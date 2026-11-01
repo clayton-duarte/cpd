@@ -36,11 +36,16 @@ impl Fx {
         let adapter = env.root().join("adapter");
         fs::create_dir_all(&adapter).unwrap();
         fs::write(adapter.join("package.json"), "{}").unwrap();
-        env.write_config(&format!("version = 1\nmachine = \"m1\"\npi_adapter = \"{}\"\n", adapter.display()));
+        env.write_config(&format!(
+            "version = 1\nmachine = \"m1\"\npi_adapter = \"{}\"\n",
+            adapter.display()
+        ));
         env.fake_pi("exit 0");
         fs::create_dir_all(env.root().join("install")).unwrap();
         fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-        let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+        let scope = env
+            .root()
+            .join("install/releases/1.0.0/node_modules/@earendil-works");
         for package in ["pi-coding-agent", "pi-ai"] {
             fs::create_dir_all(scope.join(package).join("dist")).unwrap();
             fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -56,11 +61,17 @@ impl Fx {
     }
 
     fn say(&self, exit: i32, json: &Value) {
-        fs::write(self.env.root().join("helper-answer"), format!("{exit} {json}")).unwrap();
+        fs::write(
+            self.env.root().join("helper-answer"),
+            format!("{exit} {json}"),
+        )
+        .unwrap();
     }
 
     fn path(&self, provider: &str) -> PathBuf {
-        self.env.cpd_home().join(format!("run/models-{provider}.json"))
+        self.env
+            .cpd_home()
+            .join(format!("run/models-{provider}.json"))
     }
 
     fn file(&self, provider: &str) -> Option<Value> {
@@ -69,7 +80,9 @@ impl Fx {
 
     /// A cached file of an earlier run, `polled_at` `ago` seconds ago.
     fn cache(&self, provider: &str, ago: i64, auth: &str, ids: &[&str], changes: Option<Value>) {
-        let polled_at = (OffsetDateTime::now_utc() - time::Duration::seconds(ago)).format(&Rfc3339).unwrap();
+        let polled_at = (OffsetDateTime::now_utc() - time::Duration::seconds(ago))
+            .format(&Rfc3339)
+            .unwrap();
         let mut file = json!({
             "version": 1, "provider": provider, "polled_at": polled_at, "pi_version": "1.2.0",
             "source": {"kind": if auth == "custom" { "openai-models" } else { "copilot-available" }, "auth": auth, "base": if auth == "custom" { json!(BASE) } else { Value::Null }},
@@ -82,7 +95,8 @@ impl Fx {
     }
 
     fn cpd(&self, args: &[&str]) -> Run {
-        self.env.cpd_with(self.env.root(), args, &[("BIFROST_TEST_KEY", KEY)])
+        self.env
+            .cpd_with(self.env.root(), args, &[("BIFROST_TEST_KEY", KEY)])
     }
 }
 
@@ -104,12 +118,24 @@ fn refresh_runs_the_helper_now_writes_the_files_and_prints_provider_polled_at_co
     assert_eq!(providers[0]["count"], 3);
     assert_eq!(providers[0]["changes"]["appeared"], json!(["m-c"]));
     assert_eq!(providers[0]["changes"]["went_away"], json!([]));
-    assert!(providers[0]["changes"]["at"].as_str().unwrap().ends_with('Z'));
+    assert!(
+        providers[0]["changes"]["at"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z')
+    );
     assert_eq!(providers[1]["provider"], "github-copilot");
     assert_eq!(providers[1]["count"], 2);
-    assert_eq!(providers[1]["changes"], Value::Null, "a first run reports no change");
+    assert_eq!(
+        providers[1]["changes"],
+        Value::Null,
+        "a first run reports no change"
+    );
     for p in providers {
-        assert!(OffsetDateTime::parse(p["polled_at"].as_str().unwrap(), &Rfc3339).is_ok(), "{p}");
+        assert!(
+            OffsetDateTime::parse(p["polled_at"].as_str().unwrap(), &Rfc3339).is_ok(),
+            "{p}"
+        );
     }
 
     let bifrost = fx.file("bifrost").unwrap();
@@ -117,16 +143,40 @@ fn refresh_runs_the_helper_now_writes_the_files_and_prints_provider_polled_at_co
     assert_eq!(bifrost["polled_at"], providers[0]["polled_at"]);
     assert_eq!(bifrost["changes"], providers[0]["changes"]);
     let copilot = fx.file("github-copilot").unwrap();
-    assert_eq!(copilot["known"], json!(["claude-opus-5", "gpt-5.6-sol", "gpt-6-astra"]));
-    assert_eq!(copilot["source"], json!({"kind": "copilot-available", "auth": "oauth", "base": null}));
-    assert!(!fx.env.cpd_home().join("run/models-bifrost.json.tmp").exists(), "written by rename");
+    assert_eq!(
+        copilot["known"],
+        json!(["claude-opus-5", "gpt-5.6-sol", "gpt-6-astra"])
+    );
+    assert_eq!(
+        copilot["source"],
+        json!({"kind": "copilot-available", "auth": "oauth", "base": null})
+    );
+    assert!(
+        !fx.env
+            .cpd_home()
+            .join("run/models-bifrost.json.tmp")
+            .exists(),
+        "written by rename"
+    );
 
     // The helper took no argument and the caller's environment; the key is in no argument, output or file.
     let script = fx.env.root().join("adapter/lib/models-list.ts");
-    assert_eq!(fx.env.calls("node"), vec![vec![script.to_str().unwrap().to_owned()]]);
-    assert!(fs::read_to_string(fx.env.root().join("helper-env")).unwrap().lines().any(|l| l == format!("BIFROST_TEST_KEY={KEY}")));
+    assert_eq!(
+        fx.env.calls("node"),
+        vec![vec![script.to_str().unwrap().to_owned()]]
+    );
+    assert!(
+        fs::read_to_string(fx.env.root().join("helper-env"))
+            .unwrap()
+            .lines()
+            .any(|l| l == format!("BIFROST_TEST_KEY={KEY}"))
+    );
     assert!(!run.stdout.contains(KEY) && !run.stderr.contains(KEY));
-    assert!(!fs::read_to_string(fx.path("bifrost")).unwrap().contains(KEY));
+    assert!(
+        !fs::read_to_string(fx.path("bifrost"))
+            .unwrap()
+            .contains(KEY)
+    );
 }
 
 #[test]
@@ -140,22 +190,58 @@ fn refresh_writes_the_good_providers_then_fails_with_the_failing_ones_code() {
 
     let run = fx.cpd(&["models", "refresh"]);
     let error = refused(&run, "models_unauthorized", 1);
-    assert_eq!(error["details"]["providers"].as_array().unwrap().len(), 2, "{error}");
-    assert_eq!(fx.file("github-copilot").unwrap()["ids"], json!(["gpt-5.6-sol"]), "the good one is written");
-    assert_eq!(fs::read_to_string(fx.path("bifrost")).unwrap(), before, "the failing one keeps its file");
+    assert_eq!(
+        error["details"]["providers"].as_array().unwrap().len(),
+        2,
+        "{error}"
+    );
+    assert_eq!(
+        fx.file("github-copilot").unwrap()["ids"],
+        json!(["gpt-5.6-sol"]),
+        "the good one is written"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.path("bifrost")).unwrap(),
+        before,
+        "the failing one keeps its file"
+    );
     assert!(!run.stdout.contains(KEY) && !run.stderr.contains(KEY));
 }
 
 #[test]
 fn show_prints_the_cached_lists_with_their_age_and_runs_no_helper() {
-    let fx = Fx::new(&answer(vec![listed("bifrost", "custom", Some(BASE), &["never"])]));
+    let fx = Fx::new(&answer(vec![listed(
+        "bifrost",
+        "custom",
+        Some(BASE),
+        &["never"],
+    )]));
     let changes = json!({"at": "2026-11-02T09:00:00Z", "appeared": ["m-b"], "went_away": []});
-    fx.cache("github-copilot", 7200, "oauth", &["gpt-5.6-sol", "claude-opus-5"], None);
-    fx.cache("bifrost", 3600, "custom", &["m-a", "m-b"], Some(changes.clone()));
+    fx.cache(
+        "github-copilot",
+        7200,
+        "oauth",
+        &["gpt-5.6-sol", "claude-opus-5"],
+        None,
+    );
+    fx.cache(
+        "bifrost",
+        3600,
+        "custom",
+        &["m-a", "m-b"],
+        Some(changes.clone()),
+    );
 
     let out = fx.cpd(&["models", "show"]).ok();
     let providers = out["providers"].as_array().unwrap();
-    assert_eq!(providers.iter().map(|p| p["provider"].as_str().unwrap()).collect::<Vec<_>>(), ["bifrost", "github-copilot"], "in name order");
+    assert_eq!(
+        providers
+            .iter()
+            .map(|p| p["provider"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["bifrost", "github-copilot"],
+        "in name order"
+    );
     let bifrost = &providers[0];
     assert_eq!(bifrost["pi_version"], "1.2.0");
     assert_eq!(bifrost["auth"], "custom");
@@ -166,11 +252,18 @@ fn show_prints_the_cached_lists_with_their_age_and_runs_no_helper() {
     assert!((3600..3700).contains(&seconds), "age_seconds {seconds}");
     assert!(OffsetDateTime::parse(bifrost["polled_at"].as_str().unwrap(), &Rfc3339).is_ok());
     assert_eq!(providers[1]["auth"], "oauth");
-    assert_eq!(providers[1]["changes"], Value::Null, "no change recorded is null");
+    assert_eq!(
+        providers[1]["changes"],
+        Value::Null,
+        "no change recorded is null"
+    );
     assert_eq!(out["warnings"], json!([]));
 
     assert_eq!(fx.env.calls("node").len(), 0, "show runs no helper");
-    assert!(!fx.env.cpd_home().join("locks/models.lock").exists(), "and takes no lock");
+    assert!(
+        !fx.env.cpd_home().join("locks/models.lock").exists(),
+        "and takes no lock"
+    );
 }
 
 #[test]
@@ -184,8 +277,14 @@ fn show_with_provider_prints_only_that_one() {
     assert_eq!(providers.len(), 1, "{out}");
     assert_eq!(providers[0]["provider"], "bifrost");
 
-    let none = fx.cpd(&["models", "show", "--provider", "nothing-cached"]).ok();
-    assert_eq!(none["providers"], json!([]), "a provider with no file is an empty result, not an error");
+    let none = fx
+        .cpd(&["models", "show", "--provider", "nothing-cached"])
+        .ok();
+    assert_eq!(
+        none["providers"],
+        json!([]),
+        "a provider with no file is an empty result, not an error"
+    );
 
     let run = fx.cpd(&["models", "show", "--provider", "../x"]);
     refused(&run, "usage", 2);
@@ -212,7 +311,12 @@ fn show_skips_a_file_it_cannot_parse_and_names_it_in_the_warnings() {
     assert_eq!(warnings.len(), 1, "{out}");
     assert_eq!(warnings[0]["provider"], "bifrost");
     assert_eq!(warnings[0]["code"], "models_unparseable");
-    assert!(warnings[0]["file"].as_str().unwrap().ends_with("models-bifrost.json"));
+    assert!(
+        warnings[0]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("models-bifrost.json")
+    );
 }
 
 #[test]
@@ -221,7 +325,11 @@ fn two_concurrent_refresh_runs_never_interleave_their_diffs() {
     fx.cache("bifrost", 3600, "custom", &["a"], None);
     let root = fx.env.root().display().to_string();
     for fifo in ["f1", "f2"] {
-        nix::unistd::mkfifo(&fx.env.root().join(fifo), nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+        nix::unistd::mkfifo(
+            &fx.env.root().join(fifo),
+            nix::sys::stat::Mode::from_bits_truncate(0o600),
+        )
+        .unwrap();
     }
     // The two helpers meet before either answers (a rendezvous on two fifos), so both runs reach the lock together:
     // the first to start says [a, b], the other [a, c].
@@ -245,7 +353,11 @@ fn two_concurrent_refresh_runs_never_interleave_their_diffs() {
 
     // Whoever wrote last diffed against what the other had written, not against the file both started from.
     let file = fx.file("bifrost").unwrap();
-    let (appeared, went_away) = if file["ids"] == json!(["a", "b"]) { (json!(["b"]), json!(["c"])) } else { (json!(["c"]), json!(["b"])) };
+    let (appeared, went_away) = if file["ids"] == json!(["a", "b"]) {
+        (json!(["b"]), json!(["c"]))
+    } else {
+        (json!(["c"]), json!(["b"]))
+    };
     assert_eq!(file["changes"]["appeared"], appeared, "{file}");
     assert_eq!(file["changes"]["went_away"], went_away, "{file}");
 }

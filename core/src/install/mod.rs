@@ -80,7 +80,12 @@ fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, S
     let displaced = adapter::swap(ports, install)?;
     adapter::verify(install)?;
     adapter::cleanup(ports, install, displaced.as_deref(), err);
-    let _ = writeln!(err, "installed {} and {}", dest.display(), adapter::link_of(install).display());
+    let _ = writeln!(
+        err,
+        "installed {} and {}",
+        dest.display(),
+        adapter::link_of(install).display()
+    );
     let failed = follow_up::run(ports, install, &dest, err);
     follow_up::tag(ports, install, err);
     Ok(i32::from(failed))
@@ -90,9 +95,15 @@ fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, S
 /// `origin/main`. A file only origin/main has does not count (the store check decides that).
 fn check_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
     let root = install.root.as_path();
-    let fetched = run_with(&*ports.runner, root, &["fetch", "--quiet", "origin", "main"]);
+    let fetched = run_with(
+        &*ports.runner,
+        root,
+        &["fetch", "--quiet", "origin", "main"],
+    );
     if !matches!(fetched, Ok(Out { code: 0, .. })) {
-        return Err(refused("cannot fetch origin/main to check that this build's migrations are on it."));
+        return Err(refused(
+            "cannot fetch origin/main to check that this build's migrations are on it.",
+        ));
     }
     let dir = root.join(MIGRATIONS);
     let mut names = Vec::new();
@@ -107,10 +118,21 @@ fn check_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
     names.sort();
     let mut unmerged = Vec::new();
     for name in names {
-        let on_main = run_with(&*ports.runner, root, &["show", &format!("origin/main:{MIGRATIONS}/{name}")]);
-        let file = fs::read(dir.join(&name)).map_err(|e| Stop(format!("cpd install failed: cannot read {}: {e}", dir.join(&name).display())))?;
+        let on_main = run_with(
+            &*ports.runner,
+            root,
+            &["show", &format!("origin/main:{MIGRATIONS}/{name}")],
+        );
+        let file = fs::read(dir.join(&name)).map_err(|e| {
+            Stop(format!(
+                "cpd install failed: cannot read {}: {e}",
+                dir.join(&name).display()
+            ))
+        })?;
         match on_main {
-            Ok(Out { code: 0, stdout, .. }) if stdout == String::from_utf8_lossy(&file) => {}
+            Ok(Out {
+                code: 0, stdout, ..
+            }) if stdout == String::from_utf8_lossy(&file) => {}
             _ => unmerged.push(name),
         }
     }
@@ -129,32 +151,69 @@ fn check_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
 fn check_verdict(ports: &Ports, install: &Install) -> Result<(), Stop> {
     let built = install.target_dir.join("release/cpd");
     let mut cmd = Command::new(&built);
-    cmd.arg("--version").env("CPD_HOME", install.cpd_home.root());
+    cmd.arg("--version")
+        .env("CPD_HOME", install.cpd_home.root());
     let out = ports.runner.output(&mut cmd, "cpd", VERSION_DEADLINE);
-    let text = |out: &Output| format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = |out: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
     let out = match out {
         Ok(out) if out.status.success() => out,
-        Ok(out) => return Err(refused(format!("{} --version failed:\n{}", built.display(), text(&out).trim_end()))),
-        Err(e) => return Err(refused(format!("{} --version failed:\n{e:?}", built.display()))),
+        Ok(out) => {
+            return Err(refused(format!(
+                "{} --version failed:\n{}",
+                built.display(),
+                text(&out).trim_end()
+            )));
+        }
+        Err(e) => {
+            return Err(refused(format!(
+                "{} --version failed:\n{e:?}",
+                built.display()
+            )));
+        }
     };
     let json: Option<serde_json::Value> = serde_json::from_slice(&out.stdout).ok();
-    let Some(store) = json.as_ref().and_then(|v| v.get("store")).filter(|s| s.is_null() || s.is_object()) else {
-        return Err(refused(format!("{} --version reports no store verdict:\n{}", built.display(), text(&out).trim_end())));
+    let Some(store) = json
+        .as_ref()
+        .and_then(|v| v.get("store"))
+        .filter(|s| s.is_null() || s.is_object())
+    else {
+        return Err(refused(format!(
+            "{} --version reports no store verdict:\n{}",
+            built.display(),
+            text(&out).trim_end()
+        )));
     };
     if store.get("opens").and_then(|o| o.as_bool()) != Some(false) {
         return Ok(());
     }
     let refusal = store.get("refusal");
-    let field = |name: &str| refusal.and_then(|r| r.get(name)).and_then(|v| v.as_str()).unwrap_or("");
+    let field = |name: &str| {
+        refusal
+            .and_then(|r| r.get(name))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    };
     let fix = match field("code") {
         "store_too_new" => "\nmerge main into this branch, then install again",
         "migration_changed" => {
             "\nthe branch's migration differs from the one this store applied; restore it from origin/main or wait for the store to be repaired"
         }
-        "migration_order" => "\nrename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again",
+        "migration_order" => {
+            "\nrename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again"
+        }
         _ => "",
     };
-    Err(refused(format!("this build cannot open {}: {}{fix}", install.cpd_home.db().display(), field("message"))))
+    Err(refused(format!(
+        "this build cannot open {}: {}{fix}",
+        install.cpd_home.db().display(),
+        field("message")
+    )))
 }
 
 /// The config migration and validation (contract §3.7, commands.md §14.4 step 4): the built binary runs
@@ -164,19 +223,50 @@ fn migrate_config(ports: &Ports, install: &Install, err: &mut dyn Write) -> Resu
     let built = install.target_dir.join("release/cpd");
     let config = install.cpd_home.config();
     let mut cmd = Command::new(&built);
-    cmd.args(["config", "--migrate"]).env("CPD_HOME", install.cpd_home.root());
+    cmd.args(["config", "--migrate"])
+        .env("CPD_HOME", install.cpd_home.root());
     let out = ports.runner.output(&mut cmd, "cpd", VERSION_DEADLINE);
-    let text = |out: &Output| format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = |out: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
     let out = match out {
         Ok(out) if out.status.success() => out,
-        Ok(out) => return Err(refused(format!("this build cannot migrate {}: {}", config.display(), follow_up::describe(&text(&out))))),
-        Err(e) => return Err(refused(format!("this build cannot migrate {}: {e:?}", config.display()))),
+        Ok(out) => {
+            return Err(refused(format!(
+                "this build cannot migrate {}: {}",
+                config.display(),
+                follow_up::describe(&text(&out))
+            )));
+        }
+        Err(e) => {
+            return Err(refused(format!(
+                "this build cannot migrate {}: {e:?}",
+                config.display()
+            )));
+        }
     };
     let json: Option<serde_json::Value> = serde_json::from_slice(&out.stdout).ok();
-    if json.as_ref().and_then(|v| v.get("ok")).and_then(|ok| ok.as_bool()) != Some(true) {
-        return Err(refused(format!("this build cannot migrate {}: {}", config.display(), follow_up::describe(&text(&out)))));
+    if json
+        .as_ref()
+        .and_then(|v| v.get("ok"))
+        .and_then(|ok| ok.as_bool())
+        != Some(true)
+    {
+        return Err(refused(format!(
+            "this build cannot migrate {}: {}",
+            config.display(),
+            follow_up::describe(&text(&out))
+        )));
     }
-    if let Some(names) = json.as_ref().and_then(|v| v.get("migrated")).and_then(|m| m.as_array()) {
+    if let Some(names) = json
+        .as_ref()
+        .and_then(|v| v.get("migrated"))
+        .and_then(|m| m.as_array())
+    {
         for name in names.iter().filter_map(|name| name.as_str()) {
             let _ = writeln!(err, "cpd install: config.toml migrated: {name}");
         }
@@ -192,7 +282,8 @@ fn replace_binary(install: &Install) -> Result<PathBuf, Stop> {
     let dest = dest_dir.join("cpd");
     let tmp = dest_dir.join(format!(".cpd.tmp.{}", install.pid));
     let failed = |what: &str, e: std::io::Error| Stop(format!("cpd install failed: {what}: {e}"));
-    fs::create_dir_all(&dest_dir).map_err(|e| failed(&format!("cannot create {}", dest_dir.display()), e))?;
+    fs::create_dir_all(&dest_dir)
+        .map_err(|e| failed(&format!("cannot create {}", dest_dir.display()), e))?;
     let put = || -> std::io::Result<()> {
         fs::copy(&built, &tmp)?;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
@@ -200,7 +291,10 @@ fn replace_binary(install: &Install) -> Result<PathBuf, Stop> {
     };
     put().map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        failed(&format!("cannot install {} as {}", built.display(), dest.display()), e)
+        failed(
+            &format!("cannot install {} as {}", built.display(), dest.display()),
+            e,
+        )
     })?;
     Ok(dest)
 }

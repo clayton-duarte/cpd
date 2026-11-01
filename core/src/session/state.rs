@@ -33,7 +33,10 @@ impl FromStr for Label {
         if chars == 0 || chars > Label::MAX_CHARS || s.chars().any(char::is_control) {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A label must be 1 to {} characters with no control characters.", Label::MAX_CHARS),
+                format!(
+                    "A label must be 1 to {} characters with no control characters.",
+                    Label::MAX_CHARS
+                ),
             )
             .with("value", s));
         }
@@ -74,7 +77,13 @@ pub(super) struct Change {
 /// Moves Session `id` to `to` with `label` (set exactly when `to` is
 /// `waiting` or `blocked`), as `command`: one transaction with its `session-state` Event,
 /// or nothing when unchanged (§3.6).
-pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, label: Option<&Label>) -> Result<Change, CpdError> {
+pub(super) fn set(
+    store: &mut Store,
+    command: &str,
+    id: &SessionId,
+    to: State,
+    label: Option<&Label>,
+) -> Result<Change, CpdError> {
     set_reply(store, command, id, to, label, false)
 }
 
@@ -90,7 +99,10 @@ pub(super) fn set_reply(
     let label = label.map(Label::as_str);
     let read = store.read(|conn| row::load(conn, id))?;
     if read.state == to && read.state_label.as_deref() == label {
-        return Ok(Change { from: read.state, already: true });
+        return Ok(Change {
+            from: read.state,
+            already: true,
+        });
     }
     if !legal(read.state, to) {
         return Err(illegal(id, read.state, to));
@@ -115,7 +127,10 @@ pub(super) fn set_reply(
         append(tx, scoped(event, &read))?;
         Ok(())
     })?;
-    Ok(Change { from: read.state, already: false })
+    Ok(Change {
+        from: read.state,
+        already: false,
+    })
 }
 
 /// Session `id`'s pane is known gone, dead or missing (contract §3.6, §5.2;
@@ -126,7 +141,13 @@ pub(super) fn set_reply(
 /// `{pane: null, window: null, place: "none"}` when it had a pane. Returns
 /// false, writing nothing, when the row is no longer as read (it got a new
 /// pane, or changed state, meanwhile). `why` ends each Event's text.
-pub fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
+pub fn pane_gone(
+    tx: &WriteTxn<'_>,
+    id: &SessionId,
+    state: &str,
+    pane: Option<&str>,
+    why: &str,
+) -> Result<bool, CpdError> {
     let read = row::load(tx, id)?;
     if read.state.as_str() != state || read.tmux_pane.as_deref() != pane {
         return Ok(false);
@@ -142,11 +163,20 @@ pub fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&s
     }
     if read.state != State::Stopped {
         let text = format!("Session {} is stopped: {why}.", read.name);
-        append(tx, scoped(NewEvent::session_state(text, read.state.as_str(), "stopped", None, false), &read))?;
+        append(
+            tx,
+            scoped(
+                NewEvent::session_state(text, read.state.as_str(), "stopped", None, false),
+                &read,
+            ),
+        )?;
     }
     if pane.is_some() {
         let text = format!("Session {} has no pane: {why}.", read.name);
-        append(tx, scoped(NewEvent::session_moved(text, None, None, "none"), &read))?;
+        append(
+            tx,
+            scoped(NewEvent::session_moved(text, None, None, "none"), &read),
+        )?;
     }
     Ok(true)
 }
@@ -154,7 +184,11 @@ pub fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&s
 fn illegal(id: &SessionId, from: State, to: State) -> CpdError {
     CpdError::new(
         ErrorCode::IllegalTransition,
-        format!("Session {id} cannot go from {} to {} (contract §3.6).", from.as_str(), to.as_str()),
+        format!(
+            "Session {id} cannot go from {} to {} (contract §3.6).",
+            from.as_str(),
+            to.as_str()
+        ),
     )
     .with("session", id.as_str())
     .with("from", from.as_str())
@@ -175,25 +209,45 @@ pub(super) fn state(args: StateArgs) -> Result<Output, CpdError> {
     match (args.state.has_label(), &args.label) {
         (true, None) => {
             let state = args.state.as_str();
-            return Err(CpdError::new(ErrorCode::Usage, format!("--label is required with {state}.")).with("state", state));
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("--label is required with {state}."),
+            )
+            .with("state", state));
         }
         (false, Some(_)) => {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("--label is only allowed with waiting or blocked, not {}.", args.state.as_str()),
+                format!(
+                    "--label is only allowed with waiting or blocked, not {}.",
+                    args.state.as_str()
+                ),
             )
             .with("state", args.state.as_str()));
         }
         _ => {}
     }
     if args.reply && args.state != State::Idle {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--reply is only allowed with idle, not {}.", args.state.as_str()))
-            .with("state", args.state.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!(
+                "--reply is only allowed with idle, not {}.",
+                args.state.as_str()
+            ),
+        )
+        .with("state", args.state.as_str()));
     }
     let reference = args.session.require()?.clone();
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
-    let change = set_reply(&mut env.store, "session state", &id, args.state, args.label.as_ref(), args.reply)?;
+    let change = set_reply(
+        &mut env.store,
+        "session state",
+        &id,
+        args.state,
+        args.label.as_ref(),
+        args.reply,
+    )?;
     let label = args.label.as_ref().map(Label::as_str);
     let mut out = json!({"session": id, "state": args.state.as_str(), "label": label, "from": change.from.as_str()});
     if change.already {
@@ -211,10 +265,15 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let read = env.store.read(|conn| row::load(conn, &id))?;
     if read.name == name {
         row::retitle(&id)?;
-        return Ok(Output::success(json!({"session": id, "name": name, "already": true})));
+        return Ok(Output::success(
+            json!({"session": id, "name": name, "already": true}),
+        ));
     }
     env.store.write("session rename", |tx| {
-        tx.execute("UPDATE sessions SET name = ?1 WHERE id = ?2", [name, id.as_str()])?;
+        tx.execute(
+            "UPDATE sessions SET name = ?1 WHERE id = ?2",
+            [name, id.as_str()],
+        )?;
         let text = format!("Session {id} renamed to {name:?}.");
         append(tx, scoped(NewEvent::session_renamed(text, name), &read))?;
         Ok(())
@@ -231,8 +290,11 @@ mod tests {
     fn the_transitions_of_section_3_6() {
         use State::*;
         let all = [Working, Waiting, Blocked, Idle, Stopped];
-        let allowed: Vec<(State, State)> =
-            all.iter().flat_map(|f| all.iter().map(move |t| (*f, *t))).filter(|(f, t)| legal(*f, *t)).collect();
+        let allowed: Vec<(State, State)> = all
+            .iter()
+            .flat_map(|f| all.iter().map(move |t| (*f, *t)))
+            .filter(|(f, t)| legal(*f, *t))
+            .collect();
         assert_eq!(
             allowed,
             [
@@ -263,7 +325,8 @@ mod tests {
     /// A Store in a temporary `$CPD_HOME` with Session `s1` (`idle`, pane `%5`).
     fn store_with_session() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let home = crate::home::CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let home =
+            crate::home::CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         store
             .write("fixture", |tx| {
@@ -282,7 +345,9 @@ mod tests {
         store
             .read(|c| {
                 let mut stmt = c.prepare("SELECT kind, data FROM events ORDER BY id")?;
-                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+                Ok(stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .unwrap()
     }
@@ -291,14 +356,33 @@ mod tests {
     fn pane_gone_stops_the_session_with_no_pane_and_place_none() {
         let (_dir, mut store) = store_with_session();
         let id = SessionId::parse("s1").unwrap();
-        assert!(store.write("test", |tx| pane_gone(tx, &id, "idle", Some("%5"), "its pane %5 is gone")).unwrap());
+        assert!(
+            store
+                .write("test", |tx| pane_gone(
+                    tx,
+                    &id,
+                    "idle",
+                    Some("%5"),
+                    "its pane %5 is gone"
+                ))
+                .unwrap()
+        );
         let row = store.read(|c| row::load(c, &id)).unwrap();
-        assert_eq!((row.state, row.tmux_pane, row.place.as_str()), (State::Stopped, None, "none"));
+        assert_eq!(
+            (row.state, row.tmux_pane, row.place.as_str()),
+            (State::Stopped, None, "none")
+        );
         assert_eq!(
             events(&mut store),
             [
-                ("session-state".to_owned(), r#"{"from":"idle","label":null,"to":"stopped"}"#.to_owned()),
-                ("session-moved".to_owned(), r#"{"pane":null,"place":"none","window":null}"#.to_owned()),
+                (
+                    "session-state".to_owned(),
+                    r#"{"from":"idle","label":null,"to":"stopped"}"#.to_owned()
+                ),
+                (
+                    "session-moved".to_owned(),
+                    r#"{"pane":null,"place":"none","window":null}"#.to_owned()
+                ),
             ]
         );
     }
@@ -308,18 +392,42 @@ mod tests {
         let (_dir, mut store) = store_with_session();
         let id = SessionId::parse("s1").unwrap();
         // A new pane meanwhile, or another state.
-        assert!(!store.write("test", |tx| pane_gone(tx, &id, "idle", Some("%4"), "gone")).unwrap());
-        assert!(!store.write("test", |tx| pane_gone(tx, &id, "working", Some("%5"), "gone")).unwrap());
+        assert!(
+            !store
+                .write("test", |tx| pane_gone(tx, &id, "idle", Some("%4"), "gone"))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .write("test", |tx| pane_gone(
+                    tx,
+                    &id,
+                    "working",
+                    Some("%5"),
+                    "gone"
+                ))
+                .unwrap()
+        );
         let row = store.read(|c| row::load(c, &id)).unwrap();
-        assert_eq!((row.state, row.tmux_pane.as_deref()), (State::Idle, Some("%5")));
+        assert_eq!(
+            (row.state, row.tmux_pane.as_deref()),
+            (State::Idle, Some("%5"))
+        );
         assert!(events(&mut store).is_empty());
     }
 
     #[test]
     fn label_bounds() {
-        assert_eq!("φ: Worker question".parse::<Label>().unwrap().as_str(), "φ: Worker question");
+        assert_eq!(
+            "φ: Worker question".parse::<Label>().unwrap().as_str(),
+            "φ: Worker question"
+        );
         for bad in [String::new(), "a".repeat(81), "a\nb".to_owned()] {
-            assert_eq!(bad.parse::<Label>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+            assert_eq!(
+                bad.parse::<Label>().unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad:?}"
+            );
         }
     }
 }

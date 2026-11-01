@@ -26,7 +26,9 @@ impl Waits<'_> {
             return true;
         }
         job.needs.iter().any(|need| {
-            let Some(need) = self.all.iter().find(|j| &j.key == need) else { return false };
+            let Some(need) = self.all.iter().find(|j| &j.key == need) else {
+                return false;
+            };
             match need.status.as_str() {
                 "queued" | "running" | "failed" => true,
                 "draft" => seen.insert(need.key.clone()) && self.waiting(need, seen),
@@ -41,7 +43,11 @@ fn locked(phase: &str) -> bool {
 }
 
 /// The PRs of `plan` that wait for another PR, when the Plan is locked: the condition engine E7 starts a PR by.
-fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet<String>, CpdError> {
+fn waiting_prs(
+    conn: &Connection,
+    plan: &PlanId,
+    phase: &str,
+) -> Result<BTreeSet<String>, CpdError> {
     let mut waits = BTreeSet::new();
     if locked(phase) {
         for pr in load_prs(conn, plan)? {
@@ -61,7 +67,11 @@ fn covered(conn: &Connection, plan: &PlanId, phase: &str) -> Result<bool, CpdErr
         .query_row("SELECT status, fingerprint FROM plan_reviews WHERE plan = ?1 ORDER BY number DESC LIMIT 1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     match latest {
-        Some((status, fingerprint)) if status == "pending" || (status == "approved" && phase == "plan") => Ok(fingerprint == plan_fingerprint(conn, plan)?),
+        Some((status, fingerprint))
+            if status == "pending" || (status == "approved" && phase == "plan") =>
+        {
+            Ok(fingerprint == plan_fingerprint(conn, plan)?)
+        }
         _ => Ok(false),
     }
 }
@@ -69,7 +79,11 @@ fn covered(conn: &Connection, plan: &PlanId, phase: &str) -> Result<bool, CpdErr
 /// The keys of the parked drafts of `plan`, in Job order. An archived Plan has none.
 pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdError> {
     let (phase, archived): (String, bool) = conn
-        .query_row("SELECT phase, archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            "SELECT phase, archived_at IS NOT NULL FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
     if archived {
@@ -79,7 +93,10 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
     if !all.iter().any(|j| j.is_draft() && j.kind != "open") || covered(conn, plan, &phase)? {
         return Ok(Vec::new());
     }
-    let waits = Waits { all: &all, pr_waits: waiting_prs(conn, plan, &phase)? };
+    let waits = Waits {
+        all: &all,
+        pr_waits: waiting_prs(conn, plan, &phase)?,
+    };
     Ok(all
         .iter()
         .filter(|j| j.is_draft() && j.kind != "open")
@@ -92,12 +109,23 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
 /// `queued`, `running` or `failed` Job, or (after the lock) the Job's PR waits for another PR. Never applies the
 /// `covered` check `parked_drafts` applies: a draft is exempt from review completeness because it waits, even while a
 /// review covers it.
-pub fn waiting_set(conn: &Connection, plan: &PlanId, all: &[Job]) -> Result<BTreeSet<String>, CpdError> {
+pub fn waiting_set(
+    conn: &Connection,
+    plan: &PlanId,
+    all: &[Job],
+) -> Result<BTreeSet<String>, CpdError> {
     let phase: String = conn
-        .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT phase FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
-    let waits = Waits { all, pr_waits: waiting_prs(conn, plan, &phase)? };
+    let waits = Waits {
+        all,
+        pr_waits: waiting_prs(conn, plan, &phase)?,
+    };
     Ok(all
         .iter()
         .filter(|j| j.is_draft())
@@ -109,13 +137,26 @@ pub fn waiting_set(conn: &Connection, plan: &PlanId, all: &[Job]) -> Result<BTre
 /// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a stub (no Tier or
 /// no Spec) that does not wait is refused `draft_parked`. `others` are the Plan's Jobs as stored, `job` the row as it
 /// would be (never in `others`). Never refused: a full draft, the `open` Job's draft, any draft in phase `plan`.
-pub fn door(conn: &Connection, plan: &PlanId, phase: &str, others: &[Job], job: &Job) -> Result<(), CpdError> {
+pub fn door(
+    conn: &Connection,
+    plan: &PlanId,
+    phase: &str,
+    others: &[Job],
+    job: &Job,
+) -> Result<(), CpdError> {
     let stub = job.tier.is_none() || job.spec.is_none();
     if !locked(phase) || !job.is_draft() || job.kind == "open" || !stub {
         return Ok(());
     }
-    let all: Vec<Job> = others.iter().filter(|j| j.key != job.key).cloned().collect();
-    let waits = Waits { all: &all, pr_waits: waiting_prs(conn, plan, phase)? };
+    let all: Vec<Job> = others
+        .iter()
+        .filter(|j| j.key != job.key)
+        .cloned()
+        .collect();
+    let waits = Waits {
+        all: &all,
+        pr_waits: waiting_prs(conn, plan, phase)?,
+    };
     if waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
         return Ok(());
     }

@@ -31,14 +31,18 @@ use cpd_core::ports::Ports;
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::common::fx::{Fx, exit_code};
 use crate::common::Run;
+use crate::common::fx::{Fx, exit_code};
 
 /// The `FollowArgs` of `cpd events follow <words>`, or the failure of parsing them (`usage`, `invalid_plan_id`, ...).
 fn parse(words: &[&str]) -> Result<FollowArgs, CpdError> {
-    let argv = ["cpd", "events", "follow"].into_iter().chain(words.iter().copied());
+    let argv = ["cpd", "events", "follow"]
+        .into_iter()
+        .chain(words.iter().copied());
     match Cli::try_parse_from(argv) {
-        Ok(Cli { command: Some(Command::Events(events::Command::Follow(args))) }) => Ok(args),
+        Ok(Cli {
+            command: Some(Command::Events(events::Command::Follow(args))),
+        }) => Ok(args),
         Ok(other) => panic!("`cpd events follow {words:?}` parsed as {other:?}"),
         Err(err) => Err(cpd::cli::clap_result(err).expect_err("a parse failure is a refusal")),
     }
@@ -57,7 +61,11 @@ pub fn follow_once_on(ports: &Ports, words: &[&str]) -> Run {
         });
         emit(result, &mut stdout)
     });
-    Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr }
+    Run {
+        exit: exit_code(code),
+        stdout: String::from_utf8(stdout).expect("stdout is UTF-8"),
+        stderr,
+    }
 }
 
 /// [`follow_once_on`] the fake ports of `fx`.
@@ -142,7 +150,9 @@ impl Write for Pipe {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
         for line in String::from_utf8_lossy(bytes).split_inclusive('\n') {
-            self.said.send(Message::Line(line.to_owned())).map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
+            self.said
+                .send(Message::Line(line.to_owned()))
+                .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
         }
         Ok(bytes.len())
     }
@@ -171,23 +181,42 @@ impl Follower {
     /// once it has done its first poll and is about to nap: what it has written so far is in the queue, and what the
     /// store held when it started is what "before it started" means.
     pub fn start(fx: &Fx, words: &[&str]) -> Follower {
-        let argv: Vec<OsString> = ["events", "follow"].into_iter().chain(words.iter().copied()).map(OsString::from).collect();
+        let argv: Vec<OsString> = ["events", "follow"]
+            .into_iter()
+            .chain(words.iter().copied())
+            .map(OsString::from)
+            .collect();
         let args = parse(words).unwrap_or_else(|e| panic!("`cpd events follow {words:?}`: {e:?}"));
         let (said_tx, said) = channel();
         let (go, go_rx) = channel();
         let closed = Arc::new(AtomicBool::new(false));
         let ports = Ports {
-            clock: Arc::new(Napper { time: (*fx.fakes.clock).clone(), said: Mutex::new(said_tx.clone()), go: Mutex::new(go_rx) }),
+            clock: Arc::new(Napper {
+                time: (*fx.fakes.clock).clone(),
+                said: Mutex::new(said_tx.clone()),
+                go: Mutex::new(go_rx),
+            }),
             runner: fx.fakes.runner.clone(),
             spawn: fx.fakes.spawn.clone(),
             ..Ports::real()
         };
         let pipe_closed = Arc::clone(&closed);
         let thread = std::thread::spawn(move || {
-            let mut pipe = Pipe { said: said_tx.clone(), closed: Arc::clone(&pipe_closed) };
+            let mut pipe = Pipe {
+                said: said_tx.clone(),
+                closed: Arc::clone(&pipe_closed),
+            };
             let ended = catch_unwind(AssertUnwindSafe(|| {
-                let result: Result<Output, CpdError> = Env::open_with(&ports)
-                    .and_then(|mut env| events::follow_loop(&mut env, args, &mut pipe, &|| pipe_closed.load(Ordering::SeqCst), &argv));
+                let result: Result<Output, CpdError> =
+                    Env::open_with(&ports).and_then(|mut env| {
+                        events::follow_loop(
+                            &mut env,
+                            args,
+                            &mut pipe,
+                            &|| pipe_closed.load(Ordering::SeqCst),
+                            &argv,
+                        )
+                    });
                 exit_code(emit(result, &mut pipe))
             }));
             match ended {
@@ -198,7 +227,14 @@ impl Follower {
                 Err(payload) => resume_unwind(payload),
             }
         });
-        let mut follower = Follower { said, go: Some(go), closed, lines: Default::default(), ended: None, thread: Some(thread) };
+        let mut follower = Follower {
+            said,
+            go: Some(go),
+            closed,
+            lines: Default::default(),
+            ended: None,
+            thread: Some(thread),
+        };
         follower.until(|m| matches!(m, Message::Napped));
         follower
     }
@@ -216,7 +252,9 @@ impl Follower {
     fn until(&mut self, stop: impl Fn(&Message) -> bool) {
         loop {
             match self.said.recv() {
-                Ok(Message::Line(line)) => self.lines.push_back(serde_json::from_str(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"))),
+                Ok(Message::Line(line)) => self.lines.push_back(
+                    serde_json::from_str(&line).unwrap_or_else(|e| panic!("{line:?}: {e}")),
+                ),
                 Ok(Message::Ended(code)) => {
                     self.ended = Some(code);
                     return;
@@ -250,7 +288,11 @@ impl Follower {
 
     /// Lets the follower poll once more: it ran from its nap to the next one (or its end).
     fn go_on(&mut self) {
-        self.go.as_ref().expect("the follower is running").send(()).expect("the follower's thread is waiting");
+        self.go
+            .as_ref()
+            .expect("the follower is running")
+            .send(())
+            .expect("the follower's thread is waiting");
         self.until(|m| matches!(m, Message::Napped));
     }
 
@@ -289,19 +331,41 @@ fn a_follower_hands_over_its_lines_and_its_exit_status_with_no_time_passing() {
     use cpd_core::events::{Kind, NewEvent, append};
     use cpd_core::store::Store;
     let fx = Fx::new();
-    fx.env.write_config("version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n");
+    fx.env
+        .write_config("version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n");
     let home = cpd_core::home::CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
-    let mut watch = |pid: i64| store.write("t", |tx| append(tx, NewEvent::new(Kind::WatchStarted, "start", serde_json::json!({ "pid": pid })))).unwrap();
+    let mut watch = |pid: i64| {
+        store
+            .write("t", |tx| {
+                append(
+                    tx,
+                    NewEvent::new(
+                        Kind::WatchStarted,
+                        "start",
+                        serde_json::json!({ "pid": pid }),
+                    ),
+                )
+            })
+            .unwrap()
+    };
     let mut follower = Follower::start(&fx, &[]);
     let (a, b) = (watch(1), watch(2));
     assert_eq!(follower.next().unwrap()["id"], a);
     assert_eq!(follower.next().unwrap()["id"], b);
     follower.close_stdout();
     watch(3);
-    assert_eq!(follower.exit(), 0, "a write after the reader went away ends the follower, as an EPIPE does");
+    assert_eq!(
+        follower.exit(),
+        0,
+        "a write after the reader went away ends the follower, as an EPIPE does"
+    );
     assert_eq!(follower.next(), None);
-    assert_eq!(fx.fakes.clock.elapsed(), Duration::from_millis(20) * fx.fakes.clock.naps().len() as u32, "only naps passed time");
+    assert_eq!(
+        fx.fakes.clock.elapsed(),
+        Duration::from_millis(20) * fx.fakes.clock.naps().len() as u32,
+        "only naps passed time"
+    );
 }
 
 #[test]

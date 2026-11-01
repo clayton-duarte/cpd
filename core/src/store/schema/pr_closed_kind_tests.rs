@@ -17,7 +17,12 @@ fn the_inbox_kind_check_accepts_pr_closed() {
             Ok::<(), crate::error::CpdError>(())
         })
         .expect("inbox_items accepts the kind `pr-closed`");
-    let kind: String = store.read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?)).unwrap();
+    let kind: String = store
+        .read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(kind, "pr-closed");
-    assert!(NAMED.iter().any(|m| m.name.ends_with("-pr-closed-kind")), "the migration pr-closed-kind is declared");
+    assert!(
+        NAMED.iter().any(|m| m.name.ends_with("-pr-closed-kind")),
+        "the migration pr-closed-kind is declared"
+    );
 }

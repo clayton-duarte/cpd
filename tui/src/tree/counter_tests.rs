@@ -15,15 +15,22 @@ use super::fixture::{WHEN, context, plan, session, tree};
 use super::rows::{Scroll, draw, open_new};
 use crate::palette::numbered::{C7, C8, C9, C10, C11, C13, C14, C15};
 use crate::read::{Place, PlanNode, Tree};
-use cpd_core::inbox::model::{Kind, Urgency};
 use cpd_core::ids::PlanId;
+use cpd_core::inbox::model::{Kind, Urgency};
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
 
 const WIDTH: u16 = 20;
 
 fn lone(id: &str, phase: Phase, counts: [usize; 6]) -> PlanNode {
-    plan(id, "cc", phase, counts, session(&format!("s-{id}"), "x", State::Idle, None, Place::Parked), vec![])
+    plan(
+        id,
+        "cc",
+        phase,
+        counts,
+        session(&format!("s-{id}"), "x", State::Idle, None, Place::Parked),
+        vec![],
+    )
 }
 
 fn render(t: &Tree, height: u16) -> Buffer {
@@ -31,7 +38,20 @@ fn render(t: &Tree, height: u16) -> Buffer {
     open_new(&mut state, &mut HashSet::new(), t);
     state.select(vec![]);
     let mut terminal = Terminal::new(TestBackend::new(WIDTH, height + 40)).unwrap();
-    terminal.draw(|f| draw(f, f.area(), t, &mut state, false, 0, false, &mut Scroll::default())).unwrap();
+    terminal
+        .draw(|f| {
+            draw(
+                f,
+                f.area(),
+                t,
+                &mut state,
+                false,
+                0,
+                false,
+                &mut Scroll::default(),
+            )
+        })
+        .unwrap();
     let full = terminal.backend().buffer();
     let mut buf = Buffer::empty(Rect::new(0, 0, WIDTH, height));
     for y in 0..height {
@@ -64,7 +84,9 @@ fn counter_colours(buf: &Buffer, y: u16) -> Vec<Color> {
 
 /// The fg colour of each `⋅` of row `y`, in order.
 fn separator_colours(buf: &Buffer, y: u16) -> Vec<Color> {
-    (9..WIDTH).filter_map(|x| (buf[(x, y)].symbol() == "⋅").then_some(buf[(x, y)].fg)).collect()
+    (9..WIDTH)
+        .filter_map(|x| (buf[(x, y)].symbol() == "⋅").then_some(buf[(x, y)].fg))
+        .collect()
 }
 
 #[test]
@@ -78,11 +100,23 @@ fn the_planned_role_is_the_drafts_plus_queued() {
         ],
     )]);
     let buf = render(&t, 4);
-    assert_eq!(counters_text(&buf, 1), "10", "3 drafts and 7 queued show 10");
+    assert_eq!(
+        counters_text(&buf, 1),
+        "10",
+        "3 drafts and 7 queued show 10"
+    );
     assert_eq!(counters_text(&buf, 2), "3");
-    assert_eq!(counter_colours(&buf, 2), [C13], "a planned role with a draft is magenta 13");
+    assert_eq!(
+        counter_colours(&buf, 2),
+        [C13],
+        "a planned role with a draft is magenta 13"
+    );
     assert_eq!(counters_text(&buf, 3), "7");
-    assert_eq!(counter_colours(&buf, 3), [C15], "a planned role with no draft is the queued colour 15");
+    assert_eq!(
+        counter_colours(&buf, 3),
+        [C15],
+        "a planned role with no draft is the queued colour 15"
+    );
 }
 
 #[test]
@@ -95,10 +129,22 @@ fn the_active_role_is_running_plus_merging() {
         ],
     )]);
     let buf = render(&t, 3);
-    assert_eq!(counters_text(&buf, 1), "3", "2 running and 1 merging show 3");
-    assert_eq!(counter_colours(&buf, 1), [C11], "an active role with a landing Job is yellow 11");
+    assert_eq!(
+        counters_text(&buf, 1),
+        "3",
+        "2 running and 1 merging show 3"
+    );
+    assert_eq!(
+        counter_colours(&buf, 1),
+        [C11],
+        "an active role with a landing Job is yellow 11"
+    );
     assert_eq!(counters_text(&buf, 2), "2");
-    assert_eq!(counter_colours(&buf, 2), [C14], "an active role with no landing Job is cyan 14");
+    assert_eq!(
+        counter_colours(&buf, 2),
+        [C14],
+        "an active role with no landing Job is cyan 14"
+    );
 }
 
 #[test]
@@ -128,19 +174,30 @@ fn the_four_roles_draw_in_order_with_separators_only_between_them() {
         ],
     )]);
     let buf = render(&t, 4);
-    assert_eq!(counters_text(&buf, 1), "1⋅1⋅1⋅1", "planned⋅active⋅failed⋅done");
+    assert_eq!(
+        counters_text(&buf, 1),
+        "1⋅1⋅1⋅1",
+        "planned⋅active⋅failed⋅done"
+    );
     assert_eq!(counter_colours(&buf, 1), [C13, C14, C9, C10]);
     assert_eq!(separator_colours(&buf, 1), [C8, C8, C8]);
     assert_eq!(counters_text(&buf, 2), "2⋅2⋅3⋅4");
     assert_eq!(counter_colours(&buf, 2), [C15, C11, C9, C10]);
     assert_eq!(counters_text(&buf, 3), "5");
     assert_eq!(counter_colours(&buf, 3), [C10]);
-    assert_eq!(separator_colours(&buf, 3), [], "only one role: no separator");
+    assert_eq!(
+        separator_colours(&buf, 3),
+        [],
+        "only one role: no separator"
+    );
 }
 
 #[test]
 fn a_plan_with_no_nonzero_role_draws_no_counters() {
-    let t = tree(vec![context("cc", vec![lone("aa", Phase::Dispatch, [0, 0, 0, 0, 0, 0])])]);
+    let t = tree(vec![context(
+        "cc",
+        vec![lone("aa", Phase::Dispatch, [0, 0, 0, 0, 0, 0])],
+    )]);
     let buf = render(&t, 2);
     assert_eq!(counters_text(&buf, 1), "", "every role zero: nothing drawn");
     assert_eq!(counter_colours(&buf, 1), []);
@@ -162,24 +219,55 @@ fn an_asleep_rows_counters_are_all_colour_8_and_its_dot_and_name_stay_colour_7()
     assert_eq!(counters_text(&buf, 1), "1⋅5⋅4⋅5");
     assert_eq!(counter_colours(&buf, 1), [C8; 4], "row 1: every counter");
     assert_eq!(separator_colours(&buf, 1), [C8; 3], "row 1: the separators");
-    assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (C8, C8), "row 1: the branch");
-    assert_eq!((fg(&buf, 2, 1), fg(&buf, 4, 1)), (C7, C7), "row 1: the dot and the name");
-    assert_eq!(counter_colours(&buf, 2), [], "row 2: an asleep all-zero Plan draws no counters");
+    assert_eq!(
+        (fg(&buf, 0, 1), fg(&buf, 1, 1)),
+        (C8, C8),
+        "row 1: the branch"
+    );
+    assert_eq!(
+        (fg(&buf, 2, 1), fg(&buf, 4, 1)),
+        (C7, C7),
+        "row 1: the dot and the name"
+    );
+    assert_eq!(
+        counter_colours(&buf, 2),
+        [],
+        "row 2: an asleep all-zero Plan draws no counters"
+    );
     assert_eq!(separator_colours(&buf, 2), [], "row 2: no separators");
-    assert_eq!(counter_colours(&buf, 3), [C15, C11, C9, C10], "a live row keeps its status colours");
+    assert_eq!(
+        counter_colours(&buf, 3),
+        [C15, C11, C9, C10],
+        "a live row keeps its status colours"
+    );
 }
 
 #[test]
 fn the_failed_counter_is_red_whether_or_not_the_plan_has_a_job_stuck_item() {
-    let plans = || vec![context("cc", vec![lone("aa", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
+    let plans = || {
+        vec![context(
+            "cc",
+            vec![
+                lone("aa", Phase::Dispatch, [0, 1, 0, 2, 2, 5]),
+                lone("bb", Phase::Dispatch, [0, 1, 0, 2, 2, 5]),
+            ],
+        )]
+    };
     let calm = tree(plans());
     let mut stuck = tree(plans());
-    stuck.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse("aa").unwrap()), ..crate::widgets::inbox::item(1, Kind::JobStuck, Urgency::Red, "x", WHEN) }];
+    stuck.inbox = vec![cpd_core::inbox::model::Item {
+        plan: Some(PlanId::parse("aa").unwrap()),
+        ..crate::widgets::inbox::item(1, Kind::JobStuck, Urgency::Red, "x", WHEN)
+    }];
     for (label, t) in [("no item", &calm), ("job-stuck for aa", &stuck)] {
         let buf = render(t, 3);
         for y in [1, 2] {
             assert_eq!(counters_text(&buf, y), "1⋅2⋅2⋅5", "{label}: row {y}");
-            assert_eq!(counter_colours(&buf, y)[2], C9, "{label}: row {y} failed counter");
+            assert_eq!(
+                counter_colours(&buf, y)[2],
+                C9,
+                "{label}: row {y} failed counter"
+            );
         }
     }
 }

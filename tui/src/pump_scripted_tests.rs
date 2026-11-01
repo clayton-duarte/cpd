@@ -7,11 +7,13 @@ use std::time::Duration;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+};
 
 use crate::background::Background;
 use crate::pace::Reads;
-use crate::pump::{Feed, Pump, Schedule, Signal, FRAME, SAFETY};
+use crate::pump::{FRAME, Feed, Pump, SAFETY, Schedule, Signal};
 use crate::view_ports::{Ctx, Input};
 use crate::{ViewError, history, plan, widgets};
 use cpd_core::clock::Clock;
@@ -25,7 +27,12 @@ fn ms(n: u64) -> Duration {
 }
 
 fn press(code: KeyCode) -> Signal {
-    Signal::Input(Event::Key(KeyEvent { code, modifiers: KeyModifiers::NONE, kind: KeyEventKind::Press, state: KeyEventState::NONE }))
+    Signal::Input(Event::Key(KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }))
 }
 
 fn gone() -> Signal {
@@ -59,7 +66,15 @@ fn kind_of(signal: &Signal) -> &'static str {
 #[test]
 fn the_scripted_pump_yields_the_scripted_signals_in_order_without_a_nap() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(fakes.ports.clock.clone(), vec![press(KeyCode::Char('a')), Signal::Commit, Signal::Read, gone()]);
+    let pump = Pump::scripted(
+        fakes.ports.clock.clone(),
+        vec![
+            press(KeyCode::Char('a')),
+            Signal::Commit,
+            Signal::Read,
+            gone(),
+        ],
+    );
     let until = Some(fakes.clock.now() + ms(500));
     let seen: Vec<_> = (0..4).map(|_| kind_of(&pump.wait(until))).collect();
     assert_eq!(seen, ["input", "commit", "read", "failed"]);
@@ -93,7 +108,8 @@ fn a_commit_the_test_announces_wakes_the_scripted_pump_before_the_script() {
 
 #[test]
 #[should_panic(expected = "the script is over and the loop waits for a signal")]
-fn a_scripted_pump_with_nothing_left_and_no_time_to_wait_for_says_the_script_did_not_end_the_loop() {
+fn a_scripted_pump_with_nothing_left_and_no_time_to_wait_for_says_the_script_did_not_end_the_loop()
+{
     let fakes = Fakes::new();
     Pump::scripted(fakes.ports.clock.clone(), Vec::new()).wait(None);
 }
@@ -115,7 +131,10 @@ fn an_idle_scripted_pump_makes_one_read_per_safety_interval_of_virtual_time() {
     let mut schedule = Schedule::new(fakes.clock.now(), SAFETY);
     let start = fakes.clock.now();
     for round in 1..=3u32 {
-        assert!(matches!(feed.pump.wait(schedule.deadline(fakes.clock.now())), Signal::Due));
+        assert!(matches!(
+            feed.pump.wait(schedule.deadline(fakes.clock.now())),
+            Signal::Due
+        ));
         assert!(schedule.take(fakes.clock.now()).is_some());
         schedule.done();
         assert_eq!(fakes.clock.now(), start + SAFETY * round);
@@ -125,7 +144,10 @@ fn an_idle_scripted_pump_makes_one_read_per_safety_interval_of_virtual_time() {
 #[test]
 fn a_scripted_feed_has_no_watcher() {
     let fakes = Fakes::new();
-    assert!(matches!(Feed::scripted(fakes.ports.clock.clone(), Vec::new()).watch, Ok(None)));
+    assert!(matches!(
+        Feed::scripted(fakes.ports.clock.clone(), Vec::new()).watch,
+        Ok(None)
+    ));
 }
 
 // ---- the inline reads and background jobs ---------------------------------------------------------------------------
@@ -148,13 +170,24 @@ fn inline_reads_run_in_the_caller_and_the_newest_result_is_the_last() {
     let mut reads: Reads<std::thread::ThreadId> = Reads::on(&pump);
     reads.request(|| std::thread::current().id());
     reads.request(|| std::thread::current().id());
-    assert_eq!((reads.take(), reads.take(), reads.take()), (Some(std::thread::current().id()), Some(std::thread::current().id()), None));
+    assert_eq!(
+        (reads.take(), reads.take(), reads.take()),
+        (
+            Some(std::thread::current().id()),
+            Some(std::thread::current().id()),
+            None
+        )
+    );
     let mut counted: Reads<u32> = Reads::on(&pump);
     for n in 1..=3 {
         counted.request(move || n);
     }
     let taken: Vec<u32> = std::iter::from_fn(|| counted.take()).collect();
-    assert_eq!(taken.last(), Some(&3), "what the loop ends on is the newest read: {taken:?}");
+    assert_eq!(
+        taken.last(),
+        Some(&3),
+        "what the loop ends on is the newest read: {taken:?}"
+    );
 }
 
 #[test]
@@ -167,13 +200,21 @@ fn the_production_pump_is_not_inline() {
 }
 
 #[test]
-fn an_inline_background_job_is_finished_when_submit_returns_and_the_next_starts_after_it_is_taken() {
+fn an_inline_background_job_is_finished_when_submit_returns_and_the_next_starts_after_it_is_taken()
+{
     let fakes = Fakes::new();
     let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let mut background: Background<u32> = Background::on(&pump);
     background.submit(|| 1);
     background.submit(|| 2);
-    assert_eq!((background.finished(), background.finished(), background.finished()), (Some(1), Some(2), None));
+    assert_eq!(
+        (
+            background.finished(),
+            background.finished(),
+            background.finished()
+        ),
+        (Some(1), Some(2), None)
+    );
     assert!(matches!(pump.wait(None), Signal::Read));
 }
 
@@ -189,11 +230,18 @@ fn home() -> (tempfile::TempDir, CpdHome) {
 }
 
 fn no_command(_: Vec<OsString>) -> Result<Output, CpdError> {
-    Err(CpdError::new(ErrorCode::StoreBusy, "the smoke test runs no command"))
+    Err(CpdError::new(
+        ErrorCode::StoreBusy,
+        "the smoke test runs no command",
+    ))
 }
 
 fn ctx<'a>(fakes: &'a Fakes, input: &'a mut NoInput) -> Ctx<'a, TestBackend> {
-    Ctx::new(&fakes.ports, Terminal::new(TestBackend::new(60, 14)).unwrap(), input)
+    Ctx::new(
+        &fakes.ports,
+        Terminal::new(TestBackend::new(60, 14)).unwrap(),
+        input,
+    )
 }
 
 /// The loop ends with the terminal's failure the script ends it with, after the keys: neither view has a key that ends it.
@@ -210,7 +258,10 @@ fn plan_show_with_draws_runs_its_reads_inline_and_ends_when_the_terminal_fails()
     let fakes = Fakes::new();
     let (_dir, home) = home();
     let prepared = plan::prepare(&fakes.ports, home, no_command, || Ok(60)).unwrap();
-    let feed = Feed::scripted(fakes.ports.clock.clone(), vec![press(KeyCode::Char('q')), Signal::Commit, gone()]);
+    let feed = Feed::scripted(
+        fakes.ports.clock.clone(),
+        vec![press(KeyCode::Char('q')), Signal::Commit, gone()],
+    );
     let mut input = NoInput;
     let mut ctx = ctx(&fakes, &mut input);
     assert_ended_by_the_script(plan::show_with(&mut ctx, feed, prepared));
@@ -222,7 +273,10 @@ fn widgets_show_with_draws_runs_its_reads_inline_and_ends_when_the_terminal_fail
     let fakes = Fakes::new();
     let (_dir, home) = home();
     let prepared = widgets::prepare(&fakes.ports, home).unwrap();
-    let feed = Feed::scripted(fakes.ports.clock.clone(), vec![press(KeyCode::Char('q')), Signal::Commit, gone()]);
+    let feed = Feed::scripted(
+        fakes.ports.clock.clone(),
+        vec![press(KeyCode::Char('q')), Signal::Commit, gone()],
+    );
     let mut input = NoInput;
     let mut ctx = ctx(&fakes, &mut input);
     assert_ended_by_the_script(widgets::show_with(&mut ctx, feed, prepared, no_command));
@@ -241,9 +295,15 @@ fn history_show_with_leaves_on_q_and_drew_at_least_once() {
         }
     }
     let fakes = Fakes::new();
-    let Signal::Input(q) = press(KeyCode::Char('q')) else { unreachable!() };
+    let Signal::Input(q) = press(KeyCode::Char('q')) else {
+        unreachable!()
+    };
     let mut input = Keys(vec![q]);
-    let mut ctx = Ctx::new(&fakes.ports, Terminal::new(TestBackend::new(60, 14)).unwrap(), &mut input);
+    let mut ctx = Ctx::new(
+        &fakes.ports,
+        Terminal::new(TestBackend::new(60, 14)).unwrap(),
+        &mut input,
+    );
     history::show_with(&mut ctx, "old lead", true, "plain text").unwrap();
     assert!(ctx.draws() >= 1);
 }

@@ -38,13 +38,33 @@ fn condition(kind: Kind, urgency: Urgency, subject: &str) -> Condition {
 }
 
 fn visible(store: &mut Store) -> Vec<Item> {
-    store.read(|c| list(c, &Filter { context: None, state: State::Visible { now: "2026-01-01T00:00:00.000Z".into() } })).unwrap()
+    store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Visible {
+                        now: "2026-01-01T00:00:00.000Z".into(),
+                    },
+                },
+            )
+        })
+        .unwrap()
 }
 
 /// Opens `conditions` one by one at `at`, keeping the ones already open.
 fn open_one(store: &mut Store, new: Condition, at: &str) {
     let mut open: Vec<Condition> = store
-        .read(|c| list(c, &Filter { context: None, state: State::Open }))
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Open,
+                },
+            )
+        })
         .unwrap()
         .iter()
         .map(|i| condition(i.kind, i.urgency, &i.subject))
@@ -55,7 +75,14 @@ fn open_one(store: &mut Store, new: Condition, at: &str) {
 
 #[test]
 fn urgency_orders_white_cyan_blue_magenta_yellow_red() {
-    let order = [Urgency::White, Urgency::Cyan, Urgency::Blue, Urgency::Magenta, Urgency::Yellow, Urgency::Red];
+    let order = [
+        Urgency::White,
+        Urgency::Cyan,
+        Urgency::Blue,
+        Urgency::Magenta,
+        Urgency::Yellow,
+        Urgency::Red,
+    ];
     for pair in order.windows(2) {
         assert!(pair[0] < pair[1], "{:?} < {:?}", pair[0], pair[1]);
     }
@@ -89,11 +116,29 @@ fn the_list_ranks_blue_between_magenta_and_cyan() {
         open_one(&mut store, condition(kind, urgency, subject), at);
     }
     let order: Vec<Urgency> = visible(&mut store).into_iter().map(|i| i.urgency).collect();
-    assert_eq!(order, [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::Cyan, Urgency::White]);
+    assert_eq!(
+        order,
+        [
+            Urgency::Red,
+            Urgency::Yellow,
+            Urgency::Magenta,
+            Urgency::Blue,
+            Urgency::Cyan,
+            Urgency::White
+        ]
+    );
 
     // within the tier, the oldest `opened_at` first
-    open_one(&mut store, condition(Kind::ReviewRequested, Urgency::Blue, "pr:acme/pay#0"), "t0");
-    let blue: Vec<String> = visible(&mut store).into_iter().filter(|i| i.urgency == Urgency::Blue).map(|i| i.subject).collect();
+    open_one(
+        &mut store,
+        condition(Kind::ReviewRequested, Urgency::Blue, "pr:acme/pay#0"),
+        "t0",
+    );
+    let blue: Vec<String> = visible(&mut store)
+        .into_iter()
+        .filter(|i| i.urgency == Urgency::Blue)
+        .map(|i| i.subject)
+        .collect();
     assert_eq!(blue, ["pr:acme/pay#0", "pr:acme/pay#1"]);
 }
 
@@ -108,15 +153,43 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
     std::fs::write(path, cache.to_string()).unwrap();
 
-    let pr = GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
-    let lookup = Lookup { me: "clayton-duarte".to_owned(), prs: [(("acme/pay".to_owned(), 812), Some(pr))].into_iter().collect() };
+    let pr = GhPr {
+        title: "Add retries".to_owned(),
+        draft: false,
+        state: GhState::Open,
+        author: "ryan".to_owned(),
+        decision: None,
+        reviews: Vec::new(),
+    };
+    let lookup = Lookup {
+        me: "clayton-duarte".to_owned(),
+        prs: [(("acme/pay".to_owned(), 812), Some(pr))]
+            .into_iter()
+            .collect(),
+    };
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
-    let team = Team { bot_reviewers: &bots, github: &mut github };
+    let team = Team {
+        bot_reviewers: &bots,
+        github: &mut github,
+    };
     let all = conditions_with(&mut store, &home, NOW, 20, 1, Some(team)).unwrap();
-    let reviews: Vec<Condition> = all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect();
+    let reviews: Vec<Condition> = all
+        .into_iter()
+        .filter(|c| c.kind == Kind::ReviewRequested)
+        .collect();
     assert_eq!(reviews.len(), 1, "{reviews:?}");
     let c = &reviews[0];
-    assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812\nAdd retries"));
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
+    assert_eq!(
+        (c.urgency, c.subject.as_str(), c.label.as_str()),
+        (
+            Urgency::Blue,
+            "pr:acme/pay#812",
+            "review pay#812\nAdd retries"
+        )
+    );
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/pay/pull/812")
+    );
 }

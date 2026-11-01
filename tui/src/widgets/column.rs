@@ -9,9 +9,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
+use super::inbox::{self, Shape};
 use crate::link::Links;
 use crate::palette;
-use super::inbox::{self, Shape};
 use cpd_core::inbox::model::Item;
 use time::OffsetDateTime;
 
@@ -33,15 +33,31 @@ impl Machine {
     fn usage_line(&self) -> String {
         let known = |v: Option<u8>| v.map_or("–".to_owned(), |v| v.to_string());
         let gpus = &self.usage.gpus;
-        let gpu = if gpus.is_empty() { String::new() } else { format!("{GPU_ICON} {}  ", gpus.iter().map(|g| format!("{}%", known(*g))).collect::<Vec<_>>().join(" ")) };
-        format!(" {CPU_ICON} {}%  {gpu}{MEM_ICON} {}%", known(self.usage.cpu), known(self.usage.mem))
+        let gpu = if gpus.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{GPU_ICON} {}  ",
+                gpus.iter()
+                    .map(|g| format!("{}%", known(*g)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
+        format!(
+            " {CPU_ICON} {}%  {gpu}{MEM_ICON} {}%",
+            known(self.usage.cpu),
+            known(self.usage.mem)
+        )
     }
 }
 
 fn bold(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), palette::read_only_text().add_modifier(Modifier::BOLD))
+    Span::styled(
+        text.into(),
+        palette::read_only_text().add_modifier(Modifier::BOLD),
+    )
 }
-
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2; the Inbox section
 /// scrolls with this code, one row or two an item by its content: [`Window::weighted`]; the tree's flat list counts one row an
@@ -64,7 +80,12 @@ impl Window {
     pub(crate) fn new(count: usize, rows: usize, scroll: usize) -> Window {
         let first = scroll.min(Window::max_scroll(count, rows));
         let shown = (count - first).min(rows);
-        Window { first, shown, cue_above: first > 0, below: count - first - shown }
+        Window {
+            first,
+            shown,
+            cue_above: first > 0,
+            below: count - first - shown,
+        }
     }
 
     /// The largest offset: the last item reaches the bottom of the `rows`; 0 when every one fits.
@@ -100,7 +121,12 @@ impl Window {
                 used <= rows
             })
             .count();
-        Window { first, shown, cue_above: first > 0, below: heights.len() - first - shown }
+        Window {
+            first,
+            shown,
+            cue_above: first > 0,
+            below: heights.len() - first - shown,
+        }
     }
 }
 
@@ -131,24 +157,51 @@ pub fn draw(
     now: OffsetDateTime,
     merging: &std::collections::BTreeSet<String>,
 ) -> Drawn {
-    let [_top, home, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0)]).areas(area);
+    let [_top, home, rest] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .areas(area);
     let shape = Shape::new(inbox).capped(rest.height).scrolled(inbox_scroll);
     let h = shape.height();
-    let inbox_area = Rect { y: rest.bottom() - h, height: h, ..rest };
-    let links = inbox::draw(f, inbox_area, inbox, &shape, now, &|item| inbox::merges(merging, item).then_some(frame));
-    f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
-    Drawn { links, inbox: inbox_area, inbox_shape: shape }
+    let inbox_area = Rect {
+        y: rest.bottom() - h,
+        height: h,
+        ..rest
+    };
+    let links = inbox::draw(f, inbox_area, inbox, &shape, now, &|item| {
+        inbox::merges(merging, item).then_some(frame)
+    });
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(bold(format!(" {}", machine.name))),
+            Line::styled(machine.usage_line(), palette::read_only_text()),
+        ]),
+        home,
+    );
+    Drawn {
+        links,
+        inbox: inbox_area,
+        inbox_shape: shape,
+    }
 }
-
 
 /// The snapshot's `error`, a lasting state of the column (commands.md §17 "No notes", rule (b)): it replaces the last row
 /// of `area`, in `palette::error()`, over what [`draw`] drew.
 pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
-    let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
+    let last = Rect::new(
+        area.x,
+        area.bottom().saturating_sub(1),
+        area.width,
+        1.min(area.height),
+    );
     f.render_widget(Clear, last);
-    f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::error())), last);
+    f.render_widget(
+        Paragraph::new(Span::styled(error.to_owned(), palette::error())),
+        last,
+    );
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -160,14 +213,39 @@ mod tests {
     use super::*;
 
     fn machine() -> Machine {
-        Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
+        Machine {
+            name: "homeserver".to_owned(),
+            usage: Usage {
+                cpu: Some(23),
+                gpus: vec![],
+                mem: Some(41),
+            },
+        }
     }
 
     #[test]
     fn a_value_not_known_is_a_dash() {
-        let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
-        assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
-        assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
+        let usage = |cpu, mem| {
+            Machine {
+                name: "homeserver".to_owned(),
+                usage: Usage {
+                    cpu,
+                    gpus: vec![],
+                    mem,
+                },
+            }
+            .usage_line()
+        };
+        assert_eq!(
+            usage(None, Some(100)),
+            " \u{F4BC} –%  \u{EFC5} 100%",
+            "the CPU until a second sample"
+        );
+        assert_eq!(
+            usage(Some(7), None),
+            " \u{F4BC} 7%  \u{EFC5} –%",
+            "a memory that cannot be read"
+        );
     }
 
     #[test]
@@ -175,13 +253,25 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
         terminal
             .draw(|f| {
-                draw(f, f.area(), &machine(), 0, &[], 0, OffsetDateTime::UNIX_EPOCH, &Default::default());
+                draw(
+                    f,
+                    f.area(),
+                    &machine(),
+                    0,
+                    &[],
+                    0,
+                    OffsetDateTime::UNIX_EPOCH,
+                    &Default::default(),
+                );
                 draw_error(f, f.area(), "no_cockpit: nothing here");
             })
             .unwrap();
         let buf = terminal.backend().buffer().clone();
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::error().fg.unwrap());
-        assert!(row(&buf, 11).contains("Inbox"), "the rest is as drawn: the header of the bottom-aligned section");
+        assert!(
+            row(&buf, 11).contains("Inbox"),
+            "the rest is as drawn: the header of the bottom-aligned section"
+        );
     }
 }

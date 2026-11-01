@@ -27,7 +27,12 @@ pub(crate) struct Scroller {
 
 impl Scroller {
     pub fn new() -> Scroller {
-        Scroller { lines: Vec::new(), wrapped: None, scroll: Scroll::default(), follow: true }
+        Scroller {
+            lines: Vec::new(),
+            wrapped: None,
+            scroll: Scroll::default(),
+            follow: true,
+        }
     }
 
     pub fn set_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -66,7 +71,11 @@ impl Scroller {
 
     /// Draws the rows in `body`, wrapped to its width.
     pub fn draw(&mut self, f: &mut Frame, body: Rect) {
-        if self.wrapped.as_ref().is_none_or(|(width, _)| *width != body.width) {
+        if self
+            .wrapped
+            .as_ref()
+            .is_none_or(|(width, _)| *width != body.width)
+        {
             self.wrapped = Some((body.width, wrap(&self.lines, usize::from(body.width))));
         }
         let rows = &self.wrapped.as_ref().expect("wrapped above").1;
@@ -74,7 +83,12 @@ impl Scroller {
         if self.follow {
             self.scroll.by(isize::MAX);
         }
-        let shown = rows.iter().skip(self.scroll.offset()).take(usize::from(body.height)).cloned().collect::<Vec<_>>();
+        let shown = rows
+            .iter()
+            .skip(self.scroll.offset())
+            .take(usize::from(body.height))
+            .cloned()
+            .collect::<Vec<_>>();
         f.render_widget(Paragraph::new(shown), body);
     }
 }
@@ -86,9 +100,15 @@ pub(crate) fn wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> 
     let indent = if width >= 2 * INDENT { INDENT } else { 0 };
     let mut rows = Vec::new();
     for line in lines {
-        let styled: Vec<(char, Style)> =
-            line.spans.iter().flat_map(|s| s.content.chars().map(|c| (c, line.style.patch(s.style)))).collect();
-        let columns: usize = styled.iter().map(|(c, _)| cells::width(c.encode_utf8(&mut [0; 4]))).sum();
+        let styled: Vec<(char, Style)> = line
+            .spans
+            .iter()
+            .flat_map(|s| s.content.chars().map(|c| (c, line.style.patch(s.style))))
+            .collect();
+        let columns: usize = styled
+            .iter()
+            .map(|(c, _)| cells::width(c.encode_utf8(&mut [0; 4])))
+            .sum();
         if columns <= width {
             rows.push(line.clone());
             continue;
@@ -123,7 +143,11 @@ fn chunk_end(styled: &[(char, Style)], start: usize, columns: usize) -> usize {
 
 /// One row of styled characters after `indent` blanks, neighbours of one style merged into one span.
 fn row(indent: usize, cells: &[(char, Style)]) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = if indent > 0 { vec![Span::raw(" ".repeat(indent))] } else { Vec::new() };
+    let mut spans: Vec<Span<'static>> = if indent > 0 {
+        vec![Span::raw(" ".repeat(indent))]
+    } else {
+        Vec::new()
+    };
     for &(c, style) in cells {
         match spans.last_mut() {
             Some(last) if last.style == style => last.content.to_mut().push(c),
@@ -145,14 +169,30 @@ mod tests {
 
     #[test]
     fn long_lines_wrap_with_the_body_indent() {
-        let lines = vec![Line::from(vec!["ab".bold(), "cdefghijklmnopqrstuvwxyz".into()])];
+        let lines = vec![Line::from(vec![
+            "ab".bold(),
+            "cdefghijklmnopqrstuvwxyz".into(),
+        ])];
         let rows: Vec<String> = wrap(&lines, 16).iter().map(text).collect();
         assert_eq!(rows, ["abcdefghijklmnop", "      qrstuvwxyz"]);
         let wrapped = wrap(&lines, 16);
-        assert!(wrapped[0].spans[0].style.add_modifier.contains(ratatui::style::Modifier::BOLD), "styles survive");
-        assert_eq!(wrap(&lines, 40).iter().map(text).collect::<Vec<_>>(), ["abcdefghijklmnopqrstuvwxyz"]);
+        assert!(
+            wrapped[0].spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "styles survive"
+        );
+        assert_eq!(
+            wrap(&lines, 40).iter().map(text).collect::<Vec<_>>(),
+            ["abcdefghijklmnopqrstuvwxyz"]
+        );
         let narrow: Vec<String> = wrap(&lines, 8).iter().map(text).collect();
-        assert_eq!(narrow, ["abcdefgh", "ijklmnop", "qrstuvwx", "yz"], "no indent in a narrow pane");
+        assert_eq!(
+            narrow,
+            ["abcdefgh", "ijklmnop", "qrstuvwx", "yz"],
+            "no indent in a narrow pane"
+        );
     }
 
     fn press(code: KeyCode) -> KeyEvent {
@@ -162,10 +202,19 @@ mod tests {
     /// The rows a 4-row body shows of `n` one-row lines.
     fn drawn(s: &mut Scroller, n: usize) -> Vec<String> {
         s.set_lines((0..n).map(|i| Line::from(format!("line {i}"))).collect());
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 4)).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 4)).unwrap();
         terminal.draw(|f| s.draw(f, f.area())).unwrap();
         let buf = terminal.backend().buffer().clone();
-        (0..4).map(|y| (0..20).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+        (0..4)
+            .map(|y| {
+                (0..20)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
     }
 
     /// tui-G1: the body follows the end until it moves up, and follows again at the end (End or G).
@@ -175,7 +224,11 @@ mod tests {
         assert_eq!(drawn(&mut s, 10)[3], "line 9");
         assert!(!s.key(press(KeyCode::Up)));
         assert!(!s.follows());
-        assert_eq!(drawn(&mut s, 11)[3], "line 8", "a new line does not move it");
+        assert_eq!(
+            drawn(&mut s, 11)[3],
+            "line 8",
+            "a new line does not move it"
+        );
         s.key(press(KeyCode::Char('G')));
         assert!(s.follows());
         assert_eq!(drawn(&mut s, 12)[3], "line 11");

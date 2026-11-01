@@ -4,14 +4,14 @@
 
 use serde_json::json;
 
-use super::row::PlanPrs;
-use crate::plan::PrRow;
 use super::open::{agent, hold_refused};
+use super::row::PlanPrs;
 use super::{Args, Env, gate, hide_untracked, illegal_phase, pr_policy, require_clean_lead};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::plan::PrRow;
 use crate::policy::Gate;
 
 const COMMAND: &str = "pr push";
@@ -23,10 +23,12 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_pushable(&plan, &args)?;
     let key = pr.key.clone();
-    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    env.store
+        .read(|conn| hold_refused(conn, &id, &key, agent()))?;
     // Checked before the Gate too: a running Attempt refuses at once, without a long Gate
     // (commands.md §9.9). The transaction below re-checks it, since an Attempt may start during the Gate.
-    env.store.read(|conn| super::rebase::refuse_running(conn, &id, &key, "do the push"))?;
+    env.store
+        .read(|conn| super::rebase::refuse_running(conn, &id, &key, "do the push"))?;
     let branch = pr.lead_branch.clone();
     let remote_branch = pr.remote_branch().to_owned();
     let adopted = pr.head_ref.is_some();
@@ -34,12 +36,23 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let policy = pr_policy(&mut env, &id, &key)?;
 
     // 1. G, read once; 2. when the PR's gate is local, the Lead worktree brought to G and the Gate on it there.
-    let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
+    let sha = git::run::rev_parse(
+        std::path::Path::new(&pr.repo),
+        &format!("refs/heads/{branch}"),
+    )?;
     if policy.gate.pr == Gate::Local {
         require_clean_lead(&lead, &id, pr)?;
         git::sync_lead(&lead, &branch)?;
         let hidden = hide_untracked(&lead)?;
-        let gated = gate(&env, &policy, &id, pr, &lead, &sha, &format!("pr push --pr {key}"));
+        let gated = gate(
+            &env,
+            &policy,
+            &id,
+            pr,
+            &lead,
+            &sha,
+            &format!("pr push --pr {key}"),
+        );
         hidden.restore()?;
         gated?;
     }
@@ -76,7 +89,9 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
         }
     })?;
 
-    Ok(Output::success(json!({"plan": id, "pr": key, "pushed": pushed, "sha": sha, "remote": remote})))
+    Ok(Output::success(
+        json!({"plan": id, "pr": key, "pushed": pushed, "sha": sha, "remote": remote}),
+    ))
 }
 
 /// The selected PR must be `open` or `dispatch` (`illegal_transition`); a Plan that has not

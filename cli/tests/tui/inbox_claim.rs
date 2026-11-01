@@ -15,7 +15,9 @@ const MANAGER: &str = "mgr-rc";
 const T5: &str = "2026-01-01T05:00:00.000Z";
 
 fn config(socket: &str, context: &str) -> String {
-    format!("version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n[inbox]\nreview_context = \"{context}\"\n")
+    format!(
+        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n[inbox]\nreview_context = \"{context}\"\n"
+    )
 }
 
 /// The five open items `Fixture::new` leaves, as conditions: a reconcile that omits one closes it.
@@ -73,7 +75,8 @@ fn write_cache(fx: &Fixture, number: u64) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let post = json!({"repo": "acme/pay", "number": number, "ts": 1_700_000_000.0, "ts_raw": TS_RAW, "author": "Ryan Case", "primary": true,
                       "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
-    let cache = json!({"version": 1, "polled_at": T0, "channel": CHANNEL, "read": 10, "posts": [post]});
+    let cache =
+        json!({"version": 1, "polled_at": T0, "channel": CHANNEL, "read": 10, "posts": [post]});
     fs::write(path, cache.to_string()).unwrap();
 }
 
@@ -81,13 +84,17 @@ fn write_cache(fx: &Fixture, number: u64) {
 /// Manager, the post in the cache and the key set. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     review_context(&mut fx, "eec-codereview", "idle");
     write_cache(&fx, 812);
     let mut all = base();
     all.push(review_request());
     reconcile(&mut fx.store, &all, T5).unwrap();
-    let id = fx.store_count(&format!("SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"));
+    let id = fx.store_count(&format!(
+        "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
+    ));
     (fx, id)
 }
 
@@ -95,7 +102,10 @@ fn claimable() -> (Fixture, i64) {
 fn assert_nothing_written(fx: &Fixture) {
     assert!(fx.events("inbox-claimed").is_empty());
     assert!(fx.events("session-message").is_empty());
-    assert_eq!(fx.store_count("SELECT count(*) FROM inbox_items WHERE claimed_at IS NOT NULL"), 0);
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM inbox_items WHERE claimed_at IS NOT NULL"),
+        0
+    );
 }
 
 fn refusal(fx: &Fixture, id: &str) -> (i32, String) {
@@ -116,12 +126,28 @@ fn claim_marks_the_item_claimed_hides_it_and_writes_inbox_claimed() {
     assert_eq!(events[0]["data"], json!({"item": id}));
 
     let list = fx.ok(&["list"]);
-    assert!(!list["items"].as_array().unwrap().iter().any(|i| i["id"] == id), "{list}");
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == id),
+        "{list}"
+    );
     let all = fx.ok(&["list", "--all"]);
-    let item = all["items"].as_array().unwrap().iter().find(|i| i["id"] == id).unwrap_or_else(|| panic!("{all}"));
+    let item = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == id)
+        .unwrap_or_else(|| panic!("{all}"));
     assert_eq!(item["hidden"], "claimed");
     assert_eq!(item["claimed_at"], out["item"]["claimed_at"]);
-    assert_eq!(item["closed_at"], Value::Null, "the item stays open until E8 closes it");
+    assert_eq!(
+        item["closed_at"],
+        Value::Null,
+        "the item stays open until E8 closes it"
+    );
 }
 
 #[test]
@@ -133,7 +159,11 @@ fn claim_tells_the_review_contexts_live_manager_with_the_pull_request_url_and_th
     let message = &messages[0];
     assert_eq!(message["session"], MANAGER);
     assert_eq!(message["context"], "eec-codereview");
-    assert_eq!(message["data"]["from"], Value::Null, "sent with no sender Session");
+    assert_eq!(
+        message["data"]["from"],
+        Value::Null,
+        "sent with no sender Session"
+    );
     let text = message["data"]["text"].as_str().unwrap();
     for part in [URL, CHANNEL, TS_RAW] {
         assert!(text.contains(part), "{part} in {text}");
@@ -159,14 +189,21 @@ fn claim_is_idempotent_and_the_second_claim_writes_and_sends_nothing() {
 }
 
 #[test]
-fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_request_and_writes_nothing() {
+fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_request_and_writes_nothing()
+ {
     let (mut fx, id) = claimable();
     assert_eq!(refusal(&fx, "999"), (4, "item_not_found".to_owned()));
     // another kind
-    assert_eq!(refusal(&fx, &fx.id("unread").to_string()), (3, "not_claimable".to_owned()));
+    assert_eq!(
+        refusal(&fx, &fx.id("unread").to_string()),
+        (3, "not_claimable".to_owned())
+    );
     // a dismissed review-requested item
     fx.ok(&["dismiss", &id.to_string()]);
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "not_claimable".to_owned()));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "not_claimable".to_owned())
+    );
     // a closed one: the pull request's condition ended
     reconcile(&mut fx.store, &base(), CLOSED_Y).unwrap();
     assert_eq!(refusal(&fx, &id.to_string()), (3, "item_closed".to_owned()));
@@ -177,7 +214,10 @@ fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_reques
 fn claim_refuses_without_a_review_context_and_writes_nothing() {
     let (fx, id) = claimable();
     fx.fx.env.write_config("version = 1\nmachine = \"m1\"\n");
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "review_context_unset".to_owned()));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "review_context_unset".to_owned())
+    );
     assert_nothing_written(&fx);
 }
 
@@ -185,10 +225,17 @@ fn claim_refuses_without_a_review_context_and_writes_nothing() {
 fn claim_refuses_a_review_context_without_a_live_manager_and_writes_nothing() {
     let (fx, id) = claimable();
     // ctx1 exists and has no Manager
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
     assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "no-such-context"));
-    assert_eq!(refusal(&fx, &id.to_string()), (4, "context_not_found".to_owned()));
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "no-such-context"));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (4, "context_not_found".to_owned())
+    );
     assert_nothing_written(&fx);
 }
 
@@ -197,30 +244,52 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
     let (fx, id) = claimable();
     let cache = fx.fx.env.cpd_home().join("run/team-review.json");
     write_cache(&fx, 7);
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "post_not_found".to_owned()), "a cache without a post of this pull request");
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "post_not_found".to_owned()),
+        "a cache without a post of this pull request"
+    );
     fs::remove_file(cache).unwrap();
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "post_not_found".to_owned()), "no cache");
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "post_not_found".to_owned()),
+        "no cache"
+    );
     assert_nothing_written(&fx);
 }
 
 #[test]
 fn claim_wakes_a_stopped_manager_as_session_send_does() {
     let mut fx = Fixture::new();
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     review_context(&mut fx, "eec-codereview", "stopped");
     write_cache(&fx, 812);
     let mut all = base();
     all.push(review_request());
     reconcile(&mut fx.store, &all, T5).unwrap();
-    let id = fx.store_count(&format!("SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"));
+    let id = fx.store_count(&format!(
+        "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
+    ));
     fx.fx.cockpit();
 
     let out = fx.ok(&["claim", &id.to_string()]);
     assert_eq!(out["manager"], MANAGER);
-    let started: Vec<Vec<String>> =
-        fx.fx.calls("tmux").into_iter().map(|c| c.args).filter(|a| a.iter().any(|x| x == "new-window")).collect();
+    let started: Vec<Vec<String>> = fx
+        .fx
+        .calls("tmux")
+        .into_iter()
+        .map(|c| c.args)
+        .filter(|a| a.iter().any(|x| x == "new-window"))
+        .collect();
     assert_eq!(started.len(), 1, "one new-window: {started:?}");
-    assert_eq!(started[0][started[0].len() - 3..], ["session", "run", MANAGER], "{:?}", started[0]);
+    assert_eq!(
+        started[0][started[0].len() - 3..],
+        ["session", "run", MANAGER],
+        "{:?}",
+        started[0]
+    );
     let shown = fx.cpd(&["session", "show", MANAGER]).ok();
     assert!(shown["session"]["tmux_pane"].is_string(), "{shown}");
     assert_eq!(fx.events("session-message").len(), 1);
@@ -230,14 +299,19 @@ fn claim_wakes_a_stopped_manager_as_session_send_does() {
 fn the_review_context_config_defaults_to_empty_and_accepts_only_a_context_id() {
     let fx = Fx::new();
     fx.env.write_config("version = 1\nmachine = \"hs\"\n");
-    assert_eq!(fx.cpd(&["config"]).ok()["config"]["inbox"]["review_context"], "");
+    assert_eq!(
+        fx.cpd(&["config"]).ok()["config"]["inbox"]["review_context"],
+        ""
+    );
 
-    fx.env.write_config(&config(fx.env.tmux_socket(), "eec-codereview"));
+    fx.env
+        .write_config(&config(fx.env.tmux_socket(), "eec-codereview"));
     let shown = fx.cpd(&["config"]).ok();
     assert_eq!(shown["config"]["inbox"]["review_context"], "eec-codereview");
     assert_eq!(shown["sources"]["inbox.review_context"], "file");
 
-    fx.env.write_config(&config(fx.env.tmux_socket(), "Not A Context"));
+    fx.env
+        .write_config(&config(fx.env.tmux_socket(), "Not A Context"));
     let run = fx.cpd(&["config"]);
     let error = run.error();
     assert_eq!(run.exit, 1);
@@ -248,12 +322,21 @@ fn the_review_context_config_defaults_to_empty_and_accepts_only_a_context_id() {
 #[test]
 fn list_counts_and_names_a_claimed_item_with_all() {
     let (fx, id) = claimable();
-    assert_eq!(fx.ok(&["list"])["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
+    assert_eq!(
+        fx.ok(&["list"])["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 0})
+    );
     fx.ok(&["claim", &id.to_string()]);
     let list = fx.ok(&["list"]);
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 1}));
+    assert_eq!(
+        list["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 1})
+    );
     let all = fx.ok(&["list", "--all"]);
-    assert_eq!(all["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 1}));
+    assert_eq!(
+        all["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 1})
+    );
 }
 
 /// `(channel, ts, emoji)` of every `slack_reactions` row, oldest first, plus the first row's `reacted_at`. Empty while
@@ -265,7 +348,10 @@ fn queued_rows(fx: &Fixture) -> Vec<(String, String, String, Option<String>)> {
         .read(|c| {
             let rows = c
                 .prepare("SELECT channel, ts, emoji, reacted_at FROM slack_reactions ORDER BY id")
-                .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<Vec<_>, _>>());
+                .and_then(|mut s| {
+                    s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                        .collect::<Result<Vec<_>, _>>()
+                });
             Ok(rows)
         })
         .unwrap();
@@ -277,7 +363,10 @@ fn queued_rows(fx: &Fixture) -> Vec<(String, String, String, Option<String>)> {
 }
 
 fn queued(fx: &Fixture) -> Vec<(String, String, String)> {
-    queued_rows(fx).into_iter().map(|(c, t, e, _)| (c, t, e)).collect()
+    queued_rows(fx)
+        .into_iter()
+        .map(|(c, t, e, _)| (c, t, e))
+        .collect()
 }
 
 fn eyes() -> (String, String, String) {
@@ -289,7 +378,11 @@ fn claim_queues_eyes_on_the_post_with_the_caches_channel_and_ts_raw() {
     let (fx, id) = claimable();
     fx.ok(&["claim", &id.to_string()]);
     assert_eq!(queued(&fx), vec![eyes()]);
-    assert_eq!(queued_rows(&fx)[0].3, None, "reacted_at is null until the helper succeeds");
+    assert_eq!(
+        queued_rows(&fx)[0].3,
+        None,
+        "reacted_at is null until the helper succeeds"
+    );
     let messages = fx.events("session-message");
     let text = messages[0]["data"]["text"].as_str().unwrap();
     assert!(text.contains(CHANNEL) && text.contains(TS_RAW), "{text}");
@@ -299,14 +392,27 @@ fn claim_queues_eyes_on_the_post_with_the_caches_channel_and_ts_raw() {
 fn a_refused_claim_queues_nothing() {
     let (mut fx, id) = claimable();
     assert_eq!(refusal(&fx, "999"), (4, "item_not_found".to_owned()));
-    assert_eq!(refusal(&fx, &fx.id("unread").to_string()), (3, "not_claimable".to_owned()));
+    assert_eq!(
+        refusal(&fx, &fx.id("unread").to_string()),
+        (3, "not_claimable".to_owned())
+    );
     fx.fx.env.write_config("version = 1\nmachine = \"m1\"\n");
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "review_context_unset".to_owned()));
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "review_context_unset".to_owned())
+    );
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
     assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
+    fx.fx
+        .env
+        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     write_cache(&fx, 7);
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "post_not_found".to_owned()));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "post_not_found".to_owned())
+    );
     reconcile(&mut fx.store, &base(), CLOSED_Y).unwrap();
     assert_eq!(refusal(&fx, &id.to_string()), (3, "item_closed".to_owned()));
     assert!(queued(&fx).is_empty());

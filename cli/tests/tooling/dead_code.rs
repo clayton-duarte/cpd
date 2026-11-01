@@ -31,9 +31,18 @@ fn every_allow_dead_code_states_a_live_reason() {
             }
             let reason = line.split_once("//").map(|(_, r)| r.trim()).unwrap_or("");
             if reason.is_empty() || reason.contains("Job `") {
-                bad.push(format!("{}:{}: {}", file.strip_prefix(&root).unwrap().display(), n + 1, line.trim()));
+                bad.push(format!(
+                    "{}:{}: {}",
+                    file.strip_prefix(&root).unwrap().display(),
+                    n + 1,
+                    line.trim()
+                ));
             }
         }
     }
-    assert!(bad.is_empty(), "allow(dead_code) without a live reason:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "allow(dead_code) without a live reason:\n{}",
+        bad.join("\n")
+    );
 }

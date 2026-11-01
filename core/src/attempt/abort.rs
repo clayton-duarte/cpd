@@ -20,8 +20,17 @@ const COMMAND: &str = "attempt abort";
 /// The Tiers of a no-ladder cause: `next_rung` returns `None` for `Cause::Aborted`
 /// before it reads the catalog, so no ladder decision is ever made here.
 fn no_catalog() -> Catalog {
-    let empty = || TierModel { model: String::new(), efforts: Vec::new() };
-    Catalog { pi_version: String::new(), o: empty(), s: empty(), h: empty(), g: empty() }
+    let empty = || TierModel {
+        model: String::new(),
+        efforts: Vec::new(),
+    };
+    Catalog {
+        pi_version: String::new(),
+        o: empty(),
+        s: empty(),
+        h: empty(),
+        g: empty(),
+    }
 }
 
 pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
@@ -68,10 +77,18 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
     // seam. A live driver owns its Worker and consumes the request itself (run.rs A5), so it is left alone. The end is
     // already committed: the teardown only kills the process/window and cleans the worktree.
     if let Some(dead) = crate::driver::lock::probe(&env.home, &plan, &id)? {
-        crate::driver::teardown_aborted(&env.ports, &env.config, &env.home, &mut env.store, &attempt)?;
+        crate::driver::teardown_aborted(
+            &env.ports,
+            &env.config,
+            &env.home,
+            &mut env.store,
+            &attempt,
+        )?;
         drop(dead);
     }
-    Ok(Output::success(json!({"attempt": id, "outcome": "failed", "cause": "aborted"})))
+    Ok(Output::success(
+        json!({"attempt": id, "outcome": "failed", "cause": "aborted"}),
+    ))
 }
 
 /// The calling Lead Session's id (contract §5.2): `CPD_SESSION`, else the Plan's Lead Session.
@@ -84,11 +101,18 @@ fn caller(env: &mut Env, plan: &PlanId) -> Result<String, CpdError> {
     env.store
         .read(|conn| {
             Ok(conn
-                .query_row("SELECT lead_session FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get::<_, String>(0))
+                .query_row(
+                    "SELECT lead_session FROM plans WHERE id = ?1",
+                    [plan.as_str()],
+                    |r| r.get::<_, String>(0),
+                )
                 .optional()?)
         })?
         .ok_or_else(|| {
-            CpdError::new(ErrorCode::SessionRequired, "No Session selected: pass CPD_SESSION or run as the Plan's Lead.")
+            CpdError::new(
+                ErrorCode::SessionRequired,
+                "No Session selected: pass CPD_SESSION or run as the Plan's Lead.",
+            )
         })
 }
 
@@ -109,7 +133,10 @@ fn decide(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, C
 fn not_running(attempt: &Attempt, cause: Option<&str>) -> CpdError {
     let mut err = CpdError::new(
         ErrorCode::AttemptNotRunning,
-        format!("Attempt {} is {}, not running: only a running Attempt is aborted.", attempt.id, attempt.status),
+        format!(
+            "Attempt {} is {}, not running: only a running Attempt is aborted.",
+            attempt.id, attempt.status
+        ),
     )
     .with("plan", attempt.plan.as_str())
     .with("attempt", attempt.id.to_string())

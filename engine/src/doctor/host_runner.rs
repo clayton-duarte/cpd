@@ -31,7 +31,14 @@ pub fn check_with(config: &Config, runner: &dyn Runner) -> Check {
     };
     let file = dir.join("durable-host").join("main.ts");
     if !file.is_file() {
-        return Check::fail(NAME, Severity::Error, format!("{} is missing: the durable host is not installed beside pi_adapter.", file.display()));
+        return Check::fail(
+            NAME,
+            Severity::Error,
+            format!(
+                "{} is missing: the durable host is not installed beside pi_adapter.",
+                file.display()
+            ),
+        );
     }
     let text = match run_tool(runner, node().as_os_str(), &["--version"]) {
         Ok(text) => text,
@@ -39,8 +46,19 @@ pub fn check_with(config: &Config, runner: &dyn Runner) -> Check {
     };
     let Some((found, version)) = parse_version(&text, 3) else {
         let first = text.lines().next().unwrap_or("no output");
-        return Check::fail(NAME, Severity::Error, format!("no version in the output of `node --version`: {first}")).expected(EXPECTED);
+        return Check::fail(
+            NAME,
+            Severity::Error,
+            format!("no version in the output of `node --version`: {first}"),
+        )
+        .expected(EXPECTED);
     };
-    let check = Check::new(NAME, Severity::Error, version >= MIN_NODE).found(found).expected(EXPECTED);
-    if version >= MIN_NODE { check } else { check.message("pi's Node is older than the durable host needs: 22.19.0.") }
+    let check = Check::new(NAME, Severity::Error, version >= MIN_NODE)
+        .found(found)
+        .expected(EXPECTED);
+    if version >= MIN_NODE {
+        check
+    } else {
+        check.message("pi's Node is older than the durable host needs: 22.19.0.")
+    }
 }

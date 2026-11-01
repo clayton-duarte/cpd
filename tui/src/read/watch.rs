@@ -13,10 +13,13 @@ use crate::pump::Waker;
 pub fn is_commit(event: &notify::Event) -> bool {
     let kind = matches!(
         event.kind,
-        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any) | EventKind::Create(_) | EventKind::Remove(_)
+        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any)
+            | EventKind::Create(_)
+            | EventKind::Remove(_)
     );
     kind && event.paths.iter().any(|p| {
-        p.file_name().is_some_and(|n| n == "cpd.db" || n == "cpd.db-wal")
+        p.file_name()
+            .is_some_and(|n| n == "cpd.db" || n == "cpd.db-wal")
     })
 }
 
@@ -34,13 +37,16 @@ impl Watch {
             )
         };
         // An `Err` event is not a store fact: the safety read covers a lost event.
-        let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok_and(|e| is_commit(&e)) {
-                waker.commit();
-            }
-        })
-        .map_err(fail)?;
-        watcher.watch(dir, RecursiveMode::NonRecursive).map_err(fail)?;
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if event.is_ok_and(|e| is_commit(&e)) {
+                    waker.commit();
+                }
+            })
+            .map_err(fail)?;
+        watcher
+            .watch(dir, RecursiveMode::NonRecursive)
+            .map_err(fail)?;
         Ok(Watch { _watcher: watcher })
     }
 }

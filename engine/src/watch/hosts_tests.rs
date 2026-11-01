@@ -31,7 +31,9 @@ fn live_fx() -> (Fx, Arc<FakeSpawn>, Arc<ManualClock>) {
 
 /// A Lead `id` in Context `ctx` with the stored `runner`, `cwd` and optional `plan`, `stopped` and never asleep.
 fn add_lead(fx: &mut Fx, id: &str, runner: &str, cwd: &str, plan: Option<&str>) {
-    let plan = plan.map(|p| format!("'{p}'")).unwrap_or_else(|| "NULL".to_owned());
+    let plan = plan
+        .map(|p| format!("'{p}'"))
+        .unwrap_or_else(|| "NULL".to_owned());
     fx.fixture(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
            VALUES ('{id}', 'lead', 'ctx', {plan}, '{id}', '{cwd}', 'O3', 'stopped', 't', 't', '{runner}');"
@@ -50,22 +52,57 @@ fn live_durable_session_starts_the_host() {
     let (mut fx, spawn, _clock) = live_fx();
     let cwd = fx.engine.home.root().join("lead-cwd");
     std::fs::create_dir_all(&cwd).unwrap();
-    add_lead(&mut fx, "lead1", "durable", &cwd.display().to_string(), None);
+    add_lead(
+        &mut fx,
+        "lead1",
+        "durable",
+        &cwd.display().to_string(),
+        None,
+    );
 
     hosts::run(&mut fx.engine);
 
     let launches = spawn.launches();
     assert_eq!(launches.len(), 1, "one host: {launches:?}");
     let launch = &launches[0];
-    assert_eq!(launch.program, cpd_core::config::catalog::node().display().to_string());
-    assert!(launch.args.first().is_some_and(|a| a.ends_with("durable-host/main.ts")), "{:?}", launch.args);
-    let session = launch.args.iter().position(|a| a == "--session").expect("--session: {:?}");
-    assert_eq!(launch.args.get(session + 1).map(String::as_str), Some("lead1"));
-    let env = |key: &str| launch.env_set.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
-    assert_eq!(env("CPD_HOME"), Some(fx.engine.home.root().display().to_string()));
+    assert_eq!(
+        launch.program,
+        cpd_core::config::catalog::node().display().to_string()
+    );
+    assert!(
+        launch
+            .args
+            .first()
+            .is_some_and(|a| a.ends_with("durable-host/main.ts")),
+        "{:?}",
+        launch.args
+    );
+    let session = launch
+        .args
+        .iter()
+        .position(|a| a == "--session")
+        .expect("--session: {:?}");
+    assert_eq!(
+        launch.args.get(session + 1).map(String::as_str),
+        Some("lead1")
+    );
+    let env = |key: &str| {
+        launch
+            .env_set
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        env("CPD_HOME"),
+        Some(fx.engine.home.root().display().to_string())
+    );
     assert_eq!(env("CPD_SESSION"), Some("lead1".to_owned()));
     let path = env("PATH").expect("PATH is set");
-    assert!(path.starts_with(&format!("{}:", fx.engine.home.root().join("bin").display())), "PATH starts with $CPD_HOME/bin: {path}");
+    assert!(
+        path.starts_with(&format!("{}:", fx.engine.home.root().join("bin").display())),
+        "PATH starts with $CPD_HOME/bin: {path}"
+    );
     assert_eq!(launch.cwd.as_ref(), Some(&cwd), "cwd is the Session's cwd");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }
@@ -79,9 +116,16 @@ fn no_host_for_a_pi_session() {
     hosts::run(&mut fx.engine);
 
     let launches = spawn.launches();
-    assert_eq!(launches.len(), 1, "only the durable Session starts a host: {launches:?}");
+    assert_eq!(
+        launches.len(),
+        1,
+        "only the durable Session starts a host: {launches:?}"
+    );
     assert!(
-        launches[0].env_set.iter().any(|(k, v)| k == "CPD_SESSION" && v == "dlead"),
+        launches[0]
+            .env_set
+            .iter()
+            .any(|(k, v)| k == "CPD_SESSION" && v == "dlead"),
         "the pi Session launches nothing: {launches:?}"
     );
 }
@@ -97,12 +141,25 @@ fn one_host_per_live_durable_session() {
     assert_eq!(first.len(), 2, "one host per Session: {first:?}");
     let sessions: Vec<&str> = first
         .iter()
-        .filter_map(|l| l.env_set.iter().find(|(k, _)| k == "CPD_SESSION").map(|(_, v)| v.as_str()))
+        .filter_map(|l| {
+            l.env_set
+                .iter()
+                .find(|(k, _)| k == "CPD_SESSION")
+                .map(|(_, v)| v.as_str())
+        })
         .collect();
-    assert!(sessions.contains(&"a") && sessions.contains(&"b"), "{sessions:?}");
+    assert!(
+        sessions.contains(&"a") && sessions.contains(&"b"),
+        "{sessions:?}"
+    );
 
     hosts::run(&mut fx.engine);
-    assert_eq!(spawn.launches().len(), 2, "never a second host for a live Session: {:?}", spawn.launches());
+    assert_eq!(
+        spawn.launches().len(),
+        2,
+        "never a second host for a live Session: {:?}",
+        spawn.launches()
+    );
 }
 
 #[test]
@@ -115,7 +172,12 @@ fn restarts_a_dead_host_while_still_live() {
     spawn.exit(one_host(&spawn, "lead1"), 1);
     hosts::run(&mut fx.engine);
 
-    assert_eq!(spawn.launches().len(), 2, "the host is relaunched: {:?}", spawn.launches());
+    assert_eq!(
+        spawn.launches().len(),
+        2,
+        "the host is relaunched: {:?}",
+        spawn.launches()
+    );
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }
 
@@ -128,20 +190,41 @@ fn restart_bound_in_the_window_stops_the_session() {
         spawn.exit(one_host(&spawn, "lead1"), 1);
         hosts::run(&mut fx.engine);
     }
-    assert_eq!(spawn.launches().len(), 4, "the initial start and three restarts: {:?}", spawn.launches());
+    assert_eq!(
+        spawn.launches().len(),
+        4,
+        "the initial start and three restarts: {:?}",
+        spawn.launches()
+    );
 
     spawn.exit(one_host(&spawn, "lead1"), 1);
     hosts::run(&mut fx.engine);
 
-    assert_eq!(spawn.launches().len(), 4, "a fourth restart inside the window is refused: {:?}", spawn.launches());
+    assert_eq!(
+        spawn.launches().len(),
+        4,
+        "a fourth restart inside the window is refused: {:?}",
+        spawn.launches()
+    );
     let (state, label): (String, Option<String>) = fx
         .engine
         .store
-        .read(|c| Ok(c.query_row("SELECT state, state_label FROM sessions WHERE id = 'lead1'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT state, state_label FROM sessions WHERE id = 'lead1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
         .unwrap();
     assert_eq!(state, "stopped");
     assert_eq!(label.as_deref(), Some("host crash loop"));
-    assert_eq!(fx.count("session-state"), 1, "{:?}", fx.events("session-state"));
+    assert_eq!(
+        fx.count("session-state"),
+        1,
+        "{:?}",
+        fx.events("session-state")
+    );
 }
 
 #[test]
@@ -159,9 +242,17 @@ fn restart_window_resets_after_ten_minutes() {
     clock.advance(Duration::from_secs(10 * 60));
     hosts::run(&mut fx.engine);
 
-    assert_eq!(spawn.launches().len(), 5, "a death after the window starts a fresh bound: {:?}", spawn.launches());
+    assert_eq!(
+        spawn.launches().len(),
+        5,
+        "a death after the window starts a fresh bound: {:?}",
+        spawn.launches()
+    );
     let label: Option<String> = fx.query("SELECT state_label FROM sessions WHERE id = 'lead1'");
-    assert_eq!(label, None, "the Session did not reach the crash-loop bound");
+    assert_eq!(
+        label, None,
+        "the Session did not reach the crash-loop bound"
+    );
 }
 
 #[test]
@@ -179,10 +270,18 @@ fn stops_the_host_when_the_session_sleeps_or_is_archived() {
     assert_eq!(spawn.launches().len(), 1, "the host starts");
 
     sleep::run(&mut fx.engine);
-    assert!(spawn.signals().iter().any(|(_, s)| *s == Signal::Term), "the running host is stopped: {:?}", spawn.signals());
+    assert!(
+        spawn.signals().iter().any(|(_, s)| *s == Signal::Term),
+        "the running host is stopped: {:?}",
+        spawn.signals()
+    );
     let launches = spawn.launches().len();
     hosts::run(&mut fx.engine);
-    assert_eq!(spawn.launches().len(), launches, "an asleep Session is never started");
+    assert_eq!(
+        spawn.launches().len(),
+        launches,
+        "an asleep Session is never started"
+    );
 
     // Archive: a durable Lead asleep past the threshold; `archive_leads::run` stops the host it archives.
     let (mut fx, spawn, _clock) = live_fx();
@@ -196,7 +295,11 @@ fn stops_the_host_when_the_session_sleeps_or_is_archived() {
     let id = SessionId::parse("lead1").unwrap();
     let (_pid, _lock) = hosts::start(&mut fx.engine, &id).expect("the host starts");
     archive_leads::run(&mut fx.engine);
-    assert!(spawn.signals().iter().any(|(_, s)| *s == Signal::Term), "the archived Session stops its host: {:?}", spawn.signals());
+    assert!(
+        spawn.signals().iter().any(|(_, s)| *s == Signal::Term),
+        "the archived Session stops its host: {:?}",
+        spawn.signals()
+    );
 }
 
 #[test]

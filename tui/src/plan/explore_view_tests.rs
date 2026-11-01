@@ -7,7 +7,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{JobKey, PlanId, SessionId};
 use cpd_core::store::Store;
 
-use cpd_core::plan::jobs::{is_explore, KINDS, STATUSES};
+use cpd_core::plan::jobs::{KINDS, STATUSES, is_explore};
 use ratatui::style::Modifier;
 
 use crate::link::Links;
@@ -15,8 +15,8 @@ use crate::palette;
 use crate::read::{self, JobStatus};
 use crate::test_text::rows;
 
-use super::boxes;
 use super::Centre;
+use super::boxes;
 
 const NOW_MS: i64 = 1_800_000_000_000;
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -80,9 +80,21 @@ fn explore_job(key: &str, status: &str) -> String {
 /// An explore Job `key` of kind `kind` (no PR) of Job status `status`, Tier S1, with no Attempt: it satisfies the CHECKs of
 /// `jobs` for the status (`failed_cause`; `cancel_reason` with `cancel_requested_at`; `merged_sha` with a `summary`).
 fn explore_job_of(kind: &str, key: &str, status: &str) -> String {
-    let failed_cause = if status == "failed" { "'crashed'" } else { "NULL" };
-    let (cancel_reason, cancel_at) = if status == "cancelled" { ("'stop'", "'2026-01-03T00:00:00.000Z'") } else { ("NULL", "NULL") };
-    let (merged_sha, summary) = if status == "merged" { ("'abc123'", "'Found it.'") } else { ("NULL", "NULL") };
+    let failed_cause = if status == "failed" {
+        "'crashed'"
+    } else {
+        "NULL"
+    };
+    let (cancel_reason, cancel_at) = if status == "cancelled" {
+        ("'stop'", "'2026-01-03T00:00:00.000Z'")
+    } else {
+        ("NULL", "NULL")
+    };
+    let (merged_sha, summary) = if status == "merged" {
+        ("'abc123'", "'Found it.'")
+    } else {
+        ("NULL", "NULL")
+    };
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind, failed_cause, cancel_reason, cancel_requested_at, merged_sha, summary)
@@ -111,29 +123,71 @@ fn chart(store: &mut Store, frame: usize) -> super::flow::Chart {
 fn centre(store: &mut Store, frame: usize) -> Centre {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame);
-    let slot = read::ChatSlot { session: SessionId::parse("lead1").unwrap(), name: "lead1".into(), plan: plan.plan.clone(), moved_event: 1 };
-    Centre { slot, plan, boxes, frame }
+    let slot = read::ChatSlot {
+        session: SessionId::parse("lead1").unwrap(),
+        name: "lead1".into(),
+        plan: plan.plan.clone(),
+        moved_event: 1,
+    };
+    Centre {
+        slot,
+        plan,
+        boxes,
+        frame,
+    }
 }
 
 /// The pill of `key` in `chart`, as (its icon cell's glyph, its colours).
 fn pill(chart: &super::flow::Chart, key: &str) -> (String, ratatui::style::Style) {
-    let p = chart.pills.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("the {key} pill: {:?}", chart.pills.iter().map(|p| &p.key).collect::<Vec<_>>()));
+    let p = chart
+        .pills
+        .iter()
+        .find(|p| p.key == key)
+        .unwrap_or_else(|| {
+            panic!(
+                "the {key} pill: {:?}",
+                chart.pills.iter().map(|p| &p.key).collect::<Vec<_>>()
+            )
+        });
     let cell = &chart.buf[(p.rect.x + 1, p.rect.y)];
-    (cell.symbol().to_owned(), ratatui::style::Style::new().fg(cell.fg).bg(cell.bg))
+    (
+        cell.symbol().to_owned(),
+        ratatui::style::Style::new().fg(cell.fg).bg(cell.bg),
+    )
 }
 
 #[test]
 fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let (_dir, mut store) = db();
-    run(&mut store, &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(
+        &mut store,
+        &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+    );
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
 
-    let explore = lines.iter().position(|l| l.contains(" explore Jobs ")).expect("the explore Jobs box");
-    let api = lines.iter().position(|l| l.contains(" api · ")).expect("the api PR box");
-    assert!(explore < api, "the explore box is above the PR box: {lines:?}");
-    assert!(lines[explore + 1].contains("look"), "the look pill is inside the explore box: {:?}", lines[explore + 1]);
-    assert!(lines[api + 1].contains("api-1"), "the api pill stays inside its PR box: {:?}", lines[api + 1]);
+    let explore = lines
+        .iter()
+        .position(|l| l.contains(" explore Jobs "))
+        .expect("the explore Jobs box");
+    let api = lines
+        .iter()
+        .position(|l| l.contains(" api · "))
+        .expect("the api PR box");
+    assert!(
+        explore < api,
+        "the explore box is above the PR box: {lines:?}"
+    );
+    assert!(
+        lines[explore + 1].contains("look"),
+        "the look pill is inside the explore box: {:?}",
+        lines[explore + 1]
+    );
+    assert!(
+        lines[api + 1].contains("api-1"),
+        "the api pill stays inside its PR box: {:?}",
+        lines[api + 1]
+    );
 }
 
 #[test]
@@ -143,10 +197,23 @@ fn an_explore_only_plans_chart_is_the_explore_box_alone() {
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
 
-    assert_eq!(lines.iter().filter(|l| l.contains('╭')).count(), 1, "one box only: {lines:?}");
-    assert!(lines.iter().any(|l| l.contains(" explore Jobs ")), "the explore box: {lines:?}");
-    assert!(lines.iter().any(|l| l.contains("look")), "its pill: {lines:?}");
-    assert!(!lines.iter().any(|l| l.contains("no Jobs")), "no PR box and no `no Jobs` box: {lines:?}");
+    assert_eq!(
+        lines.iter().filter(|l| l.contains('╭')).count(),
+        1,
+        "one box only: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(" explore Jobs ")),
+        "the explore box: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("look")),
+        "its pill: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("no Jobs")),
+        "no PR box and no `no Jobs` box: {lines:?}"
+    );
 }
 
 #[test]
@@ -170,14 +237,26 @@ fn a_running_explore_job_spins_and_a_failed_one_turns() {
     let (icon0, style0) = pill(&working, "look");
     let (icon1, _) = pill(&turning, "look");
     let red = palette::job_pill(JobStatus::Failed, false, true);
-    assert_eq!(style0, ratatui::style::Style::new().fg(red.fg.unwrap()).bg(red.bg.unwrap()), "a failed explore pill is red");
-    assert_ne!(icon0, icon1, "a failed explore pill turns while its Lead works");
+    assert_eq!(
+        style0,
+        ratatui::style::Style::new()
+            .fg(red.fg.unwrap())
+            .bg(red.bg.unwrap()),
+        "a failed explore pill is red"
+    );
+    assert_ne!(
+        icon0, icon1,
+        "a failed explore pill turns while its Lead works"
+    );
 }
 
 #[test]
 fn exact_rendered_rows_for_one_pr_box_and_one_explore_box() {
     let (_dir, mut store) = db();
-    run(&mut store, &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(
+        &mut store,
+        &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+    );
     let chart = chart(&mut store, 0);
     let got = rows(&chart.buf).join("\n");
     // the title is ` explore Jobs · 1 scout ` (24 cells); the box is as wide as the title plus 4 (28), the pill row as before
@@ -200,7 +279,10 @@ fn exact_rendered_rows_for_one_pr_box_and_one_explore_box() {
 /// The first row of `chart` that holds ` explore Jobs `: the explore box's top border.
 fn explore_border(chart: &super::flow::Chart) -> (usize, String) {
     let lines = rows(&chart.buf);
-    let at = lines.iter().position(|l| l.contains(" explore Jobs ")).unwrap_or_else(|| panic!("the explore box: {lines:?}"));
+    let at = lines
+        .iter()
+        .position(|l| l.contains(" explore Jobs "))
+        .unwrap_or_else(|| panic!("the explore box: {lines:?}"));
     (at, lines[at].clone())
 }
 
@@ -216,31 +298,57 @@ fn the_explore_box_title_counts_the_jobs_per_kind() {
     );
     let chart = chart(&mut store, 0);
     let (explore, border) = explore_border(&chart);
-    assert!(border.contains(" explore Jobs · 1 research · 2 scout "), "the title carries the counts per kind: {border:?}");
+    assert!(
+        border.contains(" explore Jobs · 1 research · 2 scout "),
+        "the title carries the counts per kind: {border:?}"
+    );
     let lines = rows(&chart.buf);
-    let api = lines.iter().position(|l| l.contains(" api · ")).expect("the api PR box");
-    assert!(explore < api, "the explore box is above the PR box: {lines:?}");
+    let api = lines
+        .iter()
+        .position(|l| l.contains(" api · "))
+        .expect("the api PR box");
+    assert!(
+        explore < api,
+        "the explore box is above the PR box: {lines:?}"
+    );
 }
 
 #[test]
 fn an_explore_only_plans_box_title_has_the_counts() {
     let (_dir, mut store) = db_without_pr();
-    run(&mut store, &(explore_job_of("scout", "look", "merged") + &explore_job_of("research", "dig", "failed")));
+    run(
+        &mut store,
+        &(explore_job_of("scout", "look", "merged") + &explore_job_of("research", "dig", "failed")),
+    );
     let chart = chart(&mut store, 0);
     let first = rows(&chart.buf).remove(0);
-    assert!(first.contains(" explore Jobs · 1 research · 1 scout "), "the first row carries the counts: {first:?}");
+    assert!(
+        first.contains(" explore Jobs · 1 research · 1 scout "),
+        "the first row carries the counts: {first:?}"
+    );
 }
 
 #[test]
 fn the_explore_box_title_counts_every_explore_job_whatever_its_status() {
     let (_dir, mut store) = db_without_pr();
-    let sql: String = ["queued", "running", "merged", "failed", "cancelled"].iter().map(|st| explore_job_of("scout", &format!("scout-{st}"), st)).collect();
+    let sql: String = ["queued", "running", "merged", "failed", "cancelled"]
+        .iter()
+        .map(|st| explore_job_of("scout", &format!("scout-{st}"), st))
+        .collect();
     run(&mut store, &sql);
     let chart = chart(&mut store, 0);
-    assert_eq!(chart.pills.len(), 5, "one pill per explore Job: {:?}", chart.pills.iter().map(|p| &p.key).collect::<Vec<_>>());
+    assert_eq!(
+        chart.pills.len(),
+        5,
+        "one pill per explore Job: {:?}",
+        chart.pills.iter().map(|p| &p.key).collect::<Vec<_>>()
+    );
     let want = format!(" explore Jobs · {} scout ", chart.pills.len());
     let first = rows(&chart.buf).remove(0);
-    assert!(first.contains(&want), "the number in the title is the number of pills in the box, whatever their status; want {want:?} in {first:?}");
+    assert!(
+        first.contains(&want),
+        "the number in the title is the number of pills in the box, whatever their status; want {want:?} in {first:?}"
+    );
 }
 
 #[test]
@@ -252,15 +360,28 @@ fn the_explore_box_title_is_text_only_in_the_title_style() {
     assert_eq!(drawn.links, Links::default(), "the counts are no link");
 
     let title = " explore Jobs · 1 scout ";
-    let top: Vec<&str> = (0..drawn.chart.buf.area.width).map(|x| drawn.chart.buf[(x, 0)].symbol()).collect();
+    let top: Vec<&str> = (0..drawn.chart.buf.area.width)
+        .map(|x| drawn.chart.buf[(x, 0)].symbol())
+        .collect();
     let text = top.concat();
-    let start = text.find(title).unwrap_or_else(|| panic!("the title {title:?} on the top border: {text:?}"));
+    let start = text
+        .find(title)
+        .unwrap_or_else(|| panic!("the title {title:?} on the top border: {text:?}"));
     let first_cell = text[..start].chars().count() as u16;
     let want_fg = palette::read_only_text().fg.unwrap();
     for x in first_cell..first_cell + title.chars().count() as u16 {
         let cell = &drawn.chart.buf[(x, 0)];
-        assert_eq!(cell.fg, want_fg, "the title cell {x} ({:?}) has the read-only text colour", cell.symbol());
-        assert!(!cell.modifier.contains(Modifier::BOLD), "the title cell {x} ({:?}) is not bold", cell.symbol());
+        assert_eq!(
+            cell.fg,
+            want_fg,
+            "the title cell {x} ({:?}) has the read-only text colour",
+            cell.symbol()
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::BOLD),
+            "the title cell {x} ({:?}) is not bold",
+            cell.symbol()
+        );
     }
 }
 
@@ -270,15 +391,51 @@ fn every_job() -> String {
     let mut sql = String::new();
     for status in STATUSES {
         let draft = status == "draft";
-        let fingerprint = if draft { "NULL".to_owned() } else { format!("'{FP}'") };
-        let failed_cause = if status == "failed" { "'crashed'" } else { "NULL" };
-        let (cancel_reason, cancel_at) = if status == "cancelled" { ("'stop'", "'2026-01-03T00:00:00.000Z'") } else { ("NULL", "NULL") };
+        let fingerprint = if draft {
+            "NULL".to_owned()
+        } else {
+            format!("'{FP}'")
+        };
+        let failed_cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
+        let (cancel_reason, cancel_at) = if status == "cancelled" {
+            ("'stop'", "'2026-01-03T00:00:00.000Z'")
+        } else {
+            ("NULL", "NULL")
+        };
         for kind in KINDS {
             let explore = is_explore(kind);
-            let summary = if explore && status == "merged" { "'Found it.'" } else { "NULL" };
-            let merged_sha = if status == "merged" { "'abc123'" } else { "NULL" };
-            let (tests, test_files) = if kind == "test" { ("'[\"t\"]'", "'[\"f\"]'") } else { ("NULL", "NULL") };
-            let homes: Vec<Option<&str>> = if explore { vec![None] } else { ["p-waiting", "p-dispatch", "p-open", "p-merged", "p-cancelled"].map(Some).to_vec() };
+            let summary = if explore && status == "merged" {
+                "'Found it.'"
+            } else {
+                "NULL"
+            };
+            let merged_sha = if status == "merged" {
+                "'abc123'"
+            } else {
+                "NULL"
+            };
+            let (tests, test_files) = if kind == "test" {
+                ("'[\"t\"]'", "'[\"f\"]'")
+            } else {
+                ("NULL", "NULL")
+            };
+            let homes: Vec<Option<&str>> = if explore {
+                vec![None]
+            } else {
+                [
+                    "p-waiting",
+                    "p-dispatch",
+                    "p-open",
+                    "p-merged",
+                    "p-cancelled",
+                ]
+                .map(Some)
+                .to_vec()
+            };
             for pr in homes {
                 let (key, pr_sql) = match pr {
                     Some(pr) => (format!("{pr}-{kind}-{status}"), format!("'{pr}'")),
@@ -328,17 +485,26 @@ fn assert_draws_every_job(store: &mut Store) {
     let mut stored: Vec<String> = store
         .write("fixture", |tx| {
             let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = 'pay'")?;
-            let keys = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            let keys = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok::<_, CpdError>(keys)
         })
         .unwrap();
     stored.sort();
     assert!(!stored.is_empty(), "the fixture has Jobs");
-    let mut drawn: Vec<String> = chart(store, 0).pills.iter().map(|p| p.key.clone()).collect();
+    let mut drawn: Vec<String> = chart(store, 0)
+        .pills
+        .iter()
+        .map(|p| p.key.clone())
+        .collect();
     drawn.sort();
     let missing: Vec<&String> = stored.iter().filter(|k| !drawn.contains(k)).collect();
     let extra: Vec<&String> = drawn.iter().filter(|k| !stored.contains(k)).collect();
-    assert!(stored == drawn, "the Jobs drawn are the Jobs of the Plan; missing: {missing:?}; extra: {extra:?}");
+    assert!(
+        stored == drawn,
+        "the Jobs drawn are the Jobs of the Plan; missing: {missing:?}; extra: {extra:?}"
+    );
 }
 
 #[test]
@@ -357,5 +523,8 @@ fn the_plan_view_draws_every_job_of_the_plan() {
 
 /// [`every_job`] without the Jobs of a PR.
 fn every_job_explore_only() -> String {
-    every_job().split_inclusive(';').filter(|stmt| stmt.contains("VALUES ('pay', NULL,")).collect()
+    every_job()
+        .split_inclusive(';')
+        .filter(|stmt| stmt.contains("VALUES ('pay', NULL,"))
+        .collect()
 }

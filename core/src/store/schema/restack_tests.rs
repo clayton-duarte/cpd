@@ -44,7 +44,11 @@ const LOCK: &str = "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE i
 fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let mut sql = plan_sql("pay");
     for key in keys {
         sql += &pr("pay", key, "/r");
@@ -60,7 +64,8 @@ fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
 #[test]
 fn prs_locked_lets_a_waiting_pr_stack_on_a_pr_of_its_plan_and_repo_after_the_lock() {
     let (_dir, mut store) = locked(&["a", "b"], &[]);
-    write(&mut store, "UPDATE prs SET base = 'pay/a' WHERE key = 'b'").expect("a restack of a waiting PR");
+    write(&mut store, "UPDATE prs SET base = 'pay/a' WHERE key = 'b'")
+        .expect("a restack of a waiting PR");
 }
 
 #[test]
@@ -112,10 +117,16 @@ fn pr_needs_no_delete_lets_a_waiting_prs_need_go_when_it_is_the_prs_base_pr_afte
 fn pr_needs_no_delete_still_refuses_after_the_lock_a_need_that_is_not_the_prs_base_pr() {
     let (_dir, mut store) = locked(&["a", "b", "c"], &[("b", "a"), ("b", "c")]);
     write(&mut store, "UPDATE prs SET base = 'pay/a' WHERE key = 'b'").ok();
-    assert_locked(&mut store, "DELETE FROM pr_needs WHERE pr = 'b' AND needs = 'c'");
+    assert_locked(
+        &mut store,
+        "DELETE FROM pr_needs WHERE pr = 'b' AND needs = 'c'",
+    );
 
     let (_dir, mut store) = locked(&["a", "b"], &[("b", "a")]);
-    assert_locked(&mut store, "DELETE FROM pr_needs WHERE pr = 'b' AND needs = 'a'");
+    assert_locked(
+        &mut store,
+        "DELETE FROM pr_needs WHERE pr = 'b' AND needs = 'a'",
+    );
 
     let (_dir, mut store) = locked(&["a", "d"], &[("d", "a")]);
     write(
@@ -124,5 +135,8 @@ fn pr_needs_no_delete_still_refuses_after_the_lock_a_need_that_is_not_the_prs_ba
     )
     .ok();
     // Whether or not the base moved, a `dispatch` PR keeps its needs.
-    assert_locked(&mut store, "DELETE FROM pr_needs WHERE pr = 'd' AND needs = 'a'");
+    assert_locked(
+        &mut store,
+        "DELETE FROM pr_needs WHERE pr = 'd' AND needs = 'a'",
+    );
 }

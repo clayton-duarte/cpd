@@ -21,13 +21,17 @@ pub(super) fn resolve(conn: &Connection, reference: &SessionRef) -> Result<Sessi
         SessionRef::Plain(value) => {
             let raw = value.as_str();
             if let Some(id) = conn
-                .query_row("SELECT id FROM sessions WHERE id = ?1", [raw], |r| r.get::<_, String>(0))
+                .query_row("SELECT id FROM sessions WHERE id = ?1", [raw], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()?
             {
                 return parse(&id);
             }
             if let Some(lead) = conn
-                .query_row("SELECT lead_session FROM plans WHERE id = ?1", [raw], |r| r.get::<_, String>(0))
+                .query_row("SELECT lead_session FROM plans WHERE id = ?1", [raw], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()?
             {
                 return parse(&lead);
@@ -37,16 +41,25 @@ pub(super) fn resolve(conn: &Connection, reference: &SessionRef) -> Result<Sessi
             }
             Err(not_found(reference))
         }
-        SessionRef::Scoped { plan, prefix } => one(starting_with(conn, Some(plan.as_str()), prefix.as_str())?, reference),
+        SessionRef::Scoped { plan, prefix } => one(
+            starting_with(conn, Some(plan.as_str()), prefix.as_str())?,
+            reference,
+        ),
     }
 }
 
 /// The ids of the Sessions (of `plan`, if given) whose id starts with `prefix` (exact, case-sensitive).
-fn starting_with(conn: &Connection, plan: Option<&str>, prefix: &str) -> Result<Vec<String>, CpdError> {
+fn starting_with(
+    conn: &Connection,
+    plan: Option<&str>,
+    prefix: &str,
+) -> Result<Vec<String>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id FROM sessions WHERE (?1 IS NULL OR plan = ?1) AND substr(id, 1, length(?2)) = ?2 ORDER BY created_at, id",
     )?;
-    let ids = stmt.query_map((plan, prefix), |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    let ids = stmt
+        .query_map((plan, prefix), |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(ids)
 }
 
@@ -56,7 +69,10 @@ fn one(mut ids: Vec<String>, reference: &SessionRef) -> Result<SessionId, CpdErr
         1 => parse(&ids.remove(0)),
         n => Err(CpdError::new(
             ErrorCode::SessionAmbiguous,
-            format!("{reference} matches {n} Sessions ({}): use more characters or the full id.", ids.join(", ")),
+            format!(
+                "{reference} matches {n} Sessions ({}): use more characters or the full id.",
+                ids.join(", ")
+            ),
         )
         .with("session", reference.to_string())
         .with("candidates", ids)),
@@ -64,7 +80,11 @@ fn one(mut ids: Vec<String>, reference: &SessionRef) -> Result<SessionId, CpdErr
 }
 
 fn not_found(reference: &SessionRef) -> CpdError {
-    CpdError::new(ErrorCode::SessionNotFound, format!("No Session {reference}.")).with("session", reference.to_string())
+    CpdError::new(
+        ErrorCode::SessionNotFound,
+        format!("No Session {reference}."),
+    )
+    .with("session", reference.to_string())
 }
 
 fn parse(id: &str) -> Result<SessionId, CpdError> {

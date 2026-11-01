@@ -17,7 +17,9 @@ pub fn known_owners(policy_dir: &Path) -> Vec<OwnerLogin> {
             let name = entry.file_name().into_string().ok()?;
             // `metadata` follows a link: a dangling `owner.toml` is not there.
             let known = std::fs::metadata(entry.path().join(OWNER_FILE)).is_ok_and(|m| m.is_file());
-            let owner = OwnerLogin::parse(&name).ok().filter(|o| o.as_str() == name)?;
+            let owner = OwnerLogin::parse(&name)
+                .ok()
+                .filter(|o| o.as_str() == name)?;
             known.then_some(owner)
         })
         .collect();

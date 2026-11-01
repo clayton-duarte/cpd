@@ -61,21 +61,34 @@ fn the_underline_is_added_to_every_span_and_each_span_keeps_its_colours() {
     let mut b = buf(6);
     let line = Line::from(vec![
         Span::styled("a", palette::muted_text()),
-        Span::styled("b", palette::pill_interactive().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "b",
+            palette::pill_interactive().add_modifier(Modifier::BOLD),
+        ),
     ]);
-    Link::new(URL).text(line).render(Rect::new(0, 0, 6, 1), &mut b);
+    Link::new(URL)
+        .text(line)
+        .render(Rect::new(0, 0, 6, 1), &mut b);
     let (_, a, am) = cell(&b, 0);
     assert_eq!(a.fg, palette::muted_text().fg);
     assert!(am.contains(Modifier::UNDERLINED));
     let (_, s, m) = cell(&b, 1);
-    assert_eq!((s.fg, s.bg), (palette::pill_interactive().fg, palette::pill_interactive().bg));
+    assert_eq!(
+        (s.fg, s.bg),
+        (
+            palette::pill_interactive().fg,
+            palette::pill_interactive().bg
+        )
+    );
     assert!(m.contains(Modifier::UNDERLINED | Modifier::BOLD));
 }
 
 #[test]
 fn the_cue_and_the_gap_are_not_underlined() {
     let mut b = buf(6);
-    Link::new(URL).text("ab").render(Rect::new(0, 0, 6, 1), &mut b);
+    Link::new(URL)
+        .text("ab")
+        .render(Rect::new(0, 0, 6, 1), &mut b);
     assert_eq!(b[(2, 0)].symbol(), " ");
     assert!(!underlined(&b, 2));
     assert_eq!(b[(3, 0)].symbol(), CUE);
@@ -86,11 +99,17 @@ fn the_cue_and_the_gap_are_not_underlined() {
 #[test]
 fn no_cell_the_widget_writes_holds_an_escape_character() {
     let mut b = buf(12);
-    Link::new(URL).text("hello").render(Rect::new(0, 0, 12, 1), &mut b);
+    Link::new(URL)
+        .text("hello")
+        .render(Rect::new(0, 0, 12, 1), &mut b);
     Link::new(URL).render(Rect::new(0, 1, 12, 1), &mut b);
     assert!(b[(0, 0)].symbol() == "h", "the widget drew");
     for c in &b.content {
-        assert!(!c.symbol().contains('\x1b') && !c.symbol().contains('\x07'), "{:?}", c.symbol());
+        assert!(
+            !c.symbol().contains('\x1b') && !c.symbol().contains('\x07'),
+            "{:?}",
+            c.symbol()
+        );
     }
 }
 
@@ -155,13 +174,24 @@ fn opening_a_link_runs_open_with_the_url_as_its_one_argument() {
     open_url(&fake, URL).unwrap();
     let calls = fake.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!((calls[0].program.as_str(), calls[0].args.as_slice()), ("open", [URL.to_owned()].as_slice()));
+    assert_eq!(
+        (calls[0].program.as_str(), calls[0].args.as_slice()),
+        ("open", [URL.to_owned()].as_slice())
+    );
 }
 
 #[test]
 fn a_url_that_is_not_http_or_https_is_refused_and_nothing_runs() {
     let fake = runner().on("open", |_| true, Reply::ok(""));
-    let bad = ["file:///etc/passwd", "ftp://x.y/z", "github.com/o/r", "https://a b", "https://a\nb", "https://é.com", "https://a\x1b]8;;"];
+    let bad = [
+        "file:///etc/passwd",
+        "ftp://x.y/z",
+        "github.com/o/r",
+        "https://a b",
+        "https://a\nb",
+        "https://é.com",
+        "https://a\x1b]8;;",
+    ];
     for url in bad {
         let _ = open_url(&fake, url);
     }
@@ -174,7 +204,11 @@ fn a_url_that_is_not_http_or_https_is_refused_and_nothing_runs() {
 
 #[test]
 fn a_failing_open_is_returned_as_an_error() {
-    let fake = runner().on("open", |_| true, Reply::exit(1, "", "The file does not exist"));
+    let fake = runner().on(
+        "open",
+        |_| true,
+        Reply::exit(1, "", "The file does not exist"),
+    );
     let err = open_url(&fake, URL).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     for part in ["open", URL, "The file does not exist"] {

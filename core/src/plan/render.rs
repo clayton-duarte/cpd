@@ -37,7 +37,10 @@ impl OpenPlaceholder<'_> {
     }
 
     fn title(&self) -> String {
-        format!("Open the pull request: {}", self.pr.title.as_deref().unwrap_or(self.pr.key.as_str()))
+        format!(
+            "Open the pull request: {}",
+            self.pr.title.as_deref().unwrap_or(self.pr.key.as_str())
+        )
     }
 }
 
@@ -51,7 +54,10 @@ pub(super) fn inline(text: &str) -> String {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
         if c == '`' {
-            let close = chars[i + 1..].iter().position(|x| *x == '`' || *x == '\n').map(|n| i + 1 + n);
+            let close = chars[i + 1..]
+                .iter()
+                .position(|x| *x == '`' || *x == '\n')
+                .map(|n| i + 1 + n);
             if let Some(close) = close.filter(|&n| chars[n] == '`') {
                 out.extend(&chars[i..=close]);
                 i = close + 1;
@@ -59,7 +65,9 @@ pub(super) fn inline(text: &str) -> String {
             }
         }
         match (c, next) {
-            ('<', Some(n)) if n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?') => out.push_str("&lt;"),
+            ('<', Some(n)) if n.is_ascii_alphabetic() || matches!(n, '/' | '!' | '?') => {
+                out.push_str("&lt;")
+            }
             ('[', Some('^')) => out.push_str("\\["),
             _ => out.push(c),
         }
@@ -107,12 +115,19 @@ fn fence_marker(line: &str) -> Option<String> {
 }
 
 pub(super) fn cell(text: &str) -> String {
-    let lines: Vec<String> = inline(text).split('\n').map(|l| l.trim().to_owned()).collect();
+    let lines: Vec<String> = inline(text)
+        .split('\n')
+        .map(|l| l.trim().to_owned())
+        .collect();
     lines.join(" ").replace('|', "\\|")
 }
 
 fn code(text: &str) -> String {
-    if text.contains('`') { format!("`` {text} ``") } else { format!("`{text}`") }
+    if text.contains('`') {
+        format!("`` {text} ``")
+    } else {
+        format!("`{text}`")
+    }
 }
 
 /// A code span inside a table cell: `|` must be escaped even there.
@@ -123,23 +138,39 @@ fn tcode(text: &str) -> String {
 fn strings(value: &Value) -> Vec<String> {
     value
         .as_array()
-        .map(|a| a.iter().map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned)).collect())
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn list(items: &[String]) -> String {
-    items.iter().map(|i| format!("- {}", inline(i).replace('\n', "\n  "))).collect::<Vec<_>>().join("\n")
+    items
+        .iter()
+        .map(|i| format!("- {}", inline(i).replace('\n', "\n  ")))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn joined(items: &[String], f: fn(&str) -> String) -> String {
-    if items.is_empty() { "none".to_owned() } else { items.iter().map(|i| f(i)).collect::<Vec<_>>().join(", ") }
+    if items.is_empty() {
+        "none".to_owned()
+    } else {
+        items.iter().map(|i| f(i)).collect::<Vec<_>>().join(", ")
+    }
 }
 
 /// A Mermaid graph of `nodes` (key, keys it needs), `direction` `TD` or `LR`.
 /// Node ids are positional (`n1`, `n2`, …) because keys may be reserved
 /// words; the label is the key. A need that is not a node is left out.
 fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
-    let ids: BTreeMap<&str, String> = nodes.iter().enumerate().map(|(i, (k, _))| (*k, format!("{prefix}{}", i + 1))).collect();
+    let ids: BTreeMap<&str, String> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, (k, _))| (*k, format!("{prefix}{}", i + 1)))
+        .collect();
     let mut lines = vec!["```mermaid".to_owned(), format!("graph {direction}")];
     lines.extend(nodes.iter().map(|(k, _)| format!("  {}[\"{k}\"]", ids[k])));
     for (key, needs) in nodes {
@@ -163,7 +194,12 @@ fn ordered<'a>(prs: &[&'a PrRow], display: &Display) -> Vec<&'a PrRow> {
     while !rest.is_empty() {
         let next = rest
             .iter()
-            .position(|p| display.pr_needs(p).iter().all(|n| out.iter().any(|o| o.key.as_str() == n) || !rest.iter().any(|r| r.key.as_str() == n)))
+            .position(|p| {
+                display.pr_needs(p).iter().all(|n| {
+                    out.iter().any(|o| o.key.as_str() == n)
+                        || !rest.iter().any(|r| r.key.as_str() == n)
+                })
+            })
             .unwrap_or(0);
         out.push(rest.remove(next));
     }
@@ -172,7 +208,17 @@ fn ordered<'a>(prs: &[&'a PrRow], display: &Display) -> Vec<&'a PrRow> {
 
 /// The anchor GitHub gives a heading: its text lowercased, spaces as `-`, everything but letters, digits, `-` and `_` dropped.
 fn anchor(heading: &str) -> String {
-    heading.to_lowercase().chars().filter_map(|c| if c == ' ' { Some('-') } else { (c.is_alphanumeric() || c == '-' || c == '_').then_some(c) }).collect()
+    heading
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| {
+            if c == ' ' {
+                Some('-')
+            } else {
+                (c.is_alphanumeric() || c == '-' || c == '_').then_some(c)
+            }
+        })
+        .collect()
 }
 
 /// Where each blocker is shown: a Job's section, a PR's section. A reference of another Plan has none.
@@ -182,7 +228,17 @@ struct Anchors {
 
 impl Anchors {
     fn new(jobs: &[Job]) -> Anchors {
-        Anchors { jobs: jobs.iter().map(|j| (j.key.clone(), anchor(&format!("{}: {}", j.key, inline(&j.title))))).collect() }
+        Anchors {
+            jobs: jobs
+                .iter()
+                .map(|j| {
+                    (
+                        j.key.clone(),
+                        anchor(&format!("{}: {}", j.key, inline(&j.title))),
+                    )
+                })
+                .collect(),
+        }
     }
 
     /// `key` as a link to its section, or as it is when it has none (a PR of another Plan).
@@ -196,7 +252,14 @@ impl Anchors {
     }
 
     fn waiting_on(&self, blockers: &[String]) -> String {
-        format!("waiting on {}", blockers.iter().map(|b| self.link(b)).collect::<Vec<_>>().join(", "))
+        format!(
+            "waiting on {}",
+            blockers
+                .iter()
+                .map(|b| self.link(b))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -212,7 +275,11 @@ fn job_status(j: &Job, blockers: &[String], anchors: &Anchors) -> String {
 /// What a Job is in a review of a phase after `plan` (§4.5): a `draft` is
 /// under review, every other Job is Locked context.
 fn mark(job: &Job) -> &'static str {
-    if job.is_under_review() { "**under review**" } else { "Locked" }
+    if job.is_under_review() {
+        "**under review**"
+    } else {
+        "Locked"
+    }
 }
 
 /// What the sections of a render are drawn from: the Plan's Jobs, what the views show of waiting and cancelled work, and the
@@ -226,13 +293,30 @@ struct Shown<'a> {
 /// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked. `jobs` include the cancelled ones: they are
 /// in the table, in no graph and with no Spec.
-fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
+fn pr_section(
+    out: &mut Vec<String>,
+    pr: &PrRow,
+    jobs: &[&Job],
+    later: bool,
+    open_tier: &str,
+    shown: &Shown,
+) {
     // A PR that has not started, and whose Plan holds no `open` Job (an older PR), has no opener stub: its placeholder is the last row and the last section.
-    let placeholder = (pr.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(OpenPlaceholder { pr, tier: open_tier });
+    let placeholder = (pr.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(
+        OpenPlaceholder {
+            pr,
+            tier: open_tier,
+        },
+    );
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),
-        format!("Repo: {} · Base: `{}` · Needs: {}", code(&pr.repo), pr.base, joined(&shown.display.pr_needs(pr), code)),
+        format!(
+            "Repo: {} · Base: `{}` · Needs: {}",
+            code(&pr.repo),
+            pr.base,
+            joined(&shown.display.pr_needs(pr), code)
+        ),
         String::new(),
     ]);
     if jobs.is_empty() && placeholder.is_none() {
@@ -241,14 +325,32 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
     }
     // In a phase after `plan` the table has a last column, Review: what each Job is in this review.
     let (head, rule) = if later {
-        ("| Key | Title | Kind | Tier | Status | Needs | Touches | Review |", "|---|---|---|---|---|---|---|---|")
+        (
+            "| Key | Title | Kind | Tier | Status | Needs | Touches | Review |",
+            "|---|---|---|---|---|---|---|---|",
+        )
     } else {
-        ("| Key | Title | Kind | Tier | Status | Needs | Touches |", "|---|---|---|---|---|---|---|")
+        (
+            "| Key | Title | Kind | Tier | Status | Needs | Touches |",
+            "|---|---|---|---|---|---|---|",
+        )
     };
-    out.extend(["### Jobs".to_owned(), String::new(), head.to_owned(), rule.to_owned()]);
-    let blockers: Vec<Vec<String>> = jobs.iter().map(|j| shown.display.job_blockers(shown.all_jobs, j)).collect();
+    out.extend([
+        "### Jobs".to_owned(),
+        String::new(),
+        head.to_owned(),
+        rule.to_owned(),
+    ]);
+    let blockers: Vec<Vec<String>> = jobs
+        .iter()
+        .map(|j| shown.display.job_blockers(shown.all_jobs, j))
+        .collect();
     for (j, blockers) in jobs.iter().zip(&blockers) {
-        let review = if later { format!(" {} |", mark(j)) } else { String::new() };
+        let review = if later {
+            format!(" {} |", mark(j))
+        } else {
+            String::new()
+        };
         out.push(format!(
             "| {} | {} | {} | {} | {} | {} | {} |{review}",
             tcode(&j.key),
@@ -257,11 +359,18 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             shown.display.job_tier(j).as_deref().unwrap_or(MISSING_TIER),
             job_status(j, blockers, &shown.anchors),
             joined(&j.needs, tcode),
-            j.spec.as_ref().map_or_else(|| MISSING_TIER.to_owned(), |s| joined(&strings(&s.touches), tcode)),
+            j.spec.as_ref().map_or_else(
+                || MISSING_TIER.to_owned(),
+                |s| joined(&strings(&s.touches), tcode)
+            ),
         ));
     }
     if let Some(open) = &placeholder {
-        let review = if later { format!(" {MISSING_TIER} |") } else { String::new() };
+        let review = if later {
+            format!(" {MISSING_TIER} |")
+        } else {
+            String::new()
+        };
         out.push(format!(
             "| {} | {} | open | {} | {MISSING_TIER} | {OPEN_NEEDS} | {MISSING_TIER} |{review}",
             tcode(&open.key()),
@@ -269,24 +378,56 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             open.tier,
         ));
     }
-    let live: Vec<(&&Job, &Vec<String>)> = jobs.iter().zip(&blockers).filter(|(j, _)| j.status != "cancelled").collect();
+    let live: Vec<(&&Job, &Vec<String>)> = jobs
+        .iter()
+        .zip(&blockers)
+        .filter(|(j, _)| j.status != "cancelled")
+        .collect();
     if !live.is_empty() {
-        let nodes: Vec<(&str, &[String])> = live.iter().map(|(j, _)| (j.key.as_str(), j.needs.as_slice())).collect();
-        out.extend([String::new(), "### Dependencies".to_owned(), String::new(), graph("TD", "j", &nodes), String::new()]);
+        let nodes: Vec<(&str, &[String])> = live
+            .iter()
+            .map(|(j, _)| (j.key.as_str(), j.needs.as_slice()))
+            .collect();
+        out.extend([
+            String::new(),
+            "### Dependencies".to_owned(),
+            String::new(),
+            graph("TD", "j", &nodes),
+            String::new(),
+        ]);
     } else {
         out.push(String::new());
     }
     for (j, blockers) in live {
-        let waiting = if blockers.is_empty() { String::new() } else { format!(" · {}", shown.anchors.waiting_on(blockers)) };
+        let waiting = if blockers.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", shown.anchors.waiting_on(blockers))
+        };
         out.extend([
             format!("### {}: {}", code(&j.key), inline(&j.title)),
             String::new(),
             format!(
                 "Status: `{}`{waiting}{}{} · Tier: {} · Needs: {}",
-                if blockers.is_empty() { j.status.as_str() } else { "waiting" },
-                if j.kind == "work" { String::new() } else { format!(" · Kind: `{}`", j.kind) },
-                if later { format!(" · {}", mark(j)) } else { String::new() },
-                shown.display.job_tier(j).map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
+                if blockers.is_empty() {
+                    j.status.as_str()
+                } else {
+                    "waiting"
+                },
+                if j.kind == "work" {
+                    String::new()
+                } else {
+                    format!(" · Kind: `{}`", j.kind)
+                },
+                if later {
+                    format!(" · {}", mark(j))
+                } else {
+                    String::new()
+                },
+                shown
+                    .display
+                    .job_tier(j)
+                    .map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
                 joined(&j.needs, code)
             ),
             String::new(),
@@ -296,18 +437,48 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, ope
             None => out.extend([MISSING_SPEC.to_owned(), String::new()]),
         }
         if let (Some(tests), Some(files)) = (&j.tests, &j.test_files) {
-            out.extend(["#### Tests".to_owned(), String::new(), strings(tests).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
-            out.extend(["#### Test files".to_owned(), String::new(), strings(files).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+            out.extend([
+                "#### Tests".to_owned(),
+                String::new(),
+                strings(tests)
+                    .iter()
+                    .map(|t| format!("- {}", code(t)))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                String::new(),
+            ]);
+            out.extend([
+                "#### Test files".to_owned(),
+                String::new(),
+                strings(files)
+                    .iter()
+                    .map(|t| format!("- {}", code(t)))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                String::new(),
+            ]);
         }
         if let Some(resources) = &j.resources {
-            out.extend(["#### Resources".to_owned(), String::new(), strings(resources).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+            out.extend([
+                "#### Resources".to_owned(),
+                String::new(),
+                strings(resources)
+                    .iter()
+                    .map(|t| format!("- {}", code(t)))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                String::new(),
+            ]);
         }
     }
     if let Some(open) = &placeholder {
         out.extend([
             format!("### {}: {}", code(&open.key()), inline(&open.title())),
             String::new(),
-            format!("Status: {MISSING_TIER} · Kind: `open` · Tier: `{}` · Needs: {OPEN_NEEDS}", open.tier),
+            format!(
+                "Status: {MISSING_TIER} · Kind: `open` · Tier: `{}` · Needs: {OPEN_NEEDS}",
+                open.tier
+            ),
             String::new(),
             OPEN_PLACEHOLDER.to_owned(),
             String::new(),
@@ -325,11 +496,19 @@ fn spec_section(out: &mut Vec<String>, spec: &JobSpec) {
         String::new(),
         "#### Context".to_owned(),
         String::new(),
-        if spec.context.is_empty() { "None.".to_owned() } else { block(&spec.context) },
+        if spec.context.is_empty() {
+            "None.".to_owned()
+        } else {
+            block(&spec.context)
+        },
         String::new(),
         "#### Files it touches".to_owned(),
         String::new(),
-        strings(&spec.touches).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"),
+        strings(&spec.touches)
+            .iter()
+            .map(|t| format!("- {}", code(t)))
+            .collect::<Vec<_>>()
+            .join("\n"),
         String::new(),
         "#### Acceptance".to_owned(),
         String::new(),
@@ -337,7 +516,11 @@ fn spec_section(out: &mut Vec<String>, spec: &JobSpec) {
         String::new(),
         "#### Out of scope".to_owned(),
         String::new(),
-        if out_of_scope.is_empty() { "None.".to_owned() } else { list(&out_of_scope) },
+        if out_of_scope.is_empty() {
+            "None.".to_owned()
+        } else {
+            list(&out_of_scope)
+        },
         String::new(),
     ]);
 }
@@ -357,14 +540,27 @@ fn explore_section(out: &mut Vec<String>, plan: &str, jobs: &[Job], display: &Di
         "|---|---|---|---|---|---|---|".to_owned(),
     ]);
     for j in &explore {
-        let needs = if j.needs.is_empty() { MISSING_TIER.to_owned() } else { j.needs.iter().map(|n| tcode(n)).collect::<Vec<_>>().join(", ") };
-        let goal = j.spec.as_ref().map_or("", |s| s.goal.lines().next().unwrap_or(""));
+        let needs = if j.needs.is_empty() {
+            MISSING_TIER.to_owned()
+        } else {
+            j.needs
+                .iter()
+                .map(|n| tcode(n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let goal = j
+            .spec
+            .as_ref()
+            .map_or("", |s| s.goal.lines().next().unwrap_or(""));
         let question: String = goal.chars().take(100).collect();
         out.push(format!(
             "| {} | {} | {} | {} | {needs} | {} | {} |",
             tcode(&j.key),
             tcode(&j.kind),
-            display.job_tier(j).unwrap_or_else(|| MISSING_TIER.to_owned()),
+            display
+                .job_tier(j)
+                .unwrap_or_else(|| MISSING_TIER.to_owned()),
             job_status(j, &[], &anchors),
             cell(&question),
             tcode(&crate::job::spec::explore_artefact(plan, &j.key))
@@ -398,10 +594,24 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     if overlaps.is_empty() {
         out.push("No other active Plan touches these files.".to_owned());
     } else {
-        out.extend(["| Job | Other Plan | PR | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
+        out.extend([
+            "| Job | Other Plan | PR | Its Jobs (status) | Paths |".to_owned(),
+            "|---|---|---|---|---|".to_owned(),
+        ]);
         for o in overlaps {
-            let other_jobs: Vec<String> = o.other_jobs.iter().map(|j| format!("{} ({})", tcode(&j.key), j.status)).collect();
-            out.push(format!("| {} | {} | {} | {} | {} |", tcode(&o.job), tcode(&o.plan), tcode(&o.pr), other_jobs.join(", "), paths_cell(&o.paths)));
+            let other_jobs: Vec<String> = o
+                .other_jobs
+                .iter()
+                .map(|j| format!("{} ({})", tcode(&j.key), j.status))
+                .collect();
+            out.push(format!(
+                "| {} | {} | {} | {} | {} |",
+                tcode(&o.job),
+                tcode(&o.plan),
+                tcode(&o.pr),
+                other_jobs.join(", "),
+                paths_cell(&o.paths)
+            ));
         }
     }
     out.push(String::new());
@@ -419,14 +629,31 @@ pub enum Heading<'a> {
 /// placeholder `open` Job of a PR that has not started (§4.5, hs-d497). Pure: the same PRs, Jobs
 /// and overlaps give the same text.
 #[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
-pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
-    let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
-    let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) = prs.iter().partition(|p| p.status == "cancelled");
+pub fn markdown(
+    heading: &Heading,
+    context: &str,
+    phase: &str,
+    prs: &[PrRow],
+    jobs: &[Job],
+    overlaps: &[Overlap],
+    open_tier: &str,
+    display: &Display,
+) -> String {
+    let shown = Shown {
+        all_jobs: jobs,
+        display,
+        anchors: Anchors::new(jobs),
+    };
+    let (cancelled, prs): (Vec<&PrRow>, Vec<&PrRow>) =
+        prs.iter().partition(|p| p.status == "cancelled");
     let Heading::Plan { plan, .. } = heading;
     let mut out = match heading {
         Heading::Plan { title, .. } => vec![format!("# Plan: {}", inline(title)), String::new()],
     };
-    out.extend([format!("Context: `{context}` · Phase: `{phase}`"), String::new()]);
+    out.extend([
+        format!("Context: `{context}` · Phase: `{phase}`"),
+        String::new(),
+    ]);
     let later = !matches!(phase, "grounding" | "plan");
     if later {
         out.extend([
@@ -456,12 +683,22 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
             ("waiting", _) => "queued".to_owned(),
             (status, _) => status.to_owned(),
         };
-        out.push(format!("| {} | {} | {} | {} | {status} |", tcode(p.key.as_str()), tcode(&p.repo), tcode(&p.base), joined(&display.pr_needs(p), tcode)));
+        out.push(format!(
+            "| {} | {} | {} | {} | {status} |",
+            tcode(p.key.as_str()),
+            tcode(&p.repo),
+            tcode(&p.base),
+            joined(&display.pr_needs(p), tcode)
+        ));
     }
     out.push(String::new());
     if prs.len() >= 2 {
         let needs: Vec<Vec<String>> = order.iter().map(|p| display.pr_needs(p)).collect();
-        let nodes: Vec<(&str, &[String])> = order.iter().zip(&needs).map(|(p, n)| (p.key.as_str(), n.as_slice())).collect();
+        let nodes: Vec<(&str, &[String])> = order
+            .iter()
+            .zip(&needs)
+            .map(|(p, n)| (p.key.as_str(), n.as_slice()))
+            .collect();
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
     overlaps_section(&mut out, overlaps);
@@ -469,7 +706,10 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     let mut cancelled = cancelled;
     cancelled.sort_by(|a, b| a.key.cmp(&b.key));
     for pr in order.into_iter().chain(cancelled) {
-        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr_str() == pr.key.as_str()).collect();
+        let jobs: Vec<&Job> = jobs
+            .iter()
+            .filter(|j| j.pr_str() == pr.key.as_str())
+            .collect();
         pr_section(&mut out, pr, &jobs, later, open_tier, &shown);
     }
     out.join("\n")
@@ -481,7 +721,10 @@ mod tests {
 
     #[test]
     fn inline_text_has_no_html_or_footnotes_outside_code_spans() {
-        assert_eq!(inline("a <b> and </i> but 1 < 2"), "a &lt;b> and &lt;/i> but 1 < 2");
+        assert_eq!(
+            inline("a <b> and </i> but 1 < 2"),
+            "a &lt;b> and &lt;/i> but 1 < 2"
+        );
         assert_eq!(inline("see [^1]"), "see \\[^1]");
         assert_eq!(inline("keep `<b>` and `[^1]`"), "keep `<b>` and `[^1]`");
         assert_eq!(inline("a lone ` then <b>"), "a lone ` then &lt;b>");
@@ -490,7 +733,10 @@ mod tests {
     #[test]
     fn blocks_leave_fenced_code_alone() {
         let text = "Use <b>.\n```html\n<b>bold</b>\n```\nThen <i>.";
-        assert_eq!(block(text), "Use &lt;b>.\n```html\n<b>bold</b>\n```\nThen &lt;i>.");
+        assert_eq!(
+            block(text),
+            "Use &lt;b>.\n```html\n<b>bold</b>\n```\nThen &lt;i>."
+        );
     }
 
     #[test]
@@ -504,14 +750,38 @@ mod tests {
     fn the_paths_cell_shows_five_paths_and_counts_the_rest() {
         let paths = |n: usize| (1..=n).map(|i| format!("a/{i}.rs")).collect::<Vec<_>>();
         assert_eq!(paths_cell(&paths(1)), "`a/1.rs`");
-        assert_eq!(paths_cell(&paths(5)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`");
-        assert_eq!(paths_cell(&paths(6)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +1");
-        assert_eq!(paths_cell(&paths(40)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +35");
+        assert_eq!(
+            paths_cell(&paths(5)),
+            "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`"
+        );
+        assert_eq!(
+            paths_cell(&paths(6)),
+            "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +1"
+        );
+        assert_eq!(
+            paths_cell(&paths(40)),
+            "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +35"
+        );
     }
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(
+            markdown(
+                &Heading::Plan {
+                    title: "T",
+                    plan: "p1"
+                },
+                "ctx",
+                "plan",
+                &[],
+                &[],
+                &[],
+                "S2",
+                &Display::default()
+            ),
+            "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n"
+        );
     }
 
     fn pr(key: &str, needs: &[&str]) -> PrRow {
@@ -520,9 +790,18 @@ mod tests {
 
     #[test]
     fn prs_are_ordered_by_needs_then_key() {
-        let all = [pr("a-integration", &["b"]), pr("b", &["a-contract"]), pr("a-contract", &[]), pr("z", &[]), pr("c", &["gone"])];
+        let all = [
+            pr("a-integration", &["b"]),
+            pr("b", &["a-contract"]),
+            pr("a-contract", &[]),
+            pr("z", &[]),
+            pr("c", &["gone"]),
+        ];
         let refs: Vec<&PrRow> = all.iter().collect();
-        let keys: Vec<&str> = ordered(&refs, &Display::of(&all)).iter().map(|p| p.key.as_str()).collect();
+        let keys: Vec<&str> = ordered(&refs, &Display::of(&all))
+            .iter()
+            .map(|p| p.key.as_str())
+            .collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
 
@@ -533,7 +812,13 @@ mod tests {
             pr: Some(pr.into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
-            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),
+            spec: Some(JobSpec {
+                goal: "g".into(),
+                context: "c".into(),
+                touches: serde_json::json!(["a"]),
+                acceptance: serde_json::json!(["b"]),
+                out_of_scope: serde_json::json!([]),
+            }),
             status: "draft".into(),
             appended: false,
             kind: kind.into(),
@@ -557,7 +842,19 @@ mod tests {
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
     fn plain(phase: &str, prs: &[PrRow], jobs: &[Job], open_tier: &str) -> String {
-        markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", phase, prs, jobs, &[], open_tier, &Display::of(prs))
+        markdown(
+            &Heading::Plan {
+                title: "T",
+                plan: "p1",
+            },
+            "ctx",
+            phase,
+            prs,
+            jobs,
+            &[],
+            open_tier,
+            &Display::of(prs),
+        )
     }
 
     fn titled_pr(key: &str, status: &str) -> PrRow {
@@ -571,23 +868,52 @@ mod tests {
         let mut test = job("web-tests", "web", "test");
         test.tests = Some(serde_json::json!(["t::one"]));
         test.test_files = Some(serde_json::json!(["tests/t.rs"]));
-        let md = plain("plan", &[titled_pr("web", "waiting")], &[job("web-docs", "web", "docs"), test], "S3");
-        assert!(md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"), "{md}");
-        assert!(md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"), "{md}");
+        let md = plain(
+            "plan",
+            &[titled_pr("web", "waiting")],
+            &[job("web-docs", "web", "docs"), test],
+            "S3",
+        );
+        assert!(
+            md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"),
+            "{md}"
+        );
         // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
         let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
-        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the PR | — |");
+        assert_eq!(
+            rows.last().unwrap(),
+            &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the PR | — |"
+        );
         // The last section, with the text in place of a Spec; a `test` Job lists its tests and files.
         assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the PR\n\n{OPEN_PLACEHOLDER}")), "{md}");
-        assert!(md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"), "{md}");
-        assert!(md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"), "{md}");
+        assert!(
+            md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"),
+            "{md}"
+        );
+        assert!(
+            md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"),
+            "{md}"
+        );
         // It is no Job: no node in the graph.
-        assert!(!md.contains("open-web[") && !md.contains("[\"open-web\"]"), "{md}");
+        assert!(
+            !md.contains("open-web[") && !md.contains("[\"open-web\"]"),
+            "{md}"
+        );
     }
 
     #[test]
-    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then() {
-        let started = plain("dispatch", &[titled_pr("web", "dispatch")], &[job("web-docs", "web", "docs")], "S2");
+    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then()
+     {
+        let started = plain(
+            "dispatch",
+            &[titled_pr("web", "dispatch")],
+            &[job("web-docs", "web", "docs")],
+            "S2",
+        );
         assert!(!started.contains("open-web"), "{started}");
         let waiting = plain("dispatch", &[titled_pr("web", "waiting")], &[], "S2");
         assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the PR | — | — |"), "{waiting}");
@@ -604,12 +930,32 @@ mod tests {
         let mut queued = job("later", "web", "docs");
         (queued.status, queued.needs) = ("queued".into(), vec!["gone".into(), "web-docs".into()]);
         let prs = [titled_pr("aaa", "cancelled"), titled_pr("web", "dispatch")];
-        let md = plain("dispatch", &prs, &[gone, queued, job("web-docs", "web", "docs")], "S2");
-        assert!(md.contains("| `gone` | Title gone | docs | S2 | cancelled: not needed | none | `a` |"), "{md}");
+        let md = plain(
+            "dispatch",
+            &prs,
+            &[gone, queued, job("web-docs", "web", "docs")],
+            "S2",
+        );
+        assert!(
+            md.contains("| `gone` | Title gone | docs | S2 | cancelled: not needed | none | `a` |"),
+            "{md}"
+        );
         // a need on a cancelled Job blocks nothing: only the draft `web-docs` is waited for
-        assert!(md.contains("waiting on [`web-docs`](#web-docs-title-web-docs) |"), "{md}");
-        assert!(md.find("| `web` |").unwrap() < md.find("| `aaa` |").unwrap(), "{md}");
-        assert!(md.contains("| `aaa` | `/r` | `main` | none | cancelled |"), "{md}");
-        assert!(!md.contains("[\"gone\"]") && !md.contains("### `gone`"), "{md}");
+        assert!(
+            md.contains("waiting on [`web-docs`](#web-docs-title-web-docs) |"),
+            "{md}"
+        );
+        assert!(
+            md.find("| `web` |").unwrap() < md.find("| `aaa` |").unwrap(),
+            "{md}"
+        );
+        assert!(
+            md.contains("| `aaa` | `/r` | `main` | none | cancelled |"),
+            "{md}"
+        );
+        assert!(
+            !md.contains("[\"gone\"]") && !md.contains("### `gone`"),
+            "{md}"
+        );
     }
 }

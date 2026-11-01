@@ -16,7 +16,12 @@ pub struct Trace {
 impl Trace {
     /// On only when `value` (`CPD_TUI_TRACE`) is exactly `1`.
     pub fn new(value: Option<&str>) -> Trace {
-        Trace { on: value == Some("1"), read: Duration::ZERO, layout: Duration::ZERO, last_start: None }
+        Trace {
+            on: value == Some("1"),
+            read: Duration::ZERO,
+            layout: Duration::ZERO,
+            last_start: None,
+        }
     }
 
     pub fn is_on(&self) -> bool {
@@ -38,7 +43,9 @@ impl Trace {
         if !self.on {
             return None;
         }
-        let gap = self.last_start.map_or(0, |last| start.saturating_sub(last).as_micros());
+        let gap = self
+            .last_start
+            .map_or(0, |last| start.saturating_sub(last).as_micros());
         self.last_start = Some(start);
         let line = format!(
             "trace gap_us={gap} read_us={} layout_us={} draw_us={} frame={frame}",
@@ -51,7 +58,13 @@ impl Trace {
     }
 
     /// [`Trace::line`], appended to `log`; nothing is written (no file) when off.
-    pub fn record(&mut self, log: &ViewLog, start: Duration, draw: Duration, frame: usize) -> Result<(), String> {
+    pub fn record(
+        &mut self,
+        log: &ViewLog,
+        start: Duration,
+        draw: Duration,
+        frame: usize,
+    ) -> Result<(), String> {
         match self.line(start, draw, frame) {
             Some(line) => log.append(&line),
             None => Ok(()),
@@ -71,7 +84,13 @@ impl Trace {
 
     /// Runs `draw` (a terminal draw), then appends the line to `log`; with the trace off, just `draw`. The
     /// `epoch` is the instant the view's times count from.
-    pub fn draw<T>(&mut self, epoch: Instant, log: &ViewLog, frame: usize, draw: impl FnOnce() -> T) -> (T, Result<(), String>) {
+    pub fn draw<T>(
+        &mut self,
+        epoch: Instant,
+        log: &ViewLog,
+        frame: usize,
+        draw: impl FnOnce() -> T,
+    ) -> (T, Result<(), String>) {
         if !self.on {
             return (draw(), Ok(()));
         }

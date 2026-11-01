@@ -7,8 +7,8 @@ use std::fs;
 
 use serde_json::{Value, json};
 
-use super::driver_open::{open_pr_live, submit_only, Live};
-use super::plan_show::{fx, Pay};
+use super::driver_open::{Live, open_pr_live, submit_only};
+use super::plan_show::{Pay, fx};
 
 /// One item of the stored list, with the ten keys of DESIGN item 1.
 fn item(id: &str, kind: &str) -> Value {
@@ -24,7 +24,14 @@ fn store_list(sql_target: &str, list: &Value) -> String {
 fn plan_show_gives_each_pr_its_open_feedback_count() {
     let fx = fx("dispatch");
     fx.pr("one", "open", &[]);
-    fx.env.sql(&store_list("number = 7", &json!([item("PRRT_1", "thread"), item("IC_1", "comment"), item("PRR_1", "review")])));
+    fx.env.sql(&store_list(
+        "number = 7",
+        &json!([
+            item("PRRT_1", "thread"),
+            item("IC_1", "comment"),
+            item("PRR_1", "review")
+        ]),
+    ));
     fx.pr("two", "waiting", &[]);
 
     let show = fx.show();
@@ -53,7 +60,24 @@ fn plan_show_gives_null_for_a_pr_whose_feedback_was_never_read() {
 fn merged_fix_text(live: &Live) -> String {
     let spec = live.fx.env.root().join("fix-spec.json");
     fs::write(&spec, r#"{"goal": "Fix it.", "context": "The review asked.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let added = live.fx.cpd(&["job", "add", "fix", "--title", "Fix the review", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay"]).ok();
+    let added = live
+        .fx
+        .cpd(&[
+            "job",
+            "add",
+            "fix",
+            "--title",
+            "Fix the review",
+            "--tier",
+            "S2",
+            "--spec",
+            spec.to_str().unwrap(),
+            "--pr",
+            "repo",
+            "--plan",
+            "pay",
+        ])
+        .ok();
     assert_eq!(added["job"]["status"], "queued");
     let (attempt, submitted) = live.run_job("fix", |live, id| {
         live.commit(&live.worktree(id), "fix.txt", "fixed\n", "fix");
@@ -61,18 +85,25 @@ fn merged_fix_text(live: &Live) -> String {
     });
     assert_eq!(submitted["ok"], true, "{submitted}");
     assert_eq!(attempt["outcome"], "merged", "{attempt}");
-    live.value::<String>("SELECT text FROM events WHERE plan = 'pay' AND job = 'fix' AND kind = 'job-merged'")
+    live.value::<String>(
+        "SELECT text FROM events WHERE plan = 'pay' AND job = 'fix' AND kind = 'job-merged'",
+    )
 }
 
 #[test]
 fn the_job_merged_text_of_a_work_job_names_the_open_review_comments_left() {
     let live = open_pr_live();
-    live.fixture(&store_list("repo = 'acme/pay' AND number = 812", &json!([item("PRRT_1", "thread"), item("IC_1", "comment")])));
+    live.fixture(&store_list(
+        "repo = 'acme/pay' AND number = 812",
+        &json!([item("PRRT_1", "thread"), item("IC_1", "comment")]),
+    ));
 
     let text = merged_fix_text(&live);
 
     assert!(
-        text.ends_with("PR repo still has 2 open review comments: cpd pr view --pr repo, then cpd pr reply."),
+        text.ends_with(
+            "PR repo still has 2 open review comments: cpd pr view --pr repo, then cpd pr reply."
+        ),
         "{text:?}"
     );
 }
@@ -82,10 +113,16 @@ fn the_job_merged_text_says_nothing_when_no_item_is_open() {
     let live = open_pr_live();
     // Read, none open (`[]`), and then the same as never read (NULL): neither adds a hint. Only the `[]` list is stored here;
     // the never-read case is the default of the fixture. The stored list must exist (the migration) for the test to mean it.
-    live.fixture(&store_list("repo = 'acme/pay' AND number = 812", &json!([])));
+    live.fixture(&store_list(
+        "repo = 'acme/pay' AND number = 812",
+        &json!([]),
+    ));
 
     let text = merged_fix_text(&live);
 
-    assert!(!text.contains("open review comments") && !text.contains("cpd pr reply"), "{text:?}");
+    assert!(
+        !text.contains("open review comments") && !text.contains("cpd pr reply"),
+        "{text:?}"
+    );
     let _ = common::pay_lookup;
 }

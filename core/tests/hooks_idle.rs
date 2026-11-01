@@ -19,7 +19,10 @@ fn call(tool: &str) -> Call {
         tool: tool.to_owned(),
         program: "sh".to_owned(),
         args: vec!["-c".to_owned(), "cargo test".to_owned()],
-        envs: vec![("KEPT".to_owned(), Some("yes".to_owned())), ("TMUX".to_owned(), None)],
+        envs: vec![
+            ("KEPT".to_owned(), Some("yes".to_owned())),
+            ("TMUX".to_owned(), None),
+        ],
         cwd: Some(PathBuf::from("/work/tree")),
         deadline: Duration::from_secs(60),
         stdin: Some(b"{}".to_vec()),
@@ -28,7 +31,10 @@ fn call(tool: &str) -> Call {
 }
 
 fn argv(cmd: &Command) -> Vec<String> {
-    std::iter::once(cmd.get_program()).chain(cmd.get_args()).map(|a| a.to_string_lossy().into_owned()).collect()
+    std::iter::once(cmd.get_program())
+        .chain(cmd.get_args())
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
 }
 
 mod hooks_idle {
@@ -39,7 +45,11 @@ mod hooks_idle {
         let hook = system_command(&call(HOOK_TOOL));
         let prefix: Vec<String> = idle_prefix().iter().map(|s| (*s).to_owned()).collect();
         // The hook's own argv follows the idle prefix, whole.
-        let expected: Vec<String> = prefix.iter().cloned().chain(["sh", "-c", "cargo test"].map(str::to_owned)).collect();
+        let expected: Vec<String> = prefix
+            .iter()
+            .cloned()
+            .chain(["sh", "-c", "cargo test"].map(str::to_owned))
+            .collect();
         assert_eq!(argv(&hook), expected, "nice, ionice, then the hook's shell");
         // Linux: nice 19 and the idle I/O class (`ionice -c 3`); macOS has no ionice, only nice 19 (hs-d528).
         #[cfg(target_os = "linux")]
@@ -47,10 +57,22 @@ mod hooks_idle {
         #[cfg(target_os = "macos")]
         assert_eq!(&prefix[..], ["nice", "-n", "19"]);
         // The hook keeps its directory and its environment.
-        assert_eq!(hook.get_current_dir(), Some(std::path::Path::new("/work/tree")));
+        assert_eq!(
+            hook.get_current_dir(),
+            Some(std::path::Path::new("/work/tree"))
+        );
         let envs: Vec<(&OsStr, Option<&OsStr>)> = hook.get_envs().collect();
-        assert_eq!(envs, [(OsStr::new("KEPT"), Some(OsStr::new("yes"))), (OsStr::new("TMUX"), None)]);
+        assert_eq!(
+            envs,
+            [
+                (OsStr::new("KEPT"), Some(OsStr::new("yes"))),
+                (OsStr::new("TMUX"), None)
+            ]
+        );
         // The caller keeps its nice: only a hook is wrapped, every other call is its own argv.
-        assert_eq!(argv(&system_command(&call("git"))), ["sh", "-c", "cargo test"]);
+        assert_eq!(
+            argv(&system_command(&call("git"))),
+            ["sh", "-c", "cargo test"]
+        );
     }
 }

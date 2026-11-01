@@ -7,14 +7,18 @@ use serde_json::json;
 use super::row::{self, Role};
 use super::{Env, FirstMessageArgs, not_a_lead};
 use crate::args::SessionArg;
-use crate::context::{manager, ContextRow};
+use crate::context::{ContextRow, manager};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::highest_id;
 use crate::output::Output;
 use crate::plan;
 
 pub(super) fn first_message(args: FirstMessageArgs) -> Result<Output, CpdError> {
-    let reference = SessionArg { session: args.session }.require()?.clone();
+    let reference = SessionArg {
+        session: args.session,
+    }
+    .require()?
+    .clone();
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
     let machine = env.config.machine.clone();
@@ -43,9 +47,17 @@ pub(super) fn first_message(args: FirstMessageArgs) -> Result<Output, CpdError> 
         Ok((session, text, path, highest_id(conn)?))
     })?;
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display())).with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
-    std::fs::create_dir_all(path.parent().expect("a file under $CPD_HOME has a directory")).map_err(failed)?;
+    std::fs::create_dir_all(
+        path.parent()
+            .expect("a file under $CPD_HOME has a directory"),
+    )
+    .map_err(failed)?;
     std::fs::write(&path, &text).map_err(failed)?;
     Ok(Output::success(json!({
         "session": session.id,

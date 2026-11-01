@@ -67,7 +67,12 @@ impl Rig {
         let home = root.join("home");
         let cpd_home = root.join("cpd-home");
         let target_dir = root.join("target");
-        for dir in [&home, &cpd_home, &root.join("repos"), &target_dir.join("release")] {
+        for dir in [
+            &home,
+            &cpd_home,
+            &root.join("repos"),
+            &target_dir.join("release"),
+        ] {
             fs::create_dir_all(dir).unwrap();
         }
         let built = target_dir.join("release/cpd");
@@ -78,7 +83,13 @@ impl Rig {
         for script in ["install-cpd.sh", "cargo.sh", "tag-version.sh"] {
             origin.write(&format!("scripts/{script}"), &format!("{script}\n"));
         }
-        for file in ["package.json", "extension.ts", "lib/cpd.ts", "lib/adapter.ts", "test/cpd.test.ts"] {
+        for file in [
+            "package.json",
+            "extension.ts",
+            "lib/cpd.ts",
+            "lib/adapter.ts",
+            "test/cpd.test.ts",
+        ] {
             origin.write(&format!("pi/{file}"), &format!("{file}\n"));
         }
         origin.write(&format!("{MIGRATIONS}/.keep"), "");
@@ -98,7 +109,16 @@ impl Rig {
             },
         };
         (*rig.fakes.runner).clone().with_git(&rig.route);
-        let clone = git(&rig, &root, &["clone", "-q", origin.dir().to_str().unwrap(), rig.install.root.to_str().unwrap()]);
+        let clone = git(
+            &rig,
+            &root,
+            &[
+                "clone",
+                "-q",
+                origin.dir().to_str().unwrap(),
+                rig.install.root.to_str().unwrap(),
+            ],
+        );
         assert_eq!(clone.0, 0, "the fixture's clone: {}", clone.1);
         rig
     }
@@ -108,11 +128,22 @@ impl Rig {
     fn new() -> Rig {
         let rig = Rig::bare();
         rig.built_says_no_store();
-        let (installed, tag) = (rig.installed_cpd(), rig.install.root.join("scripts/tag-version.sh"));
+        let (installed, tag) = (
+            rig.installed_cpd(),
+            rig.install.root.join("scripts/tag-version.sh"),
+        );
         (*rig.fakes.runner)
             .clone()
-            .on("cpd", move |c| Path::new(&c.program) == installed, Reply::ok(""))
-            .on("tag-version.sh", move |c| Path::new(&c.program) == tag, Reply::ok(""));
+            .on(
+                "cpd",
+                move |c| Path::new(&c.program) == installed,
+                Reply::ok(""),
+            )
+            .on(
+                "tag-version.sh",
+                move |c| Path::new(&c.program) == tag,
+                Reply::ok(""),
+            );
         rig
     }
 
@@ -137,8 +168,16 @@ impl Rig {
         let migrate = built;
         (*self.fakes.runner)
             .clone()
-            .on("cpd", move |c| Path::new(&c.program) == version && c.args == ["--version"], Reply::ok(says))
-            .on("cpd", move |c| Path::new(&c.program) == migrate && c.args == ["config", "--migrate"], Reply::ok(migrated));
+            .on(
+                "cpd",
+                move |c| Path::new(&c.program) == version && c.args == ["--version"],
+                Reply::ok(says),
+            )
+            .on(
+                "cpd",
+                move |c| Path::new(&c.program) == migrate && c.args == ["config", "--migrate"],
+                Reply::ok(migrated),
+            );
     }
 
     /// Runs the install on the rig's ports.
@@ -146,7 +185,10 @@ impl Rig {
         let mut stderr = Vec::new();
         let exit = run(&self.fakes.ports, &self.install, &mut stderr);
         self.route.assert_supported();
-        Run { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
+        Run {
+            exit,
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        }
     }
 
     /// One more install, a second of virtual time after the last: a version is named by the UTC second and the pid.
@@ -167,7 +209,10 @@ impl Rig {
     /// Sets the modification time of `path` to `age` before the virtual now.
     fn age(&self, path: &Path, age: Duration) {
         let at = u64::try_from(self.utc().unix_timestamp()).unwrap() - age.as_secs();
-        fs::File::open(path).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(at)).unwrap();
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(at))
+            .unwrap();
     }
 
     fn stamp_versions(&self, age: Duration) {
@@ -180,9 +225,16 @@ impl Rig {
     fn linked_version(&self) -> String {
         let pi = self.share().join("pi");
         let meta = fs::symlink_metadata(&pi).unwrap_or_else(|e| panic!("{}: {e}", pi.display()));
-        assert!(meta.file_type().is_symlink(), "{} is not a symlink", pi.display());
+        assert!(
+            meta.file_type().is_symlink(),
+            "{} is not a symlink",
+            pi.display()
+        );
         let target = fs::read_link(&pi).unwrap().to_string_lossy().into_owned();
-        assert!(is_version(&target) && target != "pi.legacy", "the target `{target}` is not a pi.<id> beside the link (a relative target)");
+        assert!(
+            is_version(&target) && target != "pi.legacy",
+            "the target `{target}` is not a pi.<id> beside the link (a relative target)"
+        );
         target
     }
 
@@ -198,8 +250,14 @@ impl Rig {
 
     fn names(&self, keep: impl Fn(&str) -> bool) -> Vec<String> {
         // No `share/` is no entry: the install makes it, and a test that finds none is told so by its own assertion.
-        let entries = fs::read_dir(self.share()).map(|d| d.collect::<Vec<_>>()).unwrap_or_default();
-        let mut names: Vec<String> = entries.into_iter().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| keep(n)).collect();
+        let entries = fs::read_dir(self.share())
+            .map(|d| d.collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut names: Vec<String> = entries
+            .into_iter()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| keep(n))
+            .collect();
         names.sort();
         names
     }
@@ -208,7 +266,11 @@ impl Rig {
     fn old_real_adapter(&self) -> PathBuf {
         let pi = self.share().join("pi");
         fs::create_dir_all(pi.join("lib")).unwrap();
-        for (file, text) in [("package.json", "old\n"), ("extension.ts", "old\n"), ("lib/old-only.ts", "old\n")] {
+        for (file, text) in [
+            ("package.json", "old\n"),
+            ("extension.ts", "old\n"),
+            ("lib/old-only.ts", "old\n"),
+        ] {
             fs::write(pi.join(file), text).unwrap();
         }
         pi
@@ -219,17 +281,31 @@ impl Rig {
 fn git(rig: &Rig, dir: &Path, args: &[&str]) -> (i32, String) {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir).args(args);
-    let out = rig.fakes.ports.runner.output(&mut cmd, "git", Duration::from_secs(60)).unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
-    (std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8, String::from_utf8_lossy(&out.stderr).into_owned())
+    let out = rig
+        .fakes
+        .ports
+        .runner
+        .output(&mut cmd, "git", Duration::from_secs(60))
+        .unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
+    (
+        std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 /// A `pi.<id>` directory name: `<UTC YYYYmmddTHHMMSS>-<pid>`, or `pi.legacy`.
 fn is_version(name: &str) -> bool {
-    let Some(id) = name.strip_prefix("pi.") else { return false };
+    let Some(id) = name.strip_prefix("pi.") else {
+        return false;
+    };
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     id == "legacy"
         || id.split_once('-').is_some_and(|(stamp, pid)| {
-            stamp.len() == 15 && stamp.as_bytes()[8] == b'T' && digits(&stamp[..8]) && digits(&stamp[9..]) && digits(pid)
+            stamp.len() == 15
+                && stamp.as_bytes()[8] == b'T'
+                && digits(&stamp[..8])
+                && digits(&stamp[9..])
+                && digits(pid)
         })
 }
 
@@ -242,11 +318,21 @@ fn a_first_install_links_pi_to_a_versioned_directory_without_renameat2() {
     assert_eq!(run.exit, 0, "{}", run.stderr);
     let id = rig.linked_version();
     let pi = rig.share().join("pi");
-    assert_eq!(fs::read_to_string(pi.join("extension.ts")).unwrap(), "extension.ts\n");
+    assert_eq!(
+        fs::read_to_string(pi.join("extension.ts")).unwrap(),
+        "extension.ts\n"
+    );
     assert!(pi.join("package.json").exists(), "pi/package.json");
-    assert!(!pi.join("test").exists(), "tests are not part of the install");
+    assert!(
+        !pi.join("test").exists(),
+        "tests are not part of the install"
+    );
     assert_eq!(rig.versions(), [id], "one version, no pi.legacy");
-    assert_eq!(rig.scratch(), Vec::<String>::new(), "no pi.tmp.<pid> or pi.link.<pid> is left");
+    assert_eq!(
+        rig.scratch(),
+        Vec::<String>::new(),
+        "no pi.tmp.<pid> or pi.link.<pid> is left"
+    );
 }
 
 #[test]
@@ -258,7 +344,10 @@ fn the_installed_tree_can_be_moved_because_the_link_is_relative() {
     let moved = rig.install.home.join("moved-share");
     fs::rename(rig.share(), &moved).unwrap();
 
-    assert!(moved.join("pi/package.json").exists(), "the link still resolves after the tree moved");
+    assert!(
+        moved.join("pi/package.json").exists(),
+        "the link still resolves after the tree moved"
+    );
 }
 
 #[test]
@@ -271,9 +360,20 @@ fn an_existing_real_adapter_directory_is_migrated_to_pi_legacy_without_renameat2
     assert_eq!(run.exit, 0, "{}", run.stderr);
     let id = rig.linked_version();
     let share = rig.share();
-    assert_eq!(fs::read_to_string(share.join("pi/extension.ts")).unwrap(), "extension.ts\n", "the new adapter is visible at pi");
-    assert!(!share.join("pi/lib/old-only.ts").exists(), "no old file shows through the new pi");
-    assert_eq!(fs::read_to_string(share.join("pi.legacy/lib/old-only.ts")).unwrap(), "old\n", "pi.legacy holds the old files");
+    assert_eq!(
+        fs::read_to_string(share.join("pi/extension.ts")).unwrap(),
+        "extension.ts\n",
+        "the new adapter is visible at pi"
+    );
+    assert!(
+        !share.join("pi/lib/old-only.ts").exists(),
+        "no old file shows through the new pi"
+    );
+    assert_eq!(
+        fs::read_to_string(share.join("pi.legacy/lib/old-only.ts")).unwrap(),
+        "old\n",
+        "pi.legacy holds the old files"
+    );
     let mut want = vec!["pi.legacy".to_string(), id];
     want.sort();
     assert_eq!(rig.versions(), want);
@@ -300,11 +400,28 @@ fn a_failing_swap_of_the_migration_puts_the_old_directory_back_and_fails_the_ins
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install failed: "), "{}", run.stderr);
-    assert!(run.stderr.contains("Permission denied"), "the reason is on stderr: {}", run.stderr);
-    assert!(fs::symlink_metadata(&pi).unwrap().file_type().is_dir(), "pi is the old real directory again");
-    assert_eq!(fs::read_to_string(pi.join("lib/old-only.ts")).unwrap(), "old\n");
-    assert!(!rig.share().join("pi.legacy").exists(), "pi.legacy was renamed back");
+    assert!(
+        run.stderr.contains("cpd install failed: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("Permission denied"),
+        "the reason is on stderr: {}",
+        run.stderr
+    );
+    assert!(
+        fs::symlink_metadata(&pi).unwrap().file_type().is_dir(),
+        "pi is the old real directory again"
+    );
+    assert_eq!(
+        fs::read_to_string(pi.join("lib/old-only.ts")).unwrap(),
+        "old\n"
+    );
+    assert!(
+        !rig.share().join("pi.legacy").exists(),
+        "pi.legacy was renamed back"
+    );
 }
 
 #[test]
@@ -320,8 +437,15 @@ fn an_existing_symlink_is_swapped_and_its_version_is_kept_as_the_displaced_one()
     assert_eq!(run.exit, 0, "{}", run.stderr);
     let id = rig.linked_version();
     assert_ne!(id, "pi.20260101T000000-1");
-    assert_eq!(fs::read_to_string(share.join("pi/extension.ts")).unwrap(), "extension.ts\n");
-    assert_eq!(fs::read_to_string(share.join("pi.20260101T000000-1/package.json")).unwrap(), "old\n", "the displaced version stays one install");
+    assert_eq!(
+        fs::read_to_string(share.join("pi/extension.ts")).unwrap(),
+        "extension.ts\n"
+    );
+    assert_eq!(
+        fs::read_to_string(share.join("pi.20260101T000000-1/package.json")).unwrap(),
+        "old\n",
+        "the displaced version stays one install"
+    );
 }
 
 #[test]
@@ -337,12 +461,21 @@ fn a_second_install_shows_the_new_content_and_keeps_the_displaced_version() {
     let second = rig.linked_version();
     assert_ne!(first, second);
     let share = rig.share();
-    assert_eq!(fs::read_to_string(share.join("pi/extension.ts")).unwrap(), "second install\n", "the new content is visible through pi");
-    assert_eq!(fs::read_to_string(share.join(&first).join("extension.ts")).unwrap(), "extension.ts\n", "the displaced version is whole and kept");
+    assert_eq!(
+        fs::read_to_string(share.join("pi/extension.ts")).unwrap(),
+        "second install\n",
+        "the new content is visible through pi"
+    );
+    assert_eq!(
+        fs::read_to_string(share.join(&first).join("extension.ts")).unwrap(),
+        "extension.ts\n",
+        "the displaced version is whole and kept"
+    );
 }
 
 #[test]
-fn installs_one_after_another_leave_the_current_and_the_displaced_version_once_the_others_are_old() {
+fn installs_one_after_another_leave_the_current_and_the_displaced_version_once_the_others_are_old()
+{
     let rig = Rig::new();
     assert_eq!(rig.install_again().exit, 0);
     let first = rig.linked_version();
@@ -358,11 +491,16 @@ fn installs_one_after_another_leave_the_current_and_the_displaced_version_once_t
     let third = rig.linked_version();
     let mut want = vec![second, third];
     want.sort();
-    assert_eq!(rig.versions(), want, "the current and the displaced version only; {first} is gone");
+    assert_eq!(
+        rig.versions(),
+        want,
+        "the current and the displaced version only; {first} is gone"
+    );
 }
 
 #[test]
-fn versions_modified_in_the_last_hour_are_kept_because_a_concurrent_install_may_not_have_linked_them() {
+fn versions_modified_in_the_last_hour_are_kept_because_a_concurrent_install_may_not_have_linked_them()
+ {
     let rig = Rig::new();
     let mut made = Vec::new();
     for _ in 0..3 {
@@ -370,7 +508,11 @@ fn versions_modified_in_the_last_hour_are_kept_because_a_concurrent_install_may_
         made.push(rig.linked_version());
     }
     made.sort();
-    assert_eq!(rig.versions(), made, "three installs within the hour leave three versions");
+    assert_eq!(
+        rig.versions(),
+        made,
+        "three installs within the hour leave three versions"
+    );
 }
 
 #[test]
@@ -384,8 +526,14 @@ fn the_migrated_pi_legacy_is_removed_by_a_later_install_once_it_is_old() {
     let run = rig.install_again();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(!rig.share().join("pi.legacy").exists(), "pi.legacy is neither current nor displaced any more");
-    assert!(rig.share().join(&first).exists(), "the displaced version stays");
+    assert!(
+        !rig.share().join("pi.legacy").exists(),
+        "pi.legacy is neither current nor displaced any more"
+    );
+    assert!(
+        rig.share().join(&first).exists(),
+        "the displaced version stays"
+    );
 }
 
 #[test]
@@ -394,7 +542,10 @@ fn the_cleanup_removes_the_scratch_of_dead_pids_and_spares_a_live_install_and_a_
     let share = rig.share();
     fs::create_dir_all(&share).unwrap();
     // `FakeSpawn` knows two pids: one runs, one exited.
-    let launch = Launch { program: "install".into(), ..Launch::default() };
+    let launch = Launch {
+        program: "install".into(),
+        ..Launch::default()
+    };
     let spawn = &rig.fakes.spawn;
     let (Pid(live), dead) = (spawn.spawn(&launch).unwrap(), spawn.spawn(&launch).unwrap());
     spawn.exit(dead, 0);
@@ -402,7 +553,12 @@ fn the_cleanup_removes_the_scratch_of_dead_pids_and_spares_a_live_install_and_a_
     assert!(spawn.alive(Pid(live)) && !spawn.alive(Pid(dead)));
     let old_version = "pi.20260101T000000-1";
     let young_version = "pi.20260101T000100-2";
-    for dir in [old_version, young_version, &format!("pi.tmp.{dead}"), &format!("pi.tmp.{live}")] {
+    for dir in [
+        old_version,
+        young_version,
+        &format!("pi.tmp.{dead}"),
+        &format!("pi.tmp.{live}"),
+    ] {
         fs::create_dir_all(share.join(dir)).unwrap();
     }
     for link in [format!("pi.link.{dead}"), format!("pi.link.{live}")] {
@@ -415,17 +571,38 @@ fn the_cleanup_removes_the_scratch_of_dead_pids_and_spares_a_live_install_and_a_
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(!share.join(old_version).exists(), "an old version that is neither current nor displaced is removed");
-    assert!(share.join(young_version).exists(), "a version modified a minute ago is kept");
-    assert!(!share.join(format!("pi.tmp.{dead}")).exists(), "pi.tmp.<dead pid> is removed");
-    assert!(fs::symlink_metadata(share.join(format!("pi.link.{dead}"))).is_err(), "pi.link.<dead pid> is removed");
-    assert!(share.join(format!("pi.tmp.{live}")).exists(), "pi.tmp.<live pid> is another install's");
-    assert!(fs::symlink_metadata(share.join(format!("pi.link.{live}"))).is_ok(), "pi.link.<live pid> is another install's");
+    assert!(
+        !share.join(old_version).exists(),
+        "an old version that is neither current nor displaced is removed"
+    );
+    assert!(
+        share.join(young_version).exists(),
+        "a version modified a minute ago is kept"
+    );
+    assert!(
+        !share.join(format!("pi.tmp.{dead}")).exists(),
+        "pi.tmp.<dead pid> is removed"
+    );
+    assert!(
+        fs::symlink_metadata(share.join(format!("pi.link.{dead}"))).is_err(),
+        "pi.link.<dead pid> is removed"
+    );
+    assert!(
+        share.join(format!("pi.tmp.{live}")).exists(),
+        "pi.tmp.<live pid> is another install's"
+    );
+    assert!(
+        fs::symlink_metadata(share.join(format!("pi.link.{live}"))).is_ok(),
+        "pi.link.<live pid> is another install's"
+    );
 }
 
 /// Two pids: the first runs, the second exited.
 fn live_and_dead_pids(rig: &Rig) -> (u32, u32) {
-    let launch = Launch { program: "install".into(), ..Launch::default() };
+    let launch = Launch {
+        program: "install".into(),
+        ..Launch::default()
+    };
     let spawn = &rig.fakes.spawn;
     let (live, dead) = (spawn.spawn(&launch).unwrap(), spawn.spawn(&launch).unwrap());
     spawn.exit(dead, 0);
@@ -468,9 +645,19 @@ fn a_version_a_live_pid_pins_survives_two_later_installs_once_it_is_old() {
     let (v1, v2, pin) = pin_v1_then_install_twice(&rig, live);
 
     let share = rig.share();
-    assert!(share.join(&v1).join("package.json").exists(), "{v1}, pinned by a live pid, is kept whatever its age");
-    assert_eq!(fs::read_link(&pin).unwrap().to_string_lossy(), v1, "the live pin is kept");
-    assert!(!share.join(&v2).exists(), "{v2}, old and unpinned, is removed");
+    assert!(
+        share.join(&v1).join("package.json").exists(),
+        "{v1}, pinned by a live pid, is kept whatever its age"
+    );
+    assert_eq!(
+        fs::read_link(&pin).unwrap().to_string_lossy(),
+        v1,
+        "the live pin is kept"
+    );
+    assert!(
+        !share.join(&v2).exists(),
+        "{v2}, old and unpinned, is removed"
+    );
 }
 
 #[test]
@@ -480,8 +667,14 @@ fn a_pin_of_a_dead_pid_is_removed_and_the_old_version_it_named_is_swept() {
 
     let (v1, _, pin) = pin_v1_then_install_twice(&rig, dead);
 
-    assert!(fs::symlink_metadata(&pin).is_err(), "the pin of a dead pid is removed");
-    assert!(!rig.share().join(&v1).exists(), "{v1}, old and no longer pinned, is removed");
+    assert!(
+        fs::symlink_metadata(&pin).is_err(),
+        "the pin of a dead pid is removed"
+    );
+    assert!(
+        !rig.share().join(&v1).exists(),
+        "{v1}, old and no longer pinned, is removed"
+    );
 }
 
 #[test]
@@ -497,7 +690,10 @@ fn a_pin_that_names_no_pid_is_removed() {
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(fs::symlink_metadata(&pin).is_err(), "pi.pin.abc names no pid and is removed");
+    assert!(
+        fs::symlink_metadata(&pin).is_err(),
+        "pi.pin.abc names no pid and is removed"
+    );
 }
 
 #[test]
@@ -516,8 +712,15 @@ fn a_pin_naming_something_that_is_not_a_version_is_removed_and_never_followed() 
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(fs::symlink_metadata(&pin).is_err(), "the pin of an exited pid is removed");
-    assert_eq!(fs::read_to_string(outside.join("keep.txt")).unwrap(), "mine\n", "the target was never followed");
+    assert!(
+        fs::symlink_metadata(&pin).is_err(),
+        "the pin of an exited pid is removed"
+    );
+    assert_eq!(
+        fs::read_to_string(outside.join("keep.txt")).unwrap(),
+        "mine\n",
+        "the target was never followed"
+    );
 }
 
 #[test]
@@ -530,8 +733,19 @@ fn a_pi_that_is_a_regular_file_is_refused_before_the_binary_is_replaced() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install refused: "), "{}", run.stderr);
-    assert!(run.stderr.contains(&format!("{} is neither a symlink nor a directory", pi.display())), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd install refused: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(&format!(
+            "{} is neither a symlink nor a directory",
+            pi.display()
+        )),
+        "{}",
+        run.stderr
+    );
     assert!(!rig.installed_cpd().exists(), "the binary was not replaced");
     assert_eq!(fs::read_to_string(&pi).unwrap(), "not an adapter\n");
 }
@@ -554,8 +768,17 @@ impl Handler for NewCpd {
             ["watch", "--mark-restart"] => Reply::ok(r#"{"ok":true,"marked":true,"engine_pid":1}"#),
             ["watch", "--ensure"] => {
                 fs::create_dir_all(self.lock.parent().unwrap()).unwrap();
-                let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&self.lock).unwrap();
-                assert!(crate::lock::try_lock(&file).unwrap(), "the engine's lock was free");
+                let file = fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(&self.lock)
+                    .unwrap();
+                assert!(
+                    crate::lock::try_lock(&file).unwrap(),
+                    "the engine's lock was free"
+                );
                 self.engine.lock().unwrap().push(file);
                 Reply::ok(r#"{"ok":true,"started":true}"#)
             }
@@ -579,7 +802,13 @@ fn follow_ups(rig: &Rig) -> Vec<String> {
 
 /// Whether some other open file description holds the engine's lock.
 fn lock_held(rig: &Rig) -> bool {
-    let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(rig.install.cpd_home.watch_lock()).unwrap();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(rig.install.cpd_home.watch_lock())
+        .unwrap();
     !crate::lock::try_lock(&file).unwrap()
 }
 
@@ -590,18 +819,45 @@ fn the_installer_goes_on_to_the_views_and_the_engine_after_migrating_without_ren
     rig.old_real_adapter();
     // The cockpit has `main`, the work session has `watch`; a window killed is a call the route answers.
     let tmux = TmuxRoute::new()
-        .script(|a| a.iter().any(|x| x == "list-windows") && a.iter().any(|x| x.contains("cock")), Reply::ok("main\n"))
-        .script(|a| a.iter().any(|x| x == "list-windows") && a.iter().any(|x| x.contains("work")), Reply::ok("watch\n"))
+        .script(
+            |a| a.iter().any(|x| x == "list-windows") && a.iter().any(|x| x.contains("cock")),
+            Reply::ok("main\n"),
+        )
+        .script(
+            |a| a.iter().any(|x| x == "list-windows") && a.iter().any(|x| x.contains("work")),
+            Reply::ok("watch\n"),
+        )
         .script(|a| a.iter().any(|x| x == "kill-window"), Reply::ok(""));
-    let engine = Arc::new(NewCpd { lock: rig.install.cpd_home.watch_lock(), engine: Mutex::default() });
+    let engine = Arc::new(NewCpd {
+        lock: rig.install.cpd_home.watch_lock(),
+        engine: Mutex::default(),
+    });
     let tag = rig.install.root.join("scripts/tag-version.sh");
-    (*rig.fakes.runner).clone().on("tag-version.sh", move |c| Path::new(&c.program) == tag, Reply::ok("")).route("tmux", Arc::new(tmux)).route("cpd", engine);
+    (*rig.fakes.runner)
+        .clone()
+        .on(
+            "tag-version.sh",
+            move |c| Path::new(&c.program) == tag,
+            Reply::ok(""),
+        )
+        .route("tmux", Arc::new(tmux))
+        .route("cpd", engine);
 
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     rig.linked_version();
-    assert_eq!(follow_ups(&rig), ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"], "the views are respawned and the engine restarted: {}", run.stderr);
+    assert_eq!(
+        follow_ups(&rig),
+        [
+            "watch --check",
+            "tui --respawn",
+            "watch --mark-restart",
+            "watch --ensure"
+        ],
+        "the views are respawned and the engine restarted: {}",
+        run.stderr
+    );
     assert!(lock_held(&rig), "the new engine holds the lock");
 }
 
@@ -649,32 +905,69 @@ fn directories_named(dir: &Path, name: &str) -> Vec<PathBuf> {
 }
 
 #[test]
-fn an_install_carries_the_compact_tools_extension_listed_in_its_package_json_and_leaves_every_test_directory_out() {
+fn an_install_carries_the_compact_tools_extension_listed_in_its_package_json_and_leaves_every_test_directory_out()
+ {
     let rig = Rig::new();
     real_adapter(&rig);
-    assert!(rig.install.root.join("pi/test/compact-tools").is_dir(), "the source tree has the extension's tests under pi/test/compact-tools");
+    assert!(
+        rig.install.root.join("pi/test/compact-tools").is_dir(),
+        "the source tree has the extension's tests under pi/test/compact-tools"
+    );
 
     let run = rig.run();
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     let id = rig.linked_version();
     let pi = rig.share().join("pi");
-    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(pi.join("package.json")).unwrap()).unwrap();
-    let extensions: Vec<&str> = manifest["pi"]["extensions"].as_array().unwrap().iter().map(|e| e.as_str().unwrap()).collect();
-    assert_eq!(extensions, ["./extension.ts", "./mcp-extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"], "the installed package.json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(pi.join("package.json")).unwrap()).unwrap();
+    let extensions: Vec<&str> = manifest["pi"]["extensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        extensions,
+        [
+            "./extension.ts",
+            "./mcp-extension.ts",
+            "./compact-tools/extensions/compact-tools.ts",
+            "./ask-user-question/index.ts"
+        ],
+        "the installed package.json"
+    );
     for entry in &extensions {
-        assert!(pi.join(entry).is_file(), "the installed entry {entry} resolves");
+        assert!(
+            pi.join(entry).is_file(),
+            "the installed entry {entry} resolves"
+        );
     }
-    for file in ["extensions/compact-tools-config.ts", "extensions/compact-tools-double-load.ts", "schemas/compact-tools.schema.json", "LICENSE", "NOTICE", "header.ts"] {
-        assert!(pi.join("compact-tools").join(file).is_file(), "compact-tools/{file} is installed");
+    for file in [
+        "extensions/compact-tools-config.ts",
+        "extensions/compact-tools-double-load.ts",
+        "schemas/compact-tools.schema.json",
+        "LICENSE",
+        "NOTICE",
+        "header.ts",
+    ] {
+        assert!(
+            pi.join("compact-tools").join(file).is_file(),
+            "compact-tools/{file} is installed"
+        );
     }
     // The tests are under pi/test, which the install leaves out whole: pi/test/compact-tools goes with it.
-    assert_eq!(directories_named(&rig.share().join(&id), "test"), Vec::<PathBuf>::new(), "no test directory anywhere under {id}");
+    assert_eq!(
+        directories_named(&rig.share().join(&id), "test"),
+        Vec::<PathBuf>::new(),
+        "no test directory anywhere under {id}"
+    );
 }
 
 // ---- the adapter's production packages, installed with pnpm beside `pi/` (docs/implementing.md `## cpd install`) ----
 
-const PACKAGE_WITH_DEPENDENCIES: &str = "{\n  \"name\": \"cpd\",\n  \"dependencies\": {\"left-pad\": \"1.3.0\"}\n}\n";
+const PACKAGE_WITH_DEPENDENCIES: &str =
+    "{\n  \"name\": \"cpd\",\n  \"dependencies\": {\"left-pad\": \"1.3.0\"}\n}\n";
 const PNPM_LOCK: &str = "lockfileVersion: '9.0'\n# a lock\n";
 const PNPM_WORKSPACE: &str = "packages: []\n";
 const PNPM_REFUSED: &str = "pnpm install --prod --frozen-lockfile failed in";
@@ -700,7 +993,12 @@ impl Rig {
     }
 
     fn pnpm_calls(&self) -> Vec<Call> {
-        self.fakes.runner.calls().into_iter().filter(|c| c.program.rsplit('/').next() == Some("pnpm")).collect()
+        self.fakes
+            .runner
+            .calls()
+            .into_iter()
+            .filter(|c| c.program.rsplit('/').next() == Some("pnpm"))
+            .collect()
     }
 
     /// An installed `cpd` and a `pi` link of an earlier install: (binary, link target).
@@ -738,17 +1036,35 @@ fn a_package_json_with_dependencies_is_installed_beside_the_adapter_with_pnpm() 
     assert_eq!(calls[0].args, ["install", "--prod", "--frozen-lockfile"]);
     assert_eq!(calls[0].cwd.as_deref(), Some(rig.share().as_path()));
     assert_eq!(calls[0].deadline, Duration::from_secs(600));
-    for (file, text) in [("package.json", PACKAGE_WITH_DEPENDENCIES), ("pnpm-lock.yaml", PNPM_LOCK), ("pnpm-workspace.yaml", PNPM_WORKSPACE)] {
-        assert_eq!(fs::read(rig.share().join(file)).unwrap(), text.as_bytes(), "{file} in share");
+    for (file, text) in [
+        ("package.json", PACKAGE_WITH_DEPENDENCIES),
+        ("pnpm-lock.yaml", PNPM_LOCK),
+        ("pnpm-workspace.yaml", PNPM_WORKSPACE),
+    ] {
+        assert_eq!(
+            fs::read(rig.share().join(file)).unwrap(),
+            text.as_bytes(),
+            "{file} in share"
+        );
     }
-    assert_eq!(*seen.lock().unwrap(), [false], "the installed cpd does not exist yet when pnpm runs");
-    assert!(rig.installed_cpd().exists(), "the binary is replaced afterwards");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [false],
+        "the installed cpd does not exist yet when pnpm runs"
+    );
+    assert!(
+        rig.installed_cpd().exists(),
+        "the binary is replaced afterwards"
+    );
 }
 
 #[test]
 fn a_package_json_without_dependencies_runs_no_pnpm() {
     let variants: [(&str, Option<&str>); 3] = [
-        ("only devDependencies", Some("{\"devDependencies\": {\"left-pad\": \"1.3.0\"}}\n")),
+        (
+            "only devDependencies",
+            Some("{\"devDependencies\": {\"left-pad\": \"1.3.0\"}}\n"),
+        ),
         ("empty dependencies", Some("{\"dependencies\": {}}\n")),
         ("no package.json", None),
     ];
@@ -762,8 +1078,15 @@ fn a_package_json_without_dependencies_runs_no_pnpm() {
 
         assert_eq!(run.exit, 0, "{what}: {}", run.stderr);
         assert!(rig.pnpm_calls().is_empty(), "{what}: no pnpm call");
-        assert!(!rig.share().join("package.json").exists(), "{what}: no share/package.json");
-        assert!(rig.fakes.runner.unscripted().is_empty(), "{what}: {:?}", rig.fakes.runner.unscripted());
+        assert!(
+            !rig.share().join("package.json").exists(),
+            "{what}: no share/package.json"
+        );
+        assert!(
+            rig.fakes.runner.unscripted().is_empty(),
+            "{what}: {:?}",
+            rig.fakes.runner.unscripted()
+        );
     }
 }
 
@@ -783,7 +1106,10 @@ fn dependencies_without_a_pnpm_lockfile_refuse_the_install() {
     );
     assert!(rig.pnpm_calls().is_empty(), "no pnpm call");
     assert!(!rig.installed_cpd().exists(), "the binary is not installed");
-    assert!(fs::symlink_metadata(rig.share().join("pi")).is_err(), "pi is not linked");
+    assert!(
+        fs::symlink_metadata(rig.share().join("pi")).is_err(),
+        "pi is not linked"
+    );
 }
 
 #[test]
@@ -796,11 +1122,28 @@ fn a_failing_pnpm_refuses_the_install_before_the_binary_is_replaced() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    let want = format!("cpd install refused: {PNPM_REFUSED} {}:", rig.share().display());
+    let want = format!(
+        "cpd install refused: {PNPM_REFUSED} {}:",
+        rig.share().display()
+    );
     assert!(run.stderr.starts_with(&want), "{}", run.stderr);
-    assert!(run.stderr.contains("ERR_PNPM_OUTDATED_LOCKFILE"), "{}", run.stderr);
-    assert_eq!(fs::read_to_string(bin).unwrap(), "old cpd\n", "the installed binary is untouched");
-    assert_eq!(fs::read_link(rig.share().join("pi")).unwrap().to_string_lossy(), old, "pi keeps its old target");
+    assert!(
+        run.stderr.contains("ERR_PNPM_OUTDATED_LOCKFILE"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(bin).unwrap(),
+        "old cpd\n",
+        "the installed binary is untouched"
+    );
+    assert_eq!(
+        fs::read_link(rig.share().join("pi"))
+            .unwrap()
+            .to_string_lossy(),
+        old,
+        "pi keeps its old target"
+    );
 }
 
 #[test]
@@ -813,8 +1156,21 @@ fn a_missing_pnpm_refuses_the_install_naming_pnpm() {
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    let want = format!("cpd install refused: {PNPM_REFUSED} {}:", rig.share().display());
+    let want = format!(
+        "cpd install refused: {PNPM_REFUSED} {}:",
+        rig.share().display()
+    );
     assert!(run.stderr.starts_with(&want), "{}", run.stderr);
-    assert_eq!(fs::read_to_string(bin).unwrap(), "old cpd\n", "the installed binary is untouched");
-    assert_eq!(fs::read_link(rig.share().join("pi")).unwrap().to_string_lossy(), old, "pi keeps its old target");
+    assert_eq!(
+        fs::read_to_string(bin).unwrap(),
+        "old cpd\n",
+        "the installed binary is untouched"
+    );
+    assert_eq!(
+        fs::read_link(rig.share().join("pi"))
+            .unwrap()
+            .to_string_lossy(),
+        old,
+        "pi keeps its old target"
+    );
 }

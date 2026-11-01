@@ -124,4 +124,3 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Run(args) => driver::run(args),
     }
 }
-

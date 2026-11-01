@@ -39,7 +39,12 @@ pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord
 }
 
 /// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
-pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Result<bool, CpdError> {
+pub fn insert(
+    tx: &WriteTxn<'_>,
+    plan: &str,
+    pr: &str,
+    post: &PostRecord,
+) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
          ON CONFLICT (plan, pr) DO NOTHING",
@@ -50,7 +55,12 @@ pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Res
 
 /// Sets the auto-merge request of a `pending` post to `state` (`enabled`, `refused` or `none`); `enabled` and `refused` set
 /// `auto_merge_at` to the transaction's time. `false` when the post is not `pending` (nothing changed).
-pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> Result<bool, CpdError> {
+pub fn set_auto_merge(
+    tx: &WriteTxn<'_>,
+    plan: &str,
+    pr: &str,
+    state: &str,
+) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "UPDATE pr_posts SET auto_merge = ?3,
            auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
@@ -148,11 +158,22 @@ mod tests {
         let (_dir, mut store) = store();
         add(&mut store, "a", "open", "", None);
         let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
-        assert_eq!((post.auto_merge.as_str(), post.auto_merge_at), ("pending", None));
-        assert!(store.write("set", |tx| set_auto_merge(tx, "pay", "a", "enabled")).unwrap());
+        assert_eq!(
+            (post.auto_merge.as_str(), post.auto_merge_at),
+            ("pending", None)
+        );
+        assert!(
+            store
+                .write("set", |tx| set_auto_merge(tx, "pay", "a", "enabled"))
+                .unwrap()
+        );
         let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
         assert_eq!(post.auto_merge, "enabled");
         assert!(post.auto_merge_at.is_some());
-        assert!(!store.write("set", |tx| set_auto_merge(tx, "pay", "a", "refused")).unwrap());
+        assert!(
+            !store
+                .write("set", |tx| set_auto_merge(tx, "pay", "a", "refused"))
+                .unwrap()
+        );
     }
 }

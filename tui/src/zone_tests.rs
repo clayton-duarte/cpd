@@ -43,7 +43,9 @@ fn a_logs_view_draws_the_zone_it_was_given() {
 fn a_history_view_draws_the_zone_it_was_given() {
     let entry = serde_json::json!({"type": "message", "timestamp": "2026-10-26T02:54:10.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "Do it."}]}});
     let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
-    terminal.draw(|f| crate::draw_history("lead", true, &(entry.to_string() + "\n"), &zone(), f)).unwrap();
+    terminal
+        .draw(|f| crate::draw_history("lead", true, &(entry.to_string() + "\n"), &zone(), f))
+        .unwrap();
     let rows = rows(terminal.backend().buffer());
     assert!(rows[2].starts_with(" 15:39:10 you"), "{rows:?}");
 }

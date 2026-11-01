@@ -25,7 +25,12 @@ pub mod spacing {
 
     /// `area` less [`MARGIN_X`] on each side.
     pub fn contain(area: Rect) -> Rect {
-        Rect::new(area.x + MARGIN_X, area.y, area.width.saturating_sub(2 * MARGIN_X), area.height)
+        Rect::new(
+            area.x + MARGIN_X,
+            area.y,
+            area.width.saturating_sub(2 * MARGIN_X),
+            area.height,
+        )
     }
 }
 
@@ -48,7 +53,13 @@ pub struct BoxWidget<'a, B: Widget> {
 
 impl<'a, B: Widget> BoxWidget<'a, B> {
     pub fn new(walls: Walls<'a>, border: Style, body: B) -> Self {
-        Self { walls, border, title: None, body, highlight: None }
+        Self {
+            walls,
+            border,
+            title: None,
+            body,
+            highlight: None,
+        }
     }
 
     pub fn title(mut self, title: Line<'a>) -> Self {
@@ -108,7 +119,9 @@ impl<B: Widget> Widget for BoxWidget<'_, B> {
         let area = area.intersection(buf.area);
         match &self.walls {
             Walls::Full => {
-                let mut block = Block::bordered().border_type(BorderType::Rounded).border_style(self.border);
+                let mut block = Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(self.border);
                 if let Some(title) = self.title {
                     let mut spans = vec![Span::styled("─", self.border)];
                     spans.extend(title.spans);
@@ -174,6 +187,11 @@ impl Widget for SectionTitle<'_> {
             return;
         }
         let row = Rect::new(area.x, area.y + 1, area.width, 1);
-        ratatui::widgets::Paragraph::new(crate::section::title(self.title, self.count, usize::from(area.width))).render(row, buf);
+        ratatui::widgets::Paragraph::new(crate::section::title(
+            self.title,
+            self.count,
+            usize::from(area.width),
+        ))
+        .render(row, buf);
     }
 }

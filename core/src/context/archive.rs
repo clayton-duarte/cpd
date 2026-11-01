@@ -8,7 +8,9 @@ use crate::output::Output;
 use crate::plan::archive::{self, Objects};
 
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
-    let Env { config, mut store, .. } = Env::open()?;
+    let Env {
+        config, mut store, ..
+    } = Env::open()?;
     let objects = store.read(|conn| {
         ContextRow::require(conn, &args.id)?;
         Objects::of_context(conn, &args.id)

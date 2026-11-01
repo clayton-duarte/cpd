@@ -91,7 +91,10 @@ pub fn path_with_bin(home: &CpdHome, path: Option<OsString>) -> String {
         dirs.extend(std::env::split_paths(path));
     }
     // A directory with `:` in its name cannot be on a `PATH`; none of ours has one. Non-UTF-8 is lossy.
-    std::env::join_paths(dirs).expect("no PATH entry contains ':'").to_string_lossy().into_owned()
+    std::env::join_paths(dirs)
+        .expect("no PATH entry contains ':'")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Writes [`WRAPPER`] to `$CPD_HOME/bin/git` with mode 0755 unless the file already has exactly that
@@ -103,15 +106,22 @@ pub fn install(home: &CpdHome) -> Result<PathBuf, CpdError> {
         return Ok(path);
     }
     let failed = |what: &str, e: std::io::Error| {
-        CpdError::new(ErrorCode::SetupFailed, format!("Cannot {what} the git wrapper {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Cannot {what} the git wrapper {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     let dir = home.bin_dir();
     fs::create_dir_all(&dir).map_err(|e| failed("create the directory of", e))?;
     let tmp = dir.join(format!(".git.{}.tmp", std::process::id()));
     let write = || -> std::io::Result<()> {
         let _ = fs::remove_file(&tmp);
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o755).open(&tmp)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o755)
+            .open(&tmp)?;
         file.write_all(WRAPPER.as_bytes())?;
         // The mode of `open` is cut by the umask: set it exactly.
         file.set_permissions(fs::Permissions::from_mode(0o755))?;
@@ -127,8 +137,11 @@ pub fn install(home: &CpdHome) -> Result<PathBuf, CpdError> {
 }
 
 fn is_current(path: &Path) -> bool {
-    let Ok(meta) = fs::metadata(path) else { return false };
-    meta.permissions().mode() & 0o7777 == 0o755 && fs::read(path).is_ok_and(|content| content == WRAPPER.as_bytes())
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    meta.permissions().mode() & 0o7777 == 0o755
+        && fs::read(path).is_ok_and(|content| content == WRAPPER.as_bytes())
 }
 
 #[cfg(test)]
@@ -142,7 +155,10 @@ mod tests {
     #[test]
     fn the_path_starts_with_the_bin_dir_then_the_callers_path() {
         let h = CpdHome::resolve(Some("/cpd-home".into()), None).unwrap();
-        assert_eq!(path_with_bin(&h, Some("/usr/bin:/bin".into())), "/cpd-home/bin:/usr/bin:/bin");
+        assert_eq!(
+            path_with_bin(&h, Some("/usr/bin:/bin".into())),
+            "/cpd-home/bin:/usr/bin:/bin"
+        );
         assert_eq!(path_with_bin(&h, None), "/cpd-home/bin");
     }
 
@@ -169,7 +185,10 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), WRAPPER);
         assert_eq!(second.permissions().mode() & 0o7777, 0o755);
         // Not rewritten: the same inode, and nothing else in bin/.
-        assert_eq!(std::os::unix::fs::MetadataExt::ino(&first), std::os::unix::fs::MetadataExt::ino(&second));
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::ino(&first),
+            std::os::unix::fs::MetadataExt::ino(&second)
+        );
         assert_eq!(fs::read_dir(tmp.path().join("bin")).unwrap().count(), 1);
     }
 
@@ -183,7 +202,10 @@ mod tests {
         assert_eq!(fs::read_to_string(h.git_wrapper()).unwrap(), WRAPPER);
         fs::set_permissions(h.git_wrapper(), fs::Permissions::from_mode(0o644)).unwrap();
         install(&h).unwrap();
-        assert_eq!(fs::metadata(h.git_wrapper()).unwrap().permissions().mode() & 0o7777, 0o755);
+        assert_eq!(
+            fs::metadata(h.git_wrapper()).unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
         assert_eq!(fs::read_dir(h.bin_dir()).unwrap().count(), 1);
     }
 }

@@ -14,17 +14,31 @@ use cpd_tui::read;
 fn the_cockpit_reads_every_cause_the_attempts_table_admits() {
     let fx = Fx::new();
     let causes = attempt_causes(&fx.env);
-    assert!(causes.iter().any(|c| c == "merged") && causes.iter().any(|c| c == "gate_failed"), "the cause list read is {causes:?}");
+    assert!(
+        causes.iter().any(|c| c == "merged") && causes.iter().any(|c| c == "gate_failed"),
+        "the cause list read is {causes:?}"
+    );
 
-    let mut store = Store::open(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-    sql(&mut store, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '2026-01-01T00:00:00.000Z', 'm1');");
+    let mut store = Store::open(
+        &CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap();
+    sql(
+        &mut store,
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '2026-01-01T00:00:00.000Z', 'm1');",
+    );
 
     let id = AttemptId::parse("api-a1").unwrap();
     for (i, cause) in causes.iter().enumerate() {
         // One Plan per cause, with one ended Attempt: the flow of a Plan names the first unreadable cause.
         let (pl, plan) = (format!("p{i}"), PlanId::parse(&format!("p{i}")).unwrap());
         let outcome = outcome_of(cause);
-        let merged = if outcome == "merged" { "'abc123'" } else { "NULL" };
+        let merged = if outcome == "merged" {
+            "'abc123'"
+        } else {
+            "NULL"
+        };
         sql(
             &mut store,
             &format!(
@@ -43,8 +57,14 @@ fn the_cockpit_reads_every_cause_the_attempts_table_admits() {
             ),
         );
 
-        let flow = read::flow(&mut store, &plan).unwrap_or_else(|e| panic!("the flow read fails for cause {cause:?}: {e:?}"));
-        let node = flow.jobs.iter().flat_map(|j| &j.attempts).find(|a| a.id == id).expect("the Attempt is in the flow");
+        let flow = read::flow(&mut store, &plan)
+            .unwrap_or_else(|e| panic!("the flow read fails for cause {cause:?}: {e:?}"));
+        let node = flow
+            .jobs
+            .iter()
+            .flat_map(|j| &j.attempts)
+            .find(|a| a.id == id)
+            .expect("the Attempt is in the flow");
         assert_eq!(node.cause.map(|c| c.as_str()), Some(cause.as_str()));
     }
 }

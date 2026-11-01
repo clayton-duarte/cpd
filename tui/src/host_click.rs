@@ -18,8 +18,8 @@ use super::RunCommand;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::host::install_state::InstallState;
 use cpd_core::host::Tmux;
+use cpd_core::host::install_state::InstallState;
 use cpd_core::ids::SessionId;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
@@ -35,18 +35,41 @@ const CHECKOUT: &str = "~/projects/cpd";
 
 /// `cpd tui action host --client <client>` (commands.md §9.12): `run_command` runs `cpd`'s commands in
 /// this process, as [`crate::cockpit::action`]'s other callers do.
-pub fn run(home: &CpdHome, config: &Config, tmux: &Tmux, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
-    let Some(state) = InstallState::read(home)? else { return Ok(()) };
-    let Some(reason) = state.alert() else { return Ok(()) };
+pub fn run(
+    home: &CpdHome,
+    config: &Config,
+    tmux: &Tmux,
+    client: &str,
+    run_command: RunCommand,
+) -> Result<(), CpdError> {
+    let Some(state) = InstallState::read(home)? else {
+        return Ok(());
+    };
+    let Some(reason) = state.alert() else {
+        return Ok(());
+    };
     let Some(manager) = host_manager(home, config)? else {
         // The click prints nothing; the failure is a `display-message` on the client, as the other actions do.
-        let _ = tmux.run(&["display-message".to_owned(), "-l".to_owned(), "-c".to_owned(), client.to_owned(), NO_MANAGER.to_owned()]);
+        let _ = tmux.run(&[
+            "display-message".to_owned(),
+            "-l".to_owned(),
+            "-c".to_owned(),
+            client.to_owned(),
+            NO_MANAGER.to_owned(),
+        ]);
         return Ok(());
     };
     // Bring the Manager into the chat slot as `session open` does (a stopped or asleep one is resumed).
-    super::widgets::open_lead(run_command, tmux, config.tmux.cockpit_session.as_str(), &manager)?;
+    super::widgets::open_lead(
+        run_command,
+        tmux,
+        config.tmux.cockpit_session.as_str(),
+        &manager,
+    )?;
     let marker = home.run_dir().join("cpd-install-notified");
-    if std::fs::read_to_string(&marker).is_ok_and(|held| held.trim_end_matches('\n') == state.since()) {
+    if std::fs::read_to_string(&marker)
+        .is_ok_and(|held| held.trim_end_matches('\n') == state.since())
+    {
         return Ok(());
     }
     send(run_command, &manager, reason, state.since())?;
@@ -69,25 +92,44 @@ fn host_manager(home: &CpdHome, config: &Config) -> Result<Option<SessionId>, Cp
 }
 
 /// One `session send` as the User (`--unblocks "cpd install skipped"`), the code `cpd session send` uses.
-fn send(run_command: RunCommand, manager: &SessionId, reason: &str, since: &str) -> Result<(), CpdError> {
+fn send(
+    run_command: RunCommand,
+    manager: &SessionId,
+    reason: &str,
+    since: &str,
+) -> Result<(), CpdError> {
     let text = format!(
         "cpd install skipped: {reason} (since {since}). Checkout: {CHECKOUT}. Read it with git -C {CHECKOUT} status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair."
     );
-    let argv = [PROGRAM, "session", "send", manager.as_str(), "--unblocks", UNBLOCKS, "--", text.as_str()]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
+    let argv = [
+        PROGRAM,
+        "session",
+        "send",
+        manager.as_str(),
+        "--unblocks",
+        UNBLOCKS,
+        "--",
+        text.as_str(),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
     run_command(argv).map(drop)
 }
 
 /// Writes `text` to `path` atomically: a temp file beside it, then `rename` (commands.md §9.12).
 fn write_atomic(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
-            .with("reason", e.to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
+        .with("reason", e.to_string())
     };
-    let dir = path.parent().expect("a file under $CPD_HOME has a directory");
+    let dir = path
+        .parent()
+        .expect("a file under $CPD_HOME has a directory");
     std::fs::create_dir_all(dir).map_err(failed)?;
     let tmp = path.with_extension(format!("notified-{}", std::process::id()));
     std::fs::write(&tmp, text).map_err(failed)?;

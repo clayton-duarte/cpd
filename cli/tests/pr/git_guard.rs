@@ -14,7 +14,11 @@ use common::GitWrapper as Wrapper;
 
 /// A program that does nothing and succeeds, to stand where the real `git` would: git is git's to test, not ours.
 fn true_program() -> &'static Path {
-    ["/usr/bin/true", "/bin/true"].into_iter().map(Path::new).find(|p| p.exists()).expect("a `true` program")
+    ["/usr/bin/true", "/bin/true"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+        .expect("a `true` program")
 }
 
 /// The one test of the authored wrapper script, run by a real `sh` (OS behaviour of the script: policy [tests]'s
@@ -37,7 +41,11 @@ fn it_refuses_git_stash_wherever_the_global_options_put_it() {
         vec!["--work-tree", "/x", "--namespace", "n", "stash"],
     ] {
         let (code, stdout, stderr) = w.run(&path, cwd.path(), &args);
-        assert_eq!((code, stdout.as_str(), stderr.as_str()), (1, "", format!("{REFUSAL}\n").as_str()), "{args:?}");
+        assert_eq!(
+            (code, stdout.as_str(), stderr.as_str()),
+            (1, "", format!("{REFUSAL}\n").as_str()),
+            "{args:?}"
+        );
     }
 
     // Anything that is not the `stash` subcommand goes on to the other `git` on `PATH`: here `true`, which prints nothing.
@@ -52,16 +60,28 @@ fn it_refuses_git_stash_wherever_the_global_options_put_it() {
         vec!["log", "--format=%s", "--grep=stash"],
     ] {
         let (code, stdout, stderr) = w.run(&path, cwd.path(), &args);
-        assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, "", ""), "{args:?}");
+        assert_eq!(
+            (code, stdout.as_str(), stderr.as_str()),
+            (0, "", ""),
+            "{args:?}"
+        );
     }
 
     // No other `git`: the only other directory is another wrapper's, or this wrapper's own again.
     let second = Wrapper::new();
     let (own, other) = (w.bin(), second.bin());
-    for (wrapper, dirs) in [(&w, [other.as_path(), own.as_path()]), (&second, [own.as_path(), other.as_path()]), (&w, [own.as_path(), own.as_path()])] {
+    for (wrapper, dirs) in [
+        (&w, [other.as_path(), own.as_path()]),
+        (&second, [own.as_path(), other.as_path()]),
+        (&w, [own.as_path(), own.as_path()]),
+    ] {
         let path = env::join_paths(dirs).unwrap();
         let (code, stdout, stderr) = wrapper.run(&path, cwd.path(), &["status"]);
-        assert_eq!((code, stdout.as_str(), stderr.as_str()), (127, "", format!("{NO_GIT}\n").as_str()), "{dirs:?}");
+        assert_eq!(
+            (code, stdout.as_str(), stderr.as_str()),
+            (127, "", format!("{NO_GIT}\n").as_str()),
+            "{dirs:?}"
+        );
     }
 }
 
@@ -88,7 +108,11 @@ fn the_harness_takes_every_wrapper_directory_out_of_a_path_and_nothing_else() {
         home.bin_dir()
     };
     let (first, second) = (wrapper_bin("home-a"), wrapper_bin("home-b"));
-    let (real, tools, missing) = (tmp.path().join("real"), tmp.path().join("tools"), tmp.path().join("missing"));
+    let (real, tools, missing) = (
+        tmp.path().join("real"),
+        tmp.path().join("tools"),
+        tmp.path().join("missing"),
+    );
     for dir in [&real, &tools] {
         fs::create_dir_all(dir).unwrap();
     }
@@ -97,8 +121,22 @@ fn the_harness_takes_every_wrapper_directory_out_of_a_path_and_nothing_else() {
     // An older wrapper is one too: it starts with the signature and goes on differently.
     let older = tmp.path().join("older");
     fs::create_dir_all(&older).unwrap();
-    write_executable(&older.join("git"), &format!("{}: refuses `git stash`.\nexec echo older\n", git_guard::SIGNATURE));
-    let dirs = [first.clone(), real.clone(), second, older, tools.clone(), missing.clone(), first];
+    write_executable(
+        &older.join("git"),
+        &format!(
+            "{}: refuses `git stash`.\nexec echo older\n",
+            git_guard::SIGNATURE
+        ),
+    );
+    let dirs = [
+        first.clone(),
+        real.clone(),
+        second,
+        older,
+        tools.clone(),
+        missing.clone(),
+        first,
+    ];
     let path = env::join_paths(dirs).unwrap();
     let want = env::join_paths([real, tools, missing]).unwrap();
     assert_eq!(common::without_wrapper_dirs(&path), want);

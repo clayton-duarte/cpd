@@ -26,7 +26,10 @@ pub(crate) fn queued_or_running_after_failure(failed: &str) -> String {
 }
 
 /// The failed Jobs for which the pro-d88 rule holds, of one Plan (`Some`) or of every Plan (`None`). Read only.
-pub fn failed_worked_on(conn: &Connection, plan: Option<&PlanId>) -> Result<BTreeSet<(PlanId, JobKey)>, CpdError> {
+pub fn failed_worked_on(
+    conn: &Connection,
+    plan: Option<&PlanId>,
+) -> Result<BTreeSet<(PlanId, JobKey)>, CpdError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT j.plan, j.key
            FROM jobs j
@@ -40,13 +43,20 @@ pub fn failed_worked_on(conn: &Connection, plan: Option<&PlanId>) -> Result<BTre
     let mut out = BTreeSet::new();
     while let Some(row) = rows.next()? {
         let (p, k): (String, String) = (row.get(0)?, row.get(1)?);
-        out.insert((id("Plan id", &p, PlanId::parse)?, id("Job key", &k, JobKey::parse)?));
+        out.insert((
+            id("Plan id", &p, PlanId::parse)?,
+            id("Job key", &k, JobKey::parse)?,
+        ));
     }
     Ok(out)
 }
 
 fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
     parse(value).map_err(|_| {
-        CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {value:?}.")).with("value", value)
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The store holds an invalid {what}: {value:?}."),
+        )
+        .with("value", value)
     })
 }

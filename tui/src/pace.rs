@@ -31,7 +31,10 @@ enum Run<T> {
     /// On the reader thread.
     Thread(Arc<(Mutex<Queue<T>>, Condvar)>),
     /// In the caller of `request`; the result is sent to `take` and the pump is woken.
-    Inline { send: Sender<T>, waker: crate::pump::Waker },
+    Inline {
+        send: Sender<T>,
+        waker: crate::pump::Waker,
+    },
 }
 
 impl<T: Send + 'static> Reads<T> {
@@ -39,7 +42,13 @@ impl<T: Send + 'static> Reads<T> {
     pub(crate) fn on(pump: &crate::pump::Pump) -> Self {
         if pump.inline() {
             let (send, results) = mpsc::channel();
-            Reads { run: Run::Inline { send, waker: pump.waker() }, results }
+            Reads {
+                run: Run::Inline {
+                    send,
+                    waker: pump.waker(),
+                },
+                results,
+            }
         } else {
             Self::with_waker(pump.waker())
         }
@@ -47,7 +56,13 @@ impl<T: Send + 'static> Reads<T> {
 
     /// The reader thread calls `waker.read_done()` after each result it sends.
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
-        let queue = Arc::new((Mutex::new(Queue { waiting: None, closed: false }), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(Queue {
+                waiting: None,
+                closed: false,
+            }),
+            Condvar::new(),
+        ));
         let (send, results): (Sender<T>, Receiver<T>) = mpsc::channel();
         let shared = Arc::clone(&queue);
         // The jobs read `Ports::current()`: this thread's scope is not the reader thread's.
@@ -76,7 +91,10 @@ impl<T: Send + 'static> Reads<T> {
                 }
             })
             .expect("spawn the reader thread");
-        Reads { run: Run::Thread(queue), results }
+        Reads {
+            run: Run::Thread(queue),
+            results,
+        }
     }
 
     /// Ask for `job` to run on the reader thread.
@@ -133,7 +151,11 @@ pub struct Owned<S> {
 
 impl<S> Owned<S> {
     pub fn new(home: CpdHome, busy_ms: u64, state: S) -> Arc<Mutex<Owned<S>>> {
-        Arc::new(Mutex::new(Owned { home, busy_ms, state }))
+        Arc::new(Mutex::new(Owned {
+            home,
+            busy_ms,
+            state,
+        }))
     }
 
     /// Runs `read` with the store and the state; call it from the reader thread only.

@@ -14,7 +14,10 @@ mod tests {
 
     /// A file or a directory (relative to `tui/src/`) that may keep a `note`, with why. A new one needs a reviewer to add it.
     const EXEMPT: [(&str, &str); 2] = [
-        ("palette.rs", "defines `note()` and `Ui::Note`, which rule (c) keeps while something else uses them"),
+        (
+            "palette.rs",
+            "defines `note()` and `Ui::Note`, which rule (c) keeps while something else uses them",
+        ),
         ("no_notes.rs", "this guard names the word it looks for"),
     ];
 
@@ -63,8 +66,13 @@ mod tests {
                 continue;
             }
             // rule (c): the palette's note colour is not the note
-            let code = code_of(line).replace("palette::note", "").replace("Ui::Note", "");
-            for ident in code.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|i| !i.is_empty()) {
+            let code = code_of(line)
+                .replace("palette::note", "")
+                .replace("Ui::Note", "");
+            for ident in code
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|i| !i.is_empty())
+            {
                 if words(ident).iter().any(|w| w == "note") {
                     found.push(format!("{}: {ident}", n + 1));
                 }
@@ -79,12 +87,20 @@ mod tests {
             if path.is_dir() {
                 walk(root, &path, offenders);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let file = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                let file = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
                 if EXEMPT.iter().any(|(exempt, _)| file.starts_with(exempt)) {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).unwrap();
-                offenders.extend(notes_in(&text).into_iter().map(|found| format!("{file}:{found}")));
+                offenders.extend(
+                    notes_in(&text)
+                        .into_iter()
+                        .map(|found| format!("{file}:{found}")),
+                );
             }
         }
     }
@@ -96,10 +112,22 @@ mod tests {
         assert_eq!(found("Action::Note(note) => note.clone(),"), 3);
         assert_eq!(found("const DOWN_NOTE: &str = \"x\";"), 1);
         assert_eq!(found("fn draw(f: &mut Frame, note: &str)"), 1);
-        assert_eq!(found("Paragraph::new(line).style(palette::note())"), 0, "rule (c)");
+        assert_eq!(
+            found("Paragraph::new(line).style(palette::note())"),
+            0,
+            "rule (c)"
+        );
         assert_eq!(found("palette::ui(palette::Ui::Note)"), 0, "rule (c)");
-        assert_eq!(found("let notes = denote(\"a note\"); // note"), 0, "other words, strings, comments");
-        assert_eq!(found("/// the note\nfn f() {}\n#[cfg(test)]\nmod tests {\n let note = 1;\n}"), 0, "tests may name it");
+        assert_eq!(
+            found("let notes = denote(\"a note\"); // note"),
+            0,
+            "other words, strings, comments"
+        );
+        assert_eq!(
+            found("/// the note\nfn f() {}\n#[cfg(test)]\nmod tests {\n let note = 1;\n}"),
+            0,
+            "tests may name it"
+        );
     }
 
     /// No view keeps a note: not the tree and its Inbox, the Plan view, the Dispatch column, nor the history and the chat

@@ -38,8 +38,13 @@ pub(crate) fn draw(fx: &Fx) -> Buffer {
 pub(crate) fn draw_sized(fx: &Fx, width: u16, height: u16) -> Buffer {
     let mut store = fx.env.store();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-    terminal.draw(|f| cpd_tui::draw_first_frame(&mut store, f, now_ms).unwrap()).unwrap();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    terminal
+        .draw(|f| cpd_tui::draw_first_frame(&mut store, f, now_ms).unwrap())
+        .unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -82,7 +87,11 @@ pub(crate) fn cells_of(buf: &Buffer, word: &str) -> Option<Vec<(u16, u16)>> {
     rows(buf).iter().enumerate().find_map(|(y, row)| {
         let at = row.find(word)?;
         let x = row[..at].chars().count() as u16;
-        Some((0..word.chars().count() as u16).map(|i| (x + i, y as u16)).collect())
+        Some(
+            (0..word.chars().count() as u16)
+                .map(|i| (x + i, y as u16))
+                .collect(),
+        )
     })
 }
 
@@ -104,8 +113,16 @@ pub(crate) fn plan(fx: &Fx, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
         );
     }
     for (pr, key, status, kind, _) in jobs {
-        let merged = if *status == "merged" { "'abc123'" } else { "NULL" };
-        let status = if *status == "cancelled" { "queued" } else { status };
+        let merged = if *status == "merged" {
+            "'abc123'"
+        } else {
+            "NULL"
+        };
+        let status = if *status == "cancelled" {
+            "queued"
+        } else {
+            status
+        };
         s += &format!(
             "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, merged_sha, created_at)
@@ -115,7 +132,9 @@ pub(crate) fn plan(fx: &Fx, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
     }
     for (_, key, _, _, needs) in jobs {
         for need in *needs {
-            s += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('ship', '{key}', '{need}');");
+            s += &format!(
+                "INSERT INTO dependencies (plan, job, needs) VALUES ('ship', '{key}', '{need}');"
+            );
         }
     }
     // the Lead in the chat slot
@@ -128,65 +147,152 @@ pub(crate) fn plan(fx: &Fx, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
     fx.env.sql(&s);
     for (_, key, status, _, _) in jobs {
         if *status == "cancelled" {
-            fx.cpd(&["job", "cancel", key, "--reason", &format!("{key} is not needed"), "--plan", "ship"]).ok();
+            fx.cpd(&[
+                "job",
+                "cancel",
+                key,
+                "--reason",
+                &format!("{key} is not needed"),
+                "--plan",
+                "ship",
+            ])
+            .ok();
         }
     }
 }
 
 /// The rows of the box titled with `title` (its title row to its bottom border), the box's borders cut off.
 fn box_inside(screen: &[String], title: &str) -> Vec<String> {
-    let top = screen.iter().position(|l| l.trim_start().starts_with("╭─ ") && l.contains(title)).unwrap_or_else(|| panic!("no box {title}:\n{}", screen.join("\n")));
+    let top = screen
+        .iter()
+        .position(|l| l.trim_start().starts_with("╭─ ") && l.contains(title))
+        .unwrap_or_else(|| panic!("no box {title}:\n{}", screen.join("\n")));
     screen[top + 1..]
         .iter()
         .take_while(|l| !l.trim_start().starts_with('╰'))
-        .map(|l| l.chars().skip(3).collect::<String>().trim_end().trim_end_matches('│').to_owned())
+        .map(|l| {
+            l.chars()
+                .skip(3)
+                .collect::<String>()
+                .trim_end()
+                .trim_end_matches('│')
+                .to_owned()
+        })
         .collect()
 }
 
 #[test]
 fn a_cancelled_job_pill_is_colour_8_and_nothing_follows_it() {
     let fx = env();
-    plan(&fx, &[("api", "api")], &[("api", "a", "cancelled", "work", &[])]);
+    plan(
+        &fx,
+        &[("api", "api")],
+        &[("api", "a", "cancelled", "work", &[])],
+    );
     let buf = draw(&fx);
     let screen = rows(&buf);
     let text = screen.join("\n");
     // the whole chart row is the pill, to its closing cap: no status word, no reason
     let row = screen.iter().find(|l| l.contains(" a│")).unwrap();
-    let inside: String = row.chars().skip(2).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned();
-    assert_eq!(inside, format!(" \u{e0b6}{CANCELLED} a│S3\u{e0b4}"), "{text}");
-    assert!(!text.contains("cancelled") && !text.contains("not needed"), "{text}");
+    let inside: String = row
+        .chars()
+        .skip(2)
+        .collect::<String>()
+        .trim_end()
+        .trim_end_matches('│')
+        .trim_end()
+        .to_owned();
+    assert_eq!(
+        inside,
+        format!(" \u{e0b6}{CANCELLED} a│S3\u{e0b4}"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("cancelled") && !text.contains("not needed"),
+        "{text}"
+    );
     // the pill is colour 8, inverted (contract §6.1.1: a cancelled Job's pill): no colour 0 anywhere
-    let colours = cells_of(&buf, "a│S3").unwrap_or_else(|| panic!("the pill is not on the screen:\n{text}"));
-    assert!(colours.iter().all(|at| buf[*at].fg == palette::color(Meaning::Nothing)), "{colours:?}");
+    let colours =
+        cells_of(&buf, "a│S3").unwrap_or_else(|| panic!("the pill is not on the screen:\n{text}"));
+    assert!(
+        colours
+            .iter()
+            .all(|at| buf[*at].fg == palette::color(Meaning::Nothing)),
+        "{colours:?}"
+    );
 }
 
 #[test]
 fn cancelled_pr_box_is_drawn_muted_after_live_ones() {
     let fx = env();
     // `aaa` sorts first by key: it is drawn after `web` only because it is cancelled
-    plan(&fx, &[("aaa", "aaa-repo"), ("web", "web-repo")], &[("aaa", "o1", "cancelled", "work", &[]), ("web", "w", "queued", "work", &[])]);
+    plan(
+        &fx,
+        &[("aaa", "aaa-repo"), ("web", "web-repo")],
+        &[
+            ("aaa", "o1", "cancelled", "work", &[]),
+            ("web", "w", "queued", "work", &[]),
+        ],
+    );
     fx.cpd(&["pr", "cancel", "aaa", "--plan", "ship"]).ok();
     let buf = draw(&fx);
     let screen = rows(&buf);
     let text = screen.join("\n");
-    let row_of = |needle: &str| screen.iter().position(|l| l.trim_start().starts_with("╭─ ") && l.contains(needle));
-    let (web, aaa) = (row_of("web ·").expect("the live box"), row_of("aaa ·").unwrap_or_else(|| panic!("the cancelled PR has its box:\n{text}")));
-    assert!(web < aaa, "the cancelled box is below the live one:\n{text}");
-    assert!(screen[aaa].contains("cancelled"), "its title says so: {}", screen[aaa]);
-    assert!(box_inside(&screen, "aaa ·").iter().any(|l| l.contains("o1")), "with its Jobs:\n{text}");
-    let muted = |word: &str| {
-        cells_of(&buf, word).unwrap_or_else(|| panic!("{word} is not on the screen")).iter().map(|at| buf[*at].fg == palette::color(Meaning::Nothing)).collect::<Vec<_>>()
+    let row_of = |needle: &str| {
+        screen
+            .iter()
+            .position(|l| l.trim_start().starts_with("╭─ ") && l.contains(needle))
     };
-    assert!(muted("cancelled").iter().all(|m| *m), "the status is muted: {:?}", muted("cancelled"));
+    let (web, aaa) = (
+        row_of("web ·").expect("the live box"),
+        row_of("aaa ·").unwrap_or_else(|| panic!("the cancelled PR has its box:\n{text}")),
+    );
+    assert!(
+        web < aaa,
+        "the cancelled box is below the live one:\n{text}"
+    );
+    assert!(
+        screen[aaa].contains("cancelled"),
+        "its title says so: {}",
+        screen[aaa]
+    );
+    assert!(
+        box_inside(&screen, "aaa ·")
+            .iter()
+            .any(|l| l.contains("o1")),
+        "with its Jobs:\n{text}"
+    );
+    let muted = |word: &str| {
+        cells_of(&buf, word)
+            .unwrap_or_else(|| panic!("{word} is not on the screen"))
+            .iter()
+            .map(|at| buf[*at].fg == palette::color(Meaning::Nothing))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        muted("cancelled").iter().all(|m| *m),
+        "the status is muted: {:?}",
+        muted("cancelled")
+    );
     let title = muted("aaa ·");
-    assert!(title.iter().filter(|m| **m).count() >= 3, "the cancelled PR's key is muted: {title:?}");
+    assert!(
+        title.iter().filter(|m| **m).count() >= 3,
+        "the cancelled PR's key is muted: {title:?}"
+    );
 }
 
 #[test]
 fn needs_on_a_cancelled_job_are_not_drawn() {
     let fx = env();
     // `b` needs `gone`, which is cancelled: the need counts for nothing
-    plan(&fx, &[("api", "api")], &[("api", "gone", "cancelled", "work", &[]), ("api", "b", "queued", "work", &["gone"])]);
+    plan(
+        &fx,
+        &[("api", "api")],
+        &[
+            ("api", "gone", "cancelled", "work", &[]),
+            ("api", "b", "queued", "work", &["gone"]),
+        ],
+    );
     let screen = rows(&draw(&fx));
     let text = screen.join("\n");
     assert!(text.contains("gone"), "the cancelled Job is drawn:\n{text}");

@@ -55,7 +55,9 @@ mod tests {
     #[test]
     fn scopes_nest_and_the_outer_input_comes_back_also_after_a_panic() {
         scope(Box::new(&b"outer\n"[..]), || {
-            let inner = std::panic::catch_unwind(|| scope(Box::new(&b"inner\n"[..]), || -> () { panic!("inner") }));
+            let inner = std::panic::catch_unwind(|| {
+                scope(Box::new(&b"inner\n"[..]), || -> () { panic!("inner") })
+            });
             assert!(inner.is_err());
             let mut line = String::new();
             read_line(&mut line).unwrap();

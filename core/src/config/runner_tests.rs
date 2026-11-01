@@ -53,7 +53,10 @@ fn read_with_asks_the_runner_for_node_running_the_module_on_pis_entries_and_the_
     assert_eq!(calls[0].program, node().display().to_string());
     let args = &calls[0].args;
     assert_eq!(&args[..2], ["--input-type=module", "-e"]);
-    assert!(args[2].contains("getSupportedThinkingLevels"), "the embedded module");
+    assert!(
+        args[2].contains("getSupportedThinkingLevels"),
+        "the embedded module"
+    );
     let models = models();
     assert_eq!(
         &args[3..],
@@ -75,7 +78,14 @@ fn read_with_runs_node_in_the_agent_dir_with_the_managed_install_root_and_the_gi
     let call = &runner.calls()[0];
     assert_eq!(call.deadline, DEADLINE);
     assert_eq!(call.cwd.as_deref(), Some(Path::new("/nonexistent/agent")));
-    assert!(call.envs.contains(&("PI_MANAGED_INSTALL_ROOT".to_owned(), Some("/nonexistent/agent/install".to_owned()))), "{:?}", call.envs);
+    assert!(
+        call.envs.contains(&(
+            "PI_MANAGED_INSTALL_ROOT".to_owned(),
+            Some("/nonexistent/agent/install".to_owned())
+        )),
+        "{:?}",
+        call.envs
+    );
 }
 
 #[test]
@@ -94,7 +104,12 @@ fn read_with_maps_a_node_that_cannot_start_to_catalog_failed_naming_it() {
     let (_, result) = read(Reply::io(ErrorKind::NotFound));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert!(err.message().starts_with(&format!("cannot run {}: ", node().display())), "{}", err.message());
+    assert!(
+        err.message()
+            .starts_with(&format!("cannot run {}: ", node().display())),
+        "{}",
+        err.message()
+    );
     assert_eq!(err.details()["node"], node().display().to_string());
 }
 
@@ -117,23 +132,35 @@ fn read_with_maps_stdout_that_is_not_json_to_catalog_failed_with_stdout_and_stde
     let (_, result) = read(Reply::exit(0, "garbage", "warn"));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert!(err.message().starts_with("the catalog module printed invalid JSON: "), "{}", err.message());
+    assert!(
+        err.message()
+            .starts_with("the catalog module printed invalid JSON: "),
+        "{}",
+        err.message()
+    );
     assert_eq!(err.details()["stdout"], "garbage");
     assert_eq!(err.details()["stderr"], "warn");
 }
 
 #[test]
 fn read_with_maps_a_missing_tier_letter_to_catalog_failed() {
-    let (_, result) = read(Reply::ok(&json!({"O": ["low"], "S": ["low"], "H": ["low"]}).to_string()));
+    let (_, result) = read(Reply::ok(
+        &json!({"O": ["low"], "S": ["low"], "H": ["low"]}).to_string(),
+    ));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert_eq!(err.message(), "the catalog module printed nothing for Tier G.");
+    assert_eq!(
+        err.message(),
+        "the catalog module printed nothing for Tier G."
+    );
     assert_eq!(err.details()["letter"], "G");
 }
 
 #[test]
 fn read_with_maps_a_model_pi_does_not_have_to_tier_model_unknown() {
-    let (_, result) = read(Reply::ok(&json!({"O": ["low"], "S": null, "H": ["low"], "G": ["low"]}).to_string()));
+    let (_, result) = read(Reply::ok(
+        &json!({"O": ["low"], "S": null, "H": ["low"], "G": ["low"]}).to_string(),
+    ));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::TierModelUnknown);
     assert_eq!(err.details()["missing"][0]["letter"], "S");
@@ -142,24 +169,42 @@ fn read_with_maps_a_model_pi_does_not_have_to_tier_model_unknown() {
 
 #[test]
 fn read_with_maps_an_unknown_thinking_level_to_catalog_failed() {
-    let (_, result) = read(Reply::ok(&json!({"O": ["warp"], "S": ["low"], "H": ["low"], "G": []}).to_string()));
+    let (_, result) = read(Reply::ok(
+        &json!({"O": ["warp"], "S": ["low"], "H": ["low"], "G": []}).to_string(),
+    ));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert!(err.message().starts_with("pi reports the unknown thinking level \"warp\""), "{}", err.message());
+    assert!(
+        err.message()
+            .starts_with("pi reports the unknown thinking level \"warp\""),
+        "{}",
+        err.message()
+    );
 }
 
 #[test]
 fn read_with_maps_a_model_with_no_usable_level_to_catalog_failed() {
-    let (_, result) = read(Reply::ok(&json!({"O": ["minimal"], "S": ["low"], "H": ["low"], "G": []}).to_string()));
+    let (_, result) = read(Reply::ok(
+        &json!({"O": ["minimal"], "S": ["low"], "H": ["low"], "G": []}).to_string(),
+    ));
     let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert!(err.message().starts_with("pi reports no usable thinking level for "), "{}", err.message());
+    assert!(
+        err.message()
+            .starts_with("pi reports no usable thinking level for "),
+        "{}",
+        err.message()
+    );
 }
 
 #[test]
 fn read_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("node", |_| true, Reply::ok(&levels()).takes(Duration::from_secs(31)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "node",
+        |_| true,
+        Reply::ok(&levels()).takes(Duration::from_secs(31)),
+    );
     let err = read_with(&runner, &pi(), &models(), DEADLINE).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], "node");
@@ -192,41 +237,69 @@ fn flipped_swaps_pi_and_durable() {
 #[test]
 fn set_in_text_replaces_the_whole_line_and_its_comment_and_keeps_every_other_byte() {
     let before = "# mine\r\nversion = 1\nmachine = \"hs\"\nworker_runner = \"pi\"   # old comment\nconcurrency = 5\n\n[timeouts]\nattempt_minutes = 30";
-    let want = format!("# mine\r\nversion = 1\nmachine = \"hs\"\n{}\nconcurrency = 5\n\n[timeouts]\nattempt_minutes = 30", line("durable"));
+    let want = format!(
+        "# mine\r\nversion = 1\nmachine = \"hs\"\n{}\nconcurrency = 5\n\n[timeouts]\nattempt_minutes = 30",
+        line("durable")
+    );
     assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
 }
 
 #[test]
 fn set_in_text_inserts_the_line_before_the_first_table_when_it_is_absent() {
     let before = "version = 1\nmachine = \"hs\"  # the machine\n\n# timeouts\n[timeouts]\nattempt_minutes = 30\n";
-    let want = format!("version = 1\nmachine = \"hs\"  # the machine\n{}\n\n# timeouts\n[timeouts]\nattempt_minutes = 30\n", line("durable"));
+    let want = format!(
+        "version = 1\nmachine = \"hs\"  # the machine\n{}\n\n# timeouts\n[timeouts]\nattempt_minutes = 30\n",
+        line("durable")
+    );
     assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
 }
 
 #[test]
 fn set_in_text_inserts_the_line_at_the_end_when_there_is_no_table() {
     let want = format!("version = 1\nmachine = \"hs\"\n{}\n", line("pi"));
-    assert_eq!(set_in_text("version = 1\nmachine = \"hs\"\n", WorkerRunner::Pi), want);
+    assert_eq!(
+        set_in_text("version = 1\nmachine = \"hs\"\n", WorkerRunner::Pi),
+        want
+    );
     let want = format!("version = 1\nmachine = \"hs\"\n{}\n", line("pi"));
-    assert_eq!(set_in_text("version = 1\nmachine = \"hs\"", WorkerRunner::Pi), want);
+    assert_eq!(
+        set_in_text("version = 1\nmachine = \"hs\"", WorkerRunner::Pi),
+        want
+    );
 }
 
 #[test]
 fn set_in_text_leaves_a_worker_runner_key_of_a_table_alone() {
     let before = "version = 1\nmachine = \"hs\"\n\n[tmux]\nworker_runner = \"pi\"\n";
-    let want = format!("version = 1\nmachine = \"hs\"\n{}\n\n[tmux]\nworker_runner = \"pi\"\n", line("durable"));
+    let want = format!(
+        "version = 1\nmachine = \"hs\"\n{}\n\n[tmux]\nworker_runner = \"pi\"\n",
+        line("durable")
+    );
     assert_eq!(set_in_text(before, WorkerRunner::Durable), want);
 }
 
 #[test]
 fn toggle_writes_the_other_value_atomically_and_returns_it() {
-    let (dir, home) = home_with("version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n");
+    let (dir, home) =
+        home_with("version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n");
     assert_eq!(toggle(&home).unwrap(), WorkerRunner::Durable);
     let text = std::fs::read_to_string(home.config()).unwrap();
-    assert_eq!(text, set_in_text("version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n", WorkerRunner::Durable));
-    assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Durable);
+    assert_eq!(
+        text,
+        set_in_text(
+            "version = 1\nmachine = \"hs\"\n\n[timeouts]\nattempt_minutes = 30\n",
+            WorkerRunner::Durable
+        )
+    );
+    assert_eq!(
+        Config::load(&home).unwrap().worker_runner,
+        WorkerRunner::Durable
+    );
     // Atomic: the temporary file was renamed away, so the directory holds config.toml alone.
-    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
     assert_eq!(names, ["config.toml"]);
 }
 
@@ -236,7 +309,10 @@ fn toggle_flips_back_on_the_second_call() {
     assert_eq!(toggle(&home).unwrap(), WorkerRunner::Pi);
     assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Pi);
     assert_eq!(toggle(&home).unwrap(), WorkerRunner::Durable);
-    assert_eq!(Config::load(&home).unwrap().worker_runner, WorkerRunner::Durable);
+    assert_eq!(
+        Config::load(&home).unwrap().worker_runner,
+        WorkerRunner::Durable
+    );
 }
 
 #[test]
@@ -255,16 +331,22 @@ use std::path::Path as StdPath;
 #[test]
 fn lead_and_manager_runner_default_to_pi_and_parse() {
     let path = StdPath::new("config.toml");
-    let (config, _) = Config::parse("version = 1\nmachine = \"m1\"\n", path).expect("a config without the keys parses");
+    let (config, _) = Config::parse("version = 1\nmachine = \"m1\"\n", path)
+        .expect("a config without the keys parses");
     assert_eq!(config.lead_runner, WorkerRunner::Pi);
     assert_eq!(config.manager_runner, WorkerRunner::Pi);
 
     // `lead_runner = "durable"` parses; the two keys are independent (Q11).
-    let (config, _) = Config::parse("version = 1\nmachine = \"m1\"\nlead_runner = \"durable\"\n", path).expect("lead_runner = durable parses");
+    let (config, _) = Config::parse(
+        "version = 1\nmachine = \"m1\"\nlead_runner = \"durable\"\n",
+        path,
+    )
+    .expect("lead_runner = durable parses");
     assert_eq!(config.lead_runner, WorkerRunner::Durable);
     assert_eq!(config.manager_runner, WorkerRunner::Pi);
 
     // An unknown key is still refused (`r.finish`).
-    let err = Config::parse("version = 1\nmachine = \"m1\"\nnot_a_key = \"x\"\n", path).unwrap_err();
+    let err =
+        Config::parse("version = 1\nmachine = \"m1\"\nnot_a_key = \"x\"\n", path).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }

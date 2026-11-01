@@ -29,12 +29,22 @@ fn a_tree_draws_before_start_returns_and_a_nap_moves_the_clock_and_its_drop_ends
     let fx = fx();
     let _engine = engine(&fx);
     let mut tree = Tree::start(&fx, 40, 6);
-    assert!(tree.shows("no Contexts"), "the first frame is drawn: {:?}", tree.screen());
+    assert!(
+        tree.shows("no Contexts"),
+        "the first frame is drawn: {:?}",
+        tree.screen()
+    );
     let before = fx.fakes.clock.elapsed();
     tree.idle();
-    assert!(fx.fakes.clock.elapsed() > before, "the loop's poll napped on the ManualClock");
+    assert!(
+        fx.fakes.clock.elapsed() > before,
+        "the loop's poll napped on the ManualClock"
+    );
     let written = tree.written();
-    assert!(!written.is_empty(), "the view set the terminal up: {written:?}");
+    assert!(
+        !written.is_empty(),
+        "the view set the terminal up: {written:?}"
+    );
     drop(tree); // joins the loop's thread: it ended by the closed input, not by a panic or an error of its own
 }
 
@@ -44,7 +54,10 @@ fn a_view_is_run_by_its_entry_and_its_flushes_and_snapshots_are_counted() {
     let _engine = engine(&fx);
     let mut tree = Tree::start(&fx, 40, 6);
     let flushes = tree.flushes();
-    assert!(flushes > 0 && tree.snapshots() == 0, "the first frame is drawn, and the first read is no snapshot of the loop");
+    assert!(
+        flushes > 0 && tree.snapshots() == 0,
+        "the first frame is drawn, and the first read is no snapshot of the loop"
+    );
     tree.keys(&["j"]);
     assert!(tree.flushes() > flushes, "a key is a frame");
     fx.env.sql(
@@ -78,5 +91,9 @@ fn a_gate_holds_a_call_until_its_key_opens_it_and_a_dropped_key_opens_it_too() {
 
     let (gate, key) = Gate::new(reply.clone());
     drop(key);
-    assert_eq!(gate.handle(&call()), reply, "a key that is gone opens the gate");
+    assert_eq!(
+        gate.handle(&call()),
+        reply,
+        "a key that is gone opens the gate"
+    );
 }

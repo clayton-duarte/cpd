@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use cpd_core::fakes::tmux::TmuxRoute;
 use cpd_core::clock::Clock;
 use cpd_core::error::CpdError;
+use cpd_core::fakes::tmux::TmuxRoute;
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
@@ -30,7 +30,9 @@ use cpd_tui::palette::SPINNER;
 use cpd_tui::view_ports::Input;
 use nix::fcntl::{Flock, FlockArg};
 use ratatui::Terminal;
-use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use super::fx::Fx;
 use super::screen::{Bytes, Display, FakeTty, Screen, ch, key};
@@ -85,11 +87,18 @@ impl Input for Remote {
     }
 
     fn read(&mut self) -> io::Result<Event> {
-        Ok(self.pending.take().expect("the loop reads only what a poll said is there"))
+        Ok(self
+            .pending
+            .take()
+            .expect("the loop reads only what a poll said is there"))
     }
 
     fn ready_while_busy(&mut self) -> io::Result<bool> {
-        if self.eager.load(Ordering::SeqCst) { self.ask(Duration::ZERO) } else { Ok(false) }
+        if self.eager.load(Ordering::SeqCst) {
+            self.ask(Duration::ZERO)
+        } else {
+            Ok(false)
+        }
     }
 
     fn snapshot_read(&mut self) {
@@ -111,12 +120,27 @@ pub struct Tree {
 }
 
 /// A view's entry: what [`Tree::run`] calls on the view's thread (`cpd_tui::<view>::run_on`, its arguments bound).
-pub type Entry = dyn FnOnce(&Ports, &mut FakeTty, &mut Bytes, Terminal<Display>, &mut dyn Input) -> Result<Output, CpdError> + Send;
+pub type Entry = dyn FnOnce(
+        &Ports,
+        &mut FakeTty,
+        &mut Bytes,
+        Terminal<Display>,
+        &mut dyn Input,
+    ) -> Result<Output, CpdError>
+    + Send;
 
 impl Tree {
     /// Runs the tree view in a `width` x `height` terminal on the `Fx`'s fake ports and returns when it first waits for input.
     pub fn start(fx: &Fx, width: u16, height: u16) -> Tree {
-        Tree::run(fx, "tree", width, height, Box::new(|ports, tty, out, terminal, input| cpd_tui::tree::run_on(ports, tty, out, terminal, input)))
+        Tree::run(
+            fx,
+            "tree",
+            width,
+            height,
+            Box::new(|ports, tty, out, terminal, input| {
+                cpd_tui::tree::run_on(ports, tty, out, terminal, input)
+            }),
+        )
     }
 
     /// Runs the view `name`, which `entry` runs (its `run_on`), in a `width` x `height` terminal on the `Fx`'s fake ports and
@@ -142,7 +166,15 @@ impl Tree {
             .spawn(move || {
                 let mut written = written;
                 // what the view reaches through `Ports::current()` is the fake too, never the real ports
-                Ports::scope(&ports, || entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote))
+                Ports::scope(&ports, || {
+                    entry(
+                        &ports,
+                        &mut FakeTty::new(true),
+                        &mut written,
+                        shown.terminal(),
+                        &mut remote,
+                    )
+                })
             })
             .expect("a thread for the view");
         let mut tree = Tree {
@@ -170,7 +202,10 @@ impl Tree {
 
     fn join(&mut self) -> thread::Result<Result<Output, CpdError>> {
         self.cmds = None;
-        self.thread.take().expect("the view's thread is joined once").join()
+        self.thread
+            .take()
+            .expect("the view's thread is joined once")
+            .join()
     }
 
     fn send(&mut self, cmd: Cmd) {
@@ -220,7 +255,12 @@ impl Tree {
 
     fn mouse(&mut self, button: MouseButton, column: u16, row: u16) {
         for kind in [MouseEventKind::Down(button), MouseEventKind::Up(button)] {
-            self.event(Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }));
+            self.event(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
         }
     }
 
@@ -244,7 +284,11 @@ impl Tree {
             if done(&rows) {
                 return rows;
             }
-            assert!(self.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time for {what}; the screen:\n{}", rows.join("\n"));
+            assert!(
+                self.clock.elapsed() - start < LIMIT,
+                "waited {LIMIT:?} virtual time for {what}; the screen:\n{}",
+                rows.join("\n")
+            );
             self.idle();
         }
     }
@@ -254,7 +298,11 @@ impl Tree {
     pub fn until_that(&mut self, what: &str, mut done: impl FnMut(&Tree) -> bool) {
         let start = self.clock.elapsed();
         while !done(self) {
-            assert!(self.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time for {what}; the screen:\n{}", self.screen().join("\n"));
+            assert!(
+                self.clock.elapsed() - start < LIMIT,
+                "waited {LIMIT:?} virtual time for {what}; the screen:\n{}",
+                self.screen().join("\n")
+            );
             self.idle();
         }
     }
@@ -262,7 +310,9 @@ impl Tree {
     /// Naps until the log has a line with `text`.
     pub fn until_logged(&mut self, text: &str) {
         let home = self.home.clone();
-        self.until_that(&format!("the log line {text:?}"), |_| read_log(&home).contains(text));
+        self.until_that(&format!("the log line {text:?}"), |_| {
+            read_log(&home).contains(text)
+        });
     }
 
     /// Naps until the first snapshot has been drawn: the screen has `text`.
@@ -288,7 +338,21 @@ impl Tree {
         let working = SPINNER[0].chars().next().expect("a glyph");
         let mut rows: Vec<String> = (self.display.screen().rows().iter())
             .map(|r| r.trim_end().to_owned())
-            .map(|r| if r.ends_with("1⋅1⋅1⋅2") { r.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { working } else { c }).collect() } else { r })
+            .map(|r| {
+                if r.ends_with("1⋅1⋅1⋅2") {
+                    r.chars()
+                        .map(|c| {
+                            if SPINNER.iter().any(|g| g.starts_with(c)) {
+                                working
+                            } else {
+                                c
+                            }
+                        })
+                        .collect()
+                } else {
+                    r
+                }
+            })
             .collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
@@ -343,8 +407,14 @@ pub fn fx() -> Fx {
 /// The engine's lock, held until the guard drops (`engine-down` is no row of the Inbox); declare it after the `Fx`.
 pub fn engine(fx: &Fx) -> Flock<File> {
     let path = fx.env.cpd_home().join("locks/watch.lock");
-    std::fs::create_dir_all(path.parent().expect("the locks directory")).expect("create the locks directory");
-    Flock::lock(File::create(path).expect("the engine lock file"), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("lock the engine")
+    std::fs::create_dir_all(path.parent().expect("the locks directory"))
+        .expect("create the locks directory");
+    Flock::lock(
+        File::create(path).expect("the engine lock file"),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .map_err(|(_, e)| e)
+    .expect("lock the engine")
 }
 
 /// A fake `cpd` that succeeds with `reply`, and a cockpit with no pane and no client (see [`fake_cockpit`]).
@@ -384,14 +454,29 @@ pub struct Dialogs {
 pub fn dialogs(fx: &Fx) -> Dialogs {
     let ok = |args: &[&str]| {
         let out = fx.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     ok(&["new-session", "-d", "-s", "cpd", "-x", "200", "-y", "60"]);
     fx.tmux_route.fake().add_client("/dev/pts/9", 200, 60);
-    let dialogs = Dialogs { answer: Arc::default(), route: fx.tmux_route.clone(), socket: fx.env.tmux_socket().to_owned() };
+    let dialogs = Dialogs {
+        answer: Arc::default(),
+        route: fx.tmux_route.clone(),
+        socket: fx.env.tmux_socket().to_owned(),
+    };
     dialogs.cancel();
     let answer = dialogs.answer.clone();
-    fx.tmux_route.fake().on_popup(move |_| Some(answer.lock().unwrap_or_else(PoisonError::into_inner).clone()));
+    fx.tmux_route.fake().on_popup(move |_| {
+        Some(
+            answer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
+    });
     dialogs
 }
 
@@ -422,7 +507,10 @@ impl Dialogs {
 
     /// Every popup opened so far: the command each ran, without its `--out` (a temporary file).
     pub fn popups(&self) -> Vec<String> {
-        self.raw().iter().map(|p| without_out(p.last().expect("a popup has a command"))).collect()
+        self.raw()
+            .iter()
+            .map(|p| without_out(p.last().expect("a popup has a command")))
+            .collect()
     }
 
     /// The argv of every `display-popup` so far (the subcommand name first).
@@ -437,15 +525,25 @@ impl Dialogs {
         tree.until_that("the legend's popup", |_| self.raw().len() > before);
         let popups = self.raw();
         assert_eq!(popups.len(), before + 1, "{popups:?}");
-        assert!(popups[before].contains(&" legend ".to_owned()), "the legend's: {:?}", popups[before]);
+        assert!(
+            popups[before].contains(&" legend ".to_owned()),
+            "the legend's: {:?}",
+            popups[before]
+        );
     }
 }
 
 /// `command` without its ` --out='<path>'`, when it has one.
 fn without_out(command: &str) -> String {
     const OUT: &str = " --out='";
-    let Some(start) = command.find(OUT) else { return command.to_owned() };
-    let end = start + OUT.len() + command[start + OUT.len()..].find('\'').expect("the closing quote of --out");
+    let Some(start) = command.find(OUT) else {
+        return command.to_owned();
+    };
+    let end = start
+        + OUT.len()
+        + command[start + OUT.len()..]
+            .find('\'')
+            .expect("the closing quote of --out");
     format!("{}{}", &command[..start], &command[end + 1..])
 }
 
@@ -458,7 +556,10 @@ pub fn fake_cockpit(fx: &Fx) {
 /// What the tmux calls so far ask for: the verb of each (`list-panes`, `display-popup`, ...).
 pub fn tmux_verbs(fx: &Fx) -> Vec<String> {
     // `tmux -u -L <socket> -f /dev/null <verb> ...`
-    fx.calls("tmux").iter().map(|call| call.args.get(5).cloned().unwrap_or_default()).collect()
+    fx.calls("tmux")
+        .iter()
+        .map(|call| call.args.get(5).cloned().unwrap_or_default())
+        .collect()
 }
 
 /// The arguments of every `cpd` call so far.
@@ -518,14 +619,24 @@ impl Gate {
     /// A gate with its key: `open` lets every waiting call of the fake answer `reply`.
     pub fn new(reply: Reply) -> (Arc<Gate>, GateKey) {
         let (send, recv) = channel();
-        (Arc::new(Gate { opened: Mutex::new(recv), reply }), GateKey(Some(send)))
+        (
+            Arc::new(Gate {
+                opened: Mutex::new(recv),
+                reply,
+            }),
+            GateKey(Some(send)),
+        )
     }
 }
 
 impl Handler for Gate {
     fn handle(&self, _call: &Call) -> Reply {
         // `Err` is the key dropped: the test is over, the call goes on
-        let _ = self.opened.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        let _ = self
+            .opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recv();
         self.reply.clone()
     }
 }

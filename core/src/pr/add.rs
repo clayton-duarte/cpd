@@ -15,19 +15,19 @@ use super::{AddArgs, Env, gh, plan_phase};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::home::CpdHome;
 use crate::git::run::{branch_exists, has_origin, run};
 use crate::git::worktree::list as worktrees;
+use crate::home::CpdHome;
 use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::job::open;
 use crate::job::spec::{Spec, parse as parse_spec};
-use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
 use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::Job;
 use crate::plan::locked_fingerprint;
+use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
@@ -66,7 +66,13 @@ fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
         "docs" => vec![stub("docs", "docs", "Docs", None)],
         _ => vec![stub("config", "work", "Config", None)],
     };
-    stubs.push(Stub { key: format!("open-{pr}"), suffix: "open", kind: "open", title: format!("Open the pull request: {title}"), needs: None });
+    stubs.push(Stub {
+        key: format!("open-{pr}"),
+        suffix: "open",
+        kind: "open",
+        title: format!("Open the pull request: {title}"),
+        needs: None,
+    });
     stubs
 }
 
@@ -92,33 +98,78 @@ struct Wanted {
 
 /// `--jobs <file.json>` (§9.4): one object keyed by the suffixes of `shape`'s template (every one, no other), each
 /// `{"tier", "spec"}`. A fault is the code `job add` uses for the same one (`spec_invalid`, `tier_invalid`, ...), never `usage`.
-fn read_jobs(path: &Path, shape: &str, pr: &PrKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
+fn read_jobs(
+    path: &Path,
+    shape: &str,
+    pr: &PrKey,
+    title: &str,
+) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
     let invalid = |at: &str, why: String| {
-        CpdError::new(ErrorCode::SpecInvalid, format!("The --jobs file is invalid at {at}: {why}.")).with("path", at).with("file", path.display().to_string())
+        CpdError::new(
+            ErrorCode::SpecInvalid,
+            format!("The --jobs file is invalid at {at}: {why}."),
+        )
+        .with("path", at)
+        .with("file", path.display().to_string())
     };
     let text = std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?;
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
-    let serde_json::Value::Object(mut object) = value else { return Err(invalid("$", "expected an object".to_owned())) };
-    let stubs: Vec<Stub> = template(shape, pr, title).into_iter().filter(|s| s.kind != "open").collect();
-    if let Some(unknown) = object.keys().find(|k| !stubs.iter().any(|s| s.suffix == k.as_str())) {
-        return Err(invalid(&format!("$.{unknown}"), format!("unknown key: the {shape} template has {}", suffixes(&stubs))));
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
+    let serde_json::Value::Object(mut object) = value else {
+        return Err(invalid("$", "expected an object".to_owned()));
+    };
+    let stubs: Vec<Stub> = template(shape, pr, title)
+        .into_iter()
+        .filter(|s| s.kind != "open")
+        .collect();
+    if let Some(unknown) = object
+        .keys()
+        .find(|k| !stubs.iter().any(|s| s.suffix == k.as_str()))
+    {
+        return Err(invalid(
+            &format!("$.{unknown}"),
+            format!("unknown key: the {shape} template has {}", suffixes(&stubs)),
+        ));
     }
     let mut jobs = BTreeMap::new();
     for stub in &stubs {
         let at = format!("$.{}", stub.suffix);
         let Some(serde_json::Value::Object(mut entry)) = object.remove(stub.suffix) else {
-            return Err(invalid(&at, format!("missing key (or not an object): every key of the {shape} template is required, {}", suffixes(&stubs))));
+            return Err(invalid(
+                &at,
+                format!(
+                    "missing key (or not an object): every key of the {shape} template is required, {}",
+                    suffixes(&stubs)
+                ),
+            ));
         };
-        if let Some(unknown) = entry.keys().find(|k| !matches!(k.as_str(), "tier" | "spec")) {
-            return Err(invalid(&format!("{at}.{unknown}"), "unknown field".to_owned()));
+        if let Some(unknown) = entry
+            .keys()
+            .find(|k| !matches!(k.as_str(), "tier" | "spec"))
+        {
+            return Err(invalid(
+                &format!("{at}.{unknown}"),
+                "unknown field".to_owned(),
+            ));
         }
         let Some(serde_json::Value::String(tier)) = entry.remove("tier") else {
-            return Err(invalid(&format!("{at}.tier"), "missing field: a Tier name".to_owned()));
+            return Err(invalid(
+                &format!("{at}.tier"),
+                "missing field: a Tier name".to_owned(),
+            ));
         };
         let tier = Tier::parse(&tier)?;
         tier.check_worker()?;
-        let spec = entry.remove("spec").ok_or_else(|| invalid(&format!("{at}.spec"), "missing field: the Job's Spec object".to_owned()))?;
-        let spec = parse_spec(&spec.to_string()).map_err(|e| e.with("job", stub.key.as_str()).with("file", path.display().to_string()))?;
+        let spec = entry.remove("spec").ok_or_else(|| {
+            invalid(
+                &format!("{at}.spec"),
+                "missing field: the Job's Spec object".to_owned(),
+            )
+        })?;
+        let spec = parse_spec(&spec.to_string()).map_err(|e| {
+            e.with("job", stub.key.as_str())
+                .with("file", path.display().to_string())
+        })?;
         spec.check_kind(stub.kind)?;
         jobs.insert(stub.suffix, (tier, spec));
     }
@@ -126,7 +177,11 @@ fn read_jobs(path: &Path, shape: &str, pr: &PrKey, title: &str) -> Result<BTreeM
 }
 
 fn suffixes(stubs: &[Stub]) -> String {
-    stubs.iter().map(|s| s.suffix).collect::<Vec<_>>().join(", ")
+    stubs
+        .iter()
+        .map(|s| s.suffix)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The pull request `--adopt` names, read from GitHub, and the author the Lead confirmed.
@@ -138,9 +193,21 @@ struct Adopt {
 enum Decision {
     /// The PR exists with these values; its status and `lead_branch` as stored, and `appended`
     /// as the Event recorded it.
-    Already { status: String, lead_branch: String, appended: bool, base: String, base_pr: Option<String>, needs: Vec<String> },
+    Already {
+        status: String,
+        lead_branch: String,
+        appended: bool,
+        base: String,
+        base_pr: Option<String>,
+        needs: Vec<String>,
+    },
     /// The PR is new, in a Plan in this phase.
-    Insert { phase: Phase, base: String, base_pr: Option<String>, needs: Vec<String> },
+    Insert {
+        phase: Phase,
+        base: String,
+        base_pr: Option<String>,
+        needs: Vec<String>,
+    },
 }
 
 /// A PR reference (contract §2.2): a bare `<key>`, a PR of the Plan the command is about, or
@@ -155,8 +222,14 @@ impl FromStr for PrRef {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<Self, CpdError> {
         match s.split_once('/') {
-            Some((plan, key)) => Ok(PrRef { plan: Some(PlanId::parse(plan)?), key: PrKey::parse(key)? }),
-            None => Ok(PrRef { plan: None, key: PrKey::parse(s)? }),
+            Some((plan, key)) => Ok(PrRef {
+                plan: Some(PlanId::parse(plan)?),
+                key: PrKey::parse(key)?,
+            }),
+            None => Ok(PrRef {
+                plan: None,
+                key: PrKey::parse(s)?,
+            }),
         }
     }
 }
@@ -173,7 +246,11 @@ pub(super) fn needs_refs(own: &PlanId, needs: &[PrRef]) -> Result<Vec<String>, C
         .collect();
     refs.sort();
     if let Some(pair) = refs.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("--needs lists {} twice.", pair[0]),
+        )
+        .with("pr", pair[0].as_str()));
     }
     Ok(refs)
 }
@@ -194,20 +271,34 @@ pub(super) enum BaseWanted {
 
 /// Reads `--base` (§2.2 "A PR reference"): a base PR when it is a bare `<key>` of a PR of `plan` in `repo`
 /// (it wins over a same-named branch), or has the form `<plan>/<key>` and a Plan `<plan>` exists; else a branch.
-pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base: Option<&str>) -> Result<BaseArg, CpdError> {
-    let Some(value) = base else { return Ok(BaseArg::Branch(None)) };
+pub(super) fn classify_base(
+    conn: &Connection,
+    plan: &PlanId,
+    repo: &Path,
+    base: Option<&str>,
+) -> Result<BaseArg, CpdError> {
+    let Some(value) = base else {
+        return Ok(BaseArg::Branch(None));
+    };
     if !value.contains('/')
         && let Ok(key) = PrKey::parse(value)
     {
         let repo = repo.display().to_string();
-        if known_prs(conn, plan)?.iter().any(|q| q.key == key.as_str() && q.repo == repo) {
+        if known_prs(conn, plan)?
+            .iter()
+            .any(|q| q.key == key.as_str() && q.repo == repo)
+        {
             return Ok(BaseArg::Pr(plan.clone(), key));
         }
     }
     if let Some((plan, key)) = value.split_once('/')
         && let (Ok(plan), Ok(key)) = (PlanId::parse(plan), PrKey::parse(key))
     {
-        let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
         if exists {
             return Ok(BaseArg::Pr(plan, key));
         }
@@ -236,10 +327,18 @@ pub(super) struct Known {
 
 /// Every PR of `plan`.
 pub(super) fn known_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM prs WHERE plan = ?1 ORDER BY key")?;
+    let mut stmt = conn.prepare(
+        "SELECT key, repo, base, lead_branch, status FROM prs WHERE plan = ?1 ORDER BY key",
+    )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok(Known { key: r.get(0)?, repo: r.get(1)?, base: r.get(2)?, lead_branch: r.get(3)?, status: r.get(4)? })
+            Ok(Known {
+                key: r.get(0)?,
+                repo: r.get(1)?,
+                base: r.get(2)?,
+                lead_branch: r.get(3)?,
+                status: r.get(4)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
@@ -247,12 +346,18 @@ pub(super) fn known_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, 
 
 /// The base PR of a PR of `repo` targeting `base` (§2.2 "The base PR"): derived, never stored.
 pub(super) fn derived_base_pr<'a>(known: &'a [Known], repo: &str, base: &str) -> Option<&'a Known> {
-    known.iter().find(|q| q.repo == repo && q.lead_branch == base)
+    known
+        .iter()
+        .find(|q| q.repo == repo && q.lead_branch == base)
 }
 
 /// The PRs of the Plan, not `cancelled`, stacked on the PR whose Lead Branch is `lead_branch` in `repo`.
 pub(super) fn stacked_on(known: &[Known], repo: &str, lead_branch: &str) -> Vec<String> {
-    known.iter().filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch).map(|p| p.key.clone()).collect()
+    known
+        .iter()
+        .filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch)
+        .map(|p| p.key.clone())
+        .collect()
 }
 
 /// The PR being added or edited.
@@ -287,7 +392,12 @@ fn other_plan(subject: &Subject<'_>, plan: &str, key: &str) -> CpdError {
 /// `needs_unknown`), are not `cancelled` (`needs_unavailable`), a base PR is not `merged` (`base_pr_unavailable`)
 /// and is of the PR's repo (`base_pr_other_repo`); no PR is both base and need (`usage`); the graph of needs and
 /// base PRs stays acyclic (`dependency_cycle`). `needs` are references of the Plan, as `needs_refs` makes them.
-pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &BaseWanted, needs: &[String]) -> Result<Resolved, CpdError> {
+pub(super) fn resolve_refs(
+    conn: &Connection,
+    subject: &Subject<'_>,
+    base: &BaseWanted,
+    needs: &[String],
+) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
     if let BaseWanted::Pr(base_plan, base_key) = base
         && base_plan != plan
@@ -305,15 +415,21 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     let (branch, base_pr) = match base {
         BaseWanted::Pr(_, base_key) => {
             let Some(pr) = find(base_key.as_str()) else {
-                return Err(CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {base_key} to stack on."))
-                    .with("plan", plan.as_str())
-                    .with("pr", base_key.as_str()));
+                return Err(CpdError::new(
+                    ErrorCode::BasePrUnknown,
+                    format!("Plan {plan} has no PR {base_key} to stack on."),
+                )
+                .with("plan", plan.as_str())
+                .with("pr", base_key.as_str()));
             };
             check_base_pr_state(pr)?;
             if pr.repo != subject.repo {
                 return Err(CpdError::new(
                     ErrorCode::BasePrOtherRepo,
-                    format!("PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.", pr.key, pr.repo, subject.repo),
+                    format!(
+                        "PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.",
+                        pr.key, pr.repo, subject.repo
+                    ),
                 )
                 .with("pr", pr.key.as_str())
                 .with("repo", subject.repo)
@@ -332,17 +448,34 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     };
     let base_key = base_pr.map(|p| p.key.clone());
 
-    let unknown: Vec<String> = needs.iter().filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none()).cloned().collect();
+    let unknown: Vec<String> = needs
+        .iter()
+        .filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none())
+        .cloned()
+        .collect();
     if !unknown.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unknown));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnknown,
+            format!("Plan {plan} has no PR {} to need.", unknown.join(", ")),
+        )
+        .with("plan", plan.as_str())
+        .with("needs", unknown));
     }
-    let unavailable: Vec<String> = needs.iter().filter(|n| find(n).is_some_and(|p| p.status == "cancelled")).cloned().collect();
+    let unavailable: Vec<String> = needs
+        .iter()
+        .filter(|n| find(n).is_some_and(|p| p.status == "cancelled"))
+        .cloned()
+        .collect();
     if !unavailable.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unavailable));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            format!(
+                "A PR cannot need the cancelled PR {}.",
+                unavailable.join(", ")
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("needs", unavailable));
     }
     if let Some(key) = base_key.as_ref().filter(|b| needs.contains(b)) {
         return Err(CpdError::new(
@@ -357,11 +490,21 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     let mut out: Vec<String> = needs.to_vec();
     out.extend(base_key);
     if let Some(cycle) = find_cycle(&this, &out, &edges) {
-        return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The needs and base of {} make a cycle: {}.", subject.key, cycle.join(" → ")))
-            .with("plan", plan.as_str())
-            .with("cycle", cycle));
+        return Err(CpdError::new(
+            ErrorCode::DependencyCycle,
+            format!(
+                "The needs and base of {} make a cycle: {}.",
+                subject.key,
+                cycle.join(" → ")
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("cycle", cycle));
     }
-    Ok(Resolved { base: branch, base_pr: base_pr.map(|p| format!("{plan}/{}", p.key)) })
+    Ok(Resolved {
+        base: branch,
+        base_pr: base_pr.map(|p| format!("{plan}/{}", p.key)),
+    })
 }
 
 /// A base PR is not `cancelled` or `merged` (`base_pr_unavailable`).
@@ -369,7 +512,10 @@ fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
     if matches!(pr.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
             ErrorCode::BasePrUnavailable,
-            format!("PR {} is {}: there is nothing to stack on, name its base branch instead.", pr.key, pr.status),
+            format!(
+                "PR {} is {}: there is nothing to stack on, name its base branch instead.",
+                pr.key, pr.status
+            ),
         )
         .with("pr", pr.key.as_str())
         .with("status", pr.status.as_str()));
@@ -379,18 +525,34 @@ fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
 
 /// The edges of the graph of needs and base PRs of every PR of the Plan that is not `cancelled` (an edge from a PR to
 /// each PR it needs and to its base PR), `except` the edges leaving that PR: they are the ones being set.
-fn edges(conn: &Connection, plan: &PlanId, known: &[Known], except: &String) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
-    let live = |key: &String| known.iter().any(|p| p.status != "cancelled" && &p.key == key);
+fn edges(
+    conn: &Connection,
+    plan: &PlanId,
+    known: &[Known],
+    except: &String,
+) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
+    let live = |key: &String| {
+        known
+            .iter()
+            .any(|p| p.status != "cancelled" && &p.key == key)
+    };
     let mut graph: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1")?;
-    let rows: Vec<(String, String)> = stmt.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
     for (from, to) in rows {
         if &from != except && live(&from) && live(&to) {
             graph.entry(from).or_default().push(to);
         }
     }
-    for p in known.iter().filter(|p| p.status != "cancelled" && &p.key != except) {
-        if let Some(q) = derived_base_pr(known, &p.repo, &p.base).filter(|q| q.status != "cancelled") {
+    for p in known
+        .iter()
+        .filter(|p| p.status != "cancelled" && &p.key != except)
+    {
+        if let Some(q) =
+            derived_base_pr(known, &p.repo, &p.base).filter(|q| q.status != "cancelled")
+        {
             graph.entry(p.key.clone()).or_default().push(q.key.clone());
         }
     }
@@ -398,8 +560,18 @@ fn edges(conn: &Connection, plan: &PlanId, known: &[Known], except: &String) -> 
 }
 
 /// A path from `start` back to `start`, the PR's own `out` edges first and `edges` after, if there is one.
-fn find_cycle(start: &String, out: &[String], edges: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
-    fn visit(node: &String, start: &String, edges: &BTreeMap<String, Vec<String>>, seen: &mut Vec<String>, path: &mut Vec<String>) -> bool {
+fn find_cycle(
+    start: &String,
+    out: &[String],
+    edges: &BTreeMap<String, Vec<String>>,
+) -> Option<Vec<String>> {
+    fn visit(
+        node: &String,
+        start: &String,
+        edges: &BTreeMap<String, Vec<String>>,
+        seen: &mut Vec<String>,
+        path: &mut Vec<String>,
+    ) -> bool {
         path.push(node.clone());
         if node == start && path.len() > 1 {
             return true;
@@ -434,22 +606,39 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     } else {
         Some(needs_refs(&plan, &args.needs)?)
     };
-    let jobs = args.jobs.as_deref().map(|file| read_jobs(file, &args.shape, &args.key, args.title.as_str())).transpose()?;
+    let jobs = args
+        .jobs
+        .as_deref()
+        .map(|file| read_jobs(file, &args.shape, &args.key, args.title.as_str()))
+        .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
     let open_tier = env.config.open_tier;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
-    let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none()).then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
-    let adopt = args.adopt.map(|number| gh::adoptable(&repo, number)).transpose()?;
+    let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
+        .then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
+    let adopt = args
+        .adopt
+        .map(|number| gh::adoptable(&repo, number))
+        .transpose()?;
     let base = match &adopt {
         Some(a) => BaseArg::Branch(Some(a.base.clone())),
-        None => env.store.read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
+        None => env
+            .store
+            .read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
     // A branch that is a PR's Lead Branch of the Plan and repo is its base PR's: it needs no branch yet (that PR may be `waiting`).
     let lead_branch_of_pr = match &base {
-        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_pr(&known_prs(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
+        BaseArg::Branch(Some(branch)) => env.store.read(|conn| {
+            Ok(derived_base_pr(
+                &known_prs(conn, &plan)?,
+                &repo.display().to_string(),
+                branch,
+            )
+            .is_some())
+        })?,
         _ => false,
     };
     let wanted = Wanted {
@@ -457,7 +646,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             BaseArg::Branch(Some(branch)) if lead_branch_of_pr => BaseWanted::Branch(branch),
             base => wanted_base(&repo, base)?,
         },
-        adopt: adopt.map(|pull| Adopt { pull, confirm: args.confirm_author }),
+        adopt: adopt.map(|pull| Adopt {
+            pull,
+            confirm: args.confirm_author,
+        }),
         repo: repo.display().to_string(),
         name,
         title: args.title.to_string(),
@@ -469,8 +661,18 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
 
     let head_ref = wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str());
-    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, unconfigured.as_ref()))? {
-        Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
+    let (status, lead_branch, appended, base, base_pr, needs, already) = match env
+        .store
+        .read(|conn| decide(conn, &plan, &wanted, unconfigured.as_ref()))?
+    {
+        Decision::Already {
+            status,
+            lead_branch,
+            appended,
+            base,
+            base_pr,
+            needs,
+        } => (status, lead_branch, appended, base, base_pr, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
             no_branch_clash(&repo, &plan, &pr_branch(&plan, &wanted.key))?;
@@ -524,7 +726,13 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             })?
         }
     };
-    let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
+    let jira = env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT jira FROM prs WHERE plan = ?1 AND key = ?2",
+            [plan.as_str(), wanted.key.as_str()],
+            |r| r.get::<_, Option<String>>(0),
+        )?)
+    })?;
     let mut out = json!({"pr": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
@@ -545,11 +753,17 @@ pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<Repo
 }
 
 /// [`key_repo`] with the repo's resolved policy and the path of its policy file.
-fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoName, PathBuf, Policy), CpdError> {
+fn key_repo_policy(
+    env: &mut Env,
+    plan: &PlanId,
+    repo: &Path,
+) -> Result<(RepoName, PathBuf, Policy), CpdError> {
     let (context, owner): (String, Option<String>) = env.store.read(|conn| {
-        Ok(conn.query_row("SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1", [plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?)
+        Ok(conn.query_row(
+            "SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1",
+            [plan.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     })?;
     let Some(owner) = owner else {
         return Err(owner_unset(&crate::ids::ContextId::parse(&context)?));
@@ -567,17 +781,29 @@ fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoNam
 /// `pr add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
 fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     let phase = plan_phase(conn, plan)?;
-    let archived: bool = conn.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    let archived: bool = conn.query_row(
+        "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
     if archived {
-        return Err(CpdError::new(ErrorCode::Archived, format!("Plan {plan} is archived: unarchive it first."))
-            .with("plan", plan.as_str())
-            .with("next", format!("cpd plan unarchive --plan {plan}")));
+        return Err(CpdError::new(
+            ErrorCode::Archived,
+            format!("Plan {plan} is archived: unarchive it first."),
+        )
+        .with("plan", plan.as_str())
+        .with("next", format!("cpd plan unarchive --plan {plan}")));
     }
     Ok(phase)
 }
 
 /// `unconfigured`: the refusal of a `tdd` PR whose repo policy has no `[test-commands]`; the first decision checks it, the one inside the write transaction does not.
-fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Option<&CpdError>) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+    unconfigured: Option<&CpdError>,
+) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     if wanted.jobs.is_some() && !matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done) {
         return Err(CpdError::new(
@@ -596,8 +822,15 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
             [plan.as_str(), wanted.key.as_str()],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
-        if same(existing, title.as_deref(), wanted, &prs, &base_branch(conn, &wanted.base)?) {
-            let base_pr = derived_base_pr(&known_prs(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
+        if same(
+            existing,
+            title.as_deref(),
+            wanted,
+            &prs,
+            &base_branch(conn, &wanted.base)?,
+        ) {
+            let base_pr = derived_base_pr(&known_prs(conn, plan)?, &existing.repo, &existing.base)
+                .map(|q| format!("{plan}/{}", q.key));
             return Ok(Decision::Already {
                 status: existing.status.clone(),
                 lead_branch,
@@ -607,21 +840,29 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
                 needs: existing.needs.clone(),
             });
         }
-        return Err(CpdError::new(ErrorCode::PrExists, format!("Plan {plan} already has a PR {} with other flags.", wanted.key))
-            .with("plan", plan.as_str())
-            .with("pr", wanted.key.as_str())
-            .with("repo", existing.repo.as_str())
-            .with("base", existing.base.as_str())
-            .with("title", title)
-            .with("needs", existing.needs.clone())
-            .with("shape", existing.shape.as_str())
-            .with("head_ref", existing.head_ref.clone())
-            .with("status", existing.status.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::PrExists,
+            format!(
+                "Plan {plan} already has a PR {} with other flags.",
+                wanted.key
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", wanted.key.as_str())
+        .with("repo", existing.repo.as_str())
+        .with("base", existing.base.as_str())
+        .with("title", title)
+        .with("needs", existing.needs.clone())
+        .with("shape", existing.shape.as_str())
+        .with("head_ref", existing.head_ref.clone())
+        .with("status", existing.status.as_str()));
     }
     // Stacked (§2.2 "The base PR"): `--base` names a base PR, or a branch that is a PR's Lead Branch; its base is its link.
     let stacked = match &wanted.base {
         BaseWanted::Pr(..) => true,
-        BaseWanted::Branch(branch) => derived_base_pr(&known_prs(conn, plan)?, &wanted.repo, branch).is_some(),
+        BaseWanted::Branch(branch) => {
+            derived_base_pr(&known_prs(conn, plan)?, &wanted.repo, branch).is_some()
+        }
     };
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
@@ -638,7 +879,16 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
         }
         None => Vec::new(),
     };
-    let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
+    let resolved = resolve_refs(
+        conn,
+        &Subject {
+            plan,
+            key: &wanted.key,
+            repo: &wanted.repo,
+        },
+        &wanted.base,
+        &needs,
+    )?;
     if let Some(error) = unconfigured {
         return Err(error.clone());
     }
@@ -646,7 +896,12 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
     if let Some(adopt) = &wanted.adopt {
         check_adoptable(conn, wanted, adopt)?;
     }
-    Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
+    Ok(Decision::Insert {
+        phase,
+        base: resolved.base,
+        base_pr: resolved.base_pr,
+        needs,
+    })
 }
 
 /// The refusals of `--adopt` (contract §3.8), in order, exit 3: the pull request is open, not from a fork, not a cpd one, its head free of
@@ -655,15 +910,24 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
     let pull = &adopt.pull;
     let number = pull.number;
     if pull.state != "OPEN" {
-        return Err(CpdError::new(ErrorCode::AdoptNotOpen, format!("Pull request #{number} is {}: only an open pull request is adopted.", pull.state))
-            .with("number", number)
-            .with("url", pull.url.as_str())
-            .with("state", pull.state.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptNotOpen,
+            format!(
+                "Pull request #{number} is {}: only an open pull request is adopted.",
+                pull.state
+            ),
+        )
+        .with("number", number)
+        .with("url", pull.url.as_str())
+        .with("state", pull.state.as_str()));
     }
     if pull.fork {
-        return Err(CpdError::new(ErrorCode::AdoptFork, format!("Pull request #{number} comes from a fork: cpd cannot push to a fork."))
-            .with("number", number)
-            .with("url", pull.url.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptFork,
+            format!("Pull request #{number} comes from a fork: cpd cannot push to a fork."),
+        )
+        .with("number", number)
+        .with("url", pull.url.as_str()));
     }
     let is_lead_branch: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM prs WHERE repo = ?1 AND lead_branch = ?2)",
@@ -671,9 +935,15 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
         |r| r.get(0),
     )?;
     if is_lead_branch {
-        return Err(CpdError::new(ErrorCode::AdoptCpdBranch, format!("Pull request #{number} has the head branch {}: it is a cpd pull request.", pull.head_ref))
-            .with("number", number)
-            .with("head_ref", pull.head_ref.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptCpdBranch,
+            format!(
+                "Pull request #{number} has the head branch {}: it is a cpd pull request.",
+                pull.head_ref
+            ),
+        )
+        .with("number", number)
+        .with("head_ref", pull.head_ref.as_str()));
     }
     let holder: Option<(String, String)> = conn
         .query_row(
@@ -685,14 +955,22 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
     if let Some((plan, pr)) = holder {
         return Err(CpdError::new(
             ErrorCode::AdoptTaken,
-            format!("The head branch {} is already adopted by PR {pr} of Plan {plan}.", pull.head_ref),
+            format!(
+                "The head branch {} is already adopted by PR {pr} of Plan {plan}.",
+                pull.head_ref
+            ),
         )
         .with("head_ref", pull.head_ref.as_str())
         .with("plan", plan)
         .with("pr", pr));
     }
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
-    if !same(&pull.author, &pull.user) && !adopt.confirm.as_deref().is_some_and(|c| same(c, &pull.author)) {
+    if !same(&pull.author, &pull.user)
+        && !adopt
+            .confirm
+            .as_deref()
+            .is_some_and(|c| same(c, &pull.author))
+    {
         return Err(CpdError::new(
             ErrorCode::AdoptForeign,
             format!(
@@ -723,10 +1001,18 @@ fn tests_unconfigured(repo: &str, file: &Path) -> CpdError {
 }
 
 /// None of the Job keys the shape lays out exists in the Plan (`job_key_exists`, `details.jobs`, §9.4).
-fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<(), CpdError> {
+fn check_template_keys_free(
+    conn: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+) -> Result<(), CpdError> {
     let mut taken: Vec<String> = Vec::new();
     for stub in template(&wanted.shape, &wanted.key, &wanted.title) {
-        let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)", [plan.as_str(), stub.key.as_str()], |r| r.get(0))?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)",
+            [plan.as_str(), stub.key.as_str()],
+            |r| r.get(0),
+        )?;
         if exists {
             taken.push(stub.key);
         }
@@ -736,7 +1022,12 @@ fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -
     }
     Err(CpdError::new(
         ErrorCode::JobKeyExists,
-        format!("Plan {plan} already has the Job {}, which the {} template of PR {} would add.", taken.join(", "), wanted.shape, wanted.key),
+        format!(
+            "Plan {plan} already has the Job {}, which the {} template of PR {} would add.",
+            taken.join(", "),
+            wanted.shape,
+            wanted.key
+        ),
     )
     .with("plan", plan.as_str())
     .with("pr", wanted.key.as_str())
@@ -752,16 +1043,23 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
             .find(|p| p.key == key.as_str())
             .map(|p| p.lead_branch)
             .ok_or_else(|| {
-                CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {key} to stack on."))
-                    .with("plan", plan.as_str())
-                    .with("pr", key.as_str())
+                CpdError::new(
+                    ErrorCode::BasePrUnknown,
+                    format!("Plan {plan} has no PR {key} to stack on."),
+                )
+                .with("plan", plan.as_str())
+                .with("pr", key.as_str())
             }),
     }
 }
 
 /// The keys of the `merged` PRs, in key order (A3).
 fn merged_keys(prs: &[PrRow]) -> Vec<String> {
-    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
+    let mut keys: Vec<String> = prs
+        .iter()
+        .filter(|p| p.status == "merged")
+        .map(|p| p.key.as_str().to_owned())
+        .collect();
     keys.sort();
     keys
 }
@@ -774,14 +1072,28 @@ fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], b
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
     };
-    (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
+    (
+        existing.repo.as_str(),
+        existing.base.as_str(),
+        existing.shape.as_str(),
+    ) == (wanted.repo.as_str(), base, wanted.shape.as_str())
         && title == Some(wanted.title.as_str())
-        && wanted.jira.as_ref().is_none_or(|j| existing.jira.as_ref() == Some(j))
+        && wanted
+            .jira
+            .as_ref()
+            .is_none_or(|j| existing.jira.as_ref() == Some(j))
         && existing.head_ref.as_deref() == wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
         && needs_match
 }
 
-fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
+fn insert(
+    tx: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+    base: &str,
+    needs: &[String],
+    lead_branch: &str,
+) -> Result<(), CpdError> {
     tx.execute(
         "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
          SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, id, at FROM txns WHERE id = cpd_txn()",
@@ -804,15 +1116,35 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[
 /// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
 /// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template. The opener stub is
 /// the exception: it carries the fixed Spec of [`open::spec`] and the config's `open_tier`, and no Dependency rows.
-fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted, appended: bool, open_tier: Tier) -> Result<Vec<Stub>, CpdError> {
+fn insert_stubs(
+    tx: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    wanted: &Wanted,
+    appended: bool,
+    open_tier: Tier,
+) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
-    let pr = load_prs(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
-        CpdError::bad_row(format!("PR {} of Plan {plan} vanished while its template was being written", wanted.key))
-    })?;
+    let pr = load_prs(tx, plan)?
+        .into_iter()
+        .find(|p| p.key == wanted.key)
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "PR {} of Plan {plan} vanished while its template was being written",
+                wanted.key
+            ))
+        })?;
     // After the lock a stub that waits for nothing would be a parked draft (hs-d731): without `--jobs` only a PR that waits
     // for another PR may lay the stubs out; the error rolls the transaction back, nothing stays written.
-    if appended && wanted.jobs.is_none() && crate::pr::start::not_ready(tx, plan, &wanted.key)?.is_empty() {
-        let jobs: Vec<&str> = stubs.iter().filter(|s| s.kind != "open").map(|s| s.key.as_str()).collect();
+    if appended
+        && wanted.jobs.is_none()
+        && crate::pr::start::not_ready(tx, plan, &wanted.key)?.is_empty()
+    {
+        let jobs: Vec<&str> = stubs
+            .iter()
+            .filter(|s| s.kind != "open")
+            .map(|s| s.key.as_str())
+            .collect();
         return Err(CpdError::new(
             ErrorCode::DraftParked,
             format!(
@@ -829,10 +1161,20 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
     }
     for stub in &stubs {
         if let Some((tier, spec)) = wanted.jobs.as_ref().and_then(|j| j.get(stub.suffix)) {
-            let roots: Vec<(String, PathBuf)> = load_prs(tx, plan)?.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect();
+            let roots: Vec<(String, PathBuf)> = load_prs(tx, plan)?
+                .iter()
+                .map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo)))
+                .collect();
             spec.check_primary_roots(&roots, &std::env::home_dir().unwrap_or_default())?;
             spec.check_files_relative()?;
-            crate::job::add::check_resources_declared(tx, home, plan, wanted.key.as_str(), &stub.key, spec.resources.as_deref())?;
+            crate::job::add::check_resources_declared(
+                tx,
+                home,
+                plan,
+                wanted.key.as_str(),
+                &stub.key,
+                spec.resources.as_deref(),
+            )?;
             let mut job = Job {
                 seq: 0,
                 key: stub.key.clone(),
@@ -886,7 +1228,10 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 ],
             )?;
             if let Some(need) = &stub.needs {
-                tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), stub.key.as_str(), need.as_str()])?;
+                tx.execute(
+                    "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+                    [plan.as_str(), stub.key.as_str(), need.as_str()],
+                )?;
             }
             continue;
         }
@@ -918,16 +1263,27 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             rusqlite::params![plan.as_str(), wanted.key.as_str(), stub.key, stub.title, appended, stub.kind],
         )?;
         if let Some(need) = &stub.needs {
-            tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), stub.key.as_str(), need.as_str()])?;
+            tx.execute(
+                "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+                [plan.as_str(), stub.key.as_str(), need.as_str()],
+            )?;
         }
     }
     Ok(stubs)
 }
 
 /// One `pr_needs` row per need.
-pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[String]) -> Result<(), CpdError> {
+pub(super) fn insert_needs(
+    tx: &Connection,
+    plan: &PlanId,
+    pr: &PrKey,
+    needs: &[String],
+) -> Result<(), CpdError> {
     for need in needs {
-        tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
+        tx.execute(
+            "INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)",
+            [plan.as_str(), pr.as_str(), need.as_str()],
+        )?;
     }
     Ok(())
 }
@@ -935,13 +1291,25 @@ pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[
 /// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
 /// `plan-phase` is appended (before `pr-added`).
 fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<(), CpdError> {
-    let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;
+    let moved = tx.execute(
+        "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2",
+        [plan.as_str(), from.as_str()],
+    )?;
     if moved == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase {} meanwhile: rerun the command.", from.as_str()))
-            .with("plan", plan.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::CasLost,
+            format!(
+                "Plan {plan} left phase {} meanwhile: rerun the command.",
+                from.as_str()
+            ),
+        )
+        .with("plan", plan.as_str()));
     }
     let text = format!("Plan {plan} is back in dispatch: PR {key} was added.");
-    append(tx, NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()))?;
+    append(
+        tx,
+        NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()),
+    )?;
     Ok(())
 }
 
@@ -954,7 +1322,11 @@ fn pr_branch(plan: &PlanId, key: &PrKey) -> String {
 /// nor its parent path exists in the repo, else `branch_exists` (exit 3). The parent path is the branch without its last
 /// `/<segment>` (`<plan>` for `<plan>/<key>`, `cpd/<plan>` for `cpd/<plan>/<key>`): git cannot hold both. The legacy
 /// `cpd/<plan>` has no parent check.
-pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, lead_branch: &str) -> Result<(), CpdError> {
+pub(super) fn no_branch_clash(
+    repo: &Path,
+    plan: &PlanId,
+    lead_branch: &str,
+) -> Result<(), CpdError> {
     let mut branches = vec![lead_branch];
     if lead_branch != format!("cpd/{plan}")
         && let Some((parent, _)) = lead_branch.rsplit_once('/')
@@ -963,17 +1335,23 @@ pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, lead_branch: &str) -> 
     }
     for branch in branches {
         if branch_exists(repo, branch)? {
-            return Err(CpdError::new(ErrorCode::BranchExists, format!("Branch {branch} already exists in {}.", repo.display()))
-                .with("branch", branch)
-                .with("repo", repo.display().to_string()));
+            return Err(CpdError::new(
+                ErrorCode::BranchExists,
+                format!("Branch {branch} already exists in {}.", repo.display()),
+            )
+            .with("branch", branch)
+            .with("repo", repo.display().to_string()));
         }
     }
     Ok(())
 }
 
 fn not_a_git_repo(path: &Path, why: &str) -> CpdError {
-    CpdError::new(ErrorCode::NotAGitRepo, format!("{} is not inside a git repository: {why}", path.display()))
-        .with("repo", path.display().to_string())
+    CpdError::new(
+        ErrorCode::NotAGitRepo,
+        format!("{} is not inside a git repository: {why}", path.display()),
+    )
+    .with("repo", path.display().to_string())
 }
 
 /// The realpath of the main worktree of the repo `path` is in
@@ -982,10 +1360,18 @@ fn not_a_git_repo(path: &Path, why: &str) -> CpdError {
 pub(super) fn main_worktree(path: &Path) -> Result<PathBuf, CpdError> {
     let out = run(path, &["rev-parse", "--git-common-dir"])?;
     if out.code != 0 {
-        return Err(not_a_git_repo(path, out.stderr.lines().next().unwrap_or("git rev-parse failed.")));
+        return Err(not_a_git_repo(
+            path,
+            out.stderr.lines().next().unwrap_or("git rev-parse failed."),
+        ));
     }
-    let main = worktrees(path)?.into_iter().next().ok_or_else(|| not_a_git_repo(path, "it has no worktree."))?;
-    main.path.canonicalize().map_err(|e| not_a_git_repo(&main.path, &format!("{e}.")))
+    let main = worktrees(path)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_a_git_repo(path, "it has no worktree."))?;
+    main.path
+        .canonicalize()
+        .map_err(|e| not_a_git_repo(&main.path, &format!("{e}.")))
 }
 
 /// `--base`, else the repo's `origin` HEAD branch, else `main`; it must exist
@@ -996,7 +1382,15 @@ pub(super) fn resolve_base(repo: &Path, base: Option<&str>) -> Result<String, Cp
     let base = match base {
         Some(base) => base.to_owned(),
         None if origin => {
-            let out = run(repo, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])?;
+            let out = run(
+                repo,
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )?;
             match out.stdout.trim().strip_prefix("origin/") {
                 Some(branch) if out.code == 0 && !branch.is_empty() => branch.to_owned(),
                 _ => "main".to_owned(),
@@ -1004,12 +1398,19 @@ pub(super) fn resolve_base(repo: &Path, base: Option<&str>) -> Result<String, Cp
         }
         None => "main".to_owned(),
     };
-    let reference = if origin { format!("refs/remotes/origin/{base}") } else { format!("refs/heads/{base}") };
+    let reference = if origin {
+        format!("refs/remotes/origin/{base}")
+    } else {
+        format!("refs/heads/{base}")
+    };
     if run(repo, &["rev-parse", "--verify", "--quiet", &reference])?.code != 0 {
-        return Err(CpdError::new(ErrorCode::BaseNotFound, format!("The base {reference} does not exist in {}.", repo.display()))
-            .with("base", base)
-            .with("ref", reference)
-            .with("repo", repo.display().to_string()));
+        return Err(CpdError::new(
+            ErrorCode::BaseNotFound,
+            format!("The base {reference} does not exist in {}.", repo.display()),
+        )
+        .with("base", base)
+        .with("ref", reference)
+        .with("repo", repo.display().to_string()));
     }
     Ok(base)
 }

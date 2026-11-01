@@ -42,8 +42,16 @@ pub struct Cursor {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
-    Snapshot { epoch: String, seq: u64, snapshot: Value },
-    Events { epoch: String, seq: u64, events: Vec<Value> },
+    Snapshot {
+        epoch: String,
+        seq: u64,
+        snapshot: Value,
+    },
+    Events {
+        epoch: String,
+        seq: u64,
+        events: Vec<Value>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -53,8 +61,16 @@ pub enum Frame {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToHost {
-    Hello { protocol: u64, min_protocol: u64, client: String },
-    Attach { req: String, #[serde(skip_serializing_if = "Option::is_none")] cursor: Option<Cursor> },
+    Hello {
+        protocol: u64,
+        min_protocol: u64,
+        client: String,
+    },
+    Attach {
+        req: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cursor: Option<Cursor>,
+    },
 }
 
 /// A host to client line (contract §6.14). Only the fields the tail reads are typed; every other
@@ -62,12 +78,38 @@ pub enum ToHost {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToClient {
-    Welcome { protocol: u64 },
-    Attached { mode: String, epoch: String, #[serde(default)] from_seq: u64, #[serde(default)] head_seq: u64 },
-    Snapshot { epoch: String, seq: u64, snapshot: Value },
-    Events { epoch: String, seq: u64, events: Vec<Value> },
-    Error { code: String, #[serde(default)] message: String },
-    Bye { #[serde(default)] reason: String, #[serde(default)] reconnect: bool },
+    Welcome {
+        protocol: u64,
+    },
+    Attached {
+        mode: String,
+        epoch: String,
+        #[serde(default)]
+        from_seq: u64,
+        #[serde(default)]
+        head_seq: u64,
+    },
+    Snapshot {
+        epoch: String,
+        seq: u64,
+        snapshot: Value,
+    },
+    Events {
+        epoch: String,
+        seq: u64,
+        events: Vec<Value>,
+    },
+    Error {
+        code: String,
+        #[serde(default)]
+        message: String,
+    },
+    Bye {
+        #[serde(default)]
+        reason: String,
+        #[serde(default)]
+        reconnect: bool,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -92,30 +134,51 @@ impl Fold {
     /// Applies one wire frame and returns the transcript lines it completes.
     pub fn apply(&mut self, frame: &Frame) -> Vec<String> {
         match frame {
-            Frame::Snapshot { epoch, seq, snapshot } => {
-                self.cursor = Cursor { epoch: epoch.clone(), seq: *seq };
+            Frame::Snapshot {
+                epoch,
+                seq,
+                snapshot,
+            } => {
+                self.cursor = Cursor {
+                    epoch: epoch.clone(),
+                    seq: *seq,
+                };
                 self.started = true;
                 self.in_flight = None;
                 render_entries(snapshot)
             }
             Frame::Events { epoch, seq, events } => {
-                self.cursor = Cursor { epoch: epoch.clone(), seq: *seq };
+                self.cursor = Cursor {
+                    epoch: epoch.clone(),
+                    seq: *seq,
+                };
                 self.started = true;
                 let mut lines = Vec::new();
                 for event in events {
                     match event.get("type").and_then(Value::as_str) {
                         Some("message_start") => self.in_flight = event.get("message").cloned(),
                         Some("message_end") => {
-                            let completed = event.get("entry").map(render_entries).unwrap_or_default();
+                            let completed =
+                                event.get("entry").map(render_entries).unwrap_or_default();
                             if completed.is_empty() {
-                                lines.extend(self.in_flight.take().map(|m| render_message(&m)).unwrap_or_default());
+                                lines.extend(
+                                    self.in_flight
+                                        .take()
+                                        .map(|m| render_message(&m))
+                                        .unwrap_or_default(),
+                                );
                             } else {
                                 self.in_flight = None;
                                 lines.extend(completed);
                             }
                         }
                         Some("run_end") => {
-                            lines.extend(self.in_flight.take().map(|m| render_message(&m)).unwrap_or_default());
+                            lines.extend(
+                                self.in_flight
+                                    .take()
+                                    .map(|m| render_message(&m))
+                                    .unwrap_or_default(),
+                            );
                         }
                         // A pi-durable overflow: the `events` batch carries a whole snapshot (research §4.3).
                         Some("snapshot") => {
@@ -162,18 +225,33 @@ fn render_message(message: &Value) -> Vec<String> {
         "system" => "system: ".to_owned(),
         "user" => "user: ".to_owned(),
         "assistant" => "assistant: ".to_owned(),
-        "toolResult" => format!("tool {}: ", message.get("toolName").and_then(Value::as_str).unwrap_or("")),
+        "toolResult" => format!(
+            "tool {}: ",
+            message
+                .get("toolName")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        ),
         _ => return Vec::new(),
     };
     let mut lines = Vec::new();
     for block in text_blocks(message.get("content")) {
         let mut source = block.split('\n');
         if let Some(first) = source.next() {
-            lines.push(if lines.is_empty() { format!("{prefix}{first}") } else { first.to_owned() });
+            lines.push(if lines.is_empty() {
+                format!("{prefix}{first}")
+            } else {
+                first.to_owned()
+            });
         }
         lines.extend(source.map(str::to_owned));
     }
-    if role == "toolResult" && message.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+    if role == "toolResult"
+        && message
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
         match lines.last_mut() {
             Some(last) => last.push_str(" (error)"),
             None => lines.push(format!("{prefix}(error)")),
@@ -267,7 +345,9 @@ struct FakeState {
 #[cfg(feature = "fakes")]
 impl FakeHostConn {
     pub fn new() -> FakeHostConn {
-        FakeHostConn { inner: std::sync::Mutex::new(FakeState::default()) }
+        FakeHostConn {
+            inner: std::sync::Mutex::new(FakeState::default()),
+        }
     }
 
     /// Queues the lines the host sends on the next connection, in order; `None` is a read EOF, and the
@@ -323,7 +403,10 @@ struct FakeConn {
 #[cfg(feature = "fakes")]
 impl Conn for FakeConn {
     fn send(&mut self, line: &str) -> io::Result<()> {
-        self.sent.lock().unwrap_or_else(|e| e.into_inner()).push(line.to_owned());
+        self.sent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(line.to_owned());
         Ok(())
     }
 
@@ -391,17 +474,30 @@ pub fn tail(home: &CpdHome, session: &SessionId, out: &mut dyn Write) -> Result<
 
 /// One connection: connect, `hello`, and one `attach` per `welcome`; then apply and print frames until the
 /// stream ends (`bye reconnect:false`, stdout closing) or the host says goodbye with `reconnect:true`.
-fn one(ports: &Ports, path: &Path, fold: &mut Fold, req: &mut u64, out: &mut dyn Write) -> Result<Flow, CpdError> {
+fn one(
+    ports: &Ports,
+    path: &Path,
+    fold: &mut Fold,
+    req: &mut u64,
+    out: &mut dyn Write,
+) -> Result<Flow, CpdError> {
     let mut conn = match ports.host_conn.connect(path) {
         Ok(conn) => conn,
         Err(e) => {
-            eprintln!("cpd session tail: cannot connect to {}: {e}", path.display());
+            eprintln!(
+                "cpd session tail: cannot connect to {}: {e}",
+                path.display()
+            );
             return Ok(Flow::Reconnect);
         }
     };
     send(
         &mut *conn,
-        &ToHost::Hello { protocol: 1, min_protocol: 1, client: "cpd session tail".to_owned() },
+        &ToHost::Hello {
+            protocol: 1,
+            min_protocol: 1,
+            client: "cpd session tail".to_owned(),
+        },
     )?;
     loop {
         let line = match conn.recv() {
@@ -425,14 +521,32 @@ fn one(ports: &Ports, path: &Path, fold: &mut Fold, req: &mut u64, out: &mut dyn
         match message {
             ToClient::Welcome { .. } => {
                 *req += 1;
-                let cursor = if fold.started { Some(fold.cursor()) } else { None };
-                send(&mut *conn, &ToHost::Attach { req: format!("r{req}"), cursor })?;
+                let cursor = if fold.started {
+                    Some(fold.cursor())
+                } else {
+                    None
+                };
+                send(
+                    &mut *conn,
+                    &ToHost::Attach {
+                        req: format!("r{req}"),
+                        cursor,
+                    },
+                )?;
             }
-            ToClient::Snapshot { epoch, seq, snapshot } => {
+            ToClient::Snapshot {
+                epoch,
+                seq,
+                snapshot,
+            } => {
                 if fold.started {
                     eprintln!("snapshot {epoch} seq {seq}: view replaced");
                 }
-                let lines = fold.apply(&Frame::Snapshot { epoch, seq, snapshot });
+                let lines = fold.apply(&Frame::Snapshot {
+                    epoch,
+                    seq,
+                    snapshot,
+                });
                 if !write_lines(out, &lines)? {
                     return Ok(Flow::Done);
                 }
@@ -447,7 +561,9 @@ fn one(ports: &Ports, path: &Path, fold: &mut Fold, req: &mut u64, out: &mut dyn
                 if code == "protocol_mismatch" {
                     return Err(CpdError::new(
                         ErrorCode::Internal,
-                        format!("this host speaks protocol 1, the client speaks 1 (the installed cpd): {message}"),
+                        format!(
+                            "this host speaks protocol 1, the client speaks 1 (the installed cpd): {message}"
+                        ),
                     ));
                 }
                 eprintln!("cpd session tail: the host answered error {code}: {message}");
@@ -469,11 +585,17 @@ fn one(ports: &Ports, path: &Path, fold: &mut Fold, req: &mut u64, out: &mut dyn
 /// any other write error is a failure.
 fn write_lines(out: &mut dyn Write, lines: &[String]) -> Result<bool, CpdError> {
     for line in lines {
-        if let Err(e) = out.write_all(line.as_bytes()).and_then(|()| out.write_all(b"\n")) {
+        if let Err(e) = out
+            .write_all(line.as_bytes())
+            .and_then(|()| out.write_all(b"\n"))
+        {
             if e.kind() == io::ErrorKind::BrokenPipe {
                 return Ok(false);
             }
-            return Err(CpdError::new(ErrorCode::Internal, format!("Cannot write the transcript: {e}.")));
+            return Err(CpdError::new(
+                ErrorCode::Internal,
+                format!("Cannot write the transcript: {e}."),
+            ));
         }
     }
     let _ = out.flush();
@@ -482,7 +604,17 @@ fn write_lines(out: &mut dyn Write, lines: &[String]) -> Result<bool, CpdError> 
 
 /// Sends one client line, encoded as NDJSON (contract §6.14).
 fn send(conn: &mut dyn Conn, message: &ToHost) -> Result<(), CpdError> {
-    let mut line = serde_json::to_string(message).map_err(|e| CpdError::new(ErrorCode::Internal, format!("Cannot encode a host line: {e}.")))?;
+    let mut line = serde_json::to_string(message).map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("Cannot encode a host line: {e}."),
+        )
+    })?;
     line.push('\n');
-    conn.send(&line).map_err(|e| CpdError::new(ErrorCode::Internal, format!("Cannot write to the host socket: {e}.")))
+    conn.send(&line).map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("Cannot write to the host socket: {e}."),
+        )
+    })
 }

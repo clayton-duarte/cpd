@@ -21,7 +21,14 @@ pub(crate) fn missing(pr: &PrRow, jobs: &[Job], without: Option<&str>) -> Vec<&'
     }
     ["test", "impl"]
         .into_iter()
-        .filter(|kind| !jobs.iter().any(|j| j.pr_str() == pr.key.as_str() && j.kind == *kind && j.status != "cancelled" && Some(j.key.as_str()) != without))
+        .filter(|kind| {
+            !jobs.iter().any(|j| {
+                j.pr_str() == pr.key.as_str()
+                    && j.kind == *kind
+                    && j.status != "cancelled"
+                    && Some(j.key.as_str()) != without
+            })
+        })
         .collect()
 }
 
@@ -49,7 +56,11 @@ pub(super) fn check(plan: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Result<(), Cp
         .filter(|j| {
             j.is_draft()
                 && j.kind == "impl"
-                && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.pr == j.pr && t.kind == "test" && t.status != "cancelled"))
+                && !j.needs.iter().any(|n| {
+                    jobs.iter().any(|t| {
+                        t.key == *n && t.pr == j.pr && t.kind == "test" && t.status != "cancelled"
+                    })
+                })
         })
         .collect();
     if !lacking.is_empty() {
@@ -67,14 +78,22 @@ pub(super) fn check(plan: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Result<(), Cp
         .filter(|j| {
             j.is_draft()
                 && j.kind == "verify"
-                && !j.needs.iter().any(|n| jobs.iter().any(|t| t.key == *n && t.pr == j.pr && t.kind == "impl" && t.status != "cancelled"))
+                && !j.needs.iter().any(|n| {
+                    jobs.iter().any(|t| {
+                        t.key == *n && t.pr == j.pr && t.kind == "impl" && t.status != "cancelled"
+                    })
+                })
         })
         .collect();
     if !unneeding.is_empty() {
         unneeding.sort_by(|a, b| a.key.cmp(&b.key));
         let keys: Vec<&str> = unneeding.iter().map(|j| j.key.as_str()).collect();
         let first = unneeding[0];
-        let mut impls: Vec<&str> = jobs.iter().filter(|j| j.pr == first.pr && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+        let mut impls: Vec<&str> = jobs
+            .iter()
+            .filter(|j| j.pr == first.pr && j.kind == "impl" && j.status != "cancelled")
+            .map(|j| j.key.as_str())
+            .collect();
         impls.sort();
         return Err(CpdError::new(
             ErrorCode::ImplJobRequired,
@@ -89,7 +108,12 @@ pub(super) fn check(plan: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Result<(), Cp
     for pr in ordered {
         let lacks = missing(pr, jobs, None);
         if !lacks.is_empty() {
-            return Err(incomplete(plan, pr, &lacks, "the review and the lock need both"));
+            return Err(incomplete(
+                plan,
+                pr,
+                &lacks,
+                "the review and the lock need both",
+            ));
         }
     }
     Ok(())

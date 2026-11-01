@@ -3,8 +3,8 @@
 
 use ratatui::buffer::Buffer;
 
-use super::lines_tests::{reaches, violations};
 use super::flow::Pill;
+use super::lines_tests::{reaches, violations};
 use super::{boxes, sample_pr};
 use crate::read::{NeedsUser, PrNode};
 use crate::test_text::rows;
@@ -22,12 +22,18 @@ fn canvas(prs: &[PrNode]) -> Buffer {
 /// The first row of `buf` that starts with `╰`, as cells.
 fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
     let r = rows(buf);
-    let y = r.iter().position(|l| l.starts_with('╰')).expect("a bottom border");
+    let y = r
+        .iter()
+        .position(|l| l.starts_with('╰'))
+        .expect("a bottom border");
     (y, chars(r[y].trim_end()))
 }
 
 fn with(key: &str, secs: Option<u64>) -> PrNode {
-    PrNode { elapsed_seconds: secs, ..sample_pr(key) }
+    PrNode {
+        elapsed_seconds: secs,
+        ..sample_pr(key)
+    }
 }
 
 #[test]
@@ -44,8 +50,18 @@ fn under_an_hour_is_minutes_then_seconds() {
 
 #[test]
 fn an_hour_or_more_is_hours_minutes_then_seconds() {
-    let got: Vec<String> = [3600, 3723, 90061, u64::MAX].map(boxes::format_elapsed).into();
-    assert_eq!(got, ["1h·0m·0s", "1h·2m·3s", "25h·1m·1s", "5124095576030431h·0m·15s"]);
+    let got: Vec<String> = [3600, 3723, 90061, u64::MAX]
+        .map(boxes::format_elapsed)
+        .into();
+    assert_eq!(
+        got,
+        [
+            "1h·0m·0s",
+            "1h·2m·3s",
+            "25h·1m·1s",
+            "5124095576030431h·0m·15s"
+        ]
+    );
 }
 
 #[test]
@@ -64,11 +80,18 @@ fn a_box_with_elapsed_time_reads_the_counter_on_its_bottom_border() {
 fn the_counter_is_drawn_in_the_muted_text_colour() {
     let buf = canvas(&[with("api", Some(3723))]);
     let (y, row) = bottom(&buf);
-    assert!(row.concat().starts_with("╰─ 1h·2m·3s ─"), "no counter drawn");
+    assert!(
+        row.concat().starts_with("╰─ 1h·2m·3s ─"),
+        "no counter drawn"
+    );
     let want = crate::palette::muted_text();
     for x in 2..12u16 {
         let c = &buf[(x, y as u16)];
-        assert_eq!((c.fg, c.bg, c.modifier), (want.fg.unwrap(), want.bg.unwrap_or(c.bg), c.modifier), "column {x}");
+        assert_eq!(
+            (c.fg, c.bg, c.modifier),
+            (want.fg.unwrap(), want.bg.unwrap_or(c.bg), c.modifier),
+            "column {x}"
+        );
         assert_eq!(c.style().add_modifier, want.add_modifier, "column {x}");
     }
     let last = buf.area.width - 1;
@@ -89,7 +112,10 @@ fn the_counter_shows_only_once_the_workflow_has_an_attempt() {
     let line = bottoms[0];
     let all: Vec<String> = chars(line);
     let first_end = all.iter().position(|c| c == "╯").unwrap();
-    assert!(all[1..first_end].iter().all(|c| c == "─"), "api has no counter: {line}");
+    assert!(
+        all[1..first_end].iter().all(|c| c == "─"),
+        "api has no counter: {line}"
+    );
     let web = line.chars().skip(first_end + 1).collect::<String>();
     let web = web.trim_start();
     assert!(web.starts_with("╰─ 0s ─"), "{line}");
@@ -101,7 +127,9 @@ fn a_box_is_widened_to_hold_its_counter_plus_four() {
     p.repo_name = "r".into();
     p.base = "m".into();
     p.elapsed_seconds = Some(u64::MAX);
-    let title = format!(" a · r \u{F19B0} m · {} ", p.status.as_str()).chars().count();
+    let title = format!(" a · r \u{F19B0} m · {} ", p.status.as_str())
+        .chars()
+        .count();
     let buf = canvas(&[p]);
     let (_, row) = bottom(&buf);
     let line = row.concat();
@@ -112,7 +140,10 @@ fn a_box_is_widened_to_hold_its_counter_plus_four() {
 
 /// The `┬` columns of the first box's bottom border, its width and the canvas.
 fn exit(secs: Option<u64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = PrNode { needs: vec![PrKey::parse("api").unwrap()], ..sample_pr("web") };
+    let web = PrNode {
+        needs: vec![PrKey::parse("api").unwrap()],
+        ..sample_pr("web")
+    };
     let buf = canvas(&[with("api", secs), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();
@@ -125,20 +156,49 @@ fn exit(secs: Option<u64>) -> (Buffer, usize, usize, Vec<usize>) {
 #[test]
 fn a_need_line_leaves_a_box_past_its_counter() {
     let (buf, y, width, tees) = exit(Some(u64::MAX));
-    assert_eq!(tees, [2 + 26], "the first `─` after the counter\n{}", rows(&buf).join("\n"));
+    assert_eq!(
+        tees,
+        [2 + 26],
+        "the first `─` after the counter\n{}",
+        rows(&buf).join("\n")
+    );
     let r = rows(&buf);
     let bottom_row = chars(&r[y]);
-    assert_eq!(bottom_row[..29].concat(), "╰─ 5124095576030431h·0m·15s ┬", "{}", r.join("\n"));
+    assert_eq!(
+        bottom_row[..29].concat(),
+        "╰─ 5124095576030431h·0m·15s ┬",
+        "{}",
+        r.join("\n")
+    );
     let below = chars(&r[y + 1]);
     assert_eq!(below[28], "╰", "the line turns right\n{}", r.join("\n"));
-    let web_top = y + 1 + r[y + 1..].iter().position(|l| l.starts_with('╭')).expect("web's top border");
-    let landed: Vec<usize> = chars(&r[web_top]).iter().enumerate().filter(|(_, c)| *c == "┴").map(|(x, _)| x).collect();
+    let web_top = y
+        + 1
+        + r[y + 1..]
+            .iter()
+            .position(|l| l.starts_with('╭'))
+            .expect("web's top border");
+    let landed: Vec<usize> = chars(&r[web_top])
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| *c == "┴")
+        .map(|(x, _)| x)
+        .collect();
     assert_eq!(landed.len(), 1, "{}", r.join("\n"));
     assert!(landed[0] > 28, "{}", r.join("\n"));
-    let web_bottom = web_top + r[web_top..].iter().position(|l| l.starts_with('╰')).expect("web's bottom border");
+    let web_bottom = web_top
+        + r[web_top..]
+            .iter()
+            .position(|l| l.starts_with('╰'))
+            .expect("web's bottom border");
     let boxes_: Vec<Rect> = vec![
         Rect::new(0, 0, width as u16, y as u16 + 1),
-        Rect::new(0, web_top as u16, buf.area.width, (web_bottom - web_top) as u16 + 1),
+        Rect::new(
+            0,
+            web_top as u16,
+            buf.area.width,
+            (web_bottom - web_top) as u16 + 1,
+        ),
     ];
     let none: Vec<Pill> = Vec::new();
     assert!(violations(&buf, &[], &boxes_, buf.area).is_empty());

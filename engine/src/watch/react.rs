@@ -50,35 +50,57 @@ pub(super) fn run(engine: &mut Engine) {
         let answer = match running.answer.try_recv() {
             Ok(answer) => answer,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Err(Failure::from(&CpdError::new(ErrorCode::SpawnFailed, "The reaction helper's reader ended without an answer.")))
-            }
+            Err(TryRecvError::Disconnected) => Err(Failure::from(&CpdError::new(
+                ErrorCode::SpawnFailed,
+                "The reaction helper's reader ended without an answer.",
+            ))),
         };
-        let due = engine.react.running.take().expect("a run was in flight").due;
+        let due = engine
+            .react
+            .running
+            .take()
+            .expect("a run was in flight")
+            .due;
         if let Err(failure) = &answer
-            && failure.code == "slack_refused" {
-                let reason = failure.details["reason"].as_str().unwrap_or("unknown").to_owned();
-                match park(engine, &due, &reason) {
-                    Ok(()) => {
-                        engine.react.failed_at.remove(&due.id);
-                        engine.log.line(&format!("E17: parked :{}: on {} {}: {reason}", due.emoji, due.channel, due.ts));
-                        engine.clear(Step::E17, &About::Machine);
-                    }
-                    Err(failure) => {
-                        engine.react.failed_at.insert(due.id, engine.ports.clock.now());
-                        engine.fail(Step::E17, About::Machine, failure);
-                    }
+            && failure.code == "slack_refused"
+        {
+            let reason = failure.details["reason"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned();
+            match park(engine, &due, &reason) {
+                Ok(()) => {
+                    engine.react.failed_at.remove(&due.id);
+                    engine.log.line(&format!(
+                        "E17: parked :{}: on {} {}: {reason}",
+                        due.emoji, due.channel, due.ts
+                    ));
+                    engine.clear(Step::E17, &About::Machine);
                 }
-                return;
+                Err(failure) => {
+                    engine
+                        .react
+                        .failed_at
+                        .insert(due.id, engine.ports.clock.now());
+                    engine.fail(Step::E17, About::Machine, failure);
+                }
             }
+            return;
+        }
         match answer.and_then(|()| mark(engine, &due)) {
             Ok(()) => {
                 engine.react.failed_at.remove(&due.id);
-                engine.log.line(&format!("E17: reacted :{}: to {} {}", due.emoji, due.channel, due.ts));
+                engine.log.line(&format!(
+                    "E17: reacted :{}: to {} {}",
+                    due.emoji, due.channel, due.ts
+                ));
                 engine.clear(Step::E17, &About::Machine);
             }
             Err(failure) => {
-                engine.react.failed_at.insert(due.id, engine.ports.clock.now());
+                engine
+                    .react
+                    .failed_at
+                    .insert(due.id, engine.ports.clock.now());
                 engine.fail(Step::E17, About::Machine, failure);
             }
         }
@@ -87,7 +109,10 @@ pub(super) fn run(engine: &mut Engine) {
     reopen_parked(engine);
     let repeat = Duration::from_secs(u64::from(engine.config.watch.error_repeat_seconds));
     let now = engine.ports.clock.now();
-    engine.react.failed_at.retain(|_, end| now.saturating_duration_since(*end) < repeat);
+    engine
+        .react
+        .failed_at
+        .retain(|_, end| now.saturating_duration_since(*end) < repeat);
     let skip: Vec<i64> = engine.react.failed_at.keys().copied().collect();
     let next = match engine.store.read(|conn| reactions::next_due(conn, &skip)) {
         Ok(Some(next)) => next,
@@ -104,7 +129,9 @@ pub(super) fn run(engine: &mut Engine) {
     if let Some(merge) = next.merge.clone() {
         let about = About::Plan(PlanId::parse(&merge.plan).expect("a stored Plan id"));
         let home = engine.home.clone();
-        let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr));
+        let resolved = engine
+            .store
+            .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr));
         let resolved = match resolved {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -123,7 +150,10 @@ pub(super) fn run(engine: &mut Engine) {
         }
         if resolved.emoji != next.emoji {
             let (id, emoji) = (next.id, resolved.emoji.clone());
-            if let Err(e) = engine.store.write("engine E17", |tx| reactions::set_emoji(tx, id, &emoji)) {
+            if let Err(e) = engine
+                .store
+                .write("engine E17", |tx| reactions::set_emoji(tx, id, &emoji))
+            {
                 engine.react.failed_at.insert(next.id, now);
                 engine.fail(Step::E17, about, Failure::from(&e));
                 return;
@@ -150,18 +180,33 @@ fn reopen_parked(engine: &mut Engine) {
         }
     };
     for row in parked {
-        let Some(MergeOf { plan, pr }) = row.merge.clone() else { continue };
+        let Some(MergeOf { plan, pr }) = row.merge.clone() else {
+            continue;
+        };
         let about = About::Plan(PlanId::parse(&plan).expect("a stored Plan id"));
         let home = engine.home.clone();
-        match engine.store.read(|conn| reactions::policy_emoji(conn, &home, &plan, &pr)) {
+        match engine
+            .store
+            .read(|conn| reactions::policy_emoji(conn, &home, &plan, &pr))
+        {
             Err(e) => engine.fail(Step::E17, about, Failure::from(&e)),
             Ok(resolved) => {
                 engine.clear(Step::E17, &about);
                 if !resolved.emoji.is_empty() && resolved.emoji != row.emoji {
                     let (id, emoji) = (row.id, resolved.emoji.clone());
-                    match engine.store.write("engine E17", |tx| reactions::reopen(tx, id, &emoji)) {
-                        Ok(_) => engine.log.line(&format!("E17: reopened {} {} with :{}:", row.channel, row.ts, resolved.emoji)),
-                        Err(e) => engine.fail(Step::E17, About::Plan(PlanId::parse(&plan).expect("a stored Plan id")), Failure::from(&e)),
+                    match engine
+                        .store
+                        .write("engine E17", |tx| reactions::reopen(tx, id, &emoji))
+                    {
+                        Ok(_) => engine.log.line(&format!(
+                            "E17: reopened {} {} with :{}:",
+                            row.channel, row.ts, resolved.emoji
+                        )),
+                        Err(e) => engine.fail(
+                            Step::E17,
+                            About::Plan(PlanId::parse(&plan).expect("a stored Plan id")),
+                            Failure::from(&e),
+                        ),
                     }
                 }
             }
@@ -174,7 +219,10 @@ fn park(engine: &mut Engine, due: &Due, reason: &str) -> Result<(), Failure> {
     let file = match &due.merge {
         Some(merge) => {
             let home = engine.home.clone();
-            let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr)).map_err(|e| Failure::from(&e))?;
+            let resolved = engine
+                .store
+                .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr))
+                .map_err(|e| Failure::from(&e))?;
             Some(resolved.file)
         }
         None => None,
@@ -183,8 +231,19 @@ fn park(engine: &mut Engine, due: &Due, reason: &str) -> Result<(), Failure> {
 }
 
 /// Parks row `id` with its one Event, in one transaction.
-fn refuse(engine: &mut Engine, id: i64, reason: &str, file: Option<&std::path::Path>) -> Result<(), Failure> {
-    engine.store.write("engine E17", |tx| reactions::refuse(tx, SOURCE, id, reason, file)).map(|_| ()).map_err(|e| Failure::from(&e))
+fn refuse(
+    engine: &mut Engine,
+    id: i64,
+    reason: &str,
+    file: Option<&std::path::Path>,
+) -> Result<(), Failure> {
+    engine
+        .store
+        .write("engine E17", |tx| {
+            reactions::refuse(tx, SOURCE, id, reason, file)
+        })
+        .map(|_| ())
+        .map_err(|e| Failure::from(&e))
 }
 
 /// Starts the helper for `post` on its own thread; returns where its answer will arrive.
@@ -192,19 +251,31 @@ fn start(engine: &Engine, due: &Due) -> Result<Receiver<Result<(), Failure>>, Fa
     let call = cpd_core::slack::call(
         &engine.config,
         "slack-react.ts",
-        &[("channel", &due.channel), ("ts", &due.ts), ("emoji", &due.emoji)],
+        &[
+            ("channel", &due.channel),
+            ("ts", &due.ts),
+            ("emoji", &due.emoji),
+        ],
         None,
         DEADLINE,
     )
     .map_err(|e| Failure::from(&e))?;
     let runner = Ports::current().runner;
-    let argv: Vec<String> = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect();
+    let argv: Vec<String> = std::iter::once(call.program.clone())
+        .chain(call.args.iter().cloned())
+        .collect();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         let answer = match runner.run(&call) {
-            Ok(out) => cpd_core::slack::answer(&out, &argv).map(|_| ()).map_err(|e| Failure::from(&e)),
+            Ok(out) => cpd_core::slack::answer(&out, &argv)
+                .map(|_| ())
+                .map_err(|e| Failure::from(&e)),
             Err(Failed::Io(e)) => Err(Failure::from(
-                &CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)),
+                &CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot run {}: {e}.", argv.join(" ")),
+                )
+                .with("argv", json!(argv)),
             )),
             Err(Failed::Timeout(e)) => Err(Failure::from(&e)),
         };
@@ -216,5 +287,9 @@ fn start(engine: &Engine, due: &Due) -> Result<Receiver<Result<(), Failure>>, Fa
 
 /// Sets the row's `reacted_at`, in one transaction.
 fn mark(engine: &mut Engine, due: &Due) -> Result<(), Failure> {
-    engine.store.write("engine E17", |tx| reactions::mark_reacted(tx, due.id)).map(|_| ()).map_err(|e| Failure::from(&e))
+    engine
+        .store
+        .write("engine E17", |tx| reactions::mark_reacted(tx, due.id))
+        .map(|_| ())
+        .map_err(|e| Failure::from(&e))
 }

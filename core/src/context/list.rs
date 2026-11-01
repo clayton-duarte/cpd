@@ -42,5 +42,7 @@ pub(super) fn list() -> Result<Output, CpdError> {
         let cursor: i64 = conn.query_row("SELECT coalesce(max(id), 0) FROM events", [], |r| r.get(0))?;
         Ok((contexts, cursor))
     })?;
-    Ok(Output::success(json!({"contexts": contexts, "events_cursor": cursor})))
+    Ok(Output::success(
+        json!({"contexts": contexts, "events_cursor": cursor}),
+    ))
 }

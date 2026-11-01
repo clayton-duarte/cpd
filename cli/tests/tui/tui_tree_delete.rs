@@ -11,7 +11,11 @@ use cpd_core::store::Store;
 // ---------- the prepared store ----------
 
 fn open(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 fn plan_row(id: &str, phase: &str, lead: &str, created: &str) -> String {
@@ -34,7 +38,11 @@ fn plan_row(id: &str, phase: &str, lead: &str, created: &str) -> String {
     } else {
         (String::new(), String::new())
     };
-    let (locked, done_at) = if done { ("'2026-01-02T00:00:00.000Z'", "'2026-01-09T00:00:00.000Z'") } else { ("NULL", "NULL") };
+    let (locked, done_at) = if done {
+        ("'2026-01-02T00:00:00.000Z'", "'2026-01-09T00:00:00.000Z'")
+    } else {
+        ("NULL", "NULL")
+    };
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done_at});
@@ -89,15 +97,22 @@ const PREVIEW: &str = r#"{"ok":true,"preview":true,"jobs":47,"attempts":121,"ses
 
 /// The row of the Plan `id` (its label is the id) on `tree`.
 fn row_of_plan(tree: &mut Tree, id: &str) -> u16 {
-    let screen = tree.until(&format!("the row of {id}"), |s| s.iter().any(|r| r.contains(&format!(" {id}"))));
-    screen.iter().position(|r| r.contains(&format!(" {id}"))).unwrap() as u16
+    let screen = tree.until(&format!("the row of {id}"), |s| {
+        s.iter().any(|r| r.contains(&format!(" {id}")))
+    });
+    screen
+        .iter()
+        .position(|r| r.contains(&format!(" {id}")))
+        .unwrap() as u16
 }
 
 /// Right-clicks the Plan `id` and returns the screen with its menu open.
 fn menu_of_plan(tree: &mut Tree, id: &str) -> Vec<String> {
     let row = row_of_plan(tree, id);
     tree.right_click(8, row);
-    tree.until("the menu", |s| s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id ")))
+    tree.until("the menu", |s| {
+        s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id "))
+    })
 }
 
 fn close_plan_menu(tree: &mut Tree) {
@@ -114,10 +129,16 @@ fn delete_item_only_on_archived_or_asleep_rows() {
     let mut tree = Tree::start(&fx, 60, 16);
 
     let live = menu_of_plan(&mut tree, "live");
-    assert!(has_item(&live, "New session…") && !has_item(&live, "Delete"), "a live Plan has no Delete: {live:?}");
+    assert!(
+        has_item(&live, "New session…") && !has_item(&live, "Delete"),
+        "a live Plan has no Delete: {live:?}"
+    );
     close_plan_menu(&mut tree);
     let archived = menu_of_plan(&mut tree, "old");
-    assert!(has_item(&archived, "Unarchive") && has_item(&archived, "Delete"), "an archived Plan has Delete: {archived:?}");
+    assert!(
+        has_item(&archived, "Unarchive") && has_item(&archived, "Delete"),
+        "an archived Plan has Delete: {archived:?}"
+    );
     close_plan_menu(&mut tree);
     put_to_sleep(&fx.env);
     // the tree reads the Event when its poll comes: a menu opened before that is of the old snapshot, so try again
@@ -129,11 +150,21 @@ fn delete_item_only_on_archived_or_asleep_rows() {
             break menu;
         }
         tries += 1;
-        assert!(tries < 100, "the Delete item of the asleep Plan never shows; the last menu: {menu:?}");
+        assert!(
+            tries < 100,
+            "the Delete item of the asleep Plan never shows; the last menu: {menu:?}"
+        );
         tree.idle();
     };
-    assert!(has_item(&asleep, "Delete"), "an asleep Plan has Delete: {asleep:?}");
-    assert!(drive::calls(&fx).is_empty(), "opening menus runs nothing: {:?}", drive::calls(&fx));
+    assert!(
+        has_item(&asleep, "Delete"),
+        "an asleep Plan has Delete: {asleep:?}"
+    );
+    assert!(
+        drive::calls(&fx).is_empty(),
+        "opening menus runs nothing: {:?}",
+        drive::calls(&fx)
+    );
 }
 
 #[test]
@@ -147,21 +178,38 @@ fn popup_lists_what_goes_and_n_keeps_it() {
     let mut tree = Tree::start(&fx, 60, 16);
 
     let screen = menu_of_plan(&mut tree, "old");
-    let row = screen.iter().position(|r| r.contains("│ Delete ")).expect("Delete in the menu") as u16;
+    let row = screen
+        .iter()
+        .position(|r| r.contains("│ Delete "))
+        .expect("Delete in the menu") as u16;
     tree.click(10, row);
 
     // the popup's list is the preview's: the first call is the command without `--yes`
     tree.until_that("the popup", |_| !dialogs.popups().is_empty());
-    assert_eq!(drive::calls(&fx)[0], drive::words(&["plan", "delete", "old"]), "the list comes from `plan delete <id>`");
+    assert_eq!(
+        drive::calls(&fx)[0],
+        drive::words(&["plan", "delete", "old"]),
+        "the list comes from `plan delete <id>`"
+    );
     let popup = &dialogs.popups()[0];
-    assert!(popup.contains("dialog confirm"), "a y/N confirm popup: {popup}");
+    assert!(
+        popup.contains("dialog confirm"),
+        "a y/N confirm popup: {popup}"
+    );
     assert!(popup.contains("Delete"), "{popup}");
     for count in ["47", "121", "3", "11", "342"] {
-        assert!(popup.contains(count), "the popup lists the count {count}: {popup}");
+        assert!(
+            popup.contains(count),
+            "the popup lists the count {count}: {popup}"
+        );
     }
     // N: nothing is deleted; the legend's popup comes after the view handled the answer
     dialogs.settled(&mut tree);
-    assert_eq!(drive::calls(&fx), [drive::words(&["plan", "delete", "old"])], "no `--yes` after N");
+    assert_eq!(
+        drive::calls(&fx),
+        [drive::words(&["plan", "delete", "old"])],
+        "no `--yes` after N"
+    );
 }
 
 #[test]
@@ -175,10 +223,19 @@ fn y_deletes_the_plan() {
     let mut tree = Tree::start(&fx, 60, 16);
 
     let screen = menu_of_plan(&mut tree, "old");
-    let row = screen.iter().position(|r| r.contains("│ Delete ")).expect("Delete in the menu") as u16;
+    let row = screen
+        .iter()
+        .position(|r| r.contains("│ Delete "))
+        .expect("Delete in the menu") as u16;
     tree.click(10, row);
 
     tree.until_that("the delete with --yes", |_| drive::calls(&fx).len() >= 2);
-    assert_eq!(drive::calls(&fx), [drive::words(&["plan", "delete", "old"]), drive::words(&["plan", "delete", "old", "--yes"])]);
+    assert_eq!(
+        drive::calls(&fx),
+        [
+            drive::words(&["plan", "delete", "old"]),
+            drive::words(&["plan", "delete", "old", "--yes"])
+        ]
+    );
     assert_eq!(dialogs.popups().len(), 1, "one popup, before the delete");
 }

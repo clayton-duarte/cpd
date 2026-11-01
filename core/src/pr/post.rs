@@ -47,40 +47,63 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     if pr.status != "open" {
         return Err(CpdError::new(
             ErrorCode::PrNotOpen,
-            format!("PR {key} of Plan {id} is {}: pr post needs an open PR.", pr.status),
+            format!(
+                "PR {key} of Plan {id} is {}: pr post needs an open PR.",
+                pr.status
+            ),
         )
         .with("pr", key.as_str())
         .with("status", pr.status.as_str()));
     }
     // (b)
-    if let Some(done) = env.store.read(|conn| posts::find(conn, id.as_str(), key.as_str()))? {
+    if let Some(done) = env
+        .store
+        .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?
+    {
         return Err(already_posted(&key, &done));
     }
     // (c)
     let policy = pr_policy(&mut env, &id, &key)?;
     // (d)
     if !policy.pr.post.enabled {
-        return Err(CpdError::new(ErrorCode::PostDisabled, format!("PR {key}: posting is not enabled for its owner."))
-            .with("pr", key.as_str())
-            .with("key", "pr.post.enabled"));
+        return Err(CpdError::new(
+            ErrorCode::PostDisabled,
+            format!("PR {key}: posting is not enabled for its owner."),
+        )
+        .with("pr", key.as_str())
+        .with("key", "pr.post.enabled"));
     }
     // (e)
-    let row = pr.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
+    let row = pr
+        .pull_request
+        .expect("an open PR has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     if !pull.authored {
-        return Err(CpdError::new(ErrorCode::NotAuthored, format!("Pull request {} of PR {key} is not the User's own.", pull.number))
-            .with("pr", key.as_str())
-            .with("number", pull.number));
+        return Err(CpdError::new(
+            ErrorCode::NotAuthored,
+            format!(
+                "Pull request {} of PR {key} is not the User's own.",
+                pull.number
+            ),
+        )
+        .with("pr", key.as_str())
+        .with("number", pull.number));
     }
     // (f)
-    let channel = [policy.pr.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
-        .into_iter()
-        .find(|c| !c.is_empty())
-        .ok_or_else(|| {
-            CpdError::new(ErrorCode::PostUnconfigured, "No Slack channel is configured to post to.")
-                .with("keys", json!(["pr.post.channel", "inbox.team_channel"]))
-        })?
-        .to_owned();
+    let channel = [
+        policy.pr.post.channel.as_str(),
+        env.config.inbox.team_channel.as_str(),
+    ]
+    .into_iter()
+    .find(|c| !c.is_empty())
+    .ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::PostUnconfigured,
+            "No Slack channel is configured to post to.",
+        )
+        .with("keys", json!(["pr.post.channel", "inbox.team_channel"]))
+    })?
+    .to_owned();
     // (g)
     let why = unready(&pull);
     if !why.is_empty() {
@@ -95,7 +118,8 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("reasons", json!(names)));
     }
     // (g2) one read of the repo and the pull request: a repo with no merge method refuses before the send
-    let read = super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
+    let read =
+        super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
     if read.methods.choose().is_none() {
         let m = read.methods;
         return Err(CpdError::new(
@@ -112,17 +136,33 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("rebase", m.rebase));
     }
     // (h)
-    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url).map_err(|e| {
-        CpdError::new(ErrorCode::PolicyInvalid, format!("The pr.post.template does not render: {e}."))
+    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url)
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::PolicyInvalid,
+                format!("The pr.post.template does not render: {e}."),
+            )
             .with("key", "pr.post.template")
-    })?;
+        })?;
     // (i)
-    let call = slack::call(&env.config, "slack-post.ts", &[("channel", &channel)], Some(message.clone().into_bytes()), DEADLINE)?;
-    let argv: Vec<String> = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect();
+    let call = slack::call(
+        &env.config,
+        "slack-post.ts",
+        &[("channel", &channel)],
+        Some(message.clone().into_bytes()),
+        DEADLINE,
+    )?;
+    let argv: Vec<String> = std::iter::once(call.program.clone())
+        .chain(call.args.iter().cloned())
+        .collect();
     let out = match env.ports.runner.run(&call) {
         Ok(out) => out,
         Err(Failed::Io(e)) => {
-            return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)));
+            return Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Cannot run {}: {e}.", argv.join(" ")),
+            )
+            .with("argv", json!(argv)));
         }
         Err(Failed::Timeout(e)) => return Err(e),
     };
@@ -142,23 +182,36 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let stored = env.store.write("pr post", |tx| {
         let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
         if new {
-            super::jira_sync::queue(tx, id.as_str(), key.as_str(), super::jira_sync::Target::InReview)?;
+            super::jira_sync::queue(
+                tx,
+                id.as_str(),
+                key.as_str(),
+                super::jira_sync::Target::InReview,
+            )?;
         }
         Ok(new)
     });
     match stored {
         Ok(true) => {}
         Ok(false) => {
-            let done = env.store.read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
+            let done = env
+                .store
+                .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
             return Err(match done {
                 Some(done) => already_posted(&key, &done),
-                None => CpdError::bad_row(format!("PR {key} has no post after its insert was refused")),
+                None => {
+                    CpdError::bad_row(format!("PR {key} has no post after its insert was refused"))
+                }
             });
         }
         Err(e) => {
             return Err(CpdError::new(
                 ErrorCode::StoreFailed,
-                format!("The message WAS posted ({}) but recording it failed: {}", record.link, e.message()),
+                format!(
+                    "The message WAS posted ({}) but recording it failed: {}",
+                    record.link,
+                    e.message()
+                ),
             )
             .with("link", record.link.as_str())
             .with("channel", record.channel.as_str())
@@ -173,12 +226,24 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
 }
 
 /// The GitHub attempt, after the post is stored, on the read made before the send: `{state, reason}` (commands.md §9.8b).
-fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, read: &super::gh::AutoMergeRead) -> Result<Value, CpdError> {
-    let stacked = env.store.read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
+fn request_auto_merge(
+    env: &mut Env,
+    id: &PlanId,
+    key: &PrKey,
+    read: &super::gh::AutoMergeRead,
+) -> Result<Value, CpdError> {
+    let stacked = env
+        .store
+        .read(|conn| auto_merge::stacked(conn, id.as_str(), key.as_str()))?;
     let outcome = if !read.allowed {
         Outcome::NotAllowed
     } else if stacked {
-        return Ok(state("deferred", Some("the PR is stacked on another PR's branch: the request waits until it is unstacked")));
+        return Ok(state(
+            "deferred",
+            Some(
+                "the PR is stacked on another PR's branch: the request waits until it is unstacked",
+            ),
+        ));
     } else {
         auto_merge::after_read(&*env.ports.runner, Path::new("."), read)
     };
@@ -188,7 +253,9 @@ fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, read: &super::gh:
             Some("none"),
             state(
                 "not_allowed",
-                Some("the repo does not allow auto-merge: cpd merges the PR when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)"),
+                Some(
+                    "the repo does not allow auto-merge: cpd merges the PR when it is ready (the cockpit's Merge, or the Lead with `cpd pr merge` after a human approves)",
+                ),
             ),
         ),
         Outcome::Refused(why) => (Some("refused"), state("refused", Some(&why))),
@@ -196,11 +263,16 @@ fn request_auto_merge(env: &mut Env, id: &PlanId, key: &PrKey, read: &super::gh:
     };
     if let Some(stored) = stored {
         env.store
-            .write("pr post", |tx| posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored))
+            .write("pr post", |tx| {
+                posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored)
+            })
             .map_err(|e| {
                 CpdError::new(
                     ErrorCode::StoreFailed,
-                    format!("The message WAS posted but recording its auto-merge outcome failed: {}", e.message()),
+                    format!(
+                        "The message WAS posted but recording its auto-merge outcome failed: {}",
+                        e.message()
+                    ),
                 )
             })?;
     }
@@ -217,10 +289,13 @@ fn one_line(text: &str) -> String {
 }
 
 fn already_posted(key: &crate::ids::PrKey, done: &PostRecord) -> CpdError {
-    CpdError::new(ErrorCode::AlreadyPosted, format!("PR {key} was already posted: {}.", done.link))
-        .with("pr", key.as_str())
-        .with("channel", done.channel.as_str())
-        .with("ts", done.ts.as_str())
-        .with("link", done.link.as_str())
-        .with("posted_at", done.posted_at.as_str())
+    CpdError::new(
+        ErrorCode::AlreadyPosted,
+        format!("PR {key} was already posted: {}.", done.link),
+    )
+    .with("pr", key.as_str())
+    .with("channel", done.channel.as_str())
+    .with("ts", done.ts.as_str())
+    .with("link", done.link.as_str())
+    .with("posted_at", done.posted_at.as_str())
 }

@@ -10,8 +10,8 @@ use rusqlite::{Connection, ToSql};
 use cpd_core::attempt::ledger::Stored;
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
+use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
@@ -20,11 +20,18 @@ use super::dot::{Dot, Work};
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
 pub(super) fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("The database holds an invalid row: {what}."),
+    )
 }
 
 /// An id read from a row.
-pub(super) fn id<T>(what: &str, value: &str, parse: impl FnOnce(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
+pub(super) fn id<T>(
+    what: &str,
+    value: &str,
+    parse: impl FnOnce(&str) -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
     parse(value).map_err(|_| bad_row(format!("{what} {value:?}")))
 }
 
@@ -132,13 +139,24 @@ pub struct JobCounts {
 
 impl JobCounts {
     pub fn total(&self) -> usize {
-        self.draft + self.queued + self.running + self.merging + self.failed + self.merged + self.cancelled
+        self.draft
+            + self.queued
+            + self.running
+            + self.merging
+            + self.failed
+            + self.merged
+            + self.cancelled
     }
 
     /// The tree's four counters (hs-d636, commands.md §13.2): planned (the drafts and the queued), active (the running
     /// and the merging), failed and done (the merged). Cancelled Jobs are not counted.
     pub fn counters(&self) -> [usize; 4] {
-        [self.draft + self.queued, self.running + self.merging, self.failed, self.merged]
+        [
+            self.draft + self.queued,
+            self.running + self.merging,
+            self.failed,
+            self.merged,
+        ]
     }
 
     /// The Job status and the merging flag that colour counter `index` (hs-d636): the planned role is the draft colour
@@ -146,7 +164,14 @@ impl JobCounts {
     /// lands (checking or merging). The one place the draft-or-queued decision is made.
     pub fn counter_role(&self, index: usize) -> (JobStatus, bool) {
         match index {
-            0 => (if self.draft > 0 { JobStatus::Draft } else { JobStatus::Queued }, false),
+            0 => (
+                if self.draft > 0 {
+                    JobStatus::Draft
+                } else {
+                    JobStatus::Queued
+                },
+                false,
+            ),
             1 => (JobStatus::Running, self.merging > 0),
             2 => (JobStatus::Failed, false),
             _ => (JobStatus::Merged, false),
@@ -259,7 +284,8 @@ impl SessionNode {
     }
 }
 
-const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.tier,
+const SESSION_SELECT: &str =
+    "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.tier,
        s.tmux_pane, s.state, s.state_label, s.state_at, s.created_at,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
@@ -269,17 +295,30 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
-pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -> Result<Vec<SessionNode>, CpdError> {
-    let mut stmt = conn.prepare(&format!("{SESSION_SELECT} WHERE {filter} ORDER BY s.created_at, s.id"))?;
+pub(super) fn sessions(
+    conn: &Connection,
+    filter: &str,
+    params: &[&dyn ToSql],
+) -> Result<Vec<SessionNode>, CpdError> {
+    let mut stmt = conn.prepare(&format!(
+        "{SESSION_SELECT} WHERE {filter} ORDER BY s.created_at, s.id"
+    ))?;
     let mut rows = stmt.query(params)?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let sid: String = r.get(0)?;
         let session = id("Session id", &sid, SessionId::parse)?;
-        let field = |name: &str, value: &str| bad_row(format!("Session {session} has {name} {value:?}"));
-        let (role, context, plan, attempt, forked_from): (String, String, Option<String>, Option<String>, Option<String>) =
-            (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(7)?);
-        let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
+        let field =
+            |name: &str, value: &str| bad_row(format!("Session {session} has {name} {value:?}"));
+        let (role, context, plan, attempt, forked_from): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(7)?);
+        let (state, tier_text, place): (String, String, Option<String>) =
+            (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
         let plan_lead: bool = r.get(15)?;
@@ -287,11 +326,17 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             dot: Dot::glyph(state),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
-            plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
-            attempt: attempt.map(|a| AttemptId::parse(&a).map_err(|_| field("attempt", &a))).transpose()?,
+            plan: plan
+                .map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p)))
+                .transpose()?,
+            attempt: attempt
+                .map(|a| AttemptId::parse(&a).map_err(|_| field("attempt", &a)))
+                .transpose()?,
             name: r.get(5)?,
             file: r.get(6)?,
-            forked_from: forked_from.map(|f| SessionId::parse(&f).map_err(|_| field("forked_from", &f))).transpose()?,
+            forked_from: forked_from
+                .map(|f| SessionId::parse(&f).map_err(|_| field("forked_from", &f)))
+                .transpose()?,
             tier: tier(&format!("Session {session}"), &tier_text)?,
             tmux_pane: r.get(9)?,
             state,
@@ -348,12 +393,19 @@ impl PlanHead {
 
     /// What the Lead is working on (pro-d200).
     pub fn work(&self) -> Work {
-        Work::of(self.phase, self.counts.draft > 0, self.git_active || self.counts.merging > 0)
+        Work::of(
+            self.phase,
+            self.counts.draft > 0,
+            self.git_active || self.counts.merging > 0,
+        )
     }
 }
 
 /// The Plans of `only` (all of them when `None`), oldest first, with their counts: four queries, whatever the number of Plans.
-pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec<PlanHead>, CpdError> {
+pub(super) fn plan_heads(
+    conn: &Connection,
+    only: Option<&PlanId>,
+) -> Result<Vec<PlanHead>, CpdError> {
     let only_plan = only;
     let only = only.map(|p| p.as_str().to_owned());
 
@@ -368,7 +420,8 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     )?;
     let mut rows = stmt.query([&only])?;
     while let Some(r) = rows.next()? {
-        let (plan, status, n, merging): (String, String, i64, bool) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+        let (plan, status, n, merging): (String, String, i64, bool) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
         let n = n as usize;
         let c = counts.entry(plan).or_default();
         match JobStatus::parse("Job status", &status)? {
@@ -382,7 +435,10 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         }
     }
 
-    let fixing: BTreeSet<PlanId> = failed_worked_on(conn, only_plan)?.into_iter().map(|(plan, _)| plan).collect();
+    let fixing: BTreeSet<PlanId> = failed_worked_on(conn, only_plan)?
+        .into_iter()
+        .map(|(plan, _)| plan)
+        .collect();
 
     let mut git: BTreeSet<String> = BTreeSet::new();
     let mut stmt = conn.prepare(
@@ -400,7 +456,9 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     let mut stmt = conn.prepare(
         "SELECT plan, count(*) FROM escalations WHERE status = 'open' AND (?1 IS NULL OR plan = ?1) GROUP BY plan",
     )?;
-    for row in stmt.query_map([&only], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))? {
+    for row in stmt.query_map([&only], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+    })? {
         let (plan, n) = row?;
         open.insert(plan, n);
     }
@@ -429,10 +487,15 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
-        let pr = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
+        let pr = match (
+            r.get::<_, Option<i64>>(6)?,
+            r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?,
+        ) {
             (Some(number), Some(url), Some(opened_at)) => {
                 // A PR with a number has its pull request (`prs` CHECK).
-                let checks = row_checks.ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
+                let checks = row_checks
+                    .ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
                 Some(Pr {
                     number,
                     url,
@@ -481,7 +544,9 @@ mod tests {
         let mut store = Store::open(&home, 5000).unwrap();
         let plan: Vec<(i64, i64, String)> = store
             .read(|conn| {
-                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {SESSION_SELECT} WHERE 1 ORDER BY s.created_at, s.id"))?;
+                let mut stmt = conn.prepare(&format!(
+                    "EXPLAIN QUERY PLAN {SESSION_SELECT} WHERE 1 ORDER BY s.created_at, s.id"
+                ))?;
                 let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(3)?)))?;
                 Ok(rows.collect::<rusqlite::Result<_>>()?)
             })
@@ -498,6 +563,9 @@ mod tests {
             .filter(|(_, parent, detail)| detail.starts_with("SCAN") && per_session(*parent))
             .map(|(.., detail)| detail.as_str())
             .collect();
-        assert!(scans.is_empty(), "scanned once per Session: {scans:?}\n{plan:#?}");
+        assert!(
+            scans.is_empty(),
+            "scanned once per Session: {scans:?}\n{plan:#?}"
+        );
     }
 }

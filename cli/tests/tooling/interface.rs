@@ -29,12 +29,32 @@ fn rows(nodes: &Value, prefix: &str, out: &mut String) {
         let callers = if is_internal(node) {
             "internal".to_owned()
         } else {
-            let roles: Vec<&str> = node.get("callers").map_or(vec![], |c| c.as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect());
+            let roles: Vec<&str> = node.get("callers").map_or(vec![], |c| {
+                c.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.as_str().unwrap())
+                    .collect()
+            });
             roles.join(", ")
         };
-        let cockpit = if node["cockpit"].as_bool() == Some(true) { "yes" } else { "" };
-        let cell = |text: &str| if text.is_empty() { " |".to_owned() } else { format!(" {text} |") };
-        out.push_str(&format!("| `{path}` | {about} |{}{}\n", cell(&callers), cell(cockpit)));
+        let cockpit = if node["cockpit"].as_bool() == Some(true) {
+            "yes"
+        } else {
+            ""
+        };
+        let cell = |text: &str| {
+            if text.is_empty() {
+                " |".to_owned()
+            } else {
+                format!(" {text} |")
+            }
+        };
+        out.push_str(&format!(
+            "| `{path}` | {about} |{}{}\n",
+            cell(&callers),
+            cell(cockpit)
+        ));
         if let Some(children) = node.get("commands") {
             rows(children, &path, out);
         }
@@ -53,7 +73,12 @@ fn find<'a>(tree: &'a Value, path: &str) -> &'a Value {
     let mut nodes = tree;
     let mut found = None;
     for word in path.split(' ') {
-        let n = nodes.as_array().unwrap().iter().find(|n| n["name"] == word).unwrap_or_else(|| panic!("no command {path}"));
+        let n = nodes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == word)
+            .unwrap_or_else(|| panic!("no command {path}"));
         nodes = n.get("commands").unwrap_or(&Value::Null);
         found = Some(n);
     }
@@ -76,7 +101,9 @@ fn interface_page_is_generated_from_the_binary() {
             n += 1;
             let (x, y) = (a.next(), b.next());
             if x != y {
-                panic!("docs/interface.md differs from `cpd --help` at line {n}:\n  page:   {x:?}\n  binary: {y:?}\nRegenerate: {REGENERATE}");
+                panic!(
+                    "docs/interface.md differs from `cpd --help` at line {n}:\n  page:   {x:?}\n  binary: {y:?}\nRegenerate: {REGENERATE}"
+                );
             }
             if x.is_none() {
                 break;
@@ -88,7 +115,11 @@ fn interface_page_is_generated_from_the_binary() {
 
 fn runnable_paths(cmd: &clap::Command, prefix: &str, hidden: bool, out: &mut Vec<String>) {
     for c in cmd.get_subcommands().filter(|c| c.get_name() != "help") {
-        let path = if prefix.is_empty() { c.get_name().to_owned() } else { format!("{prefix} {}", c.get_name()) };
+        let path = if prefix.is_empty() {
+            c.get_name().to_owned()
+        } else {
+            format!("{prefix} {}", c.get_name())
+        };
         let internal = hidden || c.is_hide_set();
         let has_children = c.get_subcommands().any(|s| s.get_name() != "help");
         if !internal && (!has_children || !c.is_subcommand_required_set()) {
@@ -103,13 +134,19 @@ fn every_command_has_one_entry() {
     let mut paths = Vec::new();
     runnable_paths(&Cli::command(), "", false, &mut paths);
     let table: Vec<&str> = TABLE.iter().map(|e| e.0).collect();
-    assert_eq!(table, paths, "cli/src/interface.rs's table and the runnable, non-internal commands must match, in clap's order");
+    assert_eq!(
+        table, paths,
+        "cli/src/interface.rs's table and the runnable, non-internal commands must match, in clap's order"
+    );
 }
 
 #[test]
 fn anchors() {
     let tree = help_tree();
-    assert_eq!(find(&tree, "plan show")["callers"], serde_json::json!(["Lead", "Manager"]));
+    assert_eq!(
+        find(&tree, "plan show")["callers"],
+        serde_json::json!(["Lead", "Manager"])
+    );
     assert_eq!(find(&tree, "session open")["cockpit"], true);
     for internal in ["session run", "plan decide", "tui view tree"] {
         assert_eq!(find(&tree, internal)["internal"], true, "{internal}");
@@ -125,5 +162,8 @@ fn janitor_command_is_in_the_help_tree() {
         .iter()
         .find(|n| n["name"] == "janitor")
         .expect("`janitor` is a command of the help tree (commands.md §29)");
-    assert!(!is_internal(node), "`janitor` is a runnable command the User calls: {node}");
+    assert!(
+        !is_internal(node),
+        "`janitor` is a runnable command the User calls: {node}"
+    );
 }

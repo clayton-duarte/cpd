@@ -29,18 +29,34 @@ pub(super) fn urgent(args: UrgentArgs) -> Result<Output, CpdError> {
     let decision = env.store.read(|conn| decide(conn, &plan, &key))?;
     let (job, already) = match decision {
         Decision::Already(job) => (job, true),
-        Decision::Mark(_) => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key)? {
-            Decision::Already(job) => Ok((job, true)),
-            Decision::Mark(job) => {
-                tx.execute("UPDATE jobs SET urgent = 1 WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()])?;
-                let text = format!("Job {key} of Plan {plan} is urgent. Next: cpd job show {key} --plan {plan}");
-                append(tx, NewEvent::job_edited(text, ["urgent"]).plan(plan.clone()).job(key.clone()))?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+        Decision::Mark(_) => env
+            .store
+            .write(COMMAND, |tx| match decide(tx, &plan, &key)? {
+                Decision::Already(job) => Ok((job, true)),
+                Decision::Mark(job) => {
+                    tx.execute(
+                        "UPDATE jobs SET urgent = 1 WHERE plan = ?1 AND key = ?2",
+                        [plan.as_str(), key.as_str()],
+                    )?;
+                    let text = format!(
+                        "Job {key} of Plan {plan} is urgent. Next: cpd job show {key} --plan {plan}"
+                    );
+                    append(
+                        tx,
+                        NewEvent::job_edited(text, ["urgent"])
+                            .plan(plan.clone())
+                            .job(key.clone()),
+                    )?;
+                    if let Some(pr) = &job.pr {
+                        crate::session::working_pr::name(
+                            tx,
+                            &plan,
+                            &crate::ids::PrKey::parse(pr)?,
+                        )?;
+                    }
+                    Ok((job, false))
                 }
-                Ok((job, false))
-            }
-        })?,
+            })?,
     };
     let mut out = json!({"job": {"key": job.key, "status": job.status, "urgent": true}, "fields": if already { json!([]) } else { json!(["urgent"]) }});
     if already {
@@ -63,5 +79,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
         .with("job", key.as_str())
         .with("status", job.status.as_str()));
     }
-    Ok(if job.urgent { Decision::Already(job) } else { Decision::Mark(job) })
+    Ok(if job.urgent {
+        Decision::Already(job)
+    } else {
+        Decision::Mark(job)
+    })
 }

@@ -3,22 +3,22 @@
 //! [`FakeRunner`](crate::host::runner::FakeRunner).
 
 mod merge3;
-mod repo;
-mod rev;
-mod route;
-mod sha1;
-mod universe;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
 mod rebase_tests;
+mod repo;
+mod rev;
+mod route;
 #[cfg(test)]
 mod scenario;
+mod sha1;
+mod universe;
 
 pub use repo::Repo;
 pub use rev::{RevError, Selection, parse, range};
 pub use route::GitRoute;
-pub use universe::{Commit, Head, Oid, RepoId, ReflogEntry, Universe, UnknownObject, Worktree};
+pub use universe::{Commit, Head, Oid, ReflogEntry, RepoId, Universe, UnknownObject, Worktree};
 
 use std::sync::Arc;
 
@@ -32,14 +32,14 @@ impl FakeRunner {
 }
 
 #[cfg(test)]
+mod fixture_tests;
+#[cfg(test)]
+mod remote_tests;
+#[cfg(test)]
 mod route_read_tests;
+#[cfg(test)]
+mod twin_tests;
 #[cfg(test)]
 mod universe_tests;
 #[cfg(test)]
 mod worktree_tests;
-#[cfg(test)]
-mod remote_tests;
-#[cfg(test)]
-mod fixture_tests;
-#[cfg(test)]
-mod twin_tests;

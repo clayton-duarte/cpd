@@ -20,7 +20,10 @@ pub struct ClosedUnmerged {
 }
 
 /// Every closed-unmerged PR of `plan` (every Plan when `None`), ordered by plan id then PR key.
-pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<ClosedUnmerged>, CpdError> {
+pub fn closed_unmerged(
+    conn: &Connection,
+    plan: Option<&str>,
+) -> Result<Vec<ClosedUnmerged>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, l.context, l.lead_session, g.repo, g.number, g.url, g.title
            FROM prs p
@@ -31,8 +34,16 @@ pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<Clos
     )?;
     let rows = stmt
         .query_map([plan], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?,
-                r.get::<_, String>(4)?, r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()

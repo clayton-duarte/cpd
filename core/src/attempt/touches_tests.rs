@@ -26,7 +26,10 @@ use crate::output::Output;
 use crate::ports::{Fakes, Ports};
 
 /// The files every fixture's base commit holds: the Job's one `touches` entry and a source file.
-const BASE: &[(&str, &str)] = &[("docs/research/x.md", "# Findings\n"), ("src/app.rs", "// app\n")];
+const BASE: &[(&str, &str)] = &[
+    ("docs/research/x.md", "# Findings\n"),
+    ("src/app.rs", "// app\n"),
+];
 
 /// The `touches` of the regression Job: one research note, no source file.
 const TOUCHES: &str = "[\"docs/research/x.md\"]";
@@ -64,8 +67,17 @@ text = \"\"
 ";
 
 /// A commit of exactly `files` over `parents`.
-fn commit(u: &mut Universe, repo: RepoId, parents: &[Oid], files: &[(&str, &str)], message: &str) -> Oid {
-    let blobs: Vec<(&str, Oid)> = files.iter().map(|(path, text)| (*path, u.blob(repo, text.as_bytes()))).collect();
+fn commit(
+    u: &mut Universe,
+    repo: RepoId,
+    parents: &[Oid],
+    files: &[(&str, &str)],
+    message: &str,
+) -> Oid {
+    let blobs: Vec<(&str, Oid)> = files
+        .iter()
+        .map(|(path, text)| (*path, u.blob(repo, text.as_bytes())))
+        .collect();
     let entries: Vec<(&str, &Oid)> = blobs.iter().map(|(path, blob)| (*path, blob)).collect();
     let tree = u.tree(repo, &entries);
     u.commit(repo, &tree, parents, message)
@@ -109,7 +121,14 @@ struct Spec<'a> {
 
 impl<'a> Default for Spec<'a> {
     fn default() -> Spec<'static> {
-        Spec { kind: "work", touches: TOUCHES, generated: &[LOCKFILE], changed: &[], base_ahead: &[], brings_base: false }
+        Spec {
+            kind: "work",
+            touches: TOUCHES,
+            generated: &[LOCKFILE],
+            changed: &[],
+            base_ahead: &[],
+            brings_base: false,
+        }
     }
 }
 
@@ -163,13 +182,24 @@ fn rig(spec: Spec<'_>) -> Rig {
     tree.extend(spec.changed.iter().copied());
     let attempt = {
         let mut u = universe.lock().unwrap();
-        let parents = if spec.brings_base { vec![base.clone(), u.ref_oid(repo.id(), "refs/heads/main").expect("the base moved")] } else { vec![base.clone()] };
+        let parents = if spec.brings_base {
+            vec![
+                base.clone(),
+                u.ref_oid(repo.id(), "refs/heads/main")
+                    .expect("the base moved"),
+            ]
+        } else {
+            vec![base.clone()]
+        };
         let attempt = commit(&mut u, repo.id(), &parents, &tree, "attempt");
         u.set_ref(repo.id(), "refs/heads/cpd/pay/a", &attempt, "attempt");
         attempt
     };
     let root = dir.join("r.a");
-    universe.lock().unwrap().add_worktree(repo.id(), &root, Head::Branch("cpd/pay/a".to_owned()));
+    universe
+        .lock()
+        .unwrap()
+        .add_worktree(repo.id(), &root, Head::Branch("cpd/pay/a".to_owned()));
     materialize(&root, &tree);
 
     // The home: the config, the owner policy and the repo policy.
@@ -179,8 +209,17 @@ fn rig(spec: Spec<'_>) -> Rig {
     let policy = home.root().join("policy/acme");
     std::fs::create_dir_all(&policy).unwrap();
     std::fs::write(policy.join("owner.toml"), OWNER_POLICY).unwrap();
-    let generated = spec.generated.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
-    std::fs::write(policy.join("cpd.toml"), format!("[generated]\npaths = [{generated}]\n")).unwrap();
+    let generated = spec
+        .generated
+        .iter()
+        .map(|p| format!("\"{p}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        policy.join("cpd.toml"),
+        format!("[generated]\npaths = [{generated}]\n"),
+    )
+    .unwrap();
     let mut env = Env::open_home_with(&fakes.ports, home).unwrap();
 
     let placeholder = "f".repeat(64);
@@ -211,7 +250,17 @@ fn rig(spec: Spec<'_>) -> Rig {
         })
         .unwrap();
 
-    Rig { _tmp: tmp, fakes, env, universe, repo: repo.id(), base, root, plan: PlanId::parse("pay").unwrap(), id: AttemptId::parse("a-a1").unwrap() }
+    Rig {
+        _tmp: tmp,
+        fakes,
+        env,
+        universe,
+        repo: repo.id(),
+        base,
+        root,
+        plan: PlanId::parse("pay").unwrap(),
+        id: AttemptId::parse("a-a1").unwrap(),
+    }
 }
 
 impl Rig {
@@ -219,7 +268,13 @@ impl Rig {
     fn submit(&mut self) -> Result<Output, CpdError> {
         let previous = std::env::current_dir().unwrap();
         std::env::set_current_dir(&self.root).unwrap();
-        let args = SubmitArgs { attempt: self.id.clone(), summary_file: None, plan: PlanArg { plan: Some(self.plan.clone()) } };
+        let args = SubmitArgs {
+            attempt: self.id.clone(),
+            summary_file: None,
+            plan: PlanArg {
+                plan: Some(self.plan.clone()),
+            },
+        };
         let result = Ports::scope(&self.fakes.ports, || submit_in(&mut self.env, args));
         std::env::set_current_dir(previous).unwrap();
         result
@@ -230,7 +285,13 @@ impl Rig {
         let mut tree = BASE.to_vec();
         tree.extend(files.iter().copied());
         let mut u = self.universe.lock().unwrap();
-        let attempt = commit(&mut u, self.repo, &[self.base.clone()], &tree, "attempt again");
+        let attempt = commit(
+            &mut u,
+            self.repo,
+            &[self.base.clone()],
+            &tree,
+            "attempt again",
+        );
         u.set_ref(self.repo, "refs/heads/cpd/pay/a", &attempt, "attempt again");
         drop(u);
         materialize(&self.root, &tree);
@@ -238,16 +299,23 @@ impl Rig {
 
     /// One column of the Attempt's row.
     fn attempt(&mut self, column: &str) -> Option<String> {
-        self.one(&format!("SELECT {column} FROM attempts WHERE plan = 'pay' AND id = 'a-a1'"))
+        self.one(&format!(
+            "SELECT {column} FROM attempts WHERE plan = 'pay' AND id = 'a-a1'"
+        ))
     }
 
     /// One column of Job `a`'s row.
     fn job(&mut self, column: &str) -> Option<String> {
-        self.one(&format!("SELECT {column} FROM jobs WHERE plan = 'pay' AND key = 'a'"))
+        self.one(&format!(
+            "SELECT {column} FROM jobs WHERE plan = 'pay' AND key = 'a'"
+        ))
     }
 
     fn one(&mut self, sql: &str) -> Option<String> {
-        self.env.store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get::<_, Option<String>>(0))?)).unwrap()
+        self.env
+            .store
+            .read(|conn| Ok(conn.query_row(sql, [], |r| r.get::<_, Option<String>>(0))?))
+            .unwrap()
     }
 
     /// Job `a`'s `touches_approved`, as the store now holds it: an approval written after the Attempt started.
@@ -256,7 +324,10 @@ impl Rig {
         self.env
             .store
             .write("fixture", |tx| {
-                tx.execute("UPDATE jobs SET touches_approved = ?1 WHERE plan = 'pay' AND key = 'a'", rusqlite::params![stored])?;
+                tx.execute(
+                    "UPDATE jobs SET touches_approved = ?1 WHERE plan = 'pay' AND key = 'a'",
+                    rusqlite::params![stored],
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -277,72 +348,151 @@ fn refused(result: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
 
 /// The Attempt is `merging`: the submit passed its checks.
 fn merged_ok(rig: &mut Rig, what: &str) {
-    assert_eq!(rig.attempt("status").as_deref(), Some("merging"), "{what}: the submit passed");
-    assert_eq!(rig.job("status").as_deref(), Some("running"), "{what}: the Job waits for the merge");
+    assert_eq!(
+        rig.attempt("status").as_deref(),
+        Some("merging"),
+        "{what}: the submit passed"
+    );
+    assert_eq!(
+        rig.job("status").as_deref(),
+        Some("running"),
+        "{what}: the Job waits for the merge"
+    );
 }
 
 #[test]
 fn a_stray_edit_outside_touches_is_refused() {
     // The hs-n641 regression: a Job touches one research note and its Attempt changes a source file.
-    let mut rig = rig(Spec { changed: &[("src/stray.rs", "// stray\n")], ..Spec::default() });
+    let mut rig = rig(Spec {
+        changed: &[("src/stray.rs", "// stray\n")],
+        ..Spec::default()
+    });
     let e = refused(rig.submit(), ErrorCode::TouchesViolation);
-    assert_eq!(e.details()["paths"], json!(["src/stray.rs"]), "details.paths names the stray path: {:?}", e.details());
-    assert_eq!(e.details()["touches"], json!(["docs/research/x.md"]), "details.touches is the Job's list: {:?}", e.details());
-    assert_eq!(e.details()["generated"], json!([LOCKFILE]), "details.generated is the repo policy's list: {:?}", e.details());
-    assert!(e.message().contains("src/stray.rs"), "the message names the path: {e:?}");
-    assert!(e.message().contains("cpd job approve-touches"), "the message says how the Lead allows it: {e:?}");
+    assert_eq!(
+        e.details()["paths"],
+        json!(["src/stray.rs"]),
+        "details.paths names the stray path: {:?}",
+        e.details()
+    );
+    assert_eq!(
+        e.details()["touches"],
+        json!(["docs/research/x.md"]),
+        "details.touches is the Job's list: {:?}",
+        e.details()
+    );
+    assert_eq!(
+        e.details()["generated"],
+        json!([LOCKFILE]),
+        "details.generated is the repo policy's list: {:?}",
+        e.details()
+    );
+    assert!(
+        e.message().contains("src/stray.rs"),
+        "the message names the path: {e:?}"
+    );
+    assert!(
+        e.message().contains("cpd job approve-touches"),
+        "the message says how the Lead allows it: {e:?}"
+    );
     // Nothing moved: the Attempt is still the Worker's to fix.
-    assert_eq!(rig.attempt("status").as_deref(), Some("running"), "the refusal leaves the Attempt running");
-    assert_eq!(rig.job("status").as_deref(), Some("running"), "the Job's status did not change");
+    assert_eq!(
+        rig.attempt("status").as_deref(),
+        Some("running"),
+        "the refusal leaves the Attempt running"
+    );
+    assert_eq!(
+        rig.job("status").as_deref(),
+        Some("running"),
+        "the Job's status did not change"
+    );
 }
 
 #[test]
 fn a_generated_path_change_passes() {
     // The lockfile is generated: the repo policy's `[generated] paths` allow it without an approval.
-    let mut generated = rig(Spec { changed: &[(LOCKFILE, "lockfileVersion: 9\n")], ..Spec::default() });
+    let mut generated = rig(Spec {
+        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        ..Spec::default()
+    });
     assert!(generated.submit().is_ok(), "a generated path is exempt");
     merged_ok(&mut generated, "the generated path");
 
     // The control: the same commit, the same Job, and no `[generated]` entry: refused.
-    let mut stray = rig(Spec { changed: &[(LOCKFILE, "lockfileVersion: 9\n")], generated: &[], ..Spec::default() });
+    let mut stray = rig(Spec {
+        changed: &[(LOCKFILE, "lockfileVersion: 9\n")],
+        generated: &[],
+        ..Spec::default()
+    });
     refused(stray.submit(), ErrorCode::TouchesViolation);
-    assert_eq!(stray.attempt("status").as_deref(), Some("running"), "the control's Attempt stays running");
+    assert_eq!(
+        stray.attempt("status").as_deref(),
+        Some("running"),
+        "the control's Attempt stays running"
+    );
 }
 
 #[test]
 fn a_base_merge_change_passes() {
     // The Attempt merged the base, whose own commit changed `src/from_base.rs`: the same blob as `main`'s, so exempt.
     let ahead = [("src/from_base.rs", "// from the base\n")];
-    let mut merging = rig(Spec { base_ahead: &ahead, brings_base: true, ..Spec::default() });
-    assert!(merging.submit().is_ok(), "a path a base merge brought is exempt");
+    let mut merging = rig(Spec {
+        base_ahead: &ahead,
+        brings_base: true,
+        ..Spec::default()
+    });
+    assert!(
+        merging.submit().is_ok(),
+        "a path a base merge brought is exempt"
+    );
     merged_ok(&mut merging, "the base merge");
 
     // The control: a commit of the Attempt's own that writes the same path with other content: refused.
-    let mut stray = rig(Spec { changed: &[("src/from_base.rs", "// the Attempt's own edit\n")], base_ahead: &ahead, ..Spec::default() });
+    let mut stray = rig(Spec {
+        changed: &[("src/from_base.rs", "// the Attempt's own edit\n")],
+        base_ahead: &ahead,
+        ..Spec::default()
+    });
     refused(stray.submit(), ErrorCode::TouchesViolation);
 }
 
 #[test]
 fn an_open_and_an_update_job_are_exempt() {
     // An `open` and an `update` Job store cpd's fixed Spec as `touches`: prose, which matches no path.
-    let prose = "[\"The base is main: run git fetch origin main and merge it as the Context says.\"]";
+    let prose =
+        "[\"The base is main: run git fetch origin main and merge it as the Context says.\"]";
     // The Attempt's own commit changes a source file: outside the prose touches, and not brought by any base merge, so
     // only the kind exemption can let it pass (the base-merge exemption is isolated in `a_base_merge_change_passes`).
     let authored = [("src/authored.rs", "// authored\n")];
     for kind in ["open", "update"] {
-        let mut cpd_job = rig(Spec { kind, touches: prose, changed: &authored, ..Spec::default() });
-        assert!(cpd_job.submit().is_ok(), "{kind}: the touches check skips this kind");
+        let mut cpd_job = rig(Spec {
+            kind,
+            touches: prose,
+            changed: &authored,
+            ..Spec::default()
+        });
+        assert!(
+            cpd_job.submit().is_ok(),
+            "{kind}: the touches check skips this kind"
+        );
         merged_ok(&mut cpd_job, kind);
     }
 
     // The control: a `work` Job with the same prose touches and the same diff is refused.
-    let mut work = rig(Spec { kind: "work", touches: prose, changed: &authored, ..Spec::default() });
+    let mut work = rig(Spec {
+        kind: "work",
+        touches: prose,
+        changed: &authored,
+        ..Spec::default()
+    });
     refused(work.submit(), ErrorCode::TouchesViolation);
 }
 
 #[test]
 fn an_approved_touch_passes() {
-    let mut rig = rig(Spec { changed: &[("src/stray.rs", "// stray\n")], ..Spec::default() });
+    let mut rig = rig(Spec {
+        changed: &[("src/stray.rs", "// stray\n")],
+        ..Spec::default()
+    });
     // Without an approval the stray path is refused.
     refused(rig.submit(), ErrorCode::TouchesViolation);
     assert_eq!(rig.attempt("status").as_deref(), Some("running"));
@@ -354,12 +504,23 @@ fn an_approved_touch_passes() {
 
 #[test]
 fn the_refusal_leaves_the_attempt_running() {
-    let mut rig = rig(Spec { changed: &[("src/stray.rs", "// stray\n")], ..Spec::default() });
+    let mut rig = rig(Spec {
+        changed: &[("src/stray.rs", "// stray\n")],
+        ..Spec::default()
+    });
     refused(rig.submit(), ErrorCode::TouchesViolation);
-    assert_eq!(rig.attempt("status").as_deref(), Some("running"), "the Attempt is running, not ended");
+    assert_eq!(
+        rig.attempt("status").as_deref(),
+        Some("running"),
+        "the Attempt is running, not ended"
+    );
     assert_eq!(rig.attempt("outcome"), None, "the refusal ends nothing");
     assert_eq!(rig.attempt("cause"), None, "the refusal ends nothing");
-    assert_eq!(rig.job("status").as_deref(), Some("running"), "the Job's status did not change");
+    assert_eq!(
+        rig.job("status").as_deref(),
+        Some("running"),
+        "the Job's status did not change"
+    );
 
     // The loop is recoverable: the Worker reverts the stray file and submits again.
     rig.recommit(&[("docs/research/x.md", "# Findings\n\nMore.\n")]);
@@ -404,13 +565,34 @@ fn an_explore_job_runs_no_touches_check() {
     std::fs::write(&artefact, "# Findings\n").unwrap();
     let summary = dir.join("summary.md");
     std::fs::write(&summary, "Found it.\n").unwrap();
-    let args = SubmitArgs { attempt: AttemptId::parse("a-a1").unwrap(), summary_file: Some(summary), plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) } };
+    let args = SubmitArgs {
+        attempt: AttemptId::parse("a-a1").unwrap(),
+        summary_file: Some(summary),
+        plan: PlanArg {
+            plan: Some(PlanId::parse("pay").unwrap()),
+        },
+    };
     let out = Ports::scope(&fakes.ports, || submit_in(&mut env, args));
-    assert!(out.is_ok(), "an explore Attempt submits its artefact: {out:?}");
-    let status: String = env.store.read(|conn| Ok(conn.query_row("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'a'", [], |r| r.get(0))?)).unwrap();
+    assert!(
+        out.is_ok(),
+        "an explore Attempt submits its artefact: {out:?}"
+    );
+    let status: String = env
+        .store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT status FROM jobs WHERE plan = 'pay' AND key = 'a'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
     assert_eq!(status, "merged", "the explore Job merged");
 
     // The control: the same Job of a kind that has a worktree and a check, with the same source change, is refused.
-    let mut work = rig(Spec { changed: &[("src/stray.rs", "// stray\n")], ..Spec::default() });
+    let mut work = rig(Spec {
+        changed: &[("src/stray.rs", "// stray\n")],
+        ..Spec::default()
+    });
     refused(work.submit(), ErrorCode::TouchesViolation);
 }

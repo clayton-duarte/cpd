@@ -3,12 +3,22 @@
 
 use std::path::{Path, PathBuf};
 
-const DIRS: [&str; 7] =
-    ["tui/src", "core/src", "engine/src", "cli/src", "pi/lib", "pi/compact-tools", "pi/ask-user-question"];
+const DIRS: [&str; 7] = [
+    "tui/src",
+    "core/src",
+    "engine/src",
+    "cli/src",
+    "pi/lib",
+    "pi/compact-tools",
+    "pi/ask-user-question",
+];
 
 /// The repo root: `cli/..`.
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn is_source(path: &Path) -> bool {
@@ -19,7 +29,8 @@ fn is_source(path: &Path) -> bool {
 /// `#[cfg(test)]` in its lib.rs.
 fn is_test_file(path: &Path) -> bool {
     let name = path.file_name().unwrap().to_string_lossy();
-    path.components().any(|c| c.as_os_str() == "tests" || c.as_os_str() == "test")
+    path.components()
+        .any(|c| c.as_os_str() == "tests" || c.as_os_str() == "test")
         || name.contains("test")
         || name.ends_with("_colours.rs")
         || name.starts_with("pill_")
@@ -27,7 +38,9 @@ fn is_test_file(path: &Path) -> bool {
 
 /// Appends every non-test source file under `dir`, sorted.
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = read.map(|e| e.unwrap().path()).collect();
     entries.sort();
     for path in entries {
@@ -72,7 +85,11 @@ fn offenders(forbidden: &[&str], allowed: &[&str]) -> Vec<String> {
     }
     let mut found = Vec::new();
     for path in files {
-        let rel = path.strip_prefix(&root).unwrap().to_string_lossy().to_string();
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         if allowed.contains(&rel.as_str()) {
             continue;
         }
@@ -100,7 +117,11 @@ fn no_pill_cap_glyph_in_non_test_source_outside_the_spec_and_the_adapters() {
         "core/src/host/tmux/palette.rs",
     ];
     let found = offenders(&forbidden, &allowed);
-    assert!(found.is_empty(), "a hand-assembled pill cap outside the spec:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "a hand-assembled pill cap outside the spec:\n{}",
+        found.join("\n")
+    );
 }
 
 #[test]
@@ -114,5 +135,9 @@ fn no_reverse_video_pill_outside_the_three_adapters() {
         "pi/ask-user-question/view/components/inline-input.ts",
     ];
     let found = offenders(&forbidden, &allowed);
-    assert!(found.is_empty(), "reverse video outside the three adapters:\n{}", found.join("\n"));
+    assert!(
+        found.is_empty(),
+        "reverse video outside the three adapters:\n{}",
+        found.join("\n")
+    );
 }

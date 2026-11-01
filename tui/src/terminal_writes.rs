@@ -7,8 +7,16 @@ mod tests {
 
     /// What writes to the terminal behind the frame's back: the print macros, a handle on stdout or stderr, a child that
     /// inherits them. `eprintln!` and `println!` contain `print`: each is listed whole.
-    const WRITES: [&str; 8] =
-        ["eprintln!", "eprint!", "println!", "print!", "dbg!", "stdout()", "stderr()", "Stdio::inherit"];
+    const WRITES: [&str; 8] = [
+        "eprintln!",
+        "eprint!",
+        "println!",
+        "print!",
+        "dbg!",
+        "stdout()",
+        "stderr()",
+        "Stdio::inherit",
+    ];
 
     /// A write a view may make, with why. A new one needs a reviewer to add it here.
     struct Exempt {
@@ -58,7 +66,9 @@ mod tests {
     ];
 
     fn exempt(file: &str, line: &str) -> Option<usize> {
-        EXEMPT.iter().position(|e| e.file == file && line.contains(e.line))
+        EXEMPT
+            .iter()
+            .position(|e| e.file == file && line.contains(e.line))
     }
 
     fn walk(root: &Path, dir: &Path, offenders: &mut Vec<String>, used: &mut [bool; EXEMPT.len()]) {
@@ -67,10 +77,16 @@ mod tests {
             if path.is_dir() {
                 walk(root, &path, offenders, used);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let file = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                let file = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
                 let text = std::fs::read_to_string(&path).unwrap();
                 for (n, line) in text.lines().enumerate() {
-                    if line.trim_start().starts_with("//") || !WRITES.iter().any(|w| line.contains(w)) {
+                    if line.trim_start().starts_with("//")
+                        || !WRITES.iter().any(|w| line.contains(w))
+                    {
                         continue;
                     }
                     match exempt(&file, line) {
@@ -94,7 +110,16 @@ mod tests {
             "a view's lines go to run/tui/<view>.log (and a dialog, when the User must see them), not to its terminal:\n{}",
             offenders.join("\n")
         );
-        let stale: Vec<_> = EXEMPT.iter().zip(used).filter(|(_, used)| !used).map(|(e, _)| format!("{}: {}", e.file, e.why)).collect();
-        assert!(stale.is_empty(), "exemptions that match nothing (delete them):\n{}", stale.join("\n"));
+        let stale: Vec<_> = EXEMPT
+            .iter()
+            .zip(used)
+            .filter(|(_, used)| !used)
+            .map(|(e, _)| format!("{}: {}", e.file, e.why))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "exemptions that match nothing (delete them):\n{}",
+            stale.join("\n")
+        );
     }
 }

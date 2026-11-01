@@ -8,29 +8,35 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cpd_core::clock::ManualClock;
+use cpd_tui::view_ports::{Input, Tty};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{Event, KeyCode};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use cpd_core::clock::ManualClock;
-use cpd_tui::view_ports::{Input, Tty};
 
 use crate::common::screen::{
-    Bytes, Display, FakeTty, Keys, Screen, Script, SharedBackend, Step, Steps, ch, ctrl, idle, key, left_click, right_click, then, typed,
+    Bytes, Display, FakeTty, Keys, Screen, Script, SharedBackend, Step, Steps, ch, ctrl, idle, key,
+    left_click, right_click, then, typed,
 };
 
 /// The screen of a 12x3 terminal after it drew `lines`.
 fn drawn(lines: Vec<Line<'static>>) -> Screen {
     let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("a test terminal");
-    terminal.draw(|frame| frame.render_widget(Paragraph::new(lines), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new(lines), frame.area()))
+        .expect("draw");
     Screen::from_buffer(terminal.backend().buffer())
 }
 
 fn two_lines() -> Screen {
     drawn(vec![
-        Line::from(vec![Span::raw("plan "), Span::styled("pay", Style::new().fg(Color::Green).bg(Color::Black).bold())]),
+        Line::from(vec![
+            Span::raw("plan "),
+            Span::styled("pay", Style::new().fg(Color::Green).bg(Color::Black).bold()),
+        ]),
         Line::from("  idle"),
     ])
 }
@@ -56,7 +62,10 @@ fn screen_cell_reads_the_style_of_a_cell() {
     assert_eq!((pay.fg, pay.bg), (Color::Green, Color::Black));
     assert!(pay.modifier.contains(Modifier::BOLD));
     let plain = screen.cell(0, 0);
-    assert_eq!((plain.fg, plain.bg, plain.modifier), (Color::Reset, Color::Reset, Modifier::empty()));
+    assert_eq!(
+        (plain.fg, plain.bg, plain.modifier),
+        (Color::Reset, Color::Reset, Modifier::empty())
+    );
 }
 
 #[test]
@@ -82,12 +91,19 @@ fn screen_cell_outside_the_screen_is_refused() {
 #[test]
 fn screen_is_a_copy_of_the_buffer_it_was_read_from() {
     let mut terminal = Terminal::new(TestBackend::new(6, 1)).expect("a test terminal");
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area()))
+        .expect("draw");
     let before = Screen::from_buffer(terminal.backend().buffer());
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area()))
+        .expect("draw");
 
     assert_eq!(before.rows(), ["one"]);
-    assert_eq!(Screen::from_buffer(terminal.backend().buffer()).rows(), ["two"]);
+    assert_eq!(
+        Screen::from_buffer(terminal.backend().buffer()).rows(),
+        ["two"]
+    );
 }
 
 // ---- Keys
@@ -113,9 +129,14 @@ fn typed_is_one_key_press_per_character() {
 fn keys_poll_with_nothing_left_fails_loudly() {
     let mut keys = Keys::script([]);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| keys.poll(std::time::Duration::ZERO)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        keys.poll(std::time::Duration::ZERO)
+    }));
 
-    assert!(result.is_err(), "a loop that polls past its script must not spin");
+    assert!(
+        result.is_err(),
+        "a loop that polls past its script must not spin"
+    );
 }
 
 // ---- SharedBackend and Script
@@ -125,15 +146,20 @@ fn shared_backend_shows_the_test_what_the_terminal_drew() {
     let backend = SharedBackend::new(8, 2);
     let mut terminal = backend.terminal();
 
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area()))
+        .expect("draw");
     assert_eq!(backend.screen().rows(), ["one", ""]);
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area()))
+        .expect("draw");
 
     assert_eq!(backend.screen().rows(), ["two", ""]);
 }
 
 #[test]
-fn script_runs_what_the_world_does_and_the_looks_up_to_the_next_event_and_an_idle_poll_naps_the_clock() {
+fn script_runs_what_the_world_does_and_the_looks_up_to_the_next_event_and_an_idle_poll_naps_the_clock()
+ {
     use cpd_core::ports::Fakes;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -142,7 +168,9 @@ fn script_runs_what_the_world_does_and_the_looks_up_to_the_next_event_and_an_idl
     let fakes = Fakes::new();
     let backend = SharedBackend::new(8, 1);
     let mut terminal = backend.terminal();
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("first"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("first"), frame.area()))
+        .expect("draw");
     let seen = Rc::new(RefCell::new(Vec::new()));
     let (done, looked) = (Rc::clone(&seen), Rc::clone(&seen));
     let mut script = Script::on_screen(
@@ -156,7 +184,10 @@ fn script_runs_what_the_world_does_and_the_looks_up_to_the_next_event_and_an_idl
         ],
     );
 
-    assert!(!script.poll(Duration::from_millis(50)).unwrap(), "the idle poll finds nothing");
+    assert!(
+        !script.poll(Duration::from_millis(50)).unwrap(),
+        "the idle poll finds nothing"
+    );
     assert_eq!(*seen.borrow(), ["world", "first"]);
     assert_eq!(fakes.clock.naps(), [Duration::from_millis(50)]);
     assert!(script.poll(Duration::from_millis(50)).unwrap());
@@ -178,7 +209,10 @@ fn script_idle_poll_naps_its_wait_on_the_clock_and_says_no() {
     assert!(!script.poll(Duration::from_millis(100)).unwrap());
     assert!(!script.poll(Duration::from_millis(250)).unwrap());
 
-    assert_eq!(clock.naps(), [Duration::from_millis(100), Duration::from_millis(250)]);
+    assert_eq!(
+        clock.naps(),
+        [Duration::from_millis(100), Duration::from_millis(250)]
+    );
     assert_eq!(script.remaining(), 0);
 }
 
@@ -189,16 +223,23 @@ fn script_poll_with_nothing_left_fails_loudly() {
     let fakes = Fakes::new();
     let mut script = Script::on_screen(fakes.clock.clone(), &SharedBackend::new(1, 1), []);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| script.poll(std::time::Duration::ZERO)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        script.poll(std::time::Duration::ZERO)
+    }));
 
-    assert!(result.is_err(), "a loop that polls past its script must not spin");
+    assert!(
+        result.is_err(),
+        "a loop that polls past its script must not spin"
+    );
 }
 
 // ---- Steps: what the world does while a view draws
 
 /// Draws `text` on `terminal`, one frame.
 fn frame(terminal: &mut Terminal<SharedBackend>, text: &'static str) {
-    terminal.draw(|f| f.render_widget(Paragraph::new(text), f.area())).expect("draw");
+    terminal
+        .draw(|f| f.render_widget(Paragraph::new(text), f.area()))
+        .expect("draw");
 }
 
 #[test]
@@ -208,13 +249,27 @@ fn steps_run_in_order_one_at_most_per_frame_each_at_the_first_frame_that_satisfi
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let (a, b, c) = (seen.clone(), seen.clone(), seen.clone());
     let steps = Steps::new()
-        .at("two", |s| s.contains("two"), move |s| a.borrow_mut().push(format!("two: {}", s.row(0))))
-        .next("the next", move |s| b.borrow_mut().push(format!("next: {}", s.row(0))))
-        .at("four", |s| s.contains("four"), move |_| c.borrow_mut().push("four".to_owned()));
+        .at(
+            "two",
+            |s| s.contains("two"),
+            move |s| a.borrow_mut().push(format!("two: {}", s.row(0))),
+        )
+        .next("the next", move |s| {
+            b.borrow_mut().push(format!("next: {}", s.row(0)))
+        })
+        .at(
+            "four",
+            |s| s.contains("four"),
+            move |_| c.borrow_mut().push("four".to_owned()),
+        );
     steps.on(&backend);
 
     frame(&mut terminal, "one");
-    assert_eq!(steps.pending(), ["two", "the next", "four"], "no frame satisfies the first condition yet");
+    assert_eq!(
+        steps.pending(),
+        ["two", "the next", "four"],
+        "no frame satisfies the first condition yet"
+    );
     frame(&mut terminal, "two");
     frame(&mut terminal, "three");
     frame(&mut terminal, "four");
@@ -229,8 +284,11 @@ fn steps_finish_fails_naming_the_step_that_no_frame_reached() {
     steps.on(&backend);
     frame(&mut backend.terminal(), "one");
 
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| steps.finish())).expect_err("a step is pending");
-    let message = failure.downcast_ref::<String>().expect("a formatted message");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| steps.finish()))
+        .expect_err("a step is pending");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("a formatted message");
     assert!(message.contains("never"), "{message}");
 }
 
@@ -250,7 +308,11 @@ fn a_frame_hook_may_replace_itself_and_the_next_one_replaces_the_one_before() {
     frame(&mut terminal, "one");
     frame(&mut terminal, "two");
     frame(&mut terminal, "three");
-    assert_eq!(count.get(), 21, "the first hook once, then the one it set twice");
+    assert_eq!(
+        count.get(),
+        21,
+        "the first hook once, then the one it set twice"
+    );
 }
 
 // ---- shown rows and clicks
@@ -265,7 +327,9 @@ fn shown_rows_leave_out_the_escapes_of_a_link_and_the_cells_it_covers() {
         .draw(|f| {
             let buf = f.buffer_mut();
             buf.set_string(0, 0, "go ", Style::new());
-            buf[(3, 0)].set_symbol(linked).set_diff_option(ratatui::buffer::CellDiffOption::ForcedWidth(std::num::NonZeroU16::new(2).unwrap()));
+            buf[(3, 0)].set_symbol(linked).set_diff_option(
+                ratatui::buffer::CellDiffOption::ForcedWidth(std::num::NonZeroU16::new(2).unwrap()),
+            );
             buf.set_string(5, 0, " end", Style::new());
         })
         .expect("draw");
@@ -276,9 +340,17 @@ fn shown_rows_leave_out_the_escapes_of_a_link_and_the_cells_it_covers() {
 #[test]
 fn left_and_right_click_are_a_press_of_that_button_at_a_cell() {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
-    for (event, button) in [(left_click(3, 6), MouseButton::Left), (right_click(3, 6), MouseButton::Right)] {
-        let Event::Mouse(m) = event else { panic!("{event:?}") };
-        assert_eq!((m.kind, m.column, m.row), (MouseEventKind::Down(button), 3, 6));
+    for (event, button) in [
+        (left_click(3, 6), MouseButton::Left),
+        (right_click(3, 6), MouseButton::Right),
+    ] {
+        let Event::Mouse(m) = event else {
+            panic!("{event:?}")
+        };
+        assert_eq!(
+            (m.kind, m.column, m.row),
+            (MouseEventKind::Down(button), 3, 6)
+        );
     }
 }
 
@@ -294,7 +366,14 @@ fn script_event_is_there_at_the_poll_and_read_hands_it_out() {
 fn script_do_runs_between_two_polls_and_takes_no_time() {
     let (clock, ran) = (clock(), Rc::new(Cell::new(0)));
     let seen = ran.clone();
-    let mut script = Script::new(clock.clone(), [then(move || seen.set(seen.get() + 1)), Step::Idle, Step::Event(ch('x'))]);
+    let mut script = Script::new(
+        clock.clone(),
+        [
+            then(move || seen.set(seen.get() + 1)),
+            Step::Idle,
+            Step::Event(ch('x')),
+        ],
+    );
 
     assert_eq!(ran.get(), 0, "nothing runs before the first poll");
     assert!(!script.poll(Duration::from_millis(100)).unwrap());
@@ -307,7 +386,8 @@ fn script_do_runs_between_two_polls_and_takes_no_time() {
 fn script_that_is_over_fails_loudly_instead_of_spinning() {
     let mut script = Script::new(clock(), []);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| script.poll(Duration::ZERO)));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| script.poll(Duration::ZERO)));
 
     assert!(result.is_err());
 }
@@ -319,9 +399,13 @@ fn display_shows_what_a_terminal_made_of_it_drew_while_the_test_holds_a_handle()
     let display = Display::new(8, 2);
     let mut terminal = display.terminal();
 
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area()))
+        .expect("draw");
     assert_eq!(display.screen().rows(), ["one", ""]);
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area()))
+        .expect("draw");
     assert_eq!(display.screen().rows(), ["two", ""]);
 }
 
@@ -331,8 +415,12 @@ fn display_counts_a_flush_for_every_draw_even_one_that_changes_nothing() {
     let mut terminal = display.terminal();
     assert_eq!(display.flushes(), 0);
 
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
-    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area()))
+        .expect("draw");
+    terminal
+        .draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area()))
+        .expect("draw");
 
     assert_eq!(display.flushes(), 2);
 }

@@ -25,12 +25,25 @@ fn scripted(reply: Reply) -> (FakeRunner, tempfile::TempDir, Tmux) {
 #[test]
 fn a_call_is_tmux_u_l_socket_f_dev_null_and_the_args() {
     let (runner, _dir, tmux) = scripted(Reply::ok(""));
-    tmux.run(&strings(&["list-sessions", "-F", "#{session_id}"])).unwrap();
+    tmux.run(&strings(&["list-sessions", "-F", "#{session_id}"]))
+        .unwrap();
     let calls = runner.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].tool, "tmux");
     assert_eq!(calls[0].program, "tmux");
-    assert_eq!(calls[0].args, ["-u", "-L", "sock", "-f", "/dev/null", "list-sessions", "-F", "#{session_id}"]);
+    assert_eq!(
+        calls[0].args,
+        [
+            "-u",
+            "-L",
+            "sock",
+            "-f",
+            "/dev/null",
+            "list-sessions",
+            "-F",
+            "#{session_id}"
+        ]
+    );
 }
 
 #[test]
@@ -54,7 +67,13 @@ fn a_call_sets_tmux_tmpdir_when_the_tmux_has_one() {
     let (runner, dir, tmux) = scripted(Reply::ok(""));
     tmux.run(&strings(&["list-sessions"])).unwrap();
     let envs = runner.calls()[0].envs.clone();
-    assert!(envs.contains(&("TMUX_TMPDIR".to_owned(), Some(dir.path().display().to_string()))), "{envs:?}");
+    assert!(
+        envs.contains(&(
+            "TMUX_TMPDIR".to_owned(),
+            Some(dir.path().display().to_string())
+        )),
+        "{envs:?}"
+    );
 }
 
 #[test]
@@ -71,7 +90,11 @@ fn a_missing_tmux_tmpdir_is_refused_before_the_runner_is_called() {
     let tmux = Tmux::with_tmpdir("sock", &missing).with_runner(Arc::new(runner.clone()));
     let err = tmux.run(&strings(&["list-sessions"])).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
-    assert!(err.message().contains("is not a directory"), "{}", err.message());
+    assert!(
+        err.message().contains("is not a directory"),
+        "{}",
+        err.message()
+    );
     assert!(runner.calls().is_empty());
 }
 
@@ -79,10 +102,25 @@ fn a_missing_tmux_tmpdir_is_refused_before_the_runner_is_called() {
 fn a_scripted_non_zero_exit_is_tmux_failed_with_the_argv_and_the_stderr_tail() {
     let stderr: String = (1..=70).map(|n| format!("line {n}\n")).collect();
     let (_runner, _dir, tmux) = scripted(Reply::exit(1, "", &stderr));
-    let err = tmux.run(&strings(&["kill-session", "-t", "x"])).unwrap_err();
+    let err = tmux
+        .run(&strings(&["kill-session", "-t", "x"]))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(err.message(), "tmux kill-session failed: line 1");
-    assert_eq!(err.details()["argv"], json!(["tmux", "-u", "-L", "sock", "-f", "/dev/null", "kill-session", "-t", "x"]));
+    assert_eq!(
+        err.details()["argv"],
+        json!([
+            "tmux",
+            "-u",
+            "-L",
+            "sock",
+            "-f",
+            "/dev/null",
+            "kill-session",
+            "-t",
+            "x"
+        ])
+    );
     assert_eq!(err.details()["exit"], 1);
     let tail = err.details()["stderr"].as_str().unwrap();
     assert_eq!(tail.lines().count(), 60);
@@ -94,14 +132,22 @@ fn a_tmux_that_cannot_start_is_tmux_failed_with_the_io_error() {
     let (_runner, _dir, tmux) = scripted(Reply::io(ErrorKind::NotFound));
     let err = tmux.run(&strings(&["list-sessions"])).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
-    assert!(err.message().starts_with("Cannot run tmux: "), "{}", err.message());
+    assert!(
+        err.message().starts_with("Cannot run tmux: "),
+        "{}",
+        err.message()
+    );
     assert_eq!(err.details()["exit"], json!(null));
 }
 
 #[test]
 fn a_scripted_timeout_is_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("tmux", |_| true, Reply::ok("").takes(Duration::from_secs(10)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "tmux",
+        |_| true,
+        Reply::ok("").takes(Duration::from_secs(10)),
+    );
     let dir = tempfile::tempdir().unwrap();
     let tmux = Tmux::with_tmpdir("sock", dir.path()).with_runner(Arc::new(runner));
     let err = tmux.run(&strings(&["list-sessions"])).unwrap_err();

@@ -19,17 +19,17 @@ use super::row::PlanPrs;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
 use super::{Env, PollArgs};
+use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
-use crate::inbox::model as inbox;
 use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
-use crate::config::Tier;
+use crate::inbox::model as inbox;
 use crate::job::open::{self, Cause};
-use crate::plan::fingerprint::load_prs;
 use crate::lock;
-use crate::ports::Ports;
 use crate::output::Output;
+use crate::plan::fingerprint::load_prs;
 use crate::policy::Checks;
+use crate::ports::Ports;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
@@ -109,26 +109,60 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), excused_labels: policy.pr.excused_labels.clone(), excused: false, required: policy.pr.required_checks.clone() }),
-            Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
+            Ok(policy) => checks.push(Resolved {
+                plan: plan.clone(),
+                key: key.clone(),
+                checks: policy.pr.feedback.checks,
+                post_enabled: policy.pr.post.enabled,
+                human_gated: policy.pr.human_gated_contexts.clone(),
+                excused_labels: policy.pr.excused_labels.clone(),
+                excused: false,
+                required: policy.pr.required_checks.clone(),
+            }),
+            Err(error) => unresolved.push(Unresolved {
+                plan: plan.clone(),
+                pr: key.clone(),
+                number: row.number,
+                error,
+            }),
         }
     }
 
     // The stored open pull requests a search missed are read directly (§7.6 step 3): owned and listed by neither search,
     // or flagged for a search that did not list them. A search's absence deletes, moves and unflags nothing.
     let stored = env.store.read(pulls::stored_open)?;
-    let listed_in = |row: &pulls::PullRequest| search.prs.iter().find(|l| l.pr.repo == row.repo && l.pr.number == row.number);
+    let listed_in = |row: &pulls::PullRequest| {
+        search
+            .prs
+            .iter()
+            .find(|l| l.pr.repo == row.repo && l.pr.number == row.number)
+    };
     let candidates: Vec<&pulls::PullRequest> = stored
         .iter()
         .filter(|row| {
             let found = listed_in(row).map(|l| l.membership).unwrap_or_default();
             let is_owned = owned.iter().any(|(_, _, o)| o.id == row.id);
-            (is_owned && listed_in(row).is_none()) || (row.authored && !found.authored) || (row.review_requested && !found.review_requested)
+            (is_owned && listed_in(row).is_none())
+                || (row.authored && !found.authored)
+                || (row.review_requested && !found.review_requested)
         })
         .collect();
-    let keys: Vec<(String, i64)> = candidates.iter().map(|row| (row.repo.clone(), row.number)).collect();
-    let read = gh::read_absent(&*env.ports.runner, &root, &keys, &env.config.inbox.bot_reviewers)?;
-    let mut seen: Vec<Listed> = search.prs.iter().filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number))).cloned().collect();
+    let keys: Vec<(String, i64)> = candidates
+        .iter()
+        .map(|row| (row.repo.clone(), row.number))
+        .collect();
+    let read = gh::read_absent(
+        &*env.ports.runner,
+        &root,
+        &keys,
+        &env.config.inbox.bot_reviewers,
+    )?;
+    let mut seen: Vec<Listed> = search
+        .prs
+        .iter()
+        .filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number)))
+        .cloned()
+        .collect();
     for (row, read) in candidates.iter().zip(read) {
         let found = listed_in(row);
         match read {
@@ -145,7 +179,10 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
             Some(decided) => seen.push(decided),
             // Not found: an unowned row loses its flags and keeps its state; an owned row is unchanged.
             None if !owned.iter().any(|(_, _, o)| o.id == row.id) => {
-                seen.push(Listed { pr: row.polled()?, membership: Default::default() });
+                seen.push(Listed {
+                    pr: row.polled()?,
+                    membership: Default::default(),
+                });
             }
             None => seen.extend(found.cloned()),
         }
@@ -154,7 +191,12 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     // The comments of the owned open pull requests whose `updatedAt` moved or whose stored feedback holds an open item (§7.6 step 3a): one call, before anything is
     // written, so that a failed read writes nothing.
     let due = due_reads(&owned, &seen);
-    let reads = gh::read_comments(&*env.ports.runner, &root, &due, &env.config.inbox.bot_reviewers)?;
+    let reads = gh::read_comments(
+        &*env.ports.runner,
+        &root,
+        &due,
+        &env.config.inbox.bot_reviewers,
+    )?;
 
     // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
@@ -166,18 +208,33 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
             continue;
         }
-        let mine = owned.iter().filter(|(_, _, row)| row.repo == *repo && row.number == number).filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
+        let mine = owned
+            .iter()
+            .filter(|(_, _, row)| row.repo == *repo && row.number == number)
+            .filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
         // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a PR no Plan resolved a policy for has its repo's `required_checks` alone.
-        let mut policies: Vec<(bool, Vec<String>, Vec<String>)> =
-            mine.map(|r| (r.checks == Checks::Any, r.human_gated.clone(), r.required.clone())).collect();
+        let mut policies: Vec<(bool, Vec<String>, Vec<String>)> = mine
+            .map(|r| {
+                (
+                    r.checks == Checks::Any,
+                    r.human_gated.clone(),
+                    r.required.clone(),
+                )
+            })
+            .collect();
         if policies.is_empty() {
-            policies.push((false, Vec::new(), repo_required(&env.home, repo).unwrap_or_default())); // an unreadable policy is reported for the owned PRs above
+            policies.push((
+                false,
+                Vec::new(),
+                repo_required(&env.home, repo).unwrap_or_default(),
+            )); // an unreadable policy is reported for the owned PRs above
         }
-        let wanted = |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
-            ChecksSummary::Failed => *any,
-            ChecksSummary::Pending => !gated.is_empty(),
-            ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
-        };
+        let wanted =
+            |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
+                ChecksSummary::Failed => *any,
+                ChecksSummary::Pending => !gated.is_empty(),
+                ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
+            };
         if let Some((_, gated, required)) = policies.iter().find(wanted) {
             confirm.push((repo.clone(), number));
             lists.push((gated.clone(), required.clone()));
@@ -185,15 +242,26 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
-        if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
+        if let Some(i) = confirm
+            .iter()
+            .position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number)
+        {
             listed.pr.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
         }
     }
 
     for (plan, key, row) in &owned {
-        let Some(i) = confirm.iter().position(|(repo, number)| *repo == row.repo && *number == row.number) else { continue };
+        let Some(i) = confirm
+            .iter()
+            .position(|(repo, number)| *repo == row.repo && *number == row.number)
+        else {
+            continue;
+        };
         if let Some(r) = checks.iter_mut().find(|r| r.plan == *plan && r.key == *key) {
-            r.excused = confirmed[i].labels.iter().any(|l| r.excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
+            r.excused = confirmed[i]
+                .labels
+                .iter()
+                .any(|l| r.excused_labels.iter().any(|x| x.eq_ignore_ascii_case(l)));
         }
     }
 
@@ -203,18 +271,27 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
-    let dirty = !follows.is_empty() || env.store.read(|conn| {
-        for listed in &seen {
-            match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
-                Some(row) if row.holds(listed, read_of(&reads, listed))? => {}
-                _ => return Ok(true),
+    let dirty = !follows.is_empty()
+        || env.store.read(|conn| {
+            for listed in &seen {
+                match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
+                    Some(row) if row.holds(listed, read_of(&reads, listed))? => {}
+                    _ => return Ok(true),
+                }
             }
-        }
-        Ok(false)
-    })?;
+            Ok(false)
+        })?;
     let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, &ahead, open_tier))? } else { Outcome::default() };
+    let outcome = if dirty {
+        env.store.write(COMMAND, |tx| {
+            apply(
+                tx, &seen, &reads, &owned, &checks, &follows, &ahead, open_tier,
+            )
+        })?
+    } else {
+        Outcome::default()
+    };
 
     report_unresolved(&mut env, &unresolved)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
@@ -249,12 +326,22 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 /// descriptor stays open while waiting.
 pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use the lock {}: {what}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| failed(&e))?;
     let deadline = ports.clock.now() + LOCK_WAIT;
     loop {
         if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
@@ -263,7 +350,11 @@ pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, Cpd
         if ports.clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::LockTimeout,
-                format!("Another pr poll held {} for longer than {}s.", path.display(), LOCK_WAIT.as_secs()),
+                format!(
+                    "Another pr poll held {} for longer than {}s.",
+                    path.display(),
+                    LOCK_WAIT.as_secs()
+                ),
             )
             .with("lock", path.display().to_string())
             .with("waited_seconds", LOCK_WAIT.as_secs()));
@@ -293,13 +384,19 @@ fn apply(
             listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
         let polled = &listed.pr;
-        let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else { continue };
+        let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else {
+            continue;
+        };
         let after = &change.after;
         if after.state == "merged" {
             inbox::close_pr_ready(tx, &after.repo, after.number)?;
         }
         // A row only the comments read changed (its feedback and `updated_at`) is no change of the pull request.
-        if change.before.as_ref().is_none_or(|before| !before.holds(&listed, None).unwrap_or(false)) {
+        if change
+            .before
+            .as_ref()
+            .is_none_or(|before| !before.holds(&listed, None).unwrap_or(false))
+        {
             out.changed.push(json!({
                 "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
                 "checks": after.checks, "review_decision": after.review_decision,
@@ -319,17 +416,25 @@ fn apply(
                     out.feedback.push((plan.clone(), key.clone()));
                 }
                 if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
-                    out.update_jobs.push((plan.clone(), key.clone(), job, Cause::Conflict));
+                    out.update_jobs
+                        .push((plan.clone(), key.clone(), job, Cause::Conflict));
                 }
             }
         }
     }
     for follow in follows {
-        let is_ahead = ahead.iter().any(|a| a.plan == follow.plan && a.pr == follow.pr && a.ahead);
+        let is_ahead = ahead
+            .iter()
+            .any(|a| a.plan == follow.plan && a.pr == follow.pr && a.ahead);
         let (base_changed, job) = follow_base(tx, follow, is_ahead, open_tier)?;
         out.base_changed.push(base_changed);
         if let Some(job) = job {
-            out.update_jobs.push((follow.plan.clone(), follow.pr.clone(), job, Cause::BaseMerged));
+            out.update_jobs.push((
+                follow.plan.clone(),
+                follow.pr.clone(),
+                job,
+                Cause::BaseMerged,
+            ));
         }
     }
     Ok(out)
@@ -337,25 +442,47 @@ fn apply(
 
 /// The comments read of the pull request `listed`, if this poll made one.
 fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
-    reads.iter().find(|r| r.repo == listed.pr.repo && r.number == listed.pr.number)
+    reads
+        .iter()
+        .find(|r| r.repo == listed.pr.repo && r.number == listed.pr.number)
 }
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
 /// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR whose listing has no base is not followed.
 /// The base PR of the old base, the PR of the new one and the repo's default branch are read here, so the write
 /// transaction queues the update Job a base PR's merge needs in the same transaction as the repoint.
-fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> Result<Vec<Follow>, CpdError> {
-    let mut stored = conn.prepare("SELECT base, repo FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+fn follows(
+    conn: &rusqlite::Connection,
+    owned: &[Owned],
+    listed: &[Listed],
+) -> Result<Vec<Follow>, CpdError> {
+    let mut stored = conn
+        .prepare("SELECT base, repo FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
     let base_pr = |repo: &str, branch: &str| -> Result<Option<String>, CpdError> {
         Ok(conn
-            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, branch], |r| r.get(0))
+            .query_row(
+                "SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2",
+                [repo, branch],
+                |r| r.get(0),
+            )
             .optional()?)
     };
     let mut found = Vec::new();
     for (plan, key, row) in owned {
-        let Some(listing) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)) else { continue };
-        let Some(to) = listing.pr.base_ref.as_ref() else { continue };
-        let stored: Option<(String, String)> = stored.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some(listing) = listed
+            .iter()
+            .find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number))
+        else {
+            continue;
+        };
+        let Some(to) = listing.pr.base_ref.as_ref() else {
+            continue;
+        };
+        let stored: Option<(String, String)> = stored
+            .query_row([plan.as_str(), key.as_str()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
         if let Some((from, repo)) = stored.filter(|(from, _)| from != to) {
             found.push(Follow {
                 plan: plan.clone(),
@@ -378,8 +505,23 @@ fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> R
 /// When the new base is the default branch of a base PR's merge and `ahead` says the Lead Branch lacks commits of it
 /// without a conflict, the PR's `update` Job is queued in the same transaction (§3.7 E5, hs-d794). Returns the Event's
 /// data and the Job's key when one was queued.
-fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> Result<(Value, Option<JobKey>), CpdError> {
-    let Follow { plan, pr, from, to, number, url, from_pr, to_pr, default_branch } = follow;
+fn follow_base(
+    tx: &WriteTxn<'_>,
+    follow: &Follow,
+    ahead: bool,
+    tier: Tier,
+) -> Result<(Value, Option<JobKey>), CpdError> {
+    let Follow {
+        plan,
+        pr,
+        from,
+        to,
+        number,
+        url,
+        from_pr,
+        to_pr,
+        default_branch,
+    } = follow;
     let moved = tx.execute(
         "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
         [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
@@ -388,19 +530,33 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> R
         return Err(cas_lost(plan, pr));
     }
     let reason = match (from_pr, to_pr) {
-        (Some(base), None) => format!("its base PR {base} merged and GitHub repointed the pull request"),
+        (Some(base), None) => {
+            format!("its base PR {base} merged and GitHub repointed the pull request")
+        }
         _ => "the base changed on GitHub".to_owned(),
     };
     let text = format!(
         "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
          Read it with cpd plan show --plan {plan}."
     );
-    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
+    let event = NewEvent::pr_base_changed(
+        text,
+        pr,
+        (from, to),
+        (from_pr.as_deref(), to_pr.as_deref()),
+        COMMAND_BY,
+        BasePull::Of(*number, url),
+    );
     append(tx, event.plan(plan.clone()))?;
     // A base PR's merge repoints the pull request to the default branch; with that branch ahead and no conflict, the
     // PR's update Job is the cause (§3.7 E5, hs-d794). A hand retarget to another branch queues nothing.
-    let base_merged = default_branch.as_deref() == Some(to.as_str()) && from_pr.is_some() && to_pr.is_none();
-    let job = if base_merged { queue_update_for(tx, plan, pr, Trigger::BaseMerged, ahead, tier)? } else { None };
+    let base_merged =
+        default_branch.as_deref() == Some(to.as_str()) && from_pr.is_some() && to_pr.is_none();
+    let job = if base_merged {
+        queue_update_for(tx, plan, pr, Trigger::BaseMerged, ahead, tier)?
+    } else {
+        None
+    };
     Ok((json!({"plan": plan, "pr": pr, "from": from, "to": to}), job))
 }
 
@@ -411,16 +567,25 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> R
 fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead>, CpdError> {
     let mut out = Vec::new();
     for follow in follows {
-        if !(follow.default_branch.as_deref() == Some(follow.to.as_str()) && follow.from_pr.is_some() && follow.to_pr.is_none()) {
+        if !(follow.default_branch.as_deref() == Some(follow.to.as_str())
+            && follow.from_pr.is_some()
+            && follow.to_pr.is_none())
+        {
             continue;
         }
         let row: Option<(String, String)> = conn
-            .query_row("SELECT repo, lead_branch FROM prs WHERE plan = ?1 AND key = ?2", [follow.plan.as_str(), follow.pr.as_str()], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT repo, lead_branch FROM prs WHERE plan = ?1 AND key = ?2",
+                [follow.plan.as_str(), follow.pr.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .optional()?;
         let Some((repo, lead)) = row else { continue };
-        out.push(Ahead { plan: follow.plan.clone(), pr: follow.pr.clone(), ahead: base_ahead(Path::new(&repo), &follow.to, &lead) });
+        out.push(Ahead {
+            plan: follow.plan.clone(),
+            pr: follow.pr.clone(),
+            ahead: base_ahead(Path::new(&repo), &follow.to, &lead),
+        });
     }
     Ok(out)
 }
@@ -446,16 +611,32 @@ fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&
 
 /// `required_checks` of `repo`'s own policy (hs-d743): resolved with the owner's file, or, when the owner has none, from the repo's
 /// file alone.
-pub(super) fn repo_required(home: &crate::home::CpdHome, repo: &str) -> Result<Vec<String>, CpdError> {
-    use crate::policy::{Domain, PolicyKey, ScopeKind, Source, load_scope_file, repo_path, resolve_unowned_row};
-    let bad = || CpdError::new(ErrorCode::Usage, format!("{repo:?} is not an owner/name repo.")).with("repo", repo);
+pub(super) fn repo_required(
+    home: &crate::home::CpdHome,
+    repo: &str,
+) -> Result<Vec<String>, CpdError> {
+    use crate::policy::{
+        Domain, PolicyKey, ScopeKind, Source, load_scope_file, repo_path, resolve_unowned_row,
+    };
+    let bad = || {
+        CpdError::new(
+            ErrorCode::Usage,
+            format!("{repo:?} is not an owner/name repo."),
+        )
+        .with("repo", repo)
+    };
     let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
     let (owner, name) = (OwnerLogin::parse(owner)?, RepoName::parse(name)?);
     let resolved = resolve_unowned_row(home, &PolicyKey::Repo(owner.clone(), name.clone()))?;
     if resolved.sources.get(Domain::Pr).source != Source::DefaultNoOwnerFile {
         return Ok(resolved.policy.pr.required_checks);
     }
-    Ok(load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?.and_then(|(_, scope)| scope.pr).and_then(|pr| pr.required_checks).unwrap_or_default())
+    Ok(
+        load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?
+            .and_then(|(_, scope)| scope.pr)
+            .and_then(|pr| pr.required_checks)
+            .unwrap_or_default(),
+    )
 }
 
 /// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
@@ -486,7 +667,12 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
         for failed in unresolved {
             let latest: Option<String> = stmt
                 .query_row(
-                    [failed.plan.as_str(), COMMAND, failed.pr.as_str(), ErrorCode::CleanupFailed.as_str()],
+                    [
+                        failed.plan.as_str(),
+                        COMMAND,
+                        failed.pr.as_str(),
+                        ErrorCode::CleanupFailed.as_str(),
+                    ],
                     |r| r.get(0),
                 )
                 .optional()?;
@@ -518,16 +704,44 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 }
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, change: &Change) -> Result<bool, CpdError> {
+fn tell(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &PrKey,
+    resolved: &Resolved,
+    change: &Change,
+) -> Result<bool, CpdError> {
     let open = change.after.feedback.as_deref().unwrap_or_default();
-    let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
-    let post = PostFacts { enabled: resolved.post_enabled, posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some() };
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, resolved.checks, &new, post, Excused(resolved.excused));
+    let new = comments::new_items(
+        change.before.as_ref().and_then(|b| b.feedback.as_deref()),
+        open,
+    );
+    let post = PostFacts {
+        enabled: resolved.post_enabled,
+        posted: posts::find(tx, plan.as_str(), key.as_str())?.is_some(),
+    };
+    let reasons: Vec<Reason> = pulls::attention(
+        change.before.as_ref(),
+        &change.after,
+        resolved.checks,
+        &new,
+        post,
+        Excused(resolved.excused),
+    );
     if reasons.is_empty() {
         return Ok(false);
     }
-    let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons, (new.len(), open.len()));
-    append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
+    let text = feedback::text(
+        plan.as_str(),
+        key.as_str(),
+        change.after.number,
+        &reasons,
+        (new.len(), open.len()),
+    );
+    append(
+        tx,
+        feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()),
+    )?;
     Ok(true)
 }
 
@@ -535,17 +749,33 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, resolved: &Resolved, chan
 /// transition: `unknown` is no conflict and a base that merely moved, `merge_state` `behind`, is no cause), the row's `state` is `open`
 /// and the Plan is not archived, the PR's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
 /// PR's policy. The Job's key when one was inserted.
-fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change, tier: Tier) -> Result<Option<JobKey>, CpdError> {
-    let became = change.after.mergeable == "conflicting" && change.before.as_ref().is_none_or(|b| b.mergeable != "conflicting");
+fn update_for_conflict(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &PrKey,
+    change: &Change,
+    tier: Tier,
+) -> Result<Option<JobKey>, CpdError> {
+    let became = change.after.mergeable == "conflicting"
+        && change
+            .before
+            .as_ref()
+            .is_none_or(|b| b.mergeable != "conflicting");
     if !became || change.after.state != "open" {
         return Ok(None);
     }
-    let archived: bool = tx.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    let archived: bool = tx.query_row(
+        "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
     if archived {
         return Ok(None);
     }
     let prs = load_prs(tx, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key == *key) else { return Ok(None) };
+    let Some(pr) = prs.iter().find(|p| p.key == *key) else {
+        return Ok(None);
+    };
     open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
 }
 
@@ -565,26 +795,48 @@ pub(super) enum Trigger {
 /// or `running`. `ahead` is read only for [`Trigger::BaseMerged`]: true when the default branch holds commits the
 /// Lead Branch lacks without a conflict; false when it is already contained, which queues nothing. A Plan that is
 /// archived or a PR that is not `open` queues nothing. The Job's key when one was inserted.
-pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, trigger: Trigger, ahead: bool, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+pub(super) fn queue_update_for(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &PrKey,
+    trigger: Trigger,
+    ahead: bool,
+    tier: Tier,
+) -> Result<Option<JobKey>, CpdError> {
     let cause = match trigger {
         #[cfg(test)]
         Trigger::Conflict => Cause::Conflict,
         Trigger::BaseMerged if ahead => Cause::BaseMerged,
         Trigger::BaseMerged => return Ok(None),
     };
-    let archived: bool = tx.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    let archived: bool = tx.query_row(
+        "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
     if archived {
         return Ok(None);
     }
     let prs = load_prs(tx, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key == *key).filter(|p| p.status == "open") else { return Ok(None) };
+    let Some(pr) = prs
+        .iter()
+        .find(|p| p.key == *key)
+        .filter(|p| p.status == "open")
+    else {
+        return Ok(None);
+    };
     open::queue_update(tx, plan, pr, tier, COMMAND_BY, cause)
 }
 
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
 /// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
-pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
+pub(super) fn merge(
+    tx: &WriteTxn<'_>,
+    id: &PlanId,
+    key: &PrKey,
+    pull: &pulls::PullRequest,
+) -> Result<bool, CpdError> {
     let moved = tx.execute(
         "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND key = ?2 AND status = 'open'",
@@ -595,12 +847,24 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
     }
     super::cancel::cancel_jobs_with(tx, id, key, &["draft"], "pr merged", "was merged")?;
     super::reactions::queue_merge(tx, id.as_str(), key.as_str())?;
-    super::jira_sync::queue(tx, id.as_str(), key.as_str(), super::jira_sync::Target::Done)?;
+    super::jira_sync::queue(
+        tx,
+        id.as_str(),
+        key.as_str(),
+        super::jira_sync::Target::Done,
+    )?;
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-    append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
+    append(
+        tx,
+        NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref())
+            .plan(id.clone()),
+    )?;
     // The last PR to merge ends the Plan (§3.1).
-    let unmerged: i64 =
-        tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+    let unmerged: i64 = tx.query_row(
+        "SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
+        [id.as_str()],
+        |r| r.get(0),
+    )?;
     if unmerged > 0 {
         return Ok(false);
     }
@@ -614,7 +878,8 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
         return Err(cas_lost(id, key));
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
-    let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
+    let text =
+        format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
     append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
@@ -622,14 +887,20 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
 /// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
 /// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
 /// its own Plan, so that engine E7 of the same tick already sees the new base.
-pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub(super) fn unstack_stacked_on(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    key: &PrKey,
+) -> Result<(), CpdError> {
     let mut stmt = tx.prepare(
         "SELECT r.plan, r.key FROM prs r, prs m
           WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
           ORDER BY r.plan, r.key",
     )?;
     let stacked = stmt
-        .query_map([plan.as_str(), key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .query_map([plan.as_str(), key.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (plan, key) in stacked {
         unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
@@ -652,7 +923,12 @@ fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
 /// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key
 /// order: `merged_at` is the moment the PR was seen merged, and for `just`, the
 /// one this poll merged, the time `gh` reports when it does.
-fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&str>) -> Result<Vec<serde_json::Value>, CpdError> {
+fn merged_prs(
+    tx: &WriteTxn<'_>,
+    id: &PlanId,
+    just: &PrKey,
+    reported: Option<&str>,
+) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
@@ -666,9 +942,12 @@ fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&st
 }
 
 fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
-    CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."))
-        .with("plan", id.as_str())
-        .with("pr", key.as_str())
+    CpdError::new(
+        ErrorCode::CasLost,
+        format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."),
+    )
+    .with("plan", id.as_str())
+    .with("pr", key.as_str())
 }
 
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or

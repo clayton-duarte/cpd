@@ -29,7 +29,11 @@ fn fixture() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
-    let mut f = Fx { _dir: dir, home, store };
+    let mut f = Fx {
+        _dir: dir,
+        home,
+        store,
+    };
     f.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -85,9 +89,21 @@ impl Fx {
 
     /// A Job of `kind` and `status` of the PR `p<n>` of Plan `pay`.
     fn job(&mut self, n: i64, key: &str, kind: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
-        let sha = if status == "merged" { "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" } else { "NULL" };
-        let (reason, requested) = if status == "cancelled" { ("'t'", format!("'{T}'")) } else { ("NULL", "NULL".to_owned()) };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
+        let sha = if status == "merged" {
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+        } else {
+            "NULL"
+        };
+        let (reason, requested) = if status == "cancelled" {
+            ("'t'", format!("'{T}'"))
+        } else {
+            ("NULL", "NULL".to_owned())
+        };
         self.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
@@ -103,13 +119,19 @@ impl Fx {
 
     fn rows(&mut self) -> Vec<Condition> {
         let all = conditions_with(&mut self.store, &self.home, NOW, 20, 1, None).unwrap();
-        all.into_iter().filter(|c| c.kind == Kind::PrReady).collect()
+        all.into_iter()
+            .filter(|c| c.kind == Kind::PrReady)
+            .collect()
     }
 
     /// The one row of pull request `n`.
     fn row(&mut self, n: i64) -> Condition {
         let subject = format!("pr:acme/shop#{n}");
-        let mut found: Vec<Condition> = self.rows().into_iter().filter(|c| c.subject == subject).collect();
+        let mut found: Vec<Condition> = self
+            .rows()
+            .into_iter()
+            .filter(|c| c.subject == subject)
+            .collect();
         assert_eq!(found.len(), 1, "{subject}: {found:?}");
         found.remove(0)
     }
@@ -118,13 +140,20 @@ impl Fx {
     fn status(&mut self, n: i64) -> (Urgency, String) {
         let c = self.row(n);
         let row1 = c.label.split('\n').next().unwrap();
-        let status = row1.strip_prefix(&format!("shop#{n} ")).unwrap_or_else(|| panic!("label {:?}", c.label)).to_owned();
+        let status = row1
+            .strip_prefix(&format!("shop#{n} "))
+            .unwrap_or_else(|| panic!("label {:?}", c.label))
+            .to_owned();
         (c.urgency, status)
     }
 }
 
 fn is(f: &mut Fx, n: i64, urgency: Urgency, status: &str) {
-    assert_eq!(f.status(n), (urgency, status.to_owned()), "pull request {n}");
+    assert_eq!(
+        f.status(n),
+        (urgency, status.to_owned()),
+        "pull request {n}"
+    );
 }
 
 fn bot_comment() -> String {
@@ -140,13 +169,19 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
     let c = f.row(3);
     assert_eq!((c.urgency, c.label.as_str()), (White, "shop#3 draft\nT"));
     assert_eq!(c.subject, "pr:acme/shop#3");
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/shop/pull/3")
+    );
 }
 
 #[test]
 fn an_authored_stacked_pr_is_a_white_stacked_row() {
     let mut f = fixture();
-    f.pr(1, "base_ref = 'feature', default_branch = 'main', review_decision = 'approved'");
+    f.pr(
+        1,
+        "base_ref = 'feature', default_branch = 'main', review_decision = 'approved'",
+    );
     f.pr(2, "base_ref = NULL, default_branch = NULL");
     is(&mut f, 1, White, "stacked pr pending base merge");
     is(&mut f, 2, Cyan, "waiting");
@@ -157,7 +192,10 @@ fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
     let mut f = fixture();
     f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty'");
     f.pr(2, "checks = 'failed', merge_state = 'blocked'");
-    f.pr(3, "review_decision = 'changes_requested', merge_state = 'blocked'");
+    f.pr(
+        3,
+        "review_decision = 'changes_requested', merge_state = 'blocked'",
+    );
     is(&mut f, 1, Red, "conflict");
     is(&mut f, 2, Red, "failing");
     is(&mut f, 3, Red, "changes requested");
@@ -167,7 +205,10 @@ fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
 fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested() {
     let mut f = fixture();
     f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty', checks = 'failed', review_decision = 'changes_requested'");
-    f.pr(2, "merge_state = 'blocked', checks = 'failed', review_decision = 'changes_requested'");
+    f.pr(
+        2,
+        "merge_state = 'blocked', checks = 'failed', review_decision = 'changes_requested'",
+    );
     is(&mut f, 1, Red, "conflict");
     is(&mut f, 2, Red, "failing");
 }
@@ -178,9 +219,21 @@ type JobKindStatus<'a> = (&'a str, &'a str);
 #[test]
 fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_live() {
     let broken = [
-        ("mergeable = 'conflicting', merge_state = 'dirty'", "conflict", "updating"),
-        ("checks = 'failed', merge_state = 'blocked'", "failing", "fixing"),
-        ("review_decision = 'changes_requested', merge_state = 'blocked'", "changes requested", "fixing"),
+        (
+            "mergeable = 'conflicting', merge_state = 'dirty'",
+            "conflict",
+            "updating",
+        ),
+        (
+            "checks = 'failed', merge_state = 'blocked'",
+            "failing",
+            "fixing",
+        ),
+        (
+            "review_decision = 'changes_requested', merge_state = 'blocked'",
+            "changes requested",
+            "fixing",
+        ),
     ];
     // (Lead working, a Job of (kind, status), handled)
     let cases: [(bool, Option<JobKindStatus>, bool); 10] = [
@@ -236,7 +289,10 @@ fn an_unposted_owned_postable_pr_of_a_post_owner_is_a_yellow_ready_for_review_ro
     f.pr(1, "checks = 'passed'");
     f.own("pay", 1);
     let c = f.row(1);
-    assert_eq!((c.urgency, c.label.as_str()), (Yellow, "shop#1 ready for user review\nT"));
+    assert_eq!(
+        (c.urgency, c.label.as_str()),
+        (Yellow, "shop#1 ready for user review\nT")
+    );
     assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
     assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
     assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
@@ -275,7 +331,11 @@ fn ready_for_review_needs_every_condition() {
     }
 
     // Not postable: comments unread, an open bot comment, no green checks.
-    for set in ["feedback = NULL".to_owned(), format!("feedback = '{}'", bot_comment()), "checks = 'none'".to_owned()] {
+    for set in [
+        "feedback = NULL".to_owned(),
+        format!("feedback = '{}'", bot_comment()),
+        "checks = 'none'".to_owned(),
+    ] {
         let mut f = fixture();
         f.policy(POST);
         f.pr(1, "checks = 'passed'");
@@ -341,8 +401,14 @@ fn an_authored_pr_that_matches_no_other_state_is_a_cyan_waiting_row() {
 fn the_states_take_the_documented_precedence() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "draft = 1, merge_state = 'draft', mergeable = 'conflicting'");
-    f.pr(2, "mergeable = 'conflicting', merge_state = 'dirty', base_ref = 'feature'");
+    f.pr(
+        1,
+        "draft = 1, merge_state = 'draft', mergeable = 'conflicting'",
+    );
+    f.pr(
+        2,
+        "mergeable = 'conflicting', merge_state = 'dirty', base_ref = 'feature'",
+    );
     f.pr(3, "base_ref = 'feature', checks = 'pending'");
     f.pr(4, "checks = 'pending', review_decision = 'approved'");
     f.pr(5, "review_decision = 'approved'");
@@ -391,13 +457,19 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     let red_after = f.row(1);
     assert_eq!((red.urgency, red_after.urgency), (Cyan, Red)); // the Lead working, then idle
     for (c, n) in [(red_after, 1), (f.row(2), 2)] {
-        assert_eq!(c.url.as_deref(), Some(format!("https://github.com/acme/shop/pull/{n}").as_str()));
+        assert_eq!(
+            c.url.as_deref(),
+            Some(format!("https://github.com/acme/shop/pull/{n}").as_str())
+        );
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
         assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
     }
     let c = f.row(3);
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/shop/pull/3")
+    );
     assert_eq!((c.plan, c.context, c.session), (None, None, None));
 }
 
@@ -429,7 +501,10 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
 fn a_pr_that_is_not_open_or_not_authored_has_no_row() {
     let mut f = fixture();
     f.pr(1, "authored = 0");
-    f.pr(2, "state = 'merged', merged_at = '2026-01-01T00:00:00.000Z'");
+    f.pr(
+        2,
+        "state = 'merged', merged_at = '2026-01-01T00:00:00.000Z'",
+    );
     f.pr(3, "state = 'closed'");
     assert!(f.rows().is_empty(), "{:?}", f.rows());
 }
@@ -458,7 +533,10 @@ fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
     f.own("pay", 1);
     is(&mut f, 1, Yellow, "ready for user review");
     // With an open bot comment it is not postable, so it stays stacked.
-    f.sql(&format!("UPDATE pull_requests SET feedback = '{}' WHERE number = 1", bot_comment()));
+    f.sql(&format!(
+        "UPDATE pull_requests SET feedback = '{}' WHERE number = 1",
+        bot_comment()
+    ));
     is(&mut f, 1, White, "stacked pr pending base merge");
 }
 
@@ -466,7 +544,10 @@ fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
 fn stack_review_a_posted_stacked_pr_is_in_review() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'passed', review_decision = 'none'"));
+    f.pr(
+        1,
+        &format!("{STACKED}, checks = 'passed', review_decision = 'none'"),
+    );
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, Cyan, "waiting for peer review");
@@ -491,7 +572,10 @@ fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_sta
 fn stack_review_a_posted_approved_stacked_pr_is_stacked() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"));
+    f.pr(
+        1,
+        &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"),
+    );
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, White, "stacked pr pending base merge");

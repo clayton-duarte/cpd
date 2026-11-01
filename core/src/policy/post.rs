@@ -23,14 +23,24 @@ pub(super) fn check(set: &PostSet) -> Result<(), (&'static str, String)> {
         let ok = channel.is_empty()
             || (channel.len() >= 9
                 && channel.starts_with('C')
-                && channel[1..].bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()));
+                && channel[1..]
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()));
         if !ok {
-            return Err(("channel", format!("`{channel}` is not empty or a Slack channel id (C followed by 8 or more capitals or digits)")));
+            return Err((
+                "channel",
+                format!(
+                    "`{channel}` is not empty or a Slack channel id (C followed by 8 or more capitals or digits)"
+                ),
+            ));
         }
     }
     if let Some(template) = &set.template {
         if template.chars().count() > TEMPLATE_MAX {
-            return Err(("template", format!("the template is longer than {TEMPLATE_MAX} characters")));
+            return Err((
+                "template",
+                format!("the template is longer than {TEMPLATE_MAX} characters"),
+            ));
         }
         let out = render_post(template, PROBE_TITLE, PROBE_URL).map_err(|why| ("template", why))?;
         if !out.contains(PROBE_URL) {
@@ -40,9 +50,16 @@ pub(super) fn check(set: &PostSet) -> Result<(), (&'static str, String)> {
     if let Some(reaction) = &set.merged_reaction {
         let ok = reaction.is_empty()
             || ((1..=100).contains(&reaction.len())
-                && reaction.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'+' | b'-')));
+                && reaction.bytes().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'+' | b'-')
+                }));
         if !ok {
-            return Err(("merged_reaction", format!("`{reaction}` is not empty or a Slack emoji name without colons ([a-z0-9_+-], 1 to 100)")));
+            return Err((
+                "merged_reaction",
+                format!(
+                    "`{reaction}` is not empty or a Slack emoji name without colons ([a-z0-9_+-], 1 to 100)"
+                ),
+            ));
         }
     }
     Ok(())
@@ -54,12 +71,18 @@ mod tests {
 
     #[test]
     fn title_and_url_are_the_variables() {
-        assert_eq!(render_post("{{ title }}\n{{ url }}", "T", "U").unwrap(), "T\nU");
+        assert_eq!(
+            render_post("{{ title }}\n{{ url }}", "T", "U").unwrap(),
+            "T\nU"
+        );
     }
 
     #[test]
     fn nothing_is_escaped() {
-        assert_eq!(render_post("{{ title }} {{ url }}", "a & <b>", "u").unwrap(), "a & <b> u");
+        assert_eq!(
+            render_post("{{ title }} {{ url }}", "a & <b>", "u").unwrap(),
+            "a & <b> u"
+        );
     }
 
     #[test]
@@ -69,7 +92,12 @@ mod tests {
 
     #[test]
     fn a_template_without_url_is_refused() {
-        let set = PostSet { enabled: None, channel: None, template: Some("{{ title }}".to_owned()), merged_reaction: None };
+        let set = PostSet {
+            enabled: None,
+            channel: None,
+            template: Some("{{ title }}".to_owned()),
+            merged_reaction: None,
+        };
         assert_eq!(check(&set).unwrap_err().0, "template");
     }
 }

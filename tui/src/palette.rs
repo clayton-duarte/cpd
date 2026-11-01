@@ -105,7 +105,9 @@ fn index_color(i: u8) -> Color {
 
 /// The index 0..=15 of a colour made by [`index_color`].
 fn color_index(c: Color) -> u8 {
-    (1..=15).find(|&i| index_color(i) == c).expect("a palette colour has an index")
+    (1..=15)
+        .find(|&i| index_color(i) == c)
+        .expect("a palette colour has an index")
 }
 
 /// The spec's index of a meaning (`pi/lib/pill-spec.json`, `meanings`).
@@ -187,7 +189,10 @@ pub fn selected() -> Style {
 
 /// A block (a pill, a selection): reverse video, the colour as foreground over the terminal's own background.
 fn block(c: Color) -> Style {
-    Style::new().fg(c).bg(Color::Reset).add_modifier(Modifier::REVERSED)
+    Style::new()
+        .fg(c)
+        .bg(Color::Reset)
+        .add_modifier(Modifier::REVERSED)
 }
 
 /// The selected tree row's name: blue text (hs-d351, hs-d534), where [`selected`] is the block of a cursor.
@@ -230,7 +235,11 @@ pub fn toggle_text() -> Style {
 
 /// The input box's border (hs-d575, hs-d576): colour 15 unfocused, bright blue 12 focused.
 pub fn input_border(focused: bool) -> Style {
-    Style::new().fg(if focused { index_color(12) } else { index_color(15) })
+    Style::new().fg(if focused {
+        index_color(12)
+    } else {
+        index_color(15)
+    })
 }
 
 /// Muted text and lines (separators, ages, times, scroll cues, placeholders, rails), colour 8; it replaces `DIM`.
@@ -319,7 +328,8 @@ pub(crate) mod check {
     /// The cell is part of a blue block: colour 4, reversed (a cursor or a selection).
     pub(crate) fn is_selected(cell: &Cell) -> bool {
         let block = super::selected();
-        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg) && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
+        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg)
+            && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
     }
 
     /// The cell's text is muted, colour 8.
@@ -402,7 +412,12 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
 /// U+E3CF..U+E3D4 waxing gibbous 1-6, U+E3D5 full, U+E3D6..U+E3DB waning gibbous 1-6, U+E3DC third quarter, U+E3DD..U+E3E2 waning
 /// crescent 1-6: the one loader of pi and the cockpit (hs-d616), one per [`frame`] of [`FRAME_MS`]. The working dot and a running
 /// Job's pill show one per frame; the needs-you dot is the first (the filled disc), the idle dot the one at [`HOLLOW`] (the hollow ring).
-pub const SPINNER: [&str; 28] = ["\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}", "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}", "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}", "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}"];
+pub const SPINNER: [&str; 28] = [
+    "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}", "\u{E3CE}",
+    "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}", "\u{E3D5}", "\u{E3D6}",
+    "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}", "\u{E3DC}", "\u{E3DD}", "\u{E3DE}",
+    "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
+];
 
 /// The index of the hollow ring (U+E3D5, `moon_alt_full`) in [`SPINNER`]; frame 0 (U+E3E3, `moon_alt_new`) is the filled disc.
 const HOLLOW: usize = 14;
@@ -472,7 +487,9 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
             };
             Span::styled(ITEM_PR_READY, fg_clickable(meaning))
         }
-        Item::ReviewRequested => Span::styled(ITEM_REVIEW_REQUESTED, fg_clickable(Meaning::External)),
+        Item::ReviewRequested => {
+            Span::styled(ITEM_REVIEW_REQUESTED, fg_clickable(Meaning::External))
+        }
         _ => tier_span(urgency),
     }
 }
@@ -500,7 +517,11 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Cyan => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working(work) => (
-            SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
+            SPINNER[if archived {
+                HOLLOW
+            } else {
+                frame % SPINNER.len()
+            }],
             match work {
                 Some(Work::Planning) => fg_clickable(Meaning::Planning),
                 Some(Work::Dispatch) => fg_clickable(Meaning::InProgress),
@@ -508,7 +529,14 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
                 None => clickable_text(),
             },
         ),
-        Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
+        Dot::Fixing => (
+            SPINNER[if archived {
+                HOLLOW
+            } else {
+                frame % SPINNER.len()
+            }],
+            fg_clickable(Meaning::Failed),
+        ),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
         Dot::Stopped => (STOPPED, muted_text()),
@@ -544,7 +572,11 @@ pub fn pr_state(state: PrState) -> Meaning {
 
 /// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534, pro-d118), else colourless.
 pub fn pr_open(clean: bool) -> Meaning {
-    if clean { Meaning::Review } else { Meaning::NotStarted }
+    if clean {
+        Meaning::Review
+    } else {
+        Meaning::NotStarted
+    }
 }
 
 /// A closed-unmerged pull request whose Plan's Lead has an open `dialog` item (it asks the User about it), or that no Plan
@@ -552,7 +584,11 @@ pub fn pr_open(clean: bool) -> Meaning {
 pub const PR_CLOSED_ASKED: (&str, Meaning) = ("closed", Meaning::Failed);
 
 /// The PR states the legend lists, with the name shown.
-pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
+pub const PR_LEGEND: [(&str, PrState); 3] = [
+    ("open", PrState::Open),
+    ("merged", PrState::Merged),
+    ("closed", PrState::Closed),
+];
 
 /// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
 /// meaning: the plan view's PR box title and the legend's PR states.
@@ -587,8 +623,12 @@ pub fn checks(c: Checks) -> (&'static str, Meaning) {
 }
 
 /// The checks the legend lists, with the name shown.
-pub const CHECKS_LEGEND: [(&str, Checks); 4] =
-    [("passed", Checks::Passed), ("failed", Checks::Failed), ("pending", Checks::Pending), ("none", Checks::None)];
+pub const CHECKS_LEGEND: [(&str, Checks); 4] = [
+    ("passed", Checks::Passed),
+    ("failed", Checks::Failed),
+    ("pending", Checks::Pending),
+    ("none", Checks::None),
+];
 
 #[cfg(test)]
 mod colours;
@@ -621,14 +661,35 @@ mod tests {
     fn the_notice_meaning_is_cyan_6_and_bright_14_on_a_clickable_row() {
         assert_eq!(color(Meaning::Notice), Color::Cyan);
         assert_eq!(color_clickable(Meaning::Notice), Color::LightCyan, "14");
-        assert_eq!(selected().fg, Some(numbered::C4), "the focus block is still 4");
-        assert_eq!(selected().bg, Some(Color::Reset), "a block is reversed over the terminal's background");
-        assert_eq!(tier_span(Urgency::Cyan), Span::styled(TIER_CYAN, fg_clickable(Meaning::Notice)));
-        assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::External)));
+        assert_eq!(
+            selected().fg,
+            Some(numbered::C4),
+            "the focus block is still 4"
+        );
+        assert_eq!(
+            selected().bg,
+            Some(Color::Reset),
+            "a block is reversed over the terminal's background"
+        );
+        assert_eq!(
+            tier_span(Urgency::Cyan),
+            Span::styled(TIER_CYAN, fg_clickable(Meaning::Notice))
+        );
+        assert_eq!(
+            tier_span(Urgency::Blue),
+            Span::styled(TIER_BLUE, fg_clickable(Meaning::External))
+        );
         assert_eq!(color(Meaning::External), Color::Blue);
         assert_eq!(color_clickable(Meaning::External), Color::LightBlue, "12");
-        assert_eq!(dot_span(Dot::Cyan, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
-        assert_eq!(dot_span(Dot::Cyan, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
+        assert_eq!(
+            dot_span(Dot::Cyan, 0, false),
+            Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice))
+        );
+        assert_eq!(
+            dot_span(Dot::Cyan, 0, true),
+            Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)),
+            "archived: 8"
+        );
     }
 
     #[test]
@@ -643,7 +704,11 @@ mod tests {
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
         for (status, merging, icon, m) in table {
-            assert_eq!(job_status(status, merging), (icon, m), "{status:?} {merging}");
+            assert_eq!(
+                job_status(status, merging),
+                (icon, m),
+                "{status:?} {merging}"
+            );
         }
     }
 
@@ -681,9 +746,17 @@ mod tests {
             (Dot::Cyan, Color::LightCyan),
             (Dot::White, Color::White),
         ] {
-            assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
+            assert_eq!(
+                dot_span(dot, 0, false),
+                Span::styled(NEEDS_YOU, Style::new().fg(colour)),
+                "{dot:?}"
+            );
         }
-        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new().fg(Color::White)), "clickable text, 15");
+        assert_eq!(
+            dot_span(Dot::Idle, 0, false),
+            Span::styled(IDLE, Style::new().fg(Color::White)),
+            "clickable text, 15"
+        );
         assert_eq!(
             dot_span(Dot::Waiting, 0, false),
             Span::styled(WAITING, Style::new().fg(Color::LightCyan)),
@@ -692,14 +765,21 @@ mod tests {
         assert_ne!(WAITING, NEEDS_YOU);
         assert_ne!(color(Meaning::Waiting), color(Meaning::Failed));
         assert_ne!(color(Meaning::Waiting), color(Meaning::Review));
-        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().fg(Color::DarkGray)), "stopped: 8");
+        assert_eq!(
+            dot_span(Dot::Stopped, 0, false),
+            Span::styled(STOPPED, Style::new().fg(Color::DarkGray)),
+            "stopped: 8"
+        );
     }
 
     #[test]
     fn the_spinner_is_28_frames_and_the_static_dots_are_its_ends() {
         assert_eq!(SPINNER.len(), 28);
         assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
-        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[14], SPINNER[14], SPINNER[0]));
+        assert_eq!(
+            (IDLE, STOPPED, NEEDS_YOU),
+            (SPINNER[14], SPINNER[14], SPINNER[0])
+        );
     }
 
     /// pro-d200: the five spinner colours: what the Lead works on.
@@ -707,8 +787,16 @@ mod tests {
     fn dots_palette_working_dot_colours() {
         use crate::read::Work;
         let table = [
-            (Dot::Working(Some(Work::Planning)), numbered::C13, "planning"),
-            (Dot::Working(Some(Work::Dispatch)), numbered::C14, "dispatch"),
+            (
+                Dot::Working(Some(Work::Planning)),
+                numbered::C13,
+                "planning",
+            ),
+            (
+                Dot::Working(Some(Work::Dispatch)),
+                numbered::C14,
+                "dispatch",
+            ),
             (Dot::Working(Some(Work::Review)), numbered::C11, "review"),
             (Dot::Working(None), numbered::C15, "no Plan"),
             (Dot::Fixing, numbered::C9, "fixing"),
@@ -717,19 +805,38 @@ mod tests {
             for f in 0..2 * SPINNER.len() + 1 {
                 let span = dot_span(dot, f, false);
                 assert_eq!(span.content, SPINNER[f % 28], "{what} frame {f}");
-                assert_eq!(span.style, Style::new().fg(colour), "{what} frame {f}: fg only, no modifier");
+                assert_eq!(
+                    span.style,
+                    Style::new().fg(colour),
+                    "{what} frame {f}: fg only, no modifier"
+                );
             }
             for f in 0..SPINNER.len() {
-                assert_eq!(dot_span(dot, f, true), Span::styled("\u{E3D5}", Style::new().fg(numbered::C8)), "{what} archived frame {f}");
+                assert_eq!(
+                    dot_span(dot, f, true),
+                    Span::styled("\u{E3D5}", Style::new().fg(numbered::C8)),
+                    "{what} archived frame {f}"
+                );
             }
         }
-        assert_eq!(dot_span(Dot::Working(None), 0, false).style, clickable_text());
+        assert_eq!(
+            dot_span(Dot::Working(None), 0, false).style,
+            clickable_text()
+        );
     }
 
     #[test]
     fn every_dot_glyph_is_one_cell_wide() {
-        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, WAITING, IDLE, STOPPED]) {
-            assert_eq!(Span::raw(glyph).width(), 1, "U+{:X}", glyph.chars().next().unwrap() as u32);
+        for glyph in SPINNER
+            .into_iter()
+            .chain([NEEDS_YOU, WAITING, IDLE, STOPPED])
+        {
+            assert_eq!(
+                Span::raw(glyph).width(),
+                1,
+                "U+{:X}",
+                glyph.chars().next().unwrap() as u32
+            );
             assert_eq!(glyph.chars().count(), 1, "{glyph:?}");
         }
     }
@@ -749,7 +856,11 @@ mod tests {
             (CHECKS_NONE, 0xF0374),
         ];
         for (glyph, code) in glyphs {
-            assert_eq!(glyph.chars().collect::<Vec<_>>(), [char::from_u32(code).unwrap()], "U+{code:X}");
+            assert_eq!(
+                glyph.chars().collect::<Vec<_>>(),
+                [char::from_u32(code).unwrap()],
+                "U+{code:X}"
+            );
             assert_eq!(Span::raw(glyph).width(), 1, "U+{code:X}");
         }
     }
@@ -770,7 +881,11 @@ mod tests {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
         for f in 0..SPINNER.len() {
-            assert_eq!(dot_span(Dot::Working(None), f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
+            assert_eq!(
+                dot_span(Dot::Working(None), f, true),
+                Span::styled("\u{E3D5}", grey),
+                "frame {f}"
+            );
         }
     }
 
@@ -778,22 +893,48 @@ mod tests {
     fn the_frame_is_the_unix_time_in_twentieths_of_a_second_modulo_28() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
         assert_eq!(FRAME_MS, 50);
-        assert_eq!([0, 49, 50, 99, 100, 1399, 1400, 1450, 1500].map(at), [0, 0, 1, 1, 2, 27, 0, 1, 2]);
-        assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
+        assert_eq!(
+            [0, 49, 50, 99, 100, 1399, 1400, 1450, 1500].map(at),
+            [0, 0, 1, 1, 2, 27, 0, 1, 2]
+        );
+        assert_eq!(
+            frame(UNIX_EPOCH - std::time::Duration::from_secs(1)),
+            0,
+            "before the epoch: the first frame"
+        );
     }
 
     #[test]
     fn counters_are_in_their_status_colour_and_nothing_when_zero() {
-        assert_eq!(count_style(JobStatus::Queued, false, 3), Style::new().fg(Color::White));
-        assert_eq!(count_style(JobStatus::Draft, false, 3), Style::new().fg(Color::LightMagenta));
-        assert_eq!(count_style(JobStatus::Cancelled, false, 3), Style::new().fg(Color::DarkGray));
-        assert_eq!(count_style(JobStatus::Failed, false, 0), Style::new().fg(Color::DarkGray));
-        assert_eq!(separator(), Span::styled("⋅", Style::new().fg(Color::DarkGray)));
+        assert_eq!(
+            count_style(JobStatus::Queued, false, 3),
+            Style::new().fg(Color::White)
+        );
+        assert_eq!(
+            count_style(JobStatus::Draft, false, 3),
+            Style::new().fg(Color::LightMagenta)
+        );
+        assert_eq!(
+            count_style(JobStatus::Cancelled, false, 3),
+            Style::new().fg(Color::DarkGray)
+        );
+        assert_eq!(
+            count_style(JobStatus::Failed, false, 0),
+            Style::new().fg(Color::DarkGray)
+        );
+        assert_eq!(
+            separator(),
+            Span::styled("⋅", Style::new().fg(Color::DarkGray))
+        );
     }
 
     #[test]
     fn every_pr_state_and_check_has_its_icon_and_meaning() {
-        let states = [(PrState::Open, Meaning::NotStarted), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
+        let states = [
+            (PrState::Open, Meaning::NotStarted),
+            (PrState::Merged, Meaning::Done),
+            (PrState::Closed, Meaning::Waiting),
+        ];
         for (s, m) in states {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
@@ -803,7 +944,10 @@ mod tests {
         assert_eq!(PR_CONFLICT, ("conflict", Meaning::Failed));
         assert_eq!(PR_CLOSED_ASKED, ("closed", Meaning::Failed));
         assert_eq!(PR_CONFLICT_OWNED, ("conflict", Meaning::Waiting));
-        assert_eq!(checks_of(Checks::Failed, true), (CHECKS_FAILED, Meaning::Waiting));
+        assert_eq!(
+            checks_of(Checks::Failed, true),
+            (CHECKS_FAILED, Meaning::Waiting)
+        );
         assert_eq!(checks_of(Checks::Failed, false), checks(Checks::Failed));
         for c in [Checks::Passed, Checks::Pending, Checks::None] {
             assert_eq!(checks_of(c, true), checks(c), "{c:?}");
@@ -833,7 +977,11 @@ mod tests {
         for (kind, colour) in table {
             assert_eq!(pulse_kind(kind), colour, "{kind:?}");
         }
-        assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
+        assert_eq!(
+            color(Meaning::Nothing),
+            Color::DarkGray,
+            "an empty slot's ▁ is grey"
+        );
     }
 
     /// No other file of the cockpit's views names a colour. `moon_tests.rs` is exempt: it pins the dots' colours (hs-d579) and draws nothing; so are `pill_colours.rs` and `palette/`, which pin the palette's own styles.
@@ -841,26 +989,54 @@ mod tests {
     fn no_colour_outside_the_palette() {
         fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
             let shorthand = [
-                ".black()", ".red()", ".green()", ".yellow()", ".blue()", ".magenta()", ".cyan()", ".gray()", ".dark_gray()",
-                ".white()", ".on_",
+                ".black()",
+                ".red()",
+                ".green()",
+                ".yellow()",
+                ".blue()",
+                ".magenta()",
+                ".cyan()",
+                ".gray()",
+                ".dark_gray()",
+                ".white()",
+                ".on_",
             ];
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     walk(&path, offenders);
-                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs" && n != "moon_tests.rs" && n != "pill_colours.rs") && !path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette")) {
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| {
+                        n != "palette.rs" && n != "moon_tests.rs" && n != "pill_colours.rs"
+                    })
+                    && !path
+                        .ancestors()
+                        .any(|a| a.file_name().is_some_and(|n| n == "palette"))
+                {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for (n, line) in text.lines().enumerate() {
                         if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {
-                            offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                            offenders.push(format!(
+                                "{}:{}: {}",
+                                path.display(),
+                                n + 1,
+                                line.trim()
+                            ));
                         }
                     }
                 }
             }
         }
         let mut offenders = Vec::new();
-        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut offenders);
-        assert!(offenders.is_empty(), "colours belong in tui/palette.rs:\n{}", offenders.join("\n"));
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut offenders,
+        );
+        assert!(
+            offenders.is_empty(),
+            "colours belong in tui/palette.rs:\n{}",
+            offenders.join("\n")
+        );
     }
 
     #[test]
@@ -870,7 +1046,12 @@ mod tests {
 
     #[test]
     fn every_ui_role_has_its_colour() {
-        let table = [(Ui::Note, Color::Yellow), (Ui::You, Color::Gray), (Ui::Agent, Color::Cyan), (Ui::Tool, Color::Cyan)];
+        let table = [
+            (Ui::Note, Color::Yellow),
+            (Ui::You, Color::Gray),
+            (Ui::Agent, Color::Cyan),
+            (Ui::Tool, Color::Cyan),
+        ];
         for (u, c) in table {
             assert_eq!(ui(u), c, "{u:?}");
         }

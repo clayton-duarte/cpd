@@ -49,8 +49,14 @@ impl Env {
         let store = Store::open(&home, 5000).unwrap();
         let path = home.watch_lock();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let lock = Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-        Env { store, _engine: Some(lock), _dir: dir }
+        let lock = Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        Env {
+            store,
+            _engine: Some(lock),
+            _dir: dir,
+        }
     }
 
     pub(super) fn store(&mut self) -> &mut Store {
@@ -93,7 +99,10 @@ pub(super) fn text_rows(buf: &Buffer) -> Vec<String> {
             while x < buf.area.width {
                 let symbol = buf[(x, y)].symbol();
                 // a piece of a link is one cell holding its text; the backend never writes the cell(s) after it
-                let text = symbol.strip_prefix("\x1b]8;;").and_then(|s| s.split_once('\x07')).map(|(_, t)| t.trim_end_matches("\x1b]8;;\x07"));
+                let text = symbol
+                    .strip_prefix("\x1b]8;;")
+                    .and_then(|s| s.split_once('\x07'))
+                    .map(|(_, t)| t.trim_end_matches("\x1b]8;;\x07"));
                 row += text.unwrap_or(symbol);
                 x += text.map_or(1, |t| t.chars().count() as u16);
             }
@@ -112,7 +121,12 @@ pub(super) fn screen(buf: &Buffer) -> Vec<String> {
 }
 
 fn click(view: &mut View, column: u16, row: u16) {
-    view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE });
+    view.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    });
 }
 
 fn context(id: &str) -> String {
@@ -126,11 +140,23 @@ fn context(id: &str) -> String {
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: bool) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
-    let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
-    let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
+    let locked = if late {
+        "'2026-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let done = if phase == "done" {
+        "'2026-01-09T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     let (row, number, url, opened, pull_request) = if pr {
         let state = if phase == "done" { "merged" } else { "open" };
-        let merged = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
+        let merged = if phase == "done" {
+            "'2026-01-09T00:00:00.000Z'"
+        } else {
+            "NULL"
+        };
         (
             format!(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
@@ -143,7 +169,13 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
             format!("(SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
         )
     } else {
-        (String::new(), "NULL", "NULL".to_owned(), "NULL", "NULL".to_owned())
+        (
+            String::new(),
+            "NULL",
+            "NULL".to_owned(),
+            "NULL",
+            "NULL".to_owned(),
+        )
     };
     let status = match phase {
         "grounding" | "plan" => "waiting",
@@ -162,8 +194,20 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     )
 }
 
-fn session_row(id: &str, name: &str, context: &str, plan: &str, state: &str, label: Option<&str>, created: &str) -> String {
-    let plan = if plan.is_empty() { "NULL".to_owned() } else { format!("'{plan}'") };
+fn session_row(
+    id: &str,
+    name: &str,
+    context: &str,
+    plan: &str,
+    state: &str,
+    label: Option<&str>,
+    created: &str,
+) -> String {
+    let plan = if plan.is_empty() {
+        "NULL".to_owned()
+    } else {
+        format!("'{plan}'")
+    };
     let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
@@ -182,7 +226,13 @@ fn manager_row(id: &str, context: &str) -> String {
 }
 
 /// What the engine's E8 would open for `populate`'s store (the tree reads the Inbox, it does not compute it).
-fn condition(kind: Kind, urgency: Urgency, session: &str, plan: Option<&str>, context: &str) -> Condition {
+fn condition(
+    kind: Kind,
+    urgency: Urgency,
+    session: &str,
+    plan: Option<&str>,
+    context: &str,
+) -> Condition {
     Condition {
         kind,
         urgency,
@@ -203,7 +253,13 @@ fn condition(kind: Kind, urgency: Urgency, session: &str, plan: Option<&str>, co
 /// Contexts' dots, a white `unread` of alpha's Manager and a magenta `dialog` of beta's.
 fn items() -> Vec<Condition> {
     vec![
-        condition(Kind::Dialog, Urgency::Red, "f-blocked", Some("ship"), "alpha"),
+        condition(
+            Kind::Dialog,
+            Urgency::Red,
+            "f-blocked",
+            Some("ship"),
+            "alpha",
+        ),
         condition(Kind::Dialog, Urgency::Red, "l-rel", Some("rel"), "beta"),
         condition(Kind::Unread, Urgency::White, "m-alpha", None, "alpha"),
         condition(Kind::Dialog, Urgency::Magenta, "m-beta", None, "beta"),
@@ -211,9 +267,21 @@ fn items() -> Vec<Condition> {
 }
 
 fn job_row(plan: &str, key: &str, status: &str) -> String {
-    let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "0".repeat(64)) };
-    let merged = if status == "merged" { "'abc123'" } else { "NULL" };
-    let failed = if status == "failed" { "'crashed'" } else { "NULL" };
+    let fingerprint = if status == "draft" {
+        "NULL".to_owned()
+    } else {
+        format!("'{}'", "0".repeat(64))
+    };
+    let merged = if status == "merged" {
+        "'abc123'"
+    } else {
+        "NULL"
+    };
+    let failed = if status == "failed" {
+        "'crashed'"
+    } else {
+        "NULL"
+    };
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
@@ -247,18 +315,108 @@ pub(super) fn populate(env: &mut Env) {
     s += &context("alpha");
     s += &context("beta");
     s += &context("gamma");
-    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z", false);
-    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:09.000Z", false);
-    s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
-    s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
-    s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:02.000Z");
-    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("φ: Worker question"), "2026-01-02T00:00:09.000Z");
-    s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
-    s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
-    s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
-    for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
+    s += &plan_row(
+        "ship",
+        "alpha",
+        "dispatch",
+        "l-ship",
+        "2026-01-02T00:00:10.000Z",
+        false,
+    );
+    s += &plan_row(
+        "sketch",
+        "alpha",
+        "plan",
+        "l-sketch",
+        "2026-01-02T00:00:09.000Z",
+        false,
+    );
+    s += &plan_row(
+        "rel",
+        "beta",
+        "deploy",
+        "l-rel",
+        "2026-01-02T00:00:02.000Z",
+        true,
+    );
+    s += &plan_row(
+        "old",
+        "beta",
+        "done",
+        "l-old",
+        "2026-01-02T00:00:03.000Z",
+        true,
+    );
+    s += &session_row(
+        "g-alpha",
+        "grounded",
+        "alpha",
+        "",
+        "idle",
+        None,
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session_row(
+        "l-ship",
+        "ship lead",
+        "alpha",
+        "ship",
+        "working",
+        None,
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session_row(
+        "f-idle",
+        "ship fork",
+        "alpha",
+        "ship",
+        "idle",
+        None,
+        "2026-01-02T00:00:02.000Z",
+    );
+    s += &session_row(
+        "f-blocked",
+        "ship review",
+        "alpha",
+        "ship",
+        "blocked",
+        Some("φ: Worker question"),
+        "2026-01-02T00:00:09.000Z",
+    );
+    s += &session_row(
+        "l-sketch",
+        "sketch",
+        "alpha",
+        "sketch",
+        "idle",
+        None,
+        "2026-01-02T00:00:01.000Z",
+    );
+    s += &session_row(
+        "l-rel",
+        "rel lead",
+        "beta",
+        "rel",
+        "blocked",
+        Some("cpd: PR feedback"),
+        "2026-01-02T00:00:02.000Z",
+    );
+    s += &session_row(
+        "l-old",
+        "old lead",
+        "beta",
+        "old",
+        "stopped",
+        None,
+        "2026-01-02T00:00:03.000Z",
+    );
+    for (key, status) in [
+        ("a", "merged"),
+        ("b", "merged"),
+        ("c", "running"),
+        ("d", "queued"),
+        ("e", "failed"),
+    ] {
         s += &job_row("ship", key, status);
     }
     for key in ["s1", "s2"] {
@@ -272,14 +430,14 @@ pub(super) fn populate(env: &mut Env) {
     reconcile(&mut env.store, &items(), OPENED).unwrap();
 }
 
-
 // ---------- tests ----------
 
 #[test]
 fn the_tree_of_a_prepared_store() {
     let mut env = Env::new();
     populate(&mut env);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row =
+        |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
@@ -297,8 +455,7 @@ fn the_tree_of_a_prepared_store() {
     ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a live Context with no row ends with the clickable `╰󰬪 new`), one empty row between two Contexts; the Inbox section is pinned below
     let screen = screen(&draw(&mut env.view(), 46, 20));
     assert_eq!(
-        screen,
-        expected,
+        screen, expected,
         "the Contexts by dot tier then creation, newest first (hs-d686, pro-d48: beta's magenta Manager, then alpha and gamma tied on shiro and creation, in Context id order); alpha's live Plans and forks as one list by tier then creation, newest first (the red fork `ship·f-bl`, then shiro: `ship` created last, `sketch`, then the fork `ship·f-id` created first); the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
     );
 }
@@ -320,7 +477,8 @@ fn the_tree_orders_live_rows_by_dot_tier_then_newest_first() {
          UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'sketch';
          UPDATE sessions SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'f-idle';",
     );
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row =
+        |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let beta = || {
         vec![
             String::new(),
@@ -329,7 +487,13 @@ fn the_tree_orders_live_rows_by_dot_tier_then_newest_first() {
             format!(" ╰─{STOPPED} old"),
         ]
     };
-    let gamma = || vec![String::new(), format!(" ╭{STOPPED} gamma"), " ╰\u{F0B2A} new".to_owned()];
+    let gamma = || {
+        vec![
+            String::new(),
+            format!(" ╭{STOPPED} gamma"),
+            " ╰\u{F0B2A} new".to_owned(),
+        ]
+    };
     // within shiro: the fork (newest), then `sketch`, then `ship`: one list of Plans and forks
     let alpha = || {
         vec![
@@ -344,15 +508,17 @@ fn the_tree_orders_live_rows_by_dot_tier_then_newest_first() {
     let expected = [beta(), gamma(), alpha()].concat();
     let screen = screen(&draw(&mut env.view(), 46, 20));
     assert_eq!(
-        screen,
-        expected,
+        screen, expected,
         "beta's magenta Context stays first; within shiro `gamma`, created later, is above `alpha` though alpha has the newer Event; within alpha the red fork `ship·f-bl` is first, then the fork `ship·f-id`, `sketch` and `ship` by creation, newest first, as one list (hs-d686, pro-d48)"
     );
     // the reverse creation puts `alpha` above `gamma`: the order follows creation, not the Context id
     env.sql("UPDATE contexts SET created_at = '2026-01-06T00:00:00.000Z' WHERE id = 'alpha';");
     let expected = [beta(), alpha(), gamma()].concat();
     let screen = self::screen(&draw(&mut env.view(), 46, 20));
-    assert_eq!(screen, expected, "`alpha`, created after `gamma`, is above it (hs-d686, pro-d48)");
+    assert_eq!(
+        screen, expected,
+        "`alpha`, created after `gamma`, is above it (hs-d686, pro-d48)"
+    );
 }
 
 /// An archived Plan and an archived fork stay after every live row, whatever their dot (hs-d686): `sketch` and the fork
@@ -365,7 +531,8 @@ fn an_archived_row_is_last_after_the_live_rows() {
         "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'sketch';
          UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-idle';",
     );
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row =
+        |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
@@ -384,8 +551,7 @@ fn an_archived_row_is_last_after_the_live_rows() {
     ];
     let screen = screen(&draw(&mut env.view(), 46, 21));
     assert_eq!(
-        screen,
-        expected,
+        screen, expected,
         "the archived Plan `sketch` and the archived fork `ship·f-id` are after the live rows though shiro; the Context's toggle is expanded, so it closes with `╰󰬬 collapse`"
     );
 }
@@ -395,11 +561,23 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
     let mut env = Env::new();
     populate(&mut env);
     let screen = screen(&draw(&mut env.view(), 46, 19));
-    assert!(screen.last().is_some_and(|r| r.contains("new")), "the whole tree: {screen:?}");
+    assert!(
+        screen.last().is_some_and(|r| r.contains("new")),
+        "the whole tree: {screen:?}"
+    );
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
-    assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
-    assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
-    assert!(screen.iter().any(|r| r.chars().count() == 45), "the counters end at width − 2: {screen:?}");
+    assert!(
+        screen.iter().all(|r| r.is_empty() || r.starts_with(' ')),
+        "column 0: {screen:?}"
+    );
+    assert!(
+        screen.iter().all(|r| r.chars().count() <= 45),
+        "the last column: {screen:?}"
+    );
+    assert!(
+        screen.iter().any(|r| r.chars().count() == 45),
+        "the counters end at width − 2: {screen:?}"
+    );
 }
 
 #[test]
@@ -431,8 +609,13 @@ fn blue_text(buf: &Buffer) -> Vec<String> {
 
 /// The foreground of the first cell of `glyph` in the screen row that says `row`.
 fn fg_of(buf: &Buffer, row: &str, glyph: &str) -> Color {
-    let y = text_rows(buf).iter().position(|r| r.contains(row)).unwrap_or_else(|| panic!("no row says {row:?}")) as u16;
-    let x = (0..buf.area.width).find(|&x| !buf[(x, y)].symbol().is_empty() && glyph.starts_with(buf[(x, y)].symbol())).expect("the glyph on the row");
+    let y = text_rows(buf)
+        .iter()
+        .position(|r| r.contains(row))
+        .unwrap_or_else(|| panic!("no row says {row:?}")) as u16;
+    let x = (0..buf.area.width)
+        .find(|&x| !buf[(x, y)].symbol().is_empty() && glyph.starts_with(buf[(x, y)].symbol()))
+        .expect("the glyph on the row");
     buf[(x, y)].fg
 }
 
@@ -442,11 +625,30 @@ fn the_selected_plan_rows_name_is_blue_and_no_chat_mark_is_drawn() {
     populate(&mut env); // `l-ship`, the Lead of `ship`, is in the chat slot
     let buf = draw(&mut env.view(), 46, 19);
     let rows = text_rows(&buf);
-    assert!(!rows.iter().any(|r| r.contains(ACTIVE_MARK)), "no marker in column 0: {rows:?}");
-    assert_eq!(blue_text(&buf), ["ship"], "the one blue thing is the name of the Plan whose Lead is in the chat slot: {rows:?}");
-    assert_eq!(fg_of(&buf, " sketch", "sketch"), C15, "an unselected row's name is clickable text, colour 15");
-    assert_eq!(fg_of(&buf, " ship ", "1"), C15, "the row keeps its counters' colours (the queued Job: 15)");
-    assert_eq!(fg_of(&buf, " ship ", "2"), C10, "(the merged Jobs: bright green)");
+    assert!(
+        !rows.iter().any(|r| r.contains(ACTIVE_MARK)),
+        "no marker in column 0: {rows:?}"
+    );
+    assert_eq!(
+        blue_text(&buf),
+        ["ship"],
+        "the one blue thing is the name of the Plan whose Lead is in the chat slot: {rows:?}"
+    );
+    assert_eq!(
+        fg_of(&buf, " sketch", "sketch"),
+        C15,
+        "an unselected row's name is clickable text, colour 15"
+    );
+    assert_eq!(
+        fg_of(&buf, " ship ", "1"),
+        C15,
+        "the row keeps its counters' colours (the queued Job: 15)"
+    );
+    assert_eq!(
+        fg_of(&buf, " ship ", "2"),
+        C10,
+        "(the merged Jobs: bright green)"
+    );
 }
 
 #[test]
@@ -462,9 +664,20 @@ fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot()
     );
     let buf = draw(&mut env.view(), 46, 19);
     let rows = text_rows(&buf);
-    assert!(!rows.iter().any(|r| r.contains(ACTIVE_MARK)), "no marker: {rows:?}");
-    assert_eq!(blue_text(&buf), ["alpha"], "the Context's name, and no Plan's: {rows:?}");
-    assert_ne!(fg_of(&buf, "╭", NEEDS_YOU), blue(), "its dot keeps the dot's colour");
+    assert!(
+        !rows.iter().any(|r| r.contains(ACTIVE_MARK)),
+        "no marker: {rows:?}"
+    );
+    assert_eq!(
+        blue_text(&buf),
+        ["alpha"],
+        "the Context's name, and no Plan's: {rows:?}"
+    );
+    assert_ne!(
+        fg_of(&buf, "╭", NEEDS_YOU),
+        blue(),
+        "its dot keeps the dot's colour"
+    );
 }
 
 // ---------- the empty Context's clickable ` ╰󰬪 new` (hs-d688) ----------
@@ -480,19 +693,48 @@ fn an_empty_live_context_draws_the_clickable_new_row() {
     let buf = draw(&mut env.view(), 46, 20);
     let rows = text_rows(&buf);
     let live = rows.iter().find(|r| r.contains('\u{F0B2A}'));
-    assert_eq!(live.map(String::as_str), Some(" ╰\u{F0B2A} new"), "a live empty Context ends with the clickable new row:\n{}", rows.join("\n"));
-    assert_eq!(fg_of(&buf, "\u{F0B2A}", "╰"), muted, "the corner is muted (colour 8)");
-    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "the glyph is muted (colour 8)");
-    assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
+    assert_eq!(
+        live.map(String::as_str),
+        Some(" ╰\u{F0B2A} new"),
+        "a live empty Context ends with the clickable new row:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        fg_of(&buf, "\u{F0B2A}", "╰"),
+        muted,
+        "the corner is muted (colour 8)"
+    );
+    assert_eq!(
+        fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"),
+        muted,
+        "the glyph is muted (colour 8)"
+    );
+    assert_eq!(
+        fg_of(&buf, "\u{F0B2A}", "n"),
+        C15,
+        "the word `new` is clickable (colour 15)"
+    );
     // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
     env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
     let mut view = env.view();
     let closed = draw(&mut view, 46, 30);
-    let archive = text_rows(&closed).iter().position(|r| r.contains("archive")).expect("the archive row") as u16;
+    let archive = text_rows(&closed)
+        .iter()
+        .position(|r| r.contains("archive"))
+        .expect("the archive row") as u16;
     click(&mut view, 3, archive);
     let buf = draw(&mut view, 46, 30);
     let rows = text_rows(&buf);
     let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
-    assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));
-    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "its glyph stays muted (colour 8)");
+    assert_eq!(
+        archived.map(String::as_str),
+        Some(" ╰\u{F0B2A}"),
+        "an archived empty Context keeps the plain terminator:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"),
+        muted,
+        "its glyph stays muted (colour 8)"
+    );
 }

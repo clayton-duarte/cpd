@@ -19,7 +19,16 @@ fn row(age_minutes: Option<i64>) -> PulseRow {
 
 #[test]
 fn an_age_is_in_the_largest_whole_unit() {
-    for (s, t) in [(0, "0s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h"), (86399, "23h"), (86400, "1d"), (172800, "2d")] {
+    for (s, t) in [
+        (0, "0s"),
+        (59, "59s"),
+        (60, "1m"),
+        (3599, "59m"),
+        (3600, "1h"),
+        (86399, "23h"),
+        (86400, "1d"),
+        (172800, "2d"),
+    ] {
         assert_eq!(age_text(s), t, "{s}");
     }
 }

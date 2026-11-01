@@ -137,14 +137,25 @@ fn stub_engine(env: &TestEnv) -> PathBuf {
 /// (parsed), its stderr and its exit code.
 fn run_bridge_raw(env: &TestEnv, stub: &Path, db: &Path, input: &str) -> (Vec<Value>, String, i32) {
     let mut cmd = env.command("python3");
-    cmd.arg(bridge_path()).arg("--db").arg(db).env("PYTHONPATH", stub);
-    let out = output_with_stdin(&mut cmd, input.as_bytes(), Duration::from_secs(30)).expect("run the bridge");
+    cmd.arg(bridge_path())
+        .arg("--db")
+        .arg(db)
+        .env("PYTHONPATH", stub);
+    let out = output_with_stdin(&mut cmd, input.as_bytes(), Duration::from_secs(30))
+        .expect("run the bridge");
     let stdout = String::from_utf8(out.stdout).expect("bridge stdout is UTF-8");
     let lines = stdout
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("bridge line {line:?} is not JSON: {e}")))
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("bridge line {line:?} is not JSON: {e}"))
+        })
         .collect();
-    (lines, String::from_utf8_lossy(&out.stderr).into_owned(), out.status.code().expect("the bridge has an exit code"))
+    (
+        lines,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().expect("the bridge has an exit code"),
+    )
 }
 
 /// [`run_bridge_raw`] with JSON requests, asserting the bridge exited 0.
@@ -152,7 +163,11 @@ fn run_bridge(env: &TestEnv, stub: &Path, db: &Path, requests: &[Value]) -> Vec<
     let input: String = requests.iter().map(|r| format!("{r}\n")).collect();
     let (lines, stderr, exit) = run_bridge_raw(env, stub, db, &input);
     assert_eq!(exit, 0, "the bridge exited {exit}: {stderr}");
-    assert_eq!(lines.len(), requests.len(), "one response per request: {lines:?}");
+    assert_eq!(
+        lines.len(),
+        requests.len(),
+        "one response per request: {lines:?}"
+    );
     lines
 }
 
@@ -167,12 +182,16 @@ fn facts(pairs: &[(&str, &str)]) -> Value {
 }
 
 fn hits(response: &Value) -> &Vec<Value> {
-    response["hits"].as_array().unwrap_or_else(|| panic!("no hits in {response}"))
+    response["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no hits in {response}"))
 }
 
 /// The record id of the first hit.
 fn first_record(response: &Value) -> &str {
-    hits(response)[0]["record"].as_str().unwrap_or_else(|| panic!("no record in {response}"))
+    hits(response)[0]["record"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no record in {response}"))
 }
 
 // ------------------------------------------------------------- the bridge
@@ -266,7 +285,10 @@ fn the_bridge_reports_bad_json_and_bad_cmd() {
 
     let input = "this is not json\n{\"cmd\":\"nope\"}\n{\"cmd\":\"ping\"}\n";
     let (lines, stderr, exit) = run_bridge_raw(&env, &stub, &db, input);
-    assert_eq!(exit, 0, "the bridge surfaces errors in the protocol, not its exit: {stderr}");
+    assert_eq!(
+        exit, 0,
+        "the bridge surfaces errors in the protocol, not its exit: {stderr}"
+    );
     assert_eq!(lines.len(), 3, "one response per line: {lines:?}");
 
     assert_eq!(lines[0]["ok"], false, "{}", lines[0]);
@@ -303,7 +325,11 @@ fn an_index_upserts_a_fact_by_record_id() {
     );
 
     assert_eq!(responses[1]["ok"], true, "{}", responses[1]);
-    assert_eq!(responses[2]["facts"], 1, "one fact, updated, not a second: {}", responses[2]);
+    assert_eq!(
+        responses[2]["facts"], 1,
+        "one fact, updated, not a second: {}",
+        responses[2]
+    );
     let search = &responses[3];
     assert_eq!(hits(search).len(), 1, "{search}");
     assert_eq!(first_record(search), "hs-d7", "{search}");
@@ -318,10 +344,26 @@ fn an_index_upserts_a_fact_by_record_id() {
 fn the_client_reads_the_responses_in_order() {
     let env = TestEnv::new();
     let script = env.root().join("bridge.sh");
-    write_executable(&script, "#!/bin/sh\nn=0\nwhile IFS= read -r _line; do\n  printf '{\"ok\":true,\"n\":%s}\\n' \"$n\"\n  n=$((n+1))\ndone\n");
-    let engine = Bridge::new(true, script, PathBuf::from("/bin/sh"), Duration::from_secs(10)).expect("a client");
+    write_executable(
+        &script,
+        "#!/bin/sh\nn=0\nwhile IFS= read -r _line; do\n  printf '{\"ok\":true,\"n\":%s}\\n' \"$n\"\n  n=$((n+1))\ndone\n",
+    );
+    let engine = Bridge::new(
+        true,
+        script,
+        PathBuf::from("/bin/sh"),
+        Duration::from_secs(10),
+    )
+    .expect("a client");
     let responses = engine
-        .run(&env.root().join("engine.db"), &[json!({"cmd": "a"}), json!({"cmd": "b"}), json!({"cmd": "c"})])
+        .run(
+            &env.root().join("engine.db"),
+            &[
+                json!({"cmd": "a"}),
+                json!({"cmd": "b"}),
+                json!({"cmd": "c"}),
+            ],
+        )
         .expect("the responses");
     assert_eq!(responses.len(), 3, "{responses:?}");
     for (n, response) in responses.iter().enumerate() {
@@ -339,23 +381,48 @@ fn a_nonzero_exit_a_timeout_and_bad_json_are_engine_failed() {
 
     let exit = env.root().join("exit.sh");
     write_executable(&exit, "#!/bin/sh\necho boom >&2\nexit 3\n");
-    let engine = Bridge::new(true, exit, PathBuf::from("/bin/sh"), Duration::from_secs(10)).expect("a client");
-    let err = engine.run(&db, &[json!({"cmd": "ping"})]).expect_err("a non-zero exit");
+    let engine = Bridge::new(
+        true,
+        exit,
+        PathBuf::from("/bin/sh"),
+        Duration::from_secs(10),
+    )
+    .expect("a client");
+    let err = engine
+        .run(&db, &[json!({"cmd": "ping"})])
+        .expect_err("a non-zero exit");
     assert_eq!(err.code().as_str(), "engine_failed", "{err:?}");
     assert_eq!(err.exit().code(), 1, "{err:?}");
 
     let bad = env.root().join("bad.sh");
-    write_executable(&bad, "#!/bin/sh\nwhile IFS= read -r _line; do echo 'not json'; done\n");
-    let engine = Bridge::new(true, bad, PathBuf::from("/bin/sh"), Duration::from_secs(10)).expect("a client");
-    let err = engine.run(&db, &[json!({"cmd": "ping"})]).expect_err("bad JSON");
+    write_executable(
+        &bad,
+        "#!/bin/sh\nwhile IFS= read -r _line; do echo 'not json'; done\n",
+    );
+    let engine = Bridge::new(true, bad, PathBuf::from("/bin/sh"), Duration::from_secs(10))
+        .expect("a client");
+    let err = engine
+        .run(&db, &[json!({"cmd": "ping"})])
+        .expect_err("bad JSON");
     assert_eq!(err.code().as_str(), "engine_failed", "{err:?}");
     assert_eq!(err.exit().code(), 1, "{err:?}");
 
     let hang = env.root().join("hang.sh");
     // `exec` so the timeout kills one process, not a `sh` that leaves a `sleep` orphan.
-    write_executable(&hang, "#!/bin/sh\nwhile IFS= read -r _line; do :; done\nexec sleep 60\n");
-    let engine = Bridge::new(true, hang, PathBuf::from("/bin/sh"), Duration::from_millis(200)).expect("a client");
-    let err = engine.run(&db, &[json!({"cmd": "ping"})]).expect_err("a timeout");
+    write_executable(
+        &hang,
+        "#!/bin/sh\nwhile IFS= read -r _line; do :; done\nexec sleep 60\n",
+    );
+    let engine = Bridge::new(
+        true,
+        hang,
+        PathBuf::from("/bin/sh"),
+        Duration::from_millis(200),
+    )
+    .expect("a client");
+    let err = engine
+        .run(&db, &[json!({"cmd": "ping"})])
+        .expect_err("a timeout");
     assert_eq!(err.code().as_str(), "engine_failed", "{err:?}");
     assert_eq!(err.exit().code(), 1, "{err:?}");
     assert!(err.details().contains_key("timeout_ms"), "{err:?}");
@@ -369,16 +436,34 @@ fn a_missing_bridge_or_interpreter_is_engine_missing() {
     let script = env.root().join("bridge.sh");
     write_executable(&script, "#!/bin/sh\nexit 0\n");
 
-    let missing_bridge = Bridge::new(true, env.root().join("no-such-bridge.py"), PathBuf::from("/bin/sh"), Duration::from_secs(5))
-        .err()
-        .expect("a missing bridge");
-    assert_eq!(missing_bridge.code().as_str(), "engine_missing", "{missing_bridge:?}");
+    let missing_bridge = Bridge::new(
+        true,
+        env.root().join("no-such-bridge.py"),
+        PathBuf::from("/bin/sh"),
+        Duration::from_secs(5),
+    )
+    .err()
+    .expect("a missing bridge");
+    assert_eq!(
+        missing_bridge.code().as_str(),
+        "engine_missing",
+        "{missing_bridge:?}"
+    );
     assert_eq!(missing_bridge.exit().code(), 4, "{missing_bridge:?}");
 
-    let missing_python = Bridge::new(true, script, env.root().join("no-such-python"), Duration::from_secs(5))
-        .err()
-        .expect("a missing interpreter");
-    assert_eq!(missing_python.code().as_str(), "engine_missing", "{missing_python:?}");
+    let missing_python = Bridge::new(
+        true,
+        script,
+        env.root().join("no-such-python"),
+        Duration::from_secs(5),
+    )
+    .err()
+    .expect("a missing interpreter");
+    assert_eq!(
+        missing_python.code().as_str(),
+        "engine_missing",
+        "{missing_python:?}"
+    );
     assert_eq!(missing_python.exit().code(), 4, "{missing_python:?}");
 }
 
@@ -389,9 +474,19 @@ fn a_disabled_engine_is_engine_disabled_without_a_spawn() {
     let env = TestEnv::new();
     let marker = env.root().join("spawned");
     let script = env.root().join("bridge.sh");
-    write_executable(&script, &format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()));
+    write_executable(
+        &script,
+        &format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()),
+    );
 
-    let err = Bridge::new(false, script, PathBuf::from("/bin/sh"), Duration::from_secs(5)).err().expect("a disabled engine");
+    let err = Bridge::new(
+        false,
+        script,
+        PathBuf::from("/bin/sh"),
+        Duration::from_secs(5),
+    )
+    .err()
+    .expect("a disabled engine");
     assert_eq!(err.code().as_str(), "engine_disabled", "{err:?}");
     assert_eq!(err.exit().code(), 3, "{err:?}");
     assert!(!marker.exists(), "a disabled engine spawns nothing");
@@ -412,7 +507,10 @@ fn the_config_has_the_engine_keys_with_defaults_and_sources() {
     assert_eq!(config["context_engine_python"], "", "{config}");
     assert_eq!(config["context_engine_dir"], "", "{config}");
     assert_eq!(config["context_engine_timeout_ms"], 30000, "{config}");
-    assert_eq!(config["context_engine_reindex_timeout_ms"], 600000, "{config}");
+    assert_eq!(
+        config["context_engine_reindex_timeout_ms"], 600000,
+        "{config}"
+    );
     for key in [
         "context_engine_enabled",
         "context_engine_bridge",
@@ -430,7 +528,10 @@ fn the_config_has_the_engine_keys_with_defaults_and_sources() {
     let out = env.cpd(&["config"]).ok();
     let config = &out["config"];
     assert_eq!(config["context_engine_enabled"], false, "{config}");
-    assert_eq!(config["context_engine_bridge"], "/opt/bridge.py", "{config}");
+    assert_eq!(
+        config["context_engine_bridge"], "/opt/bridge.py",
+        "{config}"
+    );
     assert_eq!(config["context_engine_timeout_ms"], 1234, "{config}");
     assert_eq!(out["sources"]["context_engine_enabled"], "file");
     assert_eq!(out["sources"]["context_engine_bridge"], "file");

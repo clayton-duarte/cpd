@@ -15,7 +15,9 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, Work, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
+use crate::read::{
+    self, Dot, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull, Work,
+};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -32,15 +34,25 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     let (_dir, mut store) = fixture();
     for (phase, plan, _) in PHASES {
         let boxes = read::plan_boxes(&mut store, &PlanId::parse(plan).unwrap()).unwrap();
-        assert!(boxes.needs_user.lead_working, "Plan {plan}: its Lead is working");
-        assert!(boxes.needs_user.lead_work.is_some(), "Plan {plan} {phase:?}");
+        assert!(
+            boxes.needs_user.lead_working,
+            "Plan {plan}: its Lead is working"
+        );
+        assert!(
+            boxes.needs_user.lead_work.is_some(),
+            "Plan {plan} {phase:?}"
+        );
     }
 }
 
 /// pro-d200: the PR box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
-    let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
+    let needs = |work: Option<Work>| NeedsUser {
+        lead_working: true,
+        lead_work: work,
+        ..NeedsUser::default()
+    };
     // the read model hands the box its dot: `PrNode::lead_dot`, red when a Job of the box failed or an Escalation is open
     let pr = |failed_here: bool, work: Option<Work>| pr_node(Some(Dot::working(failed_here, work)));
     for (work, colour) in [
@@ -50,15 +62,35 @@ fn dots_plan_box_title_dot_follows_work() {
         (None, palette::numbered::C15),
     ] {
         for frame in [0, 5, 27] {
-            assert_eq!(title_dot(&pr(false, work), &[], &needs(work), frame), Some(colour), "{work:?} frame {frame}");
+            assert_eq!(
+                title_dot(&pr(false, work), &[], &needs(work), frame),
+                Some(colour),
+                "{work:?} frame {frame}"
+            );
         }
     }
     for work in [Some(Work::Planning), Some(Work::Review), None] {
-        assert_eq!(title_dot(&pr(true, work), &[failed_job()], &needs(work), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
-        assert_eq!(title_dot(&pr(true, work), &[], &needs(work), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
+        assert_eq!(
+            title_dot(&pr(true, work), &[failed_job()], &needs(work), 3),
+            Some(palette::numbered::C9),
+            "a failed Job beats {work:?}"
+        );
+        assert_eq!(
+            title_dot(&pr(true, work), &[], &needs(work), 3),
+            Some(palette::numbered::C9),
+            "an Escalation beats {work:?}"
+        );
     }
-    let idle = NeedsUser { lead_working: false, lead_work: Some(Work::Dispatch), ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
+    let idle = NeedsUser {
+        lead_working: false,
+        lead_work: Some(Work::Dispatch),
+        ..NeedsUser::default()
+    };
+    assert_eq!(
+        title_dot(&pr_node(None), &[], &idle, 0),
+        None,
+        "a Lead not working: no spinner"
+    );
 }
 
 /// A PR of a Plan whose Lead works (or not), with one pull request.
@@ -114,7 +146,11 @@ fn title_dot(pr: &PrNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> 
     let chart = boxes::layout(std::slice::from_ref(pr), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
-        .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
+        .find(|cell| {
+            palette::SPINNER
+                .iter()
+                .any(|glyph| cell.symbol().contains(glyph))
+        })
         .map(|cell| cell.fg)
 }
 
@@ -130,8 +166,16 @@ fn fixture() -> (tempfile::TempDir, Store) {
     for (i, (phase, plan, lead)) in PHASES.iter().enumerate() {
         let number = i as i64 + 1;
         let at = format!("'2026-01-0{}T00:00:00.000Z'", i + 2);
-        let locked = if matches!(phase, Phase::Grounding | Phase::Plan) { "NULL".to_owned() } else { at.clone() };
-        let done = if *phase == Phase::Done { at.clone() } else { "NULL".to_owned() };
+        let locked = if matches!(phase, Phase::Grounding | Phase::Plan) {
+            "NULL".to_owned()
+        } else {
+            at.clone()
+        };
+        let done = if *phase == Phase::Done {
+            at.clone()
+        } else {
+            "NULL".to_owned()
+        };
         let phase = phase.as_str();
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)

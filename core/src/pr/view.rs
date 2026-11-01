@@ -26,7 +26,11 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if !matches!(pr.status.as_str(), "open" | "merged") {
         return Err(pr.refuse(&id, COMMAND, "open or merged"));
     }
-    let number = pr.pull.as_ref().expect("an open or merged PR has its pull request (prs CHECK)").number;
+    let number = pr
+        .pull
+        .as_ref()
+        .expect("an open or merged PR has its pull request (prs CHECK)")
+        .number;
     let lead = pr.lead(&id)?;
 
     let policy = pr_policy(&mut env, &id, &pr.key)?;
@@ -34,14 +38,23 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
 
     let state = PrState::of_graphql(&view.state)?;
-    let summary = ChecksSummary::of(view.checks.as_deref().unwrap_or_default(), &policy.pr.human_gated_contexts, &policy.pr.required_checks);
+    let summary = ChecksSummary::of(
+        view.checks.as_deref().unwrap_or_default(),
+        &policy.pr.human_gated_contexts,
+        &policy.pr.required_checks,
+    );
     let checks: Vec<Value> = view
         .checks
         .iter()
         .flatten()
         .filter_map(|c| {
             let name = c.name.clone().or_else(|| c.context.clone())?;
-            let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default();
+            let conclusion = c
+                .conclusion
+                .clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| c.state.clone())
+                .unwrap_or_default();
             let mut check = json!({"name": name, "conclusion": conclusion});
             if let Some(url) = c.url.as_ref().filter(|u| !u.is_empty()) {
                 check["url"] = json!(url);
@@ -54,16 +67,35 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         .iter()
         .filter(|r| r.state == "APPROVED")
         .filter_map(|r| r.author.as_ref())
-        .map(|a| Approval { login: a.login.clone(), bot_type: false })
+        .map(|a| Approval {
+            login: a.login.clone(),
+            bot_type: false,
+        })
         .collect();
-    let reviews: Vec<Value> =
-        view.reviews.iter().map(|r| json!({"id": r.id.0, "author": login(&r.author), "state": r.state, "body": r.body})).collect();
-    let comments: Vec<Value> = view.comments.iter().map(|c| json!({"id": c.id.0, "author": login(&c.author), "body": c.body})).collect();
-    let inline_comments: Vec<Value> =
-        inline.iter().map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body})).collect();
+    let reviews: Vec<Value> = view
+        .reviews
+        .iter()
+        .map(
+            |r| json!({"id": r.id.0, "author": login(&r.author), "state": r.state, "body": r.body}),
+        )
+        .collect();
+    let comments: Vec<Value> = view
+        .comments
+        .iter()
+        .map(|c| json!({"id": c.id.0, "author": login(&c.author), "body": c.body}))
+        .collect();
+    let inline_comments: Vec<Value> = inline
+        .iter()
+        .map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body}))
+        .collect();
 
-    let row = pr.pull_request.expect("an open or merged PR has its pull_request row (prs CHECK)");
-    let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
+    let row = pr
+        .pull_request
+        .expect("an open or merged PR has its pull_request row (prs CHECK)");
+    let feedback = env
+        .store
+        .read(|conn| crate::pr::pulls::load(conn, row))?
+        .feedback;
     let post = env.store.read(|conn| {
         let Some(p) = super::posts::find(conn, id.as_str(), pr.key.as_str())? else { return Ok(None) };
         // The queue row of the PR's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.

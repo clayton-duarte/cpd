@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::engine::{Engine, incident_holds, stopping};
 use super::detached_launch;
+use super::engine::{Engine, incident_holds, stopping};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -67,11 +67,16 @@ fn log_path(home: &CpdHome, session: &SessionId) -> PathBuf {
 fn due(turn: Option<&str>, titled_at: Option<&str>, now: OffsetDateTime) -> Result<bool, CpdError> {
     let time = |what: &str, value: &str| {
         OffsetDateTime::parse(value, &Rfc3339).map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid value: a Session's {what} is {value:?}: {e}."))
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("The store holds an invalid value: a Session's {what} is {value:?}: {e}."),
+            )
         })
     };
     let Some(turn) = turn else { return Ok(false) };
-    let Some(titled) = titled_at else { return Ok(true) };
+    let Some(titled) = titled_at else {
+        return Ok(true);
+    };
     let titled = time("titled_at", titled)?;
     Ok(time("session-state Event's at", turn)? > titled && now - titled >= THROTTLE)
 }
@@ -94,7 +99,13 @@ pub(super) fn run(engine: &mut Engine) {
     let idle = engine.store.read(|conn| {
         let mut stmt = conn.prepare(IDLE)?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut due_now = Vec::new();
         for (id, titled_at, turn) in rows {
@@ -112,7 +123,14 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E10, About::Machine, &e),
     };
     // A Session that is not due any more (titled by another run, archived, working) has no failure to report.
-    for session in engine.titles.reported.iter().filter(|s| !due_now.contains(s)).cloned().collect::<Vec<_>>() {
+    for session in engine
+        .titles
+        .reported
+        .iter()
+        .filter(|s| !due_now.contains(s))
+        .cloned()
+        .collect::<Vec<_>>()
+    {
         engine.clear(Step::E10, &About::TitleRun(session.clone()));
         engine.titles.reported.remove(&session);
     }
@@ -139,7 +157,10 @@ pub(super) fn run(engine: &mut Engine) {
         }
         match spawn(engine, &session, width) {
             Ok(run) => {
-                engine.log.line(&format!("E10: started the retitle of Session {session} (pid {})", run.pid.0));
+                engine.log.line(&format!(
+                    "E10: started the retitle of Session {session} (pid {})",
+                    run.pid.0
+                ));
                 engine.titles.running.insert(session, run);
                 free -= 1;
             }
@@ -151,16 +172,27 @@ pub(super) fn run(engine: &mut Engine) {
 /// The width in columns of the chat slot pane (contract §6.2), read from tmux; None when the cockpit has no chat slot pane.
 fn chat_slot_width(engine: &Engine) -> Result<Option<u32>, CpdError> {
     let panes = engine.tmux.list_panes()?;
-    chat_slot(&panes, &engine.config.tmux.cockpit_session).map(|p| engine.tmux.pane_width(&p.pane)).transpose()
+    chat_slot(&panes, &engine.config.tmux.cockpit_session)
+        .map(|p| engine.tmux.pane_width(&p.pane))
+        .transpose()
 }
 
 /// The Sessions with a run in flight: the runs this engine started, and any other holding its
 /// `locks/title-<session>.lock` (a run that has not taken its lock yet is one of the first kind).
 fn held(engine: &Engine) -> Result<HashSet<String>, CpdError> {
-    let mut held: HashSet<String> = engine.titles.running.keys().map(|s| s.as_str().to_owned()).collect();
+    let mut held: HashSet<String> = engine
+        .titles
+        .running
+        .keys()
+        .map(|s| s.as_str().to_owned())
+        .collect();
     let dir = engine.home.locks_dir();
     let failed = |what: &str, e: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", dir.display())).with("path", dir.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot {what} {}: {e}.", dir.display()),
+        )
+        .with("path", dir.display().to_string())
     };
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -169,7 +201,13 @@ fn held(engine: &Engine) -> Result<HashSet<String>, CpdError> {
     };
     for entry in entries {
         let name = entry.map_err(|e| failed("read", &e))?.file_name();
-        let Some(session) = name.to_str().and_then(|n| n.strip_prefix("title-")).and_then(|n| n.strip_suffix(".lock")) else { continue };
+        let Some(session) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("title-"))
+            .and_then(|n| n.strip_suffix(".lock"))
+        else {
+            continue;
+        };
         if held.contains(session) {
             continue;
         }
@@ -198,36 +236,66 @@ fn reap(engine: &mut Engine) {
     for session in sessions {
         let about = About::TitleRun(session.clone());
         let spawned = engine.ports.spawn.clone();
-        let status = engine.titles.running.get(&session).map(|r| spawned.try_wait(r.pid));
+        let status = engine
+            .titles
+            .running
+            .get(&session)
+            .map(|r| spawned.try_wait(r.pid));
         let status = match status {
             Some(Ok(Some(status))) => status,
             Some(Ok(None)) | None => continue,
             Some(Err(e)) => {
                 engine.titles.running.remove(&session);
-                let error = CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for the retitle run of Session {session}: {e}."));
+                let error = CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot wait for the retitle run of Session {session}: {e}."),
+                );
                 engine.fail(Step::E10, about, &error);
                 continue;
             }
         };
-        let run = engine.titles.running.remove(&session).expect("it was just looked at");
+        let run = engine
+            .titles
+            .running
+            .remove(&session)
+            .expect("it was just looked at");
         let log = log_path(&engine.home, &session);
         let output = output_since(&log, run.offset);
         if status.success() {
-            engine.log.line(&format!("E10: the retitle of Session {session} ended"));
+            engine
+                .log
+                .line(&format!("E10: the retitle of Session {session} ended"));
             engine.titles.failing_since.remove(&session);
             engine.titles.reported.remove(&session);
             engine.clear(Step::E10, &about);
         } else if lost_the_lock(&output) {
             // Another run held the Session's lock: that run is the one that counts (commands.md §10.14).
-            engine.log.line(&format!("E10: the retitle of Session {session} found another run of it"));
+            engine.log.line(&format!(
+                "E10: the retitle of Session {session} found another run of it"
+            ));
         } else {
-            let since = *engine.titles.failing_since.entry(session.clone()).or_insert_with(|| engine.ports.clock.now());
-            let exit = status.code().map_or("a signal".to_owned(), |c| format!("exit {c}"));
-            engine.log.line(&format!("E10: the retitle of Session {session} failed ({exit})"));
+            let since = *engine
+                .titles
+                .failing_since
+                .entry(session.clone())
+                .or_insert_with(|| engine.ports.clock.now());
+            let exit = status
+                .code()
+                .map_or("a signal".to_owned(), |c| format!("exit {c}"));
+            engine.log.line(&format!(
+                "E10: the retitle of Session {session} failed ({exit})"
+            ));
             if engine.ports.clock.now().saturating_duration_since(since) < FAILING {
                 continue;
             }
-            let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: Vec<&str> = output
+                .lines()
+                .rev()
+                .take(TAIL_LINES)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             let failure = Failure {
                 code: ErrorCode::TitleFailed.as_str().to_owned(),
                 message: format!("Its retitle run failed ({exit})."),
@@ -243,32 +311,63 @@ fn reap(engine: &mut Engine) {
 fn output_since(log: &PathBuf, offset: u64) -> String {
     let mut text = Vec::new();
     if let Ok(mut file) = File::open(log) {
-        let _ = file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_to_end(&mut text));
+        let _ = file
+            .seek(SeekFrom::Start(offset))
+            .and_then(|_| file.read_to_end(&mut text));
     }
     String::from_utf8_lossy(&text).into_owned()
 }
 
 /// Whether the run's output is the refusal `title_failed` with reason `running`.
 fn lost_the_lock(output: &str) -> bool {
-    output.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).any(|v| {
-        v["error"]["code"] == "title_failed" && v["error"]["details"]["reason"] == "running"
-    })
+    output
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .any(|v| {
+            v["error"]["code"] == "title_failed" && v["error"]["details"]["reason"] == "running"
+        })
 }
 
 /// Spawns `cpd session retitle <session> --width <width>` through `engine.ports.spawn`, detached (`setsid`), stdin from
 /// `/dev/null`, stdout and stderr appended to the Session's `run/titles/<session>.log`.
 fn spawn(engine: &Engine, session: &SessionId, width: u32) -> Result<Run, CpdError> {
     let failed = |why: String| {
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the retitle run of Session {session}: {why}.")).with("session", session.as_str())
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot start the retitle run of Session {session}: {why}."),
+        )
+        .with("session", session.as_str())
     };
     let exe = engine.ports.spawn.self_exe()?;
     let log_path = log_path(&engine.home, session);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
-    let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| failed(format!("cannot open {}: {e}", log_path.display())))?;
-    let offset = log.metadata().map_err(|e| failed(format!("cannot read {}: {e}", log_path.display())))?.len();
-    let launch = detached_launch(&exe, &["session", "retitle", session.as_str(), "--width", &width.to_string()], &engine.home, log_path);
-    let pid = engine.ports.spawn.spawn(&launch).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| failed(format!("cannot open {}: {e}", log_path.display())))?;
+    let offset = log
+        .metadata()
+        .map_err(|e| failed(format!("cannot read {}: {e}", log_path.display())))?
+        .len();
+    let launch = detached_launch(
+        &exe,
+        &[
+            "session",
+            "retitle",
+            session.as_str(),
+            "--width",
+            &width.to_string(),
+        ],
+        &engine.home,
+        log_path,
+    );
+    let pid = engine
+        .ports
+        .spawn
+        .spawn(&launch)
+        .map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
     Ok(Run { pid, offset })
 }
 
@@ -296,15 +395,32 @@ mod tests {
     #[test]
     fn a_title_is_rewritten_for_a_newer_turn_once_it_is_ten_minutes_old() {
         let turn = Some("2026-10-20T11:55:00Z");
-        assert!(!due(turn, Some("2026-10-20T11:50:00.001Z"), at(NOW)).unwrap(), "not ten minutes old");
-        assert!(due(turn, Some("2026-10-20T11:50:00.000Z"), at(NOW)).unwrap(), "ten minutes old");
-        assert!(!due(turn, Some("2026-10-20T11:55:00Z"), at(NOW)).unwrap(), "the turn is not newer than the title");
-        assert!(!due(turn, Some("2026-10-20T11:56:00Z"), at(NOW)).unwrap(), "the title is newer than the turn");
+        assert!(
+            !due(turn, Some("2026-10-20T11:50:00.001Z"), at(NOW)).unwrap(),
+            "not ten minutes old"
+        );
+        assert!(
+            due(turn, Some("2026-10-20T11:50:00.000Z"), at(NOW)).unwrap(),
+            "ten minutes old"
+        );
+        assert!(
+            !due(turn, Some("2026-10-20T11:55:00Z"), at(NOW)).unwrap(),
+            "the turn is not newer than the title"
+        );
+        assert!(
+            !due(turn, Some("2026-10-20T11:56:00Z"), at(NOW)).unwrap(),
+            "the title is newer than the turn"
+        );
     }
 
     #[test]
     fn an_unreadable_time_is_an_error() {
-        assert_eq!(due(Some("2026-10-20T11:00:00Z"), Some("yesterday"), at(NOW)).unwrap_err().code(), ErrorCode::StoreFailed);
+        assert_eq!(
+            due(Some("2026-10-20T11:00:00Z"), Some("yesterday"), at(NOW))
+                .unwrap_err()
+                .code(),
+            ErrorCode::StoreFailed
+        );
     }
 
     #[test]

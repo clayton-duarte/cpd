@@ -15,8 +15,22 @@ fn fx() -> Ip {
     let env = Ip::with_ports();
     env.engine_config_on_tmux("");
     env.engine_routes_on_tmux();
-    let out = env.tmux(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = env.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "x",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "sleep",
+        "600",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');");
     env.engine_plan();
@@ -39,14 +53,23 @@ fn event(fx: &Ip, kind: &str, job: &str) {
 /// Every `session-message` Event: (session, `data`).
 fn messages(fx: &Ip) -> Vec<(String, Value)> {
     fx.env.read(|conn| {
-        let mut stmt = conn.prepare("SELECT session, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows.into_iter().map(|(s, d)| (s, serde_json::from_str(&d).unwrap())).collect())
+        let mut stmt = conn.prepare(
+            "SELECT session, data FROM events WHERE kind = 'session-message' ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(s, d)| (s, serde_json::from_str(&d).unwrap()))
+            .collect())
     })
 }
 
 fn count(fx: &Ip, kind: &str) -> i64 {
-    fx.env.query(&format!("SELECT count(*) FROM events WHERE kind = '{kind}'"))
+    fx.env.query(&format!(
+        "SELECT count(*) FROM events WHERE kind = '{kind}'"
+    ))
 }
 
 fn text(message: &(String, Value)) -> &str {
@@ -61,9 +84,24 @@ fn wakes_the_idle_lead_once() {
     let sent = messages(&fx);
     assert_eq!(sent.len(), 1, "one wake: {sent:?}");
     assert_eq!(sent[0].0, "lead1");
-    assert_eq!((sent[0].1["from"].clone(), sent[0].1["wake"].clone()), (Value::Null, Value::Bool(true)), "{:?}", sent[0].1);
-    assert!(text(&sent[0]).starts_with("Drafts of Plan pay are parked: d1 (no pending Plan review, no unfinished need)."), "{}", text(&sent[0]));
-    assert!(text(&sent[0]).ends_with("Nothing runs it otherwise."), "{}", text(&sent[0]));
+    assert_eq!(
+        (sent[0].1["from"].clone(), sent[0].1["wake"].clone()),
+        (Value::Null, Value::Bool(true)),
+        "{:?}",
+        sent[0].1
+    );
+    assert!(
+        text(&sent[0]).starts_with(
+            "Drafts of Plan pay are parked: d1 (no pending Plan review, no unfinished need)."
+        ),
+        "{}",
+        text(&sent[0])
+    );
+    assert!(
+        text(&sent[0]).ends_with("Nothing runs it otherwise."),
+        "{}",
+        text(&sent[0])
+    );
 
     // The message is the record: the next ticks send nothing.
     fx.watch_ticks(LATER_TICKS).unwrap();
@@ -79,7 +117,12 @@ fn lists_the_parked_keys_sorted() {
     fx.watch_ticks(1).unwrap();
     let sent = messages(&fx);
     assert_eq!(sent.len(), 1, "{sent:?}");
-    assert!(text(&sent[0]).starts_with("Drafts of Plan pay are parked: alpha, mid, zeta (no pending Plan review"), "{}", text(&sent[0]));
+    assert!(
+        text(&sent[0])
+            .starts_with("Drafts of Plan pay are parked: alpha, mid, zeta (no pending Plan review"),
+        "{}",
+        text(&sent[0])
+    );
 }
 
 #[test]
@@ -98,7 +141,11 @@ fn wakes_again_after_a_state_change() {
     fx.watch_ticks(1).unwrap();
     let sent = messages(&fx);
     assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(text(&sent[1]).starts_with("Drafts of Plan pay are parked: d2, d3 (no pending Plan review"), "{}", text(&sent[1]));
+    assert!(
+        text(&sent[1]).starts_with("Drafts of Plan pay are parked: d2, d3 (no pending Plan review"),
+        "{}",
+        text(&sent[1])
+    );
 
     fx.watch_ticks(LATER_TICKS).unwrap();
     assert_eq!(messages(&fx).len(), 2);
@@ -109,18 +156,29 @@ fn archived_plan(fx: &Ip) {
     fx.add_job("q1", &[], "");
     draft(fx, "d1");
     draft(fx, "d2");
-    fx.env.sql("UPDATE plans SET archived_at = 't' WHERE id = 'pay';");
+    fx.env
+        .sql("UPDATE plans SET archived_at = 't' WHERE id = 'pay';");
 }
 
 fn statuses(fx: &Ip) -> Vec<(String, String)> {
     fx.env.read(|conn| {
-        let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE plan = 'pay' ORDER BY key")?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
+        let mut stmt =
+            conn.prepare("SELECT key, status FROM jobs WHERE plan = 'pay' ORDER BY key")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()
     })
 }
 
 fn expected_statuses(drafts: &str) -> Vec<(String, String)> {
-    ["d1", "d2", "q1"].iter().map(|k| (k.to_string(), if *k == "q1" { "queued" } else { drafts }.to_owned())).collect()
+    ["d1", "d2", "q1"]
+        .iter()
+        .map(|k| {
+            (
+                k.to_string(),
+                if *k == "q1" { "queued" } else { drafts }.to_owned(),
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -130,14 +188,25 @@ fn cancels_drafts_of_an_archived_plan() {
     fx.watch_ticks(1).unwrap();
     assert_eq!(statuses(&fx), expected_statuses("cancelled"));
     let reasons: Vec<(String, String)> = fx.env.read(|conn| {
-        let mut stmt = conn.prepare("SELECT key, cancel_reason FROM jobs WHERE status = 'cancelled' ORDER BY key")?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()
+        let mut stmt = conn.prepare(
+            "SELECT key, cancel_reason FROM jobs WHERE status = 'cancelled' ORDER BY key",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()
     });
     let reason = "Plan archived with a draft (hs-d731)";
-    assert_eq!(reasons, [("d1".to_owned(), reason.to_owned()), ("d2".to_owned(), reason.to_owned())]);
+    assert_eq!(
+        reasons,
+        [
+            ("d1".to_owned(), reason.to_owned()),
+            ("d2".to_owned(), reason.to_owned())
+        ]
+    );
     let cancelled: Vec<String> = fx.env.read(|conn| {
-        let mut stmt = conn.prepare("SELECT job FROM events WHERE kind = 'job-cancelled' ORDER BY job")?;
-        stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()
+        let mut stmt =
+            conn.prepare("SELECT job FROM events WHERE kind = 'job-cancelled' ORDER BY job")?;
+        stmt.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
     });
     assert_eq!(cancelled, ["d1", "d2"], "one job-cancelled Event each");
     assert_eq!(messages(&fx), [], "an archived Plan's Lead is not woken");
@@ -148,7 +217,11 @@ fn archived_cancel_is_idempotent() {
     let fx = fx();
     archived_plan(&fx);
     fx.watch_ticks(1).unwrap();
-    assert_eq!(count(&fx, "job-cancelled"), 2, "the first tick cancelled both drafts");
+    assert_eq!(
+        count(&fx, "job-cancelled"),
+        2,
+        "the first tick cancelled both drafts"
+    );
     let before: i64 = fx.env.query("SELECT max(id) FROM events");
     fx.watch_ticks(LATER_TICKS).unwrap();
     let after: Vec<(i64, String)> = fx.env.read(|conn| {
@@ -164,7 +237,9 @@ fn an_approved_plan_review_in_phase_plan_sends_no_wake() {
     let fx = fx();
     // Plan `pay` is born in `dispatch` and the store forbids going back to `plan`: a second Plan `pln` is born in `plan`,
     // its Lead `lead2` idle in the same pane.
-    let pane: String = fx.env.query("SELECT tmux_pane FROM sessions WHERE id = 'lead1'");
+    let pane: String = fx
+        .env
+        .query("SELECT tmux_pane FROM sessions WHERE id = 'lead1'");
     fx.env.sql(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
            VALUES ('lead2', 'lead', 'ctx', 'pln', 'Lead2', '/', 'O3', 'idle', 't', 't', '{pane}');
@@ -175,12 +250,19 @@ fn an_approved_plan_review_in_phase_plan_sends_no_wake() {
            VALUES ('pln', 'r', 'd1', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     ));
     let plan = cpd_core::ids::PlanId::parse("pln").unwrap();
-    let fingerprint = fx.env.read(|conn| Ok(cpd_core::plan::plan_fingerprint(conn, &plan))).unwrap();
+    let fingerprint = fx
+        .env
+        .read(|conn| Ok(cpd_core::plan::plan_fingerprint(conn, &plan)))
+        .unwrap();
     fx.env.sql(&format!(
         "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pln', 'r1', 1, '{fingerprint}', 'T', 'approved', 't', 't');
          INSERT INTO events (txn, at, kind, context, plan, job, text, data) VALUES (cpd_txn(), 't', 'plan-review', 'ctx', 'pln', '', 'x', '{{}}');"
     ));
     fx.watch_ticks(1).unwrap();
     fx.watch_ticks(LATER_TICKS).unwrap();
-    assert_eq!(messages(&fx), [], "an approved current review in phase plan covers the drafts");
+    assert_eq!(
+        messages(&fx),
+        [],
+        "an approved current review in phase plan covers the drafts"
+    );
 }

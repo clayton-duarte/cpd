@@ -60,7 +60,11 @@ impl Fixture {
     pub(crate) fn new() -> Fixture {
         let fx = Fx::with_ports();
         let env = &fx.env;
-        fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+        fs::write(
+            env.cpd_home().join("config.toml"),
+            "version = 1\nmachine = \"m1\"\n",
+        )
+        .unwrap();
         let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         store
@@ -79,10 +83,22 @@ impl Fixture {
         ];
         reconcile(&mut store, &all, T0).unwrap();
         for (at, c) in [
-            (T1, condition(Kind::Dialog, Urgency::White, "dialog", "ctx1")),
-            (T2, condition(Kind::PlanReview, Urgency::Yellow, "review", "ctx2")),
-            (T3, condition(Kind::Unread, Urgency::Magenta, "unread", "ctx1")),
-            (T4, condition(Kind::Question, Urgency::Yellow, "question", "ctx1")),
+            (
+                T1,
+                condition(Kind::Dialog, Urgency::White, "dialog", "ctx1"),
+            ),
+            (
+                T2,
+                condition(Kind::PlanReview, Urgency::Yellow, "review", "ctx2"),
+            ),
+            (
+                T3,
+                condition(Kind::Unread, Urgency::Magenta, "unread", "ctx1"),
+            ),
+            (
+                T4,
+                condition(Kind::Question, Urgency::Yellow, "question", "ctx1"),
+            ),
         ] {
             all.push(c);
             reconcile(&mut store, &all, at).unwrap();
@@ -125,19 +141,29 @@ impl Fixture {
     }
 
     pub(crate) fn events(&self, kind: &str) -> Vec<Value> {
-        self.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+        self.cpd(&["events", "list", "--kind", kind]).ok()["events"]
+            .as_array()
+            .unwrap()
+            .clone()
     }
 
     /// Holds `locks/watch.lock` as an engine does, until dropped.
     pub(crate) fn engine(&self) -> Flock<File> {
         let path = self.fx.env.cpd_home().join("locks/watch.lock");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+        Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .unwrap()
     }
 }
 
 fn subjects(json: &Value) -> Vec<&str> {
-    json["items"].as_array().unwrap().iter().map(|i| i["subject"].as_str().unwrap()).collect()
+    json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["subject"].as_str().unwrap())
+        .collect()
 }
 
 fn time(value: &Value) -> OffsetDateTime {
@@ -151,14 +177,20 @@ fn list_is_in_order_with_engine_down_first_when_no_engine_runs() {
     fx.fx.advance(std::time::Duration::from_secs(2 * 86_400));
     let list = fx.ok(&["list"]);
     assert_eq!(list["engine"], json!({"running": false}));
-    assert_eq!(subjects(&list), ["engine", "stuck", "review", "question", "unread", "dialog"]);
+    assert_eq!(
+        subjects(&list),
+        ["engine", "stuck", "review", "question", "unread", "dialog"]
+    );
     let down = &list["items"][0];
     assert_eq!(down["id"], Value::Null);
     assert_eq!(down["kind"], "engine-down");
     assert_eq!(down["urgency"], "red");
     assert_eq!(down["label"], "engine is down");
     assert_eq!(down["context"], Value::Null);
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
+    assert_eq!(
+        list["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 0})
+    );
     // The highest Event id: the fixture's reconcile calls appended Events.
     assert!(list["events_cursor"].as_i64().unwrap() > 0);
 
@@ -180,12 +212,19 @@ fn a_running_engine_adds_no_engine_down() {
     let _engine = fx.engine();
     let list = fx.ok(&["list"]);
     assert_eq!(list["engine"], json!({"running": true}));
-    assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
+    assert_eq!(
+        subjects(&list),
+        ["stuck", "review", "question", "unread", "dialog"]
+    );
 }
 
 /// A Manager Session of `ctx1` (`archived`: archived, so not live).
 fn manager(fx: &mut Fixture, id: &str, archived: bool) {
-    let archived = if archived { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
+    let archived = if archived {
+        "'2026-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     fx.store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
@@ -201,7 +240,11 @@ fn manager(fx: &mut Fixture, id: &str, archived: bool) {
 #[test]
 fn engine_down_shows_only_when_no_live_manager_exists() {
     let mut fx = Fixture::new();
-    assert_eq!(subjects(&fx.ok(&["list"]))[0], "engine", "no Manager: the User is the one to act");
+    assert_eq!(
+        subjects(&fx.ok(&["list"]))[0],
+        "engine",
+        "no Manager: the User is the one to act"
+    );
     // an archived Manager is not live
     manager(&mut fx, "m-old", true);
     assert_eq!(subjects(&fx.ok(&["list"]))[0], "engine");
@@ -209,7 +252,10 @@ fn engine_down_shows_only_when_no_live_manager_exists() {
     manager(&mut fx, "m-live", false);
     let list = fx.ok(&["list"]);
     assert_eq!(list["engine"], json!({"running": false}));
-    assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
+    assert_eq!(
+        subjects(&list),
+        ["stuck", "review", "question", "unread", "dialog"]
+    );
     assert_eq!(subjects(&fx.ok(&["list", "--all"]))[0], "stuck");
 }
 
@@ -222,13 +268,36 @@ fn hidden_items_leave_the_list_and_are_counted() {
 
     let list = fx.ok(&["list"]);
     assert_eq!(subjects(&list), ["stuck", "review", "question"]);
-    assert_eq!(list["hidden"], json!({"snoozed": 1, "dismissed": 1, "claimed": 0}));
+    assert_eq!(
+        list["hidden"],
+        json!({"snoozed": 1, "dismissed": 1, "claimed": 0})
+    );
 
     let all = fx.ok(&["list", "--all"]);
-    assert_eq!(subjects(&all), ["stuck", "review", "question", "unread", "dialog"]);
-    assert_eq!(all["hidden"], json!({"snoozed": 1, "dismissed": 1, "claimed": 0}));
-    let hidden: Vec<&Value> = all["items"].as_array().unwrap().iter().map(|i| &i["hidden"]).collect();
-    assert_eq!(hidden, [&Value::Null, &Value::Null, &Value::Null, &json!("dismissed"), &json!("snoozed")]);
+    assert_eq!(
+        subjects(&all),
+        ["stuck", "review", "question", "unread", "dialog"]
+    );
+    assert_eq!(
+        all["hidden"],
+        json!({"snoozed": 1, "dismissed": 1, "claimed": 0})
+    );
+    let hidden: Vec<&Value> = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| &i["hidden"])
+        .collect();
+    assert_eq!(
+        hidden,
+        [
+            &Value::Null,
+            &Value::Null,
+            &Value::Null,
+            &json!("dismissed"),
+            &json!("snoozed")
+        ]
+    );
 }
 
 #[test]
@@ -240,13 +309,22 @@ fn a_snooze_that_has_passed_shows_the_item_again() {
     assert_eq!(fx.ok(&["list"])["hidden"]["snoozed"], 1);
     fx.store
         .write("fixture", |tx| {
-            tx.execute("UPDATE inbox_items SET snoozed_until = '2000-01-01T00:00:00.000Z' WHERE id = ?1", [dialog])?;
+            tx.execute(
+                "UPDATE inbox_items SET snoozed_until = '2000-01-01T00:00:00.000Z' WHERE id = ?1",
+                [dialog],
+            )?;
             Ok(())
         })
         .unwrap();
     let list = fx.ok(&["list"]);
-    assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
+    assert_eq!(
+        subjects(&list),
+        ["stuck", "review", "question", "unread", "dialog"]
+    );
+    assert_eq!(
+        list["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 0})
+    );
 }
 
 #[test]
@@ -257,7 +335,10 @@ fn context_keeps_only_that_contexts_items_and_drops_engine_down() {
     let list = fx.ok(&["list", "--context", "ctx1"]);
     assert_eq!(subjects(&list), ["stuck", "question", "unread", "dialog"]);
     let (exit, error) = fx.fail(&["list", "--context", "nope"]);
-    assert_eq!((exit, error["code"].as_str()), (4, Some("context_not_found")));
+    assert_eq!(
+        (exit, error["code"].as_str()),
+        (4, Some("context_not_found"))
+    );
 }
 
 #[test]
@@ -270,17 +351,31 @@ fn closed_lists_newest_first_with_a_limit_and_a_fixed_age() {
     // closed_at minus opened_at: T0 to 2026-01-03.
     assert_eq!(y["age_seconds"], 2 * 86_400);
     assert_eq!(list["items"][1]["age_seconds"], 86_400);
-    assert_eq!(subjects(&fx.ok(&["list", "--closed", "--limit", "1"])), ["y"]);
+    assert_eq!(
+        subjects(&fx.ok(&["list", "--closed", "--limit", "1"])),
+        ["y"]
+    );
     // Open items are not listed, so neither is engine-down, but they are counted as hidden.
-    assert_eq!(list["hidden"], json!({"snoozed": 0, "dismissed": 0, "claimed": 0}));
+    assert_eq!(
+        list["hidden"],
+        json!({"snoozed": 0, "dismissed": 0, "claimed": 0})
+    );
 }
 
 #[test]
 fn list_flags_that_do_not_go_together_are_usage() {
     let fx = Fixture::new();
-    for args in [&["list", "--all", "--closed"][..], &["list", "--limit", "5"], &["list", "--closed", "--limit", "0"]] {
+    for args in [
+        &["list", "--all", "--closed"][..],
+        &["list", "--limit", "5"],
+        &["list", "--closed", "--limit", "0"],
+    ] {
         let (exit, error) = fx.fail(args);
-        assert_eq!((exit, error["code"].as_str()), (2, Some("usage")), "{args:?}");
+        assert_eq!(
+            (exit, error["code"].as_str()),
+            (2, Some("usage")),
+            "{args:?}"
+        );
     }
 }
 
@@ -294,7 +389,17 @@ fn show_prints_an_open_or_a_closed_item() {
     assert_eq!(item["urgency"], "yellow");
     assert_eq!(item["subject"], "review");
     assert_eq!(item["context"], "ctx2");
-    for link in ["plan", "job", "session", "record", "event", "url", "closed_at", "snoozed_until", "dismissed_at"] {
+    for link in [
+        "plan",
+        "job",
+        "session",
+        "record",
+        "event",
+        "url",
+        "closed_at",
+        "snoozed_until",
+        "dismissed_at",
+    ] {
         assert_eq!(item[link], Value::Null, "{link}");
     }
     let closed = fx.ok(&["show", &fx.id("x").to_string()]);
@@ -305,14 +410,21 @@ fn show_prints_an_open_or_a_closed_item() {
 }
 
 /// `snooze <id> <duration>`'s `snoozed_until`, and the time just before and after.
-fn snoozed(fx: &Fixture, id: i64, duration: &str) -> (OffsetDateTime, OffsetDateTime, OffsetDateTime) {
+fn snoozed(
+    fx: &Fixture,
+    id: i64,
+    duration: &str,
+) -> (OffsetDateTime, OffsetDateTime, OffsetDateTime) {
     let before = fx.fx.fakes.clock.utc();
     let out = fx.ok(&["snooze", &id.to_string(), duration]);
     let after = fx.fx.fakes.clock.utc();
     assert_eq!(out["item"]["id"], id);
     let until = time(&out["item"]["snoozed_until"]);
     // The stored value is the printed one.
-    assert_eq!(fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"], out["item"]["snoozed_until"]);
+    assert_eq!(
+        fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"],
+        out["item"]["snoozed_until"]
+    );
     (before, until, after)
 }
 
@@ -324,14 +436,20 @@ fn snooze_15m_and_1h_are_that_long_from_now() {
         let (before, until, after) = snoozed(&fx, id, duration);
         // Times are printed to the millisecond.
         let slack = Duration::milliseconds(1);
-        assert!(until >= before + length - slack && until <= after + length, "{duration}: {until}");
+        assert!(
+            until >= before + length - slack && until <= after + length,
+            "{duration}: {until}"
+        );
     }
     // Snoozing again replaced the time and appended another Event, scoped as the item is.
     let events = fx.events("inbox-snoozed");
     assert_eq!(events.len(), 2);
     assert_eq!(events[0]["data"]["item"], id);
     assert_eq!(events[0]["context"], "ctx1");
-    assert_eq!(events[1]["data"]["until"], fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"]);
+    assert_eq!(
+        events[1]["data"]["until"],
+        fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"]
+    );
     // opened_at is kept.
     assert_eq!(fx.ok(&["show", &id.to_string()])["item"]["opened_at"], T1);
 }
@@ -342,10 +460,25 @@ fn snooze_tomorrow_is_the_next_0900_at_the_offset_date_prints() {
     let id = fx.id("dialog");
     // 09:00 at +0530 is 03:30 UTC; at -0800 it is 17:00 UTC.
     for (offset, hour, minute) in [("+0530", 3, 30), ("-0800", 17, 0), ("+0000", 9, 0)] {
-        let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::ok(&format!("{offset}\n")));
+        let _ =
+            (*fx.fx.fakes.runner)
+                .clone()
+                .once("date", |_| true, Reply::ok(&format!("{offset}\n")));
         let (before, until, _) = snoozed(&fx, id, "tomorrow");
-        assert_eq!((until.hour(), until.minute(), until.second(), until.millisecond()), (hour, minute, 0, 0), "{offset}");
-        assert!(until > before && until <= before + Duration::hours(24), "{offset}: {until}");
+        assert_eq!(
+            (
+                until.hour(),
+                until.minute(),
+                until.second(),
+                until.millisecond()
+            ),
+            (hour, minute, 0, 0),
+            "{offset}"
+        );
+        assert!(
+            until > before && until <= before + Duration::hours(24),
+            "{offset}: {until}"
+        );
     }
     assert_eq!(fx.fx.calls("date")[0].args, ["+%z"]);
     assert_eq!(fx.fx.calls("date").len(), 3);
@@ -355,14 +488,21 @@ fn snooze_tomorrow_is_the_next_0900_at_the_offset_date_prints() {
 fn snooze_tomorrow_refuses_when_date_fails_and_changes_nothing() {
     let fx = Fixture::new();
     let id = fx.id("dialog");
-    let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::exit(1, "", "no zone\n"));
+    let _ = (*fx.fx.fakes.runner)
+        .clone()
+        .once("date", |_| true, Reply::exit(1, "", "no zone\n"));
     let (exit, error) = fx.fail(&["snooze", &id.to_string(), "tomorrow"]);
     assert_eq!((exit, error["code"].as_str()), (1, Some("spawn_failed")));
     assert_eq!(error["details"]["stderr"], "no zone");
-    let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::ok("garbage\n"));
+    let _ = (*fx.fx.fakes.runner)
+        .clone()
+        .once("date", |_| true, Reply::ok("garbage\n"));
     let (exit, error) = fx.fail(&["snooze", &id.to_string(), "tomorrow"]);
     assert_eq!((exit, error["code"].as_str()), (1, Some("spawn_failed")));
-    assert_eq!(fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"], Value::Null);
+    assert_eq!(
+        fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"],
+        Value::Null
+    );
     assert!(fx.events("inbox-snoozed").is_empty());
 }
 
@@ -418,6 +558,9 @@ impl Fixture {
     /// One integer from a query on a fresh connection.
     pub(crate) fn store_count(&self, sql: &str) -> i64 {
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
-        Store::open(&home, 5000).unwrap().read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        Store::open(&home, 5000)
+            .unwrap()
+            .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     }
 }

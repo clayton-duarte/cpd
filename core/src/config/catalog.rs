@@ -15,12 +15,12 @@ use sha2::{Digest, Sha256};
 
 use super::cache;
 use super::file::Config;
-use crate::policy::model::Models;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
 use crate::host::runner::Runner;
+use crate::policy::model::Models;
 use crate::ports::Ports;
 use crate::store::Store;
 
@@ -55,42 +55,72 @@ pub fn locate_pi() -> Result<PiInstall, CpdError> {
     let pi = std::env::split_paths(&path)
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| dir.join("pi"))
-        .find(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
-        .ok_or_else(|| pi_not_found("`pi` is not on PATH.").with("path", path.to_string_lossy().into_owned()))?;
-    let real = std::fs::canonicalize(&pi)
-        .map_err(|e| pi_not_found(format!("cannot resolve {}: {e}.", pi.display())).with("pi", pi.display().to_string()))?;
+        .find(|p| {
+            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+        .ok_or_else(|| {
+            pi_not_found("`pi` is not on PATH.").with("path", path.to_string_lossy().into_owned())
+        })?;
+    let real = std::fs::canonicalize(&pi).map_err(|e| {
+        pi_not_found(format!("cannot resolve {}: {e}.", pi.display()))
+            .with("pi", pi.display().to_string())
+    })?;
     let agent_dir = real
         .parent()
         .and_then(Path::parent)
-        .ok_or_else(|| pi_not_found(format!("{} has no agent directory above it.", real.display())))?
+        .ok_or_else(|| {
+            pi_not_found(format!(
+                "{} has no agent directory above it.",
+                real.display()
+            ))
+        })?
         .to_path_buf();
 
     let current = agent_dir.join("install").join("current-version");
     let text = std::fs::read_to_string(&current).map_err(|e| {
-        pi_not_found(format!("cannot read {}: {e}.", current.display())).with("current_version", current.display().to_string())
+        pi_not_found(format!("cannot read {}: {e}.", current.display()))
+            .with("current_version", current.display().to_string())
     })?;
     let version = text.lines().next().unwrap_or("").trim().to_owned();
     // The characters pi's launcher accepts for `current-version`.
     let valid = !version.is_empty()
         && version != "."
         && version != ".."
-        && version.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
     if !valid {
-        return Err(pi_not_found(format!("invalid pi version {version:?} in {}.", current.display()))
-            .with("current_version", current.display().to_string())
-            .with("version", version));
+        return Err(pi_not_found(format!(
+            "invalid pi version {version:?} in {}.",
+            current.display()
+        ))
+        .with("current_version", current.display().to_string())
+        .with("version", version));
     }
 
-    let scope = agent_dir.join("install").join("releases").join(&version).join("node_modules").join("@earendil-works");
+    let scope = agent_dir
+        .join("install")
+        .join("releases")
+        .join(&version)
+        .join("node_modules")
+        .join("@earendil-works");
     let coding_agent_entry = scope.join("pi-coding-agent").join("dist").join("index.js");
     let pi_ai_entry = scope.join("pi-ai").join("dist").join("index.js");
     for entry in [&coding_agent_entry, &pi_ai_entry] {
         if !entry.is_file() {
-            return Err(pi_not_found(format!("pi release {version} is incomplete: {} is missing.", entry.display()))
-                .with("missing", entry.display().to_string()));
+            return Err(pi_not_found(format!(
+                "pi release {version} is incomplete: {} is missing.",
+                entry.display()
+            ))
+            .with("missing", entry.display().to_string()));
         }
     }
-    Ok(PiInstall { agent_dir, version, coding_agent_entry, pi_ai_entry })
+    Ok(PiInstall {
+        agent_dir,
+        version,
+        coding_agent_entry,
+        pi_ai_entry,
+    })
 }
 
 /// pi's Node, the one pi's launcher uses: `${XDG_DATA_HOME:-~/.local/share}/pi-node/current/bin/node`
@@ -129,7 +159,12 @@ fn tail(bytes: &[u8]) -> String {
 /// written in one transaction (append-only: old rows stay).
 pub fn load(config: &Config, models: &Models) -> Result<Catalog, CpdError> {
     // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
-    let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
+    let mut store = Store::open_with(
+        &*Ports::current().clock,
+        &CpdHome::from_env()?,
+        config.timeouts.store_busy_ms.into(),
+        None,
+    )?;
     load_with(models, &mut store)
 }
 
@@ -157,7 +192,10 @@ fn models_sha(agent_dir: &Path) -> Result<String, CpdError> {
     match std::fs::read(&path) {
         Ok(bytes) => Ok(format!("{:x}", Sha256::digest(bytes))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(catalog_failed(format!("cannot read {}: {e}.", path.display())).with("models_json", path.display().to_string())),
+        Err(e) => Err(
+            catalog_failed(format!("cannot read {}: {e}.", path.display()))
+                .with("models_json", path.display().to_string()),
+        ),
     }
 }
 
@@ -167,38 +205,62 @@ pub fn read(pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catal
 }
 
 /// [`read`] on `runner`.
-pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catalog, CpdError> {
-    let tiers = [(Letter::O, &models.o), (Letter::S, &models.s), (Letter::H, &models.h), (Letter::G, &models.g)];
+pub fn read_with(
+    runner: &dyn Runner,
+    pi: &PiInstall,
+    models: &Models,
+    deadline: Duration,
+) -> Result<Catalog, CpdError> {
+    let tiers = [
+        (Letter::O, &models.o),
+        (Letter::S, &models.s),
+        (Letter::H, &models.h),
+        (Letter::G, &models.g),
+    ];
     let node = node();
     let mut cmd = Command::new(&node);
     cmd.args(["--input-type=module", "-e", MODULE, "--"])
         .arg(&pi.coding_agent_entry)
         .arg(&pi.pi_ai_entry)
-        .args(tiers.iter().map(|(letter, model)| format!("{letter}={model}")))
+        .args(
+            tiers
+                .iter()
+                .map(|(letter, model)| format!("{letter}={model}")),
+        )
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = runner.output(&mut cmd, "node", deadline).map_err(|e| match e {
-        Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
-        Failed::Timeout(e) => e,
-    })?;
+    let out = runner
+        .output(&mut cmd, "node", deadline)
+        .map_err(|e| match e {
+            Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display()))
+                .with("node", node.display().to_string()),
+            Failed::Timeout(e) => e,
+        })?;
     if !out.status.success() {
-        return Err(catalog_failed(format!("the catalog module failed under pi {}.", pi.version))
-            .with("node", node.display().to_string())
-            .with("exit", out.status.code().map_or(Value::Null, Value::from))
-            .with("stderr", tail(&out.stderr)));
+        return Err(catalog_failed(format!(
+            "the catalog module failed under pi {}.",
+            pi.version
+        ))
+        .with("node", node.display().to_string())
+        .with("exit", out.status.code().map_or(Value::Null, Value::from))
+        .with("stderr", tail(&out.stderr)));
     }
-    let levels: BTreeMap<String, Option<Vec<String>>> = serde_json::from_slice(&out.stdout).map_err(|e| {
-        catalog_failed(format!("the catalog module printed invalid JSON: {e}."))
-            .with("stdout", tail(&out.stdout))
-            .with("stderr", tail(&out.stderr))
-    })?;
+    let levels: BTreeMap<String, Option<Vec<String>>> = serde_json::from_slice(&out.stdout)
+        .map_err(|e| {
+            catalog_failed(format!("the catalog module printed invalid JSON: {e}."))
+                .with("stdout", tail(&out.stdout))
+                .with("stderr", tail(&out.stderr))
+        })?;
 
     let mut missing = Vec::new();
     let mut models = Vec::new();
     for (letter, model) in tiers {
         let Some(entry) = levels.get(&letter.to_string()) else {
-            return Err(catalog_failed(format!("the catalog module printed nothing for Tier {letter}.")).with("letter", letter.to_string()));
+            return Err(catalog_failed(format!(
+                "the catalog module printed nothing for Tier {letter}."
+            ))
+            .with("letter", letter.to_string()));
         };
         let Some(entry) = entry else {
             missing.push(serde_json::json!({"letter": letter.to_string(), "model": model}));
@@ -206,7 +268,10 @@ pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline:
         };
         if letter == Letter::G {
             // G has no effort levels (hs-d562): pi's levels for it are ignored, only that pi has the model matters.
-            models.push(TierModel { model: model.clone(), efforts: vec![] });
+            models.push(TierModel {
+                model: model.clone(),
+                efforts: vec![],
+            });
             continue;
         }
         let mut efforts = Vec::new();
@@ -215,26 +280,43 @@ pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline:
                 Some(Some(effort)) => efforts.push(effort),
                 Some(None) => {}
                 None => {
-                    return Err(catalog_failed(format!("pi reports the unknown thinking level {level:?} for {model}."))
-                        .with("model", model.clone())
-                        .with("level", level.clone()));
+                    return Err(catalog_failed(format!(
+                        "pi reports the unknown thinking level {level:?} for {model}."
+                    ))
+                    .with("model", model.clone())
+                    .with("level", level.clone()));
                 }
             }
         }
         efforts.sort_unstable();
         efforts.dedup();
         if efforts.is_empty() {
-            return Err(catalog_failed(format!("pi reports no usable thinking level for {model}.")).with("model", model.clone()));
+            return Err(catalog_failed(format!(
+                "pi reports no usable thinking level for {model}."
+            ))
+            .with("model", model.clone()));
         }
-        models.push(TierModel { model: model.clone(), efforts });
+        models.push(TierModel {
+            model: model.clone(),
+            efforts,
+        });
     }
     if !missing.is_empty() {
-        return Err(CpdError::new(ErrorCode::TierModelUnknown, "A configured model is not in pi's catalog.")
-            .with("missing", missing)
-            .with("pi_version", pi.version.clone()));
+        return Err(CpdError::new(
+            ErrorCode::TierModelUnknown,
+            "A configured model is not in pi's catalog.",
+        )
+        .with("missing", missing)
+        .with("pi_version", pi.version.clone()));
     }
     let [o, s, h, g]: [TierModel; 4] = models.try_into().expect("one model per letter");
-    Ok(Catalog { pi_version: pi.version.clone(), o, s, h, g })
+    Ok(Catalog {
+        pi_version: pi.version.clone(),
+        o,
+        s,
+        h,
+        g,
+    })
 }
 
 #[cfg(test)]
@@ -262,13 +344,19 @@ mod tests {
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         let models = crate::policy::default_policy().model.clone();
-        let tier = |model: &str| TierModel { model: model.to_owned(), efforts: vec![0, 1, 2] };
+        let tier = |model: &str| TierModel {
+            model: model.to_owned(),
+            efforts: vec![0, 1, 2],
+        };
         let cached = Catalog {
             pi_version: "9.9.9".into(),
             o: tier(&models.o),
             s: tier(&models.s),
             h: tier(&models.h),
-            g: TierModel { model: models.g.clone(), efforts: vec![] },
+            g: TierModel {
+                model: models.g.clone(),
+                efforts: vec![],
+            },
         };
         cache::write(&mut store, "", &cached).unwrap();
 

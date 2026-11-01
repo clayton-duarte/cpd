@@ -49,7 +49,11 @@ fn show_gqv_of_an_unset_option_prints_nothing_and_exits_0() {
 fn user_options_live_on_the_server() {
     let t = T::new();
     t.server();
-    for (k, v) in [("@cpd_machine", "m1"), ("@cpd_version", "0.1"), ("@cpd_workers_a", "x")] {
+    for (k, v) in [
+        ("@cpd_machine", "m1"),
+        ("@cpd_version", "0.1"),
+        ("@cpd_workers_a", "x"),
+    ] {
         t.ok(&["set", "-g", k, v]);
         assert_eq!(show(&t, &["show", "-gv", k]), format!("{v}\n"));
     }
@@ -59,7 +63,13 @@ fn user_options_live_on_the_server() {
 fn user_options_live_on_a_window() {
     let t = T::new();
     t.server();
-    for k in ["@cpd_session", "@cpd_title", "@cpd_view", "@cpd_history", "@cpd_preview"] {
+    for k in [
+        "@cpd_session",
+        "@cpd_title",
+        "@cpd_view",
+        "@cpd_history",
+        "@cpd_preview",
+    ] {
         t.ok(&["set", "-t", "@0", k, "v"]);
         assert_eq!(show(&t, &["show", "-t", "@0", "-v", k]), "v\n", "{k}");
     }
@@ -70,9 +80,19 @@ fn user_options_live_on_a_pane() {
     let t = T::new();
     t.server();
     t.ok(&["set", "-p", "-t", "%0", "@cpd_history", "j1"]);
-    assert_eq!(show(&t, &["show", "-p", "-t", "%0", "-v", "@cpd_history"]), "j1\n");
-    assert_eq!(t.ok(&["display-message", "-p", "-t", "%0", "#{@cpd_history}"]), "j1\n");
-    assert!(t.state().expect("server").panes()[0].options.contains(&("@cpd_history".into(), "j1".into())));
+    assert_eq!(
+        show(&t, &["show", "-p", "-t", "%0", "-v", "@cpd_history"]),
+        "j1\n"
+    );
+    assert_eq!(
+        t.ok(&["display-message", "-p", "-t", "%0", "#{@cpd_history}"]),
+        "j1\n"
+    );
+    assert!(
+        t.state().expect("server").panes()[0]
+            .options
+            .contains(&("@cpd_history".into(), "j1".into()))
+    );
 }
 
 #[test]
@@ -80,7 +100,10 @@ fn remain_on_exit_is_an_option() {
     let t = T::new();
     t.server();
     t.ok(&["set", "-t", "@0", "remain-on-exit", "on"]);
-    assert_eq!(show(&t, &["show", "-t", "@0", "-v", "remain-on-exit"]), "on\n");
+    assert_eq!(
+        show(&t, &["show", "-t", "@0", "-v", "remain-on-exit"]),
+        "on\n"
+    );
 }
 
 #[test]

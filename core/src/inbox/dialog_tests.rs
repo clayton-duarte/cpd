@@ -20,9 +20,21 @@ fn fixture(phase: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
-    let mut f = Fixture { _dir: dir, home, store };
-    let locked = if matches!(phase, "grounding" | "plan") { "NULL".to_owned() } else { format!("'{T}'") };
-    let done = if phase == "done" { format!("'{T}'") } else { "NULL".to_owned() };
+    let mut f = Fixture {
+        _dir: dir,
+        home,
+        store,
+    };
+    let locked = if matches!(phase, "grounding" | "plan") {
+        "NULL".to_owned()
+    } else {
+        format!("'{T}'")
+    };
+    let done = if phase == "done" {
+        format!("'{T}'")
+    } else {
+        "NULL".to_owned()
+    };
     f.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
@@ -56,7 +68,11 @@ impl Fixture {
 
     /// The Session is in `state` with `label`, and its `session-state` Event is written.
     fn state(&mut self, session: &str, state: &str, label: &str) {
-        let label = if state == "working" { "NULL".to_owned() } else { format!("'{}'", label.replace('\'', "''")) };
+        let label = if state == "working" {
+            "NULL".to_owned()
+        } else {
+            format!("'{}'", label.replace('\'', "''"))
+        };
         self.sql(&format!(
             "UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = '{session}';
              INSERT INTO events (txn, at, kind, context, session, text, data)
@@ -65,7 +81,11 @@ impl Fixture {
     }
 
     fn dialogs(&mut self) -> Vec<Condition> {
-        let now = OffsetDateTime::parse("2026-01-01T00:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
+        let now = OffsetDateTime::parse(
+            "2026-01-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
         let all = conditions_with(&mut self.store, &self.home, now, 20, 1, None).unwrap();
         all.into_iter().filter(|c| c.kind == Kind::Dialog).collect()
     }
@@ -104,7 +124,14 @@ fn a_manager_and_a_fork_with_a_verdict_label_name_themselves_in_it() {
     f.state("loose-fork-id", "blocked", "verdict: Approve");
     let found = f.dialogs();
     assert_eq!(found.len(), 3);
-    let label = |subject: &str| found.iter().find(|c| c.subject == subject).unwrap().label.clone();
+    let label = |subject: &str| {
+        found
+            .iter()
+            .find(|c| c.subject == subject)
+            .unwrap()
+            .label
+            .clone()
+    };
     assert_eq!(label("session:mgr"), "ctx verdict\nReject");
     assert_eq!(label("session:fork-1234"), "pay·fork verdict\nApprove");
     assert_eq!(label("session:loose-fork-id"), "loose-fo verdict\nApprove");

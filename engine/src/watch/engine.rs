@@ -17,10 +17,13 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts, inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep, team, titles, wake, workers};
+use super::{
+    SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
+    inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep,
+    team, titles, wake, workers,
+};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
-use cpd_core::policy::model::{Models, models_of_attempt, models_of_context, models_of_job};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
@@ -29,6 +32,7 @@ use cpd_core::host::pi::{self, PiDirs};
 use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{AttemptId, ContextId, PlanId, PrKey, SessionId};
 use cpd_core::output::Output;
+use cpd_core::policy::model::{Models, models_of_attempt, models_of_context, models_of_job};
 use cpd_core::ports::Ports;
 use cpd_core::pr::start::{self as start_pr, By, Failed};
 use cpd_core::store::{Persist, Store};
@@ -104,10 +108,19 @@ impl Engine {
     #[cfg(test)]
     pub(super) fn with_ports(home: CpdHome, tmux: Tmux, ports: &Ports) -> Engine {
         let config = Config::load(&home).expect("the test home's config");
-        let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms)).expect("the test home's store");
+        let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))
+            .expect("the test home's store");
         store.use_clock(ports.clock.clone());
         let log = Log::open(&home).expect("the test home's log");
-        Engine::assemble(home, config, store, tmux, log, Report::new(Duration::from_secs(60)), ports)
+        Engine::assemble(
+            home,
+            config,
+            store,
+            tmux,
+            log,
+            Report::new(Duration::from_secs(60)),
+            ports,
+        )
     }
 
     /// An engine on `home` and `tmux` on the real ports, for the steps' tests.
@@ -116,7 +129,15 @@ impl Engine {
         Engine::with_ports(home, tmux, &Ports::real())
     }
 
-    fn assemble(home: CpdHome, config: Config, store: Store, tmux: Tmux, log: Log, report: Report, ports: &Ports) -> Engine {
+    fn assemble(
+        home: CpdHome,
+        config: Config,
+        store: Store,
+        tmux: Tmux,
+        log: Log,
+        report: Report,
+        ports: &Ports,
+    ) -> Engine {
         Engine {
             home,
             config,
@@ -160,11 +181,16 @@ impl Engine {
         if self.outgrown.is_some() {
             return true;
         }
-        let Ok(version) = self.store.data_version() else { return false };
+        let Ok(version) = self.store.data_version() else {
+            return false;
+        };
         if self.verdict_seen == Some(version) {
             return false;
         }
-        if let Ok(refusal) = self.store.read(|conn| Ok(cpd_core::store::verdict(conn)?.refusal().cloned())) {
+        if let Ok(refusal) = self
+            .store
+            .read(|conn| Ok(cpd_core::store::verdict(conn)?.refusal().cloned()))
+        {
             self.verdict_seen = Some(version);
             self.outgrown = refusal;
         }
@@ -176,10 +202,14 @@ impl Engine {
     pub(super) fn fail(&mut self, step: Step, about: About, failure: impl Into<Failure>) {
         if self.outgrown() {
             let failure = failure.into();
-            self.log.line(&format!("{step:?}: {} ({}); not reported: the store outgrew this binary", failure.message, failure.code));
+            self.log.line(&format!(
+                "{step:?}: {} ({}); not reported: the store outgrew this binary",
+                failure.message, failure.code
+            ));
             return;
         }
-        self.report.fail(&mut self.store, &mut self.log, step, about, failure);
+        self.report
+            .fail(&mut self.store, &mut self.log, step, about, failure);
     }
 
     /// `step` succeeded for `about`.
@@ -194,9 +224,15 @@ impl Engine {
     }
 
     /// [`Engine::catalog_of_job`] of the Job of Attempt `id`.
-    pub(super) fn catalog_of_attempt(&mut self, plan: &PlanId, id: &AttemptId) -> Result<Catalog, CpdError> {
+    pub(super) fn catalog_of_attempt(
+        &mut self,
+        plan: &PlanId,
+        id: &AttemptId,
+    ) -> Result<Catalog, CpdError> {
         let home = self.home.clone();
-        self.catalog_of(|store| store.read(|conn| models_of_attempt(conn, &home, plan, &id.to_string())))
+        self.catalog_of(|store| {
+            store.read(|conn| models_of_attempt(conn, &home, plan, &id.to_string()))
+        })
     }
 
     /// pi's catalog of the models of Context `context`: what a host runs under (contract §6.19). A fixed catalog
@@ -206,7 +242,10 @@ impl Engine {
         self.catalog_of(|store| store.read(|conn| models_of_context(conn, &home, context.as_str())))
     }
 
-    fn catalog_of(&mut self, models: impl FnOnce(&mut Store) -> Result<Models, CpdError>) -> Result<Catalog, CpdError> {
+    fn catalog_of(
+        &mut self,
+        models: impl FnOnce(&mut Store) -> Result<Models, CpdError>,
+    ) -> Result<Catalog, CpdError> {
         if let Some(catalog) = &self.fixed_catalog {
             return Ok(catalog.clone());
         }
@@ -263,10 +302,16 @@ impl Engine {
 /// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
 /// E4 and E7 act per PR ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
-    if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18 | Step::E19) {
+    if !matches!(
+        step,
+        Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18 | Step::E19
+    ) {
         return false;
     }
-    engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
+    engine
+        .store
+        .read(|conn| Ok(cpd_core::incident::is_on(conn)))
+        .unwrap_or(false)
 }
 
 /// Whether incident mode holds `plan` for E4 and E7 (contract §3.7, hs-d643): the incident is on and
@@ -293,7 +338,9 @@ fn startable() -> String {
 pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, PrKey)>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut waiting = Vec::new();
         for (plan, key) in rows {
             let plan = PlanId::parse(&plan)?;
@@ -324,7 +371,11 @@ fn start_prs(engine: &mut Engine) {
             return;
         }
         let about = About::Plan(plan.clone());
-        let pr = engine.store.read(|conn| Ok(start_pr::load(conn, &plan)?.into_iter().find(|p| p.key == key)));
+        let pr = engine.store.read(|conn| {
+            Ok(start_pr::load(conn, &plan)?
+                .into_iter()
+                .find(|p| p.key == key))
+        });
         let pr = match pr {
             Ok(Some(pr)) => pr,
             Ok(None) => continue,
@@ -333,15 +384,30 @@ fn start_prs(engine: &mut Engine) {
                 continue;
             }
         };
-        match start_pr::start(&engine.home, &engine.config, &mut engine.store, &plan, &pr, By::Engine) {
+        match start_pr::start(
+            &engine.home,
+            &engine.config,
+            &mut engine.store,
+            &plan,
+            &pr,
+            By::Engine,
+        ) {
             Ok(started) => {
-                engine.log.line(&format!("E7: started PR {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
+                engine.log.line(&format!(
+                    "E7: started PR {key} of Plan {plan} ({})",
+                    started.to_json()["lead_branch"]
+                ));
                 engine.clear(Step::E7, &about);
             }
             Err(Failed::Setup { step, error }) => {
-                match start_pr::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
+                match start_pr::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error)
+                {
                     Ok(true) => {
-                        engine.log.line(&format!("E7: PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
+                        engine.log.line(&format!(
+                            "E7: PR {key} of Plan {plan} could not be started ({}): {}",
+                            step.as_str(),
+                            error.message()
+                        ));
                         engine.clear(Step::E7, &about);
                     }
                     Ok(false) => {}
@@ -350,7 +416,10 @@ fn start_prs(engine: &mut Engine) {
             }
             // The PR changed since it was read (`pr start` got there first): decided again next tick.
             Err(Failed::Other(e)) if e.code() == ErrorCode::CasLost => {
-                engine.log.line(&format!("E7: skipped PR {key} of Plan {plan}: {}", e.message()));
+                engine.log.line(&format!(
+                    "E7: skipped PR {key} of Plan {plan}: {}",
+                    e.message()
+                ));
             }
             Err(Failed::Other(e)) => engine.fail(Step::E7, about, &e),
         }
@@ -362,15 +431,24 @@ fn start_prs(engine: &mut Engine) {
 pub(super) fn metrics(session: Option<&SessionId>) -> Option<Value> {
     let dirs = PiDirs::from_env().ok()?;
     let file = pi::session_file(&dirs, session?)?;
-    cpd_core::metrics::parse_file(&file).ok().map(|m| m.to_json())
+    cpd_core::metrics::parse_file(&file)
+        .ok()
+        .map(|m| m.to_json())
 }
 
 fn catch_signals() -> Result<(), CpdError> {
-    let action = SigAction::new(SigHandler::Handler(on_signal), SaFlags::empty(), SigSet::empty());
+    let action = SigAction::new(
+        SigHandler::Handler(on_signal),
+        SaFlags::empty(),
+        SigSet::empty(),
+    );
     for signal in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
         // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
         unsafe { sigaction(signal, &action) }.map_err(|e| {
-            CpdError::new(cpd_core::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))
+            CpdError::new(
+                cpd_core::error::ErrorCode::StoreFailed,
+                format!("Cannot handle {signal}: {e}."),
+            )
         })?;
     }
     Ok(())
@@ -403,17 +481,35 @@ pub(super) fn mark_restart() -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let data: Option<String> = store.read(|conn| {
-        Ok(conn.query_row("SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?)
+        Ok(conn
+            .query_row(
+                "SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
     })?;
     let pid = data
         .and_then(|d| serde_json::from_str::<Value>(&d).ok())
         .and_then(|d| d["pid"].as_i64())
-        .ok_or_else(|| CpdError::new(ErrorCode::WatchNotStarted, "No engine has started in this home."))?;
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::WatchNotStarted,
+                "No engine has started in this home.",
+            )
+        })?;
     // The time of the ports in scope (`Ports::current`): the system's, or a test's `ManualClock`.
     let marker = json!({"by": "install-cpd.sh", "at": clock::timestamp(Ports::current().clock.utc()), "engine_pid": pid});
-    let io = |e: std::io::Error| CpdError::new(ErrorCode::Internal, format!("Cannot write {}: {e}.", marker_path(&home).display()));
+    let io = |e: std::io::Error| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("Cannot write {}: {e}.", marker_path(&home).display()),
+        )
+    };
     std::fs::create_dir_all(home.run_dir()).map_err(io)?;
-    let tmp = home.run_dir().join(format!("install-restart.json.tmp.{}", std::process::id()));
+    let tmp = home
+        .run_dir()
+        .join(format!("install-restart.json.tmp.{}", std::process::id()));
     std::fs::write(&tmp, marker.to_string()).map_err(io)?;
     std::fs::rename(&tmp, marker_path(&home)).map_err(io)?;
     Ok(Output::success(json!({"marked": true, "engine_pid": pid})))
@@ -441,10 +537,15 @@ pub(super) fn consume_marker_with(clock: &dyn Clock, home: &CpdHome, log: &mut L
         Some((at, v.get("engine_pid")?.as_i64()?))
     });
     let Some((at, pid)) = parsed else {
-        log.line(&format!("{} is not a marker ({}), ignored and deleted", path.display(), text.trim().chars().take(80).collect::<String>()));
+        log.line(&format!(
+            "{} is not a marker ({}), ignored and deleted",
+            path.display(),
+            text.trim().chars().take(80).collect::<String>()
+        ));
         return None;
     };
-    (at <= now && now - at <= time::Duration::seconds(PLANNED_RESTART_MARKER_MAX_AGE_SECS)).then_some(pid)
+    (at <= now && now - at <= time::Duration::seconds(PLANNED_RESTART_MARKER_MAX_AGE_SECS))
+        .then_some(pid)
 }
 
 /// How long the engine was down before this start (contract §3.7, hs-d328).
@@ -483,31 +584,62 @@ impl Downtime {
         })?;
         // The engine whose stop is reported: the latest `watch-started`.
         let previous_pid: Option<i64> = store.read(|conn| {
-            let data: Option<String> =
-                conn.query_row("SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?;
-            Ok(data.and_then(|d| serde_json::from_str::<Value>(&d).ok()).and_then(|d| d["pid"].as_i64()))
+            let data: Option<String> = conn
+                .query_row(
+                    "SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(data
+                .and_then(|d| serde_json::from_str::<Value>(&d).ok())
+                .and_then(|d| d["pid"].as_i64()))
         })?;
         let marked = marker.is_some() && marker == previous_pid;
-        let Some((kind, at)) = last else { return Ok(None) };
-        let at = OffsetDateTime::parse(&at, &Rfc3339)
-            .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("A {kind} Event has an `at` that is not RFC 3339: {e}.")))?;
+        let Some((kind, at)) = last else {
+            return Ok(None);
+        };
+        let at = OffsetDateTime::parse(&at, &Rfc3339).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("A {kind} Event has an `at` that is not RFC 3339: {e}."),
+            )
+        })?;
         let said = kind == "watch-stopped";
         // A lock file this engine created says nothing of the previous one: it is dated by its `watch-started`.
-        let since = if said || !lock_existed { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
+        let since = if said || !lock_existed {
+            at
+        } else {
+            at.max(OffsetDateTime::from(lock.last_alive()?))
+        };
         let down = (clock.utc() - since).max(time::Duration::ZERO);
         let quiet = down.as_seconds_f64() <= PLANNED_RESTART_QUIET_SECS;
-        Ok(Some(Downtime { since, said, down, planned: marked && quiet, overdue: marked && !quiet }))
+        Ok(Some(Downtime {
+            since,
+            said,
+            down,
+            planned: marked && quiet,
+            overdue: marked && !quiet,
+        }))
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
     pub(super) fn sentence(&self, zone: &cpd_core::clock::TimeZone) -> String {
-        let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
+        let how = if self.said {
+            "it stopped"
+        } else {
+            "it was last alive (it left no watch-stopped: a crash or a kill)"
+        };
         let at = clock::prose(self.since, zone);
         let secs = self.down.as_seconds_f64();
         if self.overdue {
-            format!("The engine was down for {secs:.1} s: {how} at {at}; it was an install's restart that took longer than {PLANNED_RESTART_QUIET_SECS:.0} s.")
+            format!(
+                "The engine was down for {secs:.1} s: {how} at {at}; it was an install's restart that took longer than {PLANNED_RESTART_QUIET_SECS:.0} s."
+            )
         } else if self.planned {
-            format!("The engine was down for {secs:.1} s: {how} at {at} (an install's planned restart).")
+            format!(
+                "The engine was down for {secs:.1} s: {how} at {at} (an install's planned restart)."
+            )
         } else {
             format!("The engine was down for {secs:.1} s: {how} at {at}.")
         }
@@ -516,7 +648,11 @@ impl Downtime {
 
 /// [`run`] on `ports` and `home`: the ticks and the naps between them read `ports.clock`, the steps start nothing but
 /// through `ports`, and the loop ends when `until` is set (checked between ticks and between naps).
-pub(super) fn run_with(ports: &Ports, home: &CpdHome, until: &AtomicBool) -> Result<Output, CpdError> {
+pub(super) fn run_with(
+    ports: &Ports,
+    home: &CpdHome,
+    until: &AtomicBool,
+) -> Result<Output, CpdError> {
     serve(ports, home, until, || Ok(()))
 }
 
@@ -528,28 +664,54 @@ pub(super) fn run() -> Result<Output, CpdError> {
 
 /// The engine's life: lock, `watch-started`, ticks until `until`, `watch-stopped`. `catch` runs once the store is
 /// open, where the signal handlers are put in.
-fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce() -> Result<(), CpdError>) -> Result<Output, CpdError> {
+fn serve(
+    ports: &Ports,
+    home: &CpdHome,
+    until: &AtomicBool,
+    catch: impl FnOnce() -> Result<(), CpdError>,
+) -> Result<Output, CpdError> {
     let clock = &*ports.clock;
     let config = Config::load(home)?;
     let lock_existed = home.watch_lock().exists();
     let lock = WatchLock::take(home)?;
     let mut log = Log::open(home)?;
     // A tick's steps give up waiting when the engine is told to stop.
-    let mut store = Store::open_persistent_with(ports.clock.clone(), home, u64::from(config.timeouts.store_busy_ms), persist(home, stopping)?)?;
+    let mut store = Store::open_persistent_with(
+        ports.clock.clone(),
+        home,
+        u64::from(config.timeouts.store_busy_ms),
+        persist(home, stopping)?,
+    )?;
     catch()?;
     let pid = std::process::id();
     // What the previous engine left, read before this one's `watch-started` hides it.
     let marker = consume_marker_with(clock, home, &mut log);
     let down = Downtime::since_previous_with(clock, &mut store, &lock, lock_existed, marker)?;
-    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence(&ports.clock.zone()))).unwrap_or_default();
-    watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
-    log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
+    let how_long = down
+        .as_ref()
+        .map(|d| format!(" {}", d.sentence(&ports.clock.zone())))
+        .unwrap_or_default();
+    watch_event(
+        &mut store,
+        NewEvent::watch_started(
+            format!("The engine started (pid {pid}).{how_long} See: cpd doctor"),
+            pid,
+        ),
+    )?;
+    log.line(&format!(
+        "started (pid {pid}), a tick every {}s",
+        config.watch.tick_seconds
+    ));
     if let Some(down) = down {
         log.line(&down.sentence(&ports.clock.zone()));
     }
 
-    let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());
-    let report = Report::new(Duration::from_secs(u64::from(config.watch.error_repeat_seconds)));
+    let tmux = Tmux::new(config.tmux.socket.as_str())
+        .with_runner(ports.runner.clone())
+        .with_clock(ports.clock.clone());
+    let report = Report::new(Duration::from_secs(u64::from(
+        config.watch.error_repeat_seconds,
+    )));
     let mut engine = Engine::assemble(home.clone(), config, store, tmux, log, report, ports);
 
     let tick = engine.config.watch.tick_seconds.duration();
@@ -558,7 +720,9 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
         let began = clock.now();
         // The next engine says when this one stopped from it when it leaves no `watch-stopped`.
         if let Err(e) = lock.touch_with(clock) {
-            engine.log.line(&format!("{} ({})", e.message(), e.code().as_str()));
+            engine
+                .log
+                .line(&format!("{} ({})", e.message(), e.code().as_str()));
         }
         engine.tick();
         // Read after the tick's steps: the commits of the children it started count as another's.
@@ -577,7 +741,11 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
                     (_, Err(e)) => {
                         committed = true;
                         if !failing {
-                            engine.log.line(&format!("cannot read the store's data version: {} ({})", e.message(), e.code().as_str()));
+                            engine.log.line(&format!(
+                                "cannot read the store's data version: {} ({})",
+                                e.message(),
+                                e.code().as_str()
+                            ));
                         }
                         failing = true;
                     }
@@ -606,8 +774,18 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
     pr::finish(&mut engine);
     // `watch-stopped` is not lost to a busy store: it waits for as long as that lasts.
     engine.store.persist(persist(&engine.home, || false)?);
-    if let Err(e) = watch_event(&mut engine.store, NewEvent::watch_stopped(format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure"), pid)) {
-        engine.log.line(&format!("cannot append watch-stopped: {} ({})", e.message(), e.code().as_str()));
+    if let Err(e) = watch_event(
+        &mut engine.store,
+        NewEvent::watch_stopped(
+            format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure"),
+            pid,
+        ),
+    ) {
+        engine.log.line(&format!(
+            "cannot append watch-stopped: {} ({})",
+            e.message(),
+            e.code().as_str()
+        ));
     }
     Ok(Output::success(json!({"stopped": true})))
 }

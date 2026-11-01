@@ -16,7 +16,11 @@ use super::resource;
 fn world() -> Fx {
     let fx = Fx::new();
     setup(&fx.env);
-    fs::write(fx.env.cpd_home().join("policy/acme/cpd.toml"), "[resources.e2e-port]\n").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("policy/acme/cpd.toml"),
+        "[resources.e2e-port]\n",
+    )
+    .unwrap();
     plan(&fx.env, "pl", "plan");
     fixture(&fx.env, "UPDATE prs SET name = 'cpd' WHERE plan = 'pl';");
     fx
@@ -44,7 +48,9 @@ fn spec_with(fx: &Fx, resources: Option<Value>) -> String {
 fn add(fx: &Fx, key: &str, resources: Option<Value>, extra: &[&str]) -> Run {
     let spec = spec_with(fx, resources);
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", "pl"];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", "pl",
+    ];
     args.extend(extra);
     fx.cpd(&args)
 }
@@ -81,16 +87,35 @@ fn resource_spec_job_edit_spec_refuses_an_undeclared_resource() {
     let spec = spec_with(&fx, Some(json!(["gpu"])));
     let run = fx.cpd(&["job", "edit", "a", "--spec", &spec, "--plan", "pl"]);
     let details = refused(&run, "resource_undeclared", 3)["details"].clone();
-    assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
+    assert_eq!(
+        (details["job"].as_str(), details["resource"].as_str()),
+        (Some("a"), Some("gpu"))
+    );
     assert_eq!(details["declared"], json!(["e2e-port"]));
 }
 
 #[test]
 fn resource_spec_duplicate_empty_or_malformed_names_are_spec_invalid() {
     let fx = world();
-    for bad in [json!(["e2e-port", "e2e-port"]), json!([]), json!(["E2E"]), json!(["1a"]), json!(["a_b"]), json!(["a".repeat(33)]), json!([""])] {
+    for bad in [
+        json!(["e2e-port", "e2e-port"]),
+        json!([]),
+        json!(["E2E"]),
+        json!(["1a"]),
+        json!(["a_b"]),
+        json!(["a".repeat(33)]),
+        json!([""]),
+    ] {
         let run = add(&fx, "a", Some(bad.clone()), &[]);
-        assert_eq!(refused(&run, "spec_invalid", 2)["details"]["path"].as_str().unwrap().split('[').next(), Some("$.resources"), "{bad}");
+        assert_eq!(
+            refused(&run, "spec_invalid", 2)["details"]["path"]
+                .as_str()
+                .unwrap()
+                .split('[')
+                .next(),
+            Some("$.resources"),
+            "{bad}"
+        );
     }
 }
 
@@ -119,8 +144,13 @@ fn resource_spec_the_fingerprint_ignores_resources() {
     let fingerprint = || fx.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"].clone();
     let before = fingerprint();
     let spec = spec_with(&fx, Some(json!(["e2e-port"])));
-    fx.cpd(&["job", "edit", "a", "--spec", &spec, "--plan", "pl"]).ok();
-    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the edit stored the resources");
+    fx.cpd(&["job", "edit", "a", "--spec", &spec, "--plan", "pl"])
+        .ok();
+    assert_eq!(
+        shown(&fx, "a")["resources"],
+        json!(["e2e-port"]),
+        "the edit stored the resources"
+    );
     assert_eq!(fingerprint(), before);
 }
 
@@ -137,8 +167,15 @@ fn resource_spec_job_edit_of_a_queued_job_checks_and_stores_resources() {
     assert_eq!(shown(&fx, "a")["status"], "queued");
     assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]));
     let details = refused(&edit(json!(["gpu"])), "resource_undeclared", 3)["details"].clone();
-    assert_eq!((details["job"].as_str(), details["resource"].as_str()), (Some("a"), Some("gpu")));
-    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port"]), "the refused edit stored nothing");
+    assert_eq!(
+        (details["job"].as_str(), details["resource"].as_str()),
+        (Some("a"), Some("gpu"))
+    );
+    assert_eq!(
+        shown(&fx, "a")["resources"],
+        json!(["e2e-port"]),
+        "the refused edit stored nothing"
+    );
 }
 
 #[test]
@@ -146,12 +183,22 @@ fn job_add_accepts_a_resource_declared_at_host_or_owner_level() {
     let fx = world();
     declared_at_three_levels(&fx);
 
-    add(&fx, "a", Some(json!(["e2e-port", "shared-port", "staging"])), &[]).ok();
+    add(
+        &fx,
+        "a",
+        Some(json!(["e2e-port", "shared-port", "staging"])),
+        &[],
+    )
+    .ok();
 
-    assert_eq!(shown(&fx, "a")["resources"], json!(["e2e-port", "shared-port", "staging"]));
+    assert_eq!(
+        shown(&fx, "a")["resources"],
+        json!(["e2e-port", "shared-port", "staging"])
+    );
     add(&fx, "b", None, &[]).ok();
     let spec = spec_with(&fx, Some(json!(["staging"])));
-    fx.cpd(&["job", "edit", "b", "--spec", &spec, "--plan", "pl"]).ok();
+    fx.cpd(&["job", "edit", "b", "--spec", &spec, "--plan", "pl"])
+        .ok();
     assert_eq!(shown(&fx, "b")["resources"], json!(["staging"]));
 }
 
@@ -163,9 +210,26 @@ fn job_add_refuses_a_resource_visible_at_no_level_with_the_visible_names() {
     let run = add(&fx, "a", Some(json!(["shared-port", "gpu"])), &[]);
 
     let details = refused(&run, "resource_undeclared", 3)["details"].clone();
-    assert_eq!((details["job"].as_str(), details["pr"].as_str(), details["resource"].as_str()), (Some("a"), Some("repo"), Some("gpu")));
-    assert_eq!(details["declared"], json!(["e2e-port", "shared-port", "staging"]), "the union over host, owner and repo");
-    assert!(details["file"].as_str().unwrap().ends_with("policy/acme/cpd.toml"), "{details}");
+    assert_eq!(
+        (
+            details["job"].as_str(),
+            details["pr"].as_str(),
+            details["resource"].as_str()
+        ),
+        (Some("a"), Some("repo"), Some("gpu"))
+    );
+    assert_eq!(
+        details["declared"],
+        json!(["e2e-port", "shared-port", "staging"]),
+        "the union over host, owner and repo"
+    );
+    assert!(
+        details["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("policy/acme/cpd.toml"),
+        "{details}"
+    );
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs"), 0);
 }
 
@@ -173,7 +237,11 @@ fn job_add_refuses_a_resource_visible_at_no_level_with_the_visible_names() {
 /// `c` (lists the free `e2e-port`) are queued.
 pub(super) fn one_worker_slot_taken() -> Fx {
     let fx = world();
-    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nconcurrency = 1\n").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"m1\"\nconcurrency = 1\n",
+    )
+    .unwrap();
     add(&fx, "a", None, &[]).ok();
     add(&fx, "b", None, &[]).ok();
     add(&fx, "c", Some(json!(["e2e-port"])), &[]).ok();
@@ -197,17 +265,28 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
     // A queued Job with no resources of its own waits for `workers` (commands.md §5.7): scope host, slots = concurrency, and the
     // holders are the Attempts not ended.
     let workers = |job: &Value| {
-        let waiting = job["waiting_for"].as_array().unwrap_or_else(|| panic!("no waiting_for: {job}"));
+        let waiting = job["waiting_for"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no waiting_for: {job}"));
         assert_eq!(waiting.len(), 1, "{waiting:?}");
         waiting[0].clone()
     };
     for job in [&b, &c] {
         let entry = workers(job);
-        assert_eq!((&entry["resource"], &entry["scope"], &entry["slots"]), (&json!("workers"), &json!("host"), &json!(1)), "{entry}");
+        assert_eq!(
+            (&entry["resource"], &entry["scope"], &entry["slots"]),
+            (&json!("workers"), &json!("host"), &json!(1)),
+            "{entry}"
+        );
         let holders = entry["holders"].as_array().unwrap();
         assert_eq!(holders.len(), 1, "{entry}");
         assert_eq!(
-            (&holders[0]["by"], &holders[0]["plan"], &holders[0]["job"], &holders[0]["attempt"]),
+            (
+                &holders[0]["by"],
+                &holders[0]["plan"],
+                &holders[0]["job"],
+                &holders[0]["attempt"]
+            ),
             (&json!("attempt"), &json!("pl"), &json!("a"), &json!("a-a1"))
         );
         assert!(holders[0]["at"].is_string(), "{entry}");
@@ -220,15 +299,32 @@ fn job_show_waiting_for_names_workers_when_no_worker_slot_is_free() {
                       UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE plan = 'pl' AND key = 'a';");
     for job in ["b", "c"] {
         let waiting = shown(&fx, job)["waiting_for"].clone();
-        assert_eq!(waiting.as_array().map(Vec::len), Some(1), "{job} still waits for the worker the failed Job keeps: {waiting}");
-        assert_eq!((&waiting[0]["resource"], &waiting[0]["holders"][0]["job"]), (&json!("workers"), &json!("a")));
+        assert_eq!(
+            waiting.as_array().map(Vec::len),
+            Some(1),
+            "{job} still waits for the worker the failed Job keeps: {waiting}"
+        );
+        assert_eq!(
+            (&waiting[0]["resource"], &waiting[0]["holders"][0]["job"]),
+            (&json!("workers"), &json!("a"))
+        );
     }
 
     // The Lead cancels `a`, with no live Attempt: the slot frees at once and the entry goes (no other resource is held: `c`'s
     // `e2e-port` is free).
-    fixture(&fx.env, "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE plan = 'pl' AND key = 'a';");
-    assert!(shown(&fx, "b").get("waiting_for").is_none(), "no resources and a free Worker slot: the key is absent");
-    assert_eq!(shown(&fx, "c")["waiting_for"], json!([]), "it lists resources and none is full: `[]`");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE plan = 'pl' AND key = 'a';",
+    );
+    assert!(
+        shown(&fx, "b").get("waiting_for").is_none(),
+        "no resources and a free Worker slot: the key is absent"
+    );
+    assert_eq!(
+        shown(&fx, "c")["waiting_for"],
+        json!([]),
+        "it lists resources and none is full: `[]`"
+    );
 }
 
 #[test]
@@ -237,7 +333,12 @@ fn resource_list_shows_job_tenants_and_command_tenants() {
     let _command = resource::hold(&fx, "e2e-port", resource::COMMAND_RECORD);
     resource::job_tenant(&fx, "api", "repo:acme/cpd:e2e-port", resource::API_AT);
     // A Job of another repo's pool of the same name is no tenant of this pool.
-    resource::job_tenant(&fx, "other", "repo:acme/elsewhere:e2e-port", "2026-10-26T21:42:00.000Z");
+    resource::job_tenant(
+        &fx,
+        "other",
+        "repo:acme/elsewhere:e2e-port",
+        "2026-10-26T21:42:00.000Z",
+    );
 
     let out = fx.cpd_in(&repo, &["resource", "list"]).ok();
 

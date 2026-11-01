@@ -14,7 +14,8 @@ use cpd_engine::watch::host_alert;
 const OPTION: &str = "@cpd_host_alert";
 
 const OK: &str = r#"{"status":"ok","since":"2026-10-24T12:00:00Z"}"#;
-const SKIPPED_DIRTY: &str = r#"{"status":"skipped","reason":"dirty","since":"2026-10-24T12:00:00Z"}"#;
+const SKIPPED_DIRTY: &str =
+    r#"{"status":"skipped","reason":"dirty","since":"2026-10-24T12:00:00Z"}"#;
 
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
@@ -23,7 +24,11 @@ fn args(words: &[&str]) -> Vec<String> {
 #[test]
 fn a_skipped_state_sets_the_alert_option_to_its_reason() {
     let state = InstallState::parse(SKIPPED_DIRTY).expect("a skipped state");
-    assert_eq!(state.alert(), Some("dirty"), "the pill's colour comes from the reason");
+    assert_eq!(
+        state.alert(),
+        Some("dirty"),
+        "the pill's colour comes from the reason"
+    );
     assert_eq!(
         host_alert::argv(None, state.alert()),
         Some(args(&["set", "-g", OPTION, "dirty"])),
@@ -40,14 +45,22 @@ fn an_ok_state_unsets_the_alert_option() {
         Some(args(&["set", "-gu", OPTION])),
         "clearing a red pill unsets {OPTION}"
     );
-    assert_eq!(host_alert::argv(None, None), None, "an option already unset is not written again");
+    assert_eq!(
+        host_alert::argv(None, None),
+        None,
+        "an option already unset is not written again"
+    );
 }
 
 #[test]
 fn a_missing_state_file_unsets_the_alert_option() {
     let dir = tempfile::tempdir().expect("a temporary home");
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).expect("a home");
-    assert_eq!(InstallState::read(&home).expect("a readable home"), None, "no file means no state");
+    assert_eq!(
+        InstallState::read(&home).expect("a readable home"),
+        None,
+        "no file means no state"
+    );
     assert_eq!(
         host_alert::argv(Some("dirty"), None),
         Some(args(&["set", "-gu", OPTION])),
@@ -57,7 +70,8 @@ fn a_missing_state_file_unsets_the_alert_option() {
 
 #[test]
 fn an_invalid_state_file_is_one_error_and_leaves_the_option_alone() {
-    let read: Result<Option<InstallState>, _> = InstallState::parse("not the install state").map(Some);
+    let read: Result<Option<InstallState>, _> =
+        InstallState::parse("not the install state").map(Some);
     let error = read.as_ref().expect_err("an invalid file");
     assert_eq!(error.code(), ErrorCode::InstallStateInvalid, "{error:?}");
     assert_eq!(
@@ -99,6 +113,10 @@ fn a_state_needs_a_known_reason_a_since_and_no_other_field() {
         r#"{"status":"ok","since":7}"#,
     ] {
         let error = InstallState::parse(text).expect_err(&format!("invalid: {text}"));
-        assert_eq!(error.code(), ErrorCode::InstallStateInvalid, "invalid: {text}");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InstallStateInvalid,
+            "invalid: {text}"
+        );
     }
 }

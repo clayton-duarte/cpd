@@ -20,23 +20,42 @@ fn a_config_migration_replaces_config_toml_by_rename() {
     super::migrate(&home).unwrap();
 
     let after = std::fs::metadata(home.config()).unwrap().ino();
-    assert_ne!(before, after, "config.toml must be a new inode (rename into place)");
+    assert_ne!(
+        before, after,
+        "config.toml must be a new inode (rename into place)"
+    );
     let mut old = String::new();
     reader.read_to_string(&mut old).unwrap();
-    assert_eq!(old, OLD, "a reader opened before sees the complete old text");
+    assert_eq!(
+        old, OLD,
+        "a reader opened before sees the complete old text"
+    );
     assert_eq!(std::fs::read_to_string(home.config()).unwrap(), NEW);
-    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     assert_eq!(names, ["config.toml"], "no leftover temporary file");
 
     super::migrate(&home).unwrap();
-    assert_eq!(std::fs::metadata(home.config()).unwrap().ino(), after, "nothing changed, nothing written");
+    assert_eq!(
+        std::fs::metadata(home.config()).unwrap().ino(),
+        after,
+        "nothing changed, nothing written"
+    );
     assert_eq!(std::fs::read_to_string(home.config()).unwrap(), NEW);
 }
 
 /// Test files that a `#[cfg(test)] #[path = ...]` declares and that carry no `_tests` suffix.
 const BY_HAND: &[(&str, &str)] = &[
-    ("tui/src/merge/action_d550.rs", "test module declared with #[cfg(test)] #[path]"),
-    ("tui/src/merge/marker_d550.rs", "test module declared with #[cfg(test)] #[path]"),
+    (
+        "tui/src/merge/action_d550.rs",
+        "test module declared with #[cfg(test)] #[path]",
+    ),
+    (
+        "tui/src/merge/marker_d550.rs",
+        "test module declared with #[cfg(test)] #[path]",
+    ),
 ];
 fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -47,7 +66,11 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
                 walk(&path, root, out);
             }
         } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" {
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             if !BY_HAND.iter().any(|(f, _)| *f == rel) {
                 out.push(path);
             }
@@ -84,12 +107,16 @@ fn no_source_file_writes_config_toml_with_fs_write() {
         .filter(|p| {
             let text = std::fs::read_to_string(p).unwrap();
             let text = non_test_text(&text);
-            text.contains(".config()") && (text.contains("fs::write(") || text.contains("File::create("))
+            text.contains(".config()")
+                && (text.contains("fs::write(") || text.contains("File::create("))
         })
         .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
         .collect();
     offenders.sort();
-    assert!(offenders.is_empty(), "these files write config.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}");
+    assert!(
+        offenders.is_empty(),
+        "these files write config.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}"
+    );
 }
 
 /// `cpd preset apply` rewrites host.toml's `[model]` table whole and atomically (commands.md §14.6 step 6): no source
@@ -106,10 +133,14 @@ fn no_source_file_writes_host_toml_with_fs_write() {
         .filter(|p| {
             let text = std::fs::read_to_string(p).unwrap();
             let text = non_test_text(&text);
-            text.contains("host.toml") && (text.contains("fs::write(") || text.contains("File::create("))
+            text.contains("host.toml")
+                && (text.contains("fs::write(") || text.contains("File::create("))
         })
         .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
         .collect();
     offenders.sort();
-    assert!(offenders.is_empty(), "these files write host.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}");
+    assert!(
+        offenders.is_empty(),
+        "these files write host.toml with fs::write; use cpd_core::atomic::write_atomic: {offenders:?}"
+    );
 }

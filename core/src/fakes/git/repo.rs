@@ -17,7 +17,9 @@ pub struct Repo {
 /// Every file under `root` as `relative path -> absolute path`, skipping every entry named `.git`.
 pub(super) fn work_files(root: &Path) -> BTreeMap<String, PathBuf> {
     fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             if entry.file_name() == ".git" {
                 continue;
@@ -37,18 +39,26 @@ pub(super) fn work_files(root: &Path) -> BTreeMap<String, PathBuf> {
 
 impl Repo {
     fn u(&self) -> MutexGuard<'_, Universe> {
-        self.universe.lock().expect("the Universe's lock is never held across a panic")
+        self.universe
+            .lock()
+            .expect("the Universe's lock is never held across a panic")
     }
 
     /// A non-bare repo at `dir` on the unborn branch `main`.
     pub fn init(universe: &Arc<Mutex<Universe>>, dir: &Path) -> Repo {
         let (id, dir) = {
-            let mut u = universe.lock().expect("the Universe's lock is never held across a panic");
+            let mut u = universe
+                .lock()
+                .expect("the Universe's lock is never held across a panic");
             let id = u.init(dir, false);
             let main = u.worktrees(id).remove(0).path;
             (id, main)
         };
-        Repo { universe: universe.clone(), id, dir }
+        Repo {
+            universe: universe.clone(),
+            id,
+            dir,
+        }
     }
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -59,7 +69,8 @@ impl Repo {
     /// Writes a real file of the working tree (parents made).
     pub fn write(&self, path: &str, text: &str) {
         let file = self.dir.join(path);
-        std::fs::create_dir_all(file.parent().expect("a file has a parent")).expect("the parents can be made");
+        std::fs::create_dir_all(file.parent().expect("a file has a parent"))
+            .expect("the parents can be made");
         std::fs::write(file, text).expect("the file can be written");
     }
     /// Stages the file as it is on disk (`git add <path>`).
@@ -88,9 +99,19 @@ impl Repo {
             Head::Branch(b) => u.ref_oid(self.id, &format!("refs/heads/{b}")),
             Head::Detached(oid) => Some(oid.clone()),
         };
-        let commit = u.commit(self.id, &tree, &parent.into_iter().collect::<Vec<_>>(), message);
+        let commit = u.commit(
+            self.id,
+            &tree,
+            &parent.into_iter().collect::<Vec<_>>(),
+            message,
+        );
         match head {
-            Head::Branch(b) => u.set_ref(self.id, &format!("refs/heads/{b}"), &commit, &format!("commit: {message}")),
+            Head::Branch(b) => u.set_ref(
+                self.id,
+                &format!("refs/heads/{b}"),
+                &commit,
+                &format!("commit: {message}"),
+            ),
             Head::Detached(_) => u.set_head(&self.dir, Head::Detached(commit.clone())),
         }
         u.set_index(&self.dir, index);
@@ -104,7 +125,12 @@ impl Repo {
             Head::Detached(oid) => Some(oid),
         }
         .expect("a branch needs a commit at HEAD");
-        u.set_ref(self.id, &format!("refs/heads/{name}"), &at, "branch: Created from HEAD");
+        u.set_ref(
+            self.id,
+            &format!("refs/heads/{name}"),
+            &at,
+            "branch: Created from HEAD",
+        );
     }
     /// Appends a value to the repo's own config.
     pub fn config_add(&self, key: &str, value: &str) {
@@ -116,30 +142,53 @@ impl Repo {
         let id = u.init(dir, true);
         let dir = u.git_dir(id);
         u.config_add(self.id, "remote.origin.url", &dir.to_string_lossy());
-        Repo { universe: self.universe.clone(), id, dir }
+        Repo {
+            universe: self.universe.clone(),
+            id,
+            dir,
+        }
     }
     /// The remote `origin` is `https://github.com/acme/<name>.git`, which resolves to no repo, and
     /// `refs/remotes/origin/<branch>` is the current commit of the branch `HEAD` names.
     pub fn keyed(&self, name: &str) {
         let mut u = self.u();
-        u.config_add(self.id, "remote.origin.url", &format!("https://github.com/acme/{name}.git"));
+        u.config_add(
+            self.id,
+            "remote.origin.url",
+            &format!("https://github.com/acme/{name}.git"),
+        );
         if let Head::Branch(b) = u.head(&self.dir)
-            && let Some(at) = u.ref_oid(self.id, &format!("refs/heads/{b}")) {
-                u.set_ref(self.id, &format!("refs/remotes/origin/{b}"), &at, "fetch");
-            }
+            && let Some(at) = u.ref_oid(self.id, &format!("refs/heads/{b}"))
+        {
+            u.set_ref(self.id, &format!("refs/remotes/origin/{b}"), &at, "fetch");
+        }
     }
     /// Pushes the branch `HEAD` names to `origin` (its url resolved through `insteadOf` to a repo of the
     /// Universe): the objects, `refs/heads/<b>` there and `refs/remotes/origin/<b>` here.
     pub fn push(&self) {
         let mut u = self.u();
-        let Head::Branch(b) = u.head(&self.dir) else { panic!("push needs a branch at HEAD") };
-        let commit = u.ref_oid(self.id, &format!("refs/heads/{b}")).expect("the branch to push has a commit");
-        let url = u.config_values(self.id, "remote.origin.url").pop().expect("push needs a remote origin");
+        let Head::Branch(b) = u.head(&self.dir) else {
+            panic!("push needs a branch at HEAD")
+        };
+        let commit = u
+            .ref_oid(self.id, &format!("refs/heads/{b}"))
+            .expect("the branch to push has a commit");
+        let url = u
+            .config_values(self.id, "remote.origin.url")
+            .pop()
+            .expect("push needs a remote origin");
         let url = u.resolve_url(self.id, &url);
-        let there = u.repo_at(&url).unwrap_or_else(|| panic!("the url {url} is no repo of the Universe"));
+        let there = u
+            .repo_at(&url)
+            .unwrap_or_else(|| panic!("the url {url} is no repo of the Universe"));
         u.copy(self.id, there, &commit);
         u.set_ref(there, &format!("refs/heads/{b}"), &commit, "push");
-        u.set_ref(self.id, &format!("refs/remotes/origin/{b}"), &commit, "update by push");
+        u.set_ref(
+            self.id,
+            &format!("refs/remotes/origin/{b}"),
+            &commit,
+            "update by push",
+        );
     }
 }
 

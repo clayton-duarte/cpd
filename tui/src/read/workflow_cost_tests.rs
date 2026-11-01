@@ -17,10 +17,24 @@ const NOW: &str = "2026-10-18T15:07:30.000Z";
 /// Job `key` of PR `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
 /// is the stored JSON of an ended Attempt, `None` for a live one (NULL `metrics`, running); `file` the Session's file.
 /// `with_job` adds the Job's own row (once per Job).
-fn attempt(pr: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, file: Option<&str>, with_job: bool) -> String {
+fn attempt(
+    pr: &str,
+    key: &str,
+    kind: &str,
+    number: u32,
+    metrics: Option<&str>,
+    file: Option<&str>,
+    with_job: bool,
+) -> String {
     let id = format!("{key}-a{number}");
     let (status, outcome, cause, ended, metrics) = match metrics {
-        Some(m) => ("ended", "'failed'", "'crashed'", "'2026-01-02T02:00:00.000Z'", format!("'{m}'")),
+        Some(m) => (
+            "ended",
+            "'failed'",
+            "'crashed'",
+            "'2026-01-02T02:00:00.000Z'",
+            format!("'{m}'"),
+        ),
         None => ("running", "NULL", "NULL", "NULL", "NULL".to_owned()),
     };
     format!(
@@ -37,7 +51,14 @@ fn attempt(pr: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, 
 
 fn write(dir: &tempfile::TempDir, name: &str, costs: &[f64]) -> String {
     let path = dir.path().join(name).display().to_string();
-    fs::write(&path, costing(costs).iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+    fs::write(
+        &path,
+        costing(costs)
+            .iter()
+            .map(|l| format!("{l}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
     path
 }
 
@@ -78,7 +99,15 @@ fn a_workflow_with_no_attempt_or_no_cost_data_has_no_cost() {
     run(
         &mut store,
         &(job("a", "ja", "work", "queued")
-            + &attempt("b", "jb", "work", 1, Some(r#"{"turns":3}"#), Some(&says_one), true)
+            + &attempt(
+                "b",
+                "jb",
+                "work",
+                1,
+                Some(r#"{"turns":3}"#),
+                Some(&says_one),
+                true,
+            )
             + &attempt("c", "jc", "work", 1, None, Some(&missing), true)
             + &attempt("d", "jd", "work", 1, Some(&stored("0.10")), None, true)
             + &attempt("d", "je", "work", 1, Some(r#"{"turns":3}"#), None, true)),
@@ -94,7 +123,8 @@ fn a_workflow_whose_cost_totals_zero_has_some_zero() {
     let (_dir, mut store) = store_with(&["api"]);
     run(
         &mut store,
-        &(attempt("api", "a", "work", 1, Some(&stored("0")), None, true) + &attempt("api", "b", "work", 1, Some(&stored("0.0")), None, true)),
+        &(attempt("api", "a", "work", 1, Some(&stored("0")), None, true)
+            + &attempt("api", "b", "work", 1, Some(&stored("0.0")), None, true)),
     );
     assert_eq!(costs(&mut store), vec![Some(0.0)]);
 }
@@ -103,9 +133,15 @@ fn a_workflow_whose_cost_totals_zero_has_some_zero() {
 fn a_live_attempt_costs_its_worker_sessions_file() {
     let (dir, mut store) = store_with(&["api"]);
     let file = write(&dir, "live.jsonl", &[0.25, 0.25]);
-    run(&mut store, &attempt("api", "a", "work", 1, None, Some(&file), true));
+    run(
+        &mut store,
+        &attempt("api", "a", "work", 1, None, Some(&file), true),
+    );
     near(costs(&mut store)[0], 0.5);
-    run(&mut store, &attempt("api", "b", "work", 1, Some(&stored("0.5")), None, true));
+    run(
+        &mut store,
+        &attempt("api", "b", "work", 1, Some(&stored("0.5")), None, true),
+    );
     near(costs(&mut store)[0], 1.0);
 }
 
@@ -113,7 +149,18 @@ fn a_live_attempt_costs_its_worker_sessions_file() {
 fn a_written_metrics_is_the_only_source_of_an_attempts_cost() {
     let (dir, mut store) = store_with(&["api"]);
     let file = write(&dir, "nine.jsonl", &[9.0]);
-    run(&mut store, &attempt("api", "a", "work", 1, Some(&stored("0.25")), Some(&file), true));
+    run(
+        &mut store,
+        &attempt(
+            "api",
+            "a",
+            "work",
+            1,
+            Some(&stored("0.25")),
+            Some(&file),
+            true,
+        ),
+    );
     near(costs(&mut store)[0], 0.25);
 }
 
@@ -123,10 +170,16 @@ fn a_workflow_costs_what_the_plan_row_counts_for_its_attempts() {
     let file = write(&dir, "live.jsonl", &[0.25]);
     run(
         &mut store,
-        &(attempt("api", "a", "work", 1, Some(&stored("0.5")), None, true) + &attempt("api", "b", "work", 1, None, Some(&file), true)),
+        &(attempt("api", "a", "work", 1, Some(&stored("0.5")), None, true)
+            + &attempt("api", "b", "work", 1, None, Some(&file), true)),
     );
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
-    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
+    let plan = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .find(|p| p.head.id.as_str() == "pay")
+        .unwrap();
     near(plan.cost_usd, 0.75);
     near(costs(&mut store)[0], 0.75);
 }

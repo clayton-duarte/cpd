@@ -18,7 +18,9 @@ use cpd_core::ports::Fakes;
 use cpd_tui::view_ports::run_view_with;
 use cpd_tui::{Capture, ViewError};
 use ratatui::crossterm::Command;
-use ratatui::crossterm::event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture};
+use ratatui::crossterm::event::{
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 
 /// The bytes of `command`, as crossterm writes them to a terminal.
@@ -73,7 +75,12 @@ fn view_ending(ends: &str) -> Ended {
     }));
     let raw = tty.log.borrow().clone();
     let during = during.borrow().clone();
-    Ended { during, after: out.bytes(), raw, result: result.ok() }
+    Ended {
+        during,
+        after: out.bytes(),
+        raw,
+        result: result.ok(),
+    }
 }
 
 /// The view owned the terminal while its body ran (the alternate screen, the mouse and focus reporting on, raw mode
@@ -81,17 +88,40 @@ fn view_ending(ends: &str) -> Ended {
 /// thing written.
 fn assert_owned_then_restored(ended: &Ended, what: &str) {
     let (during, after) = (&ended.during, &ended.after);
-    assert!(position(during, &ansi(EnterAlternateScreen)).is_some(), "the view owns the alternate screen: {during:?}");
-    assert!(position(during, &ansi(EnableMouseCapture)).is_some(), "mouse reporting is on: {during:?}");
-    assert!(position(during, &ansi(EnableFocusChange)).is_some(), "focus reporting is on: {during:?}");
-    assert!(position(during, &ansi(DisableMouseCapture)).is_none(), "nothing is turned off while the view runs: {during:?}");
-    assert_eq!(ended.raw, ["raw_on", "raw_off"], "raw mode is on for the body and off after {what}");
+    assert!(
+        position(during, &ansi(EnterAlternateScreen)).is_some(),
+        "the view owns the alternate screen: {during:?}"
+    );
+    assert!(
+        position(during, &ansi(EnableMouseCapture)).is_some(),
+        "mouse reporting is on: {during:?}"
+    );
+    assert!(
+        position(during, &ansi(EnableFocusChange)).is_some(),
+        "focus reporting is on: {during:?}"
+    );
+    assert!(
+        position(during, &ansi(DisableMouseCapture)).is_none(),
+        "nothing is turned off while the view runs: {during:?}"
+    );
+    assert_eq!(
+        ended.raw,
+        ["raw_on", "raw_off"],
+        "raw mode is on for the body and off after {what}"
+    );
     let left = position(after, &ansi(LeaveAlternateScreen)).expect("the alternate screen is left");
     for off in [ansi(DisableMouseCapture), ansi(DisableFocusChange)] {
-        let at = position(after, &off).unwrap_or_else(|| panic!("{off:?} is written after {what}: {after:?}"));
-        assert!(at < left, "the reporting is off before the alternate screen is left: {after:?}");
+        let at = position(after, &off)
+            .unwrap_or_else(|| panic!("{off:?} is written after {what}: {after:?}"));
+        assert!(
+            at < left,
+            "the reporting is off before the alternate screen is left: {after:?}"
+        );
     }
-    assert!(after.ends_with(&ansi(LeaveAlternateScreen)), "the alternate screen is left last after {what}: {after:?}");
+    assert!(
+        after.ends_with(&ansi(LeaveAlternateScreen)),
+        "the alternate screen is left last after {what}: {after:?}"
+    );
 }
 
 #[test]
@@ -104,7 +134,18 @@ fn a_panic_in_a_view_leaves_the_terminal_restored_and_the_mouse_off() {
 #[test]
 fn an_error_in_a_view_leaves_the_terminal_restored_and_the_mouse_off() {
     let ended = view_ending("error");
-    let e = ended.result.as_ref().expect("an error does not panic").as_ref().unwrap_err();
-    assert_eq!((e.code(), e.message()), (ErrorCode::NotATerminal, "The terminal of cpd tui view test failed: the view failed."));
+    let e = ended
+        .result
+        .as_ref()
+        .expect("an error does not panic")
+        .as_ref()
+        .unwrap_err();
+    assert_eq!(
+        (e.code(), e.message()),
+        (
+            ErrorCode::NotATerminal,
+            "The terminal of cpd tui view test failed: the view failed."
+        )
+    );
     assert_owned_then_restored(&ended, "an error");
 }

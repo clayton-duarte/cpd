@@ -26,33 +26,29 @@
 
 mod active;
 mod age;
+#[cfg(test)]
+mod age_tests;
 mod cost;
 #[cfg(test)]
 mod cost_tests;
-#[cfg(test)]
-mod age_tests;
-#[cfg(test)]
-mod inbox_mark_tests;
 mod dot;
 #[cfg(test)]
 mod dot_pr_tests;
-mod flow;
-mod follow;
-mod logs;
 #[cfg(test)]
 mod elapsed_tests;
 #[cfg(test)]
 mod explore_attempt_tests;
 #[cfg(test)]
 mod explore_view_tests;
+mod flow;
+mod follow;
 #[cfg(test)]
-mod workflow_cost_tests;
-#[cfg(test)]
-mod look_tests;
+mod inbox_mark_tests;
 #[cfg(test)]
 mod lead_dot_box_tests;
+mod logs;
 #[cfg(test)]
-mod working_pr_dot_tests;
+mod look_tests;
 pub mod pr_look;
 mod pulse;
 #[cfg(test)]
@@ -61,26 +57,36 @@ mod shared;
 #[cfg(test)]
 pub(crate) mod stacked_ready_tests;
 mod tree;
-mod widgets;
 pub mod watch;
 #[cfg(test)]
 mod watch_tests;
+mod widgets;
+#[cfg(test)]
+mod workflow_cost_tests;
+#[cfg(test)]
+mod working_pr_dot_tests;
 
 pub use age::age_text;
-pub use flow::{
-    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, UpdateState, WorkerRef, chat_slot, flow,
-    plan_boxes, plan_boxes_at,
-};
-pub use shared::{
-    AttemptStatus, Checks, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
-    PrState, ReviewStatus, SessionNode,
-};
 pub use dot::{Dot, OrderKey, Work};
-pub use pr_look::{PrFacts, PrLook, pr_look};
+pub use flow::{
+    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus,
+    Pull, Review, UpdateState, WorkerRef, chat_slot, flow, plan_boxes, plan_boxes_at,
+};
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
-pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
-pub use tree::{ContextNode, PlanNode, Tree, InboxMark, inbox_at, inbox_mark, snooze_end, snooze_end_at, tree, tree_at};
+pub use pr_look::{PrFacts, PrLook, pr_look};
+pub use pulse::{
+    BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse,
+};
+pub use shared::{
+    AttemptStatus, Checks, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr, PrState,
+    ReviewStatus, SessionNode,
+};
+pub use tree::{
+    ContextNode, InboxMark, PlanNode, Tree, inbox_at, inbox_mark, snooze_end, snooze_end_at, tree,
+    tree_at,
+};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_pulls, slots, widgets,
+    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets,
+    open_pulls, slots, widgets,
 };

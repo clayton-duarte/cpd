@@ -3,21 +3,21 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use crate::clock::{Clock, SystemClock};
 #[cfg(feature = "fakes")]
 use crate::clock::ManualClock;
+use crate::clock::{Clock, SystemClock};
 #[cfg(feature = "fakes")]
 use crate::host::host_socket::FakeHostSocket;
+use crate::host::host_socket::{HostSocket, SystemHostSocket};
 #[cfg(feature = "fakes")]
 use crate::host::runner::FakeRunner;
-use crate::host::host_socket::{HostSocket, SystemHostSocket};
 use crate::host::runner::{Runner, SystemRunner};
-#[cfg(feature = "fakes")]
-use crate::session::tail::FakeHostConn;
-use crate::session::tail::{HostConn, SystemHostConn};
 #[cfg(feature = "fakes")]
 use crate::host::spawn::FakeSpawn;
 use crate::host::spawn::{ProcessSpawn, Spawn};
+#[cfg(feature = "fakes")]
+use crate::session::tail::FakeHostConn;
+use crate::session::tail::{HostConn, SystemHostConn};
 
 /// Time, short processes, long-lived or replacing processes, the host socket and the host connection.
 #[derive(Clone)]
@@ -62,7 +62,9 @@ impl Ports {
     /// The ports scoped on this thread by [`Ports::scope`], else [`Ports::real`]. A wrapper that has no `Ports` of its
     /// own reads this, never `SystemRunner`, `ProcessSpawn` or `Ports::real()`.
     pub fn current() -> Ports {
-        SCOPED.with(|cell| cell.borrow().clone()).unwrap_or_else(Ports::real)
+        SCOPED
+            .with(|cell| cell.borrow().clone())
+            .unwrap_or_else(Ports::real)
     }
 }
 
@@ -105,6 +107,13 @@ impl Fakes {
             host_socket: host_socket.clone(),
             host_conn: host_conn.clone(),
         };
-        Fakes { ports, clock, runner, spawn, host_socket, host_conn }
+        Fakes {
+            ports,
+            clock,
+            runner,
+            spawn,
+            host_socket,
+            host_conn,
+        }
     }
 }

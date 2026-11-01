@@ -34,14 +34,23 @@ impl Changes {
 /// How many pull request rows there are and the latest `changed_at` among them (contract §4.4: the time of the last
 /// change of any other field): one cheap read of a small table, in place of a snapshot of the whole model.
 fn pulls_mark(conn: &Connection) -> Result<(i64, String), CpdError> {
-    Ok(conn.query_row("SELECT count(*), coalesce(max(changed_at), '') FROM pull_requests", [], |r| Ok((r.get(0)?, r.get(1)?)))?)
+    Ok(conn.query_row(
+        "SELECT count(*), coalesce(max(changed_at), '') FROM pull_requests",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
 }
 
 impl Follow {
     /// Follows the Events of `kinds` (every kind when empty) after `cursor`, which a snapshot's `events_cursor` gives.
     pub fn new(store: &mut Store, kinds: &[Kind], cursor: i64) -> Result<Follow, CpdError> {
-        let selection = store.read(|conn| Selection::resolve(conn, None, None, None, kinds.to_vec()))?;
-        Ok(Follow { selection, cursor, pulls: None })
+        let selection =
+            store.read(|conn| Selection::resolve(conn, None, None, None, kinds.to_vec()))?;
+        Ok(Follow {
+            selection,
+            cursor,
+            pulls: None,
+        })
     }
 
     /// The Events committed since the last successful poll, oldest first. The cursor moves only when this returns
@@ -74,7 +83,8 @@ impl Follow {
             Ok((highest, self.selection.fetch(conn, from, Some(highest), i64::MAX)?, mark))
         })?;
         self.cursor = highest;
-        let pulls = mark.is_some_and(|mark| self.pulls.replace(mark.clone()).as_ref() != Some(&mark));
+        let pulls =
+            mark.is_some_and(|mark| self.pulls.replace(mark.clone()).as_ref() != Some(&mark));
         Ok(Changes { events, pulls })
     }
 }

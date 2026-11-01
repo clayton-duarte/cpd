@@ -371,24 +371,35 @@ pub struct CpdError {
 impl CpdError {
     /// An error with empty `details`.
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        CpdError { code, message: message.into(), details: Map::new() }
+        CpdError {
+            code,
+            message: message.into(),
+            details: Map::new(),
+        }
     }
 
     /// `plan_not_found` (exit 4): no Plan `plan`.
     pub fn plan_not_found(plan: &crate::ids::PlanId) -> Self {
-        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}."))
+            .with("plan", plan.as_str())
     }
 
     /// A row the database holds in a shape the binary does not accept: it was
     /// changed outside cpd, or by a bug (`store_failed`).
     pub fn bad_row(what: impl fmt::Display) -> Self {
-        CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The database holds an invalid row: {what}."),
+        )
     }
 
     /// `file_unreadable` (exit 2): `path` cannot be read as UTF-8 text because of `cause`.
     pub fn file_unreadable(path: &std::path::Path, cause: impl fmt::Display) -> Self {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {cause}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::FileUnreadable,
+            format!("Cannot read {} as UTF-8 text: {cause}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     }
 
     /// Adds one `details` field (replacing a field of the same name).
@@ -648,10 +659,23 @@ mod tests {
             serde_json::json!({"ok": false, "error": {"code": "plan_not_found", "message": "No Plan api-schema.", "details": {"plan": "api-schema"}}})
         );
         let bad = CpdError::bad_row("Plan x has phase \"y\"");
-        assert_eq!((bad.code(), bad.message()), (ErrorCode::StoreFailed, "The database holds an invalid row: Plan x has phase \"y\"."));
+        assert_eq!(
+            (bad.code(), bad.message()),
+            (
+                ErrorCode::StoreFailed,
+                "The database holds an invalid row: Plan x has phase \"y\"."
+            )
+        );
         assert!(bad.details().is_empty());
-        let unreadable = CpdError::file_unreadable(std::path::Path::new("/tmp/brief.md"), "not UTF-8");
-        assert_eq!((unreadable.code(), unreadable.message()), (ErrorCode::FileUnreadable, "Cannot read /tmp/brief.md as UTF-8 text: not UTF-8."));
+        let unreadable =
+            CpdError::file_unreadable(std::path::Path::new("/tmp/brief.md"), "not UTF-8");
+        assert_eq!(
+            (unreadable.code(), unreadable.message()),
+            (
+                ErrorCode::FileUnreadable,
+                "Cannot read /tmp/brief.md as UTF-8 text: not UTF-8."
+            )
+        );
         assert_eq!(unreadable.details()["path"], "/tmp/brief.md");
     }
 }

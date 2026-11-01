@@ -34,7 +34,15 @@ pub fn logs(store: &mut Store, recent: u32) -> Result<Logs, CpdError> {
 pub fn logs_after(store: &mut Store, cursor: i64) -> Result<Logs, CpdError> {
     store.read(|conn| {
         let events_cursor = highest_id(conn)?;
-        let events = Selection::resolve(conn, None, None, None, Vec::new())?.fetch(conn, cursor, Some(events_cursor), i64::MAX)?;
-        Ok(Logs { events, events_cursor })
+        let events = Selection::resolve(conn, None, None, None, Vec::new())?.fetch(
+            conn,
+            cursor,
+            Some(events_cursor),
+            i64::MAX,
+        )?;
+        Ok(Logs {
+            events,
+            events_cursor,
+        })
     })
 }

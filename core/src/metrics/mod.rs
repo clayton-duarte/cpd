@@ -118,7 +118,10 @@ pub fn last_error_message(path: &Path) -> Option<String> {
         if value.get("type").and_then(Value::as_str) == Some("message")
             && value.pointer("/message/role").and_then(Value::as_str) == Some("assistant")
         {
-            last = value.pointer("/message/errorMessage").and_then(Value::as_str).map(str::to_owned);
+            last = value
+                .pointer("/message/errorMessage")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
         }
     }
     last
@@ -136,25 +139,29 @@ fn add_usage(m: &mut Metrics, u: &Usage) {
 /// UTF-8 text, `session_malformed` (with `path` and `line`) when a line is not a
 /// session entry.
 pub fn parse_file(path: &Path) -> Result<Metrics, CpdError> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
-        CpdError::file_unreadable(path, e)
-    })?;
+    let text = std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?;
     parse(&text, path)
 }
 
 /// Parses the text of a session file; `path` only names it in errors.
 pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
     let malformed = |line: usize, why: String| {
-        CpdError::new(ErrorCode::SessionMalformed, format!("{}:{line}: {why}", path.display()))
-            .with("path", path.display().to_string())
-            .with("line", line)
+        CpdError::new(
+            ErrorCode::SessionMalformed,
+            format!("{}:{line}: {why}", path.display()),
+        )
+        .with("path", path.display().to_string())
+        .with("line", line)
     };
     let mut lines: Vec<&str> = text.split('\n').collect();
     if lines.last() == Some(&"") {
         lines.pop();
     }
     if lines.is_empty() {
-        return Err(malformed(1, "empty file, missing session header".to_owned()));
+        return Err(malformed(
+            1,
+            "empty file, missing session header".to_owned(),
+        ));
     }
 
     let mut m = Metrics {
@@ -174,7 +181,8 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
 
     for (i, line) in lines.iter().enumerate() {
         let n = i + 1;
-        let value: Value = serde_json::from_str(line).map_err(|e| malformed(n, format!("invalid JSON: {e}")))?;
+        let value: Value =
+            serde_json::from_str(line).map_err(|e| malformed(n, format!("invalid JSON: {e}")))?;
         let base = Base::deserialize(&value).map_err(|e| malformed(n, e.to_string()))?;
         let at = OffsetDateTime::parse(&base.timestamp, &Rfc3339)
             .map_err(|e| malformed(n, format!("invalid timestamp {:?}: {e}", base.timestamp)))?
@@ -182,7 +190,10 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
             .div_euclid(1_000_000);
         if i == 0 {
             if base.kind != "session" {
-                return Err(malformed(n, format!("expected the session header, found type {:?}", base.kind)));
+                return Err(malformed(
+                    n,
+                    format!("expected the session header, found type {:?}", base.kind),
+                ));
             }
             first = at;
             last = at;
@@ -195,11 +206,21 @@ pub fn parse(text: &str, path: &Path) -> Result<Metrics, CpdError> {
         }
         let bad = |e: serde_json::Error| malformed(n, e.to_string());
         match base.kind.as_str() {
-            "model_change" => m.model = Some(ModelChange::deserialize(&value).map_err(bad)?.model_id),
-            "thinking_level_change" => {
-                m.thinking_level = Some(ThinkingChange::deserialize(&value).map_err(bad)?.thinking_level);
+            "model_change" => {
+                m.model = Some(ModelChange::deserialize(&value).map_err(bad)?.model_id)
             }
-            "message" if !inherited && value.pointer("/message/role").and_then(Value::as_str) == Some("assistant") => {
+            "thinking_level_change" => {
+                m.thinking_level = Some(
+                    ThinkingChange::deserialize(&value)
+                        .map_err(bad)?
+                        .thinking_level,
+                );
+            }
+            "message"
+                if !inherited
+                    && value.pointer("/message/role").and_then(Value::as_str)
+                        == Some("assistant") =>
+            {
                 let u = Assistant::deserialize(&value).map_err(bad)?.message;
                 m.turns += 1;
                 add_usage(&mut m, &u.usage);

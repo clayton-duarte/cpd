@@ -11,9 +11,9 @@ use crate::common;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use common::TestEnv;
 use common::fx::Fx;
 use common::screen::{Screen, Script, SharedBackend, Step, wheel};
-use common::TestEnv;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -22,10 +22,10 @@ use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read;
 use cpd_tui::view_ports::Ctx;
 use cpd_tui::widgets::legend;
-use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 
 /// The zone the rows are drawn in: `ManualClock`'s (EST in January, EDT in October), never the machine's.
 fn zone() -> cpd_core::clock::TimeZone {
@@ -33,7 +33,11 @@ fn zone() -> cpd_core::clock::TimeZone {
 }
 
 fn open(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 /// Appends one Event per `(kind, text)`, one second apart from 00:00:00 UTC on (19:00:00 the day before in the EST of `ManualClock`'s zone: the rows are drawn there).
@@ -74,7 +78,13 @@ fn render(width: u16, height: u16, log: &mut Log) -> Buffer {
 /// The rows under the title.
 fn rows(buf: &Buffer) -> Vec<String> {
     (HEAD..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
         .collect()
 }
 
@@ -91,15 +101,32 @@ fn append_numbered(store: &mut Store, first: usize, n: usize) {
 fn the_log_lists_the_events_one_line_each_newest_last() {
     let fx = Fx::new();
     let mut store = open(&fx.env);
-    append(&mut store, 0, &[("context-created", ""), ("plan-phase", "Plan ship: dispatch"), ("error", "store busy")]);
+    append(
+        &mut store,
+        0,
+        &[
+            ("context-created", ""),
+            ("plan-phase", "Plan ship: dispatch"),
+            ("error", "store busy"),
+        ],
+    );
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events, zone());
     let buf = render(34, 5, &mut log);
     assert_eq!(
         rows(&buf),
-        [" 19:00:00 context-created", " 19:00:01 Plan ship: dispatch", " 19:00:02 store busy", "", ""]
+        [
+            " 19:00:00 context-created",
+            " 19:00:01 Plan ship: dispatch",
+            " 19:00:02 store busy",
+            "",
+            ""
+        ]
     );
     // the time is muted (colour 8), an `error` Event is in the failed colour and the others are read-only text (7)
-    assert!(buf[(1, 3)].fg == palette::muted_text().fg.unwrap() && buf[(10, 3)].fg == palette::read_only_text().fg.unwrap());
+    assert!(
+        buf[(1, 3)].fg == palette::muted_text().fg.unwrap()
+            && buf[(10, 3)].fg == palette::read_only_text().fg.unwrap()
+    );
     assert_eq!(buf[(10, 5)].fg, palette::fg(Meaning::Failed).fg.unwrap());
     assert_ne!(buf[(10, 4)].fg, palette::fg(Meaning::Failed).fg.unwrap());
 }
@@ -110,7 +137,11 @@ fn a_long_event_is_cut_with_an_ellipsis_and_an_empty_log_says_so() {
     let mut store = open(&fx.env);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events, zone());
     assert_eq!(rows(&render(20, 2, &mut log)), [" none yet", ""]);
-    append(&mut store, 0, &[("plan-phase", "a very long event text indeed")]);
+    append(
+        &mut store,
+        0,
+        &[("plan-phase", "a very long event text indeed")],
+    );
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events, zone());
     assert_eq!(rows(&render(20, 1, &mut log)), [" 19:00:00 a very l…"]);
 }
@@ -122,12 +153,24 @@ fn the_snapshot_is_the_latest_500_events_oldest_first_and_follows_from_its_curso
     append_numbered(&mut store, 0, 600);
     let snapshot = read::logs(&mut store, 500).unwrap();
     assert_eq!(snapshot.events.len(), 500);
-    assert_eq!((snapshot.events[0].text.as_str(), snapshot.events[499].text.as_str()), ("event 100", "event 599"));
+    assert_eq!(
+        (
+            snapshot.events[0].text.as_str(),
+            snapshot.events[499].text.as_str()
+        ),
+        ("event 100", "event 599")
+    );
     assert_eq!(snapshot.events_cursor, 600);
     assert!(read::logs_after(&mut store, 600).unwrap().events.is_empty());
     append_numbered(&mut store, 600, 2);
     let next = read::logs_after(&mut store, snapshot.events_cursor).unwrap();
-    assert_eq!(next.events.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), ["event 600", "event 601"]);
+    assert_eq!(
+        next.events
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>(),
+        ["event 600", "event 601"]
+    );
     assert_eq!(next.events_cursor, 602);
 }
 
@@ -140,7 +183,15 @@ fn the_log_follows_while_it_shows_the_bottom_and_stops_when_scrolled_up() {
     append_numbered(&mut store, 0, 10);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events, zone());
     let last = |buf: &Buffer| rows(buf).last().unwrap().clone();
-    assert_eq!(rows(&render(20, 4, &mut log)), [" 19:00:06 event 6", " 19:00:07 event 7", " 19:00:08 event 8", " 19:00:09 event 9"]);
+    assert_eq!(
+        rows(&render(20, 4, &mut log)),
+        [
+            " 19:00:06 event 6",
+            " 19:00:07 event 7",
+            " 19:00:08 event 8",
+            " 19:00:09 event 9"
+        ]
+    );
     assert!(log.follows());
 
     // at the bottom: a new Event scrolls in
@@ -152,7 +203,15 @@ fn the_log_follows_while_it_shows_the_bottom_and_stops_when_scrolled_up() {
     log.scroll_up(2);
     assert!(!log.follows());
     let before = render(20, 4, &mut log);
-    assert_eq!(rows(&before), [" 19:00:05 event 5", " 19:00:06 event 6", " 19:00:07 event 7", " 19:00:08 event 8"]);
+    assert_eq!(
+        rows(&before),
+        [
+            " 19:00:05 event 5",
+            " 19:00:06 event 6",
+            " 19:00:07 event 7",
+            " 19:00:08 event 8"
+        ]
+    );
     append_numbered(&mut store, 11, 2);
     log.push(read::logs_after(&mut store, 11).unwrap().events);
     assert_eq!(rows(&render(20, 4, &mut log)), rows(&before));
@@ -194,11 +253,20 @@ const POLL: Duration = Duration::from_millis(50);
 
 /// The log view over the store of `fx`, as `logs::run` opens it (the latest 500 Events, at `event` when there is one), run
 /// on `steps` in a terminal of `screen`; what it returned. The script must be over when the view closed.
-fn run_log(fx: &Fx, screen: &SharedBackend, event: Option<i64>, steps: Vec<Step>) -> Result<(), cpd_tui::ViewError> {
+fn run_log(
+    fx: &Fx,
+    screen: &SharedBackend,
+    event: Option<i64>,
+    steps: Vec<Step>,
+) -> Result<(), cpd_tui::ViewError> {
     let mut store = open(&fx.env);
     let first = read::logs(&mut store, logs::RECENT).unwrap();
     let log = match event {
-        Some(id) => Log::at(logs::with_event(&mut store, first.events, id).unwrap(), id, zone()),
+        Some(id) => Log::at(
+            logs::with_event(&mut store, first.events, id).unwrap(),
+            id,
+            zone(),
+        ),
         None => Log::new(first.events, zone()),
     };
     let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
@@ -206,15 +274,27 @@ fn run_log(fx: &Fx, screen: &SharedBackend, event: Option<i64>, steps: Vec<Step>
     let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
     let result = logs::show_with(&mut ctx, &mut store, POLL, follow, log);
     drop(ctx);
-    assert_eq!(input.remaining(), 0, "the view closed before its script was over");
+    assert_eq!(
+        input.remaining(),
+        0,
+        "the view closed before its script was over"
+    );
     result
 }
 
 /// The rows under the title of `screen`; the title itself is asserted to be a section title between two empty rows.
 fn log_rows(screen: &Screen) -> Vec<String> {
     let rows = screen.rows();
-    assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "an empty row above and below the title: {rows:?}");
-    assert!(rows[1].starts_with(" ──\u{E0B6}Logs\u{E0B4}─"), "the title is a section title: {:?}", rows[1]);
+    assert_eq!(
+        (rows[0].as_str(), rows[2].as_str()),
+        ("", ""),
+        "an empty row above and below the title: {rows:?}"
+    );
+    assert!(
+        rows[1].starts_with(" ──\u{E0B6}Logs\u{E0B4}─"),
+        "the title is a section title: {:?}",
+        rows[1]
+    );
     rows[3..].to_vec()
 }
 
@@ -237,14 +317,23 @@ fn look(what: &'static str, check: impl Fn(&[String]) -> bool + 'static) -> Step
 /// What another process does: appends `n` Events `event <first>` … to the store at `home`.
 fn commit_later(home: PathBuf, first: usize, n: usize) -> Step {
     Step::then(move || {
-        let mut store = Store::open(&CpdHome::resolve(Some(home.clone().into()), None).unwrap(), 5000).unwrap();
+        let mut store = Store::open(
+            &CpdHome::resolve(Some(home.clone().into()), None).unwrap(),
+            5000,
+        )
+        .unwrap();
         append_numbered(&mut store, first, n);
     })
 }
 
 /// What another process does: runs `text` on the database file of the store at `home`, not through `Store`.
 fn raw_later(home: PathBuf, text: &'static str) -> Step {
-    Step::then(move || rusqlite::Connection::open(home.join("cpd.db")).unwrap().execute_batch(text).unwrap())
+    Step::then(move || {
+        rusqlite::Connection::open(home.join("cpd.db"))
+            .unwrap()
+            .execute_batch(text)
+            .unwrap()
+    })
 }
 
 #[test]
@@ -276,7 +365,10 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
         Step::look(|s| {
             let rows = log_rows(s);
             assert_eq!(rows[0], " 19:00:04 event 4", "scrolled up once more");
-            assert_eq!(rows[3], " 19:00:07 event 7", "the new Event did not move it: {rows:?}");
+            assert_eq!(
+                rows[3], " 19:00:07 event 7",
+                "the new Event did not move it: {rows:?}"
+            );
         }),
         Step::key(KeyCode::PageDown),
         look_log("following again", last(" 19:00:11 event 11")),
@@ -314,7 +406,12 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
 
     // so does Esc
     let screen = SharedBackend::new(30, 4 + HEAD);
-    let steps = vec![look_log("the Events", |r| r.get(3).is_some_and(|l| l.contains("event 13"))), Step::key(KeyCode::Esc)];
+    let steps = vec![
+        look_log("the Events", |r| {
+            r.get(3).is_some_and(|l| l.contains("event 13"))
+        }),
+        Step::key(KeyCode::Esc),
+    ];
     run_log(&fx, &screen, None, steps).unwrap();
 }
 
@@ -327,18 +424,28 @@ fn a_failed_read_keeps_the_events_and_shows_the_error_until_a_read_succeeds() {
     append_numbered(&mut open(&fx.env), 0, 10);
     let screen = SharedBackend::new(60, 7);
     let steps = vec![
-        look("the latest Events", |r| r.get(6).is_some_and(|l| l == " 19:00:09 event 9")),
+        look("the latest Events", |r| {
+            r.get(6).is_some_and(|l| l == " 19:00:09 event 9")
+        }),
         // not through `Store`, which refuses a changed schema
         raw_later(home.clone(), "ALTER TABLE events RENAME TO events_gone;"),
         Step::Idle,
         Step::look(|s| {
             let rows = s.rows();
-            assert!(rows[6].contains("no such table"), "the error in the last row: {rows:?}");
-            assert_eq!(rows[5], " 19:00:09 event 9", "the Events stay, one row less: {rows:?}");
+            assert!(
+                rows[6].contains("no such table"),
+                "the error in the last row: {rows:?}"
+            );
+            assert_eq!(
+                rows[5], " 19:00:09 event 9",
+                "the Events stay, one row less: {rows:?}"
+            );
         }),
         raw_later(home, "ALTER TABLE events_gone RENAME TO events;"),
         Step::Idle,
-        look("the error to go", |r| r.get(6).is_some_and(|l| l == " 19:00:09 event 9")),
+        look("the error to go", |r| {
+            r.get(6).is_some_and(|l| l == " 19:00:09 event 9")
+        }),
         Step::ch('q'),
     ];
     run_log(&fx, &screen, None, steps).unwrap();
@@ -353,13 +460,21 @@ fn a_follow_that_fails_is_shown_and_the_events_stay() {
     append_numbered(&mut open(&fx.env), 0, 10);
     let screen = SharedBackend::new(80, 7);
     let steps = vec![
-        look("the latest Events", |r| r.get(6).is_some_and(|l| l == " 19:00:09 event 9")),
+        look("the latest Events", |r| {
+            r.get(6).is_some_and(|l| l == " 19:00:09 event 9")
+        }),
         // not through `Store`, which keeps the Events append-only
-        raw_later(home, "DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;"),
+        raw_later(
+            home,
+            "DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;",
+        ),
         Step::Idle,
         Step::look(|s| {
             let rows = s.rows();
-            assert!(rows[6].contains("Event cursor"), "the error in the last row: {rows:?}");
+            assert!(
+                rows[6].contains("Event cursor"),
+                "the error in the last row: {rows:?}"
+            );
             assert_eq!(rows[5], " 19:00:09 event 9", "the Events stay: {rows:?}");
         }),
         Step::ch('q'),
@@ -371,7 +486,11 @@ fn a_follow_that_fails_is_shown_and_the_events_stay() {
 fn the_logs_view_needs_a_terminal() {
     let fx = Fx::with_ports();
     let run = fx.cpd_without_a_terminal(&["tui", "view", "logs"]);
-    assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
+    assert_eq!(
+        (run.exit, run.error()["code"].as_str()),
+        (3, Some("not_a_terminal")),
+        "{run:?}"
+    );
 }
 
 // ---------- the legend popup scrolls too ----------
@@ -406,7 +525,11 @@ fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes
     let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
     legend::show_with(&mut ctx).unwrap();
     drop(ctx);
-    assert_eq!(input.remaining(), 0, "the legend closed on the key, the last step");
+    assert_eq!(
+        input.remaining(),
+        0,
+        "the legend closed on the key, the last step"
+    );
 }
 
 // ---------- the button ----------
@@ -423,7 +546,11 @@ fn fx_with_client() -> Fx {
 
 /// The `display-popup` calls of the fake tmux, as the runner saw them (the whole argv, global flags first).
 fn popups(fx: &Fx) -> Vec<Vec<String>> {
-    fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "display-popup")).collect()
+    fx.calls("tmux")
+        .into_iter()
+        .map(|c| c.args)
+        .filter(|c| c.iter().any(|a| a == "display-popup"))
+        .collect()
 }
 
 #[test]
@@ -438,9 +565,28 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     let (w, h) = ((w + 2).min(160), (h + 2).min(48));
     assert_eq!(
         popup[at..],
-        ["display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &w.to_string(), "-h", &h.to_string(), "cpd tui view logs"]
+        [
+            "display-popup",
+            "-c",
+            "/dev/pts/9",
+            "-E",
+            "-T",
+            " logs ",
+            "-w",
+            &w.to_string(),
+            "-h",
+            &h.to_string(),
+            "cpd tui view logs"
+        ]
     );
-    assert!(popup[..at].starts_with(&["-u".to_owned(), "-L".to_owned(), fx.env.tmux_socket().to_owned()]), "{popup:?}");
+    assert!(
+        popup[..at].starts_with(&[
+            "-u".to_owned(),
+            "-L".to_owned(),
+            fx.env.tmux_socket().to_owned()
+        ]),
+        "{popup:?}"
+    );
 
     // the legend action opens the legend, not the log
     fx.cpd_silent(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
@@ -455,13 +601,18 @@ fn selected_rows(buf: &Buffer) -> Vec<u16> {
     let width = buf.area.width;
     let block = palette::selected();
     (HEAD..buf.area.height)
-        .filter(|&y| [0, width - 1].iter().all(|&x| (Some(buf[(x, y)].bg), Some(buf[(x, y)].fg)) == (block.bg, block.fg)))
+        .filter(|&y| {
+            [0, width - 1]
+                .iter()
+                .all(|&x| (Some(buf[(x, y)].bg), Some(buf[(x, y)].fg)) == (block.bg, block.fg))
+        })
         .map(|y| y - HEAD)
         .collect()
 }
 
 #[test]
-fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_the_view_does_not_follow() {
+fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_the_view_does_not_follow()
+ {
     let fx = Fx::new();
     let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 30);
@@ -471,7 +622,13 @@ fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_t
     let buf = render(20, 5, &mut log);
     assert_eq!(
         rows(&buf),
-        [" 19:00:08 event 8", " 19:00:09 event 9", " 19:00:10 event 10", " 19:00:11 event 11", " 19:00:12 event 12"]
+        [
+            " 19:00:08 event 8",
+            " 19:00:09 event 9",
+            " 19:00:10 event 10",
+            " 19:00:11 event 11",
+            " 19:00:12 event 12"
+        ]
     );
     assert_eq!(selected_rows(&buf), [2], "its whole line, and only it");
     assert!(!log.follows());
@@ -493,7 +650,10 @@ fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_th
     let (first, last) = (events[0].id, events[29].id);
     let mut log = Log::at(events.clone(), first, zone());
     let buf = render(20, 5, &mut log);
-    assert_eq!((rows(&buf)[0].as_str(), rows(&buf)[4].as_str()), (" 19:00:00 event 0", " 19:00:04 event 4"));
+    assert_eq!(
+        (rows(&buf)[0].as_str(), rows(&buf)[4].as_str()),
+        (" 19:00:00 event 0", " 19:00:04 event 4")
+    );
     assert_eq!(selected_rows(&buf), [0]);
     let mut log = Log::at(events.clone(), last, zone());
     let buf = render(20, 5, &mut log);
@@ -526,7 +686,10 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
         Step::look(|s| {
             let rows = log_rows(s);
             assert_ne!(rows[0], " 19:00:02 event 2", "scrolled down once");
-            assert_eq!(rows[0], " 19:01:40 event 100", "it does not follow: {rows:?}");
+            assert_eq!(
+                rows[0], " 19:01:40 event 100",
+                "it does not follow: {rows:?}"
+            );
         }),
         Step::ch('q'),
     ];
@@ -538,7 +701,10 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
         Step::look(|s| {
             let rows = log_rows(s);
             assert_eq!(rows[2], " 19:05:00 event 300", "the Event");
-            assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 19:04:58 event 298", " 19:05:02 event 302"));
+            assert_eq!(
+                (rows[0].as_str(), rows[4].as_str()),
+                (" 19:04:58 event 298", " 19:05:02 event 302")
+            );
         }),
         Step::key(KeyCode::Esc),
     ];
@@ -546,6 +712,11 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
 
     // an Event that does not exist: the bottom, as without the option
     let screen = SharedBackend::new(30, 5 + HEAD);
-    let steps = vec![look_log("the bottom", |r| r.get(4).is_some_and(|l| l == " 19:10:00 event 600")), Step::ch('q')];
+    let steps = vec![
+        look_log("the bottom", |r| {
+            r.get(4).is_some_and(|l| l == " 19:10:00 event 600")
+        }),
+        Step::ch('q'),
+    ];
     run_log(&fx, &screen, Some(99999), steps).unwrap();
 }

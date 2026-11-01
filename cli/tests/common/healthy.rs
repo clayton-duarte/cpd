@@ -53,7 +53,10 @@ impl Handler for Healthy {
 /// What the catalog module prints (`core/src/config/catalog.mjs`): for each `<letter>=<provider>/<model>` after `--`,
 /// the model's thinking levels, or `null` when pi has no such model.
 fn catalog(args: &[&str]) -> String {
-    let start = args.iter().position(|a| *a == "--").map_or(args.len(), |i| i + 3);
+    let start = args
+        .iter()
+        .position(|a| *a == "--")
+        .map_or(args.len(), |i| i + 3);
     let mut out = serde_json::Map::new();
     for tier in args.get(start..).unwrap_or_default() {
         let (letter, model) = tier.split_once('=').expect("a tier is <letter>=<model>");
@@ -87,8 +90,12 @@ impl Fx {
         fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).expect("chmod bin/pi");
         let install = self.env.root().join("install");
         fs::create_dir_all(&install).expect("create install");
-        fs::write(install.join("current-version"), format!("{PI_RELEASE}\n")).expect("write current-version");
-        let scope = install.join("releases").join(PI_RELEASE).join("node_modules/@earendil-works");
+        fs::write(install.join("current-version"), format!("{PI_RELEASE}\n"))
+            .expect("write current-version");
+        let scope = install
+            .join("releases")
+            .join(PI_RELEASE)
+            .join("node_modules/@earendil-works");
         for package in ["pi-coding-agent", "pi-ai"] {
             let dist = scope.join(package).join("dist");
             fs::create_dir_all(&dist).expect("create dist");

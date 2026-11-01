@@ -15,10 +15,18 @@ pub(crate) fn artefact_in(dir: &Path, job: &str) -> PathBuf {
 
 /// Prepares the start of an explore `target`: creates the explore directory, deletes the stale artefact of the Job there
 /// (a file an earlier Attempt left), and returns the Worker's cwd. Runs no git and no hook.
-pub(super) fn prepare(_ports: &Ports, _home: &CpdHome, target: &Target) -> Result<PathBuf, CpdError> {
+pub(super) fn prepare(
+    _ports: &Ports,
+    _home: &CpdHome,
+    target: &Target,
+) -> Result<PathBuf, CpdError> {
     let dir = target.worktree.clone();
     let failed = |what: &str, path: &Path, e: std::io::Error| {
-        CpdError::new(ErrorCode::SetupFailed, format!("Cannot {what} {}: {e}.", path.display())).with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Cannot {what} {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     std::fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     let stale = artefact_in(&dir, target.job.as_str());

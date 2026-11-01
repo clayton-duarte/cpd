@@ -83,20 +83,45 @@ fn poll_ok() -> String {
 }
 
 /// `front` adds the rules that must win; then no tmux server runs and `cpd pr poll` succeeds.
-fn world_with(stop_after: usize, hook: impl FnMut(usize) + Send + 'static, front: impl FnOnce(FakeRunner) -> FakeRunner) -> World {
+fn world_with(
+    stop_after: usize,
+    hook: impl FnMut(usize) + Send + 'static,
+    front: impl FnOnce(FakeRunner) -> FakeRunner,
+) -> World {
     let clock = ManualClock::new();
     let runner = Arc::new(
         front(FakeRunner::new(clock.clone()))
-            .on("tmux", |_| true, Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"))
+            .on(
+                "tmux",
+                |_| true,
+                Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"),
+            )
             .on("cpd", |_| true, Reply::ok(&poll_ok())),
     );
     let spawn = Arc::new(FakeSpawn::new());
     spawn.set_self_exe(EXE);
     let until = Arc::new(AtomicBool::new(false));
-    let stepped = Stepped { inner: clock.clone(), until: until.clone(), stop_after, hook: Mutex::new(Box::new(hook)) };
-    let ports = Ports { clock: Arc::new(stepped), runner: runner.clone(), spawn: spawn.clone(), ..Ports::real() };
+    let stepped = Stepped {
+        inner: clock.clone(),
+        until: until.clone(),
+        stop_after,
+        hook: Mutex::new(Box::new(hook)),
+    };
+    let ports = Ports {
+        clock: Arc::new(stepped),
+        runner: runner.clone(),
+        spawn: spawn.clone(),
+        ..Ports::real()
+    };
     let start = clock.utc();
-    World { clock, runner, spawn, ports, until, start }
+    World {
+        clock,
+        runner,
+        spawn,
+        ports,
+        until,
+        start,
+    }
 }
 
 /// A world whose loop never stops by itself.
@@ -150,20 +175,28 @@ fn texts(fx: &mut Fx, sql: &str) -> Vec<String> {
         .store
         .read(|conn| {
             let mut stmt = conn.prepare(sql)?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?)
         })
         .unwrap()
 }
 
 /// The modification time of `home`'s lock file, as the store writes times.
 fn lock_mark(home: &CpdHome) -> String {
-    timestamp(OffsetDateTime::from(std::fs::metadata(home.watch_lock()).unwrap().modified().unwrap()))
+    timestamp(OffsetDateTime::from(
+        std::fs::metadata(home.watch_lock())
+            .unwrap()
+            .modified()
+            .unwrap(),
+    ))
 }
 
 // ---- run_with: the loop on virtual time ---------------------------------------------------------------------------
 
 /// One tick a second, no PR poll in the way, a store that is not waited for in real time.
-const LOOP: &str = "[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[timeouts]\nstore_busy_ms = 1\n";
+const LOOP: &str =
+    "[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[timeouts]\nstore_busy_ms = 1\n";
 
 #[test]
 fn the_engine_waits_between_ticks_in_naps_of_a_tenth_of_a_second() {
@@ -184,11 +217,16 @@ fn a_tick_begins_when_tick_seconds_of_the_clock_have_passed_since_the_last_one_b
 
     run_with(&w.ports, &fx.engine.home, &w.until).unwrap();
 
-    assert_eq!(lock_mark(&fx.engine.home), w.stamp(2000), "the engine marks the lock alive at the start of each tick");
+    assert_eq!(
+        lock_mark(&fx.engine.home),
+        w.stamp(2000),
+        "the engine marks the lock alive at the start of each tick"
+    );
 }
 
 #[test]
-fn a_commit_by_another_process_brings_the_next_tick_forward_to_half_a_second_after_the_last_began() {
+fn a_commit_by_another_process_brings_the_next_tick_forward_to_half_a_second_after_the_last_began()
+{
     // The hook commits on a connection of its own during the first nap: the engine sees `data_version` change at the
     // next one. Ticks at 0 s and 0.5 s (not 5 s); the sixth nap, 0.5 s to 0.6 s, stops it.
     let home = Arc::new(Mutex::new(None::<CpdHome>));
@@ -223,7 +261,11 @@ fn the_engine_stops_between_ticks_when_until_is_set_and_says_so() {
 
     run_with(&w.ports, &fx.engine.home, &w.until).unwrap();
 
-    assert_eq!(w.clock.naps().len(), 3, "it naps no more once `until` is set");
+    assert_eq!(
+        w.clock.naps().len(),
+        3,
+        "it naps no more once `until` is set"
+    );
     assert_eq!(fx.count("watch-started"), 1);
     assert_eq!(fx.count("watch-stopped"), 1);
 }
@@ -237,7 +279,10 @@ fn the_engine_runs_no_tick_when_until_is_set_before_it_starts() {
     run_with(&w.ports, &fx.engine.home, &w.until).unwrap();
 
     assert!(w.clock.naps().is_empty());
-    assert_eq!((fx.count("watch-started"), fx.count("watch-stopped")), (1, 1));
+    assert_eq!(
+        (fx.count("watch-started"), fx.count("watch-stopped")),
+        (1, 1)
+    );
 }
 
 #[test]
@@ -250,7 +295,13 @@ fn a_busy_store_is_waited_out_on_the_clock_and_logged_when_it_clears() {
         40,
         move |nap| {
             if nap == 1 {
-                release.lock().unwrap().take().expect("held").execute_batch("ROLLBACK").unwrap();
+                release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("held")
+                    .execute_batch("ROLLBACK")
+                    .unwrap();
             }
         },
         |r| r,
@@ -262,10 +313,21 @@ fn a_busy_store_is_waited_out_on_the_clock_and_logged_when_it_clears() {
 
     run_with(&w.ports, &fx.engine.home, &w.until).unwrap();
 
-    assert_eq!(fx.count("watch-started"), 1, "the write went through once the store was free");
-    assert!(w.clock.naps()[0] <= MILLIS(500), "the first back-off is at most 500 ms: {:?}", w.clock.naps());
+    assert_eq!(
+        fx.count("watch-started"),
+        1,
+        "the write went through once the store was free"
+    );
+    assert!(
+        w.clock.naps()[0] <= MILLIS(500),
+        "the first back-off is at most 500 ms: {:?}",
+        w.clock.naps()
+    );
     let log = std::fs::read_to_string(fx.engine.home.watch_log()).unwrap();
-    assert!(log.contains("the store is clear again after 0.5 s"), "{log}");
+    assert!(
+        log.contains("the store is clear again after 0.5 s"),
+        "{log}"
+    );
 }
 
 // ---- the downtime and the marker, exact at the boundary ------------------------------------------------------------
@@ -278,15 +340,31 @@ fn after_an_engine(w: &World, stopped: bool) -> (Fx, WatchLock) {
         "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{at}', 'watch-started', 'started', '{{\"pid\":77}}');"
     );
     if stopped {
-        sql += &format!("INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{at}', 'watch-stopped', 'stopped', '{{\"pid\":77}}');");
+        sql += &format!(
+            "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{at}', 'watch-stopped', 'stopped', '{{\"pid\":77}}');"
+        );
     }
     fx.fixture(&sql);
     let lock = WatchLock::take(&fx.engine.home).unwrap();
     (fx, lock)
 }
 
-fn downtime(w: &World, fx: &mut Fx, lock: &WatchLock, lock_existed: bool, marker: Option<i64>) -> Downtime {
-    Downtime::since_previous_with(&*w.ports.clock, &mut fx.engine.store, lock, lock_existed, marker).unwrap().expect("a previous engine")
+fn downtime(
+    w: &World,
+    fx: &mut Fx,
+    lock: &WatchLock,
+    lock_existed: bool,
+    marker: Option<i64>,
+) -> Downtime {
+    Downtime::since_previous_with(
+        &*w.ports.clock,
+        &mut fx.engine.store,
+        lock,
+        lock_existed,
+        marker,
+    )
+    .unwrap()
+    .expect("a previous engine")
 }
 
 #[test]
@@ -300,7 +378,13 @@ fn an_engine_that_stopped_is_down_from_its_stop_to_the_clock() {
     assert!(down.said);
     assert_eq!(down.down, time::Duration::milliseconds(3200));
     assert_eq!(down.since, w.start);
-    assert_eq!(down.sentence(&w.ports.clock.zone()), format!("The engine was down for 3.2 s: it stopped at {}.", cpd_core::clock::prose(w.start, &w.ports.clock.zone())));
+    assert_eq!(
+        down.sentence(&w.ports.clock.zone()),
+        format!(
+            "The engine was down for 3.2 s: it stopped at {}.",
+            cpd_core::clock::prose(w.start, &w.ports.clock.zone())
+        )
+    );
 }
 
 #[test]
@@ -312,7 +396,12 @@ fn a_restart_back_in_exactly_ten_seconds_on_the_clock_is_a_planned_one() {
     let down = downtime(&w, &mut fx, &lock, true, Some(77));
 
     assert_eq!((down.planned, down.overdue), (true, false));
-    assert!(down.sentence(&w.ports.clock.zone()).ends_with("(an install's planned restart)."), "{}", down.sentence(&w.ports.clock.zone()));
+    assert!(
+        down.sentence(&w.ports.clock.zone())
+            .ends_with("(an install's planned restart)."),
+        "{}",
+        down.sentence(&w.ports.clock.zone())
+    );
 }
 
 #[test]
@@ -324,7 +413,12 @@ fn a_restart_back_a_millisecond_after_ten_seconds_on_the_clock_is_overdue() {
     let down = downtime(&w, &mut fx, &lock, true, Some(77));
 
     assert_eq!((down.planned, down.overdue), (false, true));
-    assert!(down.sentence(&w.ports.clock.zone()).contains("it was an install's restart that took longer than 10 s."), "{}", down.sentence(&w.ports.clock.zone()));
+    assert!(
+        down.sentence(&w.ports.clock.zone())
+            .contains("it was an install's restart that took longer than 10 s."),
+        "{}",
+        down.sentence(&w.ports.clock.zone())
+    );
 }
 
 #[test]
@@ -338,7 +432,11 @@ fn an_engine_that_left_no_stop_was_last_alive_when_it_marked_the_lock_on_the_clo
     let down = downtime(&w, &mut fx, &lock, true, None);
 
     assert!(!down.said);
-    assert_eq!(down.since, w.start + time::Duration::seconds(30), "the lock file's mtime is the clock's time of the mark");
+    assert_eq!(
+        down.since,
+        w.start + time::Duration::seconds(30),
+        "the lock file's mtime is the clock's time of the mark"
+    );
     assert_eq!(down.down, time::Duration::milliseconds(3200));
 }
 
@@ -351,9 +449,15 @@ fn marking_the_lock_alive_writes_the_time_of_the_clock_as_its_mtime() {
 
     lock.touch_with(&*w.ports.clock).unwrap();
 
-    let mtime = std::fs::metadata(fx.engine.home.watch_lock()).unwrap().modified().unwrap();
+    let mtime = std::fs::metadata(fx.engine.home.watch_lock())
+        .unwrap()
+        .modified()
+        .unwrap();
     assert_eq!(timestamp(OffsetDateTime::from(mtime)), w.stamp(1500));
-    assert_eq!(SystemTime::from(w.start + time::Duration::milliseconds(1500)), mtime);
+    assert_eq!(
+        SystemTime::from(w.start + time::Duration::milliseconds(1500)),
+        mtime
+    );
 }
 
 /// The marker file of `engine_pid`, written `age_ms` before the clock's now (negative: after it).
@@ -361,7 +465,11 @@ fn write_marker(w: &World, home: &CpdHome, age_ms: i64) -> std::path::PathBuf {
     let path = home.run_dir().join("install-restart.json");
     std::fs::create_dir_all(home.run_dir()).unwrap();
     let at = timestamp(w.clock.utc() - time::Duration::milliseconds(age_ms));
-    std::fs::write(&path, json!({"by": "install-cpd.sh", "at": at, "engine_pid": 77}).to_string()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"by": "install-cpd.sh", "at": at, "engine_pid": 77}).to_string(),
+    )
+    .unwrap();
     path
 }
 
@@ -372,7 +480,10 @@ fn a_marker_exactly_120_seconds_old_on_the_clock_is_a_marker() {
     let path = write_marker(&w, &fx.engine.home, 120_000);
     let mut log = Log::open(&fx.engine.home).unwrap();
 
-    assert_eq!(consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log), Some(77));
+    assert_eq!(
+        consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log),
+        Some(77)
+    );
     assert!(!path.exists(), "it is deleted when read");
 }
 
@@ -383,7 +494,10 @@ fn a_marker_a_millisecond_older_than_120_seconds_on_the_clock_is_ignored_and_del
     let path = write_marker(&w, &fx.engine.home, 120_001);
     let mut log = Log::open(&fx.engine.home).unwrap();
 
-    assert_eq!(consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log), None);
+    assert_eq!(
+        consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log),
+        None
+    );
     assert!(!path.exists());
 }
 
@@ -394,7 +508,10 @@ fn a_marker_dated_after_the_clock_is_ignored() {
     write_marker(&w, &fx.engine.home, -1);
     let mut log = Log::open(&fx.engine.home).unwrap();
 
-    assert_eq!(consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log), None);
+    assert_eq!(
+        consume_marker_with(&*w.ports.clock, &fx.engine.home, &mut log),
+        None
+    );
 }
 
 // ---- E3's back-off: 2^k seconds from the last `ended_at` to the clock ------------------------------------------------
@@ -411,14 +528,19 @@ fn ended_attempt(number: u32, ended_at: &str) -> String {
 /// Job `api` with `k` Attempts in a row whose driver never started, the last ended at 0 s of the clock.
 fn failed_to_start(w: &World, k: u32) -> Fx {
     let mut fx = plan_on(w, "");
-    let ended: String = (1..=k).map(|n| ended_attempt(n, &w.stamp(-1000 * i64::from(k - n)))).collect();
+    let ended: String = (1..=k)
+        .map(|n| ended_attempt(n, &w.stamp(-1000 * i64::from(k - n))))
+        .collect();
     fx.add_job("api", &[], &ended);
     fx
 }
 
 fn backing_off(w: &World, fx: &mut Fx) -> bool {
     let (plan, key) = (PlanId::parse("pay").unwrap(), JobKey::parse("api").unwrap());
-    fx.engine.store.read(|conn| backing_off_with(conn, &plan, &key, &*w.ports.clock)).unwrap()
+    fx.engine
+        .store
+        .read(|conn| backing_off_with(conn, &plan, &key, &*w.ports.clock))
+        .unwrap()
 }
 
 #[test]
@@ -480,7 +602,14 @@ fn e1_keeps_an_escalation_whose_asker_runs_in_the_spawn_and_expires_it_when_it_e
     let w = world();
     let mut fx = plan_on(&w, "");
     running_attempt()(&mut fx);
-    let asker = w.spawn.spawn(&Launch { program: "cpd".into(), args: vec!["ask".into()], ..Launch::default() }).unwrap();
+    let asker = w
+        .spawn
+        .spawn(&Launch {
+            program: "cpd".into(),
+            args: vec!["ask".into()],
+            ..Launch::default()
+        })
+        .unwrap();
     escalation(&mut fx, "api-a1-q1", asker.0);
 
     escalations::run(&mut fx.engine);
@@ -511,11 +640,19 @@ fn session_state(fx: &mut Fx, id: &str) -> String {
 }
 
 fn session_label(fx: &mut Fx, id: &str) -> Option<String> {
-    fx.query(&format!("SELECT state_label FROM sessions WHERE id = '{id}'"))
+    fx.query(&format!(
+        "SELECT state_label FROM sessions WHERE id = '{id}'"
+    ))
 }
 
 fn asker_that_runs(w: &World) -> Pid {
-    w.spawn.spawn(&Launch { program: "cpd".into(), args: vec!["ask".into()], ..Launch::default() }).unwrap()
+    w.spawn
+        .spawn(&Launch {
+            program: "cpd".into(),
+            args: vec!["ask".into()],
+            ..Launch::default()
+        })
+        .unwrap()
 }
 
 #[test]
@@ -555,7 +692,10 @@ fn e1_keeps_the_worker_session_waiting_while_another_escalation_of_the_attempt_i
     assert_eq!(status(&mut fx, "api-a1-q1"), "expired");
     assert_eq!(status(&mut fx, "api-a1-q2"), "open");
     assert_eq!(session_state(&mut fx, "w1"), "waiting");
-    assert_eq!(session_label(&mut fx, "w1").as_deref(), Some("φ: question to the Lead"));
+    assert_eq!(
+        session_label(&mut fx, "w1").as_deref(),
+        Some("φ: question to the Lead")
+    );
     assert!(fx.events("session-state").is_empty());
 
     w.spawn.exit(asker, 0);
@@ -567,7 +707,8 @@ fn e1_keeps_the_worker_session_waiting_while_another_escalation_of_the_attempt_i
 }
 
 #[test]
-fn e1_puts_the_session_back_to_working_once_when_it_expires_every_open_escalation_of_the_attempt_in_one_run() {
+fn e1_puts_the_session_back_to_working_once_when_it_expires_every_open_escalation_of_the_attempt_in_one_run()
+ {
     let w = world();
     let mut fx = plan_on(&w, "");
     running_attempt()(&mut fx);
@@ -637,7 +778,10 @@ fn e9_starts_cpd_context_distill_through_the_spawn_with_the_recorded_executable(
 
     let launch = w.launch();
     assert_eq!(launch.program, EXE);
-    assert_eq!(launch.args, ["context", "distill", "--context", "ctx", "--batch", "60"]);
+    assert_eq!(
+        launch.args,
+        ["context", "distill", "--context", "ctx", "--batch", "60"]
+    );
 }
 
 #[test]
@@ -650,10 +794,33 @@ fn e9_starts_the_distill_run_detached_in_the_home_with_its_log_and_without_the_c
     let launch = w.launch();
     assert!(launch.setsid);
     assert_eq!(launch.cwd.as_deref(), Some(home.root()));
-    assert_eq!(launch.stdout_to, Some(cpd_core::context::distill::log_path(&home, &"ctx".parse().unwrap())));
-    assert!(launch.env_set.contains(&("CPD_HOME".to_owned(), home.root().to_string_lossy().into_owned())), "{:?}", launch.env_set);
-    for removed in ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"] {
-        assert!(launch.env_remove.iter().any(|r| r == removed), "{removed}: {:?}", launch.env_remove);
+    assert_eq!(
+        launch.stdout_to,
+        Some(cpd_core::context::distill::log_path(
+            &home,
+            &"ctx".parse().unwrap()
+        ))
+    );
+    assert!(
+        launch.env_set.contains(&(
+            "CPD_HOME".to_owned(),
+            home.root().to_string_lossy().into_owned()
+        )),
+        "{:?}",
+        launch.env_set
+    );
+    for removed in [
+        "CPD_PLAN",
+        "CPD_SESSION",
+        "CPD_ATTEMPT",
+        "TMUX",
+        "TMUX_PANE",
+    ] {
+        assert!(
+            launch.env_remove.iter().any(|r| r == removed),
+            "{removed}: {:?}",
+            launch.env_remove
+        );
     }
 }
 
@@ -738,7 +905,14 @@ fn the_drain_starts_the_restart_detached_in_the_home_with_its_log() {
     assert!(launch.setsid);
     assert_eq!(launch.cwd.as_deref(), Some(home.root()));
     assert_eq!(launch.stdout_to, Some(home.tmux_restart_log()));
-    assert!(launch.env_set.contains(&("CPD_HOME".to_owned(), home.root().to_string_lossy().into_owned())), "{:?}", launch.env_set);
+    assert!(
+        launch.env_set.contains(&(
+            "CPD_HOME".to_owned(),
+            home.root().to_string_lossy().into_owned()
+        )),
+        "{:?}",
+        launch.env_set
+    );
 }
 
 #[test]
@@ -770,8 +944,16 @@ fn the_drain_does_not_start_the_restart_again_before_a_minute_of_the_clock_has_p
 
 /// tmux answers a chat slot pane of the cockpit, 90 columns wide.
 fn with_a_chat_slot(r: FakeRunner) -> FakeRunner {
-    r.on("tmux", |c| c.args.iter().any(|a| a == "list-panes"), Reply::ok("%1\t@1\tcpd\tmain\t0\t\t4242\t\tchat\n"))
-        .on("tmux", |c| c.args.iter().any(|a| a == "display-message"), Reply::ok("90\n"))
+    r.on(
+        "tmux",
+        |c| c.args.iter().any(|a| a == "list-panes"),
+        Reply::ok("%1\t@1\tcpd\tmain\t0\t\t4242\t\tchat\n"),
+    )
+    .on(
+        "tmux",
+        |c| c.args.iter().any(|a| a == "display-message"),
+        Reply::ok("90\n"),
+    )
 }
 
 fn titled_world() -> World {
@@ -779,7 +961,14 @@ fn titled_world() -> World {
 }
 
 /// Session `id` of `role` in Context `ctx`, idle, whose last turn ended at `turn` and whose title (if any) was written at `titled`.
-fn idle_session(fx: &mut Fx, id: &str, context: &str, role: &str, turn: &str, titled: Option<&str>) {
+fn idle_session(
+    fx: &mut Fx,
+    id: &str,
+    context: &str,
+    role: &str,
+    turn: &str,
+    titled: Option<&str>,
+) {
     let titled = titled.map_or("NULL".to_owned(), |t| format!("'{t}'"));
     fx.fixture(&format!(
         "INSERT OR IGNORE INTO contexts (id, title, owner, created_at, created_on) VALUES ('{context}', '{context}', 'acme', 't', 'm1');
@@ -791,7 +980,8 @@ fn idle_session(fx: &mut Fx, id: &str, context: &str, role: &str, turn: &str, ti
 }
 
 #[test]
-fn e10_starts_cpd_session_retitle_through_the_spawn_with_the_recorded_executable_and_the_chat_slot_width() {
+fn e10_starts_cpd_session_retitle_through_the_spawn_with_the_recorded_executable_and_the_chat_slot_width()
+ {
     let w = titled_world();
     let mut fx = fx_on(&w, "");
     idle_session(&mut fx, "mgr1", "ctx", "manager", &w.stamp(0), None);
@@ -815,8 +1005,18 @@ fn e10_starts_the_retitle_detached_in_the_home_with_the_sessions_log() {
     let launch = w.launch();
     assert!(launch.setsid);
     assert_eq!(launch.cwd.as_deref(), Some(home.root()));
-    assert_eq!(launch.stdout_to, Some(home.run_dir().join("titles").join("mgr1.log")));
-    assert!(launch.env_set.contains(&("CPD_HOME".to_owned(), home.root().to_string_lossy().into_owned())), "{:?}", launch.env_set);
+    assert_eq!(
+        launch.stdout_to,
+        Some(home.run_dir().join("titles").join("mgr1.log"))
+    );
+    assert!(
+        launch.env_set.contains(&(
+            "CPD_HOME".to_owned(),
+            home.root().to_string_lossy().into_owned()
+        )),
+        "{:?}",
+        launch.env_set
+    );
 }
 
 #[test]
@@ -837,7 +1037,14 @@ fn e10_rewrites_a_title_once_it_is_ten_minutes_old_on_the_clock() {
     let w = titled_world();
     let mut fx = fx_on(&w, "");
     // Titled at 0 s; a newer turn ended at 1 s.
-    idle_session(&mut fx, "mgr1", "ctx", "manager", &w.stamp(1000), Some(&w.stamp(0)));
+    idle_session(
+        &mut fx,
+        "mgr1",
+        "ctx",
+        "manager",
+        &w.stamp(1000),
+        Some(&w.stamp(0)),
+    );
     w.advance(MILLIS(599_999));
     titles::run(&mut fx.engine);
     assert!(w.launches().is_empty(), "the title is 9 min 59.999 s old");
@@ -863,7 +1070,11 @@ fn e10_reports_a_title_that_has_failed_for_ten_minutes_of_the_clock_and_not_befo
     w.spawn.exit(Pid(1001), 1);
     titles::run(&mut fx.engine);
     assert_eq!(w.launches().len(), 3, "each failed run is started again");
-    assert_eq!(fx.count("error"), 0, "it has failed for less than ten minutes");
+    assert_eq!(
+        fx.count("error"),
+        0,
+        "it has failed for less than ten minutes"
+    );
 
     // Run 3 fails exactly ten minutes after.
     w.advance(MILLIS(1));
@@ -873,5 +1084,11 @@ fn e10_reports_a_title_that_has_failed_for_ten_minutes_of_the_clock_and_not_befo
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].3["code"], "title_failed");
-    assert_eq!(texts(&mut fx, "SELECT count(*) || '' FROM events WHERE kind = 'error'"), ["1"]);
+    assert_eq!(
+        texts(
+            &mut fx,
+            "SELECT count(*) || '' FROM events WHERE kind = 'error'"
+        ),
+        ["1"]
+    );
 }

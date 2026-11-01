@@ -3,10 +3,10 @@
 
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
-use std::path::PathBuf;
-use std::process::{Command, Output};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::PathBuf;
 use std::process::ExitStatus;
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -71,23 +71,47 @@ impl Runner for SystemRunner {
     fn run(&self, call: &Call) -> Result<Output, Failed> {
         let mut cmd = system_command(call);
         if let Some(path) = &call.stderr_to {
-            let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(Failed::Io)?;
             cmd.stderr(file);
         }
-        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some(), call.tool == HOOK_TOOL)
+        deadline::output_fed(
+            &mut cmd,
+            &call.tool,
+            call.deadline,
+            call.stdin.clone(),
+            call.stderr_to.is_some(),
+            call.tool == HOOK_TOOL,
+        )
     }
 }
 
 /// The `Command` [`SystemRunner`] starts for `call`: [`command`], and a Git hook (`HOOK_TOOL`) behind the idle priority prefix.
 pub fn system_command(call: &Call) -> Command {
-    if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) }
+    if call.tool == HOOK_TOOL {
+        command(&idle(call))
+    } else {
+        command(call)
+    }
 }
 
 /// `call` behind the idle priority prefix (hs-d528): its environment and working directory are the same.
 fn idle(call: &Call) -> Call {
     let prefix = super::priority::idle_prefix();
-    let args = prefix[1..].iter().map(|s| (*s).to_owned()).chain([call.program.clone()]).chain(call.args.clone()).collect();
-    Call { program: prefix[0].to_owned(), args, ..call.clone() }
+    let args = prefix[1..]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .chain([call.program.clone()])
+        .chain(call.args.clone())
+        .collect();
+    Call {
+        program: prefix[0].to_owned(),
+        args,
+        ..call.clone()
+    }
 }
 
 /// What a `Command` carries, as the fake saw it.
@@ -109,9 +133,18 @@ pub struct Call {
 /// How a scripted call ends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
-    Exit { code: i32, stdout: Vec<u8>, stderr: Vec<u8>, takes: Duration },
+    Exit {
+        code: i32,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        takes: Duration,
+    },
     /// The program ended on the signal `signal` (no exit code): `ExitStatus::signal()` says which.
-    Signal { signal: i32, stdout: Vec<u8>, stderr: Vec<u8> },
+    Signal {
+        signal: i32,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
     Io(ErrorKind),
 }
 
@@ -121,11 +154,20 @@ impl Reply {
         Reply::exit(0, stdout, "")
     }
     pub fn exit(code: i32, stdout: &str, stderr: &str) -> Reply {
-        Reply::Exit { code, stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), takes: Duration::ZERO }
+        Reply::Exit {
+            code,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+            takes: Duration::ZERO,
+        }
     }
     /// The program was killed by `signal` after printing `stdout` and `stderr`.
     pub fn signal(signal: i32, stdout: &str, stderr: &str) -> Reply {
-        Reply::Signal { signal, stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() }
+        Reply::Signal {
+            signal,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
     }
     /// The program could not be started: `Failed::Io(kind)`.
     pub fn io(kind: ErrorKind) -> Reply {
@@ -134,7 +176,17 @@ impl Reply {
     /// The reply takes `d` of virtual time.
     pub fn takes(self, d: Duration) -> Reply {
         match self {
-            Reply::Exit { code, stdout, stderr, .. } => Reply::Exit { code, stdout, stderr, takes: d },
+            Reply::Exit {
+                code,
+                stdout,
+                stderr,
+                ..
+            } => Reply::Exit {
+                code,
+                stdout,
+                stderr,
+                takes: d,
+            },
             other => other,
         }
     }
@@ -178,7 +230,10 @@ struct WeakRunner {
 
 impl WeakRunner {
     fn upgrade(&self) -> Option<FakeRunner> {
-        self.script.upgrade().map(|script| FakeRunner { clock: self.clock.clone(), script })
+        self.script.upgrade().map(|script| FakeRunner {
+            clock: self.clock.clone(),
+            script,
+        })
     }
 }
 
@@ -211,21 +266,42 @@ fn file_name(program: &str) -> &str {
 impl FakeRunner {
     /// A fake with no rule; `Reply::takes` passes virtual time on `clock`.
     pub fn new(clock: ManualClock) -> FakeRunner {
-        FakeRunner { clock, script: Arc::default() }
+        FakeRunner {
+            clock,
+            script: Arc::default(),
+        }
     }
     fn script(&self) -> MutexGuard<'_, Script> {
-        self.script.lock().expect("the script is never held across a panic")
+        self.script
+            .lock()
+            .expect("the script is never held across a panic")
     }
     fn rule(self, program: &str, matches: Matches, reply: Reply, once: bool) -> FakeRunner {
-        self.script().rules.push(Rule { program: program.to_owned(), matches, reply, once, used: false });
+        self.script().rules.push(Rule {
+            program: program.to_owned(),
+            matches,
+            reply,
+            once,
+            used: false,
+        });
         self
     }
     /// A rule: the first match answers. `program` is compared with the program's file name.
-    pub fn on(self, program: &str, matches: impl Fn(&Call) -> bool + Send + Sync + 'static, reply: Reply) -> FakeRunner {
+    pub fn on(
+        self,
+        program: &str,
+        matches: impl Fn(&Call) -> bool + Send + Sync + 'static,
+        reply: Reply,
+    ) -> FakeRunner {
         self.rule(program, Box::new(matches), reply, false)
     }
     /// Like [`FakeRunner::on`], used up after one answer.
-    pub fn once(self, program: &str, matches: impl Fn(&Call) -> bool + Send + Sync + 'static, reply: Reply) -> FakeRunner {
+    pub fn once(
+        self,
+        program: &str,
+        matches: impl Fn(&Call) -> bool + Send + Sync + 'static,
+        reply: Reply,
+    ) -> FakeRunner {
         self.rule(program, Box::new(matches), reply, true)
     }
     /// Answers every call of `program` that no rule matched.
@@ -235,7 +311,10 @@ impl FakeRunner {
     }
     /// This runner as a [`Runner`] that does not keep the script alive.
     pub fn weak(&self) -> Arc<dyn Runner> {
-        Arc::new(WeakRunner { clock: self.clock.clone(), script: Arc::downgrade(&self.script) })
+        Arc::new(WeakRunner {
+            clock: self.clock.clone(),
+            script: Arc::downgrade(&self.script),
+        })
     }
     /// Every call in order, answered or not.
     pub fn calls(&self) -> Vec<Call> {
@@ -252,12 +331,19 @@ impl FakeRunner {
         let handler = {
             let mut script = self.script();
             script.calls.push(call.clone());
-            let hit = script.rules.iter_mut().find(|r| !r.used && file_name(&r.program) == name && (r.matches)(call));
+            let hit = script
+                .rules
+                .iter_mut()
+                .find(|r| !r.used && file_name(&r.program) == name && (r.matches)(call));
             if let Some(rule) = hit {
                 rule.used = rule.once;
                 return Some(rule.reply.clone());
             }
-            let route = script.routes.iter().find(|(program, _)| file_name(program) == name).map(|(_, h)| h.clone());
+            let route = script
+                .routes
+                .iter()
+                .find(|(program, _)| file_name(program) == name)
+                .map(|(_, h)| h.clone());
             if route.is_none() {
                 script.unscripted.push(call.clone());
             }
@@ -274,18 +360,37 @@ impl FakeRunner {
         match self.answer(&call) {
             None => Err(Failed::Io(ErrorKind::NotFound.into())),
             Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
-            Some(Reply::Signal { signal, stdout, stderr }) => Ok(Output { status: ExitStatus::from_raw(signal), stdout, stderr }),
+            Some(Reply::Signal {
+                signal,
+                stdout,
+                stderr,
+            }) => Ok(Output {
+                status: ExitStatus::from_raw(signal),
+                stdout,
+                stderr,
+            }),
             Some(Reply::Exit { takes, .. }) if takes >= deadline => {
                 self.clock.sleep(deadline);
                 let argv = std::iter::once(call.program).chain(call.args).collect();
-                Err(Failed::Timeout(deadline::timeout(&call.tool, argv, deadline)))
+                Err(Failed::Timeout(deadline::timeout(
+                    &call.tool, argv, deadline,
+                )))
             }
-            Some(Reply::Exit { code, stdout, stderr, takes }) => {
+            Some(Reply::Exit {
+                code,
+                stdout,
+                stderr,
+                takes,
+            }) => {
                 // A reply that takes no time is no nap: `ManualClock::naps` lists only what a caller waited on.
                 if !takes.is_zero() {
                     self.clock.sleep(takes);
                 }
-                Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
+                Ok(Output {
+                    status: ExitStatus::from_raw(code << 8),
+                    stdout,
+                    stderr,
+                })
             }
         }
     }
@@ -294,10 +399,18 @@ impl FakeRunner {
 impl Runner for FakeRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         let program = cmd.get_program().to_string_lossy().into_owned();
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         let envs = cmd
             .get_envs()
-            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
             .collect();
         self.reply(Call {
             tool: tool.to_owned(),

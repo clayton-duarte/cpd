@@ -78,7 +78,14 @@ impl Kind {
         match self {
             Kind::Context => &[Item::NewPlan, Item::Rename, Item::CopyId, Item::Archive],
             Kind::Plan => &[Item::NewSession, Item::Rename, Item::CopyId, Item::Archive],
-            Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::CopyId, Item::Close, Item::Archive],
+            Kind::Fork => &[
+                Item::Open,
+                Item::Rename,
+                Item::Fork,
+                Item::CopyId,
+                Item::Close,
+                Item::Archive,
+            ],
             Kind::Archived => &[Item::Rename, Item::CopyId, Item::Unarchive],
             Kind::Empty => &[Item::NewContext],
         }
@@ -99,7 +106,10 @@ impl Menu {
         if deletable {
             items.push(Item::Delete);
         }
-        Menu { path, menu: menu::Menu::new(items, at) }
+        Menu {
+            path,
+            menu: menu::Menu::new(items, at),
+        }
     }
 
     #[cfg(test)]
@@ -147,9 +157,18 @@ mod tests {
 
     #[test]
     fn each_kind_has_the_items_of_the_contract() {
-        assert_eq!(labels(Kind::Context), ["New Plan…", "Rename…", "Copy id", "Archive"]);
-        assert_eq!(labels(Kind::Plan), ["New session…", "Rename…", "Copy id", "Archive"]);
-        assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"]);
+        assert_eq!(
+            labels(Kind::Context),
+            ["New Plan…", "Rename…", "Copy id", "Archive"]
+        );
+        assert_eq!(
+            labels(Kind::Plan),
+            ["New session…", "Rename…", "Copy id", "Archive"]
+        );
+        assert_eq!(
+            labels(Kind::Fork),
+            ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"]
+        );
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
         assert_eq!(labels(Kind::Archived), ["Rename…", "Copy id", "Unarchive"]);
     }
@@ -165,22 +184,48 @@ mod tests {
         let tree = archived();
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
         assert_eq!(kind(&["╰─ alpha"]), None, "a toggle row has no menu");
-        assert_eq!(kind(&["alpha", "old"]), Some(Kind::Archived), "an archived Plan");
-        assert_eq!(kind(&["alpha", "f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
+        assert_eq!(
+            kind(&["alpha", "old"]),
+            Some(Kind::Archived),
+            "an archived Plan"
+        );
+        assert_eq!(
+            kind(&["alpha", "f-blocked"]),
+            Some(Kind::Archived),
+            "an archived fork of a live Plan"
+        );
         assert_eq!(kind(&["zeta"]), Some(Kind::Archived), "an archived Context");
         assert_eq!(kind(&["zeta", "zp"]), Some(Kind::Archived));
         assert_eq!(kind(&["zeta", "f-zp"]), Some(Kind::Archived));
-        assert_eq!(kind(&["alpha", "ship"]), Some(Kind::Plan), "a live row of a tree with archived ones");
+        assert_eq!(
+            kind(&["alpha", "ship"]),
+            Some(Kind::Plan),
+            "a live row of a tree with archived ones"
+        );
     }
 
     #[test]
     fn delete_is_offered_last_on_an_archived_or_asleep_plan_or_context_row_only() {
-        let deletable = |tree: &crate::read::Tree, p: &[&str]| rows::row(tree, &path(p)).is_some_and(|r| r.deletable());
+        let deletable = |tree: &crate::read::Tree, p: &[&str]| {
+            rows::row(tree, &path(p)).is_some_and(|r| r.deletable())
+        };
         let tree = sample();
-        assert!(!deletable(&tree, &["alpha"]) && !deletable(&tree, &["alpha", "ship"]) && !deletable(&tree, &["alpha", "f-idle"]));
+        assert!(
+            !deletable(&tree, &["alpha"])
+                && !deletable(&tree, &["alpha", "ship"])
+                && !deletable(&tree, &["alpha", "f-idle"])
+        );
         let tree = archived();
-        assert!(deletable(&tree, &["alpha", "old"]) && deletable(&tree, &["zeta"]) && deletable(&tree, &["zeta", "zp"]));
-        assert!(!deletable(&tree, &["alpha", "f-blocked"]) && !deletable(&tree, &["zeta", "f-zp"]) && !deletable(&tree, &["alpha", "ship"]));
+        assert!(
+            deletable(&tree, &["alpha", "old"])
+                && deletable(&tree, &["zeta"])
+                && deletable(&tree, &["zeta", "zp"])
+        );
+        assert!(
+            !deletable(&tree, &["alpha", "f-blocked"])
+                && !deletable(&tree, &["zeta", "f-zp"])
+                && !deletable(&tree, &["alpha", "ship"])
+        );
         // the last item: the selection is clamped, so many Downs reach it
         let last = |kind: Kind, deletable: bool| {
             let mut menu = Menu::new(kind, Vec::new(), Position::new(0, 0), deletable);
@@ -196,7 +241,12 @@ mod tests {
 
     #[test]
     fn arrows_move_the_selection_clamped_and_enter_picks() {
-        let mut menu = Menu::new(Kind::Fork, path(&["a", "b", "c"]), Position::new(3, 3), false);
+        let mut menu = Menu::new(
+            Kind::Fork,
+            path(&["a", "b", "c"]),
+            Position::new(3, 3),
+            false,
+        );
         assert_eq!(menu.selected(), 0);
         assert_eq!(press(&mut menu, KeyCode::Up), Outcome::Stay);
         assert_eq!(menu.selected(), 0);
@@ -208,7 +258,10 @@ mod tests {
             press(&mut menu, KeyCode::Down);
         }
         assert_eq!(menu.selected(), 5);
-        assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Archive));
+        assert_eq!(
+            press(&mut menu, KeyCode::Enter),
+            Outcome::Pick(Item::Archive)
+        );
         assert_eq!(press(&mut menu, KeyCode::Up), Outcome::Stay);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Close));
     }

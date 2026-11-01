@@ -17,9 +17,23 @@ pub use super::prs::load_prs;
 /// drafts only, so `prs` is the empty array there: a PR appended after the
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let prs = if reviews_prs(phase.as_deref()) { load_prs(conn, plan)? } else { Vec::new() };
-    Ok(of_with(&jobs::load(conn, plan)?, &prs, super::outline::load(conn, plan)?.as_ref()))
+    let phase: Option<String> = conn
+        .query_row(
+            "SELECT phase FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let prs = if reviews_prs(phase.as_deref()) {
+        load_prs(conn, plan)?
+    } else {
+        Vec::new()
+    };
+    Ok(of_with(
+        &jobs::load(conn, plan)?,
+        &prs,
+        super::outline::load(conn, plan)?.as_ref(),
+    ))
 }
 
 /// Whether the review of a Plan in `phase` (none: not found) covers its PRs: before the lock only.
@@ -48,7 +62,12 @@ pub fn of_with(jobs: &[Job], prs: &[PrRow], outline: Option<&Outline>) -> String
             let mut needs = j.needs.clone();
             needs.sort();
             let mut fields = j.locked_fields();
-            fields.extend([("key".into(), json!(j.key)), ("pr".into(), json!(j.pr)), ("title".into(), json!(j.title)), ("needs".into(), json!(needs))]);
+            fields.extend([
+                ("key".into(), json!(j.key)),
+                ("pr".into(), json!(j.pr)),
+                ("title".into(), json!(j.title)),
+                ("needs".into(), json!(needs)),
+            ]);
             fields.extend(j.kind_fields());
             Value::Object(fields)
         })
@@ -88,7 +107,13 @@ mod tests {
             pr: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
-            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
+            spec: Some(JobSpec {
+                goal: "g".into(),
+                context: "c".into(),
+                touches: json!(["a"]),
+                acceptance: json!(["b"]),
+                out_of_scope: json!([]),
+            }),
             status: status.into(),
             appended: false,
             kind: "work".into(),
@@ -116,10 +141,18 @@ mod tests {
 
     #[test]
     fn the_plan_fingerprint_covers_the_drafts_by_key() {
-        let (a, b, gone) = (job("a", "draft", &[]), job("b", "draft", &["a"]), job("c", "cancelled", &[]));
+        let (a, b, gone) = (
+            job("a", "draft", &[]),
+            job("b", "draft", &["a"]),
+            job("c", "cancelled", &[]),
+        );
         let prs = [pr("web", &[])];
         let base = of(&[a.clone(), b.clone()], &prs);
-        assert_eq!(of(&[b.clone(), gone, a.clone()], &prs), base, "order and non-drafts do not count");
+        assert_eq!(
+            of(&[b.clone(), gone, a.clone()], &prs),
+            base,
+            "order and non-drafts do not count"
+        );
         let mut retitled = b.clone();
         retitled.title = "New".into();
         assert_ne!(of(&[a.clone(), retitled], &prs), base);
@@ -129,7 +162,10 @@ mod tests {
         let mut moved = b;
         moved.pr = Some("api".into());
         assert_ne!(of(&[a, moved], &prs), base, "a Job's PR counts");
-        assert_eq!(of(&[], &[]), format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#)));
+        assert_eq!(
+            of(&[], &[]),
+            format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#))
+        );
     }
 
     #[test]
@@ -146,7 +182,11 @@ mod tests {
         let mut tiered = stub.clone();
         tiered.tier = Some("S2".into());
         assert_ne!(of(&[tiered.clone()], &[]), expected, "a Tier changes it");
-        assert_ne!(of(&[job("a", "draft", &[])], &[]), of(&[tiered], &[]), "so does the Spec");
+        assert_ne!(
+            of(&[job("a", "draft", &[])], &[]),
+            of(&[tiered], &[]),
+            "so does the Spec"
+        );
     }
 
     #[test]
@@ -158,7 +198,10 @@ mod tests {
                 br#"{"jobs":[],"prs":[{"base":"main","key":"api","needs":[],"repo":"/r/api"},{"base":"main","key":"web","needs":["api","db"],"repo":"/r/web"}]}"#
             )
         );
-        assert_eq!(of(&[], &[pr("web", &["db", "api"]), pr("api", &[])]), expected);
+        assert_eq!(
+            of(&[], &[pr("web", &["db", "api"]), pr("api", &[])]),
+            expected
+        );
         let base = of(&jobs, &[pr("api", &[]), pr("web", &["api"])]);
         let mut other_repo = pr("web", &["api"]);
         other_repo.repo = "/elsewhere".into();
@@ -168,14 +211,24 @@ mod tests {
         cancelled.status = "cancelled".into();
         let mut with_cancelled = vec![pr("api", &[]), pr("web", &["api"])];
         with_cancelled.push(cancelled);
-        assert_eq!(of(&jobs, &with_cancelled), base, "a cancelled PR does not count");
-        for changed in [vec![pr("api", &[]), other_repo], vec![pr("api", &[]), other_base], vec![pr("api", &[]), pr("web", &[])], vec![pr("api", &[])]] {
+        assert_eq!(
+            of(&jobs, &with_cancelled),
+            base,
+            "a cancelled PR does not count"
+        );
+        for changed in [
+            vec![pr("api", &[]), other_repo],
+            vec![pr("api", &[]), other_base],
+            vec![pr("api", &[]), pr("web", &[])],
+            vec![pr("api", &[])],
+        ] {
             assert_ne!(of(&jobs, &changed), base);
         }
     }
 
     #[test]
-    fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free() {
+    fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free()
+     {
         // A `work` Job with no tests and a `free` PR hash as they did before migration `job-kinds` (no stored review is voided).
         let before = format!(
             "{:x}",
@@ -203,15 +256,27 @@ mod tests {
         test.test_files = Some(json!(["tests/t.rs"]));
         let with_tests = of(&[test.clone()], &[pr("web", &[])]);
         test.tests = Some(json!(["t::two"]));
-        assert_ne!(of(&[test.clone()], &[pr("web", &[])]), with_tests, "the named tests count");
+        assert_ne!(
+            of(&[test.clone()], &[pr("web", &[])]),
+            with_tests,
+            "the named tests count"
+        );
         test.tests = Some(json!(["t::one"]));
         test.test_files = Some(json!(["tests/u.rs"]));
-        assert_ne!(of(&[test], &[pr("web", &[])]), with_tests, "so do the files that hold them");
+        assert_ne!(
+            of(&[test], &[pr("web", &[])]),
+            with_tests,
+            "so do the files that hold them"
+        );
         let mut approved = job("a", "draft", &[]);
         approved.kind = "impl".into();
         let without = of(&[approved.clone()], &[]);
         approved.test_approved = Some(json!(["tests/t.rs"]));
-        assert_eq!(of(&[approved], &[]), without, "test_approved is in no fingerprint");
+        assert_eq!(
+            of(&[approved], &[]),
+            without,
+            "test_approved is in no fingerprint"
+        );
 
         let mut tdd = pr("web", &[]);
         tdd.shape = "tdd".into();
@@ -233,6 +298,10 @@ mod tests {
         plain.kind = "test".into();
         plain.tests = Some(json!(["t"]));
         plain.test_files = Some(json!(["f"]));
-        assert_eq!(jobs::locked_fingerprint(&plain), base, "they are guarded by jobs_locked, not hashed (contract §2.3)");
+        assert_eq!(
+            jobs::locked_fingerprint(&plain),
+            base,
+            "they are guarded by jobs_locked, not hashed (contract §2.3)"
+        );
     }
 }

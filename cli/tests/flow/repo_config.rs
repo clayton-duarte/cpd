@@ -8,29 +8,42 @@ use std::fs;
 
 use common::fx::Fx;
 use common::refused;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    fs::write(
+        fx.env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"m1\"\n",
+    )
+    .unwrap();
     fx
 }
 
 fn show(fx: &Fx) -> Value {
-    fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"]).ok()
+    fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"])
+        .ok()
 }
 
 fn real(fx: &Fx, rel: &str) -> String {
-    fs::canonicalize(fx.env.cpd_home().join("policy").join(rel)).unwrap().display().to_string()
+    fs::canonicalize(fx.env.cpd_home().join("policy").join(rel))
+        .unwrap()
+        .display()
+        .to_string()
 }
 
 #[test]
 fn policy_show_of_a_repo_without_a_file_shows_the_owner_policy() {
     let fx = fx();
-    fx.env.owner_policy("acme", "[tests]\ntext = \"Owner tests.\"\n");
+    fx.env
+        .owner_policy("acme", "[tests]\ntext = \"Owner tests.\"\n");
     let out = show(&fx);
     let policy = &out["policy"];
-    assert_eq!(policy["tests"]["source"], format!("owner:{}", real(&fx, "acme/owner.toml")), "{out}");
+    assert_eq!(
+        policy["tests"]["source"],
+        format!("owner:{}", real(&fx, "acme/owner.toml")),
+        "{out}"
+    );
     assert_eq!(policy["tests"]["text"], "Owner tests.", "{out}");
     assert_eq!(
         policy["hooks"],
@@ -50,7 +63,11 @@ fn policy_show_of_a_repo_without_a_file_shows_the_owner_policy() {
         policy["protected"],
         json!({"source": "default", "audience": [], "text": "", "keys": {"paths": {"value": [], "source": "default"}}})
     );
-    assert_eq!(out["files"], json!([real(&fx, "acme/owner.toml")]), "the owner file and no repo file");
+    assert_eq!(
+        out["files"],
+        json!([real(&fx, "acme/owner.toml")]),
+        "the owner file and no repo file"
+    );
 }
 
 #[test]
@@ -64,7 +81,21 @@ fn pr_add_of_a_repo_without_a_file_succeeds() {
            VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead1', 't');",
     );
     let repo = fx.keyed_repo("shop");
-    let out = fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]).ok();
+    let out = fx
+        .cpd(&[
+            "pr",
+            "add",
+            "pay",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--title",
+            "Change the PR",
+            "--shape",
+            "config",
+            "--plan",
+            "pl",
+        ])
+        .ok();
     assert_eq!(out["pr"]["name"], "shop", "{out}");
 }
 
@@ -149,8 +180,14 @@ fn a_hook_shows_as_blocks_of_commands_in_file_order_in_each_of_the_three_forms()
     );
     let out = show(&fx);
     let keys = &out["policy"]["hooks"]["keys"];
-    assert_eq!(keys["pre-start"]["value"], json!([[{"name": null, "command": "npm ci"}]]));
-    assert_eq!(keys["pre-commit"]["value"], json!([[{"name": "zulu", "command": "echo z"}, {"name": "alpha", "command": "echo a"}]]));
+    assert_eq!(
+        keys["pre-start"]["value"],
+        json!([[{"name": null, "command": "npm ci"}]])
+    );
+    assert_eq!(
+        keys["pre-commit"]["value"],
+        json!([[{"name": "zulu", "command": "echo z"}, {"name": "alpha", "command": "echo a"}]])
+    );
     assert_eq!(
         keys["pre-merge"]["value"],
         json!([[{"name": "first", "command": "echo 1"}], [{"name": "second", "command": "echo 2"}]])
@@ -163,16 +200,31 @@ fn hooks_test_commands_and_protected_in_an_owner_file_are_policy_invalid() {
     fx.env.repo_policy("acme", "shop", "");
     let tables = [
         ("hooks", "[hooks]\npre-start = \"npm ci\"\n"),
-        ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n"),
+        (
+            "test-commands",
+            "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n",
+        ),
         ("protected", "[protected]\npaths = [\"verify.sh\"]\n"),
     ];
     for (domain, toml) in tables {
         fx.env.owner_policy("acme", toml);
         let run = fx.cpd(&["policy", "show", "--owner", "acme"]);
         let error = refused(&run, "policy_invalid", 1);
-        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/acme/owner.toml"), "{domain}: {run:?}");
+        assert!(
+            error["details"]["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("policy/acme/owner.toml"),
+            "{domain}: {run:?}"
+        );
         assert_eq!(error["details"]["key"], domain, "{run:?}");
-        assert!(error["message"].as_str().unwrap().contains("exposed to repo only"), "{domain}: {run:?}");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("exposed to repo only"),
+            "{domain}: {run:?}"
+        );
     }
 }
 
@@ -185,17 +237,38 @@ fn an_invalid_hooks_or_test_commands_table_is_policy_invalid() {
     let cases = [
         ("hooks", "[hooks]\npre-merge = 3\n"),
         ("test-commands", "[test-commands]\nbuild = \"b\"\n"),
-        ("test-commands", "[test-commands]\nbuild = \"\"\nrun = \"r\"\n"),
-        ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\nlist = \"l\"\n"),
+        (
+            "test-commands",
+            "[test-commands]\nbuild = \"\"\nrun = \"r\"\n",
+        ),
+        (
+            "test-commands",
+            "[test-commands]\nbuild = \"b\"\nrun = \"r\"\nlist = \"l\"\n",
+        ),
         ("hooks", "[hooks]\npost-merge = \"x\"\n"),
-        ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\nother = \"x\"\n"),
+        (
+            "test-commands",
+            "[test-commands]\nbuild = \"b\"\nrun = \"r\"\nother = \"x\"\n",
+        ),
         ("protected", "[protected]\npaths = []\nother = 1\n"),
     ];
     for (domain, toml) in cases {
         fx.env.repo_policy("acme", "shop", toml);
         let run = fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"]);
         let error = refused(&run, "policy_invalid", 1);
-        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/acme/shop.toml"), "{toml}: {run:?}");
-        assert!(error["details"]["key"].as_str().unwrap().starts_with(domain), "{toml}: {run:?}");
+        assert!(
+            error["details"]["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("policy/acme/shop.toml"),
+            "{toml}: {run:?}"
+        );
+        assert!(
+            error["details"]["key"]
+                .as_str()
+                .unwrap()
+                .starts_with(domain),
+            "{toml}: {run:?}"
+        );
     }
 }

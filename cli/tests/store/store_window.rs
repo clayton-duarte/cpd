@@ -21,7 +21,11 @@ const NEWEST: &str = "29991231T2359-newest-column";
 /// A machine with a config file, which the commands need.
 fn machine() -> TestEnv {
     let env = TestEnv::new();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"hs\"\n",
+    )
+    .unwrap();
     env
 }
 
@@ -42,11 +46,17 @@ fn store_with_additive_migrations(env: &impl HasCpdHome) {
         "additive",
         "CREATE TABLE newer_things (id INTEGER PRIMARY KEY, label TEXT NOT NULL) STRICT; CREATE INDEX newer_things_label ON newer_things (label);",
     );
-    apply_newer(env, NEWEST, "additive", "ALTER TABLE events ADD COLUMN newest TEXT;");
+    apply_newer(
+        env,
+        NEWEST,
+        "additive",
+        "ALTER TABLE events ADD COLUMN newest TEXT;",
+    );
 }
 
 fn read_only_verdict(env: &impl HasCpdHome) -> cpd_core::store::Verdict<'static> {
-    let conn = Connection::open_with_flags(home(env).db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let conn =
+        Connection::open_with_flags(home(env).db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     verdict(&conn).unwrap()
 }
 
@@ -61,7 +71,11 @@ fn a_binary_opens_a_store_with_additive_migrations_it_does_not_know() {
     assert!(v.pending_names().is_empty());
 
     let store = Store::open(&home(&env), 5000).unwrap();
-    assert_eq!(store.schema_mismatch(), None, "the schema check covers only what this binary created");
+    assert_eq!(
+        store.schema_mismatch(),
+        None,
+        "the schema check covers only what this binary created"
+    );
 }
 
 #[test]
@@ -81,14 +95,18 @@ fn it_reads_and_writes_such_a_store() {
     let titles: Vec<String> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT title FROM contexts")?;
-            let rows = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let rows = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
             Ok(rows)
         })
         .unwrap();
     assert_eq!(titles, ["Ctx"]);
 
     // And through the binary itself, which appends Events (the table with the unknown column).
-    let run = env.cpd(&["context", "new", "ctx2", "--title", "Two", "--owner", "acme"]);
+    let run = env.cpd(&[
+        "context", "new", "ctx2", "--title", "Two", "--owner", "acme",
+    ]);
     assert_eq!(run.exit, 0, "{run:?}");
 }
 
@@ -96,15 +114,27 @@ fn it_reads_and_writes_such_a_store() {
 fn a_store_whose_newest_breaking_migration_this_binary_lacks_is_store_too_new() {
     let env = machine();
     store_with_additive_migrations(&env);
-    apply_newer(&env, "29991231T2400-rebuild", "breaking", "CREATE TABLE rebuilt (id INTEGER PRIMARY KEY) STRICT;");
+    apply_newer(
+        &env,
+        "29991231T2400-rebuild",
+        "breaking",
+        "CREATE TABLE rebuilt (id INTEGER PRIMARY KEY) STRICT;",
+    );
 
     let v = read_only_verdict(&env);
     assert!(!v.opens());
     let err = v.refusal().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew);
     assert_eq!(err.details()["floor"], "29991231T2400-rebuild");
-    assert_eq!(err.details()["unknown"], json!([NEWER, NEWEST, "29991231T2400-rebuild"]));
-    assert_eq!(v.unknown, [NEWER, NEWEST, "29991231T2400-rebuild"], "filled whether or not it opens");
+    assert_eq!(
+        err.details()["unknown"],
+        json!([NEWER, NEWEST, "29991231T2400-rebuild"])
+    );
+    assert_eq!(
+        v.unknown,
+        [NEWER, NEWEST, "29991231T2400-rebuild"],
+        "filled whether or not it opens"
+    );
 
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
@@ -126,6 +156,12 @@ fn inside_the_window_a_dropped_object_of_this_binary_is_still_store_tampered() {
     conn.execute_batch(&format!("DROP INDEX {index}")).unwrap();
     drop(conn);
     let mut store = Store::open(&home(&env), 5000).unwrap();
-    assert_eq!(store.schema_mismatch().and_then(|m| m.object.clone()), Some(index));
-    assert_eq!(store.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreTampered);
+    assert_eq!(
+        store.schema_mismatch().and_then(|m| m.object.clone()),
+        Some(index)
+    );
+    assert_eq!(
+        store.write("test", |_| Ok(())).unwrap_err().code(),
+        ErrorCode::StoreTampered
+    );
 }

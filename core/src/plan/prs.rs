@@ -62,8 +62,16 @@ impl PrRow {
         if self.head_ref.is_some() {
             return Ok(None);
         }
-        let started = self.started_at.as_deref().ok_or_else(|| CpdError::bad_row(format!("PR {} has no started_at", self.key)))?;
-        started.parse().map(Some).map_err(|e| CpdError::bad_row(format!("PR {} has the started_at {started:?}: {e}", self.key)))
+        let started = self
+            .started_at
+            .as_deref()
+            .ok_or_else(|| CpdError::bad_row(format!("PR {} has no started_at", self.key)))?;
+        started.parse().map(Some).map_err(|e| {
+            CpdError::bad_row(format!(
+                "PR {} has the started_at {started:?}: {e}",
+                self.key
+            ))
+        })
     }
 }
 
@@ -91,13 +99,35 @@ impl PrRow {
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>, Option<String>, Option<String>));
+type Raw = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    (Option<i64>, Option<String>, Option<String>),
+    Option<i64>,
+    (
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+);
 
 /// The needs of every PR of `plan` by PR key, each list sorted, as keys of the Plan (contract §2.2).
-pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
+pub fn load_needs(
+    conn: &Connection,
+    plan: &PlanId,
+) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1")?;
-    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+    for row in stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(need);
     }
@@ -114,19 +144,69 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?)))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                (r.get(6)?, r.get(7)?, r.get(8)?),
+                r.get(9)?,
+                (
+                    r.get(10)?,
+                    r.get(11)?,
+                    r.get(12)?,
+                    r.get(13)?,
+                    r.get(14)?,
+                    r.get(15)?,
+                ),
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     raw.into_iter()
-        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref, started_at, jira))| {
-            let needs = needs.remove(&key).unwrap_or_default();
-            let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
-            let pull = match pull {
-                (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
-                _ => None,
-            };
-            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref, started_at, jira })
-        })
+        .map(
+            |(
+                key,
+                repo,
+                base,
+                lead_branch,
+                lead_worktree,
+                status,
+                pull,
+                pull_request,
+                (name, title, shape, head_ref, started_at, jira),
+            )| {
+                let needs = needs.remove(&key).unwrap_or_default();
+                let key = PrKey::parse(&key)
+                    .map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
+                let pull = match pull {
+                    (Some(number), Some(url), Some(opened_at)) => Some(Pull {
+                        number,
+                        url,
+                        opened_at,
+                    }),
+                    _ => None,
+                };
+                Ok(PrRow {
+                    key,
+                    repo,
+                    base,
+                    lead_branch,
+                    lead_worktree: lead_worktree.map(PathBuf::from),
+                    status,
+                    needs,
+                    pull,
+                    pull_request,
+                    name,
+                    title,
+                    shape,
+                    head_ref,
+                    started_at,
+                    jira,
+                })
+            },
+        )
         .collect()
 }
 
@@ -167,13 +247,41 @@ mod tests {
             .unwrap();
         let plan = PlanId::parse("pay").unwrap();
         let prs = store.read(|conn| load_prs(conn, &plan)).unwrap();
-        let [api, web] = prs.as_slice() else { panic!("{prs:?}") };
-        assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
-        assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
+        let [api, web] = prs.as_slice() else {
+            panic!("{prs:?}")
+        };
+        assert_eq!(
+            (
+                api.key.as_str(),
+                api.repo.as_str(),
+                api.base.as_str(),
+                api.lead_branch.as_str()
+            ),
+            ("api", "/r/api", "main", "cpd/pay/api")
+        );
+        assert_eq!(
+            (
+                api.status.as_str(),
+                api.lead_worktree.as_deref(),
+                api.needs.as_slice()
+            ),
+            ("open", Some(Path::new("/w/api")), &[][..])
+        );
         let pull = api.pull.as_ref().unwrap();
-        assert_eq!((pull.number, pull.url.as_str(), pull.opened_at.as_str()), (7, "https://x/7", "o"));
+        assert_eq!(
+            (pull.number, pull.url.as_str(), pull.opened_at.as_str()),
+            (7, "https://x/7", "o")
+        );
         assert!(api.pull_request.is_some());
-        assert_eq!((web.key.as_str(), web.status.as_str(), web.lead_worktree.as_ref(), web.needs.as_slice()), ("web", "waiting", None, &["api".to_owned()][..]));
+        assert_eq!(
+            (
+                web.key.as_str(),
+                web.status.as_str(),
+                web.lead_worktree.as_ref(),
+                web.needs.as_slice()
+            ),
+            ("web", "waiting", None, &["api".to_owned()][..])
+        );
         assert!(web.pull.is_none() && web.pull_request.is_none());
     }
 }

@@ -33,7 +33,10 @@ fn drawn(title: &str, count: Option<usize>, width: u16) -> Buffer {
 #[test]
 fn the_flush_title_is_three_lines_the_pill_a_fill_the_count_pill_and_one_line() {
     let line = flush_title("Inbox", Some(2), 30);
-    assert_eq!(text(&line), format!("───{}{}{}─", pill("Inbox"), dashes(16), pill("2")));
+    assert_eq!(
+        text(&line),
+        format!("───{}{}{}─", pill("Inbox"), dashes(16), pill("2"))
+    );
     assert_eq!(line.width(), 30);
 }
 
@@ -43,15 +46,26 @@ fn the_flush_title_has_no_padding_cell_on_either_side() {
     for width in [22u16, 30] {
         let buf = drawn("Inbox", Some(2), width);
         for x in [0, 1, 2, width - 1] {
-            assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", muted), "width {width}, cell {x}");
+            assert_eq!(
+                (buf[(x, 0)].symbol(), buf[(x, 0)].fg),
+                ("─", muted),
+                "width {width}, cell {x}"
+            );
         }
-        assert_eq!(buf[(width - 2, 0)].symbol(), CAP_R, "width {width}: the count pill's right cap");
+        assert_eq!(
+            buf[(width - 2, 0)].symbol(),
+            CAP_R,
+            "width {width}: the count pill's right cap"
+        );
     }
 }
 
 #[test]
 fn the_flush_title_without_a_count_fills_to_the_last_line() {
-    assert_eq!(text(&flush_title("Inbox", None, 20)), format!("───{}{}", pill("Inbox"), dashes(10)));
+    assert_eq!(
+        text(&flush_title("Inbox", None, 20)),
+        format!("───{}{}", pill("Inbox"), dashes(10))
+    );
 }
 
 #[test]
@@ -80,6 +94,10 @@ fn a_flush_titles_pills_are_grey_and_its_lines_are_muted() {
     check::grey_pill(&buf, 17, 0, "35");
     let muted = palette::muted_text().fg.unwrap();
     for x in (0..3).chain(10..17).chain(21..22) {
-        assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", muted), "cell {x}");
+        assert_eq!(
+            (buf[(x, 0)].symbol(), buf[(x, 0)].fg),
+            ("─", muted),
+            "cell {x}"
+        );
     }
 }

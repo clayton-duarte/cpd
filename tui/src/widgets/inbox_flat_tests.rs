@@ -25,14 +25,23 @@ fn failing(id: i64, label: &str) -> Item {
 }
 
 fn numbered(n: usize) -> Vec<Item> {
-    (1..=n).map(|i| failing(i as i64, &format!("item {i}"))).collect()
+    (1..=n)
+        .map(|i| failing(i as i64, &format!("item {i}")))
+        .collect()
 }
 
 fn draw(items: &[Item], shape: &Shape, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
         .draw(|f| {
-            inbox::draw(f, Rect::new(0, 0, width, height), items, shape, now(), &|_| None);
+            inbox::draw(
+                f,
+                Rect::new(0, 0, width, height),
+                items,
+                shape,
+                now(),
+                &|_| None,
+            );
         })
         .unwrap();
     terminal.backend().buffer().clone()
@@ -43,7 +52,10 @@ fn flat(items: &[Item], shape: &Shape) -> Buffer {
 }
 
 fn header(width: usize, count: usize) -> String {
-    format!("───{CAP_L}Inbox{CAP_R}{}{CAP_L}{count}{CAP_R}─", "─".repeat(width - 3 - 7 - 2 - count.to_string().len() - 1))
+    format!(
+        "───{CAP_L}Inbox{CAP_R}{}{CAP_L}{count}{CAP_R}─",
+        "─".repeat(width - 3 - 7 - 2 - count.to_string().len() - 1)
+    )
 }
 
 /// The cell at `x` of row `y`, as its symbol.
@@ -55,7 +67,10 @@ fn at(buf: &Buffer, x: u16, y: u16) -> &str {
 fn the_header_is_the_flush_title_in_the_sections_second_row() {
     let buf = flat(&numbered(2), &Shape::new(&numbered(2)));
     assert_eq!(row(&buf, 0), "");
-    assert_eq!(row(&buf, 1), format!("───{CAP_L}Inbox{CAP_R}{}{CAP_L}2{CAP_R}─", "─".repeat(26)));
+    assert_eq!(
+        row(&buf, 1),
+        format!("───{CAP_L}Inbox{CAP_R}{}{CAP_L}2{CAP_R}─", "─".repeat(26))
+    );
     assert_eq!(row(&buf, 1).chars().count(), 40);
     assert_eq!(at(&buf, 0, 1), "─");
 }
@@ -69,7 +84,11 @@ fn an_item_row_has_one_blank_column_on_each_side() {
     assert_eq!(at(&buf, 2, 3), " ");
     let label: String = (3..3 + 25).map(|x| at(&buf, x, 3)).collect();
     assert_eq!(label, "acme/api#12 checks failed");
-    assert_eq!((at(&buf, 37, 3), at(&buf, 38, 3), at(&buf, 39, 3)), ("5", "m", " "), "the age ends at column 38");
+    assert_eq!(
+        (at(&buf, 37, 3), at(&buf, 38, 3), at(&buf, 39, 3)),
+        ("5", "m", " "),
+        "the age ends at column 38"
+    );
 }
 
 #[test]
@@ -77,13 +96,25 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age() {
     let items = [failing(1, &"x".repeat(80))];
     let buf = flat(&items, &Shape::new(&items));
     let cut: String = (3..37).map(|x| at(&buf, x, 3)).collect();
-    assert!(cut.contains('…'), "the label is cut with an ellipsis before the age: {cut:?}");
-    assert_eq!((at(&buf, 37, 3), at(&buf, 38, 3), at(&buf, 39, 3)), ("5", "m", " "));
+    assert!(
+        cut.contains('…'),
+        "the label is cut with an ellipsis before the age: {cut:?}"
+    );
+    assert_eq!(
+        (at(&buf, 37, 3), at(&buf, 38, 3), at(&buf, 39, 3)),
+        ("5", "m", " ")
+    );
 }
 
 #[test]
 fn an_item_with_wide_text_fills_its_row_to_the_width() {
-    let items = [item(1, Kind::PrFailing, Urgency::Red, "計計計計計計計計計計", "2026-01-02T23:57:00.000Z")];
+    let items = [item(
+        1,
+        Kind::PrFailing,
+        Urgency::Red,
+        "計計計計計計計計計計",
+        "2026-01-02T23:57:00.000Z",
+    )];
     let buf = draw(&items, &Shape::new(&items), 41, 5);
     let line = row(&buf, 3);
     assert!(line.ends_with("3m"), "{line:?}");
@@ -124,13 +155,28 @@ fn with_no_item_the_list_is_the_up_to_date_row_under_the_cue_line() {
 #[test]
 fn an_overflowing_section_scrolls_between_its_cue_lines() {
     let items = numbered(12);
-    let drawn = |scroll| draw(&items, &Shape::new(&items).capped(9).scrolled(scroll), 30, 9);
+    let drawn = |scroll| {
+        draw(
+            &items,
+            &Shape::new(&items).capped(9).scrolled(scroll),
+            30,
+            9,
+        )
+    };
     // 5 list rows: 5 one-row items (rows 3-7), the cue on row 8
     let cue = |text: &str| format!("{}{text}", " ".repeat(29 - text.chars().count()));
     let items_at = |buf: &Buffer, first: usize| {
         for (i, y) in (3..8).enumerate() {
             let words: Vec<String> = row(buf, y).split_whitespace().map(str::to_owned).collect();
-            assert_eq!(words[1..], ["item".to_owned(), (first + i + 1).to_string(), "5m".to_owned()], "row {y}");
+            assert_eq!(
+                words[1..],
+                [
+                    "item".to_owned(),
+                    (first + i + 1).to_string(),
+                    "5m".to_owned()
+                ],
+                "row {y}"
+            );
         }
     };
     let top = drawn(0);
@@ -160,14 +206,28 @@ fn the_shape_is_four_rows_plus_its_list_capped_at_the_pane() {
 
 #[test]
 fn only_the_header_and_the_item_rows_are_hits() {
-    let hits = |shape: &Shape, rows: std::ops::Range<u16>| rows.map(|r| shape.hit(r)).collect::<Vec<_>>();
+    let hits =
+        |shape: &Shape, rows: std::ops::Range<u16>| rows.map(|r| shape.hit(r)).collect::<Vec<_>>();
     assert_eq!(
         hits(&Shape::new(&numbered(2)), 0..9),
-        [None, Some(Hit::Header), None, Some(Hit::Item(0)), Some(Hit::Item(1)), None, None, None, None]
+        [
+            None,
+            Some(Hit::Header),
+            None,
+            Some(Hit::Item(0)),
+            Some(Hit::Item(1)),
+            None,
+            None,
+            None,
+            None
+        ]
     );
     let scrolled = Shape::new(&numbered(12)).capped(9).scrolled(3);
     assert_eq!((scrolled.hit(2), scrolled.hit(8)), (None, None));
-    assert_eq!(hits(&scrolled, 3..8), [3, 4, 5, 6, 7].map(|i| Some(Hit::Item(i))));
+    assert_eq!(
+        hits(&scrolled, 3..8),
+        [3, 4, 5, 6, 7].map(|i| Some(Hit::Item(i)))
+    );
     assert_eq!(Shape::new(&[]).hit(3), None);
 }
 

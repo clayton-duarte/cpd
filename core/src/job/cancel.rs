@@ -44,7 +44,11 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
 }
 
 /// `job cancel` as `plan cancel` runs it: no Job is refused `shape_incomplete`, the Plan goes away whole.
-pub(crate) fn cancel_without_shape(plan: &PlanId, key: JobKey, reason: &str) -> Result<Output, CpdError> {
+pub(crate) fn cancel_without_shape(
+    plan: &PlanId,
+    key: JobKey,
+    reason: &str,
+) -> Result<Output, CpdError> {
     cancel_with(plan, key, reason, Shape::Skip)
 }
 
@@ -53,7 +57,13 @@ fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result
 }
 
 /// [`cancel_with`] on an open `env`: what a test hands in.
-pub(super) fn cancel_in(env: &mut Env, plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result<Output, CpdError> {
+pub(super) fn cancel_in(
+    env: &mut Env,
+    plan: &PlanId,
+    key: JobKey,
+    reason: &str,
+    shape: Shape,
+) -> Result<Output, CpdError> {
     let (plan, reason) = (plan.clone(), reason.to_owned());
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, shape))?;
@@ -121,7 +131,12 @@ pub(super) fn cancel_in(env: &mut Env, plan: &PlanId, key: JobKey, reason: &str,
 /// `merged` or `cancelled` is left as it is and still traversed through. `reason` is the cancelling Job's
 /// own reason, for the Event texts. Idempotent: a rerun over dependents already failed or cancelled writes
 /// nothing.
-pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobKey, reason: &str) -> Result<Failed, CpdError> {
+pub(crate) fn fail_dependents(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    cancelled: &JobKey,
+    reason: &str,
+) -> Result<Failed, CpdError> {
     let all = jobs::load(tx, plan)?;
     let cause = format!("its need {cancelled} was cancelled");
     // Reverse reachability: a Job is reached when one of its `needs` is `cancelled` or is already reached.
@@ -132,7 +147,11 @@ pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobK
             if reached.contains(&job.key) {
                 continue;
             }
-            if job.needs.iter().any(|need| need == cancelled.as_str() || reached.contains(need)) {
+            if job
+                .needs
+                .iter()
+                .any(|need| need == cancelled.as_str() || reached.contains(need))
+            {
                 reached.insert(job.key.clone());
                 grew = true;
             }
@@ -146,7 +165,8 @@ pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobK
         if !reached.contains(&job.key) {
             continue;
         }
-        let key = JobKey::parse(&job.key).map_err(|_| CpdError::bad_row(format!("Job key {:?}", job.key)))?;
+        let key = JobKey::parse(&job.key)
+            .map_err(|_| CpdError::bad_row(format!("Job key {:?}", job.key)))?;
         match job.status.as_str() {
             "queued" => {
                 tx.execute(
@@ -157,7 +177,12 @@ pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobK
                     "Job {} failed ({cause}): {reason} Decide: cpd job retry {} --tier <T> --plan {plan}, or cpd job cancel {} --reason <text> --plan {plan}",
                     job.key, job.key, job.key
                 );
-                append(tx, NewEvent::job_failed(text, &cause, &cause, job.require_tier()?, 0).plan(plan.clone()).job(key))?;
+                append(
+                    tx,
+                    NewEvent::job_failed(text, &cause, &cause, job.require_tier()?, 0)
+                        .plan(plan.clone())
+                        .job(key),
+                )?;
                 changed.failed.push(job.key.clone());
             }
             "draft" => {
@@ -167,8 +192,16 @@ pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobK
                       WHERE plan = ?1 AND key = ?2",
                     [plan.as_str(), job.key.as_str(), cause.as_str()],
                 )?;
-                let text = format!("Job {} of Plan {plan} was cancelled: {cause} Next: cpd plan show --plan {plan}", job.key);
-                append(tx, NewEvent::job_cancelled(text, &cause).plan(plan.clone()).job(key))?;
+                let text = format!(
+                    "Job {} of Plan {plan} was cancelled: {cause} Next: cpd plan show --plan {plan}",
+                    job.key
+                );
+                append(
+                    tx,
+                    NewEvent::job_cancelled(text, &cause)
+                        .plan(plan.clone())
+                        .job(key),
+                )?;
                 changed.cancelled.push(job.key.clone());
             }
             _ => {}
@@ -177,14 +210,22 @@ pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobK
     Ok(changed)
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Result<Decision, CpdError> {
+fn decide(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+    shape: Shape,
+) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
     match job.status.as_str() {
-        "merged" => Err(CpdError::new(ErrorCode::JobMerged, format!("Job {key} is merged: a merged Job cannot be cancelled."))
-            .with("plan", plan.as_str())
-            .with("job", key.as_str())),
+        "merged" => Err(CpdError::new(
+            ErrorCode::JobMerged,
+            format!("Job {key} is merged: a merged Job cannot be cancelled."),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())),
         "cancelled" => Ok(Decision::Already(job)),
         "running" if job.cancel_requested_at.is_some() => Ok(Decision::Already(job)),
         "running" => {
@@ -192,11 +233,19 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Resul
                 keeps_the_shape(conn, plan, &all, &job)?;
             }
             let active: Option<String> = conn
-                .query_row("SELECT id FROM attempts WHERE plan = ?1 AND job = ?2 AND status <> 'ended'", [plan.as_str(), key.as_str()], |r| r.get(0))
+                .query_row(
+                    "SELECT id FROM attempts WHERE plan = ?1 AND job = ?2 AND status <> 'ended'",
+                    [plan.as_str(), key.as_str()],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let attempt = active
                 .and_then(|id| AttemptId::parse(&id).ok())
-                .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
+                .ok_or_else(|| {
+                    CpdError::bad_row(format!(
+                        "Job {plan}/{key} is running with no active Attempt"
+                    ))
+                })?;
             Ok(Decision::Request(job, attempt))
         }
         _ => {
@@ -210,9 +259,16 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Resul
 
 /// The last `test` or the last `impl` Job of a `tdd` PR that has not opened is not cancelled: add the replacement first
 /// (`shape_incomplete`, §5.3, hs-d497).
-fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> Result<(), CpdError> {
+fn keeps_the_shape(
+    conn: &Connection,
+    plan: &PlanId,
+    all: &[Job],
+    job: &Job,
+) -> Result<(), CpdError> {
     let prs = crate::plan::fingerprint::load_prs(conn, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str()) else { return Ok(()) };
+    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str()) else {
+        return Ok(());
+    };
     let lacks = crate::plan::shape::missing(pr, all, Some(job.key.as_str()));
     // Only what this cancel would take away: a PR that already lacked a kind is not this Job's doing.
     let kept = crate::plan::shape::missing(pr, all, None);
@@ -220,5 +276,10 @@ fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> 
     if taken.is_empty() {
         return Ok(());
     }
-    Err(crate::plan::shape::incomplete(plan, pr, &taken, &format!("cancelling {} would leave it with none", job.key)))
+    Err(crate::plan::shape::incomplete(
+        plan,
+        pr,
+        &taken,
+        &format!("cancelling {} would leave it with none", job.key),
+    ))
 }

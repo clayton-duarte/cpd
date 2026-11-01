@@ -22,14 +22,22 @@ pub fn argv(last: Option<&str>, next: Option<&str>) -> Option<Vec<String>> {
         return None;
     }
     Some(match next {
-        Some(reason) => vec!["set".to_owned(), "-g".to_owned(), OPTION.to_owned(), reason.to_owned()],
+        Some(reason) => vec![
+            "set".to_owned(),
+            "-g".to_owned(),
+            OPTION.to_owned(),
+            reason.to_owned(),
+        ],
         None => vec!["set".to_owned(), "-gu".to_owned(), OPTION.to_owned()],
     })
 }
 
 /// The call for the state that `read` returned: the [`argv`] of the state's alert, or `None` when the
 /// read failed (the caller reports the error and leaves the option as it is).
-pub fn call(last: Option<&str>, read: &Result<Option<InstallState>, CpdError>) -> Option<Vec<String>> {
+pub fn call(
+    last: Option<&str>,
+    read: &Result<Option<InstallState>, CpdError>,
+) -> Option<Vec<String>> {
     let next = read.as_ref().ok()?.as_ref().and_then(InstallState::alert);
     argv(last, next)
 }

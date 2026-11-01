@@ -8,9 +8,9 @@
 //! it starts is a pid of the `FakeSpawn`, whose `Launch` is what they read.
 
 use crate::common::fx::Fx;
-use crate::common::{TestEnv, refused};
 use crate::common::session::{events, home, setup, show};
 use crate::common::wrapper::{Pane, installed_cpd};
+use crate::common::{TestEnv, refused};
 
 use std::fs;
 
@@ -52,8 +52,17 @@ fn tier(fx: &Fx, id: &str) -> String {
 /// Every Session's `tier`, by id.
 fn tiers(fx: &Fx) -> Vec<(String, String)> {
     let all = fx.cpd(&["session", "list"]).ok();
-    let mut out: Vec<(String, String)> =
-        all["sessions"].as_array().unwrap().iter().map(|s| (s["id"].as_str().unwrap().to_owned(), s["tier"].as_str().unwrap().to_owned())).collect();
+    let mut out: Vec<(String, String)> = all["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["id"].as_str().unwrap().to_owned(),
+                s["tier"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
     out.sort();
     out
 }
@@ -70,13 +79,25 @@ fn retier_one_moves_a_lead_to_lead_tier_with_one_event() {
     let out = fx.cpd(&["session", "retier", LEAD1]).ok();
     assert_eq!(out["retiered"].as_array().unwrap().len(), 1, "{out}");
     let one = &out["retiered"][0];
-    assert_eq!((one["session"].as_str(), one["role"].as_str(), one["from"].as_str(), one["to"].as_str()), (Some(LEAD1), Some("lead"), Some("O3"), Some("O2")));
+    assert_eq!(
+        (
+            one["session"].as_str(),
+            one["role"].as_str(),
+            one["from"].as_str(),
+            one["to"].as_str()
+        ),
+        (Some(LEAD1), Some("lead"), Some("O3"), Some("O2"))
+    );
     assert_eq!(out["unchanged"], json!([]));
     assert_eq!(out.get("already"), None);
 
     assert_eq!(tier(&fx, LEAD1), "O2");
     let shown = show(&fx, LEAD1);
-    assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/opus"), Some("medium")), "{shown}");
+    assert_eq!(
+        (shown["model"].as_str(), shown["thinking"].as_str()),
+        (Some("p/opus"), Some("medium")),
+        "{shown}"
+    );
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1, "one Event: {sent:?}");
     let event = &sent[0];
@@ -99,13 +120,34 @@ fn retier_one_moves_a_manager_to_manager_tier() {
     fixture(&fx.env);
 
     let out = fx.cpd(&["session", "retier", MANAGER]).ok();
-    assert_eq!((out["retiered"][0]["role"].as_str(), out["retiered"][0]["from"].as_str(), out["retiered"][0]["to"].as_str()), (Some("manager"), Some("O5"), Some("O4")));
+    assert_eq!(
+        (
+            out["retiered"][0]["role"].as_str(),
+            out["retiered"][0]["from"].as_str(),
+            out["retiered"][0]["to"].as_str()
+        ),
+        (Some("manager"), Some("O5"), Some("O4"))
+    );
     assert_eq!(tier(&fx, MANAGER), "O4");
     let shown = show(&fx, MANAGER);
-    assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/opus"), Some("xhigh")));
+    assert_eq!(
+        (shown["model"].as_str(), shown["thinking"].as_str()),
+        (Some("p/opus"), Some("xhigh"))
+    );
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1);
-    assert_eq!((sent[0]["session"].as_str(), sent[0]["plan"].clone(), sent[0]["data"].clone()), (Some(MANAGER), Value::Null, json!({"from": "O5", "to": "O4"})));
+    assert_eq!(
+        (
+            sent[0]["session"].as_str(),
+            sent[0]["plan"].clone(),
+            sent[0]["data"].clone()
+        ),
+        (
+            Some(MANAGER),
+            Value::Null,
+            json!({"from": "O5", "to": "O4"})
+        )
+    );
 }
 
 /// `--all`: every live Lead (a Plan's, a side fork) to `lead_tier`, the live Manager to `manager_tier`; a Worker
@@ -123,12 +165,30 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| (r["session"].as_str().unwrap().to_owned(), r["from"].as_str().unwrap().to_owned(), r["to"].as_str().unwrap().to_owned()))
+        .map(|r| {
+            (
+                r["session"].as_str().unwrap().to_owned(),
+                r["from"].as_str().unwrap().to_owned(),
+                r["to"].as_str().unwrap().to_owned(),
+            )
+        })
         .collect();
     moved.sort();
     let want = |id: &str, from: &str, to: &str| (id.to_owned(), from.to_owned(), to.to_owned());
-    assert_eq!(moved, [want(FORK, "O3", "O2"), want(LEAD1, "O3", "O2"), want(LEAD2, "O3", "O2"), want(MANAGER, "O5", "O4")]);
-    assert_eq!(out["unchanged"], json!([ON_TARGET]), "the live Session already on its Tier; Workers and archived Sessions are not listed");
+    assert_eq!(
+        moved,
+        [
+            want(FORK, "O3", "O2"),
+            want(LEAD1, "O3", "O2"),
+            want(LEAD2, "O3", "O2"),
+            want(MANAGER, "O5", "O4")
+        ]
+    );
+    assert_eq!(
+        out["unchanged"],
+        json!([ON_TARGET]),
+        "the live Session already on its Tier; Workers and archived Sessions are not listed"
+    );
 
     let after = tiers(&fx);
     for (id, was) in &before {
@@ -144,7 +204,10 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
     assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O5");
 
     // One Event per changed Session, none for the others.
-    let mut sessions: Vec<String> = events(&fx, "session-retiered").iter().map(|e| e["session"].as_str().unwrap().to_owned()).collect();
+    let mut sessions: Vec<String> = events(&fx, "session-retiered")
+        .iter()
+        .map(|e| e["session"].as_str().unwrap().to_owned())
+        .collect();
     sessions.sort();
     assert_eq!(sessions, [FORK, LEAD1, LEAD2, MANAGER]);
 }
@@ -165,11 +228,22 @@ fn retier_is_idempotent_and_a_session_on_its_tier_gets_no_event() {
     assert_eq!(again["already"], true, "{again}");
     assert_eq!(again["retiered"], json!([]));
     assert_eq!(events(&fx, "session-retiered").len(), events_before);
-    assert_eq!(fx.cpd(&["session", "list"]).ok()["events_cursor"], cursor, "nothing was written");
+    assert_eq!(
+        fx.cpd(&["session", "list"]).ok()["events_cursor"],
+        cursor,
+        "nothing was written"
+    );
     assert_eq!(tiers(&fx), tiers_before);
 
     let one = fx.cpd(&["session", "retier", ON_TARGET]).ok();
-    assert_eq!((one["already"].clone(), one["retiered"].clone(), one["unchanged"].clone()), (json!(true), json!([]), json!([ON_TARGET])));
+    assert_eq!(
+        (
+            one["already"].clone(),
+            one["retiered"].clone(),
+            one["unchanged"].clone()
+        ),
+        (json!(true), json!([]), json!([ON_TARGET]))
+    );
     assert_eq!(events(&fx, "session-retiered").len(), events_before);
 }
 
@@ -184,9 +258,20 @@ fn retier_refuses_what_it_may_not_touch_and_writes_nothing() {
     let cursor = fx.cpd(&["session", "list"]).ok()["events_cursor"].clone();
 
     refused(&fx.cpd(&["session", "retier", WORKER]), "not_a_lead", 3);
-    let archived = refused(&fx.cpd(&["session", "retier", ARCHIVED_LEAD]), "archived", 3);
-    assert_eq!(archived["details"]["next"], format!("cpd session unarchive {ARCHIVED_LEAD}"));
-    refused(&fx.cpd(&["session", "retier", "no-such-session"]), "session_not_found", 4);
+    let archived = refused(
+        &fx.cpd(&["session", "retier", ARCHIVED_LEAD]),
+        "archived",
+        3,
+    );
+    assert_eq!(
+        archived["details"]["next"],
+        format!("cpd session unarchive {ARCHIVED_LEAD}")
+    );
+    refused(
+        &fx.cpd(&["session", "retier", "no-such-session"]),
+        "session_not_found",
+        4,
+    );
     refused(&fx.cpd(&["session", "retier"]), "usage", 2);
     refused(&fx.cpd(&["session", "retier", "--all", LEAD1]), "usage", 2);
 
@@ -208,7 +293,8 @@ fn a_resumed_lead_runs_on_the_rows_current_tier() {
     fs::create_dir_all(&sessions).unwrap();
     let file = sessions.join("2026_lead1.jsonl");
     fs::write(&file, "{\"type\":\"session\"}\n").unwrap();
-    fx.env.sql("UPDATE sessions SET tier = 'O2' WHERE id = 'lead1'");
+    fx.env
+        .sql("UPDATE sessions SET tier = 'O2' WHERE id = 'lead1'");
 
     let opened = fx.cpd(&["session", "open", LEAD1]).ok();
     let pane = Pane::at(&fx, opened["pane"].as_str().unwrap(), &installed_cpd(&fx));
@@ -216,10 +302,19 @@ fn a_resumed_lead_runs_on_the_rows_current_tier() {
     wrapper.until("the resume", || !pane.spawn.pis().is_empty());
     let argv = &pane.spawn.pis()[0].args;
     assert!(argv.iter().any(|a| a == "--session"), "a resume: {argv:?}");
-    let at = |flag: &str| argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag} in {argv:?}"));
+    let at = |flag: &str| {
+        argv.iter()
+            .position(|a| a == flag)
+            .unwrap_or_else(|| panic!("no {flag} in {argv:?}"))
+    };
     assert_eq!(argv[at("--model") + 1], "p/opus:medium", "{argv:?}");
     assert_eq!(argv[at("--session") + 1], file.display().to_string());
-    assert!(!argv.iter().any(|a| a == "--fork" || a == "--session-id" || a == "--"), "a resume has no first message: {argv:?}");
+    assert!(
+        !argv
+            .iter()
+            .any(|a| a == "--fork" || a == "--session-id" || a == "--"),
+        "a resume has no first message: {argv:?}"
+    );
 }
 
 /// A relaunch of a Session **retiered** while it had no pi (and no file yet) starts fresh on the new Tier, not on the
@@ -237,18 +332,31 @@ fn a_fresh_lead_started_after_a_retier_runs_on_the_new_tier() {
     let mut wrapper = pane.run(&["session", "run", LEAD1]);
     wrapper.until("lead1's pi", || !pane.spawn.pis().is_empty());
     let argv = &pane.spawn.pis()[0].args;
-    assert!(argv.iter().any(|a| a == "--session-id"), "a fresh start: {argv:?}");
-    let at = argv.iter().position(|a| a == "--model").unwrap_or_else(|| panic!("no --model in {argv:?}"));
+    assert!(
+        argv.iter().any(|a| a == "--session-id"),
+        "a fresh start: {argv:?}"
+    );
+    let at = argv
+        .iter()
+        .position(|a| a == "--model")
+        .unwrap_or_else(|| panic!("no --model in {argv:?}"));
     assert_eq!(argv[at + 1], "p/opus:medium", "{argv:?}");
     let message = home(&fx.env).lead_message(&cpd_core::ids::PlanId::parse("pay").unwrap());
-    assert!(argv.ends_with(&["--".to_owned(), format!("@{}", message.display())]), "{argv:?}");
+    assert!(
+        argv.ends_with(&["--".to_owned(), format!("@{}", message.display())]),
+        "{argv:?}"
+    );
 }
 
 /// `fixture` plus a config that sets `review_lead_tier` explicitly, with `review` as `inbox.review_context` (empty
 /// text for none); `lead2` moves to another Context, so `lead1` and `fork1` are review-Context Leads and `lead2` not.
 fn review_fixture(env: &TestEnv, review: &str) {
     fixture(env);
-    let inbox = if review.is_empty() { String::new() } else { format!("[inbox]\nreview_context = \"{review}\"\n") };
+    let inbox = if review.is_empty() {
+        String::new()
+    } else {
+        format!("[inbox]\nreview_context = \"{review}\"\n")
+    };
     env.write_tmux_config(&format!(
         "lead_tier = \"O2\"\nreview_lead_tier = \"S3\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n{inbox}"
     ));
@@ -265,10 +373,22 @@ fn retier_one_moves_a_review_context_lead_to_review_lead_tier() {
 
     let out = fx.cpd(&["session", "retier", LEAD1]).ok();
     let one = &out["retiered"][0];
-    assert_eq!((one["session"].as_str(), one["from"].as_str(), one["to"].as_str()), (Some(LEAD1), Some("O3"), Some("S3")), "{out}");
+    assert_eq!(
+        (
+            one["session"].as_str(),
+            one["from"].as_str(),
+            one["to"].as_str()
+        ),
+        (Some(LEAD1), Some("O3"), Some("S3")),
+        "{out}"
+    );
     assert_eq!(tier(&fx, LEAD1), "S3");
     let shown = show(&fx, LEAD1);
-    assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/sonnet"), Some("high")), "{shown}");
+    assert_eq!(
+        (shown["model"].as_str(), shown["thinking"].as_str()),
+        (Some("p/sonnet"), Some("high")),
+        "{shown}"
+    );
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1, "one Event: {sent:?}");
     assert_eq!(sent[0]["session"], LEAD1);
@@ -297,7 +417,14 @@ fn retier_one_moves_a_review_context_fork_to_review_lead_tier() {
     review_fixture(&fx.env, "ctx");
 
     let out = fx.cpd(&["session", "retier", FORK]).ok();
-    assert_eq!((out["retiered"][0]["from"].as_str(), out["retiered"][0]["to"].as_str()), (Some("O3"), Some("S3")), "{out}");
+    assert_eq!(
+        (
+            out["retiered"][0]["from"].as_str(),
+            out["retiered"][0]["to"].as_str()
+        ),
+        (Some("O3"), Some("S3")),
+        "{out}"
+    );
     assert_eq!(tier(&fx, FORK), "S3");
 }
 
@@ -308,7 +435,8 @@ fn retier_one_moves_a_review_context_fork_to_review_lead_tier() {
 fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
     let fx = Fx::new();
     review_fixture(&fx.env, "ctx");
-    fx.env.sql("UPDATE sessions SET tier = 'S2' WHERE id = 'lead1'");
+    fx.env
+        .sql("UPDATE sessions SET tier = 'S2' WHERE id = 'lead1'");
 
     let out = fx.cpd(&["session", "retier", "--all"]).ok();
     let moved: Vec<(&str, &str, &str)> = out["retiered"]
@@ -316,7 +444,13 @@ fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
         .unwrap()
         .iter()
         .filter(|r| r["session"] == LEAD1 || r["session"] == MANAGER)
-        .map(|r| (r["session"].as_str().unwrap(), r["from"].as_str().unwrap(), r["to"].as_str().unwrap()))
+        .map(|r| {
+            (
+                r["session"].as_str().unwrap(),
+                r["from"].as_str().unwrap(),
+                r["to"].as_str().unwrap(),
+            )
+        })
         .collect();
     assert!(moved.contains(&(LEAD1, "S2", "S3")), "{out}");
     assert!(moved.contains(&(MANAGER, "O5", "O4")), "{out}");

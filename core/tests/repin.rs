@@ -58,7 +58,10 @@ struct Repo {
 }
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("core/ has a parent").to_owned()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("core/ has a parent")
+        .to_owned()
 }
 
 /// An environment in which `git` ignores the user's configuration.
@@ -93,12 +96,21 @@ impl Repo {
     }
 
     fn git_output(&self, args: &[&str]) -> Output {
-        Command::new("git").args(args).current_dir(self.work()).envs(git_env(self.dir.path())).output().unwrap()
+        Command::new("git")
+            .args(args)
+            .current_dir(self.work())
+            .envs(git_env(self.dir.path()))
+            .output()
+            .unwrap()
     }
 
     fn git(&self, args: &[&str]) -> String {
         let out = self.git_output(args);
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
@@ -127,17 +139,29 @@ impl Repo {
     fn conflicted(ours_two: &str, theirs_two: &str) -> Repo {
         let repo = Repo::new();
         repo.git(&["checkout", "--quiet", "-b", "theirs"]);
-        repo.commit(&schema_rs("// one: theirs", &hash('b'), theirs_two, BASE[2]));
+        repo.commit(&schema_rs(
+            "// one: theirs",
+            &hash('b'),
+            theirs_two,
+            BASE[2],
+        ));
         repo.git(&["checkout", "--quiet", "-b", "ours", "main"]);
         repo.commit(&schema_rs(BASE[0], &hash('a'), ours_two, "// three: ours"));
         let merge = repo.git_output(&["merge", "--no-edit", "theirs"]);
-        assert_eq!(merge.status.code(), Some(1), "the merge must stop on a conflict");
+        assert_eq!(
+            merge.status.code(),
+            Some(1),
+            "the merge must stop on a conflict"
+        );
         repo
     }
 
     /// Runs `scripts/repin.sh` from the repository root, the print command printing [`fresh`].
     fn repin(&self) -> Output {
-        let command = format!("printf 'warning: noise\\nSCHEMA_HASH=%s\\ntest result: ok\\n' {}", fresh());
+        let command = format!(
+            "printf 'warning: noise\\nSCHEMA_HASH=%s\\ntest result: ok\\n' {}",
+            fresh()
+        );
         Command::new(repo_root().join("scripts/repin.sh"))
             .current_dir(self.work())
             .envs(git_env(self.dir.path()))
@@ -149,7 +173,12 @@ impl Repo {
     /// Runs the script and asserts that it succeeds.
     fn repin_ok(&self) {
         let out = self.repin();
-        assert!(out.status.success(), "repin.sh failed ({:?}): {}", out.status, String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "repin.sh failed ({:?}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// Paths with an unmerged (conflicted) index entry.
@@ -167,8 +196,15 @@ impl Repo {
 fn a_merge_that_conflicts_only_on_the_hash_is_resolved_to_the_value_the_print_command_gives() {
     // The two sides edit the same hash line, and nothing else in common.
     let repo = Repo::conflicted(BASE[1], BASE[1]);
-    assert!(repo.read().contains("<<<<<<<"), "the scratch merge must conflict on the hash");
-    assert_eq!(repo.read().matches("<<<<<<<").count(), 1, "and on the hash only");
+    assert!(
+        repo.read().contains("<<<<<<<"),
+        "the scratch merge must conflict on the hash"
+    );
+    assert_eq!(
+        repo.read().matches("<<<<<<<").count(),
+        1,
+        "and on the hash only"
+    );
 
     repo.repin_ok();
 
@@ -176,23 +212,38 @@ fn a_merge_that_conflicts_only_on_the_hash_is_resolved_to_the_value_the_print_co
     let want = schema_rs("// one: theirs", &fresh(), BASE[1], "// three: ours");
     assert_eq!(repo.read(), want);
     assert_eq!(repo.unmerged(), "", "the file is staged as resolved");
-    assert_eq!(repo.git(&["diff", "--name-only"]), "", "and nothing of it is left unstaged");
+    assert_eq!(
+        repo.git(&["diff", "--name-only"]),
+        "",
+        "and nothing of it is left unstaged"
+    );
 }
 
 #[test]
 fn a_conflict_on_the_hash_and_another_hunk_is_refused_and_the_other_hunk_is_left_as_it_was() {
     let repo = Repo::conflicted("fn two() -> i32 { 2 }", "fn two() -> i32 { 3 }");
     // How git writes the hunk that is not the hash's.
-    let other = "<<<<<<< HEAD\nfn two() -> i32 { 2 }\n=======\nfn two() -> i32 { 3 }\n>>>>>>> theirs\n";
-    assert!(repo.read().contains(other), "the scratch merge must conflict on the other hunk");
+    let other =
+        "<<<<<<< HEAD\nfn two() -> i32 { 2 }\n=======\nfn two() -> i32 { 3 }\n>>>>>>> theirs\n";
+    assert!(
+        repo.read().contains(other),
+        "the scratch merge must conflict on the other hunk"
+    );
     assert_eq!(repo.read().matches("<<<<<<<").count(), 2, "and on the hash");
 
     let out = repo.repin();
 
     assert!(!out.status.success(), "the script must refuse");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("schema.rs"), "the refusal names the file that still conflicts: {stderr:?}");
-    assert!(repo.read().contains(other), "the other hunk is left exactly as git wrote it:\n{}", repo.read());
+    assert!(
+        stderr.contains("schema.rs"),
+        "the refusal names the file that still conflicts: {stderr:?}"
+    );
+    assert!(
+        repo.read().contains(other),
+        "the other hunk is left exactly as git wrote it:\n{}",
+        repo.read()
+    );
     assert_ne!(repo.unmerged(), "", "the file is not staged as resolved");
 }
 
@@ -204,7 +255,11 @@ fn without_a_conflict_the_script_only_rewrites_a_stale_value() {
     repo.repin_ok();
 
     assert_eq!(repo.read(), base_text().replace(&hash('0'), &fresh()));
-    assert_eq!(repo.git(&["diff", "--name-only"]), SCHEMA_RS.to_owned() + "\n", "no other file changes");
+    assert_eq!(
+        repo.git(&["diff", "--name-only"]),
+        SCHEMA_RS.to_owned() + "\n",
+        "no other file changes"
+    );
 }
 
 #[test]
@@ -213,7 +268,11 @@ fn rerunning_changes_nothing() {
     let repo = Repo::conflicted(BASE[1], BASE[1]);
     repo.repin_ok();
     let (text, status) = (repo.read(), repo.status());
-    assert_eq!(text, schema_rs("// one: theirs", &fresh(), BASE[1], "// three: ours"), "the first run resolves");
+    assert_eq!(
+        text,
+        schema_rs("// one: theirs", &fresh(), BASE[1], "// three: ours"),
+        "the first run resolves"
+    );
     repo.repin_ok();
     assert_eq!((repo.read(), repo.status()), (text, status));
 
@@ -221,7 +280,11 @@ fn rerunning_changes_nothing() {
     let repo = Repo::new();
     repo.repin_ok();
     let (text, status) = (repo.read(), repo.status());
-    assert_eq!(text, base_text().replace(&hash('0'), &fresh()), "the first run rewrites");
+    assert_eq!(
+        text,
+        base_text().replace(&hash('0'), &fresh()),
+        "the first run rewrites"
+    );
     repo.repin_ok();
     assert_eq!((repo.read(), repo.status()), (text, status));
 }

@@ -8,7 +8,10 @@ use crate::config::Tier;
 use crate::ids::{AttemptId, PlanId};
 
 fn text(kind: JobKind) -> String {
-    let (plan, attempt) = (PlanId::parse("pay").unwrap(), AttemptId::parse("api-schema-a1").unwrap());
+    let (plan, attempt) = (
+        PlanId::parse("pay").unwrap(),
+        AttemptId::parse("api-schema-a1").unwrap(),
+    );
     let one = ["a".to_owned()];
     render(&Input {
         plan: &plan,
@@ -44,9 +47,16 @@ fn listed(spec: &str) -> BTreeSet<String> {
     let finish = spec.split("\n## Finish").nth(1).expect("a Finish section");
     let mut codes = BTreeSet::new();
     for line in finish.lines() {
-        let Some(rest) = line.strip_prefix("- `") else { continue };
-        let Some(head) = rest.find("`:").map(|end| &line[2..3 + end + 1]) else { continue };
-        if head.split(", ").all(|c| c.len() > 2 && c.starts_with('`') && c.ends_with('`')) {
+        let Some(rest) = line.strip_prefix("- `") else {
+            continue;
+        };
+        let Some(head) = rest.find("`:").map(|end| &line[2..3 + end + 1]) else {
+            continue;
+        };
+        if head
+            .split(", ")
+            .all(|c| c.len() > 2 && c.starts_with('`') && c.ends_with('`'))
+        {
             codes.extend(ticked(head));
         }
     }
@@ -55,7 +65,9 @@ fn listed(spec: &str) -> BTreeSet<String> {
 
 /// The codes of the Code column of the §6.1 precondition table.
 fn table_codes() -> BTreeSet<String> {
-    let md = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/commands.md")).unwrap();
+    let md =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/commands.md"))
+            .unwrap();
     let mut section = Vec::new();
     let mut inside = false;
     for line in md.lines() {
@@ -82,17 +94,31 @@ fn worker_text_lists_only_refusals_submit_returns() {
     let kinds = [
         JobKind::Work,
         JobKind::Docs,
-        JobKind::Test { tests: &tests, test_files: &files },
-        JobKind::Impl { test_jobs: &files, tests: &tests, guarded: &files, approved: &[] },
+        JobKind::Test {
+            tests: &tests,
+            test_files: &files,
+        },
+        JobKind::Impl {
+            test_jobs: &files,
+            tests: &tests,
+            guarded: &files,
+            approved: &[],
+        },
         JobKind::Verify,
         JobKind::Open,
         JobKind::Update,
-        JobKind::Explore { kind: "scout", artefact: none },
+        JobKind::Explore {
+            kind: "scout",
+            artefact: none,
+        },
     ];
     let table = table_codes();
     let mut outside = BTreeSet::new();
     for kind in kinds {
         outside.extend(listed(&text(kind)).difference(&table).cloned());
     }
-    assert!(outside.is_empty(), "the Worker Spec lists refusals outside the §6.1 table: {outside:?}");
+    assert!(
+        outside.is_empty(),
+        "the Worker Spec lists refusals outside the §6.1 table: {outside:?}"
+    );
 }

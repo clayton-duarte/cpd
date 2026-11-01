@@ -3,12 +3,23 @@
 
 use serde_json::{Value, json};
 
-use super::pr_checks::{checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads, view};
+use super::pr_checks::{
+    checks_of_row, failing_rollup, feedback_data, one_page, read_says, reads, view,
+};
 
 /// A GraphQL CheckRun node of `workflow` (none: a third-party app).
-fn node_run(workflow: Option<&str>, name: &str, conclusion: Option<&str>, started: Option<&str>) -> Value {
+fn node_run(
+    workflow: Option<&str>,
+    name: &str,
+    conclusion: Option<&str>,
+    started: Option<&str>,
+) -> Value {
     let run = workflow.map(|w| json!({"workflow": {"name": w}}));
-    let status = if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" };
+    let status = if conclusion.is_some() {
+        "COMPLETED"
+    } else {
+        "IN_PROGRESS"
+    };
     json!({"__typename": "CheckRun", "name": name, "status": status, "conclusion": conclusion, "startedAt": started,
            "checkSuite": {"workflowRun": run}})
 }
@@ -60,7 +71,15 @@ fn a_status_context_is_decided_by_its_newest_state() {
 #[test]
 fn the_checks_read_asks_for_the_workflow_and_the_start_time() {
     let fx = failing_rollup();
-    read_says(&fx, one_page(vec![node_run(W, "ci", Some("SUCCESS"), Some("2026-10-30T04:19:08Z"))]));
+    read_says(
+        &fx,
+        one_page(vec![node_run(
+            W,
+            "ci",
+            Some("SUCCESS"),
+            Some("2026-10-30T04:19:08Z"),
+        )]),
+    );
     fx.poll();
     let query = &reads(&fx)[0][3];
     for word in ["startedAt", "createdAt", "workflowRun"] {
@@ -74,11 +93,20 @@ fn pr_view_counts_only_the_newest_run_of_each_check() {
         json!({"__typename": "CheckRun", "name": "danger", "workflowName": "Run Danger on PR", "status": "COMPLETED",
                "conclusion": conclusion, "startedAt": started, "completedAt": started, "detailsUrl": "https://x"})
     };
-    let out = view(vec![entry("FAILURE", "2026-10-30T04:19:08Z"), entry("SUCCESS", "2026-10-30T14:27:08Z")]);
+    let out = view(vec![
+        entry("FAILURE", "2026-10-30T04:19:08Z"),
+        entry("SUCCESS", "2026-10-30T14:27:08Z"),
+    ]);
     assert_eq!(out["pr"]["checks"], "passed");
     let listed = out["checks"].as_array().unwrap();
-    assert!(listed.iter().any(|c| c["conclusion"] == "FAILURE"), "{listed:?}");
-    assert!(listed.iter().any(|c| c["conclusion"] == "SUCCESS"), "{listed:?}");
+    assert!(
+        listed.iter().any(|c| c["conclusion"] == "FAILURE"),
+        "{listed:?}"
+    );
+    assert!(
+        listed.iter().any(|c| c["conclusion"] == "SUCCESS"),
+        "{listed:?}"
+    );
 }
 
 // Controls: they pass today and must keep passing.
@@ -96,8 +124,18 @@ fn a_failure_newer_than_a_success_still_fails_and_wakes() {
 #[test]
 fn runs_are_told_apart_by_workflow_and_name() {
     let (checks, events) = poll_with(vec![
-        node_run(Some("A"), "build", Some("FAILURE"), Some("2026-10-30T04:19:08Z")),
-        node_run(Some("B"), "build", Some("SUCCESS"), Some("2026-10-30T05:00:00Z")),
+        node_run(
+            Some("A"),
+            "build",
+            Some("FAILURE"),
+            Some("2026-10-30T04:19:08Z"),
+        ),
+        node_run(
+            Some("B"),
+            "build",
+            Some("SUCCESS"),
+            Some("2026-10-30T05:00:00Z"),
+        ),
     ]);
     assert_eq!(checks, "failed");
     assert_eq!(events.len(), 1);

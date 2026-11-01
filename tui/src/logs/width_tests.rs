@@ -18,6 +18,15 @@ fn an_event_in_wide_characters_is_cut_to_the_row() {
         text: "計".repeat(20),
         data: serde_json::json!({}),
     };
-    let drawn = line(&event, 30, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new()));
-    assert!(drawn.width() <= 30, "the Event's text is cut to the row's columns, not its chars: {drawn:?}");
+    let drawn = line(
+        &event,
+        30,
+        &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(
+            &cpd_core::clock::ManualClock::new(),
+        ),
+    );
+    assert!(
+        drawn.width() <= 30,
+        "the Event's text is cut to the row's columns, not its chars: {drawn:?}"
+    );
 }

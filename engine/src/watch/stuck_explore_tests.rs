@@ -21,7 +21,10 @@ fn failed_explore(fx: &mut Fx, key: &str, minutes: i64) {
 
 /// The text of the one message for a Plan's stuck explore Jobs, each `(key, minutes)` with cause `timed_out`.
 fn explore_text(jobs: &[(&str, i64)]) -> String {
-    let list: Vec<String> = jobs.iter().map(|(k, m)| format!("pay/{k} ({m} min ago, timed_out)")).collect();
+    let list: Vec<String> = jobs
+        .iter()
+        .map(|(k, m)| format!("pay/{k} ({m} min ago, timed_out)"))
+        .collect();
     format!(
         "Explore Jobs of Plan pay failed and their Lead has not retried or cancelled them: {}. \
          Retry each (cpd job retry <key> --plan pay --tier <T>), nudge the Lead, or ask the User.",
@@ -54,7 +57,15 @@ fn stuck_explore_jobs_of_a_plan_are_one_message_to_the_manager() {
     for _ in 0..4 {
         tick(&mut fx);
     }
-    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, explore_text(&[("a", 3), ("b", 2)]))]);
+    assert_eq!(
+        messages(&mut fx),
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            explore_text(&[("a", 3), ("b", 2)])
+        )]
+    );
     assert_eq!(open_items(&mut fx), []);
 }
 
@@ -72,8 +83,18 @@ fn a_stuck_explore_job_and_a_stuck_pr_job_are_two_messages() {
     assert_eq!(
         messages(&mut fx),
         [
-            ("mgr1".to_owned(), None, true, explore_text(&[("scout1", 5)])),
-            ("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed")),
+            (
+                "mgr1".to_owned(),
+                None,
+                true,
+                explore_text(&[("scout1", 5)])
+            ),
+            (
+                "mgr1".to_owned(),
+                None,
+                true,
+                stuck_text("old", 2, "crashed")
+            ),
         ]
     );
 }
@@ -96,5 +117,8 @@ fn only_the_leads_state_says_an_explore_job_is_being_worked_on() {
                  hex(zeroblob(32)), cpd_txn(), 't');",
     );
     tick(&mut fx);
-    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, explore_text(&[("a", 2)]))]);
+    assert_eq!(
+        messages(&mut fx),
+        [("mgr1".to_owned(), None, true, explore_text(&[("a", 2)]))]
+    );
 }

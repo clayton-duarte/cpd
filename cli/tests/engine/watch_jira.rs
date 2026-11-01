@@ -82,28 +82,64 @@ struct Node {
 }
 
 fn request_of(call: &Call) -> Value {
-    serde_json::from_slice(call.stdin.as_ref().expect("the helper's request is on its stdin")).expect("the request is JSON")
+    serde_json::from_slice(
+        call.stdin
+            .as_ref()
+            .expect("the helper's request is on its stdin"),
+    )
+    .expect("the request is JSON")
 }
 
 impl Handler for Node {
     fn handle(&self, call: &Call) -> Reply {
         self.seen.lock().unwrap().push(call.clone());
         if let Some(gate) = self.gate.lock().unwrap().take() {
-            gate.entered.lock().unwrap().send(()).expect("the test holds the receiver of `entered`");
-            if gate.open.lock().unwrap().recv_timeout(GATE_DEADLINE).is_err() {
+            gate.entered
+                .lock()
+                .unwrap()
+                .send(())
+                .expect("the test holds the receiver of `entered`");
+            if gate
+                .open
+                .lock()
+                .unwrap()
+                .recv_timeout(GATE_DEADLINE)
+                .is_err()
+            {
                 return Reply::exit(70, "", "the gate of the helper never opened");
             }
         }
-        let ticket = request_of(call)["ticket"].as_str().unwrap_or_default().to_owned();
-        let own = self.per_ticket.lock().unwrap().iter().find(|(t, _)| *t == ticket).map(|(_, a)| a.clone());
+        let ticket = request_of(call)["ticket"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let own = self
+            .per_ticket
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(t, _)| *t == ticket)
+            .map(|(_, a)| a.clone());
         let answer = own.unwrap_or_else(|| self.says.lock().unwrap().clone());
-        let (status, json) = answer.split_once(' ').expect("an answer is `<exit> <json>`");
-        Reply::exit(status.parse().expect("the exit status is a number"), &format!("{json}\n"), "")
+        let (status, json) = answer
+            .split_once(' ')
+            .expect("an answer is `<exit> <json>`");
+        Reply::exit(
+            status.parse().expect("the exit status is a number"),
+            &format!("{json}\n"),
+            "",
+        )
     }
 }
 
 /// `(settled_at, outcome, refused_at, refusal, refused_with)` of a queue row.
-type Row = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
+type Row = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// What a test reads while the engine runs: `Clone` and `'static`, so a step of the run holds one.
 #[derive(Clone)]
@@ -125,12 +161,18 @@ impl Probe {
 
     /// The `ticket` of each call of the helper, in order.
     fn tickets(&self) -> Vec<String> {
-        self.requests().iter().map(|r| r["ticket"].as_str().unwrap().to_owned()).collect()
+        self.requests()
+            .iter()
+            .map(|r| r["ticket"].as_str().unwrap().to_owned())
+            .collect()
     }
 
     /// The `target` of each call of the helper, in order.
     fn targets(&self) -> Vec<String> {
-        self.requests().iter().map(|r| r["target"].as_str().unwrap().to_owned()).collect()
+        self.requests()
+            .iter()
+            .map(|r| r["target"].as_str().unwrap().to_owned())
+            .collect()
     }
 
     fn says(&self, answer: &str) {
@@ -138,11 +180,16 @@ impl Probe {
     }
 
     fn says_for(&self, ticket: &str, answer: &str) {
-        self.node.per_ticket.lock().unwrap().push((ticket.to_owned(), answer.to_owned()));
+        self.node
+            .per_ticket
+            .lock()
+            .unwrap()
+            .push((ticket.to_owned(), answer.to_owned()));
     }
 
     fn store(&self) -> Connection {
-        Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
+        Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap()
     }
 
     fn row(&self, pr: &str, target: &str) -> Row {
@@ -156,7 +203,13 @@ impl Probe {
     }
 
     fn id(&self, pr: &str, target: &str) -> i64 {
-        self.store().query_row("SELECT id FROM jira_transitions WHERE plan = 'pay' AND pr = ?1 AND target = ?2", [pr, target], |r| r.get(0)).unwrap()
+        self.store()
+            .query_row(
+                "SELECT id FROM jira_transitions WHERE plan = 'pay' AND pr = ?1 AND target = ?2",
+                [pr, target],
+                |r| r.get(0),
+            )
+            .unwrap()
     }
 
     fn settled(&self, pr: &str, target: &str) -> bool {
@@ -174,9 +227,17 @@ impl Probe {
     /// Every `error` Event but those of `gh` (E8's one lookup is not E19's): its Plan, its text and its data.
     fn error_events(&self) -> Vec<(Option<String>, String, Value)> {
         let conn = self.store();
-        let mut stmt = conn.prepare("SELECT plan, text, data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT plan, text, data FROM events WHERE kind = 'error' ORDER BY id")
+            .unwrap();
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
@@ -187,14 +248,20 @@ impl Probe {
     }
 
     fn codes(&self) -> Vec<String> {
-        self.error_events().iter().map(|(_, _, d)| d["code"].as_str().unwrap().to_owned()).collect()
+        self.error_events()
+            .iter()
+            .map(|(_, _, d)| d["code"].as_str().unwrap().to_owned())
+            .collect()
     }
 
     /// The kinds of the Events the engine appended but its own `watch-started` and `watch-stopped`, `error` Events apart.
     fn events_but_errors(&self) -> Vec<String> {
         let conn = self.store();
         let mut stmt = conn.prepare("SELECT kind FROM events WHERE kind NOT IN ('watch-started', 'watch-stopped', 'error') ORDER BY id").unwrap();
-        stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
     }
 
     fn log(&self) -> String {
@@ -203,7 +270,14 @@ impl Probe {
 
     /// A write of the store, as another process's: a fixture the engine finds at its next tick.
     fn write(&self, sql: &str) {
-        common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(), 5000).unwrap(), sql);
+        common::sql(
+            &mut Store::open(
+                &CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(),
+                5000,
+            )
+            .unwrap(),
+            sql,
+        );
     }
 
     /// Queues the row `(pr, target)` of Plan `pay`, as a step of cpd would.
@@ -228,12 +302,16 @@ impl Probe {
 }
 
 fn queue_sql(pr: &str, target: &str) -> String {
-    format!("INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{pr}', '{target}', 't');")
+    format!(
+        "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{pr}', '{target}', 't');"
+    )
 }
 
 /// The owner's policy: the status names of the three targets.
 fn owner_toml(in_progress: &str, in_review: &str, done: &str) -> String {
-    format!("[pr.jira]\nin_progress = \"{in_progress}\"\nin_review = \"{in_review}\"\ndone = \"{done}\"\n")
+    format!(
+        "[pr.jira]\nin_progress = \"{in_progress}\"\nin_review = \"{in_review}\"\ndone = \"{done}\"\n"
+    )
 }
 
 fn names() -> String {
@@ -264,8 +342,15 @@ fn jira(repeat: u32, server: bool) -> Jira {
     fx.env.quiet_models(fx.fakes.clock.utc());
     fx.engine_routes();
     fx.install_pi();
-    fx.fake_gh(Reply::ok(r#"{"data":{"viewer":{"login":"clayton-duarte"}}}"#));
-    let node = Arc::new(Node { says: Mutex::new(MOVED.to_owned()), per_ticket: Mutex::new(Vec::new()), seen: Mutex::new(Vec::new()), gate: Mutex::new(None) });
+    fx.fake_gh(Reply::ok(
+        r#"{"data":{"viewer":{"login":"clayton-duarte"}}}"#,
+    ));
+    let node = Arc::new(Node {
+        says: Mutex::new(MOVED.to_owned()),
+        per_ticket: Mutex::new(Vec::new()),
+        seen: Mutex::new(Vec::new()),
+        gate: Mutex::new(None),
+    });
     let _ = (*fx.fakes.runner).clone().route("node", node.clone());
     fx.env.owner_policy("acme", &names());
     fx.env.repo_policy("acme", "pay", "");
@@ -290,7 +375,11 @@ fn jira(repeat: u32, server: bool) -> Jira {
 
 impl Jira {
     fn probe(&self) -> Probe {
-        Probe { home: self.fx.env.cpd_home(), node: self.node.clone(), clock: (*self.fx.fakes.clock).clone() }
+        Probe {
+            home: self.fx.env.cpd_home(),
+            node: self.node.clone(),
+            clock: (*self.fx.fakes.clock).clone(),
+        }
     }
 
     /// PR `key` of Plan `pay` (the repo `acme/pay`), pull request `number`, with `ticket`, `open` or `cancelled`.
@@ -321,12 +410,17 @@ impl Jira {
     /// The engine runs until `step` says so (it is called before each nap, after the tick that came before it) or [`CAP`] naps.
     fn run(&self, mut step: impl FnMut(&Probe, usize) -> bool + Send + 'static) {
         let probe = self.probe();
-        self.fx.watch_steps(move |nap| nap >= CAP || step(&probe, nap)).unwrap();
+        self.fx
+            .watch_steps(move |nap| nap >= CAP || step(&probe, nap))
+            .unwrap();
     }
 }
 
 /// `done` once `cond` has held for `ticks` whole ticks: the state the engine reached, and that it stays so.
-fn then_ticks(ticks: usize, mut cond: impl FnMut(&Probe) -> bool + Send + 'static) -> impl FnMut(&Probe, usize) -> bool + Send + 'static {
+fn then_ticks(
+    ticks: usize,
+    mut cond: impl FnMut(&Probe) -> bool + Send + 'static,
+) -> impl FnMut(&Probe, usize) -> bool + Send + 'static {
     let mut since = None;
     move |p, nap| {
         if since.is_none() && cond(p) {
@@ -352,7 +446,11 @@ fn a_due_row_runs_the_helper_with_the_request_and_settles_moved() {
     let p = t.probe();
 
     let calls = p.calls();
-    assert_eq!(calls.len(), 1, "one run, and later ticks run none: {calls:?}");
+    assert_eq!(
+        calls.len(),
+        1,
+        "one run, and later ticks run none: {calls:?}"
+    );
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let root = t.fx.env.root().canonicalize().unwrap();
     let argv: Vec<&str> = calls[0].args.iter().map(String::as_str).collect();
@@ -374,33 +472,62 @@ fn a_due_row_runs_the_helper_with_the_request_and_settles_moved() {
             "estimate_fields": []
         })
     );
-    let env = |name: &str| calls[0].envs.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_deref());
-    assert_eq!(env("PI_CODING_AGENT_DIR"), Some(Some(root.to_str().unwrap())));
+    let env = |name: &str| {
+        calls[0]
+            .envs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_deref())
+    };
+    assert_eq!(
+        env("PI_CODING_AGENT_DIR"),
+        Some(Some(root.to_str().unwrap()))
+    );
     for removed in ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT"] {
-        assert_eq!(env(removed), Some(None), "{removed} is removed from the helper's environment");
+        assert_eq!(
+            env(removed),
+            Some(None),
+            "{removed} is removed from the helper's environment"
+        );
     }
-    assert_eq!(calls[0].cwd, Some(t.fx.env.cpd_home().canonicalize().unwrap()));
+    assert_eq!(
+        calls[0].cwd,
+        Some(t.fx.env.cpd_home().canonicalize().unwrap())
+    );
     assert_eq!(calls[0].deadline, Duration::from_secs(120));
 
     let (settled_at, outcome, refused_at, _, _) = p.row("api", "in_review");
     assert!(settled_at.is_some_and(|at| at.ends_with('Z')));
     assert_eq!((outcome.as_deref(), refused_at), (Some("moved"), None));
     assert_eq!(p.error_events(), vec![]);
-    assert_eq!(p.events_but_errors(), Vec::<String>::new(), "a success appends no Event");
+    assert_eq!(
+        p.events_but_errors(),
+        Vec::<String>::new(),
+        "a success appends no Event"
+    );
 }
 
 #[test]
 fn the_request_carries_the_estimate_fields_of_the_policy() {
     let t = jira(LONG, true);
-    t.probe().owner_policy(&format!("{}estimate_fields = [\"customfield_10016\"]\n", names()));
+    t.probe().owner_policy(&format!(
+        "{}estimate_fields = [\"customfield_10016\"]\n",
+        names()
+    ));
     t.queue("api", "done");
     t.queue("web", "in_progress");
-    t.run(then_ticks(3, |p| p.settled("api", "done") && p.settled("web", "in_progress")));
+    t.run(then_ticks(3, |p| {
+        p.settled("api", "done") && p.settled("web", "in_progress")
+    }));
     let requests = t.probe().requests();
 
     assert_eq!(requests.len(), 2, "{requests:?}");
     for request in &requests {
-        assert_eq!(request["estimate_fields"], json!(["customfield_10016"]), "{request}");
+        assert_eq!(
+            request["estimate_fields"],
+            json!(["customfield_10016"]),
+            "{request}"
+        );
     }
 }
 
@@ -422,17 +549,24 @@ fn an_unchanged_answer_settles_the_row_unchanged() {
 #[test]
 fn a_target_with_no_status_name_settles_skipped_without_calling_the_helper() {
     let t = jira(LONG, true);
-    t.fx.env.owner_policy("acme", &owner_toml("In Progress", "", "Done"));
+    t.fx.env
+        .owner_policy("acme", &owner_toml("In Progress", "", "Done"));
     // The row of `in_review` (no name) is queued first; the control, the row of `in_progress`, is behind it.
     t.queue("api", "in_review");
     t.queue("api", "in_progress");
-    t.run(then_ticks(3, |p| p.settled("api", "in_review") && p.settled("api", "in_progress")));
+    t.run(then_ticks(3, |p| {
+        p.settled("api", "in_review") && p.settled("api", "in_progress")
+    }));
     let p = t.probe();
 
     let (settled_at, outcome, ..) = p.row("api", "in_review");
     assert!(settled_at.is_some());
     assert_eq!(outcome.as_deref(), Some("skipped"));
-    assert_eq!(p.targets(), ["in_progress"], "no helper call for the target with no name; the control runs");
+    assert_eq!(
+        p.targets(),
+        ["in_progress"],
+        "no helper call for the target with no name; the control runs"
+    );
     assert_eq!(p.row("api", "in_progress").1.as_deref(), Some("moved"));
     assert_eq!(p.error_events(), vec![]);
 }
@@ -440,19 +574,31 @@ fn a_target_with_no_status_name_settles_skipped_without_calling_the_helper() {
 #[test]
 fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     let t = jira(LONG, true);
-    t.fx.env.sql("UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
+    t.fx.env
+        .sql("UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
     t.queue("web", "in_progress");
     t.queue("api", "in_progress");
     t.run(then_ticks(5, |p| p.settled("api", "in_progress")));
     let p = t.probe();
 
-    assert_eq!(p.tickets(), [API], "only the control, the PR with a ticket, runs");
-    assert!(p.pending("web", "in_progress"), "the row of the PR with no ticket waits, with nothing else written");
+    assert_eq!(
+        p.tickets(),
+        [API],
+        "only the control, the PR with a ticket, runs"
+    );
+    assert!(
+        p.pending("web", "in_progress"),
+        "the row of the PR with no ticket waits, with nothing else written"
+    );
     assert_eq!(p.error_events(), vec![]);
 
     p.write("UPDATE prs SET jira = 'ABC-9' WHERE plan = 'pay' AND key = 'web';");
     t.run(then_ticks(3, |p| p.settled("web", "in_progress")));
-    assert_eq!(p.tickets(), [API, "ABC-9"], "the ticket is set: the row runs with it");
+    assert_eq!(
+        p.tickets(),
+        [API, "ABC-9"],
+        "the ticket is set: the row runs with it"
+    );
     assert_eq!(p.row("web", "in_progress").1.as_deref(), Some("moved"));
 }
 
@@ -466,26 +612,42 @@ fn rows_run_oldest_first_one_at_a_time() {
     // The first run is held in flight while the engine ticks on.
     let (entered_tx, entered) = channel();
     let (open_tx, open) = channel();
-    *t.node.gate.lock().unwrap() = Some(Gate { entered: Mutex::new(entered_tx), open: Mutex::new(open) });
+    *t.node.gate.lock().unwrap() = Some(Gate {
+        entered: Mutex::new(entered_tx),
+        open: Mutex::new(open),
+    });
     let mut opened = false;
     let during = Arc::new(Mutex::new(None));
     let record = during.clone();
     t.run(move |p, nap| {
         if nap == 1 {
             // The first tick started the helper's thread: wait until its route has been called.
-            entered.recv_timeout(Duration::from_secs(10)).expect("the first tick starts the helper");
+            entered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the first tick starts the helper");
         }
         if !opened && nap > 2 * NAPS_PER_TICK {
             *record.lock().unwrap() = Some(p.targets());
             open_tx.send(()).unwrap();
             opened = true;
         }
-        opened && p.settled("api", "done") && p.settled("api", "in_progress") && p.settled("api", "in_review")
+        opened
+            && p.settled("api", "done")
+            && p.settled("api", "in_progress")
+            && p.settled("api", "in_review")
     });
     let p = t.probe();
 
-    assert_eq!(during.lock().unwrap().take().unwrap(), ["done"], "one at a time: the oldest row, and no second run while it is in flight");
-    assert_eq!(p.targets(), ["done", "in_progress", "in_review"], "in id order");
+    assert_eq!(
+        during.lock().unwrap().take().unwrap(),
+        ["done"],
+        "one at a time: the oldest row, and no second run while it is in flight"
+    );
+    assert_eq!(
+        p.targets(),
+        ["done", "in_progress", "in_review"],
+        "in id order"
+    );
     assert_eq!(p.error_events(), vec![]);
 }
 
@@ -500,24 +662,46 @@ fn a_refusal_parks_the_row_with_one_error_event_naming_the_ticket_the_status_and
     assert_eq!((settled_at, outcome), (None, None), "parked, not settled");
     let refused_at = refused_at.expect("parked");
     assert!(refused_at.ends_with('Z'), "{refused_at}");
-    assert_eq!((refusal.as_deref(), refused_with.as_deref()), (Some("no_transition"), Some("ABC-123|In Review")));
+    assert_eq!(
+        (refusal.as_deref(), refused_with.as_deref()),
+        (Some("no_transition"), Some("ABC-123|In Review"))
+    );
 
     let events = p.error_events();
     assert_eq!(events.len(), 1, "one Event: {events:?}");
     let (plan, text, data) = &events[0];
     assert_eq!(plan.as_deref(), Some("pay"), "scoped to the Plan");
-    assert_eq!((data["code"].as_str(), data["source"].as_str()), (Some("jira_refused"), Some("watch")));
+    assert_eq!(
+        (data["code"].as_str(), data["source"].as_str()),
+        (Some("jira_refused"), Some("watch"))
+    );
     for word in ["ABC-123", "api", "pay", "In Review", "no_transition"] {
-        assert!(text.contains(word) && data["message"].as_str().unwrap().contains(word), "{word}: {text}");
+        assert!(
+            text.contains(word) && data["message"].as_str().unwrap().contains(word),
+            "{word}: {text}"
+        );
     }
     let id = p.id("api", "in_review");
     assert_eq!(
         data["details"],
         json!({"id": id, "plan": "pay", "pr": "api", "ticket": API, "target": "in_review", "status": "In Review", "reason": "no_transition"})
     );
-    let at: String = p.store().query_row("SELECT at FROM events WHERE kind = 'error' AND data LIKE '%jira_refused%'", [], |r| r.get(0)).unwrap();
-    assert_eq!(at, refused_at, "the Event and the parking are one transaction");
-    let items: i64 = p.store().query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0)).unwrap();
+    let at: String = p
+        .store()
+        .query_row(
+            "SELECT at FROM events WHERE kind = 'error' AND data LIKE '%jira_refused%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        at, refused_at,
+        "the Event and the parking are one transaction"
+    );
+    let items: i64 = p
+        .store()
+        .query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(items, 0, "a parked row is not an Inbox item");
 }
 
@@ -542,14 +726,22 @@ fn a_parked_row_is_not_run_again_by_a_later_tick_or_a_restarted_engine() {
         }
         tail(p, nap)
     });
-    assert_eq!(p.tickets(), [API, WEB], "the parked row is not run again, past the repeat period either");
+    assert_eq!(
+        p.tickets(),
+        [API, WEB],
+        "the parked row is not run again, past the repeat period either"
+    );
     assert_eq!(p.error_events().len(), 1, "no second Event");
     assert!(p.parked("api", "in_review"));
 
     // A second engine on the same home, with fresh memory: the same, with a new control row.
     p.queue("web", "done");
     t.run(then_ticks(10, |p| p.settled("web", "done")));
-    assert_eq!(p.tickets(), [API, WEB, WEB], "the restarted engine runs the control and not the parked row");
+    assert_eq!(
+        p.tickets(),
+        [API, WEB, WEB],
+        "the restarted engine runs the control and not the parked row"
+    );
     assert_eq!(p.error_events().len(), 1, "no second Event");
     assert!(p.parked("api", "in_review"));
 }
@@ -561,11 +753,37 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     type Change = Box<dyn Fn(&Probe)>;
     type SecondRun<'a> = Option<(&'a str, &'a str)>;
     let cases: Vec<(&str, Change, SecondRun)> = vec![
-        ("another ticket", Box::new(|p| p.write("UPDATE prs SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")), Some(("ABC-124", "In Review"))),
-        ("another status name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))), Some((API, "Under Review"))),
-        ("another title", Box::new(|p| p.write("UPDATE prs SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")), None),
-        ("the same name, rewritten", Box::new(|p| p.owner_policy(&format!("# edited\n{}", names()))), None),
-        ("an empty name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "", "Done"))), None),
+        (
+            "another ticket",
+            Box::new(|p| {
+                p.write("UPDATE prs SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")
+            }),
+            Some(("ABC-124", "In Review")),
+        ),
+        (
+            "another status name",
+            Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))),
+            Some((API, "Under Review")),
+        ),
+        (
+            "another title",
+            Box::new(|p| {
+                p.write(
+                    "UPDATE prs SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';",
+                )
+            }),
+            None,
+        ),
+        (
+            "the same name, rewritten",
+            Box::new(|p| p.owner_policy(&format!("# edited\n{}", names()))),
+            None,
+        ),
+        (
+            "an empty name",
+            Box::new(|p| p.owner_policy(&owner_toml("In Progress", "", "Done"))),
+            None,
+        ),
     ];
     for (what, change, reopened) in cases {
         let t = jira(LONG, true);
@@ -576,24 +794,54 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
         p.says(MOVED);
         p.queue("web", "in_progress");
         change(&p);
-        t.run(then_ticks(5, move |p| p.settled("web", "in_progress") && (reopened.is_none() || p.settled("api", "in_review"))));
+        t.run(then_ticks(5, move |p| {
+            p.settled("web", "in_progress") && (reopened.is_none() || p.settled("api", "in_review"))
+        }));
 
         match reopened {
             Some((ticket, name)) => {
                 let requests = p.requests();
-                assert_eq!(requests.len(), 3, "{what}: the parked row ran again, and the control: {requests:?}");
-                let again = requests.iter().skip(1).find(|r| r["target"] == "in_review").unwrap_or_else(|| panic!("{what}: no second run of the row: {requests:?}"));
-                assert_eq!((again["ticket"].as_str(), again["names"]["in_review"].as_str()), (Some(ticket), Some(name)), "{what}");
-                let (settled_at, outcome, refused_at, refusal, refused_with) = p.row("api", "in_review");
+                assert_eq!(
+                    requests.len(),
+                    3,
+                    "{what}: the parked row ran again, and the control: {requests:?}"
+                );
+                let again = requests
+                    .iter()
+                    .skip(1)
+                    .find(|r| r["target"] == "in_review")
+                    .unwrap_or_else(|| panic!("{what}: no second run of the row: {requests:?}"));
+                assert_eq!(
+                    (
+                        again["ticket"].as_str(),
+                        again["names"]["in_review"].as_str()
+                    ),
+                    (Some(ticket), Some(name)),
+                    "{what}"
+                );
+                let (settled_at, outcome, refused_at, refusal, refused_with) =
+                    p.row("api", "in_review");
                 assert!(settled_at.is_some(), "{what}");
-                assert_eq!((outcome.as_deref(), refused_at, refusal, refused_with), (Some("moved"), None, None, None), "{what}: the parking is cleared");
+                assert_eq!(
+                    (outcome.as_deref(), refused_at, refusal, refused_with),
+                    (Some("moved"), None, None, None),
+                    "{what}: the parking is cleared"
+                );
             }
             None => {
-                assert_eq!(p.tickets(), [API, WEB], "{what}: the row stays parked, only the control runs");
+                assert_eq!(
+                    p.tickets(),
+                    [API, WEB],
+                    "{what}: the row stays parked, only the control runs"
+                );
                 assert!(p.parked("api", "in_review"), "{what}");
             }
         }
-        assert_eq!(p.error_events().len(), 1, "{what}: the parking is the only Event");
+        assert_eq!(
+            p.error_events().len(),
+            1,
+            "{what}: the parking is the only Event"
+        );
     }
 }
 
@@ -617,7 +865,8 @@ fn an_auth_failure_is_reported_once_and_retried_never_parked() {
         };
         if !again {
             if nap >= at + 5 * NAPS_PER_TICK {
-                *record.lock().unwrap() = Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
+                *record.lock().unwrap() =
+                    Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
                 p.says(MOVED);
                 p.skip(u64::from(REPEAT) + 1);
                 again = true;
@@ -628,13 +877,33 @@ fn an_auth_failure_is_reported_once_and_retried_never_parked() {
     });
     let p = t.probe();
 
-    assert_eq!(seen.lock().unwrap().take(), Some((1, vec!["jira_auth".to_owned()], true)), "one run, one Event, the row PENDING, never parked");
-    assert_eq!(p.tickets(), [API, API], "after the repeat period the same row is tried again, once");
+    assert_eq!(
+        seen.lock().unwrap().take(),
+        Some((1, vec!["jira_auth".to_owned()], true)),
+        "one run, one Event, the row PENDING, never parked"
+    );
+    assert_eq!(
+        p.tickets(),
+        [API, API],
+        "after the repeat period the same row is tried again, once"
+    );
     assert_eq!(p.row("api", "in_progress").1.as_deref(), Some("moved"));
     let events = p.error_events();
-    assert_eq!(events.len(), 1, "the one failure is the only Event: {events:?}");
+    assert_eq!(
+        events.len(),
+        1,
+        "the one failure is the only Event: {events:?}"
+    );
     let (plan, text, data) = &events[0];
-    assert_eq!((plan.as_deref(), data["code"].as_str(), data["source"].as_str()), (None, Some("jira_auth"), Some("watch")), "the User's account: no Plan");
+    assert_eq!(
+        (
+            plan.as_deref(),
+            data["code"].as_str(),
+            data["source"].as_str()
+        ),
+        (None, Some("jira_auth"), Some("watch")),
+        "the User's account: no Plan"
+    );
     assert!(text.contains("pi mcp login atlassian"), "{text}");
 }
 
@@ -647,8 +916,15 @@ fn a_failing_row_does_not_block_the_rows_behind_it() {
     t.run(then_ticks(5, |p| p.settled("web", "in_progress")));
     let p = t.probe();
 
-    assert_eq!(p.tickets(), [API, WEB], "the failing row once, then the row behind it, and no retry within the period");
-    assert!(p.pending("api", "in_progress"), "the failing row stays PENDING, never parked");
+    assert_eq!(
+        p.tickets(),
+        [API, WEB],
+        "the failing row once, then the row behind it, and no retry within the period"
+    );
+    assert!(
+        p.pending("api", "in_progress"),
+        "the failing row stays PENDING, never parked"
+    );
     assert_eq!(p.row("web", "in_progress").1.as_deref(), Some("moved"));
     assert_eq!(p.codes(), ["jira_failed"], "one Event for the one code");
 }
@@ -672,7 +948,8 @@ fn a_machine_without_the_atlassian_server_reports_jira_not_configured_and_keeps_
         };
         if !added {
             if nap >= at + 3 * NAPS_PER_TICK {
-                *record.lock().unwrap() = Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
+                *record.lock().unwrap() =
+                    Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
                 p.host_policy(SERVER);
                 p.skip(u64::from(REPEAT) + 1);
                 added = true;
@@ -683,10 +960,18 @@ fn a_machine_without_the_atlassian_server_reports_jira_not_configured_and_keeps_
     });
     let p = t.probe();
 
-    assert_eq!(seen.lock().unwrap().take(), Some((0, vec!["jira_not_configured".to_owned()], true)), "no helper call, one Event, the row kept");
+    assert_eq!(
+        seen.lock().unwrap().take(),
+        Some((0, vec!["jira_not_configured".to_owned()], true)),
+        "no helper call, one Event, the row kept"
+    );
     let events = p.error_events();
     assert_eq!(events.len(), 1, "{events:?}");
-    assert!(events[0].1.contains("mcp.servers.atlassian"), "{}", events[0].1);
+    assert!(
+        events[0].1.contains("mcp.servers.atlassian"),
+        "{}",
+        events[0].1
+    );
     assert_eq!(p.tickets(), [API], "the server is there: the row runs");
     assert_eq!(p.row("api", "in_progress").1.as_deref(), Some("moved"));
 }
@@ -694,7 +979,10 @@ fn a_machine_without_the_atlassian_server_reports_jira_not_configured_and_keeps_
 #[test]
 fn a_pr_policy_that_does_not_resolve_is_reported_and_retried_later() {
     // (what is wrong with the owner's policy, the code of the Event)
-    let cases = [("invalid", "policy_invalid"), ("missing", "owner_unconfirmed")];
+    let cases = [
+        ("invalid", "policy_invalid"),
+        ("missing", "owner_unconfirmed"),
+    ];
     for (what, code) in cases {
         let t = jira(REPEAT, true);
         match what {
@@ -716,7 +1004,8 @@ fn a_pr_policy_that_does_not_resolve_is_reported_and_retried_later() {
             };
             if !fixed {
                 if nap >= at + 3 * NAPS_PER_TICK {
-                    *record.lock().unwrap() = Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
+                    *record.lock().unwrap() =
+                        Some((p.calls().len(), p.codes(), p.pending("api", "in_progress")));
                     p.owner_policy(&names());
                     p.skip(u64::from(REPEAT) + 1);
                     fixed = true;
@@ -727,12 +1016,28 @@ fn a_pr_policy_that_does_not_resolve_is_reported_and_retried_later() {
         });
         let p = t.probe();
 
-        assert_eq!(seen.lock().unwrap().take(), Some((0, vec![code.to_owned()], true)), "{what}: no helper call, one Event, the row PENDING");
+        assert_eq!(
+            seen.lock().unwrap().take(),
+            Some((0, vec![code.to_owned()], true)),
+            "{what}: no helper call, one Event, the row PENDING"
+        );
         let events = p.error_events();
         assert_eq!(events.len(), 1, "{what}: {events:?}");
-        assert_eq!(events[0].0.as_deref(), Some("pay"), "{what}: scoped to the Plan");
-        assert_eq!(p.tickets(), [API], "{what}: the policy is fixed: the row runs after the repeat period");
-        assert_eq!(p.row("api", "in_progress").1.as_deref(), Some("moved"), "{what}");
+        assert_eq!(
+            events[0].0.as_deref(),
+            Some("pay"),
+            "{what}: scoped to the Plan"
+        );
+        assert_eq!(
+            p.tickets(),
+            [API],
+            "{what}: the policy is fixed: the row runs after the repeat period"
+        );
+        assert_eq!(
+            p.row("api", "in_progress").1.as_deref(),
+            Some("moved"),
+            "{what}"
+        );
     }
 }
 
@@ -745,8 +1050,15 @@ fn a_cancelled_prs_row_is_not_run() {
     t.run(then_ticks(5, |p| p.settled("api", "in_progress")));
     let p = t.probe();
 
-    assert_eq!(p.tickets(), [API], "only the control, the live PR's row, runs");
-    assert!(p.pending("old", "in_progress"), "the cancelled PR's row is left as it is");
+    assert_eq!(
+        p.tickets(),
+        [API],
+        "only the control, the live PR's row, runs"
+    );
+    assert!(
+        p.pending("old", "in_progress"),
+        "the cancelled PR's row is left as it is"
+    );
     assert_eq!(p.error_events(), vec![]);
 }
 
@@ -767,7 +1079,8 @@ fn incident_mode_holds_the_jira_step() {
     t.run(move |p, nap| {
         if !over {
             if nap >= 5 * NAPS_PER_TICK {
-                *record.lock().unwrap() = Some((p.calls().len(), p.pending("api", "in_progress"), p.log()));
+                *record.lock().unwrap() =
+                    Some((p.calls().len(), p.pending("api", "in_progress"), p.log()));
                 p.write("DELETE FROM incident_plans; DELETE FROM incident;");
                 over = true;
             }
@@ -778,14 +1091,19 @@ fn incident_mode_holds_the_jira_step() {
     let p = t.probe();
 
     let (calls, pending, log) = held.lock().unwrap().take().expect("five ticks passed");
-    assert_eq!((calls, pending), (0, true), "while incident mode is on: no helper call, no row written");
+    assert_eq!(
+        (calls, pending),
+        (0, true),
+        "while incident mode is on: no helper call, no row written"
+    );
     assert!(log.contains("E19: holding: incident mode is on"), "{log}");
     assert_eq!(p.calls().len(), 1, "off again: it runs");
     assert!(p.settled("api", "in_progress"));
 }
 
 #[test]
-fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_status_and_jiras_message() {
+fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_status_and_jiras_message()
+ {
     let t = jira(LONG, true);
     t.probe().says(FAILED_POINTS);
     t.queue("api", "done");
@@ -797,10 +1115,15 @@ fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_stat
     assert_eq!(events.len(), 1, "one Event: {events:?}");
     let (plan, text, data) = &events[0];
     assert_eq!(plan.as_deref(), Some("pay"), "scoped to the Plan: {text}");
-    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("jira_failed")));
+    assert_eq!(
+        (data["source"].as_str(), data["code"].as_str()),
+        (Some("watch"), Some("jira_failed"))
+    );
     assert_eq!(
         data["message"].as_str(),
-        Some(r#"ABC-123 could not be moved to "Done": transitionJiraIssue returned an error: Please add story points"#)
+        Some(
+            r#"ABC-123 could not be moved to "Done": transitionJiraIssue returned an error: Please add story points"#
+        )
     );
     assert_eq!(
         data["details"],
@@ -812,7 +1135,10 @@ fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_stat
     );
     assert!(text.ends_with("See: cpd plan show --plan pay"), "{text}");
     assert!(p.pending("api", "done"), "the row stays PENDING");
-    let items: i64 = p.store().query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0)).unwrap();
+    let items: i64 = p
+        .store()
+        .query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(items, 0, "no Inbox item");
 }
 
@@ -828,9 +1154,20 @@ fn two_rows_failing_with_the_same_code_are_two_events_one_each() {
 
     assert_eq!(events.len(), 2, "one Event each: {events:?}");
     for (plan, _, data) in &events {
-        assert_eq!((plan.as_deref(), data["code"].as_str()), (Some("pay"), Some("jira_failed")));
+        assert_eq!(
+            (plan.as_deref(), data["code"].as_str()),
+            (Some("pay"), Some("jira_failed"))
+        );
     }
-    let who: Vec<(&str, &str)> = events.iter().map(|(_, _, d)| (d["details"]["ticket"].as_str().unwrap_or(""), d["details"]["pr"].as_str().unwrap_or(""))).collect();
+    let who: Vec<(&str, &str)> = events
+        .iter()
+        .map(|(_, _, d)| {
+            (
+                d["details"]["ticket"].as_str().unwrap_or(""),
+                d["details"]["pr"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
     assert_eq!(who, [(API, "api"), (WEB, "web")]);
 }
 
@@ -886,15 +1223,34 @@ fn a_row_that_keeps_failing_is_one_event_per_code_until_it_settles() {
     });
     let p = t.probe();
 
-    let (calls, events) = after_three.lock().unwrap().take().expect("three more calls");
+    let (calls, events) = after_three
+        .lock()
+        .unwrap()
+        .take()
+        .expect("three more calls");
     assert!(calls >= 4, "{calls} calls");
     assert_eq!(events.len(), 1, "one Event for the one code: {events:?}");
-    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (Some("pay"), Some("jira_failed")));
+    assert_eq!(
+        (events[0].0.as_deref(), events[0].2["code"].as_str()),
+        (Some("pay"), Some("jira_failed"))
+    );
 
-    let events = after_code.lock().unwrap().take().expect("a call with another code");
-    let codes: Vec<&str> = events.iter().map(|(_, _, d)| d["code"].as_str().unwrap()).collect();
+    let events = after_code
+        .lock()
+        .unwrap()
+        .take()
+        .expect("a call with another code");
+    let codes: Vec<&str> = events
+        .iter()
+        .map(|(_, _, d)| d["code"].as_str().unwrap())
+        .collect();
     assert_eq!(codes, ["jira_failed", "jira_helper_failed"], "{events:?}");
-    assert!(events.iter().all(|(plan, ..)| plan.as_deref() == Some("pay")), "{events:?}");
+    assert!(
+        events
+            .iter()
+            .all(|(plan, ..)| plan.as_deref() == Some("pay")),
+        "{events:?}"
+    );
 
     assert_eq!(p.error_events().len(), 2, "settling appends no Event");
     assert_eq!(p.row("api", "done").1.as_deref(), Some("moved"));
@@ -910,12 +1266,25 @@ fn a_helper_that_prints_no_json_line_is_a_plan_error_event_with_the_spawn_failed
 
     assert_eq!(events.len(), 1, "{events:?}");
     let (plan, _, data) = &events[0];
-    assert_eq!((plan.as_deref(), data["code"].as_str()), (Some("pay"), Some("spawn_failed")));
+    assert_eq!(
+        (plan.as_deref(), data["code"].as_str()),
+        (Some("pay"), Some("spawn_failed"))
+    );
     let d = &data["details"];
-    let keys: Vec<&str> = ["plan", "pr", "ticket", "target", "status"].iter().map(|k| d[*k].as_str().unwrap_or("")).collect();
-    assert_eq!(keys, ["pay", "api", API, "in_progress", "In Progress"], "{d}");
+    let keys: Vec<&str> = ["plan", "pr", "ticket", "target", "status"]
+        .iter()
+        .map(|k| d[*k].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        keys,
+        ["pay", "api", API, "in_progress", "In Progress"],
+        "{d}"
+    );
     let message = data["message"].as_str().unwrap();
-    assert!(message.starts_with(r#"ABC-123 could not be moved to "In Progress": "#), "{message}");
+    assert!(
+        message.starts_with(r#"ABC-123 could not be moved to "In Progress": "#),
+        "{message}"
+    );
 }
 
 #[test]
@@ -927,7 +1296,10 @@ fn jira_auth_is_one_machine_wide_event_however_many_rows_fail() {
     t.run(then_ticks(5, |p| p.tickets().len() >= 2));
     let events = t.probe().error_events();
     assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (None, Some("jira_auth")));
+    assert_eq!(
+        (events[0].0.as_deref(), events[0].2["code"].as_str()),
+        (None, Some("jira_auth"))
+    );
 }
 
 #[test]
@@ -938,5 +1310,8 @@ fn jira_not_configured_is_one_machine_wide_event_however_many_rows_fail() {
     t.run(then_ticks(5, |p| !p.error_events().is_empty()));
     let events = t.probe().error_events();
     assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!((events[0].0.as_deref(), events[0].2["code"].as_str()), (None, Some("jira_not_configured")));
+    assert_eq!(
+        (events[0].0.as_deref(), events[0].2["code"].as_str()),
+        (None, Some("jira_not_configured"))
+    );
 }

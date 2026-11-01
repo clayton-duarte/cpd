@@ -5,7 +5,13 @@ use super::gh::Check;
 use crate::error::{CpdError, ErrorCode};
 
 /// Check conclusions that count as failing. CANCELLED is neither failing nor pending (a cancelled run is no failure).
-const FAILING: [&str; 5] = ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
+const FAILING: [&str; 5] = [
+    "FAILURE",
+    "TIMED_OUT",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "ERROR",
+];
 
 /// What one required name is on the head's rollup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,7 +24,10 @@ pub(super) enum Required {
 
 /// The state of each name in `required` on `checks`, in order: the same classification of conclusions as [`ChecksSummary::of`];
 /// of several runs of one name the newest decides (as [`newest_runs`]), and of several identities named alike failed wins, then pending, then passed.
-pub(super) fn required_states<'a>(checks: &[Check], required: &'a [String]) -> Vec<(&'a str, Required)> {
+pub(super) fn required_states<'a>(
+    checks: &[Check],
+    required: &'a [String],
+) -> Vec<(&'a str, Required)> {
     let newest = newest_runs(checks);
     required
         .iter()
@@ -26,10 +35,28 @@ pub(super) fn required_states<'a>(checks: &[Check], required: &'a [String]) -> V
             let states = newest.iter().filter_map(|c| {
                 let state = if c.name.is_none() && c.context.as_deref() == Some(name) {
                     let state = c.state.as_deref().unwrap_or_default().to_ascii_uppercase();
-                    if failing(&state) { Required::Failed } else if matches!(state.as_str(), "PENDING" | "EXPECTED") { Required::Pending } else { Required::Passed }
+                    if failing(&state) {
+                        Required::Failed
+                    } else if matches!(state.as_str(), "PENDING" | "EXPECTED") {
+                        Required::Pending
+                    } else {
+                        Required::Passed
+                    }
                 } else if c.name.as_deref() == Some(name) {
-                    let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase();
-                    if failing(&conclusion) { Required::Failed } else if PENDING.contains(&conclusion.as_str()) { Required::Pending } else { Required::Passed }
+                    let conclusion = c
+                        .conclusion
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| c.state.clone())
+                        .unwrap_or_default()
+                        .to_ascii_uppercase();
+                    if failing(&conclusion) {
+                        Required::Failed
+                    } else if PENDING.contains(&conclusion.as_str()) {
+                        Required::Pending
+                    } else {
+                        Required::Passed
+                    }
                 } else {
                     return None;
                 };
@@ -64,7 +91,12 @@ pub(super) enum ChecksSummary {
 /// An entry's verdict word, upper-cased: a CheckRun's conclusion (else its state), a StatusContext's state.
 fn verdict(c: &Check) -> String {
     if c.name.is_some() {
-        c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase()
+        c.conclusion
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| c.state.clone())
+            .unwrap_or_default()
+            .to_ascii_uppercase()
     } else {
         c.state.clone().unwrap_or_default().to_ascii_uppercase()
     }
@@ -94,7 +126,13 @@ fn newest_runs(checks: &[Check]) -> Vec<&Check> {
         .filter_map(|(_, g)| {
             let rank = |c: &Check| {
                 let v = verdict(c);
-                if failing(&v) { 2 } else if PENDING.contains(&v.as_str()) || v == "PENDING" { 1 } else { 0 }
+                if failing(&v) {
+                    2
+                } else if PENDING.contains(&v.as_str()) || v == "PENDING" {
+                    1
+                } else {
+                    0
+                }
             };
             let best = g
                 .iter()
@@ -122,7 +160,13 @@ impl ChecksSummary {
                 failed |= failing(&state);
                 contexts.push((context, matches!(state.as_str(), "PENDING" | "EXPECTED")));
             } else if c.name.is_some() {
-                let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default().to_ascii_uppercase();
+                let conclusion = c
+                    .conclusion
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| c.state.clone())
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
                 runs += 1;
                 failed |= failing(&conclusion);
                 run_pending |= PENDING.contains(&conclusion.as_str());
@@ -132,15 +176,24 @@ impl ChecksSummary {
         if failed || required.iter().any(|(_, s)| *s == Required::Failed) {
             return ChecksSummary::Failed;
         }
-        if required.iter().any(|(_, s)| matches!(s, Required::Missing | Required::Pending)) {
+        if required
+            .iter()
+            .any(|(_, s)| matches!(s, Required::Missing | Required::Pending))
+        {
             return ChecksSummary::Pending;
         }
         if runs + contexts.len() == 0 {
             return ChecksSummary::None;
         }
         let gated_ok = runs > 0 && !run_pending;
-        let context_pending = contexts.iter().any(|(name, pending)| *pending && !(gated_ok && human_gated.iter().any(|g| g == name)));
-        if run_pending || context_pending { ChecksSummary::Pending } else { ChecksSummary::Passed }
+        let context_pending = contexts.iter().any(|(name, pending)| {
+            *pending && !(gated_ok && human_gated.iter().any(|g| g == name))
+        });
+        if run_pending || context_pending {
+            ChecksSummary::Pending
+        } else {
+            ChecksSummary::Passed
+        }
     }
 
     /// From GraphQL's `statusCheckRollup.state` (`StatusState`); `None` when the
@@ -191,7 +244,13 @@ impl ReviewDecision {
     /// only when one of the `approvals` is a human's; anything else (`REVIEW_REQUIRED`, empty, absent) is `none`.
     pub fn of_reviews(gh: Option<&str>, approvals: &[Approval], bots: &[String]) -> ReviewDecision {
         match gh {
-            Some("APPROVED") if approvals.iter().any(|a| !a.bot_type && !is_bot(&a.login, bots)) => ReviewDecision::Approved,
+            Some("APPROVED")
+                if approvals
+                    .iter()
+                    .any(|a| !a.bot_type && !is_bot(&a.login, bots)) =>
+            {
+                ReviewDecision::Approved
+            }
             Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
             _ => ReviewDecision::None,
         }
@@ -222,8 +281,11 @@ impl PrState {
             "OPEN" => Ok(PrState::Open),
             "CLOSED" => Ok(PrState::Closed),
             "MERGED" => Ok(PrState::Merged),
-            other => Err(CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown pull request state {other:?}."))
-                .with("state", other)),
+            other => Err(CpdError::new(
+                ErrorCode::GhFailed,
+                format!("gh printed the unknown pull request state {other:?}."),
+            )
+            .with("state", other)),
         }
     }
 
@@ -252,8 +314,11 @@ impl Mergeable {
             "MERGEABLE" => Ok(Mergeable::Clean),
             "CONFLICTING" => Ok(Mergeable::Conflicting),
             "UNKNOWN" => Ok(Mergeable::Unknown),
-            other => Err(CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown mergeable state {other:?}."))
-                .with("mergeable", other)),
+            other => Err(CpdError::new(
+                ErrorCode::GhFailed,
+                format!("gh printed the unknown mergeable state {other:?}."),
+            )
+            .with("mergeable", other)),
         }
     }
 
@@ -295,10 +360,16 @@ impl MergeState {
 
     /// From GraphQL's `MergeStateStatus`; any other value is `gh_failed`.
     pub fn of_graphql(state: &str) -> Result<MergeState, CpdError> {
-        MergeState::ALL.into_iter().find(|s| s.as_str().to_ascii_uppercase() == state).ok_or_else(|| {
-            CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown merge state status {state:?}."))
+        MergeState::ALL
+            .into_iter()
+            .find(|s| s.as_str().to_ascii_uppercase() == state)
+            .ok_or_else(|| {
+                CpdError::new(
+                    ErrorCode::GhFailed,
+                    format!("gh printed the unknown merge state status {state:?}."),
+                )
                 .with("merge_state", state)
-        })
+            })
     }
 
     /// As stored and printed.
@@ -337,7 +408,15 @@ mod tests {
     }
 
     fn status(context: &str, state: &str, at: Option<&str>) -> Check {
-        Check { name: None, context: Some(context.into()), conclusion: None, state: Some(state.into()), url: None, workflow: None, started_at: at.map(Into::into) }
+        Check {
+            name: None,
+            context: Some(context.into()),
+            conclusion: None,
+            state: Some(state.into()),
+            url: None,
+            workflow: None,
+            started_at: at.map(Into::into),
+        }
     }
 
     fn summary(checks: &[Check]) -> ChecksSummary {
@@ -349,62 +428,183 @@ mod tests {
 
     #[test]
     fn the_newest_run_of_a_check_decides() {
-        assert_eq!(summary(&[run(Some("w"), "a", "FAILURE", Some(T1)), run(Some("w"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
-        assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T2)), run(Some("w"), "a", "FAILURE", Some(T1))]), ChecksSummary::Passed);
-        assert_eq!(summary(&[run(Some("w"), "a", "SUCCESS", Some(T1)), run(Some("w"), "a", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+        assert_eq!(
+            summary(&[
+                run(Some("w"), "a", "FAILURE", Some(T1)),
+                run(Some("w"), "a", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            summary(&[
+                run(Some("w"), "a", "SUCCESS", Some(T2)),
+                run(Some("w"), "a", "FAILURE", Some(T1))
+            ]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            summary(&[
+                run(Some("w"), "a", "SUCCESS", Some(T1)),
+                run(Some("w"), "a", "FAILURE", Some(T2))
+            ]),
+            ChecksSummary::Failed
+        );
     }
 
     #[test]
     fn required_check_follows_its_newest_run() {
         let req = vec!["gate".to_owned()];
         let of = |checks: &[Check]| ChecksSummary::of(checks, &[], &req);
-        assert_eq!(of(&[run(Some("w"), "gate", "FAILURE", Some(T1)), run(Some("w"), "gate", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
-        assert_eq!(of(&[run(Some("w"), "gate", "SUCCESS", Some(T1)), run(Some("w"), "gate", "FAILURE", Some(T2))]), ChecksSummary::Failed);
-        assert_eq!(of(&[run(Some("w"), "gate", "SUCCESS", Some(T1)), run(Some("w"), "gate", "IN_PROGRESS", Some(T2))]), ChecksSummary::Pending);
+        assert_eq!(
+            of(&[
+                run(Some("w"), "gate", "FAILURE", Some(T1)),
+                run(Some("w"), "gate", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            of(&[
+                run(Some("w"), "gate", "SUCCESS", Some(T1)),
+                run(Some("w"), "gate", "FAILURE", Some(T2))
+            ]),
+            ChecksSummary::Failed
+        );
+        assert_eq!(
+            of(&[
+                run(Some("w"), "gate", "SUCCESS", Some(T1)),
+                run(Some("w"), "gate", "IN_PROGRESS", Some(T2))
+            ]),
+            ChecksSummary::Pending
+        );
     }
 
     #[test]
     fn a_newer_pending_run_supersedes_an_older_failure() {
-        assert_eq!(summary(&[run(Some("w"), "a", "FAILURE", Some(T1)), run(Some("w"), "a", "IN_PROGRESS", Some(T2))]), ChecksSummary::Pending);
+        assert_eq!(
+            summary(&[
+                run(Some("w"), "a", "FAILURE", Some(T1)),
+                run(Some("w"), "a", "IN_PROGRESS", Some(T2))
+            ]),
+            ChecksSummary::Pending
+        );
     }
 
     #[test]
     fn the_workflow_is_part_of_the_identity() {
-        assert_eq!(summary(&[run(Some("w1"), "a", "FAILURE", Some(T1)), run(Some("w2"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Failed);
-        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(Some("w"), "a", "SUCCESS", Some(T2))]), ChecksSummary::Failed);
-        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
+        assert_eq!(
+            summary(&[
+                run(Some("w1"), "a", "FAILURE", Some(T1)),
+                run(Some("w2"), "a", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Failed
+        );
+        assert_eq!(
+            summary(&[
+                run(None, "a", "FAILURE", Some(T1)),
+                run(Some("w"), "a", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Failed
+        );
+        assert_eq!(
+            summary(&[
+                run(None, "a", "FAILURE", Some(T1)),
+                run(None, "a", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Passed
+        );
     }
 
     #[test]
     fn cancelled_and_skipped_runs_supersede_nothing() {
         for set_aside in ["CANCELLED", "SKIPPED"] {
-            assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", set_aside, Some(T2))]), ChecksSummary::Failed, "{set_aside}");
+            assert_eq!(
+                summary(&[
+                    run(None, "a", "FAILURE", Some(T1)),
+                    run(None, "a", set_aside, Some(T2))
+                ]),
+                ChecksSummary::Failed,
+                "{set_aside}"
+            );
         }
-        assert_eq!(summary(&[run(None, "a", "CANCELLED", Some(T2)), run(None, "a", "SUCCESS", Some(T1))]), ChecksSummary::Passed);
+        assert_eq!(
+            summary(&[
+                run(None, "a", "CANCELLED", Some(T2)),
+                run(None, "a", "SUCCESS", Some(T1))
+            ]),
+            ChecksSummary::Passed
+        );
     }
 
     #[test]
     fn only_set_aside_runs_make_a_check_neither_failing_nor_pending() {
-        assert_eq!(summary(&[run(None, "a", "CANCELLED", Some(T1)), run(None, "a", "CANCELLED", Some(T2))]), ChecksSummary::Passed);
+        assert_eq!(
+            summary(&[
+                run(None, "a", "CANCELLED", Some(T1)),
+                run(None, "a", "CANCELLED", Some(T2))
+            ]),
+            ChecksSummary::Passed
+        );
     }
 
     #[test]
     fn an_entry_with_no_time_is_older_than_any_with_one() {
-        assert_eq!(summary(&[run(None, "a", "FAILURE", None), run(None, "a", "SUCCESS", Some(T1))]), ChecksSummary::Passed);
-        assert_eq!(summary(&[run(None, "a", "SUCCESS", None), run(None, "a", "FAILURE", Some(T1))]), ChecksSummary::Failed);
+        assert_eq!(
+            summary(&[
+                run(None, "a", "FAILURE", None),
+                run(None, "a", "SUCCESS", Some(T1))
+            ]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            summary(&[
+                run(None, "a", "SUCCESS", None),
+                run(None, "a", "FAILURE", Some(T1))
+            ]),
+            ChecksSummary::Failed
+        );
     }
 
     #[test]
     fn on_equal_times_the_worst_verdict_wins() {
-        assert_eq!(summary(&[run(None, "a", "SUCCESS", Some(T1)), run(None, "a", "FAILURE", Some(T1))]), ChecksSummary::Failed);
-        assert_eq!(summary(&[run(None, "a", "SUCCESS", Some(T1)), run(None, "a", "IN_PROGRESS", Some(T1))]), ChecksSummary::Pending);
-        assert_eq!(summary(&[run(None, "a", "FAILURE", Some(T1)), run(None, "a", "IN_PROGRESS", Some(T1))]), ChecksSummary::Failed);
+        assert_eq!(
+            summary(&[
+                run(None, "a", "SUCCESS", Some(T1)),
+                run(None, "a", "FAILURE", Some(T1))
+            ]),
+            ChecksSummary::Failed
+        );
+        assert_eq!(
+            summary(&[
+                run(None, "a", "SUCCESS", Some(T1)),
+                run(None, "a", "IN_PROGRESS", Some(T1))
+            ]),
+            ChecksSummary::Pending
+        );
+        assert_eq!(
+            summary(&[
+                run(None, "a", "FAILURE", Some(T1)),
+                run(None, "a", "IN_PROGRESS", Some(T1))
+            ]),
+            ChecksSummary::Failed
+        );
     }
 
     #[test]
     fn a_status_context_is_decided_by_its_newest_state() {
-        assert_eq!(summary(&[status("d", "FAILURE", Some(T1)), status("d", "SUCCESS", Some(T2))]), ChecksSummary::Passed);
-        assert_eq!(summary(&[status("d", "SUCCESS", Some(T1)), status("d", "FAILURE", Some(T2))]), ChecksSummary::Failed);
+        assert_eq!(
+            summary(&[
+                status("d", "FAILURE", Some(T1)),
+                status("d", "SUCCESS", Some(T2))
+            ]),
+            ChecksSummary::Passed
+        );
+        assert_eq!(
+            summary(&[
+                status("d", "SUCCESS", Some(T1)),
+                status("d", "FAILURE", Some(T2))
+            ]),
+            ChecksSummary::Failed
+        );
     }
 
     #[test]
@@ -422,7 +622,10 @@ mod tests {
     }
 
     fn approval(login: &str, bot_type: bool) -> Approval {
-        Approval { login: login.to_owned(), bot_type }
+        Approval {
+            login: login.to_owned(),
+            bot_type,
+        }
     }
 
     fn of(gh: Option<&str>, approvals: &[Approval], bots: &[&str]) -> ReviewDecision {
@@ -434,32 +637,63 @@ mod tests {
     fn approved_needs_a_human_approval_and_changes_requested_stands() {
         let human = [approval("alice", false)];
         assert_eq!(of(Some("APPROVED"), &human, &[]), ReviewDecision::Approved);
-        assert_eq!(of(Some("APPROVED"), &[approval("bot", true)], &[]), ReviewDecision::None);
+        assert_eq!(
+            of(Some("APPROVED"), &[approval("bot", true)], &[]),
+            ReviewDecision::None
+        );
         assert_eq!(of(Some("APPROVED"), &[], &[]), ReviewDecision::None);
-        assert_eq!(of(Some("APPROVED"), &[approval("bot", true), approval("alice", false)], &[]), ReviewDecision::Approved);
-        assert_eq!(of(Some("CHANGES_REQUESTED"), &[approval("bot", true)], &[]), ReviewDecision::ChangesRequested);
+        assert_eq!(
+            of(
+                Some("APPROVED"),
+                &[approval("bot", true), approval("alice", false)],
+                &[]
+            ),
+            ReviewDecision::Approved
+        );
+        assert_eq!(
+            of(Some("CHANGES_REQUESTED"), &[approval("bot", true)], &[]),
+            ReviewDecision::ChangesRequested
+        );
         for other in [Some("REVIEW_REQUIRED"), Some(""), None] {
             assert_eq!(of(other, &human, &[]), ReviewDecision::None, "{other:?}");
         }
     }
 
     #[test]
-    fn a_bot_is_known_by_its_type_its_suffix_or_the_list_and_a_configured_list_replaces_the_default() {
-        assert_eq!(of(Some("APPROVED"), &[approval("x", true)], &[]), ReviewDecision::None);
-        assert_eq!(of(Some("APPROVED"), &[approval("x[bot]", false)], &[]), ReviewDecision::None);
-        assert_eq!(of(Some("APPROVED"), &[approval("lane", false)], &["lane"]), ReviewDecision::None);
-        assert_eq!(of(Some("APPROVED"), &[approval("lane", false)], &["other"]), ReviewDecision::Approved);
+    fn a_bot_is_known_by_its_type_its_suffix_or_the_list_and_a_configured_list_replaces_the_default()
+     {
+        assert_eq!(
+            of(Some("APPROVED"), &[approval("x", true)], &[]),
+            ReviewDecision::None
+        );
+        assert_eq!(
+            of(Some("APPROVED"), &[approval("x[bot]", false)], &[]),
+            ReviewDecision::None
+        );
+        assert_eq!(
+            of(Some("APPROVED"), &[approval("lane", false)], &["lane"]),
+            ReviewDecision::None
+        );
+        assert_eq!(
+            of(Some("APPROVED"), &[approval("lane", false)], &["other"]),
+            ReviewDecision::Approved
+        );
     }
 
     #[test]
     fn the_state_maps_and_an_unknown_one_is_gh_failed() {
-        for (graphql, state, text) in
-            [("OPEN", PrState::Open, "open"), ("CLOSED", PrState::Closed, "closed"), ("MERGED", PrState::Merged, "merged")]
-        {
+        for (graphql, state, text) in [
+            ("OPEN", PrState::Open, "open"),
+            ("CLOSED", PrState::Closed, "closed"),
+            ("MERGED", PrState::Merged, "merged"),
+        ] {
             assert_eq!(PrState::of_graphql(graphql).unwrap(), state);
             assert_eq!(state.as_str(), text);
         }
-        assert_eq!(PrState::of_graphql("DRAFT").unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(
+            PrState::of_graphql("DRAFT").unwrap_err().code(),
+            ErrorCode::GhFailed
+        );
     }
 
     #[test]
@@ -473,26 +707,58 @@ mod tests {
             assert_eq!(mergeable.as_str(), text);
         }
         for bad in ["", "mergeable", "DIRTY"] {
-            assert_eq!(Mergeable::of_graphql(bad).unwrap_err().code(), ErrorCode::GhFailed, "{bad:?}");
+            assert_eq!(
+                Mergeable::of_graphql(bad).unwrap_err().code(),
+                ErrorCode::GhFailed,
+                "{bad:?}"
+            );
         }
     }
 
     #[test]
     fn the_merge_state_maps_and_an_unknown_value_is_gh_failed() {
-        for graphql in ["BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNKNOWN", "UNSTABLE"] {
+        for graphql in [
+            "BEHIND",
+            "BLOCKED",
+            "CLEAN",
+            "DIRTY",
+            "DRAFT",
+            "HAS_HOOKS",
+            "UNKNOWN",
+            "UNSTABLE",
+        ] {
             let state = MergeState::of_graphql(graphql).unwrap();
             assert_eq!(state.as_str(), graphql.to_ascii_lowercase());
         }
         for bad in ["", "dirty", "MERGEABLE", "QUEUED"] {
-            assert_eq!(MergeState::of_graphql(bad).unwrap_err().code(), ErrorCode::GhFailed, "{bad:?}");
+            assert_eq!(
+                MergeState::of_graphql(bad).unwrap_err().code(),
+                ErrorCode::GhFailed,
+                "{bad:?}"
+            );
         }
     }
 
     #[test]
     fn the_names_are_as_stored() {
-        let checks = [ChecksSummary::None, ChecksSummary::Passed, ChecksSummary::Pending, ChecksSummary::Failed];
-        assert_eq!(checks.map(ChecksSummary::as_str), ["none", "passed", "pending", "failed"]);
-        let reviews = [ReviewDecision::None, ReviewDecision::Approved, ReviewDecision::ChangesRequested];
-        assert_eq!(reviews.map(ReviewDecision::as_str), ["none", "approved", "changes_requested"]);
+        let checks = [
+            ChecksSummary::None,
+            ChecksSummary::Passed,
+            ChecksSummary::Pending,
+            ChecksSummary::Failed,
+        ];
+        assert_eq!(
+            checks.map(ChecksSummary::as_str),
+            ["none", "passed", "pending", "failed"]
+        );
+        let reviews = [
+            ReviewDecision::None,
+            ReviewDecision::Approved,
+            ReviewDecision::ChangesRequested,
+        ];
+        assert_eq!(
+            reviews.map(ReviewDecision::as_str),
+            ["none", "approved", "changes_requested"]
+        );
     }
 }

@@ -22,7 +22,15 @@ fn thread(id: &str, comments: Vec<Value>) -> Value {
 
 /// An open thread of reviewer `rev` whose last comment is `last`.
 fn open_thread(id: &str, last: &str) -> Value {
-    thread(id, vec![comment(last, "rev", "Please change this", "2026-10-20T09:00:00Z")])
+    thread(
+        id,
+        vec![comment(
+            last,
+            "rev",
+            "Please change this",
+            "2026-10-20T09:00:00Z",
+        )],
+    )
 }
 
 /// GitHub's answer for pull request 812: its `updatedAt` and its threads.
@@ -40,7 +48,10 @@ fn answer_with_comments(updated_at: &str, threads: Vec<Value>, comments: Vec<Val
 
 /// The search lists pull request 812 as updated at `updated_at`.
 fn search_at(fx: &Poll, updated_at: &str) {
-    fx.search(&[pay("OPEN", None, None).replace(r#""updatedAt":"U1""#, &format!(r#""updatedAt":"{updated_at}""#))]);
+    fx.search(&[pay("OPEN", None, None).replace(
+        r#""updatedAt":"U1""#,
+        &format!(r#""updatedAt":"{updated_at}""#),
+    )]);
 }
 
 /// Scripts the comments read to `text`.
@@ -57,17 +68,27 @@ fn poll_with(fx: &Poll, updated_at: &str, threads: Vec<Value>) -> Value {
 
 /// The argv of every comments read so far.
 fn reads(fx: &Poll) -> Vec<Vec<String>> {
-    fx.gh_calls().into_iter().filter(|c| c.iter().any(|a| a.contains("reviewThreads"))).collect()
+    fx.gh_calls()
+        .into_iter()
+        .filter(|c| c.iter().any(|a| a.contains("reviewThreads")))
+        .collect()
 }
 
 /// `(updated_at, feedback)` of the row of pull request `number`; None when the migration has not added the columns.
 fn stored(fx: &Poll, number: i64) -> Option<(Option<String>, Option<Value>)> {
     fx.store()
         .read(|c| {
-            Ok(c.query_row("SELECT updated_at, feedback FROM pull_requests WHERE number = ?1", [number], |r| {
-                let feedback: Option<String> = r.get(1)?;
-                Ok((r.get::<_, Option<String>>(0)?, feedback.map(|f| serde_json::from_str::<Value>(&f).unwrap())))
-            })?)
+            Ok(c.query_row(
+                "SELECT updated_at, feedback FROM pull_requests WHERE number = ?1",
+                [number],
+                |r| {
+                    let feedback: Option<String> = r.get(1)?;
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        feedback.map(|f| serde_json::from_str::<Value>(&f).unwrap()),
+                    ))
+                },
+            )?)
         })
         .ok()
 }
@@ -75,7 +96,13 @@ fn stored(fx: &Poll, number: i64) -> Option<(Option<String>, Option<Value>)> {
 /// The `id`s of the stored items of pull request 812.
 fn stored_ids(fx: &Poll) -> Vec<String> {
     let (_, feedback) = stored(fx, 812).expect("the row has `updated_at` and `feedback`");
-    feedback.expect("the list was read").as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_owned()).collect()
+    feedback
+        .expect("the list was read")
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[test]
@@ -87,7 +114,11 @@ fn an_owned_open_pr_whose_updated_at_moved_is_read_once_and_stored() {
     let calls = reads(&fx);
     assert_eq!(calls.len(), 1, "one extra call: {:?}", fx.gh_calls());
     assert_eq!(calls[0][..3], ["api", "graphql", "-f"]);
-    assert!(calls[0][3].contains(r#"name: "pay""#) && calls[0][3].contains("812"), "{}", calls[0][3]);
+    assert!(
+        calls[0][3].contains(r#"name: "pay""#) && calls[0][3].contains("812"),
+        "{}",
+        calls[0][3]
+    );
     let (updated_at, feedback) = stored(&fx, 812).expect("the row has `updated_at` and `feedback`");
     assert_eq!(updated_at.as_deref(), Some("U1"));
     let items = feedback.expect("the list was read");
@@ -107,16 +138,25 @@ fn a_poll_whose_updated_at_did_not_move_makes_no_comments_call_and_writes_nothin
     let (txns, events) = (fx.txns(), fx.event_count());
 
     // The same `updatedAt`, a different answer on GitHub's side: not asked (no open feedback is stored).
-    let out = poll_with(&fx, "U1", vec![open_thread("T1", "C1"), open_thread("T2", "C9")]);
+    let out = poll_with(
+        &fx,
+        "U1",
+        vec![open_thread("T1", "C1"), open_thread("T2", "C9")],
+    );
 
     assert_eq!(reads(&fx).len(), 1, "no second call");
     assert_eq!(out["feedback"], json!([]));
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
+    assert_eq!(
+        (fx.txns(), fx.event_count()),
+        (txns, events),
+        "nothing written"
+    );
     assert_eq!(stored_ids(&fx), Vec::<String>::new());
 }
 
 #[test]
-fn a_stored_open_thread_that_github_reports_resolved_is_cleared_at_the_next_poll_with_the_same_updated_at() {
+fn a_stored_open_thread_that_github_reports_resolved_is_cleared_at_the_next_poll_with_the_same_updated_at()
+ {
     let fx = fixture_with_open_thread();
     assert_eq!(stored_ids(&fx), ["T1"]);
     let events = fx.events("pr-feedback").len();
@@ -128,7 +168,11 @@ fn a_stored_open_thread_that_github_reports_resolved_is_cleared_at_the_next_poll
     assert_eq!(reads(&fx).len(), 2, "a PR with open feedback is re-read");
     assert_eq!(stored_ids(&fx), Vec::<String>::new());
     assert_eq!(stored(&fx, 812).unwrap().0.as_deref(), Some("U1"));
-    assert_eq!(fx.events("pr-feedback").len(), events, "resolving tells nothing");
+    assert_eq!(
+        fx.events("pr-feedback").len(),
+        events,
+        "resolving tells nothing"
+    );
 }
 
 #[test]
@@ -140,14 +184,19 @@ fn a_pr_that_holds_open_feedback_is_read_at_every_poll() {
     poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
 
     assert_eq!(reads(&fx).len(), 3, "read at every poll");
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "an unchanged read writes nothing");
+    assert_eq!(
+        (fx.txns(), fx.event_count()),
+        (txns, events),
+        "an unchanged read writes nothing"
+    );
 }
 
 #[test]
 fn a_failed_re_read_of_a_pr_with_open_feedback_fails_the_poll_and_writes_nothing() {
     let fx = fixture_with_open_thread();
     let (txns, events) = (fx.txns(), fx.event_count());
-    let mut over: Value = serde_json::from_str(&answer("U1", vec![open_thread("T1", "C1")])).unwrap();
+    let mut over: Value =
+        serde_json::from_str(&answer("U1", vec![open_thread("T1", "C1")])).unwrap();
     over["data"]["p0"]["pullRequest"]["reviewThreads"] = json!({"totalCount": 101, "pageInfo": {"hasPreviousPage": true, "hasNextPage": true}, "nodes": [open_thread("T1", "C1")]});
     read_says(&fx, over.to_string());
     search_at(&fx, "U1");
@@ -155,7 +204,11 @@ fn a_failed_re_read_of_a_pr_with_open_feedback_fails_the_poll_and_writes_nothing
     let error = fx.pr("poll").error();
 
     assert_eq!(error["code"], "gh_failed");
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
+    assert_eq!(
+        (fx.txns(), fx.event_count()),
+        (txns, events),
+        "nothing written"
+    );
     assert_eq!(stored_ids(&fx), ["T1"]);
 }
 
@@ -170,22 +223,46 @@ fn fixture_with_open_thread() -> Poll {
 #[test]
 fn a_pr_no_plan_owns_is_never_read() {
     let fx = poll_fx("deploy");
-    fx.search(&[pay("OPEN", None, None), node("acme/web", 902, "OPEN", None, None)]);
+    fx.search(&[
+        pay("OPEN", None, None),
+        node("acme/web", 902, "OPEN", None, None),
+    ]);
 
     fx.poll();
 
     let calls = reads(&fx);
-    assert_eq!(calls.len(), 1, "the owned pull request is read: {:?}", fx.gh_calls());
-    assert!(!calls[0][3].contains("web") && !calls[0][3].contains("902"), "{}", calls[0][3]);
-    assert_eq!(stored(&fx, 902).expect("the columns exist"), (None, None), "the unowned row is never read");
+    assert_eq!(
+        calls.len(),
+        1,
+        "the owned pull request is read: {:?}",
+        fx.gh_calls()
+    );
+    assert!(
+        !calls[0][3].contains("web") && !calls[0][3].contains("902"),
+        "{}",
+        calls[0][3]
+    );
+    assert_eq!(
+        stored(&fx, 902).expect("the columns exist"),
+        (None, None),
+        "the unowned row is never read"
+    );
 }
 
 #[test]
 fn the_first_read_tells_every_open_item_with_reason_comments() {
     let fx = poll_fx("deploy");
-    assert_eq!(stored(&fx, 812), Some((None, None)), "a row never read: both NULL");
+    assert_eq!(
+        stored(&fx, 812),
+        Some((None, None)),
+        "a row never read: both NULL"
+    );
 
-    let out = poll_with(&fx, "U1", vec![open_thread("T1", "C1"), open_thread("T2", "C2")]);
+    let out = poll_with(
+        &fx,
+        "U1",
+        vec![open_thread("T1", "C1"), open_thread("T2", "C2")],
+    );
 
     assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
     let events = fx.events("pr-feedback");
@@ -200,21 +277,32 @@ fn a_new_open_item_sends_pr_feedback_with_reason_comments_and_the_counts_in_its_
     poll_with(&fx, "U1", vec![open_thread("T1", "C1")]);
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
-    let out = poll_with(&fx, "U2", vec![open_thread("T1", "C1"), open_thread("T2", "C2")]);
+    let out = poll_with(
+        &fx,
+        "U2",
+        vec![open_thread("T1", "C1"), open_thread("T2", "C2")],
+    );
 
     assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 2, "told again of the one new item");
     assert_eq!(events[1].1, feedback("open", "none", "none", &["comments"]));
     let text = &events[1].0;
-    assert!(text.contains("1 new") && text.contains("2 open") && text.contains("cpd pr view"), "{text}");
+    assert!(
+        text.contains("1 new") && text.contains("2 open") && text.contains("cpd pr view"),
+        "{text}"
+    );
     assert_eq!(stored_ids(&fx), ["T1", "T2"]);
 }
 
 #[test]
 fn an_item_that_closes_is_dropped_from_the_list_and_tells_nothing() {
     let fx = poll_fx("deploy");
-    poll_with(&fx, "U1", vec![open_thread("T1", "C1"), open_thread("T2", "C2")]);
+    poll_with(
+        &fx,
+        "U1",
+        vec![open_thread("T1", "C1"), open_thread("T2", "C2")],
+    );
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
     // T1 was resolved on GitHub.
@@ -233,10 +321,20 @@ fn a_reviewer_reply_in_an_answered_thread_tells_again() {
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
     // The Lead answered: the last comment carries the marker, the thread is no item.
-    let answered = thread("T1", vec![comment("C1", "rev", "Change this", "t1"), comment("C2", "me", &format!("Done.\n\n{MARKER}"), "t2")]);
+    let answered = thread(
+        "T1",
+        vec![
+            comment("C1", "rev", "Change this", "t1"),
+            comment("C2", "me", &format!("Done.\n\n{MARKER}"), "t2"),
+        ],
+    );
     let out = poll_with(&fx, "U2", vec![answered.clone()]);
     assert_eq!(out["feedback"], json!([]));
-    assert_eq!(stored(&fx, 812).unwrap().1, Some(json!([])), "read, none open");
+    assert_eq!(
+        stored(&fx, 812).unwrap().1,
+        Some(json!([])),
+        "read, none open"
+    );
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
     // The reviewer replies after the marker.
@@ -264,15 +362,27 @@ fn a_failed_comments_read_fails_the_poll_loud_and_writes_nothing() {
     over = value.to_string();
     read_says(&fx, over);
     // The search also changed the review decision: stored with the rest of the poll, or not at all.
-    fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), None).replace(r#""updatedAt":"U1""#, r#""updatedAt":"U9""#)]);
+    fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), None)
+        .replace(r#""updatedAt":"U1""#, r#""updatedAt":"U9""#)]);
 
     let error = fx.pr("poll").error();
 
     assert_eq!(error["code"], "gh_failed");
     let message = error["message"].as_str().unwrap();
-    assert!(message.contains("acme/pay") && message.contains("812"), "{message}");
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "nothing written");
-    assert_eq!(fx.pr_data().1, "none", "the search's review decision was not stored");
+    assert!(
+        message.contains("acme/pay") && message.contains("812"),
+        "{message}"
+    );
+    assert_eq!(
+        (fx.txns(), fx.event_count()),
+        (txns, events),
+        "nothing written"
+    );
+    assert_eq!(
+        fx.pr_data().1,
+        "none",
+        "the search's review decision was not stored"
+    );
     assert_eq!(stored(&fx, 812), Some((None, None)));
 }
 
@@ -286,15 +396,25 @@ fn a_bot_typed_issue_comment_is_stored_as_no_item_and_tells_nothing() {
 
     let fx = poll_fx("deploy");
     search_at(&fx, "U1");
-    read_says(&fx, answer_with_comments("U1", vec![], vec![typed("Bot", "kodem-security")]));
+    read_says(
+        &fx,
+        answer_with_comments("U1", vec![], vec![typed("Bot", "kodem-security")]),
+    );
     fx.poll();
-    assert_eq!(stored_ids(&fx), Vec::<String>::new(), "a Bot's comment is no item");
+    assert_eq!(
+        stored_ids(&fx),
+        Vec::<String>::new(),
+        "a Bot's comment is no item"
+    );
     assert_eq!(fx.events("pr-feedback").len(), 0);
     drop(fx);
 
     let fx = poll_fx("deploy");
     search_at(&fx, "U1");
-    read_says(&fx, answer_with_comments("U1", vec![], vec![typed("User", "rev")]));
+    read_says(
+        &fx,
+        answer_with_comments("U1", vec![], vec![typed("User", "rev")]),
+    );
     fx.poll();
     assert_eq!(stored_ids(&fx), ["I1"]);
     let events = fx.events("pr-feedback");

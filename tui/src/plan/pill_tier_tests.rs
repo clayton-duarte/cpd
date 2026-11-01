@@ -5,7 +5,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
 use cpd_core::store::Store;
 
-use crate::plan::flow::{flow_jobs, layout, Live};
+use crate::plan::flow::{Live, flow_jobs, layout};
 use crate::plan::sample_job;
 use crate::read;
 
@@ -13,7 +13,15 @@ const CAP_L: &str = "\u{e0b6}";
 const CAP_R: &str = "\u{e0b4}";
 
 fn attempt(n: u32, tier: &str, origin: &str, ended: bool) -> String {
-    let (status, outcome, tail) = if ended { ("ended", "'failed'", ", 'timed_out', '2026-01-03T00:01:00.000Z'") } else { ("running", "NULL", ", NULL, NULL") };
+    let (status, outcome, tail) = if ended {
+        (
+            "ended",
+            "'failed'",
+            ", 'timed_out', '2026-01-03T00:01:00.000Z'",
+        )
+    } else {
+        ("running", "NULL", ", NULL, NULL")
+    };
     format!(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at)
          VALUES ('pl', 'a-a{n}', 'a', {n}, '{tier}', '{origin}', '{status}', {outcome}{tail}, 'cpd/pl--a-a{n}', '/w', '2026-01-03T00:00:00.000Z');"
@@ -25,7 +33,13 @@ fn reported_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
-    let attempts = [attempt(1, "H3", "ladder", true), attempt(2, "S1", "retry", true), attempt(3, "S1", "retry", true), attempt(4, "S1", "retry", false)].join("\n");
+    let attempts = [
+        attempt(1, "H3", "ladder", true),
+        attempt(2, "S1", "retry", true),
+        attempt(3, "S1", "retry", true),
+        attempt(4, "S1", "retry", false),
+    ]
+    .join("\n");
     store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
@@ -61,12 +75,19 @@ fn a_retried_job_loaded_from_the_ledger_draws_its_retry_tier() {
     let boxes = read::plan_boxes(&mut store, &PlanId::parse("pl").unwrap()).unwrap();
     assert_eq!(boxes.jobs.len(), 1);
     let icon = Live::of(&boxes.jobs[0], false).icon(0).0;
-    assert_eq!(pill_cells(&boxes.jobs), format!("{CAP_L}{icon} a│#4│S1{CAP_R}"));
+    assert_eq!(
+        pill_cells(&boxes.jobs),
+        format!("{CAP_L}{icon} a│#4│S1{CAP_R}")
+    );
 }
 
 #[test]
 fn a_pill_draws_the_shown_tier_not_the_stored_tier() {
-    let job = read::JobNode { tier: Some(Tier::parse("H3").unwrap()), shown_tier: Some(Tier::parse("S1").unwrap()), ..sample_job("r", "a") };
+    let job = read::JobNode {
+        tier: Some(Tier::parse("H3").unwrap()),
+        shown_tier: Some(Tier::parse("S1").unwrap()),
+        ..sample_job("r", "a")
+    };
     let icon = Live::Queued.icon(0).0;
     assert_eq!(pill_cells(&[job]), format!("{CAP_L}{icon} a│S1{CAP_R}"));
 }

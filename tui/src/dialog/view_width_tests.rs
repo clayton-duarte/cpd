@@ -45,12 +45,26 @@ fn a_dialog_with_wide_text_wraps_its_lines_and_cuts_its_title_by_columns() {
     let mut drawn = String::new();
     for y in 2..buf.area.height.saturating_sub(3) {
         let row = read_columns(&buf, 2, y, inside);
-        assert!(Line::from(row.as_str()).width() <= inside, "body row {y} is wider than {inside} columns: {row:?}");
+        assert!(
+            Line::from(row.as_str()).width() <= inside,
+            "body row {y} is wider than {inside} columns: {row:?}"
+        );
         drawn.push_str(row.trim_end());
     }
-    assert_eq!(drawn, content, "the wide line wraps inside the dialog's width instead of being cut");
+    assert_eq!(
+        drawn, content,
+        "the wide line wraps inside the dialog's width instead of being cut"
+    );
 
     let top = read_columns(&buf, 0, 0, usize::from(width));
-    assert_eq!(Line::from(top.as_str()).width(), usize::from(width), "the frame's top row is as wide as the box: {top:?}");
-    assert_eq!(top.chars().last(), Some('╮'), "the top right corner is not overwritten by a title too wide: {top:?}");
+    assert_eq!(
+        Line::from(top.as_str()).width(),
+        usize::from(width),
+        "the frame's top row is as wide as the box: {top:?}"
+    );
+    assert_eq!(
+        top.chars().last(),
+        Some('╮'),
+        "the top right corner is not overwritten by a title too wide: {top:?}"
+    );
 }

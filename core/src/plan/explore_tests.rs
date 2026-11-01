@@ -50,7 +50,9 @@ fn plan_id() -> PlanId {
 }
 
 fn plan_arg() -> PlanArg {
-    PlanArg { plan: Some(plan_id()) }
+    PlanArg {
+        plan: Some(plan_id()),
+    }
 }
 
 /// Plan `pay` in `phase` with PR `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the PR `web`.
@@ -67,8 +69,16 @@ fn fixture(phase: &str, extra_pr: bool) -> Fixture {
     // SAFETY: as in `Drop`.
     unsafe { std::env::set_var("CPD_HOME", home.root()) };
     let env = Env::open_home(home).unwrap();
-    let locked = if phase == "plan" { "NULL".to_owned() } else { format!("'{T}'") };
-    let (status, worktree, started) = if phase == "plan" { ("waiting", "NULL".to_owned(), "NULL".to_owned()) } else { ("dispatch", "'/lw'".to_owned(), format!("'{T}'")) };
+    let locked = if phase == "plan" {
+        "NULL".to_owned()
+    } else {
+        format!("'{T}'")
+    };
+    let (status, worktree, started) = if phase == "plan" {
+        ("waiting", "NULL".to_owned(), "NULL".to_owned())
+    } else {
+        ("dispatch", "'/lw'".to_owned(), format!("'{T}'"))
+    };
     let mut sql = format!(
         "INSERT INTO contexts (id, title, created_at, created_on, owner) VALUES ('ctx', 'Ctx', '{T}', 'm1', 'acme');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -77,13 +87,22 @@ fn fixture(phase: &str, extra_pr: bool) -> Fixture {
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked},
                    '{{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{{\"api\":[\"works\"]}},\"goal\":\"g\",\"out_of_scope\":[],\"risks\":[]}}');"
     );
-    for pr in if extra_pr { vec!["api", "web"] } else { vec!["api"] } {
+    for pr in if extra_pr {
+        vec!["api", "web"]
+    } else {
+        vec!["api"]
+    } {
         sql.push_str(&format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{pr}', '/r', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
         ));
     }
-    let mut f = Fixture { _dir: dir, env, saved, _lock: lock };
+    let mut f = Fixture {
+        _dir: dir,
+        env,
+        saved,
+        _lock: lock,
+    };
     f.sql(&sql);
     f
 }
@@ -116,7 +135,9 @@ impl Fixture {
             "e".repeat(64)
         ));
         if status == "running" {
-            self.sql(&format!("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';"));
+            self.sql(&format!(
+                "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';"
+            ));
             self.sql(&format!(
                 "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
                    VALUES ('pay', '{key}-a1', '{key}', 1, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a1', '/w', 4242, '{T}');"
@@ -125,7 +146,10 @@ impl Fixture {
     }
 
     fn fingerprint(&mut self) -> String {
-        self.env.store.read(|c| plan_fingerprint(c, &plan_id())).unwrap()
+        self.env
+            .store
+            .read(|c| plan_fingerprint(c, &plan_id()))
+            .unwrap()
     }
 
     fn approve_current(&mut self) {
@@ -141,14 +165,18 @@ impl Fixture {
             .store
             .read(|c| {
                 let mut stmt = c.prepare(sql)?;
-                let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })?;
                 Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .unwrap()
     }
 
     fn status_and_fingerprint(&mut self) -> Vec<(String, Option<String>)> {
-        self.rows("SELECT key || ':' || status, fingerprint FROM jobs WHERE plan = 'pay' ORDER BY key")
+        self.rows(
+            "SELECT key || ':' || status, fingerprint FROM jobs WHERE plan = 'pay' ORDER BY key",
+        )
     }
 }
 
@@ -171,7 +199,10 @@ fn lock() -> Result<Output, CpdError> {
 }
 
 fn review() -> Result<Output, CpdError> {
-    super::review::review(ReviewArgs { plan: plan_arg(), title: "Pay".parse::<PrTitle>().unwrap() })
+    super::review::review(ReviewArgs {
+        plan: plan_arg(),
+        title: "Pay".parse::<PrTitle>().unwrap(),
+    })
 }
 
 #[test]
@@ -183,7 +214,11 @@ fn plan_lock_ignores_explore_jobs() {
     let before = f.status_and_fingerprint();
     let e = refused(lock());
     assert_eq!(e.code(), ErrorCode::NoDraftJobs, "{e}");
-    assert_eq!(f.status_and_fingerprint(), before, "the explore Jobs stay queued, with the fingerprint they were added with");
+    assert_eq!(
+        f.status_and_fingerprint(),
+        before,
+        "the explore Jobs stay queued, with the fingerprint they were added with"
+    );
     drop(f);
 
     // Beside a draft, they are in no plan fingerprint and are not re-queued: the lock gets as far as the review check.
@@ -192,13 +227,25 @@ fn plan_lock_ignores_explore_jobs() {
     let alone = f.fingerprint();
     f.explore("s1", "scout", "queued");
     f.explore("r1", "research", "queued");
-    assert_eq!(f.fingerprint(), alone, "no explore Job is in the plan fingerprint");
+    assert_eq!(
+        f.fingerprint(),
+        alone,
+        "no explore Job is in the plan fingerprint"
+    );
     let before = f.status_and_fingerprint();
     let e = refused(lock());
     assert_eq!(e.code(), ErrorCode::PlanNotApproved, "{e}");
-    assert_eq!(e.details()["fingerprint"], alone.as_str(), "the fingerprint the lock checks has no explore Job");
+    assert_eq!(
+        e.details()["fingerprint"],
+        alone.as_str(),
+        "the fingerprint the lock checks has no explore Job"
+    );
     assert_eq!(f.status_and_fingerprint(), before);
-    assert!(before.iter().any(|(s, fp)| s == "s1:queued" && fp.as_deref() == Some("e".repeat(64).as_str())));
+    assert!(
+        before
+            .iter()
+            .any(|(s, fp)| s == "s1:queued" && fp.as_deref() == Some("e".repeat(64).as_str()))
+    );
 }
 
 #[test]
@@ -219,16 +266,27 @@ fn plan_review_counts_no_explore_job() {
     {
         let text = &summary;
         assert!(text.contains("d1"), "the draft is listed: {text}");
-        assert!(!text.contains("Explore s1") && !text.contains("Explore r1"), "no explore Job in the review: {text}");
+        assert!(
+            !text.contains("Explore s1") && !text.contains("Explore r1"),
+            "no explore Job in the review: {text}"
+        );
     }
     let events = f.rows("SELECT text, NULL FROM events WHERE kind = 'plan-review'");
     assert_eq!(events.len(), 1);
-    assert!(events[0].0.contains("1 draft Jobs"), "one draft counted, not three Jobs: {}", events[0].0);
+    assert!(
+        events[0].0.contains("1 draft Jobs"),
+        "one draft counted, not three Jobs: {}",
+        events[0].0
+    );
     let reviewed = out["review"]["fingerprint"].as_str().unwrap().to_owned();
     drop(f);
     let mut g = fixture("plan", false);
     g.draft("d1");
-    assert_eq!(reviewed, g.fingerprint(), "the review covers the draft alone");
+    assert_eq!(
+        reviewed,
+        g.fingerprint(),
+        "the review covers the draft alone"
+    );
 }
 
 #[test]
@@ -242,8 +300,16 @@ fn adding_an_explore_job_keeps_an_approved_review_approved() {
     f.explore("r1", "research", "queued");
     assert_eq!(f.fingerprint(), approved);
     let fp = approved.clone();
-    let still = f.env.store.read(|c| latest_approved_for(c, &plan_id(), &fp)).unwrap();
-    assert_eq!(still.as_deref(), Some("r1"), "the review is still approved for the current plan");
+    let still = f
+        .env
+        .store
+        .read(|c| latest_approved_for(c, &plan_id(), &fp))
+        .unwrap();
+    assert_eq!(
+        still.as_deref(),
+        Some("r1"),
+        "the review is still approved for the current plan"
+    );
     let e = refused(lock());
     assert_ne!(e.code(), ErrorCode::PlanNotApproved, "{e}");
     assert_eq!(e.code(), ErrorCode::PrEmpty, "{e}");
@@ -262,7 +328,10 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     let out = fields(super::show::show(ShowArgs { plan: plan_arg() }));
     let jobs = out["jobs"].as_array().unwrap();
     for (key, kind) in [("s1", "scout"), ("r1", "research")] {
-        let job = jobs.iter().find(|j| j["key"] == key).unwrap_or_else(|| panic!("{key} is listed in jobs: {jobs:?}"));
+        let job = jobs
+            .iter()
+            .find(|j| j["key"] == key)
+            .unwrap_or_else(|| panic!("{key} is listed in jobs: {jobs:?}"));
         assert_eq!(job["pr"], Value::Null, "{key}");
         assert_eq!(job["kind"], kind, "{key}");
         assert_eq!(job["status"], "queued", "{key}");
@@ -270,8 +339,16 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     let work = jobs.iter().find(|j| j["key"] == "w1").unwrap();
     assert_eq!(work["pr"], "api");
     for pr in out["prs"].as_array().unwrap() {
-        let listed: Vec<&str> = pr["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {pr}");
+        let listed: Vec<&str> = pr["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            !listed.contains(&"s1") && !listed.contains(&"r1"),
+            "no PR row mentions an explore Job: {pr}"
+        );
     }
     assert_eq!(out["counts"]["queued"], 3);
 }
@@ -282,11 +359,30 @@ fn plan_cancel_cancels_explore_jobs() {
     f.explore("q1", "scout", "queued");
     f.explore("r1", "research", "running");
     let out = cancel_jobs(&mut f.env.store, &plan_id(), "stop").unwrap();
-    assert_eq!(out, ["q1", "r1"], "both are named: one cancelled, one asked to stop");
-    let rows = f.rows("SELECT key || ':' || status, cancel_reason FROM jobs WHERE plan = 'pay' ORDER BY key");
-    assert_eq!(rows, [("q1:cancelled".to_owned(), Some("stop".to_owned())), ("r1:running".to_owned(), Some("stop".to_owned()))]);
-    let requested = f.rows("SELECT key, cancel_requested_at FROM jobs WHERE plan = 'pay' AND key = 'r1'");
-    assert!(requested[0].1.is_some(), "the cancel of the running Job is requested, for the engine to stop its Attempt");
+    assert_eq!(
+        out,
+        ["q1", "r1"],
+        "both are named: one cancelled, one asked to stop"
+    );
+    let rows = f.rows(
+        "SELECT key || ':' || status, cancel_reason FROM jobs WHERE plan = 'pay' ORDER BY key",
+    );
+    assert_eq!(
+        rows,
+        [
+            ("q1:cancelled".to_owned(), Some("stop".to_owned())),
+            ("r1:running".to_owned(), Some("stop".to_owned()))
+        ]
+    );
+    let requested =
+        f.rows("SELECT key, cancel_requested_at FROM jobs WHERE plan = 'pay' AND key = 'r1'");
+    assert!(
+        requested[0].1.is_some(),
+        "the cancel of the running Job is requested, for the engine to stop its Attempt"
+    );
     let events = f.rows("SELECT kind, NULL FROM events WHERE kind IN ('job-cancelled', 'job-cancel-requested') ORDER BY id");
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-cancelled", "job-cancel-requested"]);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["job-cancelled", "job-cancel-requested"]
+    );
 }

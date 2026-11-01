@@ -14,7 +14,11 @@ fn script() -> PathBuf {
 fn fake(bin: &Path, name: &str, calls: &Path, exit: i32) {
     write_executable(
         &bin.join(name),
-        &format!("#!/bin/sh\necho {name} \"$@\" >> {}\npwd >> {}\nexit {exit}\n", calls.display(), calls.display()),
+        &format!(
+            "#!/bin/sh\necho {name} \"$@\" >> {}\npwd >> {}\nexit {exit}\n",
+            calls.display(),
+            calls.display()
+        ),
     );
 }
 
@@ -36,7 +40,14 @@ fn run(fakes: &[(&str, i32)], with_bin: bool) -> (Output, String, PathBuf) {
     } else {
         std::env::join_paths([bin]).unwrap()
     };
-    let out = output(Command::new("/bin/sh").arg(script()).current_dir(&project).env_clear().env("PATH", path)).unwrap();
+    let out = output(
+        Command::new("/bin/sh")
+            .arg(script())
+            .current_dir(&project)
+            .env_clear()
+            .env("PATH", path),
+    )
+    .unwrap();
     let text = fs::read_to_string(calls).unwrap_or_default();
     (out, text, project)
 }
@@ -44,21 +55,42 @@ fn run(fakes: &[(&str, i32)], with_bin: bool) -> (Output, String, PathBuf) {
 #[test]
 fn installs_with_pnpm_install_frozen_lockfile() {
     let (out, calls, project) = run(&[("pnpm", 0)], true);
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(calls, format!("pnpm install --frozen-lockfile\n{}\n", project.display()));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        calls,
+        format!("pnpm install --frozen-lockfile\n{}\n", project.display())
+    );
 }
 
 #[test]
 fn runs_no_npm() {
     let (out, calls, project) = run(&[("npm", 0), ("pnpm", 0)], true);
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(calls, format!("pnpm install --frozen-lockfile\n{}\n", project.display()));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        calls,
+        format!("pnpm install --frozen-lockfile\n{}\n", project.display())
+    );
 }
 
 #[test]
 fn exits_with_the_status_of_pnpm() {
     let (out, _, _) = run(&[("pnpm", 3)], true);
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -67,7 +99,8 @@ fn fails_loud_naming_pnpm_when_it_is_not_on_path() {
     assert_eq!(out.status.code(), Some(127));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("pnpm-fresh: pnpm is not on PATH (package.json pins it with packageManager)"),
+        stderr
+            .contains("pnpm-fresh: pnpm is not on PATH (package.json pins it with packageManager)"),
         "{stderr}"
     );
 }

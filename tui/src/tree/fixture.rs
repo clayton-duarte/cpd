@@ -1,20 +1,29 @@
 //! Hand-built trees for the unit tests: no store, so a test names only what it looks at.
 //! (The prepared store of `tests/tui_tree.rs` goes through the real read model.)
 
+use crate::read::JobCounts;
+use crate::read::{ContextNode, Dot, Place, PlanHead, PlanNode, SessionNode, Tree};
 use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
-use crate::read::{ContextNode, Dot, Place, PlanHead, PlanNode, SessionNode, Tree};
-use crate::read::JobCounts;
 
 /// The title of a Context or Plan `id`: the id with a capital, so that a test can tell a title from an id and a name.
 fn titled(id: &str) -> String {
     let mut chars = id.chars();
-    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
-pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: Place) -> SessionNode {
+pub fn session(
+    id: &str,
+    name: &str,
+    state: State,
+    label: Option<&str>,
+    place: Place,
+) -> SessionNode {
     SessionNode {
         id: SessionId::parse(id).unwrap(),
         role: Role::Lead,
@@ -41,7 +50,14 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
 
 /// A Plan: `lead` is its Lead, `forks` its side forks. `counts` are
 /// `[draft, queued, running, merging, failed, merged]`.
-pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead: SessionNode, forks: Vec<SessionNode>) -> PlanNode {
+pub fn plan(
+    id: &str,
+    context: &str,
+    phase: Phase,
+    counts: [usize; 6],
+    mut lead: SessionNode,
+    forks: Vec<SessionNode>,
+) -> PlanNode {
     let pid = PlanId::parse(id).unwrap();
     lead.plan = Some(pid.clone());
     lead.plan_lead = true;
@@ -60,7 +76,15 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             phase,
             lead_session: lead.id,
             pr: None,
-            counts: JobCounts { draft, queued, running, merging, failed, merged, cancelled: 0 },
+            counts: JobCounts {
+                draft,
+                queued,
+                running,
+                merging,
+                failed,
+                merged,
+                cancelled: 0,
+            },
             open_escalations: 0,
             git_active: false,
             review_pending: false,
@@ -109,7 +133,12 @@ pub fn shown(mut s: SessionNode, dot: Dot) -> SessionNode {
 }
 
 pub fn tree(contexts: Vec<ContextNode>) -> Tree {
-    Tree { contexts, events_cursor: 1, inbox: Vec::new(), engine_running: true }
+    Tree {
+        contexts,
+        events_cursor: 1,
+        inbox: Vec::new(),
+        engine_running: true,
+    }
 }
 
 /// Every state of a Session, a side fork, a Plan in each phase and an empty Context:
@@ -124,48 +153,106 @@ pub fn tree(contexts: Vec<ContextNode>) -> Tree {
 pub fn sample() -> Tree {
     use State::*;
     tree(vec![
-        managed(context(
-            "alpha",
-            vec![
-                plan(
-                    "ship",
-                    "alpha",
-                    Phase::Dispatch,
-                    [0, 2, 1, 1, 0, 5],
-                    session("l-ship", "ship lead", Working, None, Place::Chat),
-                    vec![
-                        session("f-idle", "ship fork", Idle, None, Place::Parked),
-                        shown(session("f-blocked", "ship review", Blocked, Some("φ: Worker question"), Place::Parked), Dot::Red),
-                    ],
-                ),
-                plan("sketch", "alpha", Phase::Plan, [4, 0, 0, 0, 0, 0], session("l-sketch", "sketch", Idle, None, Place::Parked), vec![]),
-                plan("old", "alpha", Phase::Done, [0, 0, 0, 0, 1, 36], session("l-old", "  ", Stopped, None, Place::None), vec![]),
-            ],
-        ), Dot::White),
-        managed(context(
-            "beta",
-            vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], shown(session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), Dot::Red), vec![])],
-        ), Dot::Magenta),
+        managed(
+            context(
+                "alpha",
+                vec![
+                    plan(
+                        "ship",
+                        "alpha",
+                        Phase::Dispatch,
+                        [0, 2, 1, 1, 0, 5],
+                        session("l-ship", "ship lead", Working, None, Place::Chat),
+                        vec![
+                            session("f-idle", "ship fork", Idle, None, Place::Parked),
+                            shown(
+                                session(
+                                    "f-blocked",
+                                    "ship review",
+                                    Blocked,
+                                    Some("φ: Worker question"),
+                                    Place::Parked,
+                                ),
+                                Dot::Red,
+                            ),
+                        ],
+                    ),
+                    plan(
+                        "sketch",
+                        "alpha",
+                        Phase::Plan,
+                        [4, 0, 0, 0, 0, 0],
+                        session("l-sketch", "sketch", Idle, None, Place::Parked),
+                        vec![],
+                    ),
+                    plan(
+                        "old",
+                        "alpha",
+                        Phase::Done,
+                        [0, 0, 0, 0, 1, 36],
+                        session("l-old", "  ", Stopped, None, Place::None),
+                        vec![],
+                    ),
+                ],
+            ),
+            Dot::White,
+        ),
+        managed(
+            context(
+                "beta",
+                vec![plan(
+                    "rel",
+                    "beta",
+                    Phase::Deploy,
+                    [0, 0, 0, 0, 0, 3],
+                    shown(
+                        session(
+                            "l-rel",
+                            "rel lead",
+                            Blocked,
+                            Some("cpd: Plan review"),
+                            Place::Parked,
+                        ),
+                        Dot::Red,
+                    ),
+                    vec![],
+                )],
+            ),
+            Dot::Magenta,
+        ),
         context("gamma", vec![]),
     ])
 }
 
 pub const WHEN: &str = "2026-02-01T00:00:00.000Z";
 
-    /// `sample()` with archived objects: in `alpha`, the fork `f-blocked` of `ship` and the Plan `old`; and a
-    /// whole archived Context `zeta` with its Plan `zp` (a Lead and a fork).
+/// `sample()` with archived objects: in `alpha`, the fork `f-blocked` of `ship` and the Plan `old`; and a
+/// whole archived Context `zeta` with its Plan `zp` (a Lead and a fork).
 pub fn archived() -> Tree {
-        let mut t = sample();
-        t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
-        t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
-        t.contexts[0].plans[2].sessions[0].archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
-        let mut zp = plan("zp", "zeta", Phase::Dispatch, [0, 0, 0, 0, 0, 2], session("l-zp", "zp lead", State::Stopped, None, Place::None), vec![session("f-zp", "zp fork", State::Stopped, None, Place::None)]);
-        zp.head.archived_at = Some(WHEN.into());
-        for s in &mut zp.sessions {
-            s.archived_at = Some(WHEN.into());
-        }
-        let mut zeta = context("zeta", vec![zp]);
-        zeta.archived_at = Some(WHEN.into());
-        t.contexts.push(zeta);
-        t
+    let mut t = sample();
+    t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
+    t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
+    t.contexts[0].plans[2].sessions[0].archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
+    let mut zp = plan(
+        "zp",
+        "zeta",
+        Phase::Dispatch,
+        [0, 0, 0, 0, 0, 2],
+        session("l-zp", "zp lead", State::Stopped, None, Place::None),
+        vec![session(
+            "f-zp",
+            "zp fork",
+            State::Stopped,
+            None,
+            Place::None,
+        )],
+    );
+    zp.head.archived_at = Some(WHEN.into());
+    for s in &mut zp.sessions {
+        s.archived_at = Some(WHEN.into());
     }
+    let mut zeta = context("zeta", vec![zp]);
+    zeta.archived_at = Some(WHEN.into());
+    t.contexts.push(zeta);
+    t
+}

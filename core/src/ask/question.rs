@@ -48,7 +48,9 @@ pub(crate) fn ask_in(
     let clock = env.ports.clock.clone();
     let deadline = clock.now() + Duration::from_secs(u64::from(minutes) * 60);
 
-    let (asker, id) = env.store.write(COMMAND, |tx| open(tx, plan, attempt, question))?;
+    let (asker, id) = env
+        .store
+        .write(COMMAND, |tx| open(tx, plan, attempt, question))?;
 
     let settled = loop {
         let (status, _) = env.store.read(|conn| row(conn, &asker.plan, &id))?;
@@ -59,7 +61,9 @@ pub(crate) fn ask_in(
         clock.sleep(POLL);
     };
     match settled {
-        Settled::Answered(answer) => Ok(Output::success(json!({"escalation": id, "answer": answer}))),
+        Settled::Answered(answer) => {
+            Ok(Output::success(json!({"escalation": id, "answer": answer})))
+        }
         Settled::TimedOut => Err(CpdError::new(
             ErrorCode::AskTimeout,
             format!("Escalation {id} was not answered within {minutes} minutes."),
@@ -73,36 +77,68 @@ pub(crate) fn ask_in(
 pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    ask_in(&mut env, &plan, &args.attempt, args.question.as_str(), args.timeout_minutes)
+    ask_in(
+        &mut env,
+        &plan,
+        &args.attempt,
+        args.question.as_str(),
+        args.timeout_minutes,
+    )
 }
 
 /// Transaction 1: the Escalation, the Worker Session `waiting`, their Events.
-fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -> Result<(Asker, EscalationId), CpdError> {
+fn open(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    attempt: &AttemptId,
+    question: &str,
+) -> Result<(Asker, EscalationId), CpdError> {
     let found: Option<(String, Option<String>)> = tx
-        .query_row("SELECT status, worker_session FROM attempts WHERE plan = ?1 AND id = ?2", [plan.as_str(), &attempt.to_string()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT status, worker_session FROM attempts WHERE plan = ?1 AND id = ?2",
+            [plan.as_str(), &attempt.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
     let Some((status, session)) = found else {
-        let plan_exists: bool = tx.query_row("SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
+        let plan_exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
         return Err(if plan_exists {
-            CpdError::new(ErrorCode::AttemptNotFound, format!("No Attempt {attempt} in Plan {plan}."))
-                .with("plan", plan.as_str())
-                .with("attempt", attempt.to_string())
+            CpdError::new(
+                ErrorCode::AttemptNotFound,
+                format!("No Attempt {attempt} in Plan {plan}."),
+            )
+            .with("plan", plan.as_str())
+            .with("attempt", attempt.to_string())
         } else {
             CpdError::plan_not_found(plan)
         });
     };
     if status != "running" {
-        return Err(CpdError::new(ErrorCode::AttemptNotRunning, format!("Attempt {attempt} is {status}: only a running Attempt can ask."))
-            .with("plan", plan.as_str())
-            .with("attempt", attempt.to_string())
-            .with("status", status));
+        return Err(CpdError::new(
+            ErrorCode::AttemptNotRunning,
+            format!("Attempt {attempt} is {status}: only a running Attempt can ask."),
+        )
+        .with("plan", plan.as_str())
+        .with("attempt", attempt.to_string())
+        .with("status", status));
     }
     let session = session
         .and_then(|s| SessionId::parse(&s).ok())
-        .ok_or_else(|| CpdError::bad_row(format!("Attempt {attempt} is running with no valid Worker Session")))?;
-    let asker = Asker { plan: plan.clone(), attempt: attempt.clone(), job: attempt.job().clone(), session };
+        .ok_or_else(|| {
+            CpdError::bad_row(format!(
+                "Attempt {attempt} is running with no valid Worker Session"
+            ))
+        })?;
+    let asker = Asker {
+        plan: plan.clone(),
+        attempt: attempt.clone(),
+        job: attempt.job().clone(),
+        session,
+    };
 
     let number: u32 = tx.query_row(
         "SELECT coalesce(max(number), 0) + 1 FROM escalations WHERE plan = ?1 AND attempt = ?2",
@@ -114,7 +150,14 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
     tx.execute(
         "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
          VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6, (SELECT at FROM txns WHERE id = cpd_txn()))",
-        rusqlite::params![plan.as_str(), id.to_string(), attempt.to_string(), number.get(), question, std::process::id()],
+        rusqlite::params![
+            plan.as_str(),
+            id.to_string(),
+            attempt.to_string(),
+            number.get(),
+            question,
+            std::process::id()
+        ],
     )?;
     let text = format!(
         "Worker of Job {job} (Attempt {attempt}) asks: {question} Next: cpd answer {id} \"<answer>\" --plan {plan}",
@@ -138,7 +181,10 @@ fn wait(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
     if state == "stopped" {
         return Err(CpdError::new(
             ErrorCode::IllegalTransition,
-            format!("Session {} is stopped: it cannot go to waiting (contract §3.6).", asker.session),
+            format!(
+                "Session {} is stopped: it cannot go to waiting (contract §3.6).",
+                asker.session
+            ),
         )
         .with("session", asker.session.as_str())
         .with("from", "stopped")
@@ -162,13 +208,25 @@ fn resume(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
 /// The Worker Session of an Attempt `working` again, once the Escalation that held it `waiting` is
 /// settled (engine E1, contract §3.7): nothing when the Attempt has no Worker Session or another of its
 /// Escalations is still `open`; a Session that is not `waiting` is left as it is.
-pub fn resume_attempt(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
+pub fn resume_attempt(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<(), CpdError> {
     let session: Option<String> = tx
-        .query_row("SELECT worker_session FROM attempts WHERE plan = ?1 AND id = ?2", [plan.as_str(), &attempt.to_string()], |r| r.get(0))
+        .query_row(
+            "SELECT worker_session FROM attempts WHERE plan = ?1 AND id = ?2",
+            [plan.as_str(), &attempt.to_string()],
+            |r| r.get(0),
+        )
         .optional()?
         .flatten();
-    let Some(session) = session else { return Ok(()) };
-    let session = SessionId::parse(&session).map_err(|_| CpdError::bad_row(format!("Attempt {attempt} has an invalid Worker Session")))?;
+    let Some(session) = session else {
+        return Ok(());
+    };
+    let session = SessionId::parse(&session).map_err(|_| {
+        CpdError::bad_row(format!("Attempt {attempt} has an invalid Worker Session"))
+    })?;
     let still_open: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM escalations WHERE plan = ?1 AND attempt = ?2 AND status = 'open')",
         [plan.as_str(), &attempt.to_string()],
@@ -177,18 +235,41 @@ pub fn resume_attempt(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId) -> 
     if still_open {
         return Ok(());
     }
-    resume(tx, &Asker { plan: plan.clone(), attempt: attempt.clone(), job: attempt.job().clone(), session })
+    resume(
+        tx,
+        &Asker {
+            plan: plan.clone(),
+            attempt: attempt.clone(),
+            job: attempt.job().clone(),
+            session,
+        },
+    )
 }
 
-fn session_row(conn: &Connection, id: &SessionId) -> Result<(String, Option<String>, String), CpdError> {
-    conn.query_row("SELECT state, state_label, name FROM sessions WHERE id = ?1", [id.as_str()], |r| {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-    })
+fn session_row(
+    conn: &Connection,
+    id: &SessionId,
+) -> Result<(String, Option<String>, String), CpdError> {
+    conn.query_row(
+        "SELECT state, state_label, name FROM sessions WHERE id = ?1",
+        [id.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
     .optional()?
-    .ok_or_else(|| CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}.")).with("session", id.as_str()))
+    .ok_or_else(|| {
+        CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}."))
+            .with("session", id.as_str())
+    })
 }
 
-fn set_state(tx: &WriteTxn<'_>, asker: &Asker, from: &str, to: &str, label: Option<&str>, name: &str) -> Result<(), CpdError> {
+fn set_state(
+    tx: &WriteTxn<'_>,
+    asker: &Asker,
+    from: &str,
+    to: &str,
+    label: Option<&str>,
+    name: &str,
+) -> Result<(), CpdError> {
     tx.execute(
         "UPDATE sessions SET state = ?1, state_label = ?2, state_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?3",
         rusqlite::params![to, label, asker.session.as_str()],
@@ -207,17 +288,27 @@ fn set_state(tx: &WriteTxn<'_>, asker: &Asker, from: &str, to: &str, label: Opti
 }
 
 /// The Escalation's `status` and `answer`.
-fn row(conn: &Connection, plan: &PlanId, id: &EscalationId) -> Result<(String, Option<String>), CpdError> {
-    Ok(conn
-        .query_row("SELECT status, answer FROM escalations WHERE plan = ?1 AND id = ?2", [plan.as_str(), &id.to_string()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?)
+fn row(
+    conn: &Connection,
+    plan: &PlanId,
+    id: &EscalationId,
+) -> Result<(String, Option<String>), CpdError> {
+    Ok(conn.query_row(
+        "SELECT status, answer FROM escalations WHERE plan = ?1 AND id = ?2",
+        [plan.as_str(), &id.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
 }
 
 /// Transaction 2: the end of the wait. When the Escalation is still `open` and
 /// `timed_out`, it expires; otherwise it is whatever another process made it.
 /// The Worker Session goes back to `working` either way.
-fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> Result<Settled, CpdError> {
+fn settle(
+    env: &mut Env,
+    asker: &Asker,
+    id: &EscalationId,
+    timed_out: bool,
+) -> Result<Settled, CpdError> {
     env.store.write(COMMAND, |tx| {
         let expired = timed_out
             && tx.execute(
@@ -244,4 +335,3 @@ fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> R
         }
     })
 }
-

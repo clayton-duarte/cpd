@@ -53,8 +53,15 @@ pub fn title(content: Line<'static>) -> Line<'static> {
 
 /// The closing row: `╰󰬦 expand` when folded, `╰󰬬 collapse` when expanded: the muted `╰`, then the arrow and the word in colour 7.
 pub fn toggle(expanded: bool) -> Line<'static> {
-    let (arrow, word) = if expanded { (UP, "collapse") } else { (DOWN, "expand") };
-    Line::from(vec![Span::styled(CLOSE, muted()), Span::styled(format!("{arrow} {word}"), palette::toggle_text())])
+    let (arrow, word) = if expanded {
+        (UP, "collapse")
+    } else {
+        (DOWN, "expand")
+    };
+    Line::from(vec![
+        Span::styled(CLOSE, muted()),
+        Span::styled(format!("{arrow} {word}"), palette::toggle_text()),
+    ])
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all): the muted terminator `╰󰬪` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
@@ -114,10 +121,24 @@ mod tests {
     fn the_closing_rows_corner_is_muted_and_its_arrow_and_word_are_colour_7() {
         for expanded in [false, true] {
             let row = toggle(expanded);
-            assert!(is_muted(&row.spans[0]), "expanded {expanded}: {:?}", row.spans);
-            assert!(row.spans[1..].iter().all(|s| s.style == palette::toggle_text()), "expanded {expanded}: {:?}", row.spans);
+            assert!(
+                is_muted(&row.spans[0]),
+                "expanded {expanded}: {:?}",
+                row.spans
+            );
+            assert!(
+                row.spans[1..]
+                    .iter()
+                    .all(|s| s.style == palette::toggle_text()),
+                "expanded {expanded}: {:?}",
+                row.spans
+            );
             assert!(!row.spans.iter().any(bold));
-            assert!(!flat(&row).contains("╰─"), "the arrow replaces the `─` of the old `╰─ word`: {:?}", flat(&row));
+            assert!(
+                !flat(&row).contains("╰─"),
+                "the arrow replaces the `─` of the old `╰─ word`: {:?}",
+                flat(&row)
+            );
         }
     }
 

@@ -26,18 +26,32 @@ pub enum NotCurable {
 
 /// Whether the Context is curable: not archived, not deleted and holding at least `floor` records (every kind and
 /// state). `Ok(None)` is curable. An unknown Context counts as deleted.
-pub fn not_curable(conn: &Connection, context: &ContextId, floor: u32) -> Result<Option<NotCurable>, CpdError> {
+pub fn not_curable(
+    conn: &Connection,
+    context: &ContextId,
+    floor: u32,
+) -> Result<Option<NotCurable>, CpdError> {
     let row: Option<(bool, bool)> = conn
-        .query_row("SELECT archived_at IS NOT NULL, deleted_at IS NOT NULL FROM contexts WHERE id = ?1", [context.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            "SELECT archived_at IS NOT NULL, deleted_at IS NOT NULL FROM contexts WHERE id = ?1",
+            [context.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
-    let Some((archived, deleted)) = row else { return Ok(Some(NotCurable::Deleted)) };
+    let Some((archived, deleted)) = row else {
+        return Ok(Some(NotCurable::Deleted));
+    };
     if deleted {
         return Ok(Some(NotCurable::Deleted));
     }
     if archived {
         return Ok(Some(NotCurable::Archived));
     }
-    let records: i64 = conn.query_row("SELECT count(*) FROM context_records WHERE context = ?1", [context.as_str()], |r| r.get(0))?;
+    let records: i64 = conn.query_row(
+        "SELECT count(*) FROM context_records WHERE context = ?1",
+        [context.as_str()],
+        |r| r.get(0),
+    )?;
     let records = u32::try_from(records).unwrap_or(u32::MAX);
     Ok((records < floor).then_some(NotCurable::Young { records }))
 }
@@ -85,7 +99,12 @@ pub struct Proposal {
 /// A proposal whose record, or whose `duplicate`/`superseded` target, is no longer in force when this transaction
 /// reads it (the distiller runs for minutes; the User may have approved a retirement meanwhile) is dropped, not an
 /// error. Returns the number of proposals considered written (the `retire` count of the Event).
-pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], proposals: &[Proposal]) -> Result<usize, CpdError> {
+pub fn propose(
+    store: &mut Store,
+    context: &ContextId,
+    curations: &[Curation],
+    proposals: &[Proposal],
+) -> Result<usize, CpdError> {
     propose_rejecting(store, context, curations, proposals, 0)
 }
 
@@ -155,7 +174,7 @@ pub struct CurationArgs {
     #[command(flatten)]
     select: Select,
     /// At most this many entries per list (default: all)
-    #[arg(long, value_name = "n", )]
+    #[arg(long, value_name = "n")]
     limit: Option<u32>,
 }
 
@@ -187,7 +206,11 @@ pub struct DocsArgs {
 fn user_only(command: &str) -> Result<(), CpdError> {
     for var in ["CPD_SESSION", "CPD_ATTEMPT"] {
         if std::env::var_os(var).is_some() {
-            return Err(CpdError::new(ErrorCode::UserOnly, format!("{command} is for the User: {var} is set, so an agent's Session runs it.")).with("env", var));
+            return Err(CpdError::new(
+                ErrorCode::UserOnly,
+                format!("{command} is for the User: {var} is set, so an agent's Session runs it."),
+            )
+            .with("env", var));
         }
     }
     Ok(())
@@ -195,9 +218,16 @@ fn user_only(command: &str) -> Result<(), CpdError> {
 
 /// The ids of both lists, each without repeats, in the order given; `args_invalid` when one is in both, `usage` when
 /// both are empty.
-fn decided(command: &str, first: (&str, &[RecordId]), second: (&str, &[RecordId])) -> Result<(Vec<String>, Vec<String>), CpdError> {
+fn decided(
+    command: &str,
+    first: (&str, &[RecordId]),
+    second: (&str, &[RecordId]),
+) -> Result<(Vec<String>, Vec<String>), CpdError> {
     if first.1.is_empty() && second.1.is_empty() {
-        return Err(CpdError::new(ErrorCode::Usage, format!("{command} needs {} or {}.", first.0, second.0)));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("{command} needs {} or {}.", first.0, second.0),
+        ));
     }
     let list = |ids: &[RecordId]| {
         let mut out: Vec<String> = Vec::new();
@@ -210,22 +240,38 @@ fn decided(command: &str, first: (&str, &[RecordId]), second: (&str, &[RecordId]
     };
     let (a, b) = (list(first.1), list(second.1));
     if let Some(both) = a.iter().find(|id| b.contains(id)) {
-        return Err(CpdError::new(ErrorCode::ArgsInvalid, format!("{both} is in both {} and {}.", first.0, second.0)).with("record", both.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            format!("{both} is in both {} and {}.", first.0, second.0),
+        )
+        .with("record", both.as_str()));
     }
     Ok((a, b))
 }
 
 fn not_pending(context: &ContextId, record: &str) -> CpdError {
-    CpdError::new(ErrorCode::CurationNotPending, format!("Record {record} of Context {context} has nothing pending."))
-        .with("record", record)
-        .with("context", context.as_str())
+    CpdError::new(
+        ErrorCode::CurationNotPending,
+        format!("Record {record} of Context {context} has nothing pending."),
+    )
+    .with("record", record)
+    .with("context", context.as_str())
 }
 
 /// Refuses the first of `ids` that has no pending row of `table`'s kind (`column` is the status column).
-fn all_pending(conn: &Connection, context: &ContextId, table: &str, column: &str, ids: &[&String]) -> Result<(), CpdError> {
-    let sql = format!("SELECT {column} = 'pending' FROM {table} WHERE context = ?1 AND record = ?2");
+fn all_pending(
+    conn: &Connection,
+    context: &ContextId,
+    table: &str,
+    column: &str,
+    ids: &[&String],
+) -> Result<(), CpdError> {
+    let sql =
+        format!("SELECT {column} = 'pending' FROM {table} WHERE context = ?1 AND record = ?2");
     for id in ids {
-        let pending: Option<Option<bool>> = conn.query_row(&sql, [context.as_str(), id.as_str()], |r| r.get(0)).optional()?;
+        let pending: Option<Option<bool>> = conn
+            .query_row(&sql, [context.as_str(), id.as_str()], |r| r.get(0))
+            .optional()?;
         if pending != Some(Some(true)) {
             return Err(not_pending(context, id));
         }
@@ -239,7 +285,11 @@ pub(super) fn curation(args: CurationArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     if args.limit == Some(0) {
-        return Err(CpdError::new(ErrorCode::ArgsInvalid, "--limit must be an integer of 1 or more.").with("limit", 0));
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            "--limit must be an integer of 1 or more.",
+        )
+        .with("limit", 0));
     }
     let limit = args.limit.map_or(-1, i64::from);
     let (retire, docs, retire_total, docs_total) = store.read(|conn| {
@@ -286,13 +336,19 @@ pub(super) fn curation(args: CurationArgs) -> Result<Output, CpdError> {
         )?;
         Ok((retire, docs, retire_total, docs_total))
     })?;
-    Ok(Output::success(json!({"context": context, "retire": retire, "docs": docs, "retire_total": retire_total, "docs_total": docs_total})))
+    Ok(Output::success(
+        json!({"context": context, "retire": retire, "docs": docs, "retire_total": retire_total, "docs_total": docs_total}),
+    ))
 }
 
 /// `context retire` (§3.16).
 pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
     user_only("context retire")?;
-    let (approve, reject) = decided("context retire", ("--approve", &args.approve), ("--reject", &args.reject))?;
+    let (approve, reject) = decided(
+        "context retire",
+        ("--approve", &args.approve),
+        ("--reject", &args.reject),
+    )?;
     let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.write("context retire", |tx| {
@@ -311,7 +367,9 @@ pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
         append(tx, NewEvent::records_retired(text, context.as_str(), &approve, &reject).context(context.clone()))?;
         Ok(())
     })?;
-    Ok(Output::success(json!({"context": context, "approved": approve, "rejected": reject})))
+    Ok(Output::success(
+        json!({"context": context, "approved": approve, "rejected": reject}),
+    ))
 }
 
 /// The board's limit of a post's characters (`board post`, commands.md §10a.1).
@@ -320,11 +378,17 @@ const POST_MAX_CHARS: usize = 2000;
 /// The one board post that sends `sent` (id, short form, paths) to the Manager: a record whose line does not fit
 /// goes by id alone, and the text is cut at the limit, so that it is always written.
 fn docs_post(context: &ContextId, sent: &[(String, String, Vec<String>)]) -> String {
-    let mut text = format!("Documentation candidates of Context {context}, sent by the User: plan a docs PR that documents these records.\n");
+    let mut text = format!(
+        "Documentation candidates of Context {context}, sent by the User: plan a docs PR that documents these records.\n"
+    );
     let mut room = POST_MAX_CHARS.saturating_sub(text.chars().count());
     for (id, short, paths) in sent {
         let full = format!("- {id}: {short} ({})\n", paths.join(", "));
-        let line = if full.chars().count() <= room { full } else { format!("- {id}\n") };
+        let line = if full.chars().count() <= room {
+            full
+        } else {
+            format!("- {id}\n")
+        };
         room = room.saturating_sub(line.chars().count());
         text.push_str(&line);
     }
@@ -334,7 +398,11 @@ fn docs_post(context: &ContextId, sent: &[(String, String, Vec<String>)]) -> Str
 /// `context docs` (§3.17).
 pub(super) fn docs(args: DocsArgs) -> Result<Output, CpdError> {
     user_only("context docs")?;
-    let (send, dismiss) = decided("context docs", ("--send", &args.send), ("--dismiss", &args.dismiss))?;
+    let (send, dismiss) = decided(
+        "context docs",
+        ("--send", &args.send),
+        ("--dismiss", &args.dismiss),
+    )?;
     let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let manager = store.write("context docs", |tx| {

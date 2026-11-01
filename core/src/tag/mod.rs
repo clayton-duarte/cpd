@@ -25,12 +25,16 @@ fn git(ports: &Ports, root: &Path, args: &[&str]) -> Option<String> {
         stderr_to: None,
     };
     let out = ports.runner.run(&call).ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// The first `version = "` line from `[workspace.package]` on, as the script's `sed` range read it.
 fn workspace_version(toml: &str) -> String {
-    let mut lines = toml.lines().skip_while(|l| !l.starts_with("[workspace.package]"));
+    let mut lines = toml
+        .lines()
+        .skip_while(|l| !l.starts_with("[workspace.package]"));
     lines
         .find_map(|l| l.strip_prefix("version = \""))
         .and_then(|rest| rest.split('"').next())
@@ -69,7 +73,16 @@ pub fn tag(ports: &Ports, root: &Path) -> Result<String, String> {
         return Ok(format!("tag-version: {tag} exists; nothing to do"));
     }
 
-    let Some(log) = g(&["log", "-1", "--first-parent", "-G^version = ", "--format=%H", "origin/main", "--", "Cargo.toml"]) else {
+    let Some(log) = g(&[
+        "log",
+        "-1",
+        "--first-parent",
+        "-G^version = ",
+        "--format=%H",
+        "origin/main",
+        "--",
+        "Cargo.toml",
+    ]) else {
         return die(format!("cannot find the commit that set {tag}"));
     };
     let sha = log.trim();
@@ -92,7 +105,13 @@ pub fn tag(ports: &Ports, root: &Path) -> Result<String, String> {
     }
 
     if g(&["push", "--quiet", "origin", &reference]).is_none() {
-        let theirs = g(&["ls-remote", "--tags", "origin", &format!("{reference}^{{}}")]).unwrap_or_default();
+        let theirs = g(&[
+            "ls-remote",
+            "--tags",
+            "origin",
+            &format!("{reference}^{{}}"),
+        ])
+        .unwrap_or_default();
         if first_word(&theirs) != sha {
             return die(format!("push of {tag} failed"));
         }

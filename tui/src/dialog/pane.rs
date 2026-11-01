@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use serde_json::Value;
 
 use super::{Args, Dialog, Outcome, dispatch, write_result};
@@ -33,7 +35,14 @@ pub(super) struct Pane {
 impl Pane {
     /// `cpd tui view dialog <kind> --title=<title> --out=<out> <fields>` in a pane of `width` by `height`.
     pub(super) fn start(kind: &str, title: &str, fields: &[&str], width: u16, height: u16) -> Pane {
-        Pane::open(tempfile::tempdir().unwrap(), kind, title, fields, width, height)
+        Pane::open(
+            tempfile::tempdir().unwrap(),
+            kind,
+            title,
+            fields,
+            width,
+            height,
+        )
     }
 
     /// A `checklist` over `rows` (`{id, text, detail}`), written to the `--items` file.
@@ -41,17 +50,42 @@ impl Pane {
         let dir = tempfile::tempdir().unwrap();
         let items = dir.path().join("items.json");
         std::fs::write(&items, rows.to_string()).unwrap();
-        Pane::open(dir, "checklist", title, &[&format!("--items={}", items.display())], width, height)
+        Pane::open(
+            dir,
+            "checklist",
+            title,
+            &[&format!("--items={}", items.display())],
+            width,
+            height,
+        )
     }
 
-    fn open(dir: tempfile::TempDir, kind: &str, title: &str, fields: &[&str], width: u16, height: u16) -> Pane {
+    fn open(
+        dir: tempfile::TempDir,
+        kind: &str,
+        title: &str,
+        fields: &[&str],
+        width: u16,
+        height: u16,
+    ) -> Pane {
         let out = dir.path().join(format!("{kind}-out.json"));
-        let mut argv = vec!["cpd".to_owned(), kind.to_owned(), format!("--title={title}"), format!("--out={}", out.display())];
+        let mut argv = vec![
+            "cpd".to_owned(),
+            kind.to_owned(),
+            format!("--title={title}"),
+            format!("--out={}", out.display()),
+        ];
         argv.extend(fields.iter().map(|f| (*f).to_owned()));
         let cli = Cli::try_parse_from(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
         let (_, dialog) = cli.dialog.kind.parts().unwrap();
         let terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        Pane { dialog, terminal, out, closed: None, _dir: dir }
+        Pane {
+            dialog,
+            terminal,
+            out,
+            closed: None,
+            _dir: dir,
+        }
     }
 
     /// The screen: the view draws, then each row as a terminal shows it, its trailing blanks cut.
@@ -59,7 +93,15 @@ impl Pane {
         let dialog = &mut self.dialog;
         self.terminal.draw(|f| dialog.draw(f)).unwrap();
         let buf = self.terminal.backend().buffer();
-        (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
     }
 
     /// Whether the view has closed (it takes no more input then).
@@ -75,7 +117,10 @@ impl Pane {
     /// The outcome file's JSON; the view must have closed.
     pub(super) fn outcome(&self) -> Value {
         assert!(self.closed(), "the view is still open");
-        serde_json::from_str(&std::fs::read_to_string(&self.out).expect("the view wrote its outcome")).unwrap()
+        serde_json::from_str(
+            &std::fs::read_to_string(&self.out).expect("the view wrote its outcome"),
+        )
+        .unwrap()
     }
 
     /// One event, after a draw (`show` draws before it reads); a closing one writes the result.
@@ -112,7 +157,10 @@ impl Pane {
     /// `text` typed, a key per character.
     pub(super) fn literal(&mut self, text: &str) {
         for c in text.chars() {
-            self.send(Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)));
+            self.send(Event::Key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
         }
     }
 
@@ -132,7 +180,12 @@ impl Pane {
     }
 
     fn mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
-        self.send(Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }));
+        self.send(Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
     }
 }
 
@@ -144,7 +197,11 @@ pub(super) fn pill(label: &str) -> String {
 
 /// The top border of a popup `w` wide: `╭─`, the title pill, `─` up to `╮`.
 pub(super) fn top(w: usize, title: &str) -> String {
-    format!("╭─{}{}╮", pill(title), "─".repeat(w - 5 - title.chars().count()))
+    format!(
+        "╭─{}{}╮",
+        pill(title),
+        "─".repeat(w - 5 - title.chars().count())
+    )
 }
 
 /// The bottom border of a popup `w` wide.
@@ -154,7 +211,10 @@ pub(super) fn bottom(w: usize) -> String {
 
 /// A row of the inside of a popup `w` wide: wall, padding, `content` (blank to the width `w - 4`), padding, wall.
 pub(super) fn row(w: usize, content: &str) -> String {
-    format!("│ {content}{} │", " ".repeat(w - 4 - content.chars().count()))
+    format!(
+        "│ {content}{} │",
+        " ".repeat(w - 4 - content.chars().count())
+    )
 }
 
 /// The buttons row of a popup `w` wide: the pill `accept` flush left and, when given, the pill `other` flush right.
@@ -172,7 +232,9 @@ pub(super) fn buttons(w: usize, accept: &str, other: Option<&str>) -> String {
 
 /// The 0-based column of the left cap of the pill `label` in `line`.
 pub(super) fn column_of(line: &str, label: &str) -> usize {
-    let at = line.find(&pill(label)).unwrap_or_else(|| panic!("{label:?} in {line:?}"));
+    let at = line
+        .find(&pill(label))
+        .unwrap_or_else(|| panic!("{label:?} in {line:?}"));
     line[..at].chars().count()
 }
 

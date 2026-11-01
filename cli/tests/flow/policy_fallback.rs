@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::{refused, Run};
+use common::{Run, refused};
 use serde_json::Value;
 
 const FALLBACK: &str = "clayton-duarte";
@@ -42,7 +42,9 @@ fn contexts(fx: &Fx) -> Value {
 }
 
 fn is_symlink(path: &Path) -> bool {
-    fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+    fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn show(fx: &Fx, owner: &str) -> Run {
@@ -64,7 +66,10 @@ fn f1_new_with_an_unknown_owner_is_owner_unconfirmed_and_writes_nothing() {
         assert!(d[key].is_string(), "details.{key}: {error}");
     }
     assert_eq!(contexts(&fx), serde_json::json!([]));
-    assert!(fs::symlink_metadata(link(&fx, "stranger")).is_err(), "no file was created");
+    assert!(
+        fs::symlink_metadata(link(&fx, "stranger")).is_err(),
+        "no file was created"
+    );
 }
 
 #[test]
@@ -74,11 +79,30 @@ fn f2_confirm_fallback_links_the_owner_to_clayton_duarte() {
     assert_eq!(contexts(&fx)[0]["owner"], "stranger");
     let file = link(&fx, "stranger");
     assert!(is_symlink(&file));
-    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("../clayton-duarte/owner.toml"));
-    let real = fs::canonicalize(link(&fx, FALLBACK)).unwrap().display().to_string();
+    assert_eq!(
+        fs::read_link(&file).unwrap(),
+        PathBuf::from("../clayton-duarte/owner.toml")
+    );
+    let real = fs::canonicalize(link(&fx, FALLBACK))
+        .unwrap()
+        .display()
+        .to_string();
     let shown = show(&fx, "stranger").ok();
-    assert_eq!(shown["files"].as_array().unwrap().iter().filter(|f| **f == real.as_str()).count(), 1, "{shown}");
-    assert_eq!(shown["policy"]["tests"]["source"], format!("owner:{real}"), "{shown}");
+    assert_eq!(
+        shown["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| **f == real.as_str())
+            .count(),
+        1,
+        "{shown}"
+    );
+    assert_eq!(
+        shown["policy"]["tests"]["source"],
+        format!("owner:{real}"),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -98,7 +122,10 @@ fn f4_the_flag_with_a_known_owner_creates_nothing() {
     new_ctx(&fx, "c1", "acme", true).ok();
     assert!(!is_symlink(&link(&fx, "acme")));
     assert_eq!(fs::read_to_string(link(&fx, "acme")).unwrap(), "");
-    let names: Vec<_> = fs::read_dir(owners(&fx)).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    let names: Vec<_> = fs::read_dir(owners(&fx))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
     assert_eq!(names.len(), 2, "{names:?}");
 }
 
@@ -108,7 +135,11 @@ fn f5_without_the_fallbacks_file_the_flag_is_fallback_missing() {
     fs::remove_file(link(&fx, FALLBACK)).unwrap();
     let run = new_ctx(&fx, "c1", "stranger", true);
     let error = refused(&run, "fallback_missing", 1);
-    assert_eq!(error["details"]["file"], link(&fx, FALLBACK).display().to_string(), "{error}");
+    assert_eq!(
+        error["details"]["file"],
+        link(&fx, FALLBACK).display().to_string(),
+        "{error}"
+    );
     assert!(fs::symlink_metadata(link(&fx, "stranger")).is_err());
     assert_eq!(contexts(&fx), serde_json::json!([]));
 }
@@ -117,11 +148,20 @@ fn f5_without_the_fallbacks_file_the_flag_is_fallback_missing() {
 fn f6_context_owner_needs_the_flag_for_an_unknown_owner() {
     let fx = base();
     new_ctx(&fx, "c0", "acme", false).ok();
-    fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'c0'");
+    fx.env
+        .sql("UPDATE contexts SET owner = NULL WHERE id = 'c0'");
     let error = unconfirmed(&fx.cpd(&["context", "owner", "stranger", "--context", "c0"]));
     assert_eq!(error["details"]["owner"], "stranger");
     assert!(fs::symlink_metadata(link(&fx, "stranger")).is_err());
-    fx.cpd(&["context", "owner", "stranger", "--context", "c0", "--confirm-fallback"]).ok();
+    fx.cpd(&[
+        "context",
+        "owner",
+        "stranger",
+        "--context",
+        "c0",
+        "--confirm-fallback",
+    ])
+    .ok();
     assert_eq!(contexts(&fx)[0]["owner"], "stranger");
     assert!(is_symlink(&link(&fx, "stranger")));
 }
@@ -138,9 +178,19 @@ fn f6_an_owner_already_set_keeps_its_refusals_first() {
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('p1', 'r', '/r', 'main', 'waiting', 'cpd/p1', cpd_txn(), 't');",
     );
-    let run = fx.cpd(&["context", "owner", "stranger", "--context", "c0", "--confirm-fallback"]);
+    let run = fx.cpd(&[
+        "context",
+        "owner",
+        "stranger",
+        "--context",
+        "c0",
+        "--confirm-fallback",
+    ]);
     refused(&run, "owner_in_use", 3);
-    assert!(fs::symlink_metadata(link(&fx, "stranger")).is_err(), "no link when refused first");
+    assert!(
+        fs::symlink_metadata(link(&fx, "stranger")).is_err(),
+        "no link when refused first"
+    );
 }
 
 #[test]
@@ -160,7 +210,10 @@ fn f8_a_dangling_symlink_is_unknown_and_the_flag_replaces_it() {
     std::os::unix::fs::symlink("../missing/owner.toml", &file).unwrap();
     unconfirmed(&new_ctx(&fx, "c1", "x", false));
     new_ctx(&fx, "c1", "x", true).ok();
-    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("../clayton-duarte/owner.toml"));
+    assert_eq!(
+        fs::read_link(&file).unwrap(),
+        PathBuf::from("../clayton-duarte/owner.toml")
+    );
     show(&fx, "x").ok();
 }
 
@@ -190,7 +243,19 @@ fn pr_fx(owner: &str, name: &str) -> (Fx, PathBuf) {
 }
 
 fn add(fx: &Fx, repo: &Path) -> Run {
-    fx.cpd(&["pr", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change api", "--shape", "config", "--plan", "pay-1"])
+    fx.cpd(&[
+        "pr",
+        "add",
+        "api",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--title",
+        "Change api",
+        "--shape",
+        "config",
+        "--plan",
+        "pay-1",
+    ])
 }
 
 fn repo_file(fx: &Fx, owner: &str, name: &str) {
@@ -205,7 +270,11 @@ fn f10_a_repo_with_no_origin_is_clayton_duartes() {
     repo_file(&fx, FALLBACK, "pay");
     let out = add(&fx, &repo).ok();
     assert_eq!(out["pr"]["name"], "pay", "{out}");
-    assert_eq!(fx.env.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'api'"), "pay");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'api'"),
+        "pay"
+    );
 }
 
 #[test]
@@ -236,12 +305,16 @@ fn f11_owner_unconfirmed_replaces_the_old_refusal() {
         let fx = base();
         unconfirmed(&show(&fx, "nobody"));
         new_ctx(&fx, "c0", "acme", false).ok();
-        fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'c0'");
+        fx.env
+            .sql("UPDATE contexts SET owner = NULL WHERE id = 'c0'");
         unconfirmed(&fx.cpd(&["context", "owner", "nobody", "--context", "c0"]));
     }
 
     let (fx, repo) = pr_fx("acme", "pay");
-    fx.git(&repo, &["remote", "add", "origin", "https://github.com/acme/pay"]);
+    fx.git(
+        &repo,
+        &["remote", "add", "origin", "https://github.com/acme/pay"],
+    );
     fs::remove_file(link(&fx, "acme")).unwrap();
     unconfirmed(&add(&fx, &repo));
 }

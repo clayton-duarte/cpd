@@ -31,15 +31,29 @@ impl PiDirs {
 
     /// Empty variables count as unset and `~` is expanded, as pi does. No home
     /// directory is `usage` (exit 2): the caller fixes its environment.
-    pub fn resolve(home: Option<PathBuf>, agent_dir: Option<OsString>, session_dir: Option<OsString>) -> Result<PiDirs, CpdError> {
+    pub fn resolve(
+        home: Option<PathBuf>,
+        agent_dir: Option<OsString>,
+        session_dir: Option<OsString>,
+    ) -> Result<PiDirs, CpdError> {
         let home = home.filter(|h| h.is_absolute()).ok_or_else(|| {
-            CpdError::new(ErrorCode::Usage, "The home directory is unknown, so pi's settings cannot be found: set HOME.")
-                .with("variable", "HOME")
+            CpdError::new(
+                ErrorCode::Usage,
+                "The home directory is unknown, so pi's settings cannot be found: set HOME.",
+            )
+            .with("variable", "HOME")
         })?;
-        let set = |v: Option<OsString>| v.filter(|v| !v.is_empty()).map(|v| expand_tilde(&v.to_string_lossy(), &home));
+        let set = |v: Option<OsString>| {
+            v.filter(|v| !v.is_empty())
+                .map(|v| expand_tilde(&v.to_string_lossy(), &home))
+        };
         let agent_dir = set(agent_dir).unwrap_or_else(|| home.join(".pi").join("agent"));
         let session_dir = set(session_dir);
-        Ok(PiDirs { home, agent_dir, session_dir })
+        Ok(PiDirs {
+            home,
+            agent_dir,
+            session_dir,
+        })
     }
 
     /// What tells that pi's install changed (contract §6.7 "Reload on install"):
@@ -52,7 +66,11 @@ impl PiDirs {
         }
         std::env::split_paths(path_var)
             .map(|dir| dir.join("pi"))
-            .find(|candidate| candidate.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+            .find(|candidate| {
+                candidate
+                    .metadata()
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
             .and_then(|found| found.canonicalize().ok())
     }
 
@@ -94,15 +112,26 @@ mod tests {
         let home = PathBuf::from("/home/u");
         let d = PiDirs::resolve(Some(home.clone()), None, None).unwrap();
         assert_eq!(d.agent_dir, Path::new("/home/u/.pi/agent"));
-        assert_eq!(d.global_settings(), Path::new("/home/u/.pi/agent/settings.json"));
+        assert_eq!(
+            d.global_settings(),
+            Path::new("/home/u/.pi/agent/settings.json")
+        );
         assert_eq!(d.session_dir, None);
-        let d = PiDirs::resolve(Some(home.clone()), Some("~/agent".into()), Some("/s".into())).unwrap();
+        let d = PiDirs::resolve(
+            Some(home.clone()),
+            Some("~/agent".into()),
+            Some("/s".into()),
+        )
+        .unwrap();
         assert_eq!(d.agent_dir, Path::new("/home/u/agent"));
         assert_eq!(d.session_dir.as_deref(), Some(Path::new("/s")));
         let d = PiDirs::resolve(Some(home), Some("".into()), Some("".into())).unwrap();
         assert_eq!(d.agent_dir, Path::new("/home/u/.pi/agent"));
         assert_eq!(d.session_dir, None);
-        assert_eq!(PiDirs::resolve(None, None, None).unwrap_err().code(), ErrorCode::Usage);
+        assert_eq!(
+            PiDirs::resolve(None, None, None).unwrap_err().code(),
+            ErrorCode::Usage
+        );
     }
 
     fn executable(path: &Path) {

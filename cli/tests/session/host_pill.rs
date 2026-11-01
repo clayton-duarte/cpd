@@ -18,10 +18,32 @@ fn the_alert_draws_a_bright_red_clickable_version_pill_and_the_plain_pill_stays_
     let plain = "#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}";
     let want = format!("#{{?#{{@cpd_host_alert}},{red},{plain}}}");
 
-    let at = STATUS_FORMAT.rfind("#{?#{@cpd_host_alert},").expect("the host alert branch of the version pill");
-    let got = STATUS_FORMAT[at..].strip_suffix(JOIN).expect("the closing join follows the version pill");
-    assert_eq!(got, want, "the version pill's two branches: {}", *STATUS_FORMAT);
-    assert_eq!(STATUS_FORMAT.matches("#{@cpd_host_alert}").count(), 1, "the alert is read once");
-    assert_eq!(STATUS_FORMAT.matches("#[range=user|host]").count(), 1, "one click range for the red pill");
-    assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 2, "the version text is in both branches");
+    let at = STATUS_FORMAT
+        .rfind("#{?#{@cpd_host_alert},")
+        .expect("the host alert branch of the version pill");
+    let got = STATUS_FORMAT[at..]
+        .strip_suffix(JOIN)
+        .expect("the closing join follows the version pill");
+    assert_eq!(
+        got, want,
+        "the version pill's two branches: {}",
+        *STATUS_FORMAT
+    );
+    assert_eq!(
+        STATUS_FORMAT.matches("#{@cpd_host_alert}").count(),
+        1,
+        "the alert is read once"
+    );
+    assert_eq!(
+        STATUS_FORMAT.matches("#[range=user|host]").count(),
+        1,
+        "one click range for the red pill"
+    );
+    assert_eq!(
+        STATUS_FORMAT
+            .matches("#[reverse]#{@cpd_version}#[noreverse]")
+            .count(),
+        2,
+        "the version text is in both branches"
+    );
 }

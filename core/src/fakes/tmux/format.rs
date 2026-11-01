@@ -86,7 +86,10 @@ fn eval(inner: &str, var: &dyn Fn(&str) -> Option<String>) -> Option<String> {
         if op.contains('|') && op != "||" || op.contains('/') {
             return None;
         }
-        let a: Vec<String> = split_commas(args).into_iter().map(|p| expand(p, var)).collect();
+        let a: Vec<String> = split_commas(args)
+            .into_iter()
+            .map(|p| expand(p, var))
+            .collect();
         let two = |f: &dyn Fn(&str, &str) -> bool| Some(flag(f(a.first()?, a.get(1)?)));
         match op {
             "==" => return two(&|x, y| x == y),

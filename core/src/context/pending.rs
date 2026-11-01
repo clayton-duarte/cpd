@@ -12,10 +12,10 @@ use super::{ContextRow, Select};
 use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId};
-use crate::plan::display::Display;
-use crate::plan::jobs::{self as plan_jobs, Job};
-use crate::plan::fingerprint::load_prs;
 use crate::output::Output;
+use crate::plan::display::Display;
+use crate::plan::fingerprint::load_prs;
+use crate::plan::jobs::{self as plan_jobs, Job};
 
 #[derive(Args, Debug)]
 pub struct PendingArgs {
@@ -50,7 +50,12 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
     )?;
     let heads = stmt
         .query_map([context.as_str()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     heads
@@ -93,7 +98,12 @@ fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
 /// The Plan's PRs not `merged` and not `cancelled`, in key order. A PR that cannot start yet has `waiting_on`: the keys of
 /// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
 /// hs-d523: a display status, the stored one is `queued`); see [`Display`].
-fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn prs(
+    conn: &Connection,
+    plan: &str,
+    display: &Display,
+    all_jobs: &[Job],
+) -> Result<Vec<Value>, CpdError> {
     let plan_id = PlanId::parse(plan)?;
     let all_prs = load_prs(conn, &plan_id)?;
     let mut stmt = conn.prepare(
@@ -126,14 +136,25 @@ fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Re
 
 /// The PR's Jobs not `cancelled`, in `seq` order. The PR is not merged, so a
 /// `merged` Job is on the Lead Branch and not yet on the base.
-fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn jobs(
+    conn: &Connection,
+    plan: &str,
+    pr: &str,
+    display: &Display,
+    all: &[Job],
+) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT key, status, title, touches FROM jobs
           WHERE plan = ?1 AND pr = ?2 AND status <> 'cancelled' ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([plan, pr], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
@@ -142,7 +163,9 @@ fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job])
             let touches: Value = touches
                 .map(|text| {
                     serde_json::from_str(&text).map_err(|e| {
-                        CpdError::bad_row(format!("Job {key} of Plan {plan} has touches {text:?}: {e}"))
+                        CpdError::bad_row(format!(
+                            "Job {key} of Plan {plan} has touches {text:?}: {e}"
+                        ))
                     })
                 })
                 .transpose()?
@@ -169,7 +192,11 @@ fn add_waiting_on(item: &mut Value, blockers: Vec<String>) {
 
 /// What `waiting_on` of a Job or PR says, joined: none for work that waits for nothing.
 fn waiting_on(item: &Value) -> Option<String> {
-    let keys: Vec<&str> = item["waiting_on"].as_array()?.iter().filter_map(Value::as_str).collect();
+    let keys: Vec<&str> = item["waiting_on"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
     Some(keys.join(", "))
 }
 
@@ -181,7 +208,13 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
     let text = |v: &Value| v.as_str().expect("a string column").to_owned();
     let mut out = format!("# Pending work in {context}\n");
     for plan in plans {
-        let _ = write!(out, "\n## {} ({}): {}\n", text(&plan["id"]), text(&plan["phase"]), text(&plan["title"]));
+        let _ = write!(
+            out,
+            "\n## {} ({}): {}\n",
+            text(&plan["id"]),
+            text(&plan["phase"]),
+            text(&plan["title"])
+        );
         for pr in plan["prs"].as_array().expect("prs") {
             let _ = write!(
                 out,
@@ -198,11 +231,21 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
             if pull.is_null() {
                 out.push_str("no pull request\n\n");
             } else {
-                let _ = write!(out, "#{} {} {}\n\n", pull["number"], text(&pull["state"]), text(&pull["url"]));
+                let _ = write!(
+                    out,
+                    "#{} {} {}\n\n",
+                    pull["number"],
+                    text(&pull["state"]),
+                    text(&pull["url"])
+                );
             }
             for job in pr["jobs"].as_array().expect("jobs") {
-                let touches: Vec<String> =
-                    job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let touches: Vec<String> = job["touches"]
+                    .as_array()
+                    .expect("touches")
+                    .iter()
+                    .map(text)
+                    .collect();
                 let status = match waiting_on(job) {
                     Some(keys) => format!("{} on {keys}", text(&job["status"])),
                     None => text(&job["status"]),
@@ -220,7 +263,12 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
         if !jobs.is_empty() {
             let _ = write!(out, "\n### Jobs\n\n");
             for job in jobs {
-                let touches: Vec<String> = job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let touches: Vec<String> = job["touches"]
+                    .as_array()
+                    .expect("touches")
+                    .iter()
+                    .map(text)
+                    .collect();
                 let status = match waiting_on(job) {
                     Some(keys) => format!("{} on {keys}", text(&job["status"])),
                     None => text(&job["status"]),

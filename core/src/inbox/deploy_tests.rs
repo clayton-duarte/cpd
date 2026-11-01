@@ -35,7 +35,11 @@ fn write_cache(home: &CpdHome, runs: &[Value]) {
 
 /// The `deploy` conditions E8 computes now.
 fn deploys(store: &mut Store, home: &CpdHome) -> Vec<Condition> {
-    conditions_with(store, home, NOW, 20, 1, None).unwrap().into_iter().filter(|c| c.kind == Kind::Deploy).collect()
+    conditions_with(store, home, NOW, 20, 1, None)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == Kind::Deploy)
+        .collect()
 }
 
 /// One E8 pass: every condition, reconciled at `AT`.
@@ -45,11 +49,34 @@ fn pass(store: &mut Store, home: &CpdHome) -> super::model::Changes {
 }
 
 fn open_deploys(store: &mut Store) -> Vec<Item> {
-    store.read(|c| list(c, &Filter { context: None, state: State::Open })).unwrap().into_iter().filter(|i| i.kind == Kind::Deploy).collect()
+    store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Open,
+                },
+            )
+        })
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.kind == Kind::Deploy)
+        .collect()
 }
 
 fn visible(store: &mut Store) -> Vec<Item> {
-    store.read(|c| list(c, &Filter { context: None, state: State::Visible { now: AT.to_owned() } })).unwrap()
+    store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Visible { now: AT.to_owned() },
+                },
+            )
+        })
+        .unwrap()
 }
 
 #[test]
@@ -63,8 +90,14 @@ fn a_cached_run_opens_one_yellow_deploy_item() {
     assert_eq!((c.kind, c.urgency), (Kind::Deploy, Urgency::Yellow));
     assert_eq!(c.subject, "deploy:acme/pay#40508749055");
     assert_eq!(c.label, "acme/pay deploy production, staging\nRelease 1.2");
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/actions/runs/40508749055"));
-    assert_eq!((&c.plan, &c.context, &c.job, &c.session, &c.record, &c.event), (&None, &None, &None, &None, &None, &None));
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/pay/actions/runs/40508749055")
+    );
+    assert_eq!(
+        (&c.plan, &c.context, &c.job, &c.session, &c.record, &c.event),
+        (&None, &None, &None, &None, &None, &None)
+    );
 
     pass(&mut store, &home);
     let items = open_deploys(&mut store);
@@ -87,26 +120,54 @@ fn the_deploy_item_stays_open_while_the_run_is_cached() {
     let again = pass(&mut store, &home);
     assert!(again.is_empty(), "{again:?}");
     let second = open_deploys(&mut store);
-    assert_eq!(second.iter().map(|i| i.id).collect::<Vec<_>>(), first.iter().map(|i| i.id).collect::<Vec<_>>());
+    assert_eq!(
+        second.iter().map(|i| i.id).collect::<Vec<_>>(),
+        first.iter().map(|i| i.id).collect::<Vec<_>>()
+    );
     assert_eq!(second[0].closed_at, None);
 }
 
 #[test]
 fn the_deploy_item_closes_when_the_run_leaves_the_cache() {
     let (_dir, home, mut store) = store();
-    write_cache(&home, &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")]);
+    write_cache(
+        &home,
+        &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")],
+    );
     pass(&mut store, &home);
     assert_eq!(open_deploys(&mut store).len(), 2);
 
     write_cache(&home, &[run_entry(8, "2026-10-27T13:10:00Z")]);
     pass(&mut store, &home);
     let open = open_deploys(&mut store);
-    assert_eq!(open.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(), ["deploy:acme/pay#8"]);
-    let closed: Vec<Item> = store.read(|c| list(c, &Filter { context: None, state: State::Closed { limit: 10 } })).unwrap();
-    assert_eq!(closed.iter().map(|i| (i.kind, i.subject.as_str())).collect::<Vec<_>>(), [(Kind::Deploy, "deploy:acme/pay#7")]);
+    assert_eq!(
+        open.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(),
+        ["deploy:acme/pay#8"]
+    );
+    let closed: Vec<Item> = store
+        .read(|c| {
+            list(
+                c,
+                &Filter {
+                    context: None,
+                    state: State::Closed { limit: 10 },
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        closed
+            .iter()
+            .map(|i| (i.kind, i.subject.as_str()))
+            .collect::<Vec<_>>(),
+        [(Kind::Deploy, "deploy:acme/pay#7")]
+    );
 
     // The run returns: a new item.
-    write_cache(&home, &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")]);
+    write_cache(
+        &home,
+        &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")],
+    );
     pass(&mut store, &home);
     assert_eq!(open_deploys(&mut store).len(), 2);
 }
@@ -114,9 +175,16 @@ fn the_deploy_item_closes_when_the_run_leaves_the_cache() {
 #[test]
 fn a_snoozed_or_dismissed_deploy_item_stays_hidden() {
     let (_dir, home, mut store) = store();
-    write_cache(&home, &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")]);
+    write_cache(
+        &home,
+        &[run_entry(7, CREATED), run_entry(8, "2026-10-27T13:10:00Z")],
+    );
     pass(&mut store, &home);
-    let shown: Vec<String> = visible(&mut store).into_iter().filter(|i| i.kind == Kind::Deploy).map(|i| i.subject).collect();
+    let shown: Vec<String> = visible(&mut store)
+        .into_iter()
+        .filter(|i| i.kind == Kind::Deploy)
+        .map(|i| i.subject)
+        .collect();
     assert_eq!(shown, ["deploy:acme/pay#7", "deploy:acme/pay#8"]);
 
     store
@@ -128,7 +196,11 @@ fn a_snoozed_or_dismissed_deploy_item_stays_hidden() {
         .unwrap();
     // A later pass with the same runs neither shows nor reopens them.
     pass(&mut store, &home);
-    let shown: Vec<String> = visible(&mut store).into_iter().filter(|i| i.kind == Kind::Deploy).map(|i| i.subject).collect();
+    let shown: Vec<String> = visible(&mut store)
+        .into_iter()
+        .filter(|i| i.kind == Kind::Deploy)
+        .map(|i| i.subject)
+        .collect();
     assert!(shown.is_empty(), "{shown:?}");
     assert_eq!(open_deploys(&mut store).len(), 2, "both stay open, hidden");
 }

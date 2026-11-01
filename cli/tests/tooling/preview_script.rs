@@ -80,7 +80,12 @@ FAKE
 chmod 755 "$CARGO_TARGET_DIR/release/cpd"
 "#,
         );
-        Preview { env, worktree, dir, log }
+        Preview {
+            env,
+            worktree,
+            dir,
+            log,
+        }
     }
 
     fn run(&self, args: &[&str], vars: &[(&str, &str)]) -> Out {
@@ -94,7 +99,10 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
             cmd.env(k, v);
         }
         let out = cmd.output().unwrap();
-        Out { exit: out.status.code().unwrap(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() }
+        Out {
+            exit: out.status.code().unwrap(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
     }
 
     fn on(&self, vars: &[(&str, &str)]) -> Out {
@@ -102,7 +110,11 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
     }
 
     fn log(&self) -> Vec<String> {
-        fs::read_to_string(&self.log).unwrap_or_default().lines().map(str::to_owned).collect()
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The `respawn-pane` calls of the fake tmux, as argv after the tmux prefix.
@@ -117,7 +129,12 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
 
     /// The `set` calls of the fake tmux, as argv after the tmux prefix.
     fn sets(&self) -> Vec<Vec<String>> {
-        self.env.calls("tmux").into_iter().filter(|c| c[5] == "set").map(|c| c[5..].to_vec()).collect()
+        self.env
+            .calls("tmux")
+            .into_iter()
+            .filter(|c| c[5] == "set")
+            .map(|c| c[5..].to_vec())
+            .collect()
     }
 
     fn state(&self) -> PathBuf {
@@ -127,13 +144,31 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
 
 fn respawn_args(pane: &str, cpd_home: &Path, cpd: &str, view: &str) -> Vec<String> {
     let home = cpd_home.to_str().unwrap();
-    ["-k", "-t", pane, "-c", home, "-e", &format!("CPD_HOME={home}"), "--", cpd, "tui", "view", view]
-        .map(str::to_owned)
-        .to_vec()
+    [
+        "-k",
+        "-t",
+        pane,
+        "-c",
+        home,
+        "-e",
+        &format!("CPD_HOME={home}"),
+        "--",
+        cpd,
+        "tui",
+        "view",
+        view,
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
-const VIEW_PANES: [(&str, &str); 5] =
-    [("%1", "tree"), ("%2", "plan"), ("%3", "widgets"), ("%4", "statusbar"), ("%5", "chat")];
+const VIEW_PANES: [(&str, &str); 5] = [
+    ("%1", "tree"),
+    ("%2", "plan"),
+    ("%3", "widgets"),
+    ("%4", "statusbar"),
+    ("%5", "chat"),
+];
 
 #[test]
 fn on_respawns_the_five_views_with_the_preview_and_leaves_lead_and_worker_alone() {
@@ -142,16 +177,30 @@ fn on_respawns_the_five_views_with_the_preview_and_leaves_lead_and_worker_alone(
     assert_eq!(out.exit, 0, "{}", out.stderr);
 
     let preview = p.dir.join("cpd");
-    let expected: Vec<_> =
-        VIEW_PANES.iter().map(|(pane, view)| respawn_args(pane, &p.env.cpd_home(), preview.to_str().unwrap(), view)).collect();
+    let expected: Vec<_> = VIEW_PANES
+        .iter()
+        .map(|(pane, view)| respawn_args(pane, &p.env.cpd_home(), preview.to_str().unwrap(), view))
+        .collect();
     assert_eq!(p.respawns(), expected);
 
     let sha = p.env.git(&p.worktree, &["rev-parse", "--short", "HEAD"]);
     let wt = p.worktree.display();
-    assert_eq!(fs::read_to_string(p.state()).unwrap(), format!("{wt}\n{sha}\n"));
-    assert!(out.stderr.contains(&format!("previewing {wt} @ {sha}; revert with: sh ")), "{}", out.stderr);
+    assert_eq!(
+        fs::read_to_string(p.state()).unwrap(),
+        format!("{wt}\n{sha}\n")
+    );
+    assert!(
+        out.stderr
+            .contains(&format!("previewing {wt} @ {sha}; revert with: sh ")),
+        "{}",
+        out.stderr
+    );
     assert!(out.stderr.contains("preview-tui.sh off"), "{}", out.stderr);
-    assert!(out.stderr.contains("Worker view pane is open"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("Worker view pane is open"),
+        "{}",
+        out.stderr
+    );
     assert!(out.stderr.contains("reinstall"), "{}", out.stderr);
 }
 
@@ -162,7 +211,11 @@ fn on_sets_the_preview_option_to_the_worktree_and_sha_after_the_views_are_respaw
     let sha = p.env.git(&p.worktree, &["rev-parse", "--short", "HEAD"]);
     let name = p.worktree.file_name().unwrap().to_str().unwrap();
     let sets = p.sets();
-    assert_eq!(sets, [vec!["set", "-g", "@cpd_preview", &format!("{name} {sha}")]], "{sets:?}");
+    assert_eq!(
+        sets,
+        [vec!["set", "-g", "@cpd_preview", &format!("{name} {sha}")]],
+        "{sets:?}"
+    );
     let calls = p.env.calls("tmux");
     let at = |verb: &str| calls.iter().rposition(|c| c[5] == verb).unwrap();
     assert!(at("respawn-pane") < at("set"), "{calls:?}");
@@ -196,7 +249,9 @@ fn on_builds_into_the_preview_dir_only() {
     assert_eq!(p.on(&[]).exit, 0);
     let wt = p.worktree.display();
     assert!(
-        p.log().contains(&format!("cargo build --release --locked --manifest-path {wt}/Cargo.toml -p cpd")),
+        p.log().contains(&format!(
+            "cargo build --release --locked --manifest-path {wt}/Cargo.toml -p cpd"
+        )),
         "{:?}",
         p.log()
     );
@@ -210,10 +265,19 @@ fn on_starts_the_engine_on_the_installed_cpd_before_the_previews_tui() {
     let p = Preview::new();
     assert_eq!(p.on(&[]).exit, 0);
     let log = p.log();
-    let at = |line: &str| log.iter().position(|l| l == line).unwrap_or_else(|| panic!("{line} not in {log:?}"));
+    let at = |line: &str| {
+        log.iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("{line} not in {log:?}"))
+    };
     assert!(at("installed watch --ensure") < at("preview tui"));
     assert!(at("preview plan list") < at("installed watch --ensure"));
-    assert!(at("preview tui") < at("tmux -u -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{pane_id}|#{pane_dead}|#{@cpd_view}|#{@cpd_session}"));
+    assert!(
+        at("preview tui")
+            < at(
+                "tmux -u -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{pane_id}|#{pane_dead}|#{@cpd_view}|#{@cpd_session}"
+            )
+    );
     assert!(!log.contains(&"installed tui".to_owned()));
 }
 
@@ -224,9 +288,17 @@ fn on_refuses_a_preview_that_cannot_read_the_store_and_changes_nothing_in_tmux()
     let out = p.on(&[("PREVIEW_PLAN_LIST", refusal)]);
     assert_ne!(out.exit, 0);
     assert!(out.stderr.contains("store_too_new"), "{}", out.stderr);
-    assert!(out.stderr.contains("merge main into the branch first"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("merge main into the branch first"),
+        "{}",
+        out.stderr
+    );
     assert!(p.env.calls("tmux").is_empty(), "{:?}", p.env.calls("tmux"));
-    assert!(p.env.calls("cpd").iter().all(|c| c[0] != "watch"), "{:?}", p.env.calls("cpd"));
+    assert!(
+        p.env.calls("cpd").iter().all(|c| c[0] != "watch"),
+        "{:?}",
+        p.env.calls("cpd")
+    );
     assert!(!p.state().exists());
 }
 
@@ -239,7 +311,10 @@ fn off_respawns_the_five_views_with_the_installed_cpd_runs_tui_and_removes_the_s
 
     let out = p.run(&["off"], &[]);
     assert_eq!(out.exit, 0, "{}", out.stderr);
-    let expected: Vec<_> = VIEW_PANES.iter().map(|(pane, view)| respawn_args(pane, &p.env.cpd_home(), "cpd", view)).collect();
+    let expected: Vec<_> = VIEW_PANES
+        .iter()
+        .map(|(pane, view)| respawn_args(pane, &p.env.cpd_home(), "cpd", view))
+        .collect();
     assert_eq!(p.respawns()[before..], expected[..]);
     assert_eq!(p.log().last().map(String::as_str), Some("installed tui"));
     assert!(!p.state().exists());
@@ -275,7 +350,13 @@ fn no_cockpit_exits_1_for_on_after_building_and_for_off() {
 #[test]
 fn rejects_other_arguments() {
     let p = Preview::new();
-    let status = Command::new("/bin/sh").arg(SCRIPT).arg("sideways").env_clear().env("HOME", p.env.home()).status().unwrap();
+    let status = Command::new("/bin/sh")
+        .arg(SCRIPT)
+        .arg("sideways")
+        .env_clear()
+        .env("HOME", p.env.home())
+        .status()
+        .unwrap();
     assert_eq!(status.code(), Some(2));
     assert!(p.env.calls("tmux").is_empty());
 }

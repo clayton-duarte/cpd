@@ -19,7 +19,11 @@ use common::screen::{Bytes, Display, FakeTty, Script, Step, ch, then};
 /// `tmux <args>`'s stdout on the fake server; panics when it fails.
 fn tmux_out(fx: &Fx, args: &[&str]) -> String {
     let out = fx.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "tmux {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8(out.stdout).unwrap()
 }
 
@@ -32,11 +36,17 @@ fn the_status_line_is_one_row_and_the_panes_reach_the_row_above_it() {
     tui(&fx, &[]);
 
     // The options: one status row, the line in row 0, no row 1.
-    assert_eq!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status"]).trim(), "on");
+    assert_eq!(
+        tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status"]).trim(),
+        "on"
+    );
     assert!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]).contains("\u{2501}"));
     // The fake server refuses to show an option that was never set, so row 1 is read off the session's own options.
     let set = tmux_out(&fx, &["show", "-t", "=cpd:"]);
-    assert!(!set.lines().any(|l| l.starts_with("status-format[1]")), "no status-format row sits between the panes and the line: {set}");
+    assert!(
+        !set.lines().any(|l| l.starts_with("status-format[1]")),
+        "no status-format row sits between the panes and the line: {set}"
+    );
 }
 
 /// The history view in a 40 x 12 terminal of the test process (`history::run_on`: scripted input, a `TestBackend`): its rows
@@ -70,20 +80,36 @@ fn the_history_view_leaves_the_last_row_of_its_pane_empty() {
         then(move || shots.borrow_mut().push(display.screen().rows()))
     };
     // the first frame is drawn at the first poll; a step that is a snapshot runs between two polls
-    let mut input = Script::new(fx.fakes.clock.clone(), [take(), Step::Event(ch('G')), take(), Step::Event(ch('q'))]);
+    let mut input = Script::new(
+        fx.fakes.clock.clone(),
+        [take(), Step::Event(ch('G')), take(), Step::Event(ch('q'))],
+    );
     let args = history_args(&["l1"]);
-    let result = history::run_on(&fx.fakes.ports, args, &mut FakeTty::new(true), &mut Bytes::default(), display.terminal(), &mut input);
+    let result = history::run_on(
+        &fx.fakes.ports,
+        args,
+        &mut FakeTty::new(true),
+        &mut Bytes::default(),
+        display.terminal(),
+        &mut input,
+    );
     result.unwrap();
     assert_eq!(input.remaining(), 0);
     let check = |rows: &[String]| {
         assert_eq!(rows.len(), 12, "{rows:?}");
         assert_eq!(rows[11], "", "row 12 is empty: {rows:?}");
-        assert!(!rows[10].is_empty(), "the content fills rows 1..11: {rows:?}");
+        assert!(
+            !rows[10].is_empty(),
+            "the content fills rows 1..11: {rows:?}"
+        );
     };
     let shots = shots.borrow();
     assert_eq!(shots.len(), 2);
     for rows in shots.iter() {
-        assert!(rows.iter().any(|r| r.contains("row 39")), "the end of the conversation: {rows:?}");
+        assert!(
+            rows.iter().any(|r| r.contains("row 39")),
+            "the end of the conversation: {rows:?}"
+        );
         check(rows);
     }
 }
@@ -95,5 +121,7 @@ fn history_args(argv: &[&str]) -> history::Args {
         #[command(flatten)]
         args: history::Args,
     }
-    Command::try_parse_from(std::iter::once("history").chain(argv.iter().copied())).unwrap().args
+    Command::try_parse_from(std::iter::once("history").chain(argv.iter().copied()))
+        .unwrap()
+        .args
 }

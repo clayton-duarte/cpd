@@ -134,9 +134,15 @@ const VIEWS: [&str; 4] = ["tree", "plan", "widgets", "logs"];
 fn start(fx: &Fx, name: &str) -> Tree {
     let entry: Box<drive::Entry> = match name {
         "tree" => return Tree::start(fx, 120, 30),
-        "plan" => Box::new(|ports, tty, out, terminal, input| plan::run_on(ports, no_command, tty, out, terminal, input)),
-        "widgets" => Box::new(|ports, tty, out, terminal, input| widgets::run_on(ports, no_command, tty, out, terminal, input)),
-        "logs" => Box::new(|ports, tty, out, terminal, input| logs::run_on(ports, logs_args(), tty, out, terminal, input)),
+        "plan" => Box::new(|ports, tty, out, terminal, input| {
+            plan::run_on(ports, no_command, tty, out, terminal, input)
+        }),
+        "widgets" => Box::new(|ports, tty, out, terminal, input| {
+            widgets::run_on(ports, no_command, tty, out, terminal, input)
+        }),
+        "logs" => Box::new(|ports, tty, out, terminal, input| {
+            logs::run_on(ports, logs_args(), tty, out, terminal, input)
+        }),
         other => panic!("no view {other:?}"),
     };
     Tree::run(fx, name, 120, 30, entry)
@@ -157,7 +163,10 @@ fn noisy(fx: &Fx, view: &mut Tree, noise: &mut Store, span: Duration) {
     while fx.fakes.clock.elapsed() - start < span {
         noise
             .write("noise", |tx| {
-                tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = 'lead-other'", [format!("%{n}")])?;
+                tx.execute(
+                    "UPDATE sessions SET tmux_pane = ?1 WHERE id = 'lead-other'",
+                    [format!("%{n}")],
+                )?;
                 Ok::<(), CpdError>(())
             })
             .unwrap();
@@ -174,8 +183,14 @@ fn idle(fx: &Fx, name: &str) -> Idle {
     assert!(view.flushes() > 0, "{name} drew nothing before the window");
     let before = (view.flushes(), view.snapshots());
     noisy(fx, &mut view, &mut noise, WINDOW);
-    let idle = Idle { flushes: view.flushes() - before.0, snapshots: view.snapshots() - before.1 };
-    eprintln!("idle {name}: {WINDOW:?}: {} snapshots, {} flushes of the terminal", idle.snapshots, idle.flushes);
+    let idle = Idle {
+        flushes: view.flushes() - before.0,
+        snapshots: view.snapshots() - before.1,
+    };
+    eprintln!(
+        "idle {name}: {WINDOW:?}: {} snapshots, {} flushes of the terminal",
+        idle.snapshots, idle.flushes
+    );
     idle
 }
 
@@ -187,7 +202,10 @@ fn idle_dispatch_views_read_next_to_nothing() {
     let _engine = engine(&fx);
     fx.env.sql(&fixture());
     let idle = idle(&fx, "widgets");
-    assert_eq!(idle.snapshots, 0, "widgets took a snapshot while nothing changed");
+    assert_eq!(
+        idle.snapshots, 0,
+        "widgets took a snapshot while nothing changed"
+    );
 }
 
 /// tui-F3: the tree takes a 2.4 MB snapshot every 2 s, and the plan view one of its Plan, with no Event.
@@ -198,7 +216,10 @@ fn idle_tree_and_plan_read_next_to_nothing() {
     fx.env.sql(&fixture());
     for name in ["tree", "plan"] {
         let idle = idle(&fx, name);
-        assert_eq!(idle.snapshots, 0, "{name} took a snapshot while nothing changed");
+        assert_eq!(
+            idle.snapshots, 0,
+            "{name} took a snapshot while nothing changed"
+        );
     }
 }
 
@@ -211,8 +232,16 @@ fn idle_views_write_nothing_to_the_terminal() {
     fx.env.sql(&fixture());
     for name in VIEWS {
         let idle = idle(&fx, name);
-        let allowed = if name == "widgets" { 2 + (WINDOW.as_secs() / 2) as usize } else { 0 };
-        assert!(idle.flushes <= allowed, "{name} wrote {} times while nothing changed", idle.flushes);
+        let allowed = if name == "widgets" {
+            2 + (WINDOW.as_secs() / 2) as usize
+        } else {
+            0
+        };
+        assert!(
+            idle.flushes <= allowed,
+            "{name} wrote {} times while nothing changed",
+            idle.flushes
+        );
     }
 }
 
@@ -233,7 +262,10 @@ fn a_commit_that_concerns_a_view_makes_it_take_a_snapshot_and_a_key_makes_it_flu
              VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-state', 'ctx', 'ship', 'lead-ship', 'State.', '{\"from\":\"idle\",\"label\":null,\"to\":\"working\"}');",
         );
         noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
-        assert!(view.snapshots() > before, "{name} took no snapshot after an Event that concerns it");
+        assert!(
+            view.snapshots() > before,
+            "{name} took no snapshot after an Event that concerns it"
+        );
         let flushes = view.flushes();
         view.keys(&["j"]);
         assert!(view.flushes() > flushes, "{name} drew no frame for a key");
@@ -255,7 +287,11 @@ fn a_session_state_event_alone_makes_the_widgets_view_take_no_snapshot() {
          VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-state', 'ctx', 'ship', 'lead-ship', 'State.', '{}');",
     );
     noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
-    assert_eq!(view.snapshots(), before, "widgets took a snapshot while nothing changed");
+    assert_eq!(
+        view.snapshots(),
+        before,
+        "widgets took a snapshot while nothing changed"
+    );
 }
 
 /// The widgets view reads the Inbox when an open item changed in place (a label change appends no Event).
@@ -272,7 +308,11 @@ fn a_change_of_an_open_inbox_item_makes_the_widgets_view_take_a_snapshot() {
     let mut noise = fx.env.store();
     noisy(&fx, &mut view, &mut noise, SETTLE);
     let before = view.snapshots();
-    fx.env.sql("UPDATE inbox_items SET label = 'Ready now' WHERE subject = 'acme/repo#1';");
+    fx.env
+        .sql("UPDATE inbox_items SET label = 'Ready now' WHERE subject = 'acme/repo#1';");
     noisy(&fx, &mut view, &mut noise, Duration::from_secs(2));
-    assert!(view.snapshots() > before, "widgets took no snapshot after an open Inbox item changed");
+    assert!(
+        view.snapshots() > before,
+        "widgets took no snapshot after an open Inbox item changed"
+    );
 }

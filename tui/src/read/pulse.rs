@@ -144,11 +144,18 @@ const ACTIVITY: &str = "(e.kind IN ('plan-phase', 'plan-review', 'plan-done', 'j
 
 /// Unix ms of an RFC 3339 UTC timestamp with milliseconds (`2026-10-18T14:57:18.848Z`), as SQL over `col`.
 fn ms(col: &str) -> String {
-    format!("(CAST(strftime('%s', {col}) AS INTEGER) * 1000 + CAST(substr({col}, 21, 3) AS INTEGER))")
+    format!(
+        "(CAST(strftime('%s', {col}) AS INTEGER) * 1000 + CAST(substr({col}, 21, 3) AS INTEGER))"
+    )
 }
 
 /// `context`'s Pulse at `now_ms` (Unix ms), with `buckets` 5-minute buckets ending at the current, partial bucket.
-pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize) -> Result<Pulse, CpdError> {
+pub fn pulse(
+    store: &mut Store,
+    context: &ContextId,
+    now_ms: i64,
+    buckets: usize,
+) -> Result<Pulse, CpdError> {
     let start_ms = now_ms.div_euclid(BUCKET_MS) * BUCKET_MS - (buckets as i64 - 1) * BUCKET_MS;
     store.read(|conn| {
         let start_at: String =
@@ -260,9 +267,24 @@ mod tests {
             (&["error", "job-failed"][..], Kind::Error),
             (&["plan-phase", "plan-review", "plan-done"], Kind::Plan),
             (&["pr-opened"], Kind::PrOpened),
-            (&["escalation", "escalation-answered", "escalation-expired"], Kind::Escalation),
+            (
+                &["escalation", "escalation-answered", "escalation-expired"],
+                Kind::Escalation,
+            ),
             (&["job-merged", "pr-merged"], Kind::Merged),
-            (&["job-added", "job-retried", "attempt-started", "attempt-status", "all-merged", "pr-feedback", "pr-started", "session-state"], Kind::Other),
+            (
+                &[
+                    "job-added",
+                    "job-retried",
+                    "attempt-started",
+                    "attempt-status",
+                    "all-merged",
+                    "pr-feedback",
+                    "pr-started",
+                    "session-state",
+                ],
+                Kind::Other,
+            ),
         ] {
             for event in events {
                 assert_eq!(Kind::of(event), kind, "{event}");
@@ -272,7 +294,14 @@ mod tests {
 
     #[test]
     fn a_bucket_with_several_kinds_takes_red_magenta_yellow_blue_green_white_in_that_order() {
-        let order = ["error", "plan-phase", "pr-opened", "escalation", "job-merged", "job-added"];
+        let order = [
+            "error",
+            "plan-phase",
+            "pr-opened",
+            "escalation",
+            "job-merged",
+            "job-added",
+        ];
         for first in 0..order.len() {
             // every kind from `first` on, added in any order: the first of them wins
             for reversed in [false, true] {
@@ -284,8 +313,17 @@ mod tests {
                 for event in events {
                     bucket.add(event, 2);
                 }
-                assert_eq!(bucket.kind, Some(Kind::of(order[first])), "from {}", order[first]);
-                assert_eq!(bucket.count, 2 * (order.len() - first) as u32, "the count is the sum: the scale does not change");
+                assert_eq!(
+                    bucket.kind,
+                    Some(Kind::of(order[first])),
+                    "from {}",
+                    order[first]
+                );
+                assert_eq!(
+                    bucket.count,
+                    2 * (order.len() - first) as u32,
+                    "the count is the sum: the scale does not change"
+                );
             }
         }
     }

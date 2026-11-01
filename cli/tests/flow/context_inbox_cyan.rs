@@ -22,8 +22,21 @@ const T1: &str = "2026-01-01T01:00:00.000Z";
 fn fx() -> TestEnv {
     let env = TestEnv::new();
     fs::create_dir_all(env.cpd_home()).unwrap();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\ncontext_curation_min_records = 1\n").unwrap();
-    env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"hs\"\ncontext_curation_min_records = 1\n",
+    )
+    .unwrap();
+    env.cpd(&[
+        "context",
+        "new",
+        CTX,
+        "--title",
+        "Building cpd",
+        "--owner",
+        "acme",
+    ])
+    .ok();
     for text in ["Old fact.", "Same fact.", "Worth documenting."] {
         env.cpd(&["context", "note", text, "--context", CTX]).ok();
     }
@@ -33,9 +46,23 @@ fn fx() -> TestEnv {
         short: format!("short of {record}"),
         doc_paths: doc.then(|| vec!["docs/a.md".to_owned()]),
     };
-    let curations = [curation("hs-n1", false), curation("hs-n2", false), curation("hs-n3", true)];
-    let proposals = [Proposal { record: "hs-n1".parse().unwrap(), reason: Reason::Duplicate, target: "hs-n2".into() }];
-    propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &curations, &proposals).unwrap();
+    let curations = [
+        curation("hs-n1", false),
+        curation("hs-n2", false),
+        curation("hs-n3", true),
+    ];
+    let proposals = [Proposal {
+        record: "hs-n1".parse().unwrap(),
+        reason: Reason::Duplicate,
+        target: "hs-n2".into(),
+    }];
+    propose(
+        &mut env.store(),
+        &ContextId::parse(CTX).unwrap(),
+        &curations,
+        &proposals,
+    )
+    .unwrap();
     env
 }
 
@@ -47,7 +74,10 @@ fn home(env: &TestEnv) -> CpdHome {
 fn notices(env: &TestEnv) -> Vec<Condition> {
     let all = rules::conditions(&mut env.store(), &home(env)).unwrap();
     let kinds: Vec<Kind> = all.iter().map(|c| c.kind).collect();
-    assert!(kinds.contains(&Kind::CurateDocs) && kinds.contains(&Kind::CurateRetire), "{kinds:?}");
+    assert!(
+        kinds.contains(&Kind::CurateDocs) && kinds.contains(&Kind::CurateRetire),
+        "{kinds:?}"
+    );
     all
 }
 
@@ -70,7 +100,13 @@ fn plain(kind: Kind, urgency: Urgency, subject: &str) -> Condition {
 
 fn listed(env: &TestEnv) -> Vec<Value> {
     let out = env.cpd(&["inbox", "list"]).ok();
-    out["items"].as_array().unwrap().iter().filter(|i| i["kind"] != "engine-down").cloned().collect()
+    out["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] != "engine-down")
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -80,7 +116,10 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
 
     let items = listed(&env);
     for kind in ["curate-docs", "curate-retire"] {
-        let item = items.iter().find(|i| i["kind"] == kind).unwrap_or_else(|| panic!("{kind} in {items:?}"));
+        let item = items
+            .iter()
+            .find(|i| i["kind"] == kind)
+            .unwrap_or_else(|| panic!("{kind} in {items:?}"));
         assert_eq!(item["urgency"], "cyan", "{item}");
     }
     let stored: Vec<String> = env
@@ -95,7 +134,11 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
     let list = env.cpd(&["inbox", "list"]).ok().to_string();
     assert!(list.contains("\"urgency\":\"cyan\""), "{list}");
     let id = items[0]["id"].as_i64().unwrap().to_string();
-    let outputs = [list, env.cpd(&["inbox", "show", &id]).ok().to_string(), env.cpd(&["inbox", "list", "--all"]).ok().to_string()];
+    let outputs = [
+        list,
+        env.cpd(&["inbox", "show", &id]).ok().to_string(),
+        env.cpd(&["inbox", "list", "--all"]).ok().to_string(),
+    ];
     for out in outputs {
         assert!(!out.contains("blue"), "no inbox output prints blue: {out}");
     }
@@ -105,8 +148,19 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
 fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a_tier() {
     let env = fx();
     let notices = notices(&env);
-    let of = |kind: Kind| notices.iter().filter(|c| c.kind == kind).cloned().collect::<Vec<_>>();
-    let mut first = vec![plain(Kind::Unread, Urgency::White, "w-old"), plain(Kind::Dialog, Urgency::Magenta, "m"), plain(Kind::PrReady, Urgency::Yellow, "y"), plain(Kind::Dialog, Urgency::Red, "r")];
+    let of = |kind: Kind| {
+        notices
+            .iter()
+            .filter(|c| c.kind == kind)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mut first = vec![
+        plain(Kind::Unread, Urgency::White, "w-old"),
+        plain(Kind::Dialog, Urgency::Magenta, "m"),
+        plain(Kind::PrReady, Urgency::Yellow, "y"),
+        plain(Kind::Dialog, Urgency::Red, "r"),
+    ];
     first.extend(of(Kind::CurateDocs));
     reconcile(&mut env.store(), &first, T0).unwrap();
     let mut second = first.clone();
@@ -114,7 +168,15 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
     second.push(plain(Kind::Unread, Urgency::White, "w-new"));
     reconcile(&mut env.store(), &second, T1).unwrap();
 
-    let order: Vec<(String, String)> = listed(&env).iter().map(|i| (i["urgency"].as_str().unwrap().to_owned(), i["subject"].as_str().unwrap().to_owned())).collect();
+    let order: Vec<(String, String)> = listed(&env)
+        .iter()
+        .map(|i| {
+            (
+                i["urgency"].as_str().unwrap().to_owned(),
+                i["subject"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
     let want: Vec<(&str, String)> = vec![
         ("red", "r".into()),
         ("yellow", "y".into()),
@@ -124,18 +186,30 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
         ("white", "w-old".into()),
         ("white", "w-new".into()),
     ];
-    assert_eq!(order, want.into_iter().map(|(u, s)| (u.to_owned(), s)).collect::<Vec<_>>());
+    assert_eq!(
+        order,
+        want.into_iter()
+            .map(|(u, s)| (u.to_owned(), s))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn an_urgency_is_parsed_as_cyan_and_never_as_blue() {
     // The one place an urgency is read from text (the tiers are named by the palette's colours, hs-d534, pro-d16).
     assert_eq!(Urgency::parse("cyan").map(Urgency::as_str), Some("cyan"));
-    assert_eq!(Urgency::parse("blue").map(Urgency::as_str), Some("blue"), "blue is a tier now (review-requested)");
+    assert_eq!(
+        Urgency::parse("blue").map(Urgency::as_str),
+        Some("blue"),
+        "blue is a tier now (review-requested)"
+    );
     assert_eq!(Urgency::parse("teal"), None, "an unknown value");
     for tier in ["white", "magenta", "yellow", "red"] {
         assert_eq!(Urgency::parse(tier).map(Urgency::as_str), Some(tier));
     }
     let cyan = Urgency::parse("cyan").expect("cyan is a tier");
-    assert!(Urgency::White < cyan && cyan < Urgency::Magenta, "the same place in the order");
+    assert!(
+        Urgency::White < cyan && cyan < Urgency::Magenta,
+        "the same place in the order"
+    );
 }

@@ -93,20 +93,44 @@ pub(super) fn messages(fx: &mut Fx) -> Vec<(String, Option<String>, bool, String
 #[test]
 fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
     let mut fx = fx();
-    fx.fixture("UPDATE sessions SET state = 'blocked', state_label = 'Which repo?' WHERE id = 'lead1';");
+    fx.fixture(
+        "UPDATE sessions SET state = 'blocked', state_label = 'Which repo?' WHERE id = 'lead1';",
+    );
 
     tick(&mut fx);
-    assert_eq!(open_items(&mut fx), [("dialog".into(), "red".into(), "session:lead1".into(), "pay asks you".into())]);
+    assert_eq!(
+        open_items(&mut fx),
+        [(
+            "dialog".into(),
+            "red".into(),
+            "session:lead1".into(),
+            "pay asks you".into()
+        )]
+    );
     let id: i64 = fx.query("SELECT id FROM inbox_items WHERE kind = 'dialog'");
-    assert_eq!(data(&mut fx, "inbox-opened"), [json!({"item": id, "kind": "dialog", "urgency": "red", "label": "pay asks you"})]);
-    assert_eq!(fx.query::<String>("SELECT plan || '/' || session FROM events WHERE kind = 'inbox-opened'"), "pay/lead1");
+    assert_eq!(
+        data(&mut fx, "inbox-opened"),
+        [json!({"item": id, "kind": "dialog", "urgency": "red", "label": "pay asks you"})]
+    );
+    assert_eq!(
+        fx.query::<String>("SELECT plan || '/' || session FROM events WHERE kind = 'inbox-opened'"),
+        "pay/lead1"
+    );
     assert!(data(&mut fx, "inbox-closed").is_empty());
 
     fx.fixture("UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'lead1';");
     tick(&mut fx);
     assert_eq!(open_items(&mut fx), []);
-    assert_eq!(data(&mut fx, "inbox-closed"), [json!({"item": id, "kind": "dialog"})]);
-    assert!(fx.query::<Option<String>>(&format!("SELECT closed_at FROM inbox_items WHERE id = {id}")).is_some());
+    assert_eq!(
+        data(&mut fx, "inbox-closed"),
+        [json!({"item": id, "kind": "dialog"})]
+    );
+    assert!(
+        fx.query::<Option<String>>(&format!(
+            "SELECT closed_at FROM inbox_items WHERE id = {id}"
+        ))
+        .is_some()
+    );
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
 }
 
@@ -115,11 +139,23 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
 #[test]
 fn a_phi_plan_review_blocked_session_is_not_a_dialog() {
     let mut fx = fx();
-    fx.fixture("UPDATE sessions SET state = 'blocked', state_label = 'φ: plan review' WHERE id = 'lead1';");
+    fx.fixture(
+        "UPDATE sessions SET state = 'blocked', state_label = 'φ: plan review' WHERE id = 'lead1';",
+    );
 
     tick(&mut fx);
-    assert!(item(&mut fx, "dialog").is_none(), "{:?}", open_sessions(&mut fx));
-    assert!(data(&mut fx, "inbox-opened").iter().all(|e| e["kind"] != "dialog"), "{:?}", data(&mut fx, "inbox-opened"));
+    assert!(
+        item(&mut fx, "dialog").is_none(),
+        "{:?}",
+        open_sessions(&mut fx)
+    );
+    assert!(
+        data(&mut fx, "inbox-opened")
+            .iter()
+            .all(|e| e["kind"] != "dialog"),
+        "{:?}",
+        data(&mut fx, "inbox-opened")
+    );
 }
 
 /// The text of the one message for a PR's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
@@ -180,7 +216,15 @@ fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
     for _ in 0..3 {
         tick(&mut fx);
     }
-    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(
+        messages(&mut fx),
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            stuck_text("old", 2, "crashed")
+        )]
+    );
     assert_eq!(open_items(&mut fx), []);
     assert_eq!(data(&mut fx, "inbox-opened"), Vec::<Value>::new());
 }
@@ -209,7 +253,15 @@ fn a_failed_job_with_a_fix_underway_sends_the_manager_no_nudge_until_the_fix_end
     for _ in 0..3 {
         tick(&mut fx);
     }
-    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(
+        messages(&mut fx),
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            stuck_text("old", 2, "crashed")
+        )]
+    );
     assert_eq!(open_items(&mut fx), []);
 }
 
@@ -228,8 +280,19 @@ fn a_restarted_engine_does_not_tell_the_manager_of_the_same_failure_again() {
         inbox::run(&mut second);
     }
     // The restarted engine also tells the Manager how long it was down (contract §3.7, hs-d328): not a stuck-Job message.
-    let messages: Vec<_> = messages(&mut fx).into_iter().filter(|(_, _, _, text)| !text.contains("The engine was down for ")).collect();
-    assert_eq!(messages, [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
+    let messages: Vec<_> = messages(&mut fx)
+        .into_iter()
+        .filter(|(_, _, _, text)| !text.contains("The engine was down for "))
+        .collect();
+    assert_eq!(
+        messages,
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            stuck_text("old", 2, "crashed")
+        )]
+    );
 }
 
 /// After `job retry` and a new failure (a newer `job-failed` Event) the Job is told again, once more.
@@ -257,8 +320,14 @@ fn a_job_that_fails_again_after_a_retry_is_sent_again() {
         tick(&mut fx);
     }
     assert_eq!(
-        messages(&mut fx).into_iter().map(|m| m.3).collect::<Vec<_>>(),
-        [stuck_text("old", 2, "crashed"), stuck_text("old", 3, "timed_out")]
+        messages(&mut fx)
+            .into_iter()
+            .map(|m| m.3)
+            .collect::<Vec<_>>(),
+        [
+            stuck_text("old", 2, "crashed"),
+            stuck_text("old", 3, "timed_out")
+        ]
     );
     assert_eq!(open_items(&mut fx), []);
 }
@@ -278,11 +347,23 @@ fn with_no_manager_nothing_is_sent_and_a_later_manager_is_told() {
     for _ in 0..2 {
         tick(&mut fx);
     }
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "a stuck Job nobody can be told of writes nothing");
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM txns"),
+        txns,
+        "a stuck Job nobody can be told of writes nothing"
+    );
 
     manager(&mut fx);
     tick(&mut fx);
-    assert_eq!(messages(&mut fx), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(
+        messages(&mut fx),
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            stuck_text("old", 2, "crashed")
+        )]
+    );
 }
 
 /// A working Lead is handling the failure: nothing is sent until it stops (audit Q1).
@@ -342,11 +423,21 @@ const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-r
 fn a_review_required_blocked_pull_request_is_never_ready() {
     let mut fx = fx();
     polled_2385(&mut fx, "none", "blocked");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM pull_requests WHERE number = 2385 AND merge_state = 'blocked'"), 1);
+    assert_eq!(
+        fx.query::<i64>(
+            "SELECT count(*) FROM pull_requests WHERE number = 2385 AND merge_state = 'blocked'"
+        ),
+        1
+    );
     for _ in 0..2 {
         tick(&mut fx);
     }
-    assert_eq!(fx.query::<i64>(PR_READY_OPEN), 0, "{:?}", open_items(&mut fx));
+    assert_eq!(
+        fx.query::<i64>(PR_READY_OPEN),
+        0,
+        "{:?}",
+        open_items(&mut fx)
+    );
 }
 
 /// The positive control: the same pull request, approved and clean, opens one `pr-ready` item.
@@ -363,7 +454,9 @@ fn a_clean_approved_pull_request_is_ready() {
 fn a_tick_with_no_change_writes_no_transaction() {
     let mut fx = fx();
     manager(&mut fx);
-    fx.fixture("UPDATE sessions SET state = 'blocked', state_label = 'Which repo?' WHERE id = 'lead1';");
+    fx.fixture(
+        "UPDATE sessions SET state = 'blocked', state_label = 'Which repo?' WHERE id = 'lead1';",
+    );
     failed_job(&mut fx, "old", 2);
     // The dialog holds the Lead `blocked`, which is not `working`: the stuck Job is sent as well.
     tick(&mut fx);
@@ -371,15 +464,26 @@ fn a_tick_with_no_change_writes_no_transaction() {
     assert!(!messages(&mut fx).is_empty());
     let reconciles = "SELECT count(*) FROM txns WHERE command = 'inbox reconcile'";
     assert_eq!(fx.query::<i64>(reconciles), 1);
-    let (txns, events) = (fx.query::<i64>("SELECT count(*) FROM txns"), fx.query::<i64>("SELECT count(*) FROM events"));
+    let (txns, events) = (
+        fx.query::<i64>("SELECT count(*) FROM txns"),
+        fx.query::<i64>("SELECT count(*) FROM events"),
+    );
 
     tick(&mut fx);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM txns"),
+        txns,
+        "no transaction of any step"
+    );
     for _ in 0..3 {
         tick(&mut fx);
     }
     assert_eq!(fx.query::<i64>(reconciles), 1);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM txns"),
+        txns,
+        "no transaction of any step"
+    );
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM events"), events);
 }
 
@@ -394,7 +498,9 @@ fn guard_fx(phase: &str, extra_config: &str) -> Fx {
 }
 
 fn guard(fx: &mut Fx, session: &str) {
-    fx.fixture(&format!("UPDATE sessions SET state = 'blocked', state_label = '{GUARD}' WHERE id = '{session}';"));
+    fx.fixture(&format!(
+        "UPDATE sessions SET state = 'blocked', state_label = '{GUARD}' WHERE id = '{session}';"
+    ));
 }
 
 /// A `blocked` Lead with the label is one open red `loop-guard` item with the label, linked to its Session and no `dialog`.
@@ -403,13 +509,28 @@ fn e8_opens_a_red_loop_guard_item_for_a_blocked_lead_with_the_label() {
     let mut fx = guard_fx("dispatch", "");
     guard(&mut fx, "lead1");
     tick(&mut fx);
-    assert_eq!(open_sessions(&mut fx), [("loop-guard".into(), "red".into(), Some("lead1".into()), "pay: loop guard, 21 turns in 10 min".into())]);
+    assert_eq!(
+        open_sessions(&mut fx),
+        [(
+            "loop-guard".into(),
+            "red".into(),
+            Some("lead1".into()),
+            "pay: loop guard, 21 turns in 10 min".into()
+        )]
+    );
     let id: i64 = fx.query("SELECT id FROM inbox_items WHERE kind = 'loop-guard'");
     assert_eq!(
         data(&mut fx, "inbox-opened"),
-        [json!({"item": id, "kind": "loop-guard", "urgency": "red", "label": "pay: loop guard, 21 turns in 10 min"})]
+        [
+            json!({"item": id, "kind": "loop-guard", "urgency": "red", "label": "pay: loop guard, 21 turns in 10 min"})
+        ]
     );
-    assert_eq!(fx.query::<String>("SELECT plan || '/' || session FROM inbox_items WHERE kind = 'loop-guard'"), "pay/lead1");
+    assert_eq!(
+        fx.query::<String>(
+            "SELECT plan || '/' || session FROM inbox_items WHERE kind = 'loop-guard'"
+        ),
+        "pay/lead1"
+    );
     assert!(item(&mut fx, "dialog").is_none());
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
 }
@@ -423,7 +544,12 @@ fn e8_loop_guard_item_is_red_in_every_phase_and_is_no_dialog() {
         tick(&mut fx);
         assert!(item(&mut fx, "loop-guard").is_some(), "{phase}");
         assert_eq!(item(&mut fx, "loop-guard").unwrap().1, "red", "{phase}");
-        assert_eq!(open_sessions(&mut fx).len(), 1, "{phase}: {:?}", open_sessions(&mut fx));
+        assert_eq!(
+            open_sessions(&mut fx).len(),
+            1,
+            "{phase}: {:?}",
+            open_sessions(&mut fx)
+        );
         assert!(item(&mut fx, "dialog").is_none(), "{phase}");
     }
 }
@@ -437,15 +563,27 @@ fn e8_closes_the_loop_guard_item_when_the_session_leaves_blocked() {
         guard(&mut fx, "lead1");
         tick(&mut fx);
         assert!(item(&mut fx, "loop-guard").is_some(), "{state}");
-        let id: i64 = fx.query("SELECT id FROM inbox_items WHERE kind = 'loop-guard' AND closed_at IS NULL");
-        fx.fixture(&format!("UPDATE sessions SET state = '{state}', state_label = NULL WHERE id = 'lead1';"));
+        let id: i64 =
+            fx.query("SELECT id FROM inbox_items WHERE kind = 'loop-guard' AND closed_at IS NULL");
+        fx.fixture(&format!(
+            "UPDATE sessions SET state = '{state}', state_label = NULL WHERE id = 'lead1';"
+        ));
         tick(&mut fx);
         assert_eq!(open_sessions(&mut fx), [], "{state}");
         closed += 1;
         let events = data(&mut fx, "inbox-closed");
         assert_eq!(events.len(), closed, "{state}: {events:?}");
-        assert_eq!(events.last().unwrap(), &json!({"item": id, "kind": "loop-guard"}), "{state}");
-        assert!(fx.query::<Option<String>>(&format!("SELECT closed_at FROM inbox_items WHERE id = {id}")).is_some());
+        assert_eq!(
+            events.last().unwrap(),
+            &json!({"item": id, "kind": "loop-guard"}),
+            "{state}"
+        );
+        assert!(
+            fx.query::<Option<String>>(&format!(
+                "SELECT closed_at FROM inbox_items WHERE id = {id}"
+            ))
+            .is_some()
+        );
     }
 }
 
@@ -455,14 +593,33 @@ fn e8_loop_guard_label_follows_loop_guard_turns_and_names_a_manager_by_its_conte
     let mut fx = guard_fx("dispatch", "loop_guard_turns = 3\n");
     guard(&mut fx, "lead1");
     tick(&mut fx);
-    assert_eq!(item(&mut fx, "loop-guard").unwrap().3, "pay: loop guard, 4 turns in 10 min");
+    assert_eq!(
+        item(&mut fx, "loop-guard").unwrap().3,
+        "pay: loop guard, 4 turns in 10 min"
+    );
 
     guard(&mut fx, "mgr1");
     tick(&mut fx);
-    assert_eq!(open_sessions(&mut fx).iter().filter(|i| i.0 == "loop-guard").count(), 2);
-    let manager = open_sessions(&mut fx).into_iter().find(|i| i.2.as_deref() == Some("mgr1")).unwrap();
-    assert_eq!((manager.0.as_str(), manager.1.as_str(), manager.3.as_str()), ("loop-guard", "red", "ctx: loop guard, 4 turns in 10 min"));
-    assert!(item(&mut fx, "dialog").is_none(), "{:?}", open_sessions(&mut fx));
+    assert_eq!(
+        open_sessions(&mut fx)
+            .iter()
+            .filter(|i| i.0 == "loop-guard")
+            .count(),
+        2
+    );
+    let manager = open_sessions(&mut fx)
+        .into_iter()
+        .find(|i| i.2.as_deref() == Some("mgr1"))
+        .unwrap();
+    assert_eq!(
+        (manager.0.as_str(), manager.1.as_str(), manager.3.as_str()),
+        ("loop-guard", "red", "ctx: loop guard, 4 turns in 10 min")
+    );
+    assert!(
+        item(&mut fx, "dialog").is_none(),
+        "{:?}",
+        open_sessions(&mut fx)
+    );
 }
 
 // ---------- the message wakes the Manager ----------
@@ -490,7 +647,16 @@ fn a_stuck_job_wakes_its_context_manager() {
     let messages = data(&mut fx, "session-message");
     assert_eq!(messages.len(), 1, "{messages:?}");
     let data = &messages[0];
-    assert_eq!((fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'").as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
+    assert_eq!(
+        (
+            fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'")
+                .as_str(),
+            data["from"].clone(),
+            data["wake"].clone()
+        ),
+        ("mgr1", Value::Null, json!(true)),
+        "{data}"
+    );
     // hs-d647: the stuck Jobs of a PR are one message (contract §3.7 "A stuck Job").
     let text = data["text"].as_str().unwrap();
     assert!(text.starts_with("Jobs of PR pay/repo failed "), "{data}");

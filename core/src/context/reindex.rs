@@ -8,9 +8,9 @@
 use clap::Args;
 use serde_json::json;
 
+use super::Select;
 use super::engine::{Bridge, ContextEngine};
 use super::search::{self, check_ok};
-use super::Select;
 use crate::env::Env;
 use crate::error::CpdError;
 use crate::output::Output;
@@ -24,7 +24,12 @@ pub struct ReindexArgs {
 
 /// `cpd context reindex` (docs/research/context-holographic.md, `## Index and staleness`).
 pub(super) fn reindex(args: ReindexArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let snap = search::snapshot(&mut store, &context)?;
     let bridge = Bridge::new(
@@ -33,7 +38,9 @@ pub(super) fn reindex(args: ReindexArgs) -> Result<Output, CpdError> {
         config.context_engine_python_path()?,
         config.context_engine_reindex_timeout(),
     )?;
-    let db = config.context_engine_dir(&home).join(format!("{}.db", context.as_str()));
+    let db = config
+        .context_engine_dir(&home)
+        .join(format!("{}.db", context.as_str()));
     let archive = search::index(&snap, &snap.records);
     let responses = bridge.run(&db, &[json!({"cmd": "reset"}), archive])?;
     for response in &responses {

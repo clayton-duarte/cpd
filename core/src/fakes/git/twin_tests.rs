@@ -75,7 +75,9 @@ fn hex_runs(text: &str) -> Vec<(usize, &str)> {
     while i < bytes.len() {
         if bytes[i].is_ascii_digit() || (b'a'..=b'f').contains(&bytes[i]) {
             let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || (b'a'..=b'f').contains(&bytes[i])) {
+            while i < bytes.len()
+                && (bytes[i].is_ascii_digit() || (b'a'..=b'f').contains(&bytes[i]))
+            {
                 i += 1;
             }
             runs.push((start, &text[start..i]));
@@ -90,7 +92,13 @@ impl<'a> Sh<'a> {
     fn new(r: &'a dyn Runner) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        Sh { r, _tmp: tmp, root, log: String::new(), shas: Vec::new() }
+        Sh {
+            r,
+            _tmp: tmp,
+            root,
+            log: String::new(),
+            shas: Vec::new(),
+        }
     }
 
     fn at(&self, name: &str) -> PathBuf {
@@ -100,7 +108,10 @@ impl<'a> Sh<'a> {
     /// Runs `git args` (in `cwd` when given) under the environment of the contract, and notes the shas it printed.
     fn spawn(&mut self, cwd: Option<&Path>, env: &[(&str, &str)], args: &[&str]) -> Raw {
         let mut cmd = Command::new("git");
-        cmd.args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_TERMINAL_PROMPT", "0");
+        cmd.args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -129,20 +140,29 @@ impl<'a> Sh<'a> {
     }
 
     fn record(&mut self, shown: &str, raw: &Raw, show: Show) {
-        self.log.push_str(&format!("$ git {shown}\n= {}\n", raw.code));
+        self.log
+            .push_str(&format!("$ git {shown}\n= {}\n", raw.code));
         let stdout = raw.stdout.replace('\0', "\\0");
         for line in stdout.split_inclusive('\n') {
             let (text, ended) = match line.strip_suffix('\n') {
                 Some(text) => (text, true),
                 None => (line, false),
             };
-            self.log.push_str(&format!("|{}{text}\n", if text.is_empty() { "" } else { " " }));
+            self.log.push_str(&format!(
+                "|{}{text}\n",
+                if text.is_empty() { "" } else { " " }
+            ));
             if !ended {
                 self.log.push_str("\\ no newline\n");
             }
         }
         // A progress meter ends with `\r` and the next text overwrites it: the first line is what is left on screen.
-        if let Some(first) = raw.stderr.lines().next().and_then(|line| line.rsplit('\r').next()) {
+        if let Some(first) = raw
+            .stderr
+            .lines()
+            .next()
+            .and_then(|line| line.rsplit('\r').next())
+        {
             let kept = match show {
                 Show::Line => first,
                 Show::Class => first.split(':').next().unwrap_or(first),
@@ -169,7 +189,17 @@ impl<'a> Sh<'a> {
         let mut full = vec!["-C", s(dir)];
         full.extend_from_slice(args);
         let raw = self.spawn(None, env, &full);
-        let tag = if env.is_empty() { String::new() } else { format!("  [env {}]", env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")) };
+        let tag = if env.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "  [env {}]",
+                env.iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
         self.record(&format!("{}{tag}", full.join(" ")), &raw, show);
         raw
     }
@@ -192,7 +222,9 @@ impl<'a> Sh<'a> {
     }
 
     fn rev(&mut self, dir: &Path, rev: &str) -> String {
-        self.set(dir, &["rev-parse", "--verify", rev]).trim().to_owned()
+        self.set(dir, &["rev-parse", "--verify", rev])
+            .trim()
+            .to_owned()
     }
 
     fn note(&mut self, text: &str) {
@@ -295,12 +327,38 @@ pub(crate) fn run_env_and_exit_mapping(r: &dyn Runner) -> Transcript {
         ("GIT_CONFIG_VALUE_1", "10000"),
     ];
     sh.obs_env(&repo, &env, &["rev-parse", "--verify", "HEAD"]);
-    sh.obs_env(&repo, &env, &["config", "--get", "core.filesRefLockTimeout"]);
+    sh.obs_env(
+        &repo,
+        &env,
+        &["config", "--get", "core.filesRefLockTimeout"],
+    );
     sh.obs_env(&repo, &env, &["config", "--get", "core.packedRefsTimeout"]);
     sh.obs(&repo, &["config", "--get", "core.filesRefLockTimeout"]);
     sh.obs_raw(Some(&repo), &["rev-parse", "--verify", "HEAD"]);
-    sh.obs_raw(None, &["-C", s(&root), "-C", "repo", "rev-parse", "--verify", "HEAD"]);
-    sh.obs(&repo, &["-c", "core.editor=true", "-c", "sequence.editor=true", "rev-parse", "--verify", "HEAD"]);
+    sh.obs_raw(
+        None,
+        &[
+            "-C",
+            s(&root),
+            "-C",
+            "repo",
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ],
+    );
+    sh.obs(
+        &repo,
+        &[
+            "-c",
+            "core.editor=true",
+            "-c",
+            "sequence.editor=true",
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ],
+    );
     sh.obs(&repo, &["--no-optional-locks", "status", "--porcelain"]);
     sh.write(&repo, "README.md", "two\n");
     sh.obs(&repo, &["diff", "--quiet"]);
@@ -326,9 +384,18 @@ pub(crate) fn exit_code_table(r: &dyn Runner) -> Transcript {
     sh.set(&repo, &["push", "origin", "main"]);
     sh.obs(&repo, &["rev-parse", "--verify", "--quiet", "nothing"]);
     sh.obs(&repo, &["rev-parse", "--verify", "nothing"]);
-    sh.obs(&repo, &["rev-parse", "--verify", &format!("{c1}^{{commit}}")]);
-    sh.obs(&repo, &["ls-remote", "--exit-code", "--heads", "origin", "nothing"]);
-    sh.obs(&repo, &["ls-remote", "--exit-code", "--heads", "origin", "main"]);
+    sh.obs(
+        &repo,
+        &["rev-parse", "--verify", &format!("{c1}^{{commit}}")],
+    );
+    sh.obs(
+        &repo,
+        &["ls-remote", "--exit-code", "--heads", "origin", "nothing"],
+    );
+    sh.obs(
+        &repo,
+        &["ls-remote", "--exit-code", "--heads", "origin", "main"],
+    );
     sh.obs(&repo, &["merge-base", "--is-ancestor", &c1, &c2]);
     sh.obs(&repo, &["merge-base", "--is-ancestor", &c2, &c1]);
     sh.obs(&repo, &["merge-base", "--is-ancestor", UNKNOWN, &c2]);
@@ -353,17 +420,35 @@ pub(crate) fn worktree_round_trip(r: &dyn Runner) -> Transcript {
     let c1 = sh.rev(&repo, "HEAD");
     let c2 = sh.commit(&repo, &[("b.txt", "b\n")], "two");
     let (wt, gate, gone) = (sh.at("wt1"), sh.at("gate"), sh.at("gone"));
-    sh.obs(&repo, &["worktree", "add", "--no-track", "-b", "att", s(&wt), &c1]);
+    sh.obs(
+        &repo,
+        &["worktree", "add", "--no-track", "-b", "att", s(&wt), &c1],
+    );
     let dotgit = sh.read(&wt.join(".git"));
     sh.note(&format!(".git of wt1: {}", dotgit.trim()));
     sh.obs(&repo, &["worktree", "list", "--porcelain"]);
-    sh.obs(&repo, &["worktree", "add", "--detach", "--lock", "--reason", "cpd gate 4242", s(&gate), &c2]);
+    sh.obs(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--lock",
+            "--reason",
+            "cpd gate 4242",
+            s(&gate),
+            &c2,
+        ],
+    );
     sh.obs(&repo, &["worktree", "list", "--porcelain"]);
     sh.obs(&repo, &["worktree", "remove", s(&gate)]);
     sh.obs(&repo, &["worktree", "remove", "--force", s(&gate)]);
     sh.write(&wt, "dirty.txt", "x\n");
     sh.obs(&repo, &["worktree", "remove", s(&wt)]);
-    sh.obs(&repo, &["worktree", "remove", "--force", "--force", s(&gate)]);
+    sh.obs(
+        &repo,
+        &["worktree", "remove", "--force", "--force", s(&gate)],
+    );
     sh.obs(&repo, &["worktree", "remove", "--force", s(&wt)]);
     sh.obs(&repo, &["worktree", "list", "--porcelain"]);
     sh.obs(&repo, &["worktree", "add", "--detach", s(&gone), &c1]);
@@ -380,20 +465,65 @@ pub(crate) fn worktree_round_trip(r: &dyn Runner) -> Transcript {
 /// the names, a blank line and the messages; exit 0 and the tree id alone when clean; the sides swapped.
 pub(crate) fn merge_tree_conflict_shape(r: &dyn Runner) -> Transcript {
     let mut sh = Sh::new(r);
-    let repo = sh.repo("repo", &[("a.txt", "1\n2\n3\n"), ("d.txt", "d\n"), ("m.txt", "m\n")]);
+    let repo = sh.repo(
+        "repo",
+        &[("a.txt", "1\n2\n3\n"), ("d.txt", "d\n"), ("m.txt", "m\n")],
+    );
     sh.set(&repo, &["checkout", "-q", "-b", "ours"]);
-    sh.commit(&repo, &[("a.txt", "1\nours\n3\n"), ("add.txt", "ours\n"), ("d.txt", "d ours\n")], "ours");
+    sh.commit(
+        &repo,
+        &[
+            ("a.txt", "1\nours\n3\n"),
+            ("add.txt", "ours\n"),
+            ("d.txt", "d ours\n"),
+        ],
+        "ours",
+    );
     sh.set(&repo, &["checkout", "-q", "main"]);
     sh.set(&repo, &["checkout", "-q", "-b", "theirs"]);
     std::fs::remove_file(repo.join("d.txt")).unwrap();
-    sh.commit(&repo, &[("a.txt", "1\ntheirs\n3\n"), ("add.txt", "theirs\n")], "theirs");
+    sh.commit(
+        &repo,
+        &[("a.txt", "1\ntheirs\n3\n"), ("add.txt", "theirs\n")],
+        "theirs",
+    );
     sh.set(&repo, &["checkout", "-q", "main"]);
     sh.set(&repo, &["checkout", "-q", "-b", "clean"]);
     sh.commit(&repo, &[("m.txt", "m clean\n")], "clean");
-    sh.obs(&repo, &["merge-tree", "--write-tree", "--name-only", "ours", "theirs"]);
-    sh.obs(&repo, &["merge-tree", "--write-tree", "--name-only", "theirs", "ours"]);
-    sh.obs(&repo, &["merge-tree", "--write-tree", "--name-only", "ours", "clean"]);
-    sh.obs(&repo, &["merge-tree", "--write-tree", "--name-only", "ours", "nothing"]);
+    sh.obs(
+        &repo,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "ours",
+            "theirs",
+        ],
+    );
+    sh.obs(
+        &repo,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "theirs",
+            "ours",
+        ],
+    );
+    sh.obs(
+        &repo,
+        &["merge-tree", "--write-tree", "--name-only", "ours", "clean"],
+    );
+    sh.obs(
+        &repo,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "ours",
+            "nothing",
+        ],
+    );
     sh.finish()
 }
 
@@ -412,14 +542,28 @@ pub(crate) fn rebase_stop_continue_abort(r: &dyn Runner) -> Transcript {
     sh.commit(&repo, &[("README.md", "main\n")], "main");
     sh.set(&repo, &["checkout", "-q", "feat"]);
     let editors = ["-c", "core.editor=true", "-c", "sequence.editor=true"];
-    let with = |rest: &[&str]| -> Vec<String> { editors.iter().chain(rest).map(|a| (*a).to_owned()).collect() };
+    let with = |rest: &[&str]| -> Vec<String> {
+        editors
+            .iter()
+            .chain(rest)
+            .map(|a| (*a).to_owned())
+            .collect()
+    };
     let run = |sh: &mut Sh, rest: &[&str], show: Show| {
         let args = with(rest);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         sh.observe(&repo, &[], &args, show)
     };
     run(&mut sh, &["rebase", "main"], Show::Class);
-    let orig_head = sh.obs(&repo, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge/orig-head"]);
+    let orig_head = sh.obs(
+        &repo,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "rebase-merge/orig-head",
+        ],
+    );
     let orig_head = PathBuf::from(orig_head.stdout.trim());
     let saved = sh.read(&orig_head);
     sh.note(&format!("orig-head holds {}", saved.trim()));
@@ -442,16 +586,25 @@ pub(crate) fn rebase_stop_continue_abort(r: &dyn Runner) -> Transcript {
     sh.obs(&repo, &["symbolic-ref", "--short", "HEAD"]);
     sh.obs(&repo, &["rev-list", "--count", "main..feat"]);
     run(&mut sh, &["rebase", "main"], Show::Line);
-    sh.note(&format!("rebase-merge is gone: {}", !repo.join(".git/rebase-merge").exists()));
+    sh.note(&format!(
+        "rebase-merge is gone: {}",
+        !repo.join(".git/rebase-merge").exists()
+    ));
     // The second attempt: back to the first state of feat, stop, abort.
     sh.set(&repo, &["reset", "-q", "--hard", &orig]);
     run(&mut sh, &["rebase", "main"], Show::Class);
-    sh.note(&format!("rebase-merge exists: {}", repo.join(".git/rebase-merge").exists()));
+    sh.note(&format!(
+        "rebase-merge exists: {}",
+        repo.join(".git/rebase-merge").exists()
+    ));
     run(&mut sh, &["rebase", "--abort"], Show::Line);
     sh.obs(&repo, &["rev-parse", "HEAD"]);
     sh.obs(&repo, &["symbolic-ref", "--short", "HEAD"]);
     sh.obs(&repo, &["status", "--porcelain"]);
-    sh.note(&format!("rebase-merge exists: {}", repo.join(".git/rebase-merge").exists()));
+    sh.note(&format!(
+        "rebase-merge exists: {}",
+        repo.join(".git/rebase-merge").exists()
+    ));
     run(&mut sh, &["rebase", "--abort"], Show::Class);
     sh.finish()
 }
@@ -466,22 +619,92 @@ pub(crate) fn push_porcelain_shapes(r: &dyn Runner) -> Transcript {
     let a = sh.repo("a", &[("f.txt", "1\n")]);
     sh.set(&a, &["remote", "add", "origin", s(&origin)]);
     let c1 = sh.rev(&a, "HEAD");
-    sh.obs(&a, &["push", "--porcelain", "origin", &format!("{c1}:refs/heads/main")]);
-    sh.obs(&a, &["push", "--porcelain", "origin", &format!("{c1}:refs/heads/main")]);
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{c1}:refs/heads/main"),
+        ],
+    );
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{c1}:refs/heads/main"),
+        ],
+    );
     let c2 = sh.commit(&a, &[("f.txt", "2\n")], "two");
-    sh.obs(&a, &["push", "--porcelain", "origin", &format!("{c2}:refs/heads/main")]);
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{c2}:refs/heads/main"),
+        ],
+    );
     // B pushes a commit A has never seen; A then holds a commit that is not on it.
     let b = sh.clone_of(&origin, "b");
     let b1 = sh.commit(&b, &[("g.txt", "b\n")], "b1");
     sh.set(&b, &["push", "-q", "origin", "main"]);
     let c3 = sh.commit(&a, &[("f.txt", "3\n")], "three");
-    sh.obs(&a, &["push", "--porcelain", "origin", &format!("{c3}:refs/heads/main")]);
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{c3}:refs/heads/main"),
+        ],
+    );
     sh.set(&a, &["fetch", "-q", "origin"]);
-    sh.obs(&a, &["push", "--porcelain", "origin", &format!("{c3}:refs/heads/main")]);
-    sh.obs(&a, &["push", "--porcelain", &format!("--force-with-lease=refs/heads/main:{c2}"), "origin", &format!("{c3}:refs/heads/main")]);
-    sh.obs(&a, &["push", "--porcelain", &format!("--force-with-lease=refs/heads/main:{b1}"), "origin", &format!("{c3}:refs/heads/main")]);
-    sh.obs(&a, &["push", "--porcelain", &format!("--force-with-lease=refs/heads/main:{c3}"), "origin", &format!("{c3}:refs/heads/main")]);
-    sh.set(&a, &["push", "-q", "origin", &format!("{c3}:refs/heads/cpd/x")]);
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            "origin",
+            &format!("{c3}:refs/heads/main"),
+        ],
+    );
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            &format!("--force-with-lease=refs/heads/main:{c2}"),
+            "origin",
+            &format!("{c3}:refs/heads/main"),
+        ],
+    );
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            &format!("--force-with-lease=refs/heads/main:{b1}"),
+            "origin",
+            &format!("{c3}:refs/heads/main"),
+        ],
+    );
+    sh.obs(
+        &a,
+        &[
+            "push",
+            "--porcelain",
+            &format!("--force-with-lease=refs/heads/main:{c3}"),
+            "origin",
+            &format!("{c3}:refs/heads/main"),
+        ],
+    );
+    sh.set(
+        &a,
+        &["push", "-q", "origin", &format!("{c3}:refs/heads/cpd/x")],
+    );
     sh.obs(&a, &["push", "origin", "--delete", "cpd/x"]);
     sh.obs(&a, &["push", "origin", "--delete", "cpd/x"]);
     sh.obs(&a, &["push", "--porcelain", "origin", "--delete", "cpd/y"]);
@@ -503,7 +726,10 @@ pub(crate) fn fetch_and_ls_remote_shapes(r: &dyn Runner) -> Transcript {
     let a = sh.clone_of(&origin, "a");
     sh.obs(&a, &["ls-remote", "--heads", "origin", "refs/heads/main"]);
     sh.obs(&a, &["ls-remote", "origin", "refs/heads/nothing"]);
-    sh.obs(&a, &["ls-remote", "--exit-code", "origin", "refs/heads/nothing"]);
+    sh.obs(
+        &a,
+        &["ls-remote", "--exit-code", "origin", "refs/heads/nothing"],
+    );
     sh.obs(&a, &["ls-remote", "--heads", "origin"]);
     sh.obs(&a, &["ls-remote", "origin"]);
     sh.obs(&a, &["fetch", "origin", "main"]);
@@ -529,14 +755,23 @@ pub(crate) fn rule_s_plumbing(r: &dyn Runner) -> Transcript {
     let repo = sh.repo("repo", &[("a.txt", "one\n")]);
     let c1 = sh.rev(&repo, "HEAD");
     let lead = sh.at("lead");
-    sh.set(&repo, &["worktree", "add", "-q", "-b", "lead", s(&lead), &c1]);
+    sh.set(
+        &repo,
+        &["worktree", "add", "-q", "-b", "lead", s(&lead), &c1],
+    );
     sh.set(&repo, &["checkout", "-q", "-b", "side"]);
     let c2 = sh.commit(&repo, &[("a.txt", "two\n"), ("b.txt", "b\n")], "two");
     sh.set(&repo, &["checkout", "-q", "main"]);
     // The branch `lead` moves to c2 behind the back of the worktree.
     sh.set(&repo, &["update-ref", "refs/heads/lead", &c2, &c1]);
-    sh.obs(&lead, &["rev-parse", "--path-format=absolute", "--git-path", "index"]);
-    sh.obs(&repo, &["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+    sh.obs(
+        &lead,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+    );
+    sh.obs(
+        &repo,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+    );
     sh.obs(&lead, &["rev-parse", "--verify", "HEAD"]);
     sh.obs(&lead, &["--no-optional-locks", "diff", "--quiet"]);
     sh.obs(&lead, &["status", "--porcelain"]);
@@ -554,7 +789,10 @@ pub(crate) fn rule_s_plumbing(r: &dyn Runner) -> Transcript {
     sh.obs(&lead, &["rev-parse", "--verify", &format!("{c2}^{{tree}}")]);
     let moved = sh.read(&lead.join("a.txt"));
     sh.note(&format!("a.txt in the worktree: {}", moved.trim()));
-    sh.note(&format!("b.txt in the worktree: {}", lead.join("b.txt").exists()));
+    sh.note(&format!(
+        "b.txt in the worktree: {}",
+        lead.join("b.txt").exists()
+    ));
     sh.finish()
 }
 
@@ -564,7 +802,10 @@ pub(crate) fn rule_s_plumbing(r: &dyn Runner) -> Transcript {
 /// `--untracked-files=no` and `-z`; `diff` (`--name-only`, `-z`, `--cached`, `--quiet`, `a..b`, `a...b`).
 pub(crate) fn status_and_diff_shapes(r: &dyn Runner) -> Transcript {
     let mut sh = Sh::new(r);
-    let repo = sh.repo("repo", &[("a.txt", "a\n"), ("b.txt", "b\n"), ("sub/c.txt", "c\n")]);
+    let repo = sh.repo(
+        "repo",
+        &[("a.txt", "a\n"), ("b.txt", "b\n"), ("sub/c.txt", "c\n")],
+    );
     let c1 = sh.rev(&repo, "HEAD");
     sh.obs(&repo, &["status", "--porcelain"]);
     sh.write(&repo, "a.txt", "a2\n");
@@ -591,10 +832,37 @@ pub(crate) fn status_and_diff_shapes(r: &dyn Runner) -> Transcript {
     sh.set(&repo, &["checkout", "-q", "-b", "side", &c1]);
     let c3 = sh.commit(&repo, &[("side.txt", "s\n")], "side");
     sh.obs(&repo, &["status", "--porcelain"]);
-    sh.obs(&repo, &["diff", "--name-only", "--no-renames", &format!("{c1}..{c2}")]);
-    sh.obs(&repo, &["diff", "--name-only", "--no-renames", &format!("{c1}...{c2}")]);
-    sh.obs(&repo, &["diff", "--name-only", "--no-renames", &format!("{c2}...{c3}")]);
-    sh.obs(&repo, &["diff", "--name-only", "--no-renames", "-z", &c1, &c2]);
+    sh.obs(
+        &repo,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            &format!("{c1}..{c2}"),
+        ],
+    );
+    sh.obs(
+        &repo,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            &format!("{c1}...{c2}"),
+        ],
+    );
+    sh.obs(
+        &repo,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            &format!("{c2}...{c3}"),
+        ],
+    );
+    sh.obs(
+        &repo,
+        &["diff", "--name-only", "--no-renames", "-z", &c1, &c2],
+    );
     sh.obs(&repo, &["diff", "--quiet", &c1, &c1]);
     sh.obs(&repo, &["diff", "--quiet", &c1, &c2]);
     sh.finish()
@@ -607,30 +875,93 @@ pub(crate) fn status_and_diff_shapes(r: &dyn Runner) -> Transcript {
 pub(crate) fn rev_list_ls_tree_shapes(r: &dyn Runner) -> Transcript {
     let mut sh = Sh::new(r);
     let origin = sh.bare("origin.git");
-    let repo = sh.repo("repo", &[("a.txt", "a\n"), ("a/b.txt", "ab\n"), ("sp ace.txt", "s\n"), ("sub/c.txt", "c\n")]);
+    let repo = sh.repo(
+        "repo",
+        &[
+            ("a.txt", "a\n"),
+            ("a/b.txt", "ab\n"),
+            ("sp ace.txt", "s\n"),
+            ("sub/c.txt", "c\n"),
+        ],
+    );
     sh.set(&repo, &["remote", "add", "origin", s(&origin)]);
     sh.set(&repo, &["push", "-q", "origin", "main"]);
     let c1 = sh.rev(&repo, "HEAD");
     sh.obs(&repo, &["rev-list", "--count", "HEAD"]);
     sh.obs(&repo, &["rev-list", "--count", &format!("{c1}..HEAD")]);
-    sh.obs(&repo, &["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"]);
+    sh.obs(
+        &repo,
+        &[
+            "rev-list",
+            "--no-merges",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+    );
     sh.set(&repo, &["checkout", "-q", "-b", "feat"]);
     sh.commit(&repo, &[("f.txt", "f\n")], "f1");
     sh.set(&repo, &["checkout", "-q", "main"]);
     let m1 = sh.commit(&repo, &[("m.txt", "m\n")], "m1");
-    sh.obs(&repo, &["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"]);
-    sh.set(&repo, &["merge", "-q", "--no-ff", "-m", "merge feat", "feat"]);
+    sh.obs(
+        &repo,
+        &[
+            "rev-list",
+            "--no-merges",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+    );
+    sh.set(
+        &repo,
+        &["merge", "-q", "--no-ff", "-m", "merge feat", "feat"],
+    );
     sh.obs(&repo, &["rev-list", "--count", &format!("{c1}..HEAD")]);
-    sh.obs(&repo, &["rev-list", "--count", "--no-merges", "HEAD", "--not", "--remotes=origin"]);
-    sh.obs(&repo, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]);
+    sh.obs(
+        &repo,
+        &[
+            "rev-list",
+            "--count",
+            "--no-merges",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+    );
+    sh.obs(
+        &repo,
+        &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+    );
     sh.obs(&repo, &["rev-list", "--count", &format!("HEAD..{m1}")]);
     sh.obs(&repo, &["rev-list", "--count", &format!("{m1}..HEAD")]);
     sh.set(&repo, &["push", "-q", "origin", "main"]);
-    sh.obs(&repo, &["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"]);
-    sh.obs(&repo, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]);
+    sh.obs(
+        &repo,
+        &[
+            "rev-list",
+            "--no-merges",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+    );
+    sh.obs(
+        &repo,
+        &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+    );
     sh.obs(&repo, &["ls-tree", "-r", "--name-only", "HEAD"]);
     sh.obs(&repo, &["ls-tree", "-r", "--name-only", "-z", &c1]);
-    sh.obs(&repo, &["ls-tree", "-r", "--name-only", "-z", &format!("{c1}^{{tree}}")]);
+    sh.obs(
+        &repo,
+        &[
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            &format!("{c1}^{{tree}}"),
+        ],
+    );
     sh.obs(&repo, &["ls-tree", "-r", "--name-only", "-z", "nothing"]);
     sh.finish()
 }
@@ -647,7 +978,10 @@ pub(crate) fn branch_d_m_refusals(r: &dyn Runner) -> Transcript {
     sh.commit(&repo, &[("u.txt", "u\n")], "unmerged");
     sh.set(&repo, &["checkout", "-q", "main"]);
     let wt = sh.at("wt");
-    sh.set(&repo, &["worktree", "add", "-q", "-b", "att", s(&wt), "main"]);
+    sh.set(
+        &repo,
+        &["worktree", "add", "-q", "-b", "att", s(&wt), "main"],
+    );
     sh.obs(&repo, &["branch", "-d", "merged"]);
     sh.obs_class(&repo, &["branch", "-d", "unmerged"]);
     sh.obs_class(&repo, &["branch", "-d", "att"]);
@@ -685,7 +1019,10 @@ fn on_the_route(scenario: fn(&dyn Runner) -> Transcript) -> Transcript {
 
 #[test]
 fn run_env_and_exit_mapping_matches_real_git() {
-    assert_eq!(on_the_route(run_env_and_exit_mapping), EXPECTED_RUN_ENV_AND_EXIT_MAPPING);
+    assert_eq!(
+        on_the_route(run_env_and_exit_mapping),
+        EXPECTED_RUN_ENV_AND_EXIT_MAPPING
+    );
 }
 
 #[test]
@@ -695,27 +1032,42 @@ fn exit_code_table_matches_real_git() {
 
 #[test]
 fn worktree_round_trip_matches_real_git() {
-    assert_eq!(on_the_route(worktree_round_trip), EXPECTED_WORKTREE_ROUND_TRIP);
+    assert_eq!(
+        on_the_route(worktree_round_trip),
+        EXPECTED_WORKTREE_ROUND_TRIP
+    );
 }
 
 #[test]
 fn merge_tree_conflict_shape_matches_real_git() {
-    assert_eq!(on_the_route(merge_tree_conflict_shape), EXPECTED_MERGE_TREE_CONFLICT_SHAPE);
+    assert_eq!(
+        on_the_route(merge_tree_conflict_shape),
+        EXPECTED_MERGE_TREE_CONFLICT_SHAPE
+    );
 }
 
 #[test]
 fn rebase_stop_continue_abort_matches_real_git() {
-    assert_eq!(on_the_route(rebase_stop_continue_abort), EXPECTED_REBASE_STOP_CONTINUE_ABORT);
+    assert_eq!(
+        on_the_route(rebase_stop_continue_abort),
+        EXPECTED_REBASE_STOP_CONTINUE_ABORT
+    );
 }
 
 #[test]
 fn push_porcelain_shapes_match_real_git() {
-    assert_eq!(on_the_route(push_porcelain_shapes), EXPECTED_PUSH_PORCELAIN_SHAPES);
+    assert_eq!(
+        on_the_route(push_porcelain_shapes),
+        EXPECTED_PUSH_PORCELAIN_SHAPES
+    );
 }
 
 #[test]
 fn fetch_and_ls_remote_shapes_match_real_git() {
-    assert_eq!(on_the_route(fetch_and_ls_remote_shapes), EXPECTED_FETCH_AND_LS_REMOTE_SHAPES);
+    assert_eq!(
+        on_the_route(fetch_and_ls_remote_shapes),
+        EXPECTED_FETCH_AND_LS_REMOTE_SHAPES
+    );
 }
 
 #[test]
@@ -725,17 +1077,26 @@ fn rule_s_plumbing_matches_real_git() {
 
 #[test]
 fn status_and_diff_shapes_match_real_git() {
-    assert_eq!(on_the_route(status_and_diff_shapes), EXPECTED_STATUS_AND_DIFF_SHAPES);
+    assert_eq!(
+        on_the_route(status_and_diff_shapes),
+        EXPECTED_STATUS_AND_DIFF_SHAPES
+    );
 }
 
 #[test]
 fn rev_list_ls_tree_shapes_match_real_git() {
-    assert_eq!(on_the_route(rev_list_ls_tree_shapes), EXPECTED_REV_LIST_LS_TREE_SHAPES);
+    assert_eq!(
+        on_the_route(rev_list_ls_tree_shapes),
+        EXPECTED_REV_LIST_LS_TREE_SHAPES
+    );
 }
 
 #[test]
 fn branch_d_m_refusals_match_real_git() {
-    assert_eq!(on_the_route(branch_d_m_refusals), EXPECTED_BRANCH_D_M_REFUSALS);
+    assert_eq!(
+        on_the_route(branch_d_m_refusals),
+        EXPECTED_BRANCH_D_M_REFUSALS
+    );
 }
 
 // ---- the literals, recorded from real git (see the top of the file) -----------------------------------------

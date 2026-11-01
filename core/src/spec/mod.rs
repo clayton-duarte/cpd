@@ -36,7 +36,11 @@ const ALWAYS_PROTECTED: [&str; 1] = [".cpd/"];
 /// The cause an `attempts` row holds, read for a Spec. A value outside the table's CHECK is a corrupt row: `store_failed`.
 pub fn parse_cause(cause: &str) -> Result<Stored, CpdError> {
     Stored::parse(cause).ok_or_else(|| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Unknown Attempt cause {cause:?}.")).with("cause", cause)
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Unknown Attempt cause {cause:?}."),
+        )
+        .with("cause", cause)
     })
 }
 
@@ -136,14 +140,25 @@ pub enum JobKind<'a> {
     Work,
     Docs,
     /// A `test` Job's own named tests and the files that hold them (its Spec's `tests` and `test_files`).
-    Test { tests: &'a [String], test_files: &'a [String] },
+    Test {
+        tests: &'a [String],
+        test_files: &'a [String],
+    },
     /// An `impl` Job's derived tests, the guarded files and the paths the Lead approved, and the keys of the `test` Jobs it needs.
-    Impl { test_jobs: &'a [String], tests: &'a [String], guarded: &'a [String], approved: &'a [String] },
+    Impl {
+        test_jobs: &'a [String],
+        tests: &'a [String],
+        guarded: &'a [String],
+        approved: &'a [String],
+    },
     Verify,
     Open,
     Update,
     /// A `scout` or `research` Job (§2.2 "Job kinds"): its `kind` and the artefact the Worker writes (R7, R8).
-    Explore { kind: &'a str, artefact: &'a Path },
+    Explore {
+        kind: &'a str,
+        artefact: &'a Path,
+    },
 }
 
 impl<'a> JobKind<'a> {
@@ -163,7 +178,11 @@ impl<'a> JobKind<'a> {
 
 /// `a`, `b`: Job keys as inline code in a sentence.
 fn code_list(items: &[String]) -> String {
-    items.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
+    items
+        .iter()
+        .map(|i| format!("`{i}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Everything the Spec says. The lists of the Job's Spec are as `job add` stored them.
@@ -208,7 +227,17 @@ pub fn quick_check(pipeline: &Pipeline) -> Vec<String> {
 
 /// Six spaces of indent: a code block under a list item.
 fn indented(command: &str) -> String {
-    command.lines().map(|l| if l.is_empty() { String::new() } else { format!("      {l}") }).collect::<Vec<_>>().join("\n")
+    command
+        .lines()
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("      {l}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The Spec's text.
@@ -245,7 +274,10 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
                 ("tier", Value::from(p.tier.to_string())),
                 ("outcome", Value::from(p.cause.outcome())),
                 ("cause", Value::from(p.cause.as_str())),
-                ("explanation", Value::from(explanation(p.cause, &p.evidence))),
+                (
+                    "explanation",
+                    Value::from(explanation(p.cause, &p.evidence)),
+                ),
                 ("files", Value::from(items)),
             ])
         })
@@ -265,21 +297,38 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
     let addenda: Vec<Value> = input
         .addenda
         .iter()
-        .map(|a| Value::from_pairs([("number", Value::from(a.number)), ("text", Value::from(a.text.as_str()))]))
+        .map(|a| {
+            Value::from_pairs([
+                ("number", Value::from(a.number)),
+                ("text", Value::from(a.text.as_str())),
+            ])
+        })
         .collect();
 
-    let (tests, test_files, test_jobs, approved): (&[String], &[String], String, &[String]) = match input.kind {
-        JobKind::Test { tests, test_files } => (tests, test_files, String::new(), &[]),
-        JobKind::Impl { test_jobs, tests, guarded, approved } => (tests, guarded, code_list(test_jobs), approved),
-        _ => (&[], &[], String::new(), &[]),
-    };
+    let (tests, test_files, test_jobs, approved): (&[String], &[String], String, &[String]) =
+        match input.kind {
+            JobKind::Test { tests, test_files } => (tests, test_files, String::new(), &[]),
+            JobKind::Impl {
+                test_jobs,
+                tests,
+                guarded,
+                approved,
+            } => (tests, guarded, code_list(test_jobs), approved),
+            _ => (&[], &[], String::new(), &[]),
+        };
     let vars = Value::from_pairs([
         ("kind", Value::from(input.kind.as_str())),
-        ("explore", Value::from(matches!(input.kind, JobKind::Explore { .. }))),
-        ("artefact", Value::from(match input.kind {
-            JobKind::Explore { artefact, .. } => artefact.display().to_string(),
-            _ => String::new(),
-        })),
+        (
+            "explore",
+            Value::from(matches!(input.kind, JobKind::Explore { .. })),
+        ),
+        (
+            "artefact",
+            Value::from(match input.kind {
+                JobKind::Explore { artefact, .. } => artefact.display().to_string(),
+                _ => String::new(),
+            }),
+        ),
         ("summary_cap", Value::from(SUMMARY_CAP)),
         ("tests", Value::from(tests.to_vec())),
         ("test_files", Value::from(test_files.to_vec())),
@@ -291,7 +340,10 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("title", Value::from(input.title)),
         ("plan", Value::from(input.plan.to_string())),
         ("tier", Value::from(input.tier.to_string())),
-        ("worktree", Value::from(input.worktree.display().to_string())),
+        (
+            "worktree",
+            Value::from(input.worktree.display().to_string()),
+        ),
         ("goal", Value::from(input.goal)),
         ("context", Value::from(input.context)),
         ("touches", Value::from(input.touches.to_vec())),
@@ -299,17 +351,27 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("out_of_scope", Value::from(input.out_of_scope.to_vec())),
         ("resources", Value::from(input.resources.to_vec())),
         ("quick_check", Value::from(quick_check)),
-        ("protected", Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>())),
+        (
+            "protected",
+            Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>()),
+        ),
         ("generated", Value::from(input.generated.to_vec())),
-        ("approved_touches", Value::from(input.approved_touches.to_vec())),
+        (
+            "approved_touches",
+            Value::from(input.approved_touches.to_vec()),
+        ),
         ("previous", Value::from(previous)),
         ("answers", Value::from(answers)),
         ("addenda", Value::from(addenda)),
     ]);
-    env.render_named_str("worker.md", TEMPLATE, vars).map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot render the Worker Spec: {e}."))
+    env.render_named_str("worker.md", TEMPLATE, vars)
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("Cannot render the Worker Spec: {e}."),
+            )
             .with("attempt", input.attempt.to_string())
-    })
+        })
 }
 
 /// Renders the Spec to `run/<plan>/specs/<attempt>.md` (whole, through
@@ -319,8 +381,11 @@ pub fn write(home: &CpdHome, input: &Input<'_>) -> Result<PathBuf, CpdError> {
     let text = render(input)?;
     let path = home.worker_spec(input.plan, input.attempt);
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     crate::atomic::write_atomic(&path, text).map_err(failed)?;
     Ok(path)

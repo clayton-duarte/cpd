@@ -62,7 +62,9 @@ pub fn schedule(pools: &[Pool], ready: &[Ready]) -> Schedule {
             out.start.push(job.id);
             continue;
         }
-        let may_take = |p: usize, left: &[Pool]| left[p].free + if job.urgent { left[p].urgent_free } else { 0 };
+        let may_take = |p: usize, left: &[Pool]| {
+            left[p].free + if job.urgent { left[p].urgent_free } else { 0 }
+        };
         if job.needs.iter().all(|&p| may_take(p, &left) > 0) {
             for &p in &job.needs {
                 if left[p].free > 0 {

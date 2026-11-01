@@ -44,7 +44,11 @@ fn fx() -> Fx {
 
 impl Fx {
     fn store(&self) -> Store {
-        Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+        Store::open(
+            &CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(),
+            5000,
+        )
+        .unwrap()
     }
 
     /// What `gh pr view 7` answers: the default pull request with `over` merged in.
@@ -81,7 +85,18 @@ impl Fx {
 
     /// `pr add <key> --repo pay --title T --shape config --adopt 7 <extra…>` in `plan`.
     fn adopt_in(&self, plan: &str, key: &str, extra: &[&str]) -> Run {
-        let mut args = vec!["add", key, "--repo", self.pay.to_str().unwrap(), "--title", "T", "--shape", "config", "--adopt", "7"];
+        let mut args = vec![
+            "add",
+            key,
+            "--repo",
+            self.pay.to_str().unwrap(),
+            "--title",
+            "T",
+            "--shape",
+            "config",
+            "--adopt",
+            "7",
+        ];
         args.extend(extra);
         self.pr_in(plan, &args)
     }
@@ -115,7 +130,11 @@ fn adopts_a_pull_request_of_the_user_without_asking() {
     assert_eq!(out["pr"]["base"], "release");
     assert_eq!(out["pr"]["status"], "waiting");
     assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"), "feat/x");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"),
+        "feat/x"
+    );
 }
 
 #[test]
@@ -135,10 +154,17 @@ fn refuses_a_pull_request_of_another_author_until_the_author_is_confirmed() {
 fn adopts_a_pull_request_of_another_author_once_confirmed() {
     let fx = fx();
     fx.view(json!({"author": {"login": "alice"}}));
-    fx.refuse(&fx.adopt("web", &["--confirm-author", "bob"]), "adopt_foreign");
+    fx.refuse(
+        &fx.adopt("web", &["--confirm-author", "bob"]),
+        "adopt_foreign",
+    );
     let out = fx.adopt("web", &["--confirm-author", "Alice"]).ok();
     assert_eq!(out["pr"]["head_ref"], "feat/x");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"), "feat/x");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"),
+        "feat/x"
+    );
 }
 
 #[test]
@@ -163,7 +189,17 @@ fn refuses_a_pull_request_from_a_fork() {
 #[test]
 fn refuses_a_head_branch_that_is_a_stored_lead_branch() {
     let fx = fx();
-    fx.pr(&["add", "api", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config"]).ok();
+    fx.pr(&[
+        "add",
+        "api",
+        "--repo",
+        fx.pay.to_str().unwrap(),
+        "--title",
+        "T",
+        "--shape",
+        "config",
+    ])
+    .ok();
     fx.view(json!({"headRefName": "pay-1/api"}));
     let error = fx.refuse(&fx.adopt("web", &[]), "adopt_cpd_branch");
     assert_eq!(error["details"]["head_ref"], "pay-1/api");
@@ -175,9 +211,15 @@ fn refuses_a_head_branch_another_live_pr_holds() {
     fx.plan("pay-2");
     fx.adopt("web", &[]).ok();
     let error = fx.refuse(&fx.adopt("api", &[]), "adopt_taken");
-    assert_eq!(error["details"], json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"}));
+    assert_eq!(
+        error["details"],
+        json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"})
+    );
     let error = fx.refuse(&fx.adopt_in("pay-2", "api", &[]), "adopt_taken");
-    assert_eq!(error["details"], json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"}));
+    assert_eq!(
+        error["details"],
+        json!({"head_ref": "feat/x", "plan": "pay-1", "pr": "web"})
+    );
     // Cancelled, the head is free again.
     fx.pr(&["cancel", "web"]).ok();
     fx.adopt_in("pay-2", "api", &[]).ok();
@@ -200,7 +242,10 @@ fn adopt_and_base_exclude_each_other() {
     let before = fx.writes();
     let error = refused(&fx.adopt("web", &["--base", "main"]), "usage", 2);
     let help = error["details"]["help"].as_str().unwrap();
-    assert!(help.contains("cannot be used with") && help.contains("--adopt") && help.contains("--base"), "not a conflict: {help}");
+    assert!(
+        help.contains("cannot be used with") && help.contains("--adopt") && help.contains("--base"),
+        "not a conflict: {help}"
+    );
     assert_eq!(fx.writes(), before);
 }
 
@@ -210,26 +255,60 @@ fn pr_edit_refuses_repo_and_base_of_an_adopted_pr() {
     fx.adopt("web", &[]).ok();
     let error = fx.refuse(&fx.pr(&["edit", "web", "--base", "x"]), "pr_adopted");
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--base"}));
-    let error = fx.refuse(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "pr_adopted");
+    let error = fx.refuse(
+        &fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]),
+        "pr_adopted",
+    );
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--repo"}));
     fx.pr(&["edit", "web", "--title", "Renamed"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Renamed");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT title FROM prs WHERE key = 'web'"),
+        "Renamed"
+    );
 }
 
 #[test]
 fn the_event_and_plan_show_name_the_head_branch() {
     let fx = fx();
     fx.adopt("web", &[]).ok();
-    fx.pr(&["add", "plain", "--repo", fx.pay.to_str().unwrap(), "--title", "P", "--shape", "config"]).ok();
-    let added = fx.env.cpd(&["events", "list", "--kind", "pr-added"]).ok()["events"].as_array().unwrap().clone();
+    fx.pr(&[
+        "add",
+        "plain",
+        "--repo",
+        fx.pay.to_str().unwrap(),
+        "--title",
+        "P",
+        "--shape",
+        "config",
+    ])
+    .ok();
+    let added = fx.env.cpd(&["events", "list", "--kind", "pr-added"]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(added.len(), 2);
     assert_eq!(added[0]["data"]["head_ref"], "feat/x");
     assert_eq!(added[0]["data"]["author"], "bob");
-    assert!(added[1]["data"]["head_ref"].is_null() && added[1]["data"].get("head_ref").is_some(), "{}", added[1]);
-    assert!(added[1]["data"]["author"].is_null() && added[1]["data"].get("author").is_some(), "{}", added[1]);
+    assert!(
+        added[1]["data"]["head_ref"].is_null() && added[1]["data"].get("head_ref").is_some(),
+        "{}",
+        added[1]
+    );
+    assert!(
+        added[1]["data"]["author"].is_null() && added[1]["data"].get("author").is_some(),
+        "{}",
+        added[1]
+    );
     let shown = fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
     let prs = shown["prs"].as_array().unwrap();
-    let head = |key: &str| prs.iter().find(|p| p["key"] == key).unwrap().get("head_ref").cloned();
+    let head = |key: &str| {
+        prs.iter()
+            .find(|p| p["key"] == key)
+            .unwrap()
+            .get("head_ref")
+            .cloned()
+    };
     assert_eq!(head("web"), Some(json!("feat/x")));
     assert_eq!(head("plain"), Some(Value::Null));
 }
@@ -247,10 +326,14 @@ fn the_head_branch_of_a_pr_cannot_change_and_is_unique_among_live_prs() {
     };
     let write = |sql: &str| fx.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?));
     write(&insert("pay-1", "a", "waiting")).expect("insert a PR with a head_ref");
-    let err = write("UPDATE prs SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
+    let err =
+        write("UPDATE prs SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
     assert!(format!("{err:?}").contains("pr_locked"), "{err:?}");
     let err = write(&insert("pay-2", "b", "waiting")).expect_err("a second live PR with the head");
-    assert!(format!("{err:?}").to_lowercase().contains("unique"), "{err:?}");
+    assert!(
+        format!("{err:?}").to_lowercase().contains("unique"),
+        "{err:?}"
+    );
     // A cancelled row does not count.
     write(&insert("pay-2", "c", "cancelled")).expect("a cancelled row does not hold the head");
 }

@@ -58,7 +58,9 @@ impl Marker {
 }
 
 fn unix_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// The held setup lock. Dropping it releases the `flock` and, first, empties
@@ -87,11 +89,17 @@ impl SetupLock {
             started_unix_ms: unix_ms(),
             from,
             to,
-            command: std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" "),
+            command: std::env::args_os()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" "),
         };
         let mut text = serde_json::to_string(&marker).expect("a marker serialises");
         text.push('\n');
-        self.file.set_len(0).and_then(|()| (&self.file).write_all(text.as_bytes())).map_err(|e| failed("write", &self.path, e))
+        self.file
+            .set_len(0)
+            .and_then(|()| (&self.file).write_all(text.as_bytes()))
+            .map_err(|e| failed("write", &self.path, e))
     }
 }
 
@@ -103,7 +111,11 @@ impl Drop for SetupLock {
 }
 
 fn failed(what: &str, path: &Path, e: std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display())).with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot {what} {}: {e}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
@@ -113,16 +125,29 @@ fn failed(what: &str, path: &Path, e: std::io::Error) -> CpdError {
 /// stays held (the holder is in the last steps of its setup): then `lock_timeout` (exit 5) naming the lock
 /// file and the time waited (§4.2). On its first wait for a migration it says
 /// so, once, on stderr.
-pub(super) fn setup_lock(clock: &dyn Clock, home: &CpdHome, busy_ms: u64) -> Result<SetupLock, CpdError> {
+pub(super) fn setup_lock(
+    clock: &dyn Clock,
+    home: &CpdHome,
+    busy_ms: u64,
+) -> Result<SetupLock, CpdError> {
     acquire(clock, home, busy_ms, MIGRATION_WAIT_CEILING)
 }
 
-fn acquire(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock, CpdError> {
+fn acquire(
+    clock: &dyn Clock,
+    home: &CpdHome,
+    busy_ms: u64,
+    ceiling: Duration,
+) -> Result<SetupLock, CpdError> {
     let dir = home.locks_dir();
     fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     // `home.rs` has no method for this lock; it is the store's alone.
     let path = dir.join("store.lock");
-    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| failed("open", &path, e))?;
     let busy = Duration::from_millis(busy_ms);
     let mut deadline = clock.now() + busy;
     let mut said = false;
@@ -130,9 +155,15 @@ fn acquire(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, ceiling: Duration) -
     let mut seen: Option<Marker> = None;
     loop {
         if flock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
-            let lock = SetupLock { file, path, waited: said };
+            let lock = SetupLock {
+                file,
+                path,
+                waited: said,
+            };
             // A marker left by a holder that died is not ours to keep.
-            lock.file.set_len(0).map_err(|e| failed("clear", &lock.path, e))?;
+            lock.file
+                .set_len(0)
+                .map_err(|e| failed("clear", &lock.path, e))?;
             return Ok(lock);
         }
         // A marker that is not a live migration's (a dead pid, `migrating: false`) is not the holder we saw; an
@@ -216,13 +247,25 @@ mod tests {
     }
 
     fn marker(pid: u32, started_unix_ms: u64) -> String {
-        serde_json::to_string(&Marker { migrating: true, pid, started_unix_ms, from: 3, to: 9, command: "cpd test".into() }).unwrap()
+        serde_json::to_string(&Marker {
+            migrating: true,
+            pid,
+            started_unix_ms,
+            from: 3,
+            to: 9,
+            command: "cpd test".into(),
+        })
+        .unwrap()
     }
 
     /// A holder (this process, on another descriptor) with `text` in the lock file.
     fn held(home: &CpdHome, text: &str) -> File {
         fs::create_dir_all(home.locks_dir()).unwrap();
-        let file = OpenOptions::new().create(true).append(true).open(home.locks_dir().join("store.lock")).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.locks_dir().join("store.lock"))
+            .unwrap();
         assert!(flock::try_lock(&file).unwrap());
         (&file).write_all(text.as_bytes()).unwrap();
         file
@@ -232,9 +275,16 @@ mod tests {
     fn a_migrating_holder_past_the_ceiling_is_lock_timeout_naming_it() {
         let (_dir, home) = home();
         let _holder = held(&home, &marker(std::process::id(), unix_ms() - 5_000));
-        let err = acquire(&SystemClock, &home, 60_000, Duration::from_secs(1)).err().expect("past the ceiling");
+        let err = acquire(&SystemClock, &home, 60_000, Duration::from_secs(1))
+            .err()
+            .expect("past the ceiling");
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
-        for part in [&std::process::id().to_string(), "cpd test", "3 to 9", "store.lock"] {
+        for part in [
+            &std::process::id().to_string(),
+            "cpd test",
+            "3 to 9",
+            "store.lock",
+        ] {
             assert!(err.message().contains(part), "{part}: {err}");
         }
         assert_eq!(err.details()["pid"], std::process::id());
@@ -248,9 +298,15 @@ mod tests {
         child.wait().unwrap();
         let _holder = held(&home, &marker(dead, unix_ms()));
         let started = std::time::Instant::now();
-        let err = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING).err().expect("the lock is held");
+        let err = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING)
+            .err()
+            .expect("the lock is held");
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
-        assert!(started.elapsed() < Duration::from_secs(5), "waited {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
@@ -267,7 +323,10 @@ mod tests {
         let lock = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING).unwrap();
         lock.migrating(1, 2).unwrap();
         let written = read_marker(&lock.path).expect("a marker");
-        assert!(written.migrating && written.live() && (written.from, written.to) == (1, 2), "{written:?}");
+        assert!(
+            written.migrating && written.live() && (written.from, written.to) == (1, 2),
+            "{written:?}"
+        );
         let path = lock.path.clone();
         drop(lock);
         assert_eq!(fs::read_to_string(path).unwrap(), "");

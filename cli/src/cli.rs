@@ -7,14 +7,18 @@ use std::ffi::OsString;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser, Subcommand};
 
+use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host_repair as host;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
-use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp, metrics, models, plan, policy, pr, prune, resource, secret, session, tag, testsel, version_sync};
+use cpd_core::{
+    ask, attempt, board, config, context, events, gate, inbox, incident, janitor, job, mcp,
+    metrics, models, plan, policy, pr, prune, resource, secret, session, tag, testsel,
+    version_sync,
+};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -143,24 +147,40 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
 /// [`run`] on `ports`: the whole parse-and-dispatch runs inside [`Ports::scope`], so every area, also those that hand
 /// no ports on, reaches them through `Ports::current()` (docs/implementing.md, "Ports, Spawn and run_with"). A thread
 /// a command spawns captures `Ports::current()` and scopes it itself.
-pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+pub fn run_with(
+    ports: &Ports,
+    argv: impl IntoIterator<Item = OsString>,
+) -> Result<Output, CpdError> {
     run_on(ports, argv, cpd_tui::on_a_terminal())
 }
 
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_on(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_on(
+    ports: &Ports,
+    argv: impl IntoIterator<Item = OsString>,
+    terminal: bool,
+) -> Result<Output, CpdError> {
     Ports::scope(ports, || run_scoped(ports, argv, terminal))
 }
 
-fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_scoped(
+    ports: &Ports,
+    argv: impl IntoIterator<Item = OsString>,
+    terminal: bool,
+) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
-    let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
+    let root_help =
+        matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(Cli { command: Some(command) }) => dispatch(ports, command),
+        Ok(Cli {
+            command: Some(command),
+        }) => dispatch(ports, command),
         Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
-            let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
+            let required = Cli::command()
+                .subcommand_required(true)
+                .arg_required_else_help(true);
             match required.try_get_matches_from(&argv) {
                 Err(err) => clap_result(err),
                 Ok(_) => unreachable!("a missing command is an error when one is required"),
@@ -168,7 +188,9 @@ fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal:
         }
         Err(err) if root_help && err.kind() == ErrorKind::DisplayHelp => {
             let text = err.render().to_string();
-            Ok(Output::success(serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) })))
+            Ok(Output::success(
+                serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) }),
+            ))
         }
         Err(err) => clap_result(err),
     }
@@ -192,7 +214,9 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART),
+        Command::Tui(a) => {
+            cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART)
+        }
         Command::Doctor(a) => doctor::run(a, &ports.clock.zone()),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
@@ -208,7 +232,9 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Prune(a) => prune::command(a),
         Command::Janitor => janitor::pass(&mut cpd_core::env::Env::open_with(ports)?),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
-        Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
+        Command::Version(VersionCommand::Sync { print }) => {
+            release_exit(version_sync::sync(&repo_root()?, print))
+        }
     }
 }
 
@@ -226,7 +252,12 @@ fn transparent_exit(result: Result<u8, CpdError>) -> ! {
 
 /// The repository the release commands work in: the current directory.
 fn repo_root() -> Result<std::path::PathBuf, CpdError> {
-    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
+    std::env::current_dir().map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("cannot read the current directory: {e}"),
+        )
+    })
 }
 
 /// `cpd gate finish` ends the process with the run's status, its report on stderr. It never returns.
@@ -259,16 +290,29 @@ fn release_exit(result: Result<String, String>) -> ! {
 }
 
 /// The engine's tmux restart, which `cpd tui` and bare `cpd` hand the cockpit (`cpd-tui` does not depend on `cpd-engine`).
-const RESTART: cpd_tui::Restart =
-    cpd_tui::Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
+const RESTART: cpd_tui::Restart = cpd_tui::Restart {
+    failed: restart_failed,
+    clear: restart::clear,
+    mark: restart::mark,
+    now: restart_now,
+};
 
 /// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
-fn restart_failed(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(zone)))
+fn restart_failed(
+    home: &CpdHome,
+    zone: &cpd_core::clock::TimeZone,
+) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?
+        .filter(|p| p.failed.is_some())
+        .map(|p| p.describe(zone)))
 }
 
 /// [`cpd_tui::Restart::now`]: the restart, logging nothing.
-fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<cpd_tui::RestartOutcome, CpdError> {
+fn restart_now(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+) -> Result<cpd_tui::RestartOutcome, CpdError> {
     Ok(match restart::restart(home, config, store, &mut |_| ())? {
         restart::Outcome::NotNeeded => cpd_tui::RestartOutcome::NotNeeded,
         restart::Outcome::Running => cpd_tui::RestartOutcome::Running,
@@ -312,15 +356,21 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
 fn store_verdict(home: &CpdHome) -> Result<Option<serde_json::Value>, CpdError> {
     let path = home.db();
     let exists = path.try_exists().map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot read {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     })?;
     if !exists {
         return Ok(None);
     }
-    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let verdict = cpd_core::store::verdict(&conn)?;
-    let refusal = verdict.refusal().map(|e| serde_json::json!({"code": e.code().as_str(), "message": e.message()}));
+    let refusal = verdict
+        .refusal()
+        .map(|e| serde_json::json!({"code": e.code().as_str(), "message": e.message()}));
     Ok(Some(serde_json::json!({
         "opens": verdict.opens(),
         "refusal": refusal,
@@ -336,7 +386,9 @@ fn usage_error(err: &clap::Error, text: &str) -> CpdError {
     }
     let message = match err.kind() {
         // clap renders the help text itself here, not an error line.
-        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => "A command is required: see details.help.".to_owned(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            "A command is required: see details.help.".to_owned()
+        }
         _ => {
             let first = text.lines().next().unwrap_or_default();
             first.strip_prefix("error: ").unwrap_or(first).to_owned()
@@ -360,7 +412,10 @@ mod tests {
     use cpd_core::output::Output;
 
     fn argv(words: &[&str]) -> Vec<OsString> {
-        std::iter::once("cpd").chain(words.iter().copied()).map(OsString::from).collect()
+        std::iter::once("cpd")
+            .chain(words.iter().copied())
+            .map(OsString::from)
+            .collect()
     }
 
     fn fails(words: &[&str]) -> CpdError {
@@ -369,7 +424,13 @@ mod tests {
 
     #[test]
     fn unknown_or_missing_commands_are_usage() {
-        for words in [&[][..], &["nope"], &["plan"], &["plan", "nope"], &["--bogus"]] {
+        for words in [
+            &[][..],
+            &["nope"],
+            &["plan"],
+            &["plan", "nope"],
+            &["--bogus"],
+        ] {
             let err = fails(words);
             assert_eq!(err.code(), ErrorCode::Usage, "{words:?}");
             assert!(!err.message().contains('\n'), "{:?}", err.message());
@@ -379,28 +440,42 @@ mod tests {
 
     #[test]
     fn usage_messages_say_what_is_wrong() {
-        assert_eq!(fails(&[]).message(), "A command is required: see details.help.");
-        assert_eq!(fails(&["plan"]).message(), "A command is required: see details.help.");
+        assert_eq!(
+            fails(&[]).message(),
+            "A command is required: see details.help."
+        );
+        assert_eq!(
+            fails(&["plan"]).message(),
+            "A command is required: see details.help."
+        );
         assert!(fails(&["nope"]).message().contains("'nope'"));
     }
 
     #[test]
     fn help_and_version_are_one_json_value() {
-        let Ok(Output::Success(fields)) = run(argv(&["--help"])) else { panic!("help is a success") };
+        let Ok(Output::Success(fields)) = run(argv(&["--help"])) else {
+            panic!("help is a success")
+        };
         assert!(fields["help"].as_str().unwrap().contains("context"));
         assert!(fields["tree"].is_array());
         for words in [&["plan", "--help"][..], &["help", "plan"]] {
-            let Ok(Output::Success(fields)) = run(argv(words)) else { panic!("help is a success") };
+            let Ok(Output::Success(fields)) = run(argv(words)) else {
+                panic!("help is a success")
+            };
             assert!(fields.contains_key("help") && !fields.contains_key("tree"));
         }
-        let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
+        let Ok(Output::Success(fields)) = run(argv(&["--version"])) else {
+            panic!("version is a success")
+        };
         let version = fields["version"].as_str().expect("version is a string");
         let hash = version
             .strip_prefix(env!("CARGO_PKG_VERSION"))
             .and_then(|rest| rest.strip_prefix('-'))
             .expect("version is <Cargo version>-<hash>");
         assert!(
-            hash == "dev" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
+            hash == "dev"
+                || (hash.len() >= 7
+                    && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
             "bad hash {hash}"
         );
         let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
@@ -433,10 +508,21 @@ mod tests {
 
     #[test]
     fn our_parsers_keep_their_codes_through_clap() {
-        assert_eq!(probe(&["--plan", "Bad"]).unwrap_err().code(), ErrorCode::InvalidPlanId);
+        assert_eq!(
+            probe(&["--plan", "Bad"]).unwrap_err().code(),
+            ErrorCode::InvalidPlanId
+        );
         // --plan is always given: plan_falls_back_to_cpd_plan changes CPD_PLAN meanwhile.
-        assert_eq!(probe(&["--plan", "cpd2", "--name", ""]).unwrap_err().code(), ErrorCode::InvalidName);
-        assert_eq!(probe(&["--plan", "cpd2", "--title", ""]).unwrap_err().code(), ErrorCode::Usage);
+        assert_eq!(
+            probe(&["--plan", "cpd2", "--name", ""]).unwrap_err().code(),
+            ErrorCode::InvalidName
+        );
+        assert_eq!(
+            probe(&["--plan", "cpd2", "--title", ""])
+                .unwrap_err()
+                .code(),
+            ErrorCode::Usage
+        );
         let ok = probe(&["--plan", "cpd2", "--title", "T", "--name", "N"]).unwrap();
         assert_eq!(ok.plan.require().unwrap().as_str(), "cpd2");
     }
@@ -455,7 +541,10 @@ mod tests {
         assert_eq!(from_env.unwrap().require().unwrap().as_str(), "from-env");
         assert_eq!(flag_wins.unwrap().require().unwrap().as_str(), "from-flag");
         assert_eq!(bad_env.unwrap_err().code(), ErrorCode::InvalidPlanId);
-        assert_eq!(none.unwrap().require().unwrap_err().code(), ErrorCode::PlanRequired);
+        assert_eq!(
+            none.unwrap().require().unwrap_err().code(),
+            ErrorCode::PlanRequired
+        );
     }
 
     #[test]

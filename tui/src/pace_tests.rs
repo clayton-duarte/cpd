@@ -4,16 +4,18 @@
 //! against a Lead that works and no running Job. At every frame change the trace shows `gap_us` about 100000 and
 //! `layout_us` 0 (before the fix: one frame in 35 s, and `layout_us` of 13-18 ms at p50 when a Job runs).
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::pace::Reads;
-use crate::pump::Pump;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
-use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
+use crate::pump::Pump;
+use crate::read::{
+    ChatSlot, Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull,
+};
 use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 
@@ -63,7 +65,10 @@ fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
         }
     }
     assert_eq!(out, [1, 3]);
-    assert!(!second_ran.load(Ordering::SeqCst), "the older waiting request ran");
+    assert!(
+        !second_ran.load(Ordering::SeqCst),
+        "the older waiting request ran"
+    );
     assert!(!overlapped.load(Ordering::SeqCst), "two jobs ran at once");
     assert_eq!(reads.take(), None);
 }
@@ -85,7 +90,15 @@ fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> PrNode {
 }
 
 fn pull() -> Pull {
-    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, update: None, draft: false }
+    Pull {
+        number: 12,
+        state: PrState::Open,
+        url: "https://github.com/acme/repo/pull/12".into(),
+        conflicting: false,
+        clean: false,
+        update: None,
+        draft: false,
+    }
 }
 
 fn job_node(key: &str, status: JobStatus) -> JobNode {
@@ -126,32 +139,61 @@ fn centre(lead_dot: Option<Dot>, jobs: Vec<JobNode>) -> Centre {
         plan: plan.plan.clone(),
         moved_event: 0,
     };
-    Centre { slot, plan, boxes, frame: 0 }
+    Centre {
+        slot,
+        plan,
+        boxes,
+        frame: 0,
+    }
 }
 
 #[test]
 fn the_plan_view_spins_for_a_lead_dot_with_no_running_job() {
     let queued = || vec![job_node("job-1", JobStatus::Queued)];
-    assert!(centre(Some(Dot::working(false, None)), queued()).spins(), "a working Lead's dot spins");
-    assert!(!centre(None, queued()).spins(), "a Lead not working, no running Job");
-    assert!(centre(None, vec![job_node("job-1", JobStatus::Running)]).spins(), "a running Job spins");
+    assert!(
+        centre(Some(Dot::working(false, None)), queued()).spins(),
+        "a working Lead's dot spins"
+    );
+    assert!(
+        !centre(None, queued()).spins(),
+        "a Lead not working, no running Job"
+    );
+    assert!(
+        centre(None, vec![job_node("job-1", JobStatus::Running)]).spins(),
+        "a running Job spins"
+    );
 }
 
 #[test]
 fn the_plan_view_lays_out_once_per_snapshot_and_a_frame_change_draws_the_same_cells() {
     let before = LAYOUTS.with(|n| n.get());
-    let mut c = centre(Some(Dot::working(false, None)), vec![job_node("job-1", JobStatus::Running), job_node("job-2", JobStatus::Queued)]);
-    assert_eq!(LAYOUTS.with(|n| n.get()), before + 1, "one layout for the snapshot");
+    let mut c = centre(
+        Some(Dot::working(false, None)),
+        vec![
+            job_node("job-1", JobStatus::Running),
+            job_node("job-2", JobStatus::Queued),
+        ],
+    );
+    assert_eq!(
+        LAYOUTS.with(|n| n.get()),
+        before + 1,
+        "one layout for the snapshot"
+    );
 
     let mut cells = Vec::new();
     for frame in 1..=16 {
         c.turn(frame % 8);
         cells.push((frame % 8, c.boxes.chart.buf.clone()));
     }
-    assert_eq!(LAYOUTS.with(|n| n.get()), before + 1, "a frame change lays nothing out");
+    assert_eq!(
+        LAYOUTS.with(|n| n.get()),
+        before + 1,
+        "a frame change lays nothing out"
+    );
 
     for (frame, buf) in cells.iter().take(8) {
-        let full = boxes::layout(&c.plan.prs, &c.plan.jobs, &c.plan.needs_user, *frame).with_margin(CHART_MARGIN);
+        let full = boxes::layout(&c.plan.prs, &c.plan.jobs, &c.plan.needs_user, *frame)
+            .with_margin(CHART_MARGIN);
         assert_eq!(&full.chart.buf, buf, "frame {frame}");
     }
 }

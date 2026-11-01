@@ -17,7 +17,10 @@ use common::TestEnv;
 use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, ORPHAN_HISTORY_SQL, Persist, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash, is_transient};
+use cpd_core::store::{
+    APPLICATION_ID, ORPHAN_HISTORY_SQL, Persist, SCHEMA_HASH, Store, VERSION, WriteTxn,
+    canonical_hash, is_transient,
+};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -40,7 +43,10 @@ fn raw(env: &impl HasCpdHome) -> Connection {
 }
 
 fn sqlite_message(err: &CpdError) -> String {
-    err.details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    err.details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Runs `sql` in its own write transaction and returns the refusal.
@@ -99,7 +105,10 @@ fn fixture_store(env: &impl HasCpdHome) -> Store {
 
 fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
     let mut stmt = conn.prepare(sql).unwrap();
-    stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+    stmt.query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 // ---------- §4.1 the database ----------
@@ -112,12 +121,18 @@ fn a_new_database_is_wal_with_cpds_application_id() {
     assert!(store.schema_mismatch().is_none());
     drop(store);
     let conn = raw(&env);
-    let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
+    let mode: String = conn
+        .pragma_query_value(None, "journal_mode", |r| r.get(0))
+        .unwrap();
     assert_eq!(mode, "wal");
-    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    let app: i32 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .unwrap();
     assert_eq!(app, 1668310066);
     assert_eq!(APPLICATION_ID, 1668310066);
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, VERSION);
 }
 
@@ -129,8 +144,10 @@ fn every_connection_is_synchronous_normal_in_wal_mode() {
     let (sync, mode): (i64, String) = store
         .read(|conn| {
             Ok((
-                conn.pragma_query_value(None, "synchronous", |r| r.get(0)).unwrap(),
-                conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap(),
+                conn.pragma_query_value(None, "synchronous", |r| r.get(0))
+                    .unwrap(),
+                conn.pragma_query_value(None, "journal_mode", |r| r.get(0))
+                    .unwrap(),
             ))
         })
         .unwrap();
@@ -142,7 +159,11 @@ fn every_connection_is_synchronous_normal_in_wal_mode() {
 fn cpd_home_is_created_on_first_use() {
     let env = Home::new();
     let nested = env.root().join("a/b/home");
-    let store = Store::open(&CpdHome::resolve(Some(nested.clone().into()), None).unwrap(), 5000).unwrap();
+    let store = Store::open(
+        &CpdHome::resolve(Some(nested.clone().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap();
     assert_eq!(store.path(), nested.join("cpd.db"));
     assert!(nested.join("cpd.db").is_file());
 }
@@ -150,7 +171,11 @@ fn cpd_home_is_created_on_first_use() {
 #[test]
 fn a_file_that_is_not_a_database_is_store_failed() {
     let env = Home::new();
-    fs::write(home(&env).db(), "this is not sqlite, not at all, and long enough to have a header").unwrap();
+    fs::write(
+        home(&env).db(),
+        "this is not sqlite, not at all, and long enough to have a header",
+    )
+    .unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
     assert_eq!(err.exit().code(), 1);
@@ -170,7 +195,9 @@ fn a_foreign_application_id_is_refused_and_never_written() {
     assert_eq!(err.details()["application_id"], 42);
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
     let conn = Connection::open(home(&env).db()).unwrap();
-    let mode: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
+    let mode: String = conn
+        .pragma_query_value(None, "journal_mode", |r| r.get(0))
+        .unwrap();
     assert_eq!(mode, "delete");
 }
 
@@ -183,8 +210,13 @@ fn contract() -> String {
 /// `(table, no_delete)` of every row of `history_tables`: the tables whose history triggers are generated (§4.4).
 fn history_tables(env: &impl HasCpdHome) -> Vec<(String, bool)> {
     let conn = raw(env);
-    let mut stmt = conn.prepare("SELECT name, no_delete FROM history_tables ORDER BY name").unwrap();
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1))).unwrap().map(Result::unwrap).collect()
+    let mut stmt = conn
+        .prepare("SELECT name, no_delete FROM history_tables ORDER BY name")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 /// The ```sql blocks of contract §4.4, in order.
@@ -193,15 +225,27 @@ fn contract_ddl_blocks() -> Vec<String> {
     let start = text.find("### 4.4 DDL").unwrap();
     let end = text.find("### 4.5 ").unwrap();
     let section = &text[start..end];
-    section.split("```sql\n").skip(1).map(|b| b.split("```").next().unwrap().to_owned()).collect()
+    section
+        .split("```sql\n")
+        .skip(1)
+        .map(|b| b.split("```").next().unwrap().to_owned())
+        .collect()
 }
 
 /// The SQL without its `--` comments and with its whitespace collapsed: comments are
 /// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
-    let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
+    let code: Vec<&str> = sql
+        .lines()
+        .map(|line| line.split("--").next().unwrap_or_default())
+        .collect();
     // `ALTER TABLE … ADD COLUMN` splices its column in as `, <column>)`: the spaces before `,` and `)` are layout too.
-    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")")
+    code.join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" ,", ",")
+        .replace(" )", ")")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -214,7 +258,11 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
         .unwrap()
         .map(|row| {
             let (name, sql) = row.unwrap();
-            let sql = normalized(&sql.replacen(&format!("CREATE TABLE \"{name}\""), &format!("CREATE TABLE {name}"), 1));
+            let sql = normalized(&sql.replacen(
+                &format!("CREATE TABLE \"{name}\""),
+                &format!("CREATE TABLE {name}"),
+                1,
+            ));
             (name, sql)
         })
         .collect()
@@ -224,19 +272,25 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
     assert_eq!(blocks.len(), 10, "§4.4 changed shape"); // `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`
-    assert!(blocks[2].contains("CREATE TRIGGER escalations_hist_ins"), "block 3 is the generated example");
+    assert!(
+        blocks[2].contains("CREATE TRIGGER escalations_hist_ins"),
+        "block 3 is the generated example"
+    );
     // The contract's DDL, every block but the generated example, run as written.
     let contract = Connection::open_in_memory().unwrap();
     for (i, block) in blocks.iter().enumerate() {
         if i != 2 {
-            contract.execute_batch(block).unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
+            contract
+                .execute_batch(block)
+                .unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
         }
     }
     let expected = schema_sql(&contract);
     assert!(expected.len() > 40, "{expected:?}");
     let env = Home::new();
     drop(open(&env));
-    let found: std::collections::BTreeMap<String, String> = schema_sql(&raw(&env)).into_iter().collect();
+    let found: std::collections::BTreeMap<String, String> =
+        schema_sql(&raw(&env)).into_iter().collect();
     for (name, sql) in expected {
         assert_eq!(found.get(&name), Some(&sql), "{name}");
     }
@@ -280,11 +334,22 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     );
     assert_eq!(found, expected);
     // Every table is STRICT.
-    let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 31, "§4.4's tables, the three lookup tables and schema_migrations");
+    let tables = names(
+        &raw(&env),
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    );
+    assert_eq!(
+        tables.len(),
+        31,
+        "§4.4's tables, the three lookup tables and schema_migrations"
+    );
     for table in tables {
         let strict: i64 = raw(&env)
-            .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
+            .query_row(
+                "SELECT strict FROM pragma_table_list WHERE name = ?1",
+                [&table],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(strict, 1, "{table}");
     }
@@ -302,23 +367,44 @@ fn generated_history_triggers_match_the_contracts_example() {
             continue;
         }
         let name = statement.split_whitespace().nth(2).unwrap();
-        let mut sql: String =
-            conn.query_row("SELECT sql FROM sqlite_schema WHERE name = ?1", [name], |r| r.get(0)).unwrap();
+        let mut sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap();
         if name == "escalations_hist_upd" {
             // The example abbreviates the changed-column lines of the columns its comments name.
             let columns = names(&conn, "SELECT name FROM pragma_table_info('escalations')");
-            let omitted: Vec<&String> = columns.iter().filter(|c| !normalized(statement).contains(&format!("'{c}'"))).collect();
+            let omitted: Vec<&String> = columns
+                .iter()
+                .filter(|c| !normalized(statement).contains(&format!("'{c}'")))
+                .collect();
             assert!(!omitted.is_empty(), "the example abbreviates");
             for column in &omitted {
-                assert!(statement.contains(&format!(" {column},")) || statement.contains(&format!(" {column}\n")), "the comment names {column}");
+                assert!(
+                    statement.contains(&format!(" {column},"))
+                        || statement.contains(&format!(" {column}\n")),
+                    "the comment names {column}"
+                );
             }
             sql = sql
                 .lines()
-                .filter(|line| !omitted.iter().any(|c| line.trim_start().starts_with(&format!("UNION ALL SELECT '{c}',"))))
+                .filter(|line| {
+                    !omitted.iter().any(|c| {
+                        line.trim_start()
+                            .starts_with(&format!("UNION ALL SELECT '{c}',"))
+                    })
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        assert_eq!(normalized(&format!("{sql};")), normalized(statement), "{name}");
+        assert_eq!(
+            normalized(&format!("{sql};")),
+            normalized(statement),
+            "{name}"
+        );
     }
 }
 
@@ -328,18 +414,31 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
     drop(open(&env));
     let conn = raw(&env);
     let sql_of = |name: &str| -> String {
-        conn.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1", [name], |r| r.get(0))
-            .unwrap_or_else(|e| panic!("{name}: {e}"))
+        conn.query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
     };
     for (table, _) in history_tables(&env) {
         let table = table.as_str();
-        let columns = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}')"));
+        let columns = names(
+            &conn,
+            &format!("SELECT name FROM pragma_table_info('{table}')"),
+        );
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
         let upd = sql_of(&format!("{table}_hist_upd"));
-        let key = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"));
+        let key = names(
+            &conn,
+            &format!("SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"),
+        );
         for column in &columns {
-            assert!(ins.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_ins lacks {column}");
+            assert!(
+                ins.contains(&format!("'{column}', NEW.{column}")),
+                "{table}_hist_ins lacks {column}"
+            );
             // §4.4 "History row shape": the key always, every other column when it changed.
             for row in ["OLD", "NEW"] {
                 if key.contains(column) {
@@ -348,9 +447,14 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
                         format!("SELECT '{column}', {row}.{column}\n"),
                         format!("SELECT '{column}', {row}.{column} UNION ALL"),
                     ];
-                    assert!(forms.iter().any(|f| upd.contains(f)), "{table}_hist_upd lacks the key {row}.{column}");
+                    assert!(
+                        forms.iter().any(|f| upd.contains(f)),
+                        "{table}_hist_upd lacks the key {row}.{column}"
+                    );
                 } else {
-                    let line = format!("UNION ALL SELECT '{column}', {row}.{column} WHERE OLD.{column} IS NOT NEW.{column}\n");
+                    let line = format!(
+                        "UNION ALL SELECT '{column}', {row}.{column} WHERE OLD.{column} IS NOT NEW.{column}\n"
+                    );
                     assert!(upd.contains(&line), "{table}_hist_upd lacks {line:?}");
                 }
             }
@@ -360,8 +464,14 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
             // `pull_requests_hist_del` is hand-written and owned by its migrations (§4.5 K4): `pr-comments` and `pr-base` (pro-d118) are additive, so they
             // cannot rewrite it (two additive migrations that did would not commute) and its columns are not in it.
             let added_by_additive = ["updated_at", "feedback", "base_ref", "default_branch"];
-            for column in columns.iter().filter(|c| table != "pull_requests" || !added_by_additive.contains(&c.as_str())) {
-                assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
+            for column in columns
+                .iter()
+                .filter(|c| table != "pull_requests" || !added_by_additive.contains(&c.as_str()))
+            {
+                assert!(
+                    del.contains(&format!("'{column}', OLD.{column}")),
+                    "{table}_hist_del lacks {column}"
+                );
             }
         }
     }
@@ -392,14 +502,23 @@ fn writes_are_copied_into_history_with_their_txn() {
         })
         .unwrap();
     assert_eq!(rows.len(), 2);
-    assert_eq!((rows[0].0, rows[0].1.as_str(), rows[0].2.as_str()), (txn, r#"["pay","api-a1-q1"]"#, "insert"));
+    assert_eq!(
+        (rows[0].0, rows[0].1.as_str(), rows[0].2.as_str()),
+        (txn, r#"["pay","api-a1-q1"]"#, "insert")
+    );
     assert_eq!(rows[0].3, None);
     assert_eq!((rows[1].0, rows[1].2.as_str()), (txn + 1, "update"));
     let before: Value = serde_json::from_str(rows[1].3.as_deref().unwrap()).unwrap();
     let after: Value = serde_json::from_str(rows[1].4.as_deref().unwrap()).unwrap();
     // §4.4 "History row shape": the key and the changed columns, a change from NULL included.
-    assert_eq!(before, json!({"plan": "pay", "id": "api-a1-q1", "status": "open", "answer": null, "answered_at": null}));
-    assert_eq!(after, json!({"plan": "pay", "id": "api-a1-q1", "status": "answered", "answer": "Because.", "answered_at": "t"}));
+    assert_eq!(
+        before,
+        json!({"plan": "pay", "id": "api-a1-q1", "status": "open", "answer": null, "answered_at": null})
+    );
+    assert_eq!(
+        after,
+        json!({"plan": "pay", "id": "api-a1-q1", "status": "answered", "answer": "Because.", "answered_at": "t"})
+    );
 }
 
 /// sql-F2 (hs-d234): a Job status flip used to store the whole row twice, its long text included.
@@ -437,24 +556,67 @@ fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() 
             })
             .unwrap()
     };
-    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'running' WHERE key = 'big'")).unwrap();
+    store
+        .write("test", |tx| {
+            exec(tx, "UPDATE jobs SET status = 'running' WHERE key = 'big'")
+        })
+        .unwrap();
     let (before, after, bytes) = last(&mut store);
-    assert_eq!((before, after), (json!({"seq": seq, "status": "queued"}), json!({"seq": seq, "status": "running"})), "{bytes} B");
+    assert_eq!(
+        (before, after),
+        (
+            json!({"seq": seq, "status": "queued"}),
+            json!({"seq": seq, "status": "running"})
+        ),
+        "{bytes} B"
+    );
     eprintln!("history bytes of a Job status change (before + after): {bytes}");
     assert!(bytes < 100, "{bytes} B");
     // A change to a value from NULL is a change.
-    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'big'")).unwrap();
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'big'",
+            )
+        })
+        .unwrap();
     let (before, after, _) = last(&mut store);
-    assert_eq!(before, json!({"seq": seq, "status": "running", "failed_cause": null}));
-    assert_eq!(after, json!({"seq": seq, "status": "failed", "failed_cause": "crashed"}));
+    assert_eq!(
+        before,
+        json!({"seq": seq, "status": "running", "failed_cause": null})
+    );
+    assert_eq!(
+        after,
+        json!({"seq": seq, "status": "failed", "failed_cause": "crashed"})
+    );
     // An UPDATE that changes nothing still writes one row, the key only.
     let count = |store: &mut Store| -> i64 {
-        store.read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'jobs'", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|c| {
+                Ok(
+                    c.query_row("SELECT count(*) FROM history WHERE tbl = 'jobs'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap()
     };
     let rows = count(&mut store);
-    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = status WHERE key = 'big'")).unwrap();
+    store
+        .write("test", |tx| {
+            exec(tx, "UPDATE jobs SET status = status WHERE key = 'big'")
+        })
+        .unwrap();
     assert_eq!(count(&mut store), rows + 1);
-    assert_eq!(last(&mut store), (json!({"seq": seq}), json!({"seq": seq}), 2 * json!({"seq": seq}).to_string().len() as i64));
+    assert_eq!(
+        last(&mut store),
+        (
+            json!({"seq": seq}),
+            json!({"seq": seq}),
+            2 * json!({"seq": seq}).to_string().len() as i64
+        )
+    );
 }
 
 #[test]
@@ -482,7 +644,11 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         let err = refused(&mut store, &sql);
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
         // A kind is a foreign key to its lookup table (§4.5 K1); every other bad value is a CHECK.
-        let expected = if ["events", "context_records"].contains(&table) { "FOREIGN KEY constraint failed" } else { "CHECK constraint failed" };
+        let expected = if ["events", "context_records"].contains(&table) {
+            "FOREIGN KEY constraint failed"
+        } else {
+            "CHECK constraint failed"
+        };
         assert!(sqlite_message(&err).contains(expected), "{table}: {err:?}");
     }
     // The same rows with the bad value fixed are accepted, so the CHECK (or the foreign key) was the cause.
@@ -513,11 +679,24 @@ fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
             )
         })
         .unwrap();
-    let stored: (String, String) =
-        store.read(|c| Ok(c.query_row("SELECT pr, needs FROM pr_needs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let stored: (String, String) = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT pr, needs FROM pr_needs WHERE plan = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
     assert_eq!(stored, ("deploy".to_owned(), "pay".to_owned()));
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'nowhere')");
-    assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{err:?}");
+    let err = refused(
+        &mut store,
+        "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'nowhere')",
+    );
+    assert!(
+        sqlite_message(&err).contains("FOREIGN KEY constraint failed"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -543,7 +722,10 @@ fn transitions_outside_section_3_are_illegal_transition() {
                       UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'api-a1'")
         })
         .unwrap();
-    let err = refused(&mut store, "UPDATE attempts SET metrics = '{}' WHERE id = 'api-a1'");
+    let err = refused(
+        &mut store,
+        "UPDATE attempts SET metrics = '{}' WHERE id = 'api-a1'",
+    );
     assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
 
@@ -564,7 +746,13 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
     // A draft Job's Dependency may be deleted, and the deletion is in history.
     store.write("test", |tx| exec(tx, "UPDATE jobs SET title = 'Ui 2' WHERE key = 'ui'; DELETE FROM dependencies WHERE job = 'ui'")).unwrap();
     let op: String = store
-        .read(|c| Ok(c.query_row("SELECT op FROM history WHERE tbl = 'dependencies' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT op FROM history WHERE tbl = 'dependencies' ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )?)
+        })
         .unwrap();
     assert_eq!(op, "delete");
     // A Locked Job's Dependencies may not be.
@@ -595,15 +783,25 @@ fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_
         )
     };
     // A stub draft is stored, and may be cancelled as such.
-    store.write("test", |tx| exec(tx, &insert("stub", "draft", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, &insert("stub", "draft", "NULL")))
+        .unwrap();
     store
         .write("test", |tx| exec(tx, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'stub'"))
         .unwrap();
     // No other status is, and a draft cannot be queued while it lacks its Tier or Spec.
-    store.write("test", |tx| exec(tx, &insert("stub2", "draft", "NULL"))).unwrap();
-    for sql in [insert("direct", "queued", &format!("'{FP}'")), format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'")] {
+    store
+        .write("test", |tx| exec(tx, &insert("stub2", "draft", "NULL")))
+        .unwrap();
+    for sql in [
+        insert("direct", "queued", &format!("'{FP}'")),
+        format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'"),
+    ] {
         let err = refused(&mut store, &sql);
-        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{sql}: {err:?}");
+        assert!(
+            sqlite_message(&err).contains("CHECK constraint failed"),
+            "{sql}: {err:?}"
+        );
     }
     store
         .write("test", |tx| {
@@ -657,7 +855,10 @@ fn append_only_tables_refuse_updates_and_deletes() {
         ("DELETE FROM history", "append_only: history"),
         ("UPDATE events SET text = 'y'", "append_only: events"),
         ("DELETE FROM events", "append_only: events"),
-        ("UPDATE context_records SET text = 'y'", "append_only: context_records"),
+        (
+            "UPDATE context_records SET text = 'y'",
+            "append_only: context_records",
+        ),
         ("DELETE FROM escalations", "append_only: escalations"),
         ("DELETE FROM contexts WHERE id = 'nope'", ""),
     ];
@@ -672,7 +873,15 @@ fn append_only_tables_refuse_updates_and_deletes() {
         assert_eq!(sqlite_message(&err), message, "{sql}");
     }
     // The fixture's rows: the generated `<table>_no_delete` refuses them.
-    for table in ["contexts", "sessions", "plans", "prs", "jobs", "attempts", "escalations"] {
+    for table in [
+        "contexts",
+        "sessions",
+        "plans",
+        "prs",
+        "jobs",
+        "attempts",
+        "escalations",
+    ] {
         let err = refused(&mut store, &format!("DELETE FROM {table}"));
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
         assert_eq!(sqlite_message(&err), format!("append_only: {table}"));
@@ -698,9 +907,16 @@ fn a_connection_without_cpd_txn_cannot_write() {
         "INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (2, 'jobs', '[1]', 'update', '{}', '{}')",
     ] {
         let err = conn.execute_batch(sql).expect_err(sql);
-        assert!(err.to_string().contains("no such function: cpd_txn"), "{sql}: {err}");
+        assert!(
+            err.to_string().contains("no such function: cpd_txn"),
+            "{sql}: {err}"
+        );
     }
-    let title: String = conn.query_row("SELECT title FROM contexts WHERE id = 'ctx'", [], |r| r.get(0)).unwrap();
+    let title: String = conn
+        .query_row("SELECT title FROM contexts WHERE id = 'ctx'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(title, "Ctx");
 }
 
@@ -710,20 +926,38 @@ fn a_cpd_txn_that_does_not_match_the_txns_row_is_refused() {
     let mut store = open(&env);
     fixture(&mut store);
     let conn = raw(&env);
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(77i64)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(77i64))
+        .unwrap();
     let err = conn
-        .execute_batch("INSERT INTO txns (id, at, command, pid, cwd) VALUES (78, 't', 'forged', 1, '/')")
+        .execute_batch(
+            "INSERT INTO txns (id, at, command, pid, cwd) VALUES (78, 't', 'forged', 1, '/')",
+        )
         .unwrap_err();
-    assert!(err.to_string().contains("txns.id must be cpd_txn()"), "{err}");
+    assert!(
+        err.to_string().contains("txns.id must be cpd_txn()"),
+        "{err}"
+    );
     let err = conn
         .execute_batch("INSERT INTO events (txn, at, kind, context, text, data) VALUES (1, 't', 'job-added', 'ctx', 'x', '{}')")
         .unwrap_err();
-    assert!(err.to_string().contains("events.txn must be cpd_txn()"), "{err}");
+    assert!(
+        err.to_string().contains("events.txn must be cpd_txn()"),
+        "{err}"
+    );
     let err = conn
         .execute_batch("INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (2, 'jobs', '[1]', 'update', '{}', '{}')")
         .unwrap_err();
-    assert!(err.to_string().contains("history.txn must be cpd_txn()"), "{err}");
-    let forged: i64 = conn.query_row("SELECT count(*) FROM history WHERE txn = 2 AND op = 'update'", [], |r| r.get(0)).unwrap();
+    assert!(
+        err.to_string().contains("history.txn must be cpd_txn()"),
+        "{err}"
+    );
+    let forged: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM history WHERE txn = 2 AND op = 'update'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(forged, 0);
 }
 
@@ -748,13 +982,21 @@ fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
     let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
-    for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
+    for sql in [
+        "CREATE TEMP TABLE scratch (x)",
+        "CREATE TABLE scratch (x)",
+        "DROP TABLE tier_catalog",
+    ] {
         let err = store.read(|c| Ok(c.execute_batch(sql)?)).expect_err(sql);
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
         assert!(sqlite_message(&err).contains("readonly"), "{sql}: {err:?}");
     }
     // The guard is off again for the next write, and the schema is untouched.
-    store.write("test", |tx| exec(tx, "UPDATE contexts SET title = 'Changed'")).unwrap();
+    store
+        .write("test", |tx| {
+            exec(tx, "UPDATE contexts SET title = 'Changed'")
+        })
+        .unwrap();
     assert!(store.schema_mismatch().is_none());
     let tables: i64 = store
         .read(|c| Ok(c.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?))
@@ -769,13 +1011,24 @@ fn every_write_transaction_has_its_txns_row() {
     let id = store.write("job add", |tx| Ok(tx.id())).unwrap();
     assert_eq!(id, 2, "txn 1 is the migration");
     let row: (String, i64, String) = store
-        .read(|c| Ok(c.query_row("SELECT command, pid, cwd FROM txns WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT command, pid, cwd FROM txns WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
         .unwrap();
     assert_eq!(row.0, "job add");
     assert_eq!(row.1, std::process::id() as i64);
     assert_eq!(row.2, std::env::current_dir().unwrap().to_string_lossy());
-    let at: String = store.read(|c| Ok(c.query_row("SELECT at FROM txns WHERE id = 2", [], |r| r.get(0))?)).unwrap();
-    assert!(at.len() == 24 && at.ends_with('Z') && at.as_bytes()[19] == b'.', "{at}");
+    let at: String = store
+        .read(|c| Ok(c.query_row("SELECT at FROM txns WHERE id = 2", [], |r| r.get(0))?))
+        .unwrap();
+    assert!(
+        at.len() == 24 && at.ends_with('Z') && at.as_bytes()[19] == b'.',
+        "{at}"
+    );
 }
 
 #[test]
@@ -809,13 +1062,17 @@ fn a_changed_schema_refuses_writes_but_not_reads() {
     let mut store = open(&env);
     fixture(&mut store);
     drop(store);
-    raw(&env).execute_batch("DROP TRIGGER contexts_no_delete").unwrap();
+    raw(&env)
+        .execute_batch("DROP TRIGGER contexts_no_delete")
+        .unwrap();
     let mut store = open(&env);
     assert!(store.schema_mismatch().is_some());
     let err = store.write("test", |_| Ok(())).unwrap_err();
     assert_eq!(err.code(), ErrorCode::StoreTampered);
     assert_eq!(err.exit().code(), 1);
-    let n: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0))?)).unwrap();
+    let n: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(n, 1);
     let report = store.tamper().unwrap();
     assert_eq!(report.len(), 1);
@@ -829,10 +1086,14 @@ fn the_tamper_report_lists_history_rows_without_a_txn() {
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     let conn = raw(&env);
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(999i64)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(999i64))
+        .unwrap();
     conn.execute_batch("INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (999, 'contexts', '[\"x\"]', 'insert', NULL, '{}')")
         .unwrap();
-    assert_eq!(store.tamper().unwrap(), vec![json!({"kind": "history", "id": 1, "txn": 999})]);
+    assert_eq!(
+        store.tamper().unwrap(),
+        vec![json!({"kind": "history", "id": 1, "txn": 999})]
+    );
 }
 
 #[test]
@@ -843,9 +1104,13 @@ fn the_tamper_report_lists_every_orphan_among_many_history_rows_in_id_order() {
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     let current = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
     let seen = current.clone();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(seen.load(std::sync::atomic::Ordering::SeqCst)))
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| {
+        Ok(seen.load(std::sync::atomic::Ordering::SeqCst))
+    })
+    .unwrap();
+    let real: i64 = conn
+        .query_row("SELECT min(id) FROM txns", [], |r| r.get(0))
         .unwrap();
-    let real: i64 = conn.query_row("SELECT min(id) FROM txns", [], |r| r.get(0)).unwrap();
     for n in 0..30i64 {
         let txn = if n % 7 == 3 { 900 + n } else { real };
         current.store(txn, std::sync::atomic::Ordering::SeqCst);
@@ -867,13 +1132,24 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
     let env = Home::new();
     let _store = open(&env);
     let conn = raw(&env);
-    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {ORPHAN_HISTORY_SQL}")).unwrap();
-    let details: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {ORPHAN_HISTORY_SQL}"))
+        .unwrap();
+    let details: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
     assert!(
-        details.iter().any(|d| d.starts_with("SCAN h") && d.contains("COVERING INDEX history_txn")),
+        details
+            .iter()
+            .any(|d| d.starts_with("SCAN h") && d.contains("COVERING INDEX history_txn")),
         "history must be scanned through history_txn: {details:?}"
     );
-    assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
+    assert!(
+        !details.iter().any(|d| d == "SCAN h"),
+        "history must not be scanned as a table: {details:?}"
+    );
 }
 
 // ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, engine-F2; sql-F6 refused) ----------
@@ -884,14 +1160,21 @@ fn query_plan(sql: &str) -> Vec<String> {
     let _store = open(&env);
     let conn = raw(&env);
     let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-    stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+    stmt.query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
 }
 
 /// The statement under test is read by `index`, not by a table scan.
 #[track_caller]
 fn assert_uses(sql: &str, index: &str) {
     let plan = query_plan(sql);
-    assert!(plan.iter().any(|step| step.contains(&format!("USING INDEX {index}"))), "{index} unused by {sql}: {plan:?}");
+    assert!(
+        plan.iter()
+            .any(|step| step.contains(&format!("USING INDEX {index}"))),
+        "{index} unused by {sql}: {plan:?}"
+    );
 }
 
 /// sql-F4, tui-F3: the job counts of `plan_heads` (`tui/src/read/shared.rs`), run by every cockpit
@@ -919,15 +1202,24 @@ fn the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index(
         "SELECT json_extract(e.data, '$.place') FROM events e WHERE e.session = 'x' AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1",
         "events_session",
     );
-    assert_uses("SELECT max(e.id) FROM events e WHERE e.session = 'x' AND e.kind = 'session-state'", "events_session");
+    assert_uses(
+        "SELECT max(e.id) FROM events e WHERE e.session = 'x' AND e.kind = 'session-state'",
+        "events_session",
+    );
     // `core/src/watch/liveness.rs` (E2, per Attempt per tick), `core/src/job/retry.rs`.
     assert_uses(
         "SELECT at FROM events WHERE plan = 'p' AND attempt = 'a' AND kind = 'attempt-status' AND json_extract(data, '$.to') = 'running' ORDER BY id LIMIT 1",
         "events_plan",
     );
-    assert_uses("SELECT max(id) FROM events WHERE plan = 'p' AND job = 'j' AND kind = 'job-retried'", "events_plan");
+    assert_uses(
+        "SELECT max(id) FROM events WHERE plan = 'p' AND job = 'j' AND kind = 'job-retried'",
+        "events_plan",
+    );
     // `events follow --session --kind` (`core/src/events/select.rs`).
-    assert_uses("SELECT id FROM events WHERE id > 0 AND session = 'x' AND kind IN ('session-state') ORDER BY id LIMIT 500", "events_session");
+    assert_uses(
+        "SELECT id FROM events WHERE id > 0 AND session = 'x' AND kind IN ('session-state') ORDER BY id LIMIT 500",
+        "events_session",
+    );
 }
 
 /// engine-F2: E2's Session read (`core/src/watch/liveness.rs`, unit-tested there against its own
@@ -950,7 +1242,11 @@ fn only_the_live_sessions_are_in_sessions_live() {
     let conn = raw(&env);
     let sql = "SELECT id FROM sessions INDEXED BY sessions_live WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
     let mut stmt = conn.prepare(sql).unwrap();
-    let listed: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let listed: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
     // `lead1` is `idle`, `parked` is `stopped` with a pane; `gone` is `stopped` with none.
     assert_eq!(listed, vec!["lead1".to_owned(), "parked".to_owned()]);
 }
@@ -969,15 +1265,21 @@ fn migrating_an_empty_file_creates_the_schema_once() {
     let rows: Vec<(i64, String)> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT id, command FROM txns")?;
-            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
         .unwrap();
     assert_eq!(rows, vec![(1, "migrate".to_owned())]);
     let conn = raw(&env);
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, VERSION);
-    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    let app: i32 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .unwrap();
     assert_eq!(app, APPLICATION_ID);
 }
 
@@ -985,14 +1287,31 @@ fn migrating_an_empty_file_creates_the_schema_once() {
 fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its_schema_hash() {
     let env = Home::empty();
     let mut store = fixture_store(&env);
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let hash = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
-    assert_eq!(hash, SCHEMA_HASH, "a fresh store hashes to the hash pinned in the code (§4.3)");
+    assert_eq!(
+        hash, SCHEMA_HASH,
+        "a fresh store hashes to the hash pinned in the code (§4.3)"
+    );
 
     for table in ["contexts", "plans", "sessions"] {
-        let archived: Option<String> =
-            store.read(|c| Ok(c.query_row(&format!("SELECT archived_at FROM {table} LIMIT 1"), [], |r| r.get(0))?)).unwrap();
-        assert_eq!(archived, None, "{table}.archived_at is null until the first archive");
+        let archived: Option<String> = store
+            .read(|c| {
+                Ok(c.query_row(
+                    &format!("SELECT archived_at FROM {table} LIMIT 1"),
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            archived, None,
+            "{table}.archived_at is null until the first archive"
+        );
     }
     let insert = |tx: &WriteTxn<'_>, kind: &str| {
         tx.execute(
@@ -1001,7 +1320,13 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
         )
     };
     let mut last = 0;
-    for kind in ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"] {
+    for kind in [
+        "context-renamed",
+        "plan-renamed",
+        "context-archived",
+        "plan-archived",
+        "session-archived",
+    ] {
         last = store
             .write("test", |tx| {
                 insert(tx, kind)?;
@@ -1010,9 +1335,16 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
             .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
     assert_eq!(last, 5);
-    store.write("test", |tx| Ok(insert(tx, "session-message")?)).unwrap(); // migration 9
-    let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
-    assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
+    store
+        .write("test", |tx| Ok(insert(tx, "session-message")?))
+        .unwrap(); // migration 9
+    let err = store
+        .write("test", |tx| Ok(insert(tx, "plan-exploded")?))
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("FOREIGN KEY"),
+        "an Event kind is a foreign key to event_kinds: {err:?}"
+    );
 }
 
 /// Migration `loop-guard` (contract §4.4, §5.2): a fresh store takes the Event kind `session-resumed` and the Inbox kind `loop-guard`.
@@ -1067,29 +1399,57 @@ fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan
         )
     };
     store.write("test", |tx| exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c2', 'C2', 't', 'm')")).unwrap();
-    store.write("test", |tx| exec(tx, &manager("mgr1", "ctx", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, &manager("mgr1", "ctx", "NULL")))
+        .unwrap();
     let second = refused(&mut store, &manager("mgr2", "ctx", "NULL"));
-    assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
+    assert!(
+        sqlite_message(&second).contains("UNIQUE constraint failed"),
+        "{second:?}"
+    );
     let with_plan = refused(&mut store, &manager("mgr3", "c2", "'pay'"));
-    assert!(sqlite_message(&with_plan).contains("CHECK constraint failed"), "a Manager has no Plan: {with_plan:?}");
+    assert!(
+        sqlite_message(&with_plan).contains("CHECK constraint failed"),
+        "a Manager has no Plan: {with_plan:?}"
+    );
     // Another Context has its own; an archived Manager makes room for a new one.
-    store.write("test", |tx| exec(tx, &manager("mgr4", "c2", "NULL"))).unwrap();
-    store.write("test", |tx| exec(tx, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'")).unwrap();
-    store.write("test", |tx| exec(tx, &manager("mgr5", "ctx", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, &manager("mgr4", "c2", "NULL")))
+        .unwrap();
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'",
+            )
+        })
+        .unwrap();
+    store
+        .write("test", |tx| exec(tx, &manager("mgr5", "ctx", "NULL")))
+        .unwrap();
 
     let brief = |plan: &str| {
-        format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm-b1', 'brief', 't', 'm', 'B', {plan})")
+        format!(
+            "INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm-b1', 'brief', 't', 'm', 'B', {plan})"
+        )
     };
     let bare = refused(&mut store, &brief("NULL, NULL"));
-    assert!(sqlite_message(&bare).contains("CHECK constraint failed"), "a brief needs its Plan: {bare:?}");
-    store.write("test", |tx| exec(tx, &brief("'pay', 'm'"))).unwrap();
+    assert!(
+        sqlite_message(&bare).contains("CHECK constraint failed"),
+        "a brief needs its Plan: {bare:?}"
+    );
+    store
+        .write("test", |tx| exec(tx, &brief("'pay', 'm'")))
+        .unwrap();
 }
 
 #[test]
 fn a_newer_schema_is_store_too_new() {
     let env = Home::new();
     drop(open(&env));
-    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    raw(&env)
+        .pragma_update(None, "user_version", VERSION + 1)
+        .unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     assert_eq!(err.exit().code(), 1);
@@ -1110,9 +1470,13 @@ fn a_failed_migration_rolls_back_entirely() {
     let conn = raw(&env);
     let tables = names(&conn, "SELECT name FROM sqlite_schema");
     assert_eq!(tables, BTreeSet::from(["history".to_owned()]));
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 0);
-    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    let app: i32 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .unwrap();
     assert_eq!(app, 0);
 }
 
@@ -1130,10 +1494,17 @@ fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
     let actual = err.details()["actual"].as_str().unwrap();
     assert_ne!(expected, actual);
     let conn = raw(&env);
-    assert_eq!(names(&conn, "SELECT name FROM sqlite_schema"), BTreeSet::from(["stray".to_owned()]));
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(
+        names(&conn, "SELECT name FROM sqlite_schema"),
+        BTreeSet::from(["stray".to_owned()])
+    );
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 0, "the store stays at its old version");
-    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    let app: i32 = conn
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .unwrap();
     assert_eq!(app, 0);
     // Rerunning is safe: the same refusal, nothing written.
     let again = Store::open(&home(&env), 5000).err().unwrap();
@@ -1144,9 +1515,15 @@ fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
 fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_appends_nothing() {
     let env = Home::new();
     let mut store = fixture_store(&env);
-    let txns = |store: &mut Store| store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0))?)).unwrap();
+    let txns = |store: &mut Store| {
+        store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0))?))
+            .unwrap()
+    };
     let before = txns(&mut store);
-    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    raw(&env)
+        .pragma_update(None, "user_version", VERSION + 1)
+        .unwrap();
     let mut ran = false;
     let err = store
         .write("test", |tx| {
@@ -1158,7 +1535,15 @@ fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_app
     assert_eq!(err.details()["user_version"], VERSION + 1);
     assert!(!ran, "the closure must not run against a newer schema");
     assert_eq!(txns(&mut store), before);
-    let contexts: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM contexts WHERE id = 'late'", [], |r| r.get(0))?)).unwrap();
+    let contexts: i64 = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT count(*) FROM contexts WHERE id = 'late'", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
     assert_eq!(contexts, 0);
 }
 
@@ -1182,21 +1567,36 @@ fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
 #[test]
 fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let env = TestEnv::new();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"hs\"\n",
+    )
+    .unwrap();
     // The shell enters a directory, deletes it and runs cpd from there.
     let out = env
         .command("sh")
-        .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
+        .args([
+            "-c",
+            "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"",
+            "sh",
+            common::CPD,
+        ])
         .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{stdout} {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{stdout} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let mut store = open(&env);
     let cwds: Vec<String> = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT cwd FROM txns WHERE command = 'context new'")?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?)
         })
         .unwrap();
     assert_eq!(cwds, ["(unreadable)"]);
@@ -1210,8 +1610,12 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
     let mut store = open(&env);
     let rows: Vec<(String, String, i64, i64)> = store
         .read(|c| {
-            let mut stmt = c.prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")?;
-            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut stmt = c.prepare(
+                "SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
         .unwrap();
@@ -1231,14 +1635,29 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
         ("0013-pr-inbox", "breaking"),
         ("0014-register", "breaking"),
     ];
-    let expected: Vec<(String, String, i64, i64)> =
-        expected.iter().enumerate().map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0)).collect();
-    assert_eq!(rows[..expected.len()], expected, "a fresh store records its legacy migrations as not converted");
+    let expected: Vec<(String, String, i64, i64)> = expected
+        .iter()
+        .enumerate()
+        .map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0))
+        .collect();
+    assert_eq!(
+        rows[..expected.len()],
+        expected,
+        "a fresh store records its legacy migrations as not converted"
+    );
     // The named migrations follow, the first being `kind-tables`; none is converted.
-    let (kind_tables, later) = rows[expected.len()..].split_first().expect("a named migration");
+    let (kind_tables, later) = rows[expected.len()..]
+        .split_first()
+        .expect("a named migration");
     assert!(kind_tables.0.ends_with("-kind-tables"), "{kind_tables:?}");
-    assert_eq!((kind_tables.1.as_str(), kind_tables.2), ("breaking", expected.len() as i64 + 1));
-    assert!(kind_tables.3 == 0 && later.iter().all(|r| r.3 == 0), "{rows:?}");
+    assert_eq!(
+        (kind_tables.1.as_str(), kind_tables.2),
+        ("breaking", expected.len() as i64 + 1)
+    );
+    assert!(
+        kind_tables.3 == 0 && later.iter().all(|r| r.3 == 0),
+        "{rows:?}"
+    );
 
     // Not from the `sqlite3` shell: there is no `cpd_txn()`.
     let err = raw(&env)
@@ -1246,23 +1665,37 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
         .unwrap_err();
     assert!(err.to_string().contains("cpd_txn"), "{err}");
     // Not by cpd either, once recorded.
-    for sql in ["UPDATE schema_migrations SET compat = 'additive'", "DELETE FROM schema_migrations"] {
+    for sql in [
+        "UPDATE schema_migrations SET compat = 'additive'",
+        "DELETE FROM schema_migrations",
+    ] {
         let err = refused(&mut store, sql);
-        assert!(sqlite_message(&err).starts_with("append_only"), "{sql}: {err:?}");
+        assert!(
+            sqlite_message(&err).starts_with("append_only"),
+            "{sql}: {err:?}"
+        );
     }
     // And only for the migrating transaction.
     let err = refused(
         &mut store,
-        &format!("INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES ('x-xxxx', 'additive', '{FP}', 99, 1, 0)"),
+        &format!(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES ('x-xxxx', 'additive', '{FP}', 99, 1, 0)"
+        ),
     );
-    assert!(sqlite_message(&err).contains("must be cpd_txn()"), "{err:?}");
+    assert!(
+        sqlite_message(&err).contains("must be cpd_txn()"),
+        "{err:?}"
+    );
 }
 
 // ---------- §4.2 two writers ----------
 
 /// The wall time in milliseconds since the epoch, as a record of the store writes it.
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 /// The order in which the writers enter and leave their write transactions: a number from one counter, so "B entered
@@ -1311,7 +1744,11 @@ impl Writer {
                 Err(e) => json!({"ok": false, "error": e.to_json()}),
             }
         });
-        Writer { thread: Some(thread), release, started }
+        Writer {
+            thread: Some(thread),
+            release,
+            started,
+        }
     }
 
     /// Lets the writer finish its transaction.
@@ -1322,14 +1759,23 @@ impl Writer {
     /// Waits until the writer is inside its write transaction.
     fn wait_started(&mut self) {
         if self.started.recv().is_err() {
-            let ended = self.thread.take().expect("the writer is joined once").join().expect("the writer thread");
+            let ended = self
+                .thread
+                .take()
+                .expect("the writer is joined once")
+                .join()
+                .expect("the writer thread");
             panic!("the writer ended before it was inside its write transaction: {ended}");
         }
     }
 
     /// The writer's result: `{"ok": true, "result": {"txn", "entered", "left"}}` or `{"ok": false, "error"}`.
     fn wait(mut self) -> Value {
-        self.thread.take().expect("the writer is joined once").join().expect("the writer thread")
+        self.thread
+            .take()
+            .expect("the writer is joined once")
+            .join()
+            .expect("the writer thread")
     }
 }
 
@@ -1342,7 +1788,9 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
     // While A holds the write lock (until this test lets go of it), a reader opens and reads: had it to wait for A,
     // it would wait for ever.
     let mut reader = open(&env);
-    let txns: i64 = reader.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
+    let txns: i64 = reader
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(txns, 1, "A has not committed yet");
     a.release();
     let (a, b) = (a.wait(), b.wait());
@@ -1350,7 +1798,10 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
     assert_eq!(b["ok"], true, "{b}");
     assert_eq!(a["result"]["txn"], 2);
     assert_eq!(b["result"]["txn"], 3);
-    assert!(b["result"]["entered"].as_u64() >= a["result"]["left"].as_u64(), "B ran while A held the lock: {a} {b}");
+    assert!(
+        b["result"]["entered"].as_u64() >= a["result"]["left"].as_u64(),
+        "B ran while A held the lock: {a} {b}"
+    );
 }
 
 #[test]
@@ -1361,7 +1812,8 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     let a_pid = std::process::id();
     // B waits `busy_ms` in SQLite's own busy handler, a short real wait inside the library.
     let begun = Instant::now();
-    let b = Store::open(&home(&env), 200).and_then(|mut store| store.write("test writer", |_| Ok(())));
+    let b =
+        Store::open(&home(&env), 200).and_then(|mut store| store.write("test writer", |_| Ok(())));
     let waited = begun.elapsed();
     let error = b.expect_err("B cannot get the lock").to_json();
     assert_eq!(error["code"], "store_busy", "{error}");
@@ -1372,14 +1824,26 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     assert_eq!(holder["command"], "test writer", "{error}");
     assert!(holder["since_ms"].as_u64().unwrap() >= 200, "{error}");
     // A is a thread of this process: its argv is the process's.
-    assert_eq!(holder["argv"].as_str().unwrap(), std::env::args().collect::<Vec<_>>().join(" "), "{error}");
+    assert_eq!(
+        holder["argv"].as_str().unwrap(),
+        std::env::args().collect::<Vec<_>>().join(" "),
+        "{error}"
+    );
     let message = error["message"].as_str().unwrap();
-    assert!(message.contains(&format!("pid {a_pid} (`test writer`")), "{message}");
-    assert!(waited >= Duration::from_millis(200), "gave up after {waited:?}");
+    assert!(
+        message.contains(&format!("pid {a_pid} (`test writer`")),
+        "{message}"
+    );
+    assert!(
+        waited >= Duration::from_millis(200),
+        "gave up after {waited:?}"
+    );
     a.release();
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
-    let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
+    let txns: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(txns, 2, "B wrote nothing");
 }
 
@@ -1389,13 +1853,22 @@ fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
     let env = Home::new();
     let mut store = open(&env);
     let records = || -> Vec<String> {
-        let names = fs::read_dir(home(&env).locks_dir()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
+        let names = fs::read_dir(home(&env).locks_dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
         names.filter(|n| n.starts_with("store-writer-")).collect()
     };
     let during = store.write("test", |_| Ok(records())).unwrap();
-    assert_eq!(during, [format!("store-writer-{}.json", std::process::id())]);
+    assert_eq!(
+        during,
+        [format!("store-writer-{}.json", std::process::id())]
+    );
     assert!(records().is_empty(), "{:?}", records());
-    store.write("test", |_| Err::<(), _>(CpdError::new(ErrorCode::StoreFailed, "no"))).unwrap_err();
+    store
+        .write("test", |_| {
+            Err::<(), _>(CpdError::new(ErrorCode::StoreFailed, "no"))
+        })
+        .unwrap_err();
     assert!(records().is_empty(), "{:?}", records());
 }
 
@@ -1408,10 +1881,12 @@ fn a_slow_write_is_logged_with_where_its_time_went() {
     // the 1 s threshold.
     let clock = ManualClock::new();
     store.use_clock(Arc::new(clock.clone()));
-    store.write("slow", |_| {
-        clock.advance(Duration::from_millis(1100));
-        Ok(())
-    }).unwrap();
+    store
+        .write("slow", |_| {
+            clock.advance(Duration::from_millis(1100));
+            Ok(())
+        })
+        .unwrap();
     let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
     // Other writes of a loaded machine may be in it too: find this one.
     let line = text
@@ -1422,8 +1897,14 @@ fn a_slow_write_is_logged_with_where_its_time_went() {
     assert_eq!(line["pid"].as_u64(), Some(u64::from(std::process::id())));
     let phases = &line["phases"];
     assert!(phases["closure_ms"].as_u64().unwrap() >= 1100, "{line}");
-    assert!(phases["held_ms"].as_u64().unwrap() >= phases["closure_ms"].as_u64().unwrap(), "{line}");
-    assert!(phases["commit_ms"].is_u64() && phases["begin_ms"].is_u64() && phases["waited_ms"].is_u64(), "{line}");
+    assert!(
+        phases["held_ms"].as_u64().unwrap() >= phases["closure_ms"].as_u64().unwrap(),
+        "{line}"
+    );
+    assert!(
+        phases["commit_ms"].is_u64() && phases["begin_ms"].is_u64() && phases["waited_ms"].is_u64(),
+        "{line}"
+    );
 }
 
 /// A lock held by a connection that is not cpd's has no record: `store_busy` says the holder is unknown.
@@ -1437,7 +1918,11 @@ fn a_store_busy_with_no_recorded_holder_says_so() {
     let e = store.write("test", |_| Ok(())).unwrap_err();
     assert_eq!(e.code(), ErrorCode::StoreBusy, "{e:?}");
     assert!(e.details()["holder"].is_null(), "{e:?}");
-    assert!(e.message().ends_with("Its holder is unknown: no process has recorded that it holds the lock."), "{e:?}");
+    assert!(
+        e.message()
+            .ends_with("Its holder is unknown: no process has recorded that it holds the lock."),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -1447,10 +1932,19 @@ fn a_record_of_a_dead_process_is_not_the_holder() {
     // A pid no process has: above every system's `pid_max` (no child to spawn and reap).
     let dead = i32::MAX as u32;
     let record = json!({"pid": dead, "command": "gone", "argv": "gone", "session": null, "attempt": null, "since_unix_ms": now_ms()});
-    fs::write(home(&env).locks_dir().join(format!("store-writer-{dead}.json")), record.to_string()).unwrap();
+    fs::write(
+        home(&env)
+            .locks_dir()
+            .join(format!("store-writer-{dead}.json")),
+        record.to_string(),
+    )
+    .unwrap();
     let other = raw(&env);
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let e = Store::open(&home(&env), 100).unwrap().write("test", |_| Ok(())).unwrap_err();
+    let e = Store::open(&home(&env), 100)
+        .unwrap()
+        .write("test", |_| Ok(()))
+        .unwrap_err();
     assert!(e.details()["holder"].is_null(), "{e:?}");
 }
 
@@ -1482,7 +1976,10 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
     let a_pid = std::process::id();
 
     let mut plain = Store::open(&home(&env), 100).unwrap();
-    assert_eq!(plain.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+    assert_eq!(
+        plain.write("test", |_| Ok(())).unwrap_err().code(),
+        ErrorCode::StoreBusy
+    );
 
     // The back-off between two tries is virtual time (the store reads and sleeps on `clock`); each try waits
     // `store_busy_ms` in SQLite's busy handler, a short real wait inside the library.
@@ -1491,19 +1988,42 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
     // A holds the lock until the persisting store has met it and said so: the store waits past `store_busy_ms` for
     // as long as A holds it.
     let release = a.release.clone();
-    let persist = persisting_then(&lines, || false, move || {
-        let _ = release.send(());
-    });
-    let mut store = Store::open_persistent_with(Arc::new(clock.clone()), &home(&env), 100, persist).unwrap();
+    let persist = persisting_then(
+        &lines,
+        || false,
+        move || {
+            let _ = release.send(());
+        },
+    );
+    let mut store =
+        Store::open_persistent_with(Arc::new(clock.clone()), &home(&env), 100, persist).unwrap();
     let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
-    assert!(clock.elapsed() >= Duration::from_millis(100), "it did not wait past store_busy_ms: {:?}", clock.elapsed());
+    assert!(
+        clock.elapsed() >= Duration::from_millis(100),
+        "it did not wait past store_busy_ms: {:?}",
+        clock.elapsed()
+    );
     assert_eq!(a.wait()["ok"], true);
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].starts_with("store_busy: "), "{lines:?}");
-    assert!(lines[0].contains(&format!("pid {a_pid} (`test writer`")), "the line names the holder: {lines:?}");
-    assert!(lines[1].starts_with("the store is clear again after "), "{lines:?}");
-    let command: String = store.read(|c| Ok(c.query_row("SELECT command FROM txns WHERE id = ?1", [txn], |r| r.get(0))?)).unwrap();
+    assert!(
+        lines[0].contains(&format!("pid {a_pid} (`test writer`")),
+        "the line names the holder: {lines:?}"
+    );
+    assert!(
+        lines[1].starts_with("the store is clear again after "),
+        "{lines:?}"
+    );
+    let command: String = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT command FROM txns WHERE id = ?1", [txn], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
     assert_eq!(command, "persisted");
 }
 
@@ -1516,10 +2036,18 @@ fn a_persisting_store_gives_up_when_told_to_and_its_reads_never_wait() {
     let lines = Lines::default();
     // Told to give up at once: the error is returned and nothing is logged.
     let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || true)).unwrap();
-    assert_eq!(store.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+    assert_eq!(
+        store.write("test", |_| Ok(())).unwrap_err().code(),
+        ErrorCode::StoreBusy
+    );
     assert!(lines.lock().unwrap().is_empty());
     // A reader never waits for a writer: it reads, persisting or not.
-    assert_eq!(store.read(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).unwrap(), 1);
+    assert_eq!(
+        store
+            .read(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?))
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -1530,7 +2058,15 @@ fn only_busy_and_locked_are_transient() {
     let constraint = CpdError::new(ErrorCode::StoreFailed, "constraint").with("sqlite_code", 275);
     let other = CpdError::new(ErrorCode::StoreFailed, "other");
     let tampered = CpdError::new(ErrorCode::StoreTampered, "tampered");
-    let flags = [&busy, &locked, &busy_snapshot, &constraint, &other, &tampered].map(is_transient);
+    let flags = [
+        &busy,
+        &locked,
+        &busy_snapshot,
+        &constraint,
+        &other,
+        &tampered,
+    ]
+    .map(is_transient);
     assert_eq!(flags, [true, true, true, false, false, false]);
 }
 
@@ -1550,7 +2086,13 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
     assert_eq!(ids, vec![2, 3, 4, 5]);
     let mut store = open(&env);
     let migrations: i64 = store
-        .read(|c| Ok(c.query_row("SELECT count(*) FROM txns WHERE command = 'migrate'", [], |r| r.get(0))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM txns WHERE command = 'migrate'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
         .unwrap();
     assert_eq!(migrations, 1);
 }
@@ -1570,28 +2112,58 @@ fn version_on_a_migrated_home_reports_the_verdict_only() {
     let env = TestEnv::new();
     drop(open(&env));
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out.as_object().unwrap().len(), 4, "only ok, version, protocol and store: {out}");
-    assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": []}), "{out}");
+    assert_eq!(
+        out.as_object().unwrap().len(),
+        4,
+        "only ok, version, protocol and store: {out}"
+    );
+    assert_eq!(
+        out["store"],
+        json!({"opens": true, "refusal": null, "unknown": [], "pending": []}),
+        "{out}"
+    );
 }
 
 #[test]
 fn version_on_a_store_that_does_not_open_reports_the_refusal() {
     let env = TestEnv::new();
     drop(open(&env));
-    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    raw(&env)
+        .pragma_update(None, "user_version", VERSION + 1)
+        .unwrap();
     let before = fs::read(home(&env).db()).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
-    assert!(out["store"]["refusal"]["message"].as_str().unwrap().contains("newer cpd"), "{out}");
+    assert!(
+        out["store"]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("newer cpd"),
+        "{out}"
+    );
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
 }
 
 #[test]
 fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_later_number() {
-    let named: Vec<String> = cpd_core::store::testing::named_migrations().into_iter().map(|(n, ..)| n.to_owned()).collect();
+    let named: Vec<String> = cpd_core::store::testing::named_migrations()
+        .into_iter()
+        .map(|(n, ..)| n.to_owned())
+        .collect();
     for (version, legacy_pending) in [
-        (7, &["0008-phase-deploy", "0009-session-message", "0010-manager", "0011-pr-mergeable", "0012-inbox", "0013-pr-inbox", "0014-register"][..]),
+        (
+            7,
+            &[
+                "0008-phase-deploy",
+                "0009-session-message",
+                "0010-manager",
+                "0011-pr-mergeable",
+                "0012-inbox",
+                "0013-pr-inbox",
+                "0014-register",
+            ][..],
+        ),
         (11, &["0012-inbox", "0013-pr-inbox", "0014-register"][..]),
         (12, &["0013-pr-inbox", "0014-register"][..]),
         (13, &["0014-register"][..]),
@@ -1599,12 +2171,26 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
     ] {
         let env = TestEnv::empty();
         // `--version` reads only `user_version` of a legacy store: it never converts.
-        raw(&env).pragma_update(None, "user_version", version).unwrap();
+        raw(&env)
+            .pragma_update(None, "user_version", version)
+            .unwrap();
         let before = fs::read(home(&env).db()).unwrap();
         let out = env.cpd(&["--version"]).ok();
-        let pending: Vec<String> = legacy_pending.iter().map(|n| n.to_string()).chain(named.iter().cloned()).collect();
-        assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": pending}), "version {version}: {out}");
-        assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
+        let pending: Vec<String> = legacy_pending
+            .iter()
+            .map(|n| n.to_string())
+            .chain(named.iter().cloned())
+            .collect();
+        assert_eq!(
+            out["store"],
+            json!({"opens": true, "refusal": null, "unknown": [], "pending": pending}),
+            "version {version}: {out}"
+        );
+        assert_eq!(
+            fs::read(home(&env).db()).unwrap(),
+            before,
+            "version {version}"
+        );
     }
     // 15 is no legacy version: a numbered migration this binary lacks.
     let env = TestEnv::empty();
@@ -1618,8 +2204,16 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
 fn apply_newer(env: &impl HasCpdHome, name: &str, compat: &str) {
     drop(open(env));
     let conn = raw(env);
-    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
-    conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    let txn: i64 = conn
+        .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+        .unwrap();
+    conn.create_scalar_function(
+        "cpd_txn",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        move |_| Ok(txn),
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
          VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
@@ -1635,7 +2229,11 @@ fn version_lists_the_additive_migrations_it_lacks_and_still_opens() {
     apply_newer(&env, "29991231T2359-second", "additive");
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["opens"], true, "{out}");
-    assert_eq!(out["store"]["unknown"], json!(["29991231T2358-first", "29991231T2359-second"]), "{out}");
+    assert_eq!(
+        out["store"]["unknown"],
+        json!(["29991231T2358-first", "29991231T2359-second"]),
+        "{out}"
+    );
 }
 
 #[test]
@@ -1645,7 +2243,11 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
-    assert_eq!(out["store"]["unknown"], json!(["29991231T2359-breaking"]), "{out}");
+    assert_eq!(
+        out["store"]["unknown"],
+        json!(["29991231T2359-breaking"]),
+        "{out}"
+    );
 }
 
 /// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.
@@ -1656,22 +2258,36 @@ fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
     let h = home(&env);
     fs::create_dir_all(h.locks_dir()).unwrap();
     let path = h.locks_dir().join("store.lock");
-    let file = fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
-    let _held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap();
+    let _held = Flock::lock(file, FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| e)
+        .unwrap();
 
     // The wait is the open's own retry, on virtual time.
     let clock = ManualClock::new();
-    let err = Store::open_with(&clock, &h, 300, None).map(drop).unwrap_err();
+    let err = Store::open_with(&clock, &h, 300, None)
+        .map(drop)
+        .unwrap_err();
     let waited = clock.elapsed();
 
     assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
-    assert!(waited >= Duration::from_millis(300), "gave up after {waited:?}");
+    assert!(
+        waited >= Duration::from_millis(300),
+        "gave up after {waited:?}"
+    );
     assert!(waited < Duration::from_secs(5), "waited {waited:?}");
     assert!(err.message().contains("store.lock"), "{err}");
     assert!(err.message().contains("300"), "{err}");
     assert_eq!(err.details()["lock"], path.display().to_string());
     assert_eq!(err.details()["waited_ms"], 300);
-    assert!(!home(&env).db().exists(), "a refused open created the database");
+    assert!(
+        !home(&env).db().exists(),
+        "a refused open created the database"
+    );
 }
 
 /// A process that migrates, as the contract's marker (§1.4) describes it: `locks/store.lock` held, with
@@ -1684,8 +2300,14 @@ fn hold_setup_lock(h: &CpdHome, marker: Option<Value>) -> Holder {
     use nix::fcntl::{Flock, FlockArg};
     use std::io::Write;
     fs::create_dir_all(h.locks_dir()).unwrap();
-    let file = fs::OpenOptions::new().create(true).append(true).open(h.locks_dir().join("store.lock")).unwrap();
-    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(h.locks_dir().join("store.lock"))
+        .unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| e)
+        .unwrap();
     if let Some(marker) = marker {
         lock.write_all(marker.to_string().as_bytes()).unwrap();
     }
@@ -1714,7 +2336,11 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
     let clock = ScriptedClock::new().at(Duration::from_millis(1500), move || drop(holder));
     let store = Store::open_with(&clock, &h, 300, None);
     store.expect("the open waits for the migration");
-    assert!(clock.elapsed() >= Duration::from_millis(1400), "did not wait for the migration: {:?}", clock.elapsed());
+    assert!(
+        clock.elapsed() >= Duration::from_millis(1400),
+        "did not wait for the migration: {:?}",
+        clock.elapsed()
+    );
 }
 
 /// hs-n278, contract §4.2: a waiter that saw the migrating holder's marker keeps waiting while the same holder
@@ -1723,16 +2349,32 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
 fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone() {
     let env = Home::new();
     let h = home(&env);
-    let holder = std::sync::Arc::new(std::sync::Mutex::new(Some(hold_setup_lock(&h, Some(migrating_marker(std::process::id()))))));
+    let holder = std::sync::Arc::new(std::sync::Mutex::new(Some(hold_setup_lock(
+        &h,
+        Some(migrating_marker(std::process::id())),
+    ))));
     let (clearing, releasing) = (holder.clone(), holder);
     // The waiter (1 ms bound) polls every 20 ms, so it reads the marker in its first poll, then the lock stays held
     // for 300 ms more without a marker.
     let clock = ScriptedClock::new()
-        .at(Duration::from_millis(300), move || clearing.lock().unwrap().as_ref().expect("held").clear_marker())
-        .at(Duration::from_millis(600), move || drop(releasing.lock().unwrap().take()));
+        .at(Duration::from_millis(300), move || {
+            clearing
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("held")
+                .clear_marker()
+        })
+        .at(Duration::from_millis(600), move || {
+            drop(releasing.lock().unwrap().take())
+        });
     let store = Store::open_with(&clock, &h, 1, None);
     store.expect("the waiter outlasts the marker, until the release");
-    assert!(clock.elapsed() >= Duration::from_millis(550), "did not wait for the release: {:?}", clock.elapsed());
+    assert!(
+        clock.elapsed() >= Duration::from_millis(550),
+        "did not wait for the release: {:?}",
+        clock.elapsed()
+    );
 }
 
 /// hs-n278, contract §4.2: an opener that waited out a migration waits for SQLite in its own setup at least
@@ -1745,7 +2387,9 @@ fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
     Store::open(&h, 5000).map(drop).unwrap();
     // A rollback-journal database, so that an exclusive lock blocks a reader at once.
     let finishing = Connection::open(h.db()).unwrap();
-    finishing.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    finishing
+        .pragma_update(None, "journal_mode", "DELETE")
+        .unwrap();
     finishing.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
     // The waiter (1 ms bound) reads the marker in its first poll. The holder lets go of the setup lock 300 ms of
@@ -1758,18 +2402,36 @@ fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
         *finisher.lock().unwrap() = Some(std::thread::spawn(move || {
             let reader = Connection::open(db).unwrap();
             reader.busy_timeout(Duration::from_millis(300)).unwrap();
-            let blocked = reader.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get::<_, i64>(0));
-            assert!(blocked.is_err(), "the finishing connection holds the database");
+            let blocked = reader.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
+                r.get::<_, i64>(0)
+            });
+            assert!(
+                blocked.is_err(),
+                "the finishing connection holds the database"
+            );
             finishing.execute_batch("COMMIT").unwrap();
         }));
     });
     let begun = Instant::now();
     let store = Store::open_with(&clock, &h, 1, None);
     let waited = begun.elapsed();
-    finisher.lock().unwrap().take().expect("the holder let go of the setup lock").join().unwrap();
+    finisher
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the holder let go of the setup lock")
+        .join()
+        .unwrap();
     store.expect("the waiter waits for SQLite in its setup");
-    assert!(clock.elapsed() >= Duration::from_millis(300), "did not wait for the setup lock: {:?}", clock.elapsed());
-    assert!(waited >= Duration::from_millis(250), "did not wait for the database: {waited:?}");
+    assert!(
+        clock.elapsed() >= Duration::from_millis(300),
+        "did not wait for the setup lock: {:?}",
+        clock.elapsed()
+    );
+    assert!(
+        waited >= Duration::from_millis(250),
+        "did not wait for the database: {waited:?}"
+    );
 }
 
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
@@ -1777,9 +2439,16 @@ fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
 fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
     let env = Home::new();
     let h = home(&env);
-    for marker in [None, Some(json!({"migrating": false, "pid": std::process::id(), "started_unix_ms": 0, "from": 1, "to": 2, "command": "x"}))] {
+    for marker in [
+        None,
+        Some(
+            json!({"migrating": false, "pid": std::process::id(), "started_unix_ms": 0, "from": 1, "to": 2, "command": "x"}),
+        ),
+    ] {
         let _holder = hold_setup_lock(&h, marker);
-        let err = Store::open_with(&ManualClock::new(), &h, 300, None).map(drop).unwrap_err();
+        let err = Store::open_with(&ManualClock::new(), &h, 300, None)
+            .map(drop)
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
     }
 }
@@ -1792,7 +2461,9 @@ fn a_marker_of_a_dead_process_does_not_block() {
     // A pid no process has: above every system's `pid_max` (no child to spawn and reap).
     let dead = i32::MAX as u32;
     let _holder = hold_setup_lock(&h, Some(migrating_marker(dead)));
-    let err = Store::open_with(&ManualClock::new(), &h, 300, None).map(drop).unwrap_err();
+    let err = Store::open_with(&ManualClock::new(), &h, 300, None)
+        .map(drop)
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
 }
 
@@ -1813,23 +2484,34 @@ fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
     let folder = h.old_contexts_dir().join("c1");
     fs::create_dir_all(folder.join("records")).unwrap();
     let manifest = folder.join("context.json");
-    nix::unistd::mkfifo(&manifest, nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).unwrap();
+    nix::unistd::mkfifo(
+        &manifest,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
     let first = {
         let (h, manifest) = (h.clone(), manifest.clone());
         std::thread::spawn(move || {
             let opened = Store::open(&h, 60_000).map(drop);
             // An open that ended without reading the manifest lets the test's writer through, to fail on what it finds.
-            let _ = fs::OpenOptions::new().read(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(&manifest);
+            let _ = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits())
+                .open(&manifest);
             opened
         })
     };
     let mut writer = fs::OpenOptions::new().write(true).open(&manifest).unwrap();
-    let seen: Value = serde_json::from_str(&fs::read_to_string(&lock).unwrap()).expect("no marker while the store migrated");
+    let seen: Value = serde_json::from_str(&fs::read_to_string(&lock).unwrap())
+        .expect("no marker while the store migrated");
     assert_eq!(seen["migrating"], true, "{seen}");
     assert_eq!(seen["pid"], std::process::id(), "{seen}");
     assert_eq!(seen["from"], 0, "{seen}");
     assert!(seen["to"].as_u64().unwrap() > 0, "{seen}");
-    assert!(seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(), "{seen}");
+    assert!(
+        seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(),
+        "{seen}"
+    );
     // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up. The migration cannot end
     // until the test writes the manifest, which it does 100 ms of the second opener's virtual time on.
     let second = {
@@ -1845,7 +2527,11 @@ fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
     };
     first.join().unwrap().unwrap();
     second.expect("the second opener waits for the migration");
-    assert_eq!(fs::read_to_string(&lock).unwrap(), "", "the marker outlived the migration");
+    assert_eq!(
+        fs::read_to_string(&lock).unwrap(),
+        "",
+        "the marker outlived the migration"
+    );
 }
 
 /// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).
@@ -1854,6 +2540,10 @@ fn sqlite_busy_and_sqlite_locked_are_store_busy() {
     for primary in [5, 6] {
         let sqlite = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(primary), None);
         let err = CpdError::from(sqlite);
-        assert_eq!(err.code(), ErrorCode::StoreBusy, "SQLite code {primary}: {err:?}");
+        assert_eq!(
+            err.code(),
+            ErrorCode::StoreBusy,
+            "SQLite code {primary}: {err:?}"
+        );
     }
 }

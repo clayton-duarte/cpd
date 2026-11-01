@@ -42,16 +42,26 @@ pub(super) fn run(engine: &mut Engine) {
         let outcome = match running.answer.try_recv() {
             Ok(outcome) => outcome,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Outcome::Failed(CpdError::new(ErrorCode::SpawnFailed, "The auto-merge request's reader ended without an answer."))
-            }
+            Err(TryRecvError::Disconnected) => Outcome::Failed(CpdError::new(
+                ErrorCode::SpawnFailed,
+                "The auto-merge request's reader ended without an answer.",
+            )),
         };
-        let post = engine.auto_merge.running.take().expect("a run was in flight").post;
+        let post = engine
+            .auto_merge
+            .running
+            .take()
+            .expect("a run was in flight")
+            .post;
         settle(engine, &post, outcome);
         return;
     }
     let repeat = Duration::from_secs(u64::from(engine.config.watch.error_repeat_seconds));
-    if engine.auto_merge.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < repeat) {
+    if engine
+        .auto_merge
+        .last_end
+        .is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < repeat)
+    {
         return;
     }
     let next = match engine.store.read(posts::next_pending) {
@@ -72,7 +82,10 @@ pub(super) fn run(engine: &mut Engine) {
         // The engine may have stopped: nobody to tell.
         let _ = tx.send(auto_merge::attempt(&*runner, Path::new("."), &repo, number));
     });
-    engine.auto_merge.running = Some(Running { post: next, answer: rx });
+    engine.auto_merge.running = Some(Running {
+        post: next,
+        answer: rx,
+    });
 }
 
 /// Records `outcome` of `post`: the row, and for a refusal the Event, in one transaction.
@@ -85,7 +98,11 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         Outcome::Failed(e) => {
             engine.auto_merge.last_end = Some(engine.ports.clock.now());
             let mut failure = Failure::from(&e);
-            if let Some(stderr) = failure.details["stderr"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(stderr) = failure.details["stderr"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 failure.message = format!("{} {stderr}", failure.message);
             }
             engine.fail(Step::E18, about, failure);
@@ -93,19 +110,40 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         }
     };
     let written = engine.store.write("engine E18", |tx| {
-        posts::set_auto_merge(tx, &post.plan, &post.pr, match (&refused, &not_allowed) {
-            (Some(_), _) => "refused",
-            (None, true) => "none",
-            (None, false) => "enabled",
-        })?;
+        posts::set_auto_merge(
+            tx,
+            &post.plan,
+            &post.pr,
+            match (&refused, &not_allowed) {
+                (Some(_), _) => "refused",
+                (None, true) => "none",
+                (None, false) => "enabled",
+            },
+        )?;
         if let Some(why) = &refused {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
-                format!("Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.", post.plan, post.pr, post.number, post.repo),
+                format!(
+                    "Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.",
+                    post.plan, post.pr, post.number, post.repo
+                ),
             ));
-            let text = format!("{} See: cpd plan show --plan {}", failure.message, post.plan);
+            let text = format!(
+                "{} See: cpd plan show --plan {}",
+                failure.message, post.plan
+            );
             let plan = PlanId::parse(&post.plan).expect("a stored Plan id");
-            events::append(tx, NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details).plan(plan))?;
+            events::append(
+                tx,
+                NewEvent::error(
+                    text,
+                    SOURCE,
+                    &failure.code,
+                    &failure.message,
+                    &failure.details,
+                )
+                .plan(plan),
+            )?;
         }
         Ok(())
     });
@@ -114,9 +152,15 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             engine.auto_merge.last_end = None;
             engine.clear(Step::E18, &about);
             if not_allowed {
-                engine.log.line(&format!("E18: the repo of PR {}/{} does not allow auto-merge: row set to none", post.plan, post.pr));
+                engine.log.line(&format!(
+                    "E18: the repo of PR {}/{} does not allow auto-merge: row set to none",
+                    post.plan, post.pr
+                ));
             } else if refused.is_none() {
-                engine.log.line(&format!("E18: enabled auto-merge for PR {}/{}", post.plan, post.pr));
+                engine.log.line(&format!(
+                    "E18: enabled auto-merge for PR {}/{}",
+                    post.plan, post.pr
+                ));
             }
         }
         Err(e) => {

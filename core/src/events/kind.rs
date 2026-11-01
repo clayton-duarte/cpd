@@ -39,7 +39,11 @@ pub const PROTOCOL: u32 = 22;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
-const fn spec(scope: [Set; 5], required: &'static [&'static str], optional: &'static [&'static str]) -> Spec {
+const fn spec(
+    scope: [Set; 5],
+    required: &'static [&'static str],
+    optional: &'static [&'static str],
+) -> Spec {
     Spec {
         context: scope[0],
         plan: scope[1],
@@ -159,15 +163,45 @@ impl Kind {
             ContextCreated => spec([Y, N, N, N, N], &["title", "jira", "created_on"], &[]),
             ContextRecord => spec([Y, N, N, N, N], &["record", "kind", "machine", "seq"], &[]),
             ContextGrounded => spec([Y, N, N, N, Y], &["seq", "forked_from"], &[]),
-            PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
+            PlanCreated => spec(
+                [Y, Y, N, N, N],
+                &["title", "jira", "lead_session", "forked_from", "cwd"],
+                &[],
+            ),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
-            PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
+            PlanReview => spec(
+                [Y, Y, N, N, N],
+                &["review", "fingerprint", "status"],
+                &["feedback", "jobs"],
+            ),
             PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
-            JobAdded => spec([Y, Y, Y, N, N], &["pr", "kind", "status", "appended", "tier", "needs", "urgent"], &["by", "reason"]),
+            JobAdded => spec(
+                [Y, Y, Y, N, N],
+                &[
+                    "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+                ],
+                &["by", "reason"],
+            ),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
-            JobMerged => spec([Y, Y, Y, Y, N], &["sha", "tier", "kind"], &["turn", "cancel_too_late", "pr", "number", "url", "summary", "artefact"]),
-            JobFailed => spec([Y, Y, Y, M, N], &["cause", "detail", "tier", "attempts"], &[]),
+            JobMerged => spec(
+                [Y, Y, Y, Y, N],
+                &["sha", "tier", "kind"],
+                &[
+                    "turn",
+                    "cancel_too_late",
+                    "pr",
+                    "number",
+                    "url",
+                    "summary",
+                    "artefact",
+                ],
+            ),
+            JobFailed => spec(
+                [Y, Y, Y, M, N],
+                &["cause", "detail", "tier", "attempts"],
+                &[],
+            ),
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
             JobCancelled => spec([Y, Y, Y, M, N], &["reason"], &[]),
@@ -175,32 +209,84 @@ impl Kind {
             JobBlocked => spec([Y, Y, Y, N, N], &["waiting"], &[]),
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
             AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
-            AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
+            AttemptRetry => spec(
+                [Y, Y, Y, Y, N],
+                &["outcome", "cause", "next_tier"],
+                &["feedback"],
+            ),
             AttemptAborted => spec([Y, Y, Y, Y, N], &["tier", "by"], &[]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),
             AttemptEnded => spec(
                 [Y, Y, Y, Y, N],
-                &["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model", "stop_reason", "thinking_level"],
+                &[
+                    "turns",
+                    "tokens_in",
+                    "tokens_out",
+                    "cache_read",
+                    "cache_write",
+                    "cost_usd",
+                    "duration_s",
+                    "model",
+                    "stop_reason",
+                    "thinking_level",
+                ],
                 &[],
             ),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
-            PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
-            PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title", "head_ref", "author"]),
+            PrFeedback => spec(
+                [Y, Y, N, N, N],
+                &[
+                    "pr",
+                    "number",
+                    "url",
+                    "state",
+                    "checks",
+                    "review_decision",
+                    "mergeable",
+                    "merge_state",
+                    "conflict",
+                    "reasons",
+                ],
+                &[],
+            ),
+            PrAdded => spec(
+                [Y, Y, N, N, N],
+                &["pr", "repo", "base", "needs", "appended"],
+                &["title", "head_ref", "author"],
+            ),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
             PrDescribed => spec([Y, Y, N, N, N], &["pr"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
             PrStarted => spec(
                 [Y, Y, N, N, N],
-                &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"],
+                &[
+                    "pr",
+                    "repo",
+                    "base",
+                    "lead_branch",
+                    "lead_worktree",
+                    "base_sha",
+                    "reused",
+                    "pushed",
+                    "by",
+                ],
                 &[],
             ),
-            PrBaseChanged => spec([Y, Y, N, N, N], &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
+            PrBaseChanged => spec(
+                [Y, Y, N, N, N],
+                &["pr", "from", "to", "from_pr", "to_pr", "by"],
+                &["number", "url"],
+            ),
             PrOpened => spec([Y, Y, N, N, N], &["pr", "number", "url"], &[]),
             PrMerged => spec([Y, Y, N, N, N], &["pr", "number", "url", "merged_at"], &[]),
             Escalation => spec([Y, Y, Y, Y, N], &["escalation", "question"], &[]),
             EscalationAnswered => spec([Y, Y, Y, Y, N], &["escalation"], &[]),
             EscalationExpired => spec([Y, Y, Y, Y, N], &["escalation", "reason"], &[]),
-            SessionRegistered => spec([Y, M, N, N, Y], &["role", "name", "forked_from", "tier"], &[]),
+            SessionRegistered => spec(
+                [Y, M, N, N, Y],
+                &["role", "name", "forked_from", "tier"],
+                &[],
+            ),
             SessionState => spec([Y, M, N, N, Y], &["from", "to", "label"], &["reply"]),
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
@@ -210,11 +296,30 @@ impl Kind {
             McpAttached => spec([Y, M, N, N, Y], &["name", "server"], &[]),
             SessionAsleep => spec([Y, M, N, N, Y], &[], &[]),
             SessionResumed => spec([Y, M, N, N, Y], &[], &[]),
-            PlanDeleted => spec([Y, Y, N, N, N], &["jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
-            ContextDeleted => spec([Y, N, N, N, N], &["plans", "jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
+            PlanDeleted => spec(
+                [Y, Y, N, N, N],
+                &["jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"],
+                &[],
+            ),
+            ContextDeleted => spec(
+                [Y, N, N, N, N],
+                &[
+                    "plans",
+                    "jobs",
+                    "attempts",
+                    "sessions",
+                    "worktrees",
+                    "disk_freed_mb",
+                ],
+                &[],
+            ),
             RecordsRetired => spec([Y, N, N, N, N], &["context", "approved", "rejected"], &[]),
             DocsDecided => spec([Y, N, N, N, N], &["context", "sent", "dismissed"], &[]),
-            ContextCurated => spec([Y, N, N, N, N], &["context", "curated", "retire", "docs"], &["rejected"]),
+            ContextCurated => spec(
+                [Y, N, N, N, N],
+                &["context", "curated", "retire", "docs"],
+                &["rejected"],
+            ),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
@@ -229,10 +334,18 @@ impl Kind {
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
             ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
             ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
-            IncidentStarted => spec([N, N, N, N, N], &["by", "reason", "started_at", "plans"], &["until_pr"]),
+            IncidentStarted => spec(
+                [N, N, N, N, N],
+                &["by", "reason", "started_at", "plans"],
+                &["until_pr"],
+            ),
             IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_pr"]),
             IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
-            Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
+            Error => spec(
+                [M, M, M, M, M],
+                &["source", "code", "message", "details"],
+                &[],
+            ),
         }
     }
 }
@@ -247,11 +360,21 @@ impl fmt::Display for Kind {
 impl FromStr for Kind {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<Kind, CpdError> {
-        Kind::ALL.iter().copied().find(|k| k.as_str() == s).ok_or_else(|| {
-            CpdError::new(ErrorCode::Usage, format!("Unknown Event kind {s:?}: see contract §5.2."))
+        Kind::ALL
+            .iter()
+            .copied()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| {
+                CpdError::new(
+                    ErrorCode::Usage,
+                    format!("Unknown Event kind {s:?}: see contract §5.2."),
+                )
                 .with("kind", s)
-                .with("kinds", Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>())
-        })
+                .with(
+                    "kinds",
+                    Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+                )
+            })
     }
 }
 
@@ -277,14 +400,32 @@ mod tests {
     #[test]
     fn session_retiered_is_about_a_session_and_carries_from_and_to() {
         let spec = Kind::SessionRetiered.spec();
-        assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
+        assert_eq!(
+            (
+                spec.context,
+                spec.plan,
+                spec.job,
+                spec.attempt,
+                spec.session
+            ),
+            (Y, M, N, N, Y)
+        );
         assert_eq!(spec.required, ["from", "to"]);
     }
 
     #[test]
     fn session_model_changed_is_about_a_session_and_carries_from_and_to() {
         let spec = Kind::SessionModelChanged.spec();
-        assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
+        assert_eq!(
+            (
+                spec.context,
+                spec.plan,
+                spec.job,
+                spec.attempt,
+                spec.session
+            ),
+            (Y, M, N, N, Y)
+        );
         assert_eq!(spec.required, ["from", "to"]);
     }
 
@@ -294,7 +435,17 @@ mod tests {
             let kind: Kind = name.parse().unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(kind.as_str(), name);
             let spec = kind.spec();
-            assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y), "{name}");
+            assert_eq!(
+                (
+                    spec.context,
+                    spec.plan,
+                    spec.job,
+                    spec.attempt,
+                    spec.session
+                ),
+                (Y, M, N, N, Y),
+                "{name}"
+            );
         }
         let data = |name: &str| Kind::from_str(name).unwrap().spec().required;
         assert_eq!(data("review-opened"), ["pn_id", "kind", "subject", "port"]);
@@ -309,8 +460,12 @@ mod tests {
         let mut store = Store::open(&home, 5000).unwrap();
         let listed: Vec<String> = store
             .read(|c| {
-                let mut stmt = c.prepare("SELECT name FROM event_kinds WHERE name LIKE 'review-%' ORDER BY name")?;
-                let names = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+                let mut stmt = c.prepare(
+                    "SELECT name FROM event_kinds WHERE name LIKE 'review-%' ORDER BY name",
+                )?;
+                let names = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
                 Ok(names)
             })
             .unwrap();

@@ -9,7 +9,9 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 
 use common::fx::Fx;
-use common::inbox::{World, frame_with, gone, open, plan_row, rows, seed, session_row, show, show_with, view_fx};
+use common::inbox::{
+    World, frame_with, gone, open, plan_row, rows, seed, session_row, show, show_with, view_fx,
+};
 use common::sql;
 use common::tree::{engine, stamp};
 use cpd_core::error::CpdError;
@@ -31,7 +33,10 @@ thread_local! {
 }
 
 fn recording(argv: Vec<OsString>) -> Result<Output, CpdError> {
-    let mut words: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let mut words: Vec<String> = argv
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     if words.first().is_some_and(|w| w == "cpd") {
         words.remove(0);
     }
@@ -69,16 +74,60 @@ fn rig() -> Fx {
     let fx = view_fx();
     seed(&fx, &[], 330);
     let mut store = open(&fx.env);
-    sql(&mut store, &(plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z") + &session_row("l-ship", "lead", "alpha", "ship", "2026-01-02T00:00:10.000Z")));
+    sql(
+        &mut store,
+        &(plan_row(
+            "ship",
+            "alpha",
+            "dispatch",
+            "l-ship",
+            "2026-01-02T00:00:10.000Z",
+        ) + &session_row(
+            "l-ship",
+            "lead",
+            "alpha",
+            "ship",
+            "2026-01-02T00:00:10.000Z",
+        )),
+    );
     reconcile(&mut store, &[parked()], &stamp(&fx, -330)).unwrap();
     let ok = |args: &[&str]| {
         let out = fx.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let view = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    let view = ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "-x",
+        "120",
+        "-y",
+        "40",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view widgets",
+    ]);
     ok(&["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
-    let chat = ok(&["split-window", "-h", "-d", "-t", &view, "-P", "-F", "#{pane_id}", "cpd tui view chat"]);
+    let chat = ok(&[
+        "split-window",
+        "-h",
+        "-d",
+        "-t",
+        &view,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view chat",
+    ]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
     fx.tmux_route.fake().add_client(CLIENT, 200, 60);
     fx
@@ -86,7 +135,9 @@ fn rig() -> Fx {
 
 fn first_rows(fx: &Fx) -> Vec<String> {
     let frames = show(fx, HEIGHT, vec![Signal::Commit, gone()], &World::new());
-    let at = frame_with(&frames, 0, "the item's row", |r| r.iter().any(|row| row.contains(LABEL)));
+    let at = frame_with(&frames, 0, "the item's row", |r| {
+        r.iter().any(|row| row.contains(LABEL))
+    });
     rows(&frames, at)
 }
 
@@ -96,16 +147,33 @@ fn draws_magenta_with_its_label() {
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
     let row = screen.iter().find(|r| r.contains(LABEL)).expect("the row");
-    assert!(row.contains(palette::TIER_MAGENTA), "the magenta tier glyph on the row: {row:?}");
+    assert!(
+        row.contains(palette::TIER_MAGENTA),
+        "the magenta tier glyph on the row: {row:?}"
+    );
     assert!(row.contains("5m"), "its age: {row:?}");
     let magenta = palette::tier_span(Urgency::Magenta);
     assert_eq!(magenta.content, palette::TIER_MAGENTA);
-    assert_eq!(palette::item_span(Kind::DraftsParked, Urgency::Magenta).content, palette::item_span(Kind::PlanReview, Urgency::Magenta).content, "the glyph of the other magenta kinds");
+    assert_eq!(
+        palette::item_span(Kind::DraftsParked, Urgency::Magenta).content,
+        palette::item_span(Kind::PlanReview, Urgency::Magenta).content,
+        "the glyph of the other magenta kinds"
+    );
 
     // Its dot counts: the Lead the item is linked to shows magenta.
     let tree = cpd_tui::read::tree(&mut open(&fx.env)).unwrap();
-    let lead = tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).find(|n| n.id.as_str() == "l-ship").expect("the Lead");
-    assert_eq!(lead.dot, cpd_tui::read::Dot::Magenta, "the item fills the Lead's dot");
+    let lead = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .flat_map(|p| &p.sessions)
+        .find(|n| n.id.as_str() == "l-ship")
+        .expect("the Lead");
+    assert_eq!(
+        lead.dot,
+        cpd_tui::read::Dot::Magenta,
+        "the item fills the Lead's dot"
+    );
 }
 
 #[test]
@@ -113,10 +181,25 @@ fn click_jumps_to_the_lead() {
     let fx = rig();
     let _engine = engine(&fx);
     let screen = first_rows(&fx);
-    let row = screen.iter().position(|r| r.contains(LABEL)).expect("the row");
+    let row = screen
+        .iter()
+        .position(|r| r.contains(LABEL))
+        .expect("the row");
     fx.fake("cpd", Reply::ok(r#"{"ok":true}"#));
     RAN.with(|ran| ran.borrow_mut().clear());
-    let signals = vec![Signal::Commit, common::inbox::click(1, u16::try_from(row).unwrap()), gone()];
+    let signals = vec![
+        Signal::Commit,
+        common::inbox::click(1, u16::try_from(row).unwrap()),
+        gone(),
+    ];
     show_with(&fx, HEIGHT, signals, &World::new(), recording);
-    assert_eq!(cpd_calls(&fx), [vec!["session".to_owned(), "open".to_owned(), "l-ship".to_owned()]], "the Lead of the Plan opens, as for a plan-review with no url");
+    assert_eq!(
+        cpd_calls(&fx),
+        [vec![
+            "session".to_owned(),
+            "open".to_owned(),
+            "l-ship".to_owned()
+        ]],
+        "the Lead of the Plan opens, as for a plan-review with no url"
+    );
 }

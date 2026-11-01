@@ -9,7 +9,8 @@ use super::pr_view;
 
 /// What the policy says of `feedback.checks`.
 pub(super) fn policy(fx: &Poll, checks: &str) {
-    fx.env.owner_policy("acme", &format!("[pr]\nfeedback.checks = \"{checks}\"\n"));
+    fx.env
+        .owner_policy("acme", &format!("[pr]\nfeedback.checks = \"{checks}\"\n"));
 }
 
 /// An owned PR (812) with policy `any` whose search rollup is `FAILURE`.
@@ -26,7 +27,9 @@ pub(super) fn run(name: &str, status: &str, conclusion: Option<&str>) -> Value {
 
 /// `n` successful check runs.
 pub(super) fn green(n: usize) -> Vec<Value> {
-    (0..n).map(|i| run(&format!("ci/{i}"), "COMPLETED", Some("SUCCESS"))).collect()
+    (0..n)
+        .map(|i| run(&format!("ci/{i}"), "COMPLETED", Some("SUCCESS")))
+        .collect()
 }
 
 pub(super) fn status_context(context: &str, state: &str) -> Value {
@@ -48,7 +51,11 @@ pub(super) fn with_labels(mut pull: Value, labels: &[&str]) -> Value {
 
 /// The answer of the checks read: one alias `p<i>` per entry.
 pub(super) fn answer(pulls: Vec<Value>) -> String {
-    let data: serde_json::Map<String, Value> = pulls.into_iter().enumerate().map(|(i, p)| (format!("p{i}"), json!({"pullRequest": p}))).collect();
+    let data: serde_json::Map<String, Value> = pulls
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| (format!("p{i}"), json!({"pullRequest": p})))
+        .collect();
     json!({"data": data}).to_string() + "\n"
 }
 
@@ -58,17 +65,27 @@ pub(super) fn one_page(nodes: Vec<Value>) -> String {
 }
 
 pub(super) fn is_checks_read(call: &Call) -> bool {
-    call.args.get(3).is_some_and(|q| q.contains("contexts(first: 100"))
+    call.args
+        .get(3)
+        .is_some_and(|q| q.contains("contexts(first: 100"))
 }
 
 /// The next checks read (the first page) is answered `text`.
 pub(super) fn read_says(fx: &Poll, text: String) {
-    let _ = (*fx.fakes.runner).clone().once("gh", |c| is_checks_read(c) && !c.args[3].contains("after:"), Reply::ok(&text));
+    let _ = (*fx.fakes.runner).clone().once(
+        "gh",
+        |c| is_checks_read(c) && !c.args[3].contains("after:"),
+        Reply::ok(&text),
+    );
 }
 
 /// The argv of every checks read so far.
 pub(super) fn reads(fx: &Poll) -> Vec<Vec<String>> {
-    fx.calls("gh").into_iter().filter(is_checks_read).map(|c| c.args).collect()
+    fx.calls("gh")
+        .into_iter()
+        .filter(is_checks_read)
+        .map(|c| c.args)
+        .collect()
 }
 
 pub(super) fn feedback_data(fx: &Poll) -> Vec<Value> {
@@ -90,9 +107,17 @@ fn a_cancelled_check_among_pending_ones_raises_no_feedback() {
 
     fx.poll();
 
-    assert_eq!(feedback_data(&fx), Vec::<Value>::new(), "a cancelled check is no failure");
+    assert_eq!(
+        feedback_data(&fx),
+        Vec::<Value>::new(),
+        "a cancelled check is no failure"
+    );
     assert_eq!(checks_of_row(&fx), "pending");
-    assert_eq!(reads(&fx).len(), 1, "the rollup's failed is confirmed by one checks read");
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the rollup's failed is confirmed by one checks read"
+    );
 }
 
 #[test]
@@ -113,11 +138,21 @@ fn a_cancelled_check_among_green_ones_is_passed_and_raises_no_feedback() {
 #[test]
 fn a_failing_check_beside_a_cancelled_one_raises_checks_failed() {
     let fx = failing_rollup();
-    read_says(&fx, one_page(vec![run("bot", "COMPLETED", Some("CANCELLED")), run("ci/test", "COMPLETED", Some("FAILURE"))]));
+    read_says(
+        &fx,
+        one_page(vec![
+            run("bot", "COMPLETED", Some("CANCELLED")),
+            run("ci/test", "COMPLETED", Some("FAILURE")),
+        ]),
+    );
 
     fx.poll();
 
-    assert_eq!(reads(&fx).len(), 1, "the rollup's failed is confirmed by one checks read");
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the rollup's failed is confirmed by one checks read"
+    );
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1["reasons"], json!(["checks_failed"]));
@@ -142,10 +177,18 @@ fn each_failing_conclusion_raises_checks_failed() {
 
         fx.poll();
 
-        assert_eq!(reads(&fx).len(), 1, "{failing}: the rollup's failed is confirmed by one checks read");
+        assert_eq!(
+            reads(&fx).len(),
+            1,
+            "{failing}: the rollup's failed is confirmed by one checks read"
+        );
         let events = fx.events("pr-feedback");
         assert_eq!(events.len(), 1, "{failing}");
-        assert_eq!(events[0].1["reasons"], json!(["checks_failed"]), "{failing}");
+        assert_eq!(
+            events[0].1["reasons"],
+            json!(["checks_failed"]),
+            "{failing}"
+        );
         assert_eq!(checks_of_row(&fx), "failed", "{failing}");
     }
 }
@@ -161,11 +204,21 @@ fn a_real_failure_after_a_cancelled_poll_still_raises_feedback() {
     assert_eq!(feedback_data(&fx), Vec::<Value>::new());
     assert_eq!(checks_of_row(&fx), "pending");
 
-    read_says(&fx, one_page(vec![run("bot", "COMPLETED", Some("CANCELLED")), run("ci/test", "COMPLETED", Some("FAILURE"))]));
+    read_says(
+        &fx,
+        one_page(vec![
+            run("bot", "COMPLETED", Some("CANCELLED")),
+            run("ci/test", "COMPLETED", Some("FAILURE")),
+        ]),
+    );
     fx.poll();
 
     let events = fx.events("pr-feedback");
-    assert_eq!(events.len(), 1, "the stored value was the confirmed one: a transition");
+    assert_eq!(
+        events.len(),
+        1,
+        "the stored value was the confirmed one: a transition"
+    );
     assert_eq!(events[0].1["reasons"], json!(["checks_failed"]));
     assert_eq!(checks_of_row(&fx), "failed");
 }
@@ -194,10 +247,22 @@ fn the_checks_are_read_only_for_an_owned_any_pr_whose_rollup_failed() {
     // an owned PR's PENDING rollup is pinned by pr_human_gated.) (One fixture at a time.)
     let fx = poll_fx("deploy");
     policy(&fx, "any");
-    fx.search(&[pay("OPEN", None, Some("SUCCESS")), node("acme/web", 902, "OPEN", None, Some("FAILURE"))]);
+    fx.search(&[
+        pay("OPEN", None, Some("SUCCESS")),
+        node("acme/web", 902, "OPEN", None, Some("FAILURE")),
+    ]);
     fx.poll();
     assert_eq!(reads(&fx).len(), 0, "not owned");
-    let rows = fx.store().read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 902", [], |r| r.get::<_, String>(0))?)).unwrap();
+    let rows = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT checks FROM pull_requests WHERE number = 902",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
     assert_eq!(rows, "failed", "the search's value");
 
     // The policy says `none`: the row says failed, no Event, no read.
@@ -215,13 +280,20 @@ fn the_checks_are_read_only_for_an_owned_any_pr_whose_rollup_failed() {
     let fx = poll_fx("deploy");
     policy(&fx, "any");
     add_second_owned_pr(&fx);
-    fx.search(&[pay("OPEN", None, Some("FAILURE")), node("acme/pay", 813, "OPEN", None, Some("FAILURE"))]);
+    fx.search(&[
+        pay("OPEN", None, Some("FAILURE")),
+        node("acme/pay", 813, "OPEN", None, Some("FAILURE")),
+    ]);
     let both = answer(vec![contexts(green(2), None), contexts(green(2), None)]);
     read_says(&fx, both);
     fx.poll();
     let calls = reads(&fx);
     assert_eq!(calls.len(), 1, "one call for both: {calls:?}");
-    assert!(calls[0][3].contains("p0:") && calls[0][3].contains("p1:"), "{}", calls[0][3]);
+    assert!(
+        calls[0][3].contains("p0:") && calls[0][3].contains("p1:"),
+        "{}",
+        calls[0][3]
+    );
 }
 
 #[test]
@@ -245,7 +317,11 @@ fn more_than_one_hundred_checks_are_read_page_by_page() {
 #[test]
 fn a_failed_checks_read_fails_the_poll_and_writes_nothing() {
     let fx = failing_rollup();
-    let _ = (*fx.fakes.runner).clone().on("gh", is_checks_read, Reply::exit(1, "", "gh: HTTP 502: Bad Gateway\n"));
+    let _ = (*fx.fakes.runner).clone().on(
+        "gh",
+        is_checks_read,
+        Reply::exit(1, "", "gh: HTTP 502: Bad Gateway\n"),
+    );
     let (txns, events, row) = (fx.txns(), fx.event_count(), fx.pr_data());
 
     let run = fx.cpd(&["pr", "poll", "--plan", "pay"]);
@@ -253,8 +329,15 @@ fn a_failed_checks_read_fails_the_poll_and_writes_nothing() {
     assert_eq!(run.exit, 1, "{run:?}");
     assert_eq!(run.error()["code"], "gh_failed");
     let details = &run.error()["details"];
-    assert_eq!((&details["call"], &details["transient"]), (&json!("lookup"), &json!(true)), "{details}");
-    assert_eq!((fx.txns(), fx.event_count(), fx.pr_data()), (txns, events, row));
+    assert_eq!(
+        (&details["call"], &details["transient"]),
+        (&json!("lookup"), &json!(true)),
+        "{details}"
+    );
+    assert_eq!(
+        (fx.txns(), fx.event_count(), fx.pr_data()),
+        (txns, events, row)
+    );
 }
 
 /// The `gh pr view` reply with `checks` as its `statusCheckRollup`.
@@ -268,21 +351,34 @@ pub(super) fn view_with(checks: Vec<Value>) -> String {
 /// `pr view` of a PR whose `gh pr view` holds `checks`: its output.
 pub(super) fn view(checks: Vec<Value>) -> Value {
     let fx = pr_view::fx("open");
-    let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&view_with(checks)));
-    fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()
+    let _ = (*fx.fx.fakes.runner).clone().on(
+        "gh",
+        |c| c.args.starts_with(&["pr".into(), "view".into()]),
+        Reply::ok(&view_with(checks)),
+    );
+    fx.fx
+        .cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"])
+        .ok()
 }
 
 #[test]
 fn pr_view_does_not_count_a_cancelled_check_as_failed() {
     let cancelled = json!({"__typename": "CheckRun", "name": "bot", "conclusion": "CANCELLED", "status": "COMPLETED"});
-    let pending = |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "PENDING"});
-    let success = |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "SUCCESS"});
+    let pending =
+        |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "PENDING"});
+    let success =
+        |n: &str| json!({"__typename": "StatusContext", "context": n, "state": "SUCCESS"});
     let failure = json!({"__typename": "CheckRun", "name": "ci", "conclusion": "FAILURE", "status": "COMPLETED"});
 
     let out = view(vec![cancelled.clone(), pending("a"), pending("b")]);
     assert_eq!(out["pr"]["checks"], "pending");
     let listed = out["checks"].as_array().unwrap();
-    assert!(listed.iter().any(|c| c["name"] == "bot" && c["conclusion"] == "CANCELLED"), "{listed:?}");
+    assert!(
+        listed
+            .iter()
+            .any(|c| c["name"] == "bot" && c["conclusion"] == "CANCELLED"),
+        "{listed:?}"
+    );
 
     let out = view(vec![cancelled.clone(), success("a"), success("b")]);
     assert_eq!(out["pr"]["checks"], "passed");

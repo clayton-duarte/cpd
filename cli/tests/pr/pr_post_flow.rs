@@ -45,7 +45,10 @@ fn fixture(posting: Posting, posted: bool, checks: &str) -> Poll {
         Posting::Disabled => "[pr.post]\nenabled = false\n",
         Posting::Absent => "",
     };
-    fx.env.owner_policy("acme", &format!("[pr]\ngate = \"local\"\n[pr.feedback]\nchecks = \"{checks}\"\n{post}"));
+    fx.env.owner_policy(
+        "acme",
+        &format!("[pr]\ngate = \"local\"\n[pr.feedback]\nchecks = \"{checks}\"\n{post}"),
+    );
     if posted {
         fx.store()
             .write("fixture", |tx| {
@@ -62,15 +65,32 @@ fn fixture(posting: Posting, posted: bool, checks: &str) -> Poll {
 
 /// One poll with pull request 812 as GitHub answers: updated at `updated_at`, its checks `rollup`, its `review` decision, open
 /// `threads`; `listed_as` is the list the search puts it in: `authored` or `requested`.
-fn poll(fx: &Poll, updated_at: &str, rollup: &str, review: Option<&str>, threads: Vec<Value>, listed_as: &str) {
+fn poll(
+    fx: &Poll,
+    updated_at: &str,
+    rollup: &str,
+    review: Option<&str>,
+    threads: Vec<Value>,
+    listed_as: &str,
+) {
     let pull = node("acme/pay", 812, "OPEN", review, Some(rollup))
-        .replace(r#""updatedAt":"U1""#, &format!(r#""updatedAt":"{updated_at}""#))
-        .replace(r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#, r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#);
+        .replace(
+            r#""updatedAt":"U1""#,
+            &format!(r#""updatedAt":"{updated_at}""#),
+        )
+        .replace(
+            r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#,
+            r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#,
+        );
     if listed_as != "authored" {
         // The row was stored as the User's own: the poll reads it directly, and GitHub says it is review-requested of them.
         fx.lookup(&[Some(viewer(pull.clone(), false, true))]);
     }
-    let (authored, requested) = if listed_as == "authored" { (vec![pull], vec![]) } else { (vec![], vec![pull]) };
+    let (authored, requested) = if listed_as == "authored" {
+        (vec![pull], vec![])
+    } else {
+        (vec![], vec![pull])
+    };
     fx.search_raw(&format!(
         r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
         authored.len(),
@@ -89,11 +109,24 @@ fn step(fx: &Poll, updated_at: &str, rollup: &str, review: Option<&str>, threads
 
 /// The `reasons` of every `pr-feedback` Event so far.
 fn reasons(fx: &Poll) -> Vec<Vec<String>> {
-    fx.events("pr-feedback").iter().map(|(_, data)| data["reasons"].as_array().unwrap().iter().map(|r| r.as_str().unwrap().to_owned()).collect()).collect()
+    fx.events("pr-feedback")
+        .iter()
+        .map(|(_, data)| {
+            data["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r.as_str().unwrap().to_owned())
+                .collect()
+        })
+        .collect()
 }
 
 fn told(reasons: &[&[&str]]) -> Vec<Vec<String>> {
-    reasons.iter().map(|r| r.iter().map(|s| (*s).to_owned()).collect()).collect()
+    reasons
+        .iter()
+        .map(|r| r.iter().map(|s| (*s).to_owned()).collect())
+        .collect()
 }
 
 /// The PR turns ready: checks pending (no thread), then passed. Returns the reasons told.
@@ -119,16 +152,36 @@ fn a_pr_that_becomes_ready_tells_the_lead_ready_to_post_once() {
 #[test]
 fn an_answered_bot_comment_that_makes_the_pr_ready_tells_comments_then_ready_to_post() {
     let fx = fixture(Posting::Enabled, false, "any");
-    step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
-    assert_eq!(reasons(&fx), told(&[&["comments"]]), "the open bot thread is a comment");
+    step(
+        &fx,
+        "U1",
+        "SUCCESS",
+        None,
+        vec![thread("T1", "review-bot[bot]")],
+    );
+    assert_eq!(
+        reasons(&fx),
+        told(&[&["comments"]]),
+        "the open bot thread is a comment"
+    );
     step(&fx, "U2", "SUCCESS", None, vec![]);
-    assert_eq!(reasons(&fx), told(&[&["comments"], &["ready_to_post"]]), "the bot thread is answered: the PR is ready");
+    assert_eq!(
+        reasons(&fx),
+        told(&[&["comments"], &["ready_to_post"]]),
+        "the bot thread is answered: the PR is ready"
+    );
 }
 
 #[test]
 fn a_resolved_bot_thread_with_an_unchanged_updated_at_tells_the_lead_ready_to_post() {
     let fx = fixture(Posting::Enabled, false, "any");
-    step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
+    step(
+        &fx,
+        "U1",
+        "SUCCESS",
+        None,
+        vec![thread("T1", "review-bot[bot]")],
+    );
     assert_eq!(reasons(&fx), told(&[&["comments"]]));
     let mut resolved = thread("T1", "review-bot[bot]");
     resolved["isResolved"] = json!(true);
@@ -139,8 +192,20 @@ fn a_resolved_bot_thread_with_an_unchanged_updated_at_tells_the_lead_ready_to_po
 #[test]
 fn a_ready_pr_with_an_open_bot_comment_is_not_told_ready_to_post() {
     let fx = fixture(Posting::Enabled, false, "any");
-    step(&fx, "U1", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
-    step(&fx, "U2", "SUCCESS", None, vec![thread("T1", "review-bot[bot]")]);
+    step(
+        &fx,
+        "U1",
+        "SUCCESS",
+        None,
+        vec![thread("T1", "review-bot[bot]")],
+    );
+    step(
+        &fx,
+        "U2",
+        "SUCCESS",
+        None,
+        vec![thread("T1", "review-bot[bot]")],
+    );
     assert_eq!(reasons(&fx), told(&[&["comments"]]));
 }
 
@@ -152,7 +217,11 @@ fn a_pr_that_becomes_ready_with_a_new_human_comment_is_told_both_in_one_event() 
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].1["reasons"], json!(["comments", "ready_to_post"]));
-    assert!(events[0].0.contains("ready to post for review"), "{}", events[0].0);
+    assert!(
+        events[0].0.contains("ready to post for review"),
+        "{}",
+        events[0].0
+    );
 }
 
 #[test]
@@ -160,7 +229,11 @@ fn ready_to_post_needs_an_enabled_unposted_authored_pr() {
     let fx = fixture(Posting::Enabled, false, "any");
     assert_eq!(becomes_ready(&fx), told(&[&["ready_to_post"]]));
     drop(fx);
-    for (posting, posted) in [(Posting::Enabled, true), (Posting::Disabled, false), (Posting::Absent, false)] {
+    for (posting, posted) in [
+        (Posting::Enabled, true),
+        (Posting::Disabled, false),
+        (Posting::Absent, false),
+    ] {
         let fx = fixture(posting, posted, "any");
         assert_eq!(becomes_ready(&fx), told(&[]));
         drop(fx);
@@ -177,27 +250,40 @@ fn a_pr_that_stops_being_ready_and_is_ready_again_is_told_again() {
     step(&fx, "U1", "SUCCESS", None, vec![]);
     step(&fx, "U2", "FAILURE", None, vec![]);
     step(&fx, "U3", "SUCCESS", None, vec![]);
-    assert_eq!(reasons(&fx), told(&[&["ready_to_post"], &["checks_failed"], &["ready_to_post"]]));
+    assert_eq!(
+        reasons(&fx),
+        told(&[&["ready_to_post"], &["checks_failed"], &["ready_to_post"]])
+    );
 }
 
 #[test]
 fn a_posted_pr_that_is_approved_tells_the_lead_approved_once() {
     let fx = fixture(Posting::Enabled, true, "any");
     step(&fx, "U1", "SUCCESS", None, vec![]);
-    assert!(fx.events("pr-feedback").is_empty(), "a posted PR is told no ready_to_post");
+    assert!(
+        fx.events("pr-feedback").is_empty(),
+        "a posted PR is told no ready_to_post"
+    );
 
     step(&fx, "U2", "SUCCESS", Some("APPROVED"), vec![]);
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].1["reasons"], json!(["approved"]));
-    assert!(events[0].0.contains("needs attention: approved. Read"), "{}", events[0].0);
+    assert!(
+        events[0].0.contains("needs attention: approved. Read"),
+        "{}",
+        events[0].0
+    );
 
     step(&fx, "U2", "SUCCESS", Some("APPROVED"), vec![]);
     assert_eq!(fx.events("pr-feedback").len(), 1, "told once");
 
     step(&fx, "U3", "SUCCESS", Some("CHANGES_REQUESTED"), vec![]);
     step(&fx, "U4", "SUCCESS", Some("APPROVED"), vec![]);
-    assert_eq!(reasons(&fx), told(&[&["approved"], &["changes_requested"], &["approved"]]));
+    assert_eq!(
+        reasons(&fx),
+        told(&[&["approved"], &["changes_requested"], &["approved"]])
+    );
 }
 
 #[test]
@@ -205,13 +291,21 @@ fn an_unposted_pr_or_a_disabled_owner_hears_no_approved() {
     let control = fixture(Posting::Enabled, true, "any");
     step(&control, "U1", "SUCCESS", None, vec![]);
     step(&control, "U2", "SUCCESS", Some("APPROVED"), vec![]);
-    assert_eq!(reasons(&control), told(&[&["approved"]]), "the positive control");
+    assert_eq!(
+        reasons(&control),
+        told(&[&["approved"]]),
+        "the positive control"
+    );
     drop(control);
 
     let unposted = fixture(Posting::Enabled, false, "any");
     step(&unposted, "U1", "SUCCESS", None, vec![]);
     step(&unposted, "U2", "SUCCESS", Some("APPROVED"), vec![]);
-    assert!(!flat(&reasons(&unposted)).contains(&"approved"), "{:?}", reasons(&unposted));
+    assert!(
+        !flat(&reasons(&unposted)).contains(&"approved"),
+        "{:?}",
+        reasons(&unposted)
+    );
     drop(unposted);
 
     for posting in [Posting::Absent, Posting::Disabled] {
@@ -231,7 +325,13 @@ fn the_approved_reason_follows_the_old_ones_in_the_documented_order() {
     let events = posted.events("pr-feedback");
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].1["reasons"], json!(["checks_failed", "approved"]));
-    assert!(events[0].0.contains("needs attention: checks failed, approved."), "{}", events[0].0);
+    assert!(
+        events[0]
+            .0
+            .contains("needs attention: checks failed, approved."),
+        "{}",
+        events[0].0
+    );
 }
 
 #[test]
@@ -242,13 +342,20 @@ fn human_approval_a_bot_only_approval_tells_a_posted_pr_nothing() {
     let bot_only = reviewed(
         node("acme/pay", 812, "OPEN", Some("APPROVED"), Some("SUCCESS"))
             .replace(r#""updatedAt":"U1""#, r#""updatedAt":"U2""#)
-            .replace(r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#, r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#),
+            .replace(
+                r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#,
+                r#""mergeable":"MERGEABLE","mergeStateStatus":"CLEAN""#,
+            ),
         &[("Bot", "acme-review-app", "APPROVED")],
     );
     fx.search(&[bot_only]);
     *fx.gh.comments.lock().unwrap() = Some(answer("U2", vec![]));
     fx.poll();
 
-    assert!(!flat(&reasons(&fx)).contains(&"approved"), "{:?}", reasons(&fx));
+    assert!(
+        !flat(&reasons(&fx)).contains(&"approved"),
+        "{:?}",
+        reasons(&fx)
+    );
     assert_eq!(fx.pr_data().1, "none");
 }

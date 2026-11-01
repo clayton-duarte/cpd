@@ -43,7 +43,17 @@ fn fx() -> Pay {
 impl Pay {
     fn add(&self, plan: &str, key: &str, extra: &[&str]) -> Run {
         let title = format!("Change {key}");
-        let mut args = vec!["pr", "add", key, "--repo", self.repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+        let mut args = vec![
+            "pr",
+            "add",
+            key,
+            "--repo",
+            self.repo.to_str().unwrap(),
+            "--title",
+            &title,
+            "--shape",
+            "config",
+        ];
         args.extend(extra);
         args.extend(["--plan", plan]);
         self.fx.cpd(&args)
@@ -57,7 +67,10 @@ impl Pay {
     }
 
     fn writes(&self) -> (i64, i64) {
-        (self.fx.env.query("SELECT count(*) FROM txns"), self.fx.env.query("SELECT count(*) FROM events"))
+        (
+            self.fx.env.query("SELECT count(*) FROM txns"),
+            self.fx.env.query("SELECT count(*) FROM events"),
+        )
     }
 
     /// `run` is refused `pr_other_plan`, exit 3, with these details, and wrote nothing.
@@ -74,16 +87,36 @@ impl Pay {
 fn pr_add_refuses_a_need_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
-    fx.refused(&fx.add("pay-1", "web", &["--needs", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"), 0);
+    fx.refused(
+        &fx.add("pay-1", "web", &["--needs", "ops-1/deploy"]),
+        "web",
+        "ops-1/deploy",
+        writes,
+    );
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"),
+        0
+    );
 }
 
 #[test]
 fn pr_add_refuses_a_base_pr_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
-    fx.refused(&fx.add("pay-1", "web", &["--base", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"), 0);
+    fx.refused(
+        &fx.add("pay-1", "web", &["--base", "ops-1/deploy"]),
+        "web",
+        "ops-1/deploy",
+        writes,
+    );
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"),
+        0
+    );
 }
 
 #[test]
@@ -91,8 +124,18 @@ fn pr_edit_refuses_a_need_of_another_plan() {
     let fx = fx();
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
-    fx.refused(&fx.edit("pay-1", &["web", "--needs", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM pr_needs WHERE pr = 'web'"), 0);
+    fx.refused(
+        &fx.edit("pay-1", &["web", "--needs", "ops-1/deploy"]),
+        "web",
+        "ops-1/deploy",
+        writes,
+    );
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<i64>("SELECT count(*) FROM pr_needs WHERE pr = 'web'"),
+        0
+    );
 }
 
 #[test]
@@ -100,8 +143,18 @@ fn pr_edit_refuses_a_base_pr_of_another_plan() {
     let fx = fx();
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
-    fx.refused(&fx.edit("pay-1", &["web", "--base", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "main");
+    fx.refused(
+        &fx.edit("pay-1", &["web", "--base", "ops-1/deploy"]),
+        "web",
+        "ops-1/deploy",
+        writes,
+    );
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<String>("SELECT base FROM prs WHERE plan = 'pay-1' AND key = 'web'"),
+        "main"
+    );
 }
 
 /// What stays: a need and a base PR of the Plan itself, by bare key (a base as the Plan's own `<plan>/<key>` long form, which may stay). And `pr_needs` is keyed by the Plan alone
@@ -113,7 +166,24 @@ fn needs_and_base_pr_of_the_same_plan_still_work() {
     let out = fx.add("pay-1", "ui", &["--base", "pay-1/api"]).ok();
     assert_eq!(out["pr"]["base"], "pay-1/api", "{out}");
     fx.edit("pay-1", &["web", "--needs", "api"]).ok();
-    assert_eq!(fx.fx.env.query::<String>("SELECT group_concat(needs) FROM pr_needs WHERE pr = 'web'"), "api");
-    let columns: Value = fx.fx.env.query::<String>("SELECT json_group_array(name) FROM pragma_table_info('pr_needs')").parse().unwrap();
-    assert!(!columns.as_array().unwrap().iter().any(|c| c == "needs_plan"), "pr_needs still has needs_plan: {columns}");
+    assert_eq!(
+        fx.fx
+            .env
+            .query::<String>("SELECT group_concat(needs) FROM pr_needs WHERE pr = 'web'"),
+        "api"
+    );
+    let columns: Value = fx
+        .fx
+        .env
+        .query::<String>("SELECT json_group_array(name) FROM pragma_table_info('pr_needs')")
+        .parse()
+        .unwrap();
+    assert!(
+        !columns
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "needs_plan"),
+        "pr_needs still has needs_plan: {columns}"
+    );
 }

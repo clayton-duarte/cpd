@@ -19,7 +19,16 @@ use rusqlite::params;
 use serde_json::json;
 
 const URL: &str = "https://github.com/acme/pay/pull/7";
-const LIST_HEAD: [&str; 8] = ["pr", "list", "--head", "feat/x", "--state", "all", "--json", "number,url,state,createdAt"];
+const LIST_HEAD: [&str; 8] = [
+    "pr",
+    "list",
+    "--head",
+    "feat/x",
+    "--state",
+    "all",
+    "--json",
+    "number,url,state,createdAt",
+];
 
 /// The fake `gh`: the lookup of `feat/x` finds pull request 7, every other head has none, `pr create` would make 812, and the poll's lookup
 /// answers pull request 7.
@@ -55,20 +64,61 @@ fn fx(status: &str) -> Fx {
     env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.keyed_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
-    env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    env.git(
+        env.root(),
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
     env.local_origin(&repo, &origin);
-    env.git(&repo, &["push", "-q", "origin", "main", "main:refs/heads/feat/x"]);
+    env.git(
+        &repo,
+        &["push", "-q", "origin", "main", "main:refs/heads/feat/x"],
+    );
     env.git(&repo, &["fetch", "-q", "origin", "feat/x"]);
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [
+        ("user.name", "cpd test"),
+        ("user.email", "test@cpd.invalid"),
+        ("commit.gpgsign", "false"),
+    ] {
         env.git(&repo, &["config", key, value]);
     }
     let lead = repo.parent().unwrap().join("pay.pay.web");
-    env.git(&repo, &["worktree", "add", "-q", "-b", "cpd/pay/web", lead.to_str().unwrap(), "origin/feat/x"]);
+    env.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "cpd/pay/web",
+            lead.to_str().unwrap(),
+            "origin/feat/x",
+        ],
+    );
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
+    fs::write(
+        home.config(),
+        format!(
+            "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n",
+            env.tmux_socket()
+        ),
+    )
+    .unwrap();
     gh(&env);
 
-    let fx = Fx { env, home, repo, origin, lead };
+    let fx = Fx {
+        env,
+        home,
+        repo,
+        origin,
+        lead,
+    };
     let merged = if status == "dispatch" {
         fx.commit("api.txt")
     } else {
@@ -85,7 +135,11 @@ fn fx(status: &str) -> Fx {
         ),
         _ => ("", String::new(), String::new()),
     };
-    let phase = if status == "open" { "deploy" } else { "dispatch" };
+    let phase = if status == "open" {
+        "deploy"
+    } else {
+        "dispatch"
+    };
     let sql = format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -98,7 +152,9 @@ fn fx(status: &str) -> Fx {
         repo = fx.repo.display(),
         lead = fx.lead.display(),
     );
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    fx.store()
+        .write("fixture", |tx| Ok(tx.execute_batch(&sql)?))
+        .unwrap();
     if status == "dispatch" {
         // The PR's work is done: `pr open` wants every Job but the `open` and `update` ones merged.
         fx.store()
@@ -129,7 +185,19 @@ impl Fx {
     fn commit(&self, name: &str) -> String {
         fs::write(self.lead.join(name), name).unwrap();
         self.git(&self.lead, &["add", "-A"]);
-        self.git(&self.lead, &["-c", "user.name=cpd test", "-c", "user.email=test@cpd.invalid", "commit", "-q", "-m", name]);
+        self.git(
+            &self.lead,
+            &[
+                "-c",
+                "user.name=cpd test",
+                "-c",
+                "user.email=test@cpd.invalid",
+                "commit",
+                "-q",
+                "-m",
+                name,
+            ],
+        );
         self.lead_sha()
     }
 
@@ -139,52 +207,113 @@ impl Fx {
 
     /// What `origin` holds at `branch`, if anything.
     fn remote(&self, branch: &str) -> Option<String> {
-        let out = self.git(&self.origin, &["for-each-ref", "--format=%(objectname)", &format!("refs/heads/{branch}")]);
+        let out = self.git(
+            &self.origin,
+            &[
+                "for-each-ref",
+                "--format=%(objectname)",
+                &format!("refs/heads/{branch}"),
+            ],
+        );
         (!out.is_empty()).then_some(out)
     }
 
     /// Every branch of `origin`.
     fn remote_branches(&self) -> Vec<String> {
-        self.git(&self.origin, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).lines().map(str::to_owned).collect()
+        self.git(
+            &self.origin,
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        )
+        .lines()
+        .map(str::to_owned)
+        .collect()
     }
 
     /// Moves `feat/x` on `origin` by a commit the Lead Branch lacks, through a second clone.
     fn move_remote(&self) -> String {
         let clone = self.env.root().join("clone");
-        self.git(self.env.root(), &["clone", "-q", self.origin.to_str().unwrap(), clone.to_str().unwrap()]);
+        self.git(
+            self.env.root(),
+            &[
+                "clone",
+                "-q",
+                self.origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
         self.git(&clone, &["checkout", "-q", "feat/x"]);
         fs::write(clone.join("remote.txt"), "remote\n").unwrap();
         self.git(&clone, &["add", "-A"]);
-        self.git(&clone, &["-c", "user.name=someone", "-c", "user.email=someone@cpd.invalid", "commit", "-q", "-m", "remote"]);
+        self.git(
+            &clone,
+            &[
+                "-c",
+                "user.name=someone",
+                "-c",
+                "user.email=someone@cpd.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "remote",
+            ],
+        );
         self.git(&clone, &["push", "-q", "origin", "feat/x"]);
         self.remote("feat/x").unwrap()
     }
 
     fn pr(&self, command: &str) -> Run {
-        self.env.cpd(&["pr", command, "--pr", "web", "--plan", "pay"])
+        self.env
+            .cpd(&["pr", command, "--pr", "web", "--plan", "pay"])
     }
 
     /// `(status, pr_number, pr_url)` of PR `web`.
     fn row(&self) -> (String, Option<i64>, Option<String>) {
         self.store()
-            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_url FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT status, pr_number, pr_url FROM prs WHERE plan = 'pay' AND key = 'web'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
             .unwrap()
     }
 
     /// The `gh pr ...` calls so far.
     fn pr_calls(&self) -> Vec<Vec<String>> {
-        self.env.calls("gh").into_iter().filter(|c| c[0] == "pr").collect()
+        self.env
+            .calls("gh")
+            .into_iter()
+            .filter(|c| c[0] == "pr")
+            .collect()
     }
 
     /// What publishing the Lead tip as the adopted pull request's must have done: pushed to `feat/x` and nowhere else, found the pull
     /// request by its head and created none, recorded it.
     fn assert_published(&self, tip: &str) {
-        assert_eq!(self.remote("feat/x").as_deref(), Some(tip), "origin/feat/x is the Lead tip");
-        assert_eq!(self.remote_branches(), ["feat/x", "main"], "no cpd/* branch on origin");
+        assert_eq!(
+            self.remote("feat/x").as_deref(),
+            Some(tip),
+            "origin/feat/x is the Lead tip"
+        );
+        assert_eq!(
+            self.remote_branches(),
+            ["feat/x", "main"],
+            "no cpd/* branch on origin"
+        );
         let calls = self.pr_calls();
-        assert!(calls.iter().any(|c| c == &LIST_HEAD), "gh looked the pull request up by its head: {calls:?}");
-        assert!(calls.iter().all(|c| c[1] != "create"), "no gh pr create: {calls:?}");
-        assert_eq!(self.row(), ("open".to_owned(), Some(7), Some(URL.to_owned())));
+        assert!(
+            calls.iter().any(|c| c == &LIST_HEAD),
+            "gh looked the pull request up by its head: {calls:?}"
+        );
+        assert!(
+            calls.iter().all(|c| c[1] != "create"),
+            "no gh pr create: {calls:?}"
+        );
+        assert_eq!(
+            self.row(),
+            ("open".to_owned(), Some(7), Some(URL.to_owned()))
+        );
     }
 }
 
@@ -194,8 +323,18 @@ impl Fx {
 /// Lead Branch, nothing committed (the Worker's base did not move).
 fn submitted_open_job(fx: &Fx) -> AttemptId {
     let attempt = AttemptId::parse("open-web-a1").unwrap();
-    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("attempt.log") };
-    let made = create_attempt_worktree(&fx.repo, &fx.lead, &PlanId::parse("pay").unwrap(), &attempt, &setup).unwrap();
+    let setup = Setup {
+        timeout: Duration::from_secs(30),
+        log: fx.env.root().join("attempt.log"),
+    };
+    let made = create_attempt_worktree(
+        &fx.repo,
+        &fx.lead,
+        &PlanId::parse("pay").unwrap(),
+        &attempt,
+        &setup,
+    )
+    .unwrap();
     let sha = fx.git(&made.path, &["rev-parse", "HEAD"]);
     fx.store()
         .write("fixture", |tx| {
@@ -224,13 +363,38 @@ const CHILD_ATTEMPT: &str = "CPD_ADOPT_PUB_ATTEMPT";
 #[test]
 #[ignore = "run by merge_in_child, in a child process"]
 fn child_merges_the_attempt() {
-    let home = CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME")), None).unwrap();
+    let home =
+        CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME")), None).unwrap();
     let attempt = AttemptId::parse(&std::env::var(CHILD_ATTEMPT).expect(CHILD_ATTEMPT)).unwrap();
     let config = Config::load(&home).unwrap();
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-    let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
-    let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
-    let done = merge::merge(&mut Store::open(&home, 5000).unwrap(), &ctx, &PlanId::parse("pay").unwrap(), &attempt).unwrap();
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![0, 1, 2, 3, 4, 5],
+    };
+    let catalog = Catalog {
+        pi_version: "1.2.0".to_owned(),
+        o: model("p/opus"),
+        s: model("p/sonnet"),
+        h: model("p/haiku"),
+        g: TierModel {
+            model: "p/gemini".to_owned(),
+            efforts: vec![],
+        },
+    };
+    let ctx = Ctx {
+        home: &home,
+        config: &config,
+        catalog: &catalog,
+        source: "attempt run",
+        metrics: &|_| None,
+    };
+    let done = merge::merge(
+        &mut Store::open(&home, 5000).unwrap(),
+        &ctx,
+        &PlanId::parse("pay").unwrap(),
+        &attempt,
+    )
+    .unwrap();
     println!("END {:?}", done.end);
 }
 
@@ -240,13 +404,31 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["pr_adopt_pub::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args([
+            "pr_adopt_pub::child_merges_the_attempt",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "the child merge failed: {stdout}{}", String::from_utf8_lossy(&out.stderr));
-    stdout.split_once("END ").unwrap_or_else(|| panic!("no END: {stdout}")).1.lines().next().unwrap().to_owned()
+    assert!(
+        out.status.success(),
+        "the child merge failed: {stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout
+        .split_once("END ")
+        .unwrap_or_else(|| panic!("no END: {stdout}"))
+        .1
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned()
 }
 
 #[test]
@@ -270,8 +452,16 @@ fn pr_open_of_an_adopted_pr_queues_its_open_job_and_publishes_nothing() {
     let out = fx.pr("open").ok();
 
     // `pr open` queues the PR's opener (contract §7.6); its merge publishes, as the test above shows.
-    assert_eq!((out["status"].as_str(), out["job"].as_str()), (Some("queued"), Some("open-web")), "{out}");
-    assert_ne!(fx.remote("feat/x").as_deref(), Some(tip.as_str()), "nothing is pushed by the command itself");
+    assert_eq!(
+        (out["status"].as_str(), out["job"].as_str()),
+        (Some("queued"), Some("open-web")),
+        "{out}"
+    );
+    assert_ne!(
+        fx.remote("feat/x").as_deref(),
+        Some(tip.as_str()),
+        "nothing is pushed by the command itself"
+    );
 }
 
 #[test]
@@ -282,16 +472,32 @@ fn pr_push_pushes_to_the_head_branch() {
 
     let out = fx.pr("push").ok();
 
-    assert_eq!((out["pushed"].as_bool(), out["sha"].as_str()), (Some(true), Some(tip.as_str())), "{out}");
+    assert_eq!(
+        (out["pushed"].as_bool(), out["sha"].as_str()),
+        (Some(true), Some(tip.as_str())),
+        "{out}"
+    );
     assert_eq!(fx.remote("feat/x").as_deref(), Some(tip.as_str()));
-    assert_eq!(fx.remote_branches(), ["feat/x", "main"], "no cpd/* branch on origin");
+    assert_eq!(
+        fx.remote_branches(),
+        ["feat/x", "main"],
+        "no cpd/* branch on origin"
+    );
 
     // A head that moved is refused, and nothing is forced.
     let moved = fx.move_remote();
     let mine = fx.commit("mine.txt");
     let run = fx.pr("push");
-    assert_eq!((run.error()["code"].as_str(), run.exit), (Some("push_rejected"), 3), "{run:?}");
-    assert_eq!(fx.remote("feat/x").as_deref(), Some(moved.as_str()), "the remote is untouched");
+    assert_eq!(
+        (run.error()["code"].as_str(), run.exit),
+        (Some("push_rejected"), 3),
+        "{run:?}"
+    );
+    assert_eq!(
+        fx.remote("feat/x").as_deref(),
+        Some(moved.as_str()),
+        "the remote is untouched"
+    );
     assert_eq!(fx.lead_sha(), mine);
     assert_eq!(fx.remote_branches(), ["feat/x", "main"]);
 }
@@ -303,7 +509,14 @@ fn cancel_fx() -> TestEnv {
     let env = TestEnv::new();
     env.fake_tmux();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
+    fs::write(
+        home.config(),
+        format!(
+            "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n",
+            env.tmux_socket()
+        ),
+    )
+    .unwrap();
     env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
     let pr = |key: &str, repo: &str, number: i64, branch: &str, head_ref: &str| {
         format!(
@@ -334,8 +547,24 @@ fn plan_cancel_leaves_an_adopted_pull_request_open() {
 
     let out = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
 
-    let closes: Vec<Vec<String>> = env.calls("gh").into_iter().filter(|c| c[..2] == ["pr", "close"]).collect();
-    assert_eq!(closes, [["pr", "close", "11", "--repo", "acme/api"]], "gh pr close for the cpd PR only: {out}");
-    assert_eq!(out["closed_prs"], json!([{"pr": "api", "number": 11}]), "{out}");
-    assert_eq!(out["left_open"], json!([{"pr": "web", "number": 7}]), "{out}");
+    let closes: Vec<Vec<String>> = env
+        .calls("gh")
+        .into_iter()
+        .filter(|c| c[..2] == ["pr", "close"])
+        .collect();
+    assert_eq!(
+        closes,
+        [["pr", "close", "11", "--repo", "acme/api"]],
+        "gh pr close for the cpd PR only: {out}"
+    );
+    assert_eq!(
+        out["closed_prs"],
+        json!([{"pr": "api", "number": 11}]),
+        "{out}"
+    );
+    assert_eq!(
+        out["left_open"],
+        json!([{"pr": "web", "number": 7}]),
+        "{out}"
+    );
 }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::Event;
 
 use crate::pace::Reads;
-use crate::pump::{wake, Needs, Pump, ReadKind, Schedule, Signal, FRAME, SAFETY};
+use crate::pump::{FRAME, Needs, Pump, ReadKind, SAFETY, Schedule, Signal, wake};
 
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
@@ -186,31 +186,64 @@ fn a_finished_read_wakes_the_pump_with_a_read_signal() {
 
 #[test]
 fn no_need_and_no_deadline_waits_for_a_signal_only() {
-    let needs = Needs { frame: false, second: false, at: None };
+    let needs = Needs {
+        frame: false,
+        second: false,
+        at: None,
+    };
     assert_eq!(wake(Instant::now(), 1234, &needs, None), None);
 }
 
 #[test]
 fn a_frame_need_wakes_at_the_next_50_ms_boundary_of_the_wall_clock() {
     let now = Instant::now();
-    let needs = Needs { frame: true, second: false, at: None };
+    let needs = Needs {
+        frame: true,
+        second: false,
+        at: None,
+    };
     assert_eq!(wake(now, 1234, &needs, None), Some(now + ms(16)));
 }
 
 #[test]
 fn a_second_need_wakes_at_the_next_whole_second_of_the_wall_clock() {
     let now = Instant::now();
-    let needs = Needs { frame: false, second: true, at: None };
+    let needs = Needs {
+        frame: false,
+        second: true,
+        at: None,
+    };
     assert_eq!(wake(now, 1234, &needs, None), Some(now + ms(766)));
 }
 
 #[test]
 fn the_earliest_of_the_deadline_the_needs_and_the_extra_time_wins() {
     let now = Instant::now();
-    let all = Needs { frame: true, second: true, at: Some(now + ms(10)) };
-    assert_eq!(wake(now, 1234, &all, Some(now + ms(900))), Some(now + ms(10)));
-    let no_at = Needs { frame: true, second: true, at: Some(now + ms(500)) };
-    assert_eq!(wake(now, 1234, &no_at, Some(now + ms(900))), Some(now + ms(16)));
-    let slow = Needs { frame: false, second: true, at: Some(now + ms(800)) };
-    assert_eq!(wake(now, 1234, &slow, Some(now + ms(20))), Some(now + ms(20)));
+    let all = Needs {
+        frame: true,
+        second: true,
+        at: Some(now + ms(10)),
+    };
+    assert_eq!(
+        wake(now, 1234, &all, Some(now + ms(900))),
+        Some(now + ms(10))
+    );
+    let no_at = Needs {
+        frame: true,
+        second: true,
+        at: Some(now + ms(500)),
+    };
+    assert_eq!(
+        wake(now, 1234, &no_at, Some(now + ms(900))),
+        Some(now + ms(16))
+    );
+    let slow = Needs {
+        frame: false,
+        second: true,
+        at: Some(now + ms(800)),
+    };
+    assert_eq!(
+        wake(now, 1234, &slow, Some(now + ms(20))),
+        Some(now + ms(20))
+    );
 }

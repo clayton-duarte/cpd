@@ -1,14 +1,25 @@
 //! The clocks the plan view's screen needs ([`needs`]): pure, `taken` is a plain `Instant`.
 
 use super::*;
-use crate::read::{JobStatus, Pull, PrState};
+use crate::read::{JobStatus, PrState, Pull};
 
 fn snap(centre: Option<Centre>, pulse: Option<Pulse>) -> Snapshot {
-    Snapshot { cursor: 0, centre, pulse, layout: Duration::ZERO }
+    Snapshot {
+        cursor: 0,
+        centre,
+        pulse,
+        layout: Duration::ZERO,
+    }
 }
 
 fn none_of(n: &crate::pump::Needs) {
-    assert!(!n.frame && !n.second && n.at.is_none(), "frame {} second {} at {:?}", n.frame, n.second, n.at);
+    assert!(
+        !n.frame && !n.second && n.at.is_none(),
+        "frame {} second {} at {:?}",
+        n.frame,
+        n.second,
+        n.at
+    );
 }
 
 fn pull() -> Pull {
@@ -24,7 +35,12 @@ fn pull() -> Pull {
 }
 
 fn pulse() -> Pulse {
-    Pulse { context: cpd_core::ids::ContextId::parse("ctx").unwrap(), rows: Vec::new(), max: 0, events_cursor: 0 }
+    Pulse {
+        context: cpd_core::ids::ContextId::parse("ctx").unwrap(),
+        rows: Vec::new(),
+        max: 0,
+        events_cursor: 0,
+    }
 }
 
 #[test]
@@ -65,9 +81,9 @@ fn no_chat_slot_needs_no_clock() {
 
 /// A Plan of one PR with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
 fn tests_centre(jobs: usize) -> Centre {
+    use crate::read::{JobNode, PrNode, PrStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, PrKey};
-    use crate::read::{JobNode, PrNode, PrStatus};
     let pr = PrKey::parse("web").unwrap();
     let node = PrNode {
         key: pr.clone(),
@@ -115,5 +131,10 @@ fn tests_centre(jobs: usize) -> Centre {
         plan: plan.plan.clone(),
         moved_event: 0,
     };
-    Centre { slot, plan, boxes, frame: 0 }
+    Centre {
+        slot,
+        plan,
+        boxes,
+        frame: 0,
+    }
 }

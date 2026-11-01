@@ -158,7 +158,11 @@ fn nodes(parent: &clap::Command, prefix: &str, parent_internal: bool) -> Vec<Val
 }
 
 fn node(c: &clap::Command, prefix: &str, parent_internal: bool) -> Value {
-    let path = if prefix.is_empty() { c.get_name().to_owned() } else { format!("{prefix} {}", c.get_name()) };
+    let path = if prefix.is_empty() {
+        c.get_name().to_owned()
+    } else {
+        format!("{prefix} {}", c.get_name())
+    };
     let internal = parent_internal || c.is_hide_set();
     let about = c.get_about().map(|a| a.to_string()).unwrap_or_default();
     let children = nodes(c, &path, internal);

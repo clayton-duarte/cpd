@@ -48,7 +48,12 @@ pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Outpu
 }
 
 /// [`output`] with `grace` between `SIGTERM` and `SIGKILL` instead of [`GRACE`]: for this module's tests.
-fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration) -> Result<Output, Failed> {
+fn output_with_grace(
+    cmd: &mut Command,
+    tool: &str,
+    deadline: Duration,
+    grace: Duration,
+) -> Result<Output, Failed> {
     cmd.stderr(Stdio::piped());
     run(cmd, tool, deadline, grace, Stdin::AsSet, false)
 }
@@ -59,11 +64,25 @@ fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: D
 /// left behind outlives the call. A write that fails is `Failed::Io` when the child exited successfully, except a
 /// broken pipe: the child (or its group) closed its stdin without reading it, which is the child's choice, not a
 /// start failure.
-pub(super) fn output_fed(cmd: &mut Command, tool: &str, deadline: Duration, stdin: Option<Vec<u8>>, stderr_set: bool, reap_group: bool) -> Result<Output, Failed> {
+pub(super) fn output_fed(
+    cmd: &mut Command,
+    tool: &str,
+    deadline: Duration,
+    stdin: Option<Vec<u8>>,
+    stderr_set: bool,
+    reap_group: bool,
+) -> Result<Output, Failed> {
     if !stderr_set {
         cmd.stderr(Stdio::piped());
     }
-    run(cmd, tool, deadline, GRACE, stdin.map_or(Stdin::Null, Stdin::Bytes), reap_group)
+    run(
+        cmd,
+        tool,
+        deadline,
+        GRACE,
+        stdin.map_or(Stdin::Null, Stdin::Bytes),
+        reap_group,
+    )
 }
 
 /// Where the stdin of the child comes from.
@@ -75,7 +94,14 @@ enum Stdin {
     Bytes(Vec<u8>),
 }
 
-fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin: Stdin, reap_group: bool) -> Result<Output, Failed> {
+fn run(
+    cmd: &mut Command,
+    tool: &str,
+    deadline: Duration,
+    grace: Duration,
+    stdin: Stdin,
+    reap_group: bool,
+) -> Result<Output, Failed> {
     let deadline = limit(&format!("DEADLINE_{}", tool.to_ascii_uppercase()), deadline);
     let argv: Vec<String> = std::iter::once(cmd.get_program())
         .chain(cmd.get_args())
@@ -90,9 +116,16 @@ fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin
             cmd.stdin(Stdio::piped());
         }
     }
-    let mut child = cmd.stdout(Stdio::piped()).process_group(0).spawn().map_err(Failed::Io)?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(Failed::Io)?;
     let written = match stdin {
-        Stdin::Bytes(bytes) => child.stdin.take().map(|mut pipe| thread::spawn(move || pipe.write_all(&bytes))),
+        Stdin::Bytes(bytes) => child
+            .stdin
+            .take()
+            .map(|mut pipe| thread::spawn(move || pipe.write_all(&bytes))),
         _ => None,
     };
     let stdout = drain(child.stdout.take());
@@ -122,9 +155,18 @@ fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin
     // deadline also bounds (a daemon it left behind may hold them).
     let left = until.saturating_duration_since(Instant::now());
     let read = |rx: Receiver<Vec<u8>>| rx.recv_timeout(left.max(DRAIN)).unwrap_or_default();
-    let output = Output { status, stdout: read(stdout), stderr: read(stderr) };
-    match written.map(|w| w.join().expect("the writer of the child's stdin does not panic")) {
-        Some(Err(e)) if status.success() && e.kind() != io::ErrorKind::BrokenPipe => Err(Failed::Io(e)),
+    let output = Output {
+        status,
+        stdout: read(stdout),
+        stderr: read(stderr),
+    };
+    match written.map(|w| {
+        w.join()
+            .expect("the writer of the child's stdin does not panic")
+    }) {
+        Some(Err(e)) if status.success() && e.kind() != io::ErrorKind::BrokenPipe => {
+            Err(Failed::Io(e))
+        }
         _ => Ok(output),
     }
 }
@@ -133,11 +175,18 @@ fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin
 /// (an integer; a decimal only for a test's sub-second override).
 pub(crate) fn timeout(tool: &str, argv: Vec<String>, deadline: Duration) -> CpdError {
     let what = argv.get(1..).map(|rest| rest.join(" ")).unwrap_or_default();
-    let seconds = if deadline.subsec_nanos() == 0 { json!(deadline.as_secs()) } else { json!(deadline.as_secs_f64()) };
-    CpdError::new(ErrorCode::ToolTimeout, format!("{tool} ran past its deadline of {seconds}s and was killed: {tool} {what}"))
-        .with("tool", tool)
-        .with("argv", json!(argv))
-        .with("deadline_seconds", seconds)
+    let seconds = if deadline.subsec_nanos() == 0 {
+        json!(deadline.as_secs())
+    } else {
+        json!(deadline.as_secs_f64())
+    };
+    CpdError::new(
+        ErrorCode::ToolTimeout,
+        format!("{tool} ran past its deadline of {seconds}s and was killed: {tool} {what}"),
+    )
+    .with("tool", tool)
+    .with("argv", json!(argv))
+    .with("deadline_seconds", seconds)
 }
 
 /// Reads a pipe to its end on a thread; the bytes arrive on the channel.
@@ -195,13 +244,22 @@ mod tests {
 
     fn sh(script: &str, pidfile: &std::path::Path) -> Command {
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(script).arg("sh").arg(pidfile).stdin(Stdio::null());
+        cmd.arg("-c")
+            .arg(script)
+            .arg("sh")
+            .arg(pidfile)
+            .stdin(Stdio::null());
         cmd
     }
 
     #[test]
     fn a_child_that_ends_in_time_returns_its_output() {
-        let out = output(Command::new("sh").args(["-c", "echo out; echo err >&2; exit 3"]), "sh", Duration::from_secs(10)).unwrap();
+        let out = output(
+            Command::new("sh").args(["-c", "echo out; echo err >&2; exit 3"]),
+            "sh",
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
@@ -212,13 +270,26 @@ mod tests {
         // More than a pipe buffer, so the writer blocks and then sees the closed read end: the child's choice.
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exec 0<&-"]);
-        let out = output_fed(&mut cmd, "hook", Duration::from_secs(10), Some(vec![b'x'; 8 << 20]), false, false).unwrap();
+        let out = output_fed(
+            &mut cmd,
+            "hook",
+            Duration::from_secs(10),
+            Some(vec![b'x'; 8 << 20]),
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(out.status.code(), Some(0));
     }
 
     #[test]
     fn a_missing_program_is_an_io_failure_not_a_timeout() {
-        let err = output(&mut Command::new("/nonexistent/tool"), "tool", Duration::from_secs(1)).unwrap_err();
+        let err = output(
+            &mut Command::new("/nonexistent/tool"),
+            "tool",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(matches!(err, Failed::Io(_)), "{err:?}");
     }
 
@@ -229,15 +300,24 @@ mod tests {
         // A grandchild in the group: it must die with the child.
         let mut cmd = sh(r#"sleep 30 & echo $! > "$1"; wait"#, &pidfile);
         let started = Instant::now();
-        let Err(Failed::Timeout(err)) = output(&mut cmd, "git", Duration::from_secs(1)) else { panic!("no timeout") };
-        assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
+        let Err(Failed::Timeout(err)) = output(&mut cmd, "git", Duration::from_secs(1)) else {
+            panic!("no timeout")
+        };
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "took {:?}",
+            started.elapsed()
+        );
         assert_eq!(err.code(), ErrorCode::ToolTimeout);
         assert_eq!(err.exit().code(), 5);
         assert_eq!(err.details()["tool"], "git");
         assert_eq!(err.details()["deadline_seconds"], 1);
         assert_eq!(err.details()["argv"][0], "sh");
-        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         assert!(wait_gone(pid), "the grandchild {pid} outlived the deadline");
     }
-
 }

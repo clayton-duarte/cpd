@@ -47,7 +47,13 @@ fn config_refuses_a_worker_runner_that_is_neither_pi_nor_durable() {
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
         assert_eq!(err["details"]["key"], "worker_runner", "{bad}: {err}");
-        assert!(!err["message"].as_str().unwrap().contains("is not a known key"), "{bad}: {err}");
+        assert!(
+            !err["message"]
+                .as_str()
+                .unwrap()
+                .contains("is not a known key"),
+            "{bad}: {err}"
+        );
     }
 }
 
@@ -57,10 +63,17 @@ fn runner_of(live: &Live, id: &str) -> Value {
 
 #[test]
 fn a_dispatched_attempt_records_the_runner_the_config_names() {
-    for (extra, runner) in [("", "pi"), ("worker_runner = \"pi\"", "pi"), ("worker_runner = \"durable\"", "durable")] {
+    for (extra, runner) in [
+        ("", "pi"),
+        ("worker_runner = \"pi\"", "pi"),
+        ("worker_runner = \"durable\"", "durable"),
+    ] {
         let live = live(extra);
         let out = live.dispatch(JOB).ok();
-        let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+        let id = out["attempt"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no attempt in {out}"))
+            .to_owned();
         assert_eq!(runner_of(&live, &id), runner, "{extra:?}: {out}");
         let stored: String = live.value(&format!("SELECT runner FROM attempts WHERE id = '{id}'"));
         assert_eq!(stored, runner, "{extra:?}");
@@ -72,33 +85,67 @@ fn a_dispatched_attempt_records_the_runner_the_config_names() {
 #[test]
 fn an_attempt_keeps_its_runner_when_the_config_changes_after_it_started() {
     let live = live("worker_runner = \"pi\"");
-    let id = live.dispatch(JOB).ok()["attempt"].as_str().unwrap().to_owned();
+    let id = live.dispatch(JOB).ok()["attempt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(runner_of(&live, &id), "pi");
 
     // The flag moves after the Attempt exists: the Attempt does not.
     seed_home(&live.fx.env, "worker_runner = \"durable\"");
-    assert_eq!(live.fx.cpd(&["config"]).ok()["config"]["worker_runner"], "durable");
-    assert_eq!(runner_of(&live, &id), "pi", "a config change never moves a started Attempt");
+    assert_eq!(
+        live.fx.cpd(&["config"]).ok()["config"]["worker_runner"],
+        "durable"
+    );
+    assert_eq!(
+        runner_of(&live, &id),
+        "pi",
+        "a config change never moves a started Attempt"
+    );
     let job = live.fx.cpd(&["job", "show", JOB, "--plan", PLAN]).ok();
     assert_eq!(job["attempts"][0]["runner"], "pi", "{job}");
     // And the file on disk is the one the test wrote.
-    assert!(fs::read_to_string(live.fx.env.cpd_home().join("config.toml")).unwrap().contains("durable"));
+    assert!(
+        fs::read_to_string(live.fx.env.cpd_home().join("config.toml"))
+            .unwrap()
+            .contains("durable")
+    );
 }
 
 #[test]
 fn attempt_show_and_job_show_carry_runner_and_worker_pid() {
     let live = live("worker_runner = \"durable\"");
-    let id = live.dispatch(JOB).ok()["attempt"].as_str().unwrap().to_owned();
+    let id = live.dispatch(JOB).ok()["attempt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     // `worker_pid` is null before a durable Worker starts; a stored pid is shown as the number.
     let shown = live.attempt(&id);
-    assert_eq!((&shown["runner"], &shown["worker_pid"]), (&json!("durable"), &Value::Null), "{shown}");
-    assert!(shown.as_object().unwrap().contains_key("worker_pid"), "the field is present, null: {shown}");
-    live.fixture(&format!("UPDATE attempts SET worker_pid = 4242 WHERE id = '{id}';"));
+    assert_eq!(
+        (&shown["runner"], &shown["worker_pid"]),
+        (&json!("durable"), &Value::Null),
+        "{shown}"
+    );
+    assert!(
+        shown.as_object().unwrap().contains_key("worker_pid"),
+        "the field is present, null: {shown}"
+    );
+    live.fixture(&format!(
+        "UPDATE attempts SET worker_pid = 4242 WHERE id = '{id}';"
+    ));
 
     let shown = live.attempt(&id);
-    assert_eq!((&shown["runner"], &shown["worker_pid"]), (&json!("durable"), &json!(4242)), "{shown}");
+    assert_eq!(
+        (&shown["runner"], &shown["worker_pid"]),
+        (&json!("durable"), &json!(4242)),
+        "{shown}"
+    );
     let job = live.fx.cpd(&["job", "show", JOB, "--plan", PLAN]).ok();
     let attempt = &job["attempts"][0];
-    assert_eq!((&attempt["runner"], &attempt["worker_pid"]), (&json!("durable"), &json!(4242)), "{job}");
+    assert_eq!(
+        (&attempt["runner"], &attempt["worker_pid"]),
+        (&json!("durable"), &json!(4242)),
+        "{job}"
+    );
 }

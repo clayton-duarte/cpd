@@ -18,7 +18,10 @@ pub struct ScriptedClock<'a> {
 
 impl<'a> ScriptedClock<'a> {
     pub fn new() -> Self {
-        ScriptedClock { clock: ManualClock::new(), steps: Mutex::new(Vec::new()) }
+        ScriptedClock {
+            clock: ManualClock::new(),
+            steps: Mutex::new(Vec::new()),
+        }
     }
 
     /// Runs `step` when virtual time has reached `at`, in the nap that reaches it (steps of one nap run in the order of
@@ -66,14 +69,26 @@ impl Clock for ScriptedClock<'_> {
 fn a_scripted_clock_runs_each_step_once_in_the_first_nap_that_reaches_its_time() {
     let ran = Mutex::new(Vec::new());
     let clock = ScriptedClock::new()
-        .at(Duration::from_millis(50), || ran.lock().unwrap().push("late"))
-        .at(Duration::from_millis(20), || ran.lock().unwrap().push("early"));
+        .at(Duration::from_millis(50), || {
+            ran.lock().unwrap().push("late")
+        })
+        .at(Duration::from_millis(20), || {
+            ran.lock().unwrap().push("early")
+        });
     clock.sleep(Duration::from_millis(10));
     assert!(ran.lock().unwrap().is_empty(), "nothing is due at 10 ms");
     clock.sleep(Duration::from_millis(20));
-    assert_eq!(*ran.lock().unwrap(), ["early"], "the step of 20 ms runs in the nap that ends at 30 ms");
+    assert_eq!(
+        *ran.lock().unwrap(),
+        ["early"],
+        "the step of 20 ms runs in the nap that ends at 30 ms"
+    );
     clock.sleep(Duration::from_millis(30));
     clock.sleep(Duration::from_millis(30));
-    assert_eq!(*ran.lock().unwrap(), ["early", "late"], "each step runs once");
+    assert_eq!(
+        *ran.lock().unwrap(),
+        ["early", "late"],
+        "each step runs once"
+    );
     assert_eq!(clock.elapsed(), Duration::from_millis(90));
 }

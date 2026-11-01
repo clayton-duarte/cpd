@@ -57,7 +57,10 @@ fn a_path_equal_to_the_lead_tip_is_left_out() {
     let (fx, repo) = repo();
     on(&fx, &repo, "lead", &[("lead.rs", "from the lead\n")]);
     fx.git(&repo, &["switch", "-q", "att"]);
-    fx.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "lead"]);
+    fx.git(
+        &repo,
+        &["merge", "-q", "--no-ff", "-m", "merge the lead", "lead"],
+    );
     fx.git(&repo, &["switch", "-q", "main"]);
     on(&fx, &repo, "att", &[("own.rs", "mine\n")]);
     assert_eq!(written(&fx, &repo, &["lead"]), strings(&["own.rs"]));
@@ -71,7 +74,10 @@ fn a_path_equal_to_any_one_of_several_refs_is_left_out() {
     on(&fx, &repo, "second", &[("second.rs", "from the second\n")]);
     merge(&fx, &repo, "att", "second");
     on(&fx, &repo, "att", &[("own.rs", "mine\n")]);
-    assert_eq!(written(&fx, &repo, &["lead", "second"]), strings(&["own.rs"]));
+    assert_eq!(
+        written(&fx, &repo, &["lead", "second"]),
+        strings(&["own.rs"])
+    );
 }
 
 #[test]
@@ -104,14 +110,28 @@ fn a_rename_lists_both_paths() {
     fx.git(&repo, &["mv", "old.txt", "new.txt"]);
     fx.git(&repo, &["commit", "-q", "-m", "rename"]);
     fx.git(&repo, &["switch", "-q", "main"]);
-    assert_eq!(written(&fx, &repo, &["lead"]), strings(&["new.txt", "old.txt"]));
+    assert_eq!(
+        written(&fx, &repo, &["lead"]),
+        strings(&["new.txt", "old.txt"])
+    );
 }
 
 #[test]
 fn the_list_is_in_the_diffs_bytewise_order() {
     let (fx, repo) = repo();
     // Bytewise: "C" < "Z" < "a.txt" < "a/x" ('.' is 0x2e, '/' is 0x2f) < "b".
-    on(&fx, &repo, "att", &[("b", "1\n"), ("a/x", "2\n"), ("Z", "3\n"), ("a.txt", "4\n"), ("C", "5\n")]);
+    on(
+        &fx,
+        &repo,
+        "att",
+        &[
+            ("b", "1\n"),
+            ("a/x", "2\n"),
+            ("Z", "3\n"),
+            ("a.txt", "4\n"),
+            ("C", "5\n"),
+        ],
+    );
     let expected = strings(&["C", "Z", "a.txt", "a/x", "b"]);
     assert_eq!(written(&fx, &repo, &[]), expected);
     assert_eq!(written(&fx, &repo, &["lead"]), expected);
@@ -129,8 +149,17 @@ fn it_runs_one_diff_per_ref_and_no_call_per_path() {
     assert_eq!(found.len(), 50);
     let calls: Vec<Call> = fx.calls("git").into_iter().skip(before).collect();
     assert_eq!(calls.iter().filter(|c| is_diff(c)).count(), 3, "{calls:?}");
-    let names_a_path = |c: &Call| c.args.iter().any(|a| names.iter().any(|n| a.contains(n.as_str())));
-    assert!(!calls.iter().any(|c| c.args.iter().any(|a| a == "rev-parse") && names_a_path(c)), "{calls:?}");
+    let names_a_path = |c: &Call| {
+        c.args
+            .iter()
+            .any(|a| names.iter().any(|n| a.contains(n.as_str())))
+    };
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "rev-parse") && names_a_path(c)),
+        "{calls:?}"
+    );
 }
 
 #[test]
@@ -139,7 +168,13 @@ fn a_failing_git_call_is_git_failed_and_returns_no_list() {
     on(&fx, &repo, "att", &[("a.rs", "a\n")]);
     let is_ref_diff = |call: &Call| is_diff(call) && !call.args.iter().any(|a| a.contains("..."));
     let runner = (*fx.fakes.runner).clone();
-    let _ = runner.once("git", is_ref_diff, Reply::exit(128, "", "fatal: bad revision\n"));
-    let err = fx.scoped(|| written_paths(&repo, "main", "att", &["lead"])).unwrap_err();
+    let _ = runner.once(
+        "git",
+        is_ref_diff,
+        Reply::exit(128, "", "fatal: bad revision\n"),
+    );
+    let err = fx
+        .scoped(|| written_paths(&repo, "main", "att", &["lead"]))
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
 }

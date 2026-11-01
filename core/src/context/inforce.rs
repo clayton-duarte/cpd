@@ -19,20 +19,33 @@ pub fn in_force(records: &[Indexed], as_of: i64) -> Vec<&Indexed> {
 }
 
 /// The records of `Context` that an approved retirement took out of force (contract §4.6 "Retirement", hs-d549).
-pub fn retired(conn: &rusqlite::Connection, context: &ContextId) -> Result<HashSet<RecordId>, CpdError> {
-    let mut stmt = conn.prepare("SELECT record FROM record_retirements WHERE context = ?1 AND status = 'approved'")?;
-    let ids = stmt.query_map([context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+pub fn retired(
+    conn: &rusqlite::Connection,
+    context: &ContextId,
+) -> Result<HashSet<RecordId>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT record FROM record_retirements WHERE context = ?1 AND status = 'approved'",
+    )?;
+    let ids = stmt
+        .query_map([context.as_str()], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     ids.iter().map(|id| RecordId::parse(id)).collect()
 }
 
 /// [`in_force`] that also leaves out the `retired` records (read with [`retired`]).
-pub fn in_force_without<'a>(records: &'a [Indexed], as_of: i64, retired: &HashSet<RecordId>) -> Vec<&'a Indexed> {
+pub fn in_force_without<'a>(
+    records: &'a [Indexed],
+    as_of: i64,
+    retired: &HashSet<RecordId>,
+) -> Vec<&'a Indexed> {
     let considered = || records.iter().filter(|(seq, _)| *seq <= as_of);
     let superseded: HashSet<_> = considered().filter_map(|(_, r)| r.supersedes()).collect();
     considered()
         .filter(|(_, r)| {
-            matches!(r.kind(), RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer)
-                && !superseded.contains(&r.id)
+            matches!(
+                r.kind(),
+                RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer
+            ) && !superseded.contains(&r.id)
                 && !retired.contains(&r.id)
         })
         .collect()
@@ -49,15 +62,33 @@ mod tests {
     }
 
     fn record(s: &str, draft: Draft) -> Record {
-        Record { id: id(s), at: "2026-10-18T05:53:00.000Z".into(), by: By { session: None, plan: None }, text: format!("text of {s}"), draft }
+        Record {
+            id: id(s),
+            at: "2026-10-18T05:53:00.000Z".into(),
+            by: By {
+                session: None,
+                plan: None,
+            },
+            text: format!("text of {s}"),
+            draft,
+        }
     }
 
     fn decision(s: &str, supersedes: Option<&str>) -> Record {
-        record(s, Draft::Decision { supersedes: supersedes.map(id) })
+        record(
+            s,
+            Draft::Decision {
+                supersedes: supersedes.map(id),
+            },
+        )
     }
 
     fn plan_ref() -> PlanRef {
-        PlanRef { id: PlanId::parse("cross-repo").unwrap(), machine: MachineName::parse("hs").unwrap(), jira: None }
+        PlanRef {
+            id: PlanId::parse("cross-repo").unwrap(),
+            machine: MachineName::parse("hs").unwrap(),
+            jira: None,
+        }
     }
 
     fn ids(found: &[&Indexed]) -> Vec<String> {
@@ -66,12 +97,20 @@ mod tests {
 
     /// Records numbered by position, from 1.
     fn indexed(records: Vec<Record>) -> Vec<Indexed> {
-        records.into_iter().enumerate().map(|(i, r)| (i as i64 + 1, r)).collect()
+        records
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| (i as i64 + 1, r))
+            .collect()
     }
 
     #[test]
     fn a_retired_record_is_out_and_the_rest_stay() {
-        let records = indexed(vec![decision("hs-d1", None), record("hs-n1", Draft::Note), record("hs-n2", Draft::Note)]);
+        let records = indexed(vec![
+            decision("hs-d1", None),
+            record("hs-n1", Draft::Note),
+            record("hs-n2", Draft::Note),
+        ]);
         let retired: HashSet<RecordId> = [id("hs-n1"), id("hs-d1")].into();
         assert_eq!(ids(&in_force_without(&records, 3, &retired)), ["hs-n2"]);
         assert_eq!(ids(&in_force(&records, 3)), ["hs-d1", "hs-n1", "hs-n2"]);
@@ -79,7 +118,11 @@ mod tests {
 
     #[test]
     fn a_superseded_decision_is_out_and_its_successor_in() {
-        let records = indexed(vec![decision("hs-d1", None), decision("hs-d2", Some("hs-d1")), decision("hs-d3", None)]);
+        let records = indexed(vec![
+            decision("hs-d1", None),
+            decision("hs-d2", Some("hs-d1")),
+            decision("hs-d3", None),
+        ]);
         assert_eq!(ids(&in_force(&records, 3)), ["hs-d2", "hs-d3"]);
     }
 
@@ -96,7 +139,11 @@ mod tests {
             decision("hs-d1", Some("hs-n3")),
         ]);
         assert_eq!(ids(&in_force(&records, 4)), ["hs-n2", "hs-d1"]);
-        assert_eq!(ids(&in_force(&records, 3)), ["hs-n2", "hs-n3"], "a later supersede does not count");
+        assert_eq!(
+            ids(&in_force(&records, 3)),
+            ["hs-n2", "hs-n3"],
+            "a later supersede does not count"
+        );
     }
 
     #[test]
@@ -111,13 +158,20 @@ mod tests {
 
     #[test]
     fn two_decisions_superseding_one_record_both_stay_and_the_old_one_goes() {
-        let records = indexed(vec![decision("hs-d1", None), decision("hs-d2", Some("hs-d1")), decision("hs-d3", Some("hs-d1"))]);
+        let records = indexed(vec![
+            decision("hs-d1", None),
+            decision("hs-d2", Some("hs-d1")),
+            decision("hs-d3", Some("hs-d1")),
+        ]);
         assert_eq!(ids(&in_force(&records, 3)), ["hs-d2", "hs-d3"]);
     }
 
     #[test]
     fn as_of_a_seq_a_later_supersede_does_not_count() {
-        let records = indexed(vec![decision("hs-d1", None), decision("hs-d2", Some("hs-d1"))]);
+        let records = indexed(vec![
+            decision("hs-d1", None),
+            decision("hs-d2", Some("hs-d1")),
+        ]);
         assert_eq!(ids(&in_force(&records, 1)), ["hs-d1"]);
         assert_eq!(ids(&in_force(&records, 2)), ["hs-d2"]);
         assert!(in_force(&records, 0).is_empty());
@@ -128,11 +182,23 @@ mod tests {
         let records = indexed(vec![
             record("hs-q1", Draft::Question),
             record("hs-q2", Draft::Question),
-            record("hs-a1", Draft::Answer { question: id("hs-q1") }),
+            record(
+                "hs-a1",
+                Draft::Answer {
+                    question: id("hs-q1"),
+                },
+            ),
             record("hs-n1", Draft::Note),
         ]);
-        assert_eq!(ids(&in_force(&records, 4)), ["hs-q1", "hs-q2", "hs-a1", "hs-n1"]);
-        assert_eq!(ids(&in_force(&records, 2)), ["hs-q1", "hs-q2"], "an answer after the seq is not there yet");
+        assert_eq!(
+            ids(&in_force(&records, 4)),
+            ["hs-q1", "hs-q2", "hs-a1", "hs-n1"]
+        );
+        assert_eq!(
+            ids(&in_force(&records, 2)),
+            ["hs-q1", "hs-q2"],
+            "an answer after the seq is not there yet"
+        );
     }
 
     #[test]
@@ -147,7 +213,10 @@ mod tests {
 
     #[test]
     fn seqs_need_not_be_contiguous() {
-        let records = vec![(10, decision("hs-d1", None)), (40, decision("hs-d2", Some("hs-d1")))];
+        let records = vec![
+            (10, decision("hs-d1", None)),
+            (40, decision("hs-d2", Some("hs-d1"))),
+        ];
         assert_eq!(ids(&in_force(&records, 39)), ["hs-d1"]);
         assert_eq!(ids(&in_force(&records, 40)), ["hs-d2"]);
     }

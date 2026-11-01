@@ -20,10 +20,20 @@ fn session_from_env() -> Result<Option<SessionId>, CpdError> {
 }
 
 /// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
-pub(super) fn write(command: &str, select: &Select, text: &Text, draft: Draft) -> Result<Output, CpdError> {
-    let Env { config, mut store, .. } = Env::open()?;
+pub(super) fn write(
+    command: &str,
+    select: &Select,
+    text: &Text,
+    draft: Draft,
+) -> Result<Output, CpdError> {
+    let Env {
+        config, mut store, ..
+    } = Env::open()?;
     let context = select.resolve(&mut store)?;
-    let by = By { session: session_from_env()?, plan: select.plan.plan.clone() };
+    let by = By {
+        session: session_from_env()?,
+        plan: select.plan.plan.clone(),
+    };
     let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;
     let mut out = json!({"record": written.record.to_json(), "seq": written.seq});
     if written.already {

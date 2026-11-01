@@ -6,26 +6,34 @@
 
 use std::time::Duration;
 
-use super::engine::Engine;
-use cpd_core::clock::timestamp;
-use super::report::{About, Step, tell_stuck_jobs};
-use cpd_core::error::CpdError;
-use cpd_core::inbox::model::{Changes, reconcile};
 use super::asks::tell_repeated_asks;
+use super::engine::Engine;
+use super::report::{About, Step, tell_stuck_jobs};
+use cpd_core::clock::timestamp;
+use cpd_core::error::CpdError;
 use cpd_core::inbox::asks::repeated_asks;
+use cpd_core::inbox::model::{Changes, reconcile};
 use cpd_core::inbox::rules::{conditions_on, stuck_jobs};
 
 pub(super) fn run(engine: &mut Engine) {
     match reconcile_inbox(engine) {
         Ok((changes, told, asked)) => {
             if !changes.is_empty() {
-                engine.log.line(&format!("E8: opened {} Inbox item(s), closed {}", changes.opened.len(), changes.closed.len()));
+                engine.log.line(&format!(
+                    "E8: opened {} Inbox item(s), closed {}",
+                    changes.opened.len(),
+                    changes.closed.len()
+                ));
             }
             if told > 0 {
-                engine.log.line(&format!("E8: told the Manager of {told} stuck Job PR(s)"));
+                engine
+                    .log
+                    .line(&format!("E8: told the Manager of {told} stuck Job PR(s)"));
             }
             if asked > 0 {
-                engine.log.line(&format!("E8: told the Manager of {asked} repeated ask(s)"));
+                engine
+                    .log
+                    .line(&format!("E8: told the Manager of {asked} repeated ask(s)"));
             }
             engine.clear(Step::E8, &About::Machine);
         }

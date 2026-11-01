@@ -1,12 +1,25 @@
 use super::T;
 
 fn d(t: &T, f: &str) -> String {
-    t.ok(&["display-message", "-p", "-t", "%0", f]).trim_end_matches('\n').to_string()
+    t.ok(&["display-message", "-p", "-t", "%0", f])
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 fn one() -> T {
     let t = T::new();
-    t.ok(&["new-session", "-d", "-s", "s", "-n", "w", "-x", "80", "-y", "24"]);
+    t.ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "s",
+        "-n",
+        "w",
+        "-x",
+        "80",
+        "-y",
+        "24",
+    ]);
     t
 }
 
@@ -40,7 +53,10 @@ fn equality_and_inequality() {
 #[test]
 fn and_or_not() {
     let t = one();
-    assert_eq!(d(&t, "#{&&:1,0}#{&&:1,1}#{||:0,0}#{||:0,1}#{!:0}#{!:1}"), "010110");
+    assert_eq!(
+        d(&t, "#{&&:1,0}#{&&:1,1}#{||:0,0}#{||:0,1}#{!:0}#{!:1}"),
+        "010110"
+    );
 }
 
 #[test]
@@ -66,7 +82,10 @@ fn an_unknown_variable_prints_empty() {
 fn id_and_name_variables() {
     let t = one();
     assert_eq!(
-        d(&t, "#{pane_id} #{window_id} #{session_name} #{session_id} #{window_name} #{pane_index}"),
+        d(
+            &t,
+            "#{pane_id} #{window_id} #{session_name} #{session_id} #{window_name} #{pane_index}"
+        ),
         "%0 @0 s $0 w 0"
     );
 }
@@ -74,7 +93,10 @@ fn id_and_name_variables() {
 #[test]
 fn pane_state_variables() {
     let t = one();
-    assert_eq!(d(&t, "#{pane_dead}|#{pane_dead_status}|#{pane_width}"), "0||80");
+    assert_eq!(
+        d(&t, "#{pane_dead}|#{pane_dead_status}|#{pane_width}"),
+        "0||80"
+    );
     assert!(!d(&t, "#{pane_pid}").is_empty());
 }
 
@@ -84,7 +106,10 @@ fn client_and_version_variables_are_defined() {
     let v = d(&t, "#{version}");
     assert!(v.chars().next().is_some_and(|c| c.is_ascii_digit()), "{v}");
     assert!(d(&t, "#{client_width}x#{client_height}").contains('x'));
-    assert_ne!(d(&t, "#{client_name}#{client_activity}"), "#{client_name}#{client_activity}");
+    assert_ne!(
+        d(&t, "#{client_name}#{client_activity}"),
+        "#{client_name}#{client_activity}"
+    );
 }
 
 #[test]

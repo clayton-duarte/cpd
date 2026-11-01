@@ -27,10 +27,10 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -103,7 +103,11 @@ pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
 /// a Plan end to end: the engine's E5 every tick and the wrappers (pi's file, a fork's source) every 50 ms. What such a
 /// test waits for is the next look of each. (The drivers' polls and kill pauses have no override: a test of a driver
 /// runs it in this process on the `ManualClock`.)
-pub const PLAN_POLLS: [(&str, &str); 3] = [PR_POLL_EVERY_TICK, ("CPD_TEST_FILE_POLL", "0.05"), ("CPD_TEST_SOURCE_POLL", "0.05")];
+pub const PLAN_POLLS: [(&str, &str); 3] = [
+    PR_POLL_EVERY_TICK,
+    ("CPD_TEST_FILE_POLL", "0.05"),
+    ("CPD_TEST_SOURCE_POLL", "0.05"),
+];
 
 /// The teardown script. It finds nothing by scanning: it stops what the env tracks.
 ///
@@ -312,7 +316,12 @@ fn sh_quote(s: &str) -> String {
 /// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
 fn envs_dir() -> PathBuf {
     // Normalised: a TMPDIR that ends in a slash, joined with `/name` by a script, makes a `//` the components drop.
-    std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), |d| PathBuf::from(d).components().collect())
+    std::env::var_os("TMPDIR")
+        .filter(|d| !d.is_empty())
+        .map_or_else(
+            || PathBuf::from("/dev/shm"),
+            |d| PathBuf::from(d).components().collect(),
+        )
 }
 
 /// A `TestEnv` root this process made, in the registry [`sweep_envs`] walks at process exit.
@@ -348,12 +357,18 @@ fn register_env(root: &Path) {
         // `atexit` calls it once at process exit, on every way out including `std::process::exit`.
         unsafe { nix::libc::atexit(sweep_envs) };
     });
-    let node = Box::into_raw(Box::new(EnvRoot { root: root.to_path_buf(), next: AtomicPtr::new(std::ptr::null_mut()) }));
+    let node = Box::into_raw(Box::new(EnvRoot {
+        root: root.to_path_buf(),
+        next: AtomicPtr::new(std::ptr::null_mut()),
+    }));
     loop {
         let head = ENV_ROOTS.load(Ordering::SeqCst);
         // SAFETY: `node` is our own fresh `Box`, and its `next` is written only before the CAS publishes it.
         unsafe { (*node).next.store(head, Ordering::SeqCst) };
-        if ENV_ROOTS.compare_exchange(head, node, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if ENV_ROOTS
+            .compare_exchange(head, node, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             return;
         }
     }
@@ -368,14 +383,19 @@ static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether `dir` holds a cpd `git` wrapper, of any version: they all start with [`git_guard::SIGNATURE`].
 fn is_wrapper_dir(dir: &Path) -> bool {
-    let Ok(file) = fs::File::open(dir.join("git")) else { return false };
+    let Ok(file) = fs::File::open(dir.join("git")) else {
+        return false;
+    };
     let mut head = Vec::new();
-    file.take(git_guard::SIGNATURE.len() as u64).read_to_end(&mut head).is_ok_and(|_| head == git_guard::SIGNATURE.as_bytes())
+    file.take(git_guard::SIGNATURE.len() as u64)
+        .read_to_end(&mut head)
+        .is_ok_and(|_| head == git_guard::SIGNATURE.as_bytes())
 }
 
 /// `path` without the directories that hold a cpd `git` wrapper.
 pub fn without_wrapper_dirs(path: &OsStr) -> OsString {
-    std::env::join_paths(std::env::split_paths(path).filter(|dir| !is_wrapper_dir(dir))).expect("a PATH without some of its entries")
+    std::env::join_paths(std::env::split_paths(path).filter(|dir| !is_wrapper_dir(dir)))
+        .expect("a PATH without some of its entries")
 }
 
 /// The test process's own `PATH` without any cpd wrapper directory, the one `PATH` every test builds on. A Session
@@ -426,7 +446,10 @@ pub fn pay_search(mergeable: &str, merge_state: &str) -> String {
 
 /// The poll's lookup answer (§7.6 step 3), which `pr open` also reads for the pull request it just opened: [`pay_node`] as alias `p0`.
 pub fn pay_lookup() -> String {
-    format!(r#"{{"data":{{"p0":{{"pullRequest":{}}}}}}}"#, pay_node("MERGEABLE", "CLEAN"))
+    format!(
+        r#"{{"data":{{"p0":{{"pullRequest":{}}}}}}}"#,
+        pay_node("MERGEABLE", "CLEAN")
+    )
 }
 
 /// The proxy variables, dropped from every command (either case).
@@ -445,7 +468,10 @@ static TEMP_NAME: AtomicUsize = AtomicUsize::new(0);
 /// rename over the target never crosses a filesystem.
 fn temp_beside(path: &Path) -> PathBuf {
     let n = TEMP_NAME.fetch_add(1, Ordering::Relaxed);
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     path.with_file_name(format!(".{name}.tmp-{}-{n}", std::process::id()))
 }
 
@@ -466,7 +492,9 @@ fn temp_beside(path: &Path) -> PathBuf {
 /// spawn ([`spawn`], [`output`]) takes the shared lock until the child has exec'd.
 /// Never retry instead.
 pub fn write_executable(path: &Path, contents: &str) {
-    let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
+    let _exclusive = SCRIPT_WRITE_VS_SPAWN
+        .write()
+        .unwrap_or_else(PoisonError::into_inner);
     let temp = temp_beside(path);
     fs::write(&temp, contents).expect("write script");
     fs::set_permissions(&temp, fs::Permissions::from_mode(0o755)).expect("chmod script");
@@ -478,7 +506,9 @@ pub fn write_executable(path: &Path, contents: &str) {
 /// file beside `to` (which `fs::copy` gives the source's mode) and renamed over it, so a
 /// running `to` is never opened for writing.
 pub fn copy_executable(from: &str, to: &Path) {
-    let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
+    let _exclusive = SCRIPT_WRITE_VS_SPAWN
+        .write()
+        .unwrap_or_else(PoisonError::into_inner);
     let temp = temp_beside(to);
     fs::copy(from, &temp).expect("copy executable");
     fs::rename(&temp, to).expect("rename executable over its target");
@@ -541,7 +571,14 @@ impl FakeBridge {
 
     /// Writes the bridge script with `body` as its shell body (the shim, or a failing one).
     pub fn install(&self, body: &str) {
-        write_executable(&self.script, &format!("#!/bin/sh\nlog={}\nresp={}\n{body}\n", sh_quote(&self.log.to_string_lossy()), sh_quote(&self.responses.to_string_lossy())));
+        write_executable(
+            &self.script,
+            &format!(
+                "#!/bin/sh\nlog={}\nresp={}\n{body}\n",
+                sh_quote(&self.log.to_string_lossy()),
+                sh_quote(&self.responses.to_string_lossy())
+            ),
+        );
     }
 
     /// Answers the first call of `cmd` with the one-line `json`.
@@ -551,7 +588,11 @@ impl FakeBridge {
 
     /// Answers the `n`th (1-based) call of `cmd` with the one-line `json`.
     pub fn reply_n(&self, cmd: &str, n: usize, json: &str) {
-        fs::write(self.responses.join(format!("{cmd}-{n}")), format!("{json}\n")).expect("write a bridge response");
+        fs::write(
+            self.responses.join(format!("{cmd}-{n}")),
+            format!("{json}\n"),
+        )
+        .expect("write a bridge response");
     }
 
     /// Every request line the fake answered, parsed.
@@ -560,13 +601,19 @@ impl FakeBridge {
             .unwrap_or_default()
             .lines()
             .filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("a request line is not JSON ({e}): {line}")))
+            .map(|line| {
+                serde_json::from_str(line)
+                    .unwrap_or_else(|e| panic!("a request line is not JSON ({e}): {line}"))
+            })
             .collect()
     }
 
     /// The `cmd` of every request the fake answered, in order.
     pub fn commands(&self) -> Vec<String> {
-        self.requests().iter().map(|request| request["cmd"].as_str().unwrap_or_default().to_owned()).collect()
+        self.requests()
+            .iter()
+            .map(|request| request["cmd"].as_str().unwrap_or_default().to_owned())
+            .collect()
     }
 
     /// The `config.toml` keys that point cpd at this fake: the bridge, `/bin/sh` as the interpreter,
@@ -584,23 +631,38 @@ impl FakeBridge {
 /// returns once the child has exec'd (or failed to), so the shared lock covers
 /// the whole window in which the child holds copies of this process's descriptors.
 pub fn spawn(cmd: &mut Command) -> io::Result<Child> {
-    let _shared = SCRIPT_WRITE_VS_SPAWN.read().unwrap_or_else(PoisonError::into_inner);
+    let _shared = SCRIPT_WRITE_VS_SPAWN
+        .read()
+        .unwrap_or_else(PoisonError::into_inner);
     cmd.spawn()
 }
 
 /// `cmd.output()` (stdout and stderr captured, stdin null), spawning through
 /// [`spawn`]: the lock is released before the child is waited for.
 pub fn output(cmd: &mut Command) -> io::Result<Output> {
-    spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
+    spawn(
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?
+    .wait_with_output()
 }
 
 /// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
 /// the wait: the child is killed and reaped when it outlives `deadline`, and
 /// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],
 /// which nulls stdin.
-pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> io::Result<Output> {
+pub fn output_with_stdin(
+    cmd: &mut Command,
+    stdin: &[u8],
+    deadline: Duration,
+) -> io::Result<Output> {
     use std::io::Write;
-    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    let mut child = spawn(
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?;
     {
         let mut pipe = child.stdin.take().expect("stdin is piped");
         let _ = pipe.write_all(stdin);
@@ -615,7 +677,10 @@ pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) ->
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"))
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the child did not exit before its deadline",
+            ))
         }
     }
 }
@@ -640,8 +705,14 @@ pub fn wait_until_for(what: &str, timeout: Duration, ready: impl FnMut() -> bool
 }
 
 /// [`wait_until_for`] on `clock`: a test of the wait itself passes a `ManualClock`, whose time is virtual.
-pub fn wait_until_on(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
-    poll_on(clock, timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+pub fn wait_until_on(
+    clock: &dyn Clock,
+    what: &str,
+    timeout: Duration,
+    mut ready: impl FnMut() -> bool,
+) {
+    poll_on(clock, timeout, || ready().then_some(()))
+        .unwrap_or_else(|| panic!("timed out waiting for {what}"));
 }
 
 /// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
@@ -653,7 +724,11 @@ pub fn poll<T>(timeout: Duration, ready: impl FnMut() -> Option<T>) -> Option<T>
 }
 
 /// [`poll`] on `clock`: the time it reads and the naps it takes are the clock's.
-pub fn poll_on<T>(clock: &dyn Clock, timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
+pub fn poll_on<T>(
+    clock: &dyn Clock,
+    timeout: Duration,
+    mut ready: impl FnMut() -> Option<T>,
+) -> Option<T> {
     let deadline = clock.now() + timeout;
     loop {
         if let Some(value) = ready() {
@@ -672,14 +747,23 @@ pub fn poll_on<T>(clock: &dyn Clock, timeout: Duration, mut ready: impl FnMut() 
 /// asserts what has not happened yet.
 pub fn wait_for_flock_waiter(path: &Path) {
     use std::os::unix::fs::MetadataExt;
-    let inode = fs::metadata(path).expect("the lock file exists").ino().to_string();
-    wait_until(&format!("a process to wait for the flock on {}", path.display()), || {
-        let locks = fs::read_to_string("/proc/locks").expect("read /proc/locks");
-        locks.lines().any(|line| {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            fields.contains(&"->") && fields.iter().any(|f| f.rsplit(':').next() == Some(inode.as_str()) && f.matches(':').count() == 2)
-        })
-    });
+    let inode = fs::metadata(path)
+        .expect("the lock file exists")
+        .ino()
+        .to_string();
+    wait_until(
+        &format!("a process to wait for the flock on {}", path.display()),
+        || {
+            let locks = fs::read_to_string("/proc/locks").expect("read /proc/locks");
+            locks.lines().any(|line| {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                fields.contains(&"->")
+                    && fields.iter().any(|f| {
+                        f.rsplit(':').next() == Some(inode.as_str()) && f.matches(':').count() == 2
+                    })
+            })
+        },
+    );
 }
 
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
@@ -689,17 +773,31 @@ pub fn wait_some<T>(what: &str, timeout: Duration, ready: impl FnMut() -> Result
 }
 
 /// [`wait_some`] on `clock` (see [`wait_until_on`]).
-pub fn wait_some_on<T>(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
+pub fn wait_some_on<T>(
+    clock: &dyn Clock,
+    what: &str,
+    timeout: Duration,
+    mut ready: impl FnMut() -> Result<T, String>,
+) -> T {
     let mut state = String::new();
-    poll_on(clock, timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
+    poll_on(clock, timeout, || ready().map_err(|s| state = s).ok())
+        .unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
 /// screen. A timeout prints the last one.
-pub fn wait_screen(what: &str, mut screen: impl FnMut() -> Vec<String>, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+pub fn wait_screen(
+    what: &str,
+    mut screen: impl FnMut() -> Vec<String>,
+    mut done: impl FnMut(&[String]) -> bool,
+) -> Vec<String> {
     wait_some(what, WAIT, || {
         let rows = screen();
-        if done(&rows) { Ok(rows) } else { Err(format!("the screen is:\n{}", rows.join("\n"))) }
+        if done(&rows) {
+            Ok(rows)
+        } else {
+            Err(format!("the screen is:\n{}", rows.join("\n")))
+        }
     })
 }
 
@@ -717,7 +815,11 @@ pub fn refused(run: &Run, code: &str, exit: i32) -> Value {
         Value::Null => {}
         Value::String(next) => {
             let words: Vec<&str> = next.split_whitespace().collect();
-            assert_eq!(words.first(), Some(&"cpd"), "details.next `{next}` is not a cpd command: {run:?}");
+            assert_eq!(
+                words.first(),
+                Some(&"cpd"),
+                "details.next `{next}` is not a cpd command: {run:?}"
+            );
             if let Err(e) = Cli::try_parse_from(&words) {
                 panic!("details.next `{next}` does not parse: {e}");
             }
@@ -766,7 +868,12 @@ impl GitWrapper {
     /// call is not over in [`GIT_WRAPPER_BOUND`].
     pub fn run(&self, path: &OsString, cwd: &Path, args: &[&str]) -> (i32, String, String) {
         let mut cmd = self.env.command(self.home.git_wrapper());
-        cmd.args(args).current_dir(cwd).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(args)
+            .current_dir(cwd)
+            .env("PATH", path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = spawn(&mut cmd).unwrap();
         if poll(GIT_WRAPPER_BOUND, || child.try_wait().unwrap()).is_none() {
             child.kill().unwrap();
@@ -778,7 +885,11 @@ impl GitWrapper {
         }
         // Already reaped: `wait_with_output` reads what is left in the pipes.
         let out = child.wait_with_output().unwrap();
-        (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+        (
+            out.status.code().unwrap(),
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap(),
+        )
     }
 
     pub fn session_path(&self) -> OsString {
@@ -794,7 +905,11 @@ const DERIVED_SOCKET_ROOM: usize = 20;
 /// The `TMUX_TMPDIR` of the env rooted at `root` whose socket is `socket`: [`tmux_tmpdir_for`] with [`DERIVED_SOCKET_ROOM`].
 fn env_tmux_tmpdir(root: &Path, socket: &str) -> PathBuf {
     let uid = fs::metadata(root).expect("stat the env").uid();
-    tmux_tmpdir_for(root, uid, &format!("{socket}{}", "-".repeat(DERIVED_SOCKET_ROOM)))
+    tmux_tmpdir_for(
+        root,
+        uid,
+        &format!("{socket}{}", "-".repeat(DERIVED_SOCKET_ROOM)),
+    )
 }
 
 /// The `TMUX_TMPDIR` for an env rooted at `root`: `<root>/tmux`, or `/tmp` when the socket path would pass 100
@@ -802,7 +917,16 @@ fn env_tmux_tmpdir(root: &Path, socket: &str) -> PathBuf {
 pub fn tmux_tmpdir_for(root: &Path, uid: u32, socket: &str) -> PathBuf {
     let tmux = root.join("tmux");
     let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    if canonical.join(format!("tmux/tmux-{uid}/{socket}")).as_os_str().len() > 100 { PathBuf::from("/tmp") } else { tmux }
+    if canonical
+        .join(format!("tmux/tmux-{uid}/{socket}"))
+        .as_os_str()
+        .len()
+        > 100
+    {
+        PathBuf::from("/tmp")
+    } else {
+        tmux
+    }
 }
 
 /// A `flock(1)` for where there is none (macOS), in perl, which ships with macOS: `flock [-n] [-x] [--no-fork] <file>
@@ -878,7 +1002,10 @@ impl Run {
             .stdout
             .strip_suffix('\n')
             .unwrap_or_else(|| panic!("stdout does not end with one newline: {self:?}"));
-        assert!(!line.contains('\n'), "stdout has more than one line: {self:?}");
+        assert!(
+            !line.contains('\n'),
+            "stdout has more than one line: {self:?}"
+        );
         serde_json::from_str(line).unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {self:?}"))
     }
 
@@ -924,7 +1051,10 @@ impl TestEnv {
 
     fn build(reaped: bool) -> TestEnv {
         let envs_dir = envs_dir();
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
+        let dir = tempfile::Builder::new()
+            .prefix("cpd-test-")
+            .tempdir_in(&envs_dir)
+            .unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
         // On the exit-sweep list from before anything can panic: a test process that ends without dropping this env
         // still leaves no `cpd-test-*` behind ([`sweep_envs`]).
         register_env(dir.path());
@@ -950,17 +1080,30 @@ impl TestEnv {
             .expect("write teardown script");
             start_reaper(&script)
         });
-        let env = TestEnv { dir, tmux_socket, tmux_in_root: false, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
+        let env = TestEnv {
+            dir,
+            tmux_socket,
+            tmux_in_root: false,
+            pgid: reaper.as_ref().map(Child::id),
+            reaper: Mutex::new(reaper),
+            reader: Mutex::new(None),
+        };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
         for tool in DENIED_TOOLS {
             let path = env.bin().join(tool);
-            write_executable(&path, &format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"));
+            write_executable(
+                &path,
+                &format!(
+                    "#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"
+                ),
+            );
         }
         // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
         fs::create_dir_all(env.cpd_home().join("policy/acme")).expect("create the acme directory");
-        fs::write(env.cpd_home().join("policy/acme/owner.toml"), "").expect("write the acme owner file");
+        fs::write(env.cpd_home().join("policy/acme/owner.toml"), "")
+            .expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
@@ -981,7 +1124,12 @@ impl TestEnv {
     /// directory. Idempotent. Every env that a test builds is dropped (or torn down) before the
     /// test process ends, so the Gate's leak check finds no `cpd-test-*` behind.
     pub fn teardown(&self) {
-        if let Some(mut reaper) = self.reaper.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        if let Some(mut reaper) = self
+            .reaper
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             // By its pid alone, and reaped: a zombie in the group would hold the teardown for its grace.
             let _ = reaper.kill();
             let _ = reaper.wait();
@@ -989,7 +1137,16 @@ impl TestEnv {
         if self.teardown_script().exists() {
             // stderr stays the test's: a failed read of the store shows in its output.
             let mut teardown = Command::new("sh");
-            teardown.arg(self.teardown_script()).arg(self.pgid.expect("a teardown script has a reaper").to_string()).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null());
+            teardown
+                .arg(self.teardown_script())
+                .arg(
+                    self.pgid
+                        .expect("a teardown script has a reaper")
+                        .to_string(),
+                )
+                .current_dir("/")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null());
             let _ = spawn(&mut teardown).and_then(|mut child| child.wait());
         }
         let _ = fs::remove_dir_all(self.root());
@@ -997,7 +1154,10 @@ impl TestEnv {
         // leave the directory there or make it again after the `rm`: stop the env's process group and remove it once
         // more, so the `Drop` truly removes it.
         if let (true, Some(pgid)) = (self.root().exists(), self.pgid) {
-            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid as i32), nix::sys::signal::Signal::SIGKILL);
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pgid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
             let _ = fs::remove_dir_all(self.root());
         }
     }
@@ -1054,7 +1214,11 @@ impl TestEnv {
     /// The `flock` the env's commands run: the shim in `bin/` where the system has none, else the real one.
     pub fn flock(&self) -> PathBuf {
         let shim = self.bin().join("flock");
-        if shim.is_file() { shim } else { PathBuf::from("flock") }
+        if shim.is_file() {
+            shim
+        } else {
+            PathBuf::from("flock")
+        }
     }
 
     /// The private tmux server's socket name (`tmux -L <name>`), to put in
@@ -1092,10 +1256,14 @@ impl TestEnv {
     /// of [`TestEnv::command`]) and the ones to set: the one place that says what isolated means, for the `Command` of
     /// [`TestEnv::command`] and for the process [`fx::Fx`] runs `cpd` in.
     pub fn isolation(&self) -> (Vec<OsString>, Vec<(&'static str, OsString)>) {
-        let mut remove: Vec<OsString> = ["TMUX", "TMUX_PANE", "ZDOTDIR"].map(OsString::from).to_vec();
+        let mut remove: Vec<OsString> = ["TMUX", "TMUX_PANE", "ZDOTDIR"]
+            .map(OsString::from)
+            .to_vec();
         for (key, _) in std::env::vars_os() {
             let k = key.to_string_lossy();
-            let listed = ["CPD_", "PI_", "GIT_", "XDG_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+            let listed = ["CPD_", "PI_", "GIT_", "XDG_", "GH_", "GITHUB_", "SSH_"]
+                .iter()
+                .any(|p| k.starts_with(p))
                 || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v));
             if listed && !remove.contains(&key) {
                 remove.push(key);
@@ -1109,7 +1277,10 @@ impl TestEnv {
             ("HOME", self.home().into()),
             ("TMUX_TMPDIR", self.tmux_tmpdir().into()),
             ("TZ", "EST5EDT,M3.2.0,M11.1.0".into()),
-            ("FAKE_TMUX_SERVER_PID", std::process::id().to_string().into()),
+            (
+                "FAKE_TMUX_SERVER_PID",
+                std::process::id().to_string().into(),
+            ),
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
             ("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig").into()),
             ("GIT_TERMINAL_PROMPT", "0".into()),
@@ -1119,7 +1290,11 @@ impl TestEnv {
 
     /// The store of this env's `$CPD_HOME`, opened (migrated) now.
     pub fn store(&self) -> Store {
-        Store::open(&CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(), 5000).unwrap()
+        Store::open(
+            &CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(),
+            5000,
+        )
+        .unwrap()
     }
 
     /// `f` on a read-only connection to this env's store, for a test that only looks: no
@@ -1130,12 +1305,18 @@ impl TestEnv {
     pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
         use std::os::unix::fs::MetadataExt;
         let db = self.cpd_home().join("cpd.db");
-        let file = fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap_or_else(|e| panic!("stat {}: {e}", db.display()));
+        let file = fs::metadata(&db)
+            .map(|m| (m.dev(), m.ino()))
+            .unwrap_or_else(|e| panic!("stat {}: {e}", db.display()));
         let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
         if reader.as_ref().is_none_or(|(opened, _)| *opened != file) {
-            let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
-            conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+            let conn = rusqlite::Connection::open_with_flags(
+                &db,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+            conn.busy_timeout(Duration::from_secs(5))
+                .expect("set the busy timeout");
             *reader = Some((file, conn));
         }
         let (_, conn) = reader.as_ref().expect("opened above");
@@ -1168,7 +1349,8 @@ impl TestEnv {
         if held.contains("[model]") {
             return;
         }
-        let model = "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
+        let model =
+            "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
         fs::write(&path, format!("{held}{model}")).expect("write host.toml");
     }
 
@@ -1184,7 +1366,8 @@ impl TestEnv {
         });
         let run = self.cpd_home().join("run");
         fs::create_dir_all(&run).expect("create the run directory");
-        fs::write(run.join("models-quiet.json"), file.to_string()).expect("write models-quiet.json");
+        fs::write(run.join("models-quiet.json"), file.to_string())
+            .expect("write models-quiet.json");
     }
 
     /// `config.toml` of machine `m1` on this env's private tmux server. `extra` is more TOML
@@ -1208,13 +1391,24 @@ impl TestEnv {
         let mut done_when = serde_json::Map::new();
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
-                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+                done_when.insert(
+                    job["pr"].as_str().expect("a Job's PR").to_owned(),
+                    serde_json::json!(["Done"]),
+                );
             }
         }
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
         let path = self.root().join(format!("outline-{plan}.json"));
         fs::write(&path, outline.to_string()).expect("write the outline");
-        cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
+        cpd(&[
+            "plan",
+            "outline",
+            "--file",
+            &path.display().to_string(),
+            "--plan",
+            plan,
+        ])
+        .ok();
     }
 
     /// Runs `cpd <args>` from this env's root.
@@ -1229,7 +1423,13 @@ impl TestEnv {
 
     /// Runs `cpd <args>` from `cwd` with the variables `vars` added to its environment.
     pub fn cpd_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &str)]) -> Run {
-        let out = output(self.command(CPD).args(args).envs(vars.iter().copied()).current_dir(cwd)).expect("run cpd");
+        let out = output(
+            self.command(CPD)
+                .args(args)
+                .envs(vars.iter().copied())
+                .current_dir(cwd),
+        )
+        .expect("run cpd");
         Run {
             exit: out.status.code().expect("cpd was killed by a signal"),
             stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
@@ -1267,7 +1467,11 @@ impl TestEnv {
         self.git(&repo, &["add", "-A"]);
         self.git(&repo, &["commit", "-q", "-m", "initial"]);
         // Put it in place for the next env (atomic: a concurrent maker's whole copy wins).
-        let partial = template.with_extension(format!("partial-{}-{}", std::process::id(), NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)));
+        let partial = template.with_extension(format!(
+            "partial-{}-{}",
+            std::process::id(),
+            NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
+        ));
         copy_tree(&repo, &partial);
         if fs::rename(&partial, &template).is_err() {
             fs::remove_dir_all(&partial).expect("remove the partial git repo template");
@@ -1290,11 +1494,19 @@ impl TestEnv {
         if self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
             return self.git(repo, &["config", "--get", "remote.origin.url"]);
         }
-        let name = repo.file_name().expect("a repo directory").to_string_lossy().into_owned();
+        let name = repo
+            .file_name()
+            .expect("a repo directory")
+            .to_string_lossy()
+            .into_owned();
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
-        if !self.cpd_home().join(format!("policy/acme/{name}.toml")).exists() {
+        if !self
+            .cpd_home()
+            .join(format!("policy/acme/{name}.toml"))
+            .exists()
+        {
             self.repo_policy("acme", &name, "");
         }
         url
@@ -1304,16 +1516,24 @@ impl TestEnv {
     /// GitHub one (the repo's key): `url.<bare>.insteadOf = <that URL>`.
     pub fn local_origin(&self, repo: &Path, bare: &Path) {
         let url = self.github_origin(repo);
-        self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+        self.git(
+            repo,
+            &["config", &format!("url.{}.insteadOf", bare.display()), &url],
+        );
     }
 
     /// Removes `origin` from a repo whose `origin` is only the GitHub URL `keyed_repo` gave it
     /// (no `local_origin`): for what runs after `pr add` and must find no remote, as before keying.
     pub fn drop_unreachable_origin(&self, repo: &Path) {
         // Exit 1 and no output when nothing matches.
-        let rewritten = output(self.command("git").args(["config", "--get-regexp", r"^url\..*\.insteadof$"]).current_dir(repo))
-            .expect("git config");
-        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+        let rewritten = output(
+            self.command("git")
+                .args(["config", "--get-regexp", r"^url\..*\.insteadof$"])
+                .current_dir(repo),
+        )
+        .expect("git config");
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin")
+        {
             self.git(repo, &["remote", "remove", "origin"]);
         }
     }
@@ -1329,14 +1549,21 @@ impl TestEnv {
 
     /// `tmux -L <private socket> <args>` in this env.
     pub fn tmux(&self, args: &[&str]) -> Output {
-        output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")
+        output(
+            self.command("tmux")
+                .arg("-L")
+                .arg(&self.tmux_socket)
+                .args(args),
+        )
+        .expect("run tmux")
     }
 
     /// Makes `tmux` on this env's PATH the fake tmux: a symlink `bin/tmux` to the built `fake-tmux`. Idempotent.
     pub fn fake_tmux(&self) {
         let link = self.bin().join("tmux");
         let _ = fs::remove_file(&link);
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_fake-tmux"), &link).expect("link bin/tmux to the fake tmux");
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_fake-tmux"), &link)
+            .expect("link bin/tmux to the fake tmux");
     }
 
     /// The fake's state of this env's socket (`None` while no server exists).
@@ -1415,18 +1642,26 @@ unset _d _n _f _a
     /// in the order the calls reached the recorder: calls that do not overlap in time
     /// are in the order they ran; overlapping calls are in some one fixed order.
     pub fn calls(&self, name: &str) -> Vec<Vec<String>> {
-        let Ok(entries) = fs::read_dir(self.calls_dir(name)) else { return Vec::new() };
+        let Ok(entries) = fs::read_dir(self.calls_dir(name)) else {
+            return Vec::new();
+        };
         // A call `<n>` is complete once `<n>.done` exists; `<n>.rec` holds its argv.
         let mut records: Vec<(u64, PathBuf)> = entries
             .map(|e| e.expect("read calls dir").path())
             .filter(|p| p.extension().is_some_and(|e| e == "done"))
-            .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p.with_extension("rec"))))
+            .filter_map(|p| {
+                Some((
+                    p.file_stem()?.to_str()?.parse().ok()?,
+                    p.with_extension("rec"),
+                ))
+            })
             .collect();
         records.sort();
         records
             .into_iter()
             .map(|(_, p)| {
-                let text = String::from_utf8(fs::read(p).expect("read call record")).expect("calls are UTF-8");
+                let text = String::from_utf8(fs::read(p).expect("read call record"))
+                    .expect("calls are UTF-8");
                 text.split_terminator('\0').map(str::to_owned).collect()
             })
             .collect()
@@ -1435,7 +1670,10 @@ unset _d _n _f _a
     /// The poll searches the fake `gh` has recorded: one per `cpd pr poll`, which engine E5 runs
     /// about once per tick when the engine runs with [`PR_POLL_EVERY_TICK`].
     pub fn poll_searches(&self) -> usize {
-        self.calls("gh").iter().filter(|c| c.get(3).is_some_and(|q| q.contains("search(type"))).count()
+        self.calls("gh")
+            .iter()
+            .filter(|c| c.get(3).is_some_and(|q| q.contains("search(type")))
+            .count()
     }
 
     /// Waits until the engine has run `ticks` whole ticks (E1-E8) since this call: the poll of
@@ -1445,7 +1683,13 @@ unset _d _n _f _a
     /// fake `gh` that answers the search.
     pub fn wait_whole_ticks(&self, ticks: usize) {
         let from = self.poll_searches();
-        wait_until(&format!("{ticks} whole engine ticks (polls {from} -> {})", from + ticks + 1), || self.poll_searches() > from + ticks);
+        wait_until(
+            &format!(
+                "{ticks} whole engine ticks (polls {from} -> {})",
+                from + ticks + 1
+            ),
+            || self.poll_searches() > from + ticks,
+        );
     }
 
     fn calls_dir(&self, name: &str) -> PathBuf {
@@ -1480,7 +1724,12 @@ fn store_template() -> &'static Path {
         use std::os::unix::fs::MetadataExt;
         let binary = fs::metadata(CPD).expect("stat the cpd binary");
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
-        let path = dir.join(format!("cpd-store-{}-{}.{}.db", binary.len(), binary.mtime(), binary.mtime_nsec()));
+        let path = dir.join(format!(
+            "cpd-store-{}-{}.{}.db",
+            binary.len(),
+            binary.mtime(),
+            binary.mtime_nsec()
+        ));
         if path.exists() {
             return path;
         }
@@ -1488,7 +1737,10 @@ fn store_template() -> &'static Path {
         env.write_config("version = 1\nmachine = \"m1\"\n");
         env.cpd(&["events", "list"]).ok();
         let db = env.cpd_home().join("cpd.db");
-        assert!(!env.cpd_home().join("cpd.db-wal").exists(), "cpd left a WAL beside the template store");
+        assert!(
+            !env.cpd_home().join("cpd.db-wal").exists(),
+            "cpd left a WAL beside the template store"
+        );
         let partial = dir.join(format!("cpd-store-{}.partial", std::process::id()));
         fs::copy(&db, &partial).expect("copy the new store");
         fs::rename(&partial, &path).expect("put the store template in place");
@@ -1503,8 +1755,14 @@ fn git_repo_template(name: &str) -> PathBuf {
     use std::os::unix::fs::MetadataExt;
     static KEY: OnceLock<String> = OnceLock::new();
     let key = KEY.get_or_init(|| {
-        let binary = fs::metadata(std::env::current_exe().expect("this test binary")).expect("stat this test binary");
-        format!("{}-{}.{}", binary.len(), binary.mtime(), binary.mtime_nsec())
+        let binary = fs::metadata(std::env::current_exe().expect("this test binary"))
+            .expect("stat this test binary");
+        format!(
+            "{}-{}.{}",
+            binary.len(),
+            binary.mtime(),
+            binary.mtime_nsec()
+        )
     });
     Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("git-repo-{key}-{name}"))
 }
@@ -1539,7 +1797,12 @@ pub enum Locale {
     LcAllC,
 }
 
-pub const LOCALES: [Locale; 4] = [Locale::Unset, Locale::EmptyLang, Locale::LangC, Locale::LcAllC];
+pub const LOCALES: [Locale; 4] = [
+    Locale::Unset,
+    Locale::EmptyLang,
+    Locale::LangC,
+    Locale::LcAllC,
+];
 
 impl Locale {
     /// `cmd` with every locale variable of this process removed, then this locale's own.
@@ -1585,11 +1848,19 @@ impl Locale {
 pub fn tripwire_env_words() -> String {
     ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME", "TMPDIR"]
         .iter()
-        .filter_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()).map(|v| format!(" {key}={}", sh_quote(&v))))
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(|v| format!(" {key}={}", sh_quote(&v)))
+        })
         .collect()
 }
 
 /// The first `tmux` of the real `PATH`.
 pub fn real_tmux() -> std::path::PathBuf {
-    std::env::split_paths(inherited_path()).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
+    std::env::split_paths(inherited_path())
+        .map(|dir| dir.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH")
 }

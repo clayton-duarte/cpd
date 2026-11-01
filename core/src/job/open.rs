@@ -30,7 +30,13 @@ fn pr_title(pr: &PrRow) -> &str {
 fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdError> {
     let stem = format!("{prefix}-{}", pr.key);
     (1u32..)
-        .map(|n| if n == 1 { stem.clone() } else { format!("{stem}-{n}") })
+        .map(|n| {
+            if n == 1 {
+                stem.clone()
+            } else {
+                format!("{stem}-{n}")
+            }
+        })
         .find(|key| !taken.contains(key))
         .ok_or_else(|| CpdError::bad_row(format!("PR {} has no free {prefix} Job key", pr.key)))
         .and_then(|key| JobKey::parse(&key))
@@ -59,9 +65,13 @@ pub(crate) fn spec(pr: &PrRow) -> JobSpec {
             key = pr.key,
             repo = pr.repo,
         ),
-        touches: json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+        touches: json!([format!(
+            "The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate"
+        )]),
         acceptance: json!([
-            format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
+            format!(
+                "`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"
+            ),
             "Nothing was pushed by the Worker and no pull request was created or edited by it",
         ]),
         out_of_scope: json!([
@@ -95,7 +105,11 @@ fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
 /// The `cause` is the `update` Job's (`None` for an `open` Job); a missing cause is the conflict, so a row inserted before the
 /// widened trigger keeps today's text.
 pub(crate) fn fixed_spec(pr: &PrRow, update: bool, cause: Option<Cause>) -> JobSpec {
-    if update { update_spec(pr, cause.unwrap_or(Cause::Conflict)) } else { spec(pr) }
+    if update {
+        update_spec(pr, cause.unwrap_or(Cause::Conflict))
+    } else {
+        spec(pr)
+    }
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
@@ -121,7 +135,9 @@ fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
                 key = pr.key,
                 repo = pr.repo,
             ),
-            json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([format!(
+                "The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate"
+            )]),
             json!([
                 "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
                 format!("Merging {remote} when it does not conflict"),
@@ -143,7 +159,9 @@ fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
                 key = pr.key,
                 repo = pr.repo,
             ),
-            json!([format!("The files {remote} merges into {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([format!(
+                "The files {remote} merges into {lead} in, and what the merge needs in order to build and pass the Gate"
+            )]),
             json!([
                 "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
                 format!("Leaving {remote}'s commits out of {lead}"),
@@ -156,7 +174,9 @@ fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
         context,
         touches,
         acceptance: json!([
-            format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
+            format!(
+                "`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"
+            ),
             "Nothing was pushed by the Worker and no pull request was created or edited by it",
         ]),
         out_of_scope,
@@ -165,7 +185,14 @@ fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
 
 /// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` the caller's) in the same transaction. Returns its key.
-pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
+pub fn add(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pr: &PrRow,
+    tier: Tier,
+    draft: bool,
+    by: &str,
+) -> Result<JobKey, CpdError> {
     insert(tx, plan, pr, tier, "open", by, None, draft)
 }
 
@@ -189,7 +216,9 @@ impl Cause {
 
     /// The cause a `reason` spells (the inverse of [`Cause::as_str`]); `None` for a reason no cause spells.
     pub fn parse(text: &str) -> Option<Cause> {
-        [Cause::Conflict, Cause::BaseMerged].into_iter().find(|cause| cause.as_str() == text)
+        [Cause::Conflict, Cause::BaseMerged]
+            .into_iter()
+            .find(|cause| cause.as_str() == text)
     }
 }
 
@@ -203,13 +232,23 @@ pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, Cp
             |r| r.get(0),
         )
         .optional()?;
-    Ok(reason.as_deref().and_then(Cause::parse).unwrap_or(Cause::Conflict))
+    Ok(reason
+        .as_deref()
+        .and_then(Cause::parse)
+        .unwrap_or(Cause::Conflict))
 }
 
 /// Queues PR `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the PR has one `queued` or `running`: one transaction writes the
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
-pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+pub fn queue_update(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pr: &PrRow,
+    tier: Tier,
+    by: &str,
+    cause: Cause,
+) -> Result<Option<JobKey>, CpdError> {
     // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract §3.7 E5).
     if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
         return Ok(None);
@@ -229,15 +268,29 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
 /// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
 // Each argument is a column of the inserted row; a signature change is out of scope.
 #[allow(clippy::too_many_arguments)]
-fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
+fn insert(
+    tx: &WriteTxn<'_>,
+    plan: &PlanId,
+    pr: &PrRow,
+    tier: Tier,
+    kind: &str,
+    by: &str,
+    cause: Option<Cause>,
+    draft: bool,
+) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
-        stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        stmt.query_map([plan.as_str()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
     };
     let update = kind == "update";
     let key = free_key(&taken, if update { "up" } else { "open" }, pr)?;
     let tier = tier.to_string();
-    let title = if update { format!("Bring the pull request up to date: {}", pr_title(pr)) } else { format!("Open the pull request: {}", pr_title(pr)) };
+    let title = if update {
+        format!("Bring the pull request up to date: {}", pr_title(pr))
+    } else {
+        format!("Open the pull request: {}", pr_title(pr))
+    };
     let mut job = Job {
         seq: 0,
         key: key.as_str().to_owned(),
@@ -294,7 +347,11 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             pr = pr.key
         )
     } else if update {
-        let merges = if cause == Some(Cause::BaseMerged) { "its base PR merged, so it merges the new base" } else { "it merges the base only on a conflict" };
+        let merges = if cause == Some(Cause::BaseMerged) {
+            "its base PR merged, so it merges the new base"
+        } else {
+            "it merges the base only on a conflict"
+        };
         format!(
             "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes PR {pr}'s Lead Branch when it is done. \
              It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
@@ -308,13 +365,28 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             pr = pr.key
         )
     };
-    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &job.status, &tier, by, cause.map(Cause::as_str)).plan(plan.clone()).job(key.clone()))?;
+    append(
+        tx,
+        NewEvent::job_added_by_cpd(
+            text,
+            pr.key.as_str(),
+            kind,
+            &job.status,
+            &tier,
+            by,
+            cause.map(Cause::as_str),
+        )
+        .plan(plan.clone())
+        .job(key.clone()),
+    )?;
     Ok(key)
 }
 
 /// The other Jobs of `job`'s PR that its Ready rule counts (§3.2): every Job but the `open` and `update` ones, which do not count each other.
 fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
-    all.iter().filter(move |j| j.pr == job.pr && j.key != job.key && !matches!(j.kind.as_str(), "open" | "update"))
+    all.iter().filter(move |j| {
+        j.pr == job.pr && j.key != job.key && !matches!(j.kind.as_str(), "open" | "update")
+    })
 }
 
 /// What an `open` or `update` Job waits for (§3.2: they have no Dependency rows, so this is their needs, derived each time it is read):
@@ -322,8 +394,18 @@ fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
 /// or `running` (a `draft` or `failed` Job does not hold it back). `None` for a Job of another kind, whose Dependency rows are its needs.
 pub fn unfinished(all: &[Job], job: &Job) -> Option<Vec<String>> {
     match job.kind.as_str() {
-        "open" => Some(others(all, job).filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")).map(|j| j.key.clone()).collect()),
-        "update" => Some(others(all, job).filter(|j| matches!(j.status.as_str(), "queued" | "running")).map(|j| j.key.clone()).collect()),
+        "open" => Some(
+            others(all, job)
+                .filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled"))
+                .map(|j| j.key.clone())
+                .collect(),
+        ),
+        "update" => Some(
+            others(all, job)
+                .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
+                .map(|j| j.key.clone())
+                .collect(),
+        ),
         _ => None,
     }
 }
@@ -335,11 +417,17 @@ pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
         return job.needs.clone();
     }
     // A Job chained after the merged open Job (it needs it, directly or not) is no need of it: that would be a cycle.
-    let mut after: std::collections::BTreeSet<&str> = std::collections::BTreeSet::from([job.key.as_str()]);
-    while let Some(next) = all.iter().find(|j| !after.contains(j.key.as_str()) && j.needs.iter().any(|n| after.contains(n.as_str()))) {
+    let mut after: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::from([job.key.as_str()]);
+    while let Some(next) = all.iter().find(|j| {
+        !after.contains(j.key.as_str()) && j.needs.iter().any(|n| after.contains(n.as_str()))
+    }) {
         after.insert(next.key.as_str());
     }
-    let mut keys: Vec<String> = others(all, job).filter(|j| j.status != "cancelled" && !after.contains(j.key.as_str())).map(|j| j.key.clone()).collect();
+    let mut keys: Vec<String> = others(all, job)
+        .filter(|j| j.status != "cancelled" && !after.contains(j.key.as_str()))
+        .map(|j| j.key.clone())
+        .collect();
     keys.sort();
     keys
 }
@@ -352,8 +440,8 @@ pub fn nothing_merged(all: &[Job], job: &Job) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::jobs::Job;
     use crate::ids::PrKey;
+    use crate::plan::jobs::Job;
 
     fn job(key: &str, pr: &str, kind: &str, status: &str) -> Job {
         Job {
@@ -390,14 +478,29 @@ mod tests {
 
     #[test]
     fn the_key_is_the_first_free_of_open_pr_and_its_numbered_successors() {
-        let key = |taken: &[&str]| free_key(&taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(), "open", &pr("api")).unwrap();
+        let key = |taken: &[&str]| {
+            free_key(
+                &taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(),
+                "open",
+                &pr("api"),
+            )
+            .unwrap()
+        };
         assert_eq!(key(&[]).as_str(), "open-api");
         assert_eq!(key(&["open-api"]).as_str(), "open-api-2");
-        assert_eq!(key(&["open-api", "open-api-2", "open-web"]).as_str(), "open-api-3");
+        assert_eq!(
+            key(&["open-api", "open-api-2", "open-web"]).as_str(),
+            "open-api-3"
+        );
         // A PR key of 24 characters leaves room for a suffix of up to two digits (32 characters).
         let long = PrKey::parse(&"a".repeat(24)).unwrap().to_string();
-        let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
-        assert_eq!(free_key(&taken, "open", &pr(&long)).unwrap().as_str().len(), 32);
+        let taken: Vec<String> = std::iter::once(format!("open-{long}"))
+            .chain((2..10).map(|n| format!("open-{long}-{n}")))
+            .collect();
+        assert_eq!(
+            free_key(&taken, "open", &pr(&long)).unwrap().as_str().len(),
+            32
+        );
     }
 
     #[test]
@@ -413,8 +516,14 @@ mod tests {
             job("open-a", "a", "open", "queued"),
             update.clone(),
         ];
-        assert_eq!(unfinished(&all, &update), Some(vec!["q".to_owned(), "r".to_owned()]));
-        assert_eq!(shown_needs(&all, &update), ["d", "f", "m", "q", "r"].map(str::to_owned));
+        assert_eq!(
+            unfinished(&all, &update),
+            Some(vec!["q".to_owned(), "r".to_owned()])
+        );
+        assert_eq!(
+            shown_needs(&all, &update),
+            ["d", "f", "m", "q", "r"].map(str::to_owned)
+        );
     }
 
     #[test]
@@ -433,18 +542,43 @@ mod tests {
         ];
         let mut waiting = unfinished(&all, &open).unwrap();
         waiting.sort();
-        assert_eq!(waiting, ["broken", "busy", "later", "queued"], "the open and update Jobs of a PR do not count each other");
-        assert_eq!(unfinished(&all, &all[0]), None, "a Job of another kind has Dependency rows");
+        assert_eq!(
+            waiting,
+            ["broken", "busy", "later", "queued"],
+            "the open and update Jobs of a PR do not count each other"
+        );
+        assert_eq!(
+            unfinished(&all, &all[0]),
+            None,
+            "a Job of another kind has Dependency rows"
+        );
         assert!(!nothing_merged(&all, &open));
-        assert!(nothing_merged(&[job("gone", "a", "work", "cancelled"), job("merged-open", "a", "open", "merged"), open.clone()], &open));
+        assert!(nothing_merged(
+            &[
+                job("gone", "a", "work", "cancelled"),
+                job("merged-open", "a", "open", "merged"),
+                open.clone()
+            ],
+            &open
+        ));
     }
 
     #[test]
     fn the_needs_an_open_job_shows_are_the_other_jobs_of_its_pr_that_are_not_cancelled() {
         let open = job("open-a", "a", "open", "queued");
-        let all = [job("z", "a", "work", "merged"), job("gone", "a", "work", "cancelled"), job("b", "a", "work", "queued"), job("x", "b", "work", "queued"), open.clone()];
+        let all = [
+            job("z", "a", "work", "merged"),
+            job("gone", "a", "work", "cancelled"),
+            job("b", "a", "work", "queued"),
+            job("x", "b", "work", "queued"),
+            open.clone(),
+        ];
         assert_eq!(shown_needs(&all, &open), ["b", "z"]);
-        assert_eq!(shown_needs(&all, &all[0]), ["unused"], "any other kind shows its Dependency rows");
+        assert_eq!(
+            shown_needs(&all, &all[0]),
+            ["unused"],
+            "any other kind shows its Dependency rows"
+        );
     }
 
     #[test]
@@ -455,6 +589,9 @@ mod tests {
         let mut fix2 = job("fix2", "a", "work", "queued");
         fix2.needs = vec!["fix1".into()];
         let early = job("early", "a", "work", "merged");
-        assert_eq!(shown_needs(&[early, fix1, fix2, open.clone()], &open), ["early"]);
+        assert_eq!(
+            shown_needs(&[early, fix1, fix2, open.clone()], &open),
+            ["early"]
+        );
     }
 }

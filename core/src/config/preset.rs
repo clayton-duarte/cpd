@@ -56,8 +56,11 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 }
 
 fn preset_unknown(name: &str) -> CpdError {
-    CpdError::new(ErrorCode::PresetUnknown, format!("No preset {name}: config.toml has no `[presets.{name}]` table."))
-        .with("preset", name)
+    CpdError::new(
+        ErrorCode::PresetUnknown,
+        format!("No preset {name}: config.toml has no `[presets.{name}]` table."),
+    )
+    .with("preset", name)
 }
 
 /// `preset list` (commands.md §14.6): every preset with the provider of its `O` ref, sorted by name. One read of
@@ -78,7 +81,10 @@ fn list() -> Result<Output, CpdError> {
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
-    let preset = config.presets.get(&args.name).ok_or_else(|| preset_unknown(&args.name))?;
+    let preset = config
+        .presets
+        .get(&args.name)
+        .ok_or_else(|| preset_unknown(&args.name))?;
     let host = resolve_machine(&home)?.policy.model;
     Ok(Output::success(json!({
         "name": args.name,
@@ -93,32 +99,57 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let name = args.name;
     // Step 1: the name.
-    let preset = config.presets.get(&name).ok_or_else(|| preset_unknown(&name))?;
-    let preset_models = Models { o: preset.o.clone(), s: preset.s.clone(), h: preset.h.clone(), g: preset.g.clone() };
+    let preset = config
+        .presets
+        .get(&name)
+        .ok_or_else(|| preset_unknown(&name))?;
+    let preset_models = Models {
+        o: preset.o.clone(),
+        s: preset.s.clone(),
+        h: preset.h.clone(),
+        g: preset.g.clone(),
+    };
 
     // Step 2: host.toml must exist and hold a `[model]` table: there is nothing to rewrite without one.
     let host_path = policy_dir(&home).join("host.toml");
     let host_text = match std::fs::read_to_string(&host_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(policy_invalid(&host_path, Some("model"), "host.toml is missing: there is no `[model]` table to rewrite."));
+            return Err(policy_invalid(
+                &host_path,
+                Some("model"),
+                "host.toml is missing: there is no `[model]` table to rewrite.",
+            ));
         }
         Err(e) => {
-            return Err(CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {}: {e}.", host_path.display()))
-                .with("file", host_path.display().to_string()));
+            return Err(CpdError::new(
+                ErrorCode::FileUnreadable,
+                format!("Cannot read {}: {e}.", host_path.display()),
+            )
+            .with("file", host_path.display().to_string()));
         }
     };
     let table: toml::Table = host_text.parse().map_err(|e: toml::de::Error| {
-        policy_invalid(&host_path, Some("model"), format!("not valid TOML ({})", e.message()))
+        policy_invalid(
+            &host_path,
+            Some("model"),
+            format!("not valid TOML ({})", e.message()),
+        )
     })?;
     if !matches!(table.get("model"), Some(toml::Value::Table(_))) {
-        return Err(policy_invalid(&host_path, Some("model"), "host.toml has no `[model]` table: there is nothing to rewrite."));
+        return Err(policy_invalid(
+            &host_path,
+            Some("model"),
+            "host.toml has no `[model]` table: there is nothing to rewrite.",
+        ));
     }
 
     // Step 3: equality. The no-op opens no store and writes nothing.
     let pre = resolve_machine(&home)?.policy.model;
     if preset_models == pre {
-        return Ok(Output::success(json!({"preset": name, "already": true, "changed": []})));
+        return Ok(Output::success(
+            json!({"preset": name, "already": true, "changed": []}),
+        ));
     }
 
     // Step 4: the one-provider invariant of the table to be written, before anything external runs.
@@ -143,7 +174,11 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
             .collect()
     })?;
     write_atomic(&host_path, &new_text).map_err(|e| {
-        CpdError::new(ErrorCode::Internal, format!("cannot write {}: {e}.", host_path.display())).with("file", host_path.display().to_string())
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("cannot write {}: {e}.", host_path.display()),
+        )
+        .with("file", host_path.display().to_string())
     })?;
     let changed: Vec<Value> = env.store.write("preset apply", |tx| {
         let mut changed = Vec::new();
@@ -168,23 +203,34 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
         }
         Ok(changed)
     })?;
-    Ok(Output::success(json!({"preset": name, "host": host_path.display().to_string(), "already": false, "changed": changed})))
+    Ok(Output::success(
+        json!({"preset": name, "host": host_path.display().to_string(), "already": false, "changed": changed}),
+    ))
 }
 
 /// The registry's listed providers: the `Entry::Listed` ones by provider name. A provider whose listing failed is
 /// not in the registry (a preset naming it cannot be validated).
 fn listed_of(answer: &Answer) -> BTreeMap<&str, &Listed> {
-    answer.entries.iter().filter_map(|e| match e {
-        Entry::Listed(l) => Some((l.provider.as_str(), l)),
-        Entry::Failed(_) => None,
-    }).collect()
+    answer
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Listed(l) => Some((l.provider.as_str(), l)),
+            Entry::Failed(_) => None,
+        })
+        .collect()
 }
 
 /// Step 5 of `preset apply` (commands.md §14.6): the preset's provider is in the registry, and every ref is
 /// `<provider>/<an offered id>`; else `preset_provider_unconfigured` / `preset_model_unoffered`, writing nothing.
 fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), CpdError> {
     let listed = listed_of(answer);
-    for (letter, model_ref) in [("O", &preset.o), ("S", &preset.s), ("H", &preset.h), ("G", &preset.g)] {
+    for (letter, model_ref) in [
+        ("O", &preset.o),
+        ("S", &preset.s),
+        ("H", &preset.h),
+        ("G", &preset.g),
+    ] {
         let provider = provider_of(model_ref);
         let entry = listed.get(provider).ok_or_else(|| {
             CpdError::new(
@@ -196,7 +242,10 @@ fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), Cp
             .with("model", model_ref.as_str())
             .with("provider", provider)
         })?;
-        let id = model_ref.strip_prefix(provider).and_then(|rest| rest.strip_prefix('/')).unwrap_or(model_ref);
+        let id = model_ref
+            .strip_prefix(provider)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(model_ref);
         if !entry.ids.iter().any(|offered| offered == id) {
             return Err(CpdError::new(
                 ErrorCode::PresetModelUnoffered,
@@ -216,13 +265,21 @@ fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), Cp
 /// order, and every other byte of the file is unchanged. The caller has parsed the file and found the table.
 fn rewrite_model(host_text: &str, preset: &Models) -> String {
     let mut lines: Vec<String> = host_text.split_inclusive('\n').map(str::to_owned).collect();
-    let header = lines.iter().position(|l| l.trim() == "[model]").expect("the caller found the [model] table");
+    let header = lines
+        .iter()
+        .position(|l| l.trim() == "[model]")
+        .expect("the caller found the [model] table");
     let next = lines[header + 1..]
         .iter()
         .position(|l| l.starts_with('['))
         .map(|i| header + 1 + i)
         .unwrap_or(lines.len());
-    let letters: [(&str, &String); 4] = [("O", &preset.o), ("S", &preset.s), ("H", &preset.h), ("G", &preset.g)];
+    let letters: [(&str, &String); 4] = [
+        ("O", &preset.o),
+        ("S", &preset.s),
+        ("H", &preset.h),
+        ("G", &preset.g),
+    ];
     let is_key = |line: &str, letter: &str| {
         let bare = line.trim().trim_end_matches(['\n', '\r']);
         bare.strip_prefix(letter)
@@ -249,7 +306,12 @@ mod tests {
     #[test]
     fn rewrite_replaces_only_the_model_table() {
         let host = "# not part of the model\n[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n\n[pr]\nfeedback.checks = \"none\"\n";
-        let preset = Models { o: "p/haiku".into(), s: "p/sonnet".into(), h: "p/haiku".into(), g: "p/gemini".into() };
+        let preset = Models {
+            o: "p/haiku".into(),
+            s: "p/sonnet".into(),
+            h: "p/haiku".into(),
+            g: "p/gemini".into(),
+        };
         let after = rewrite_model(host, &preset);
         assert_eq!(
             after,
@@ -259,9 +321,18 @@ mod tests {
 
     #[test]
     fn rewrite_keeps_surrounding_bytes_and_last_section() {
-        let host = "# c\n[model]\nG = \"p/gemini\"\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n";
-        let preset = Models { o: "p/opus".into(), s: "p/sonnet".into(), h: "p/haiku".into(), g: "p/gemini".into() };
+        let host =
+            "# c\n[model]\nG = \"p/gemini\"\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n";
+        let preset = Models {
+            o: "p/opus".into(),
+            s: "p/sonnet".into(),
+            h: "p/haiku".into(),
+            g: "p/gemini".into(),
+        };
         // The letters keep their places; the trailing newline survives.
-        assert_eq!(rewrite_model(host, &preset), "# c\n[model]\nG = \"p/gemini\"\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n");
+        assert_eq!(
+            rewrite_model(host, &preset),
+            "# c\n[model]\nG = \"p/gemini\"\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n"
+        );
     }
 }

@@ -25,7 +25,9 @@ fn explore_dir(home: &CpdHome) -> PathBuf {
 }
 
 fn target(env: &mut Env, id: &AttemptId) -> Target {
-    env.store.read(|conn| ledger::load(conn, &plan(), id)).unwrap()
+    env.store
+        .read(|conn| ledger::load(conn, &plan(), id))
+        .unwrap()
 }
 
 #[test]
@@ -36,22 +38,50 @@ fn attempt_of_an_explore_job_has_no_worktree_and_runs_in_the_explore_directory()
     let dir = explore_dir(&rig.env.home);
 
     // The row the starter wrote: a branch no git branch has, the explore directory, no base.
-    assert_eq!(rig.one::<String>("SELECT branch FROM attempts WHERE id = 'look-a1'"), "cpd/pay--look-a1");
-    assert_eq!(rig.one::<String>("SELECT worktree FROM attempts WHERE id = 'look-a1'"), dir.display().to_string());
-    assert_eq!(rig.one::<Option<String>>("SELECT base_sha FROM attempts WHERE id = 'look-a1'"), None);
+    assert_eq!(
+        rig.one::<String>("SELECT branch FROM attempts WHERE id = 'look-a1'"),
+        "cpd/pay--look-a1"
+    );
+    assert_eq!(
+        rig.one::<String>("SELECT worktree FROM attempts WHERE id = 'look-a1'"),
+        dir.display().to_string()
+    );
+    assert_eq!(
+        rig.one::<Option<String>>("SELECT base_sha FROM attempts WHERE id = 'look-a1'"),
+        None
+    );
 
     // A2: the directory is created if missing, and it is the Worker's cwd; no git and no pre-start run.
     let _ = std::fs::remove_dir_all(&dir);
     let attempt = target(&mut rig.env, &id);
     let home = rig.env.home.clone();
     let before = rig.fakes.runner.calls().len();
-    let cwd = Ports::scope(&rig.fakes.ports, || prepare(&rig.fakes.ports, &home, &attempt));
-    assert_eq!(cwd.as_ref().ok(), Some(&dir), "the cwd is the explore directory: {cwd:?}");
+    let cwd = Ports::scope(&rig.fakes.ports, || {
+        prepare(&rig.fakes.ports, &home, &attempt)
+    });
+    assert_eq!(
+        cwd.as_ref().ok(),
+        Some(&dir),
+        "the cwd is the explore directory: {cwd:?}"
+    );
     assert!(dir.is_dir(), "the explore directory is created");
-    let calls: Vec<String> = rig.fakes.runner.calls()[before..].iter().map(|c| format!("{} {:?}", c.program, c.args)).collect();
-    assert!(calls.is_empty(), "no worktree, no branch, no pre-start: {calls:?}");
-    assert!(!home.hook_log(&plan(), &id, Hook::PreStart).exists(), "pre-start left no log");
-    assert_eq!(rig.one::<Option<String>>("SELECT base_sha FROM attempts WHERE id = 'look-a1'"), None, "the Attempt has no base_sha");
+    let calls: Vec<String> = rig.fakes.runner.calls()[before..]
+        .iter()
+        .map(|c| format!("{} {:?}", c.program, c.args))
+        .collect();
+    assert!(
+        calls.is_empty(),
+        "no worktree, no branch, no pre-start: {calls:?}"
+    );
+    assert!(
+        !home.hook_log(&plan(), &id, Hook::PreStart).exists(),
+        "pre-start left no log"
+    );
+    assert_eq!(
+        rig.one::<Option<String>>("SELECT base_sha FROM attempts WHERE id = 'look-a1'"),
+        None,
+        "the Attempt has no base_sha"
+    );
 }
 
 /// The launch env of the `durable` runner of `target`, over an adapter directory that holds the runner file.
@@ -60,7 +90,10 @@ fn worker_env(rig: &Rig, target: &Target) -> Vec<(String, String)> {
     std::fs::create_dir_all(adapter.join("durable-worker")).unwrap();
     std::fs::write(adapter.join("durable-worker").join("main.ts"), "").unwrap();
     std::fs::write(adapter.join("package.json"), "{}").unwrap();
-    let text = format!("version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n", adapter.display());
+    let text = format!(
+        "version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n",
+        adapter.display()
+    );
     let config = Config::parse(&text, Path::new("config.toml")).unwrap().0;
     let session = SessionId::parse(WORKER).unwrap();
     let launch = runner::launch(&rig.env.home, &config, &catalog(), target, &session).unwrap();
@@ -85,15 +118,26 @@ fn worker_env_of_an_explore_attempt_has_cpd_job_kind() {
     );
     let work = AttemptId::parse("w-a1").unwrap();
 
-    let kind = |env: &[(String, String)]| env.iter().find(|(k, _)| k == "CPD_JOB_KIND").map(|(_, v)| v.clone());
+    let kind = |env: &[(String, String)]| {
+        env.iter()
+            .find(|(k, _)| k == "CPD_JOB_KIND")
+            .map(|(_, v)| v.clone())
+    };
     let t = target(&mut rig.env, &scout);
     assert_eq!(kind(&worker_env(&rig, &t)).as_deref(), Some("scout"));
     let t = target(&mut rig.env, &research);
     assert_eq!(kind(&worker_env(&rig, &t)).as_deref(), Some("research"));
     let t = target(&mut rig.env, &work);
     let env = worker_env(&rig, &t);
-    assert_eq!(kind(&env), None, "a Worker of any other kind has no CPD_JOB_KIND");
-    assert!(env.iter().any(|(k, v)| k == "CPD_ATTEMPT" && v == "w-a1"), "it is still a Worker's environment");
+    assert_eq!(
+        kind(&env),
+        None,
+        "a Worker of any other kind has no CPD_JOB_KIND"
+    );
+    assert!(
+        env.iter().any(|(k, v)| k == "CPD_ATTEMPT" && v == "w-a1"),
+        "it is still a Worker's environment"
+    );
 }
 
 #[test]
@@ -116,9 +160,14 @@ fn a_new_attempt_removes_the_stale_artefact() {
     let home = rig.env.home.clone();
 
     for pass in 1..=2 {
-        let result = Ports::scope(&rig.fakes.ports, || prepare(&rig.fakes.ports, &home, &attempt));
+        let result = Ports::scope(&rig.fakes.ports, || {
+            prepare(&rig.fakes.ports, &home, &attempt)
+        });
         assert!(result.is_ok(), "pass {pass}: {result:?}");
-        assert!(!stale.exists(), "pass {pass}: the stale artefact of the Job is deleted");
+        assert!(
+            !stale.exists(),
+            "pass {pass}: the stale artefact of the Job is deleted"
+        );
         assert!(other.exists(), "pass {pass}: another Job's artefact stays");
         assert_eq!(artefact(&home, "look"), stale);
     }
@@ -134,22 +183,51 @@ fn worker_spec_of_an_explore_job_has_a_deliverable_section() {
     let job = rig
         .env
         .store
-        .read(|conn| Ok(crate::plan::jobs::load(conn, &plan())?.into_iter().find(|j| j.key == "look").unwrap()))
+        .read(|conn| {
+            Ok(crate::plan::jobs::load(conn, &plan())?
+                .into_iter()
+                .find(|j| j.key == "look")
+                .unwrap())
+        })
         .unwrap();
 
-    let path = rig.env.store.read(|conn| render_spec(conn, &home, &attempt, &job));
-    assert!(path.is_ok(), "the Worker Spec of an explore Job renders: {path:?}");
+    let path = rig
+        .env
+        .store
+        .read(|conn| render_spec(conn, &home, &attempt, &job));
+    assert!(
+        path.is_ok(),
+        "the Worker Spec of an explore Job renders: {path:?}"
+    );
     let text = std::fs::read_to_string(path.unwrap()).unwrap();
 
-    let heading = text.lines().find(|l| l.starts_with('#') && l.contains("Deliverable"));
+    let heading = text
+        .lines()
+        .find(|l| l.starts_with('#') && l.contains("Deliverable"));
     assert!(heading.is_some(), "a Deliverable section:\n{text}");
     let section = &text[text.find(heading.unwrap()).unwrap()..];
     let artefact = artefact(&home, "look");
-    assert!(section.contains(&artefact.display().to_string()), "the artefact path {}:\n{section}", artefact.display());
-    assert!(section.contains("cpd attempt submit look-a1 --summary-file "), "the submit command:\n{section}");
-    assert!(section.contains("1500"), "the 1500-character cap:\n{section}");
-    assert!(section.contains("cpd context search"), "the read-only context search:\n{section}");
-    assert!(section.contains("cpd context show"), "the read-only context show:\n{section}");
+    assert!(
+        section.contains(&artefact.display().to_string()),
+        "the artefact path {}:\n{section}",
+        artefact.display()
+    );
+    assert!(
+        section.contains("cpd attempt submit look-a1 --summary-file "),
+        "the submit command:\n{section}"
+    );
+    assert!(
+        section.contains("1500"),
+        "the 1500-character cap:\n{section}"
+    );
+    assert!(
+        section.contains("cpd context search"),
+        "the read-only context search:\n{section}"
+    );
+    assert!(
+        section.contains("cpd context show"),
+        "the read-only context show:\n{section}"
+    );
 }
 
 #[test]
@@ -164,12 +242,22 @@ fn policy_of_an_explore_worker_resolves_from_the_contexts_owner() {
     let worker = SessionId::parse(WORKER).unwrap();
     let owner = PolicyKey::Owner(OwnerLogin::parse("acme").unwrap());
 
-    let found = rig.env.store.read(|conn| crate::policy::show::key_of_session(conn, &worker));
-    assert_eq!(found.as_ref().ok().map(|(_, key)| key), Some(&owner), "the Context owner's policy, no PR and no error: {found:?}");
+    let found = rig
+        .env
+        .store
+        .read(|conn| crate::policy::show::key_of_session(conn, &worker));
+    assert_eq!(
+        found.as_ref().ok().map(|(_, key)| key),
+        Some(&owner),
+        "the Context owner's policy, no PR and no error: {found:?}"
+    );
     assert_eq!(found.as_ref().ok().map(|(role, _)| *role), Some("worker"));
     // As a Lead's does.
     let lead_key = rig.env.store.read(|conn| {
-        let id: String = conn.query_row("SELECT id FROM sessions WHERE role = 'lead'", [], |r| r.get(0))?;
+        let id: String =
+            conn.query_row("SELECT id FROM sessions WHERE role = 'lead'", [], |r| {
+                r.get(0)
+            })?;
         Ok(id)
     });
     assert!(lead_key.is_ok());
@@ -192,18 +280,43 @@ fn clean_up_leaves_explore_attempts_and_their_directory_alone() {
     // The explore Attempt of a merged explore Job, ended the way `attempt submit` ends it.
     let ended = submit(&mut env, &rig.fakes, &id, Some(&summary));
     assert!(ended.is_ok(), "the explore Attempt ends merged: {ended:?}");
-    assert_eq!(env.store.read(|c| Ok(c.query_row("SELECT status FROM jobs WHERE key = 'look'", [], |r| r.get::<_, String>(0))?)).unwrap(), "merged");
+    assert_eq!(
+        env.store
+            .read(|c| Ok(
+                c.query_row("SELECT status FROM jobs WHERE key = 'look'", [], |r| r
+                    .get::<_, String>(
+                    0
+                ))?
+            ))
+            .unwrap(),
+        "merged"
+    );
 
     let writes = |env: &mut Env| -> (i64, i64) {
-        env.store.read(|c| Ok((c.query_row("SELECT max(id) FROM history", [], |r| r.get(0))?, c.query_row("SELECT max(id) FROM txns", [], |r| r.get(0))?))).unwrap()
+        env.store
+            .read(|c| {
+                Ok((
+                    c.query_row("SELECT max(id) FROM history", [], |r| r.get(0))?,
+                    c.query_row("SELECT max(id) FROM txns", [], |r| r.get(0))?,
+                ))
+            })
+            .unwrap()
     };
     let before = writes(&mut env);
     let calls = rig.fakes.runner.calls().len();
     let dir = explore_dir(&env.home);
 
-    let _ = (*rig.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]), Reply::ok("[]"));
+    let _ = (*rig.fakes.runner).clone().on(
+        "gh",
+        |c| c.args.starts_with(&["pr".to_owned(), "list".to_owned()]),
+        Reply::ok("[]"),
+    );
     let _ = rig.pass();
-    let args = crate::prune::Args { apply: true, drop: Vec::new(), repos: vec![rig.repo.dir().to_path_buf()] };
+    let args = crate::prune::Args {
+        apply: true,
+        drop: Vec::new(),
+        repos: vec![rig.repo.dir().to_path_buf()],
+    };
     let _ = crate::prune::run(&rig.fakes.ports, &rig.home, &args);
 
     assert!(artefact.is_file(), "the artefact stays");
@@ -215,5 +328,8 @@ fn clean_up_leaves_explore_attempts_and_their_directory_alone() {
         .map(|c| c.args.join(" "))
         .filter(|a| a.contains("remove") || a.contains("-D") || a.contains("prune"))
         .collect();
-    assert!(removals.is_empty(), "no worktree or branch is removed: {removals:?}");
+    assert!(
+        removals.is_empty(),
+        "no worktree or branch is removed: {removals:?}"
+    );
 }

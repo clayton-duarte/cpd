@@ -36,7 +36,9 @@ impl Handler for Gh {
                 Some(v) => Reply::ok(&v.to_string()),
                 None => Reply::exit(1, "", "gh: HTTP 500: Server Error\n"),
             },
-            ["api", "--method", "POST", GET, "--input", "-"] if self.post_fails => Reply::exit(1, "", "gh: HTTP 422\n"),
+            ["api", "--method", "POST", GET, "--input", "-"] if self.post_fails => {
+                Reply::exit(1, "", "gh: HTTP 422\n")
+            }
             ["api", "--method", "POST", GET, "--input", "-"] => Reply::ok("[]"),
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
         }
@@ -72,18 +74,45 @@ fn condition(kind: Kind, subject: &str) -> Condition {
 }
 
 /// A temp home with item 1 of `kind` and `subject`, and a `gh` answering `get`.
-fn fixture_of(kind: Kind, subject: &str, get: Option<Value>, post_fails: bool) -> (Fixture, Arc<Gh>) {
+fn fixture_of(
+    kind: Kind,
+    subject: &str,
+    get: Option<Value>,
+    post_fails: bool,
+) -> (Fixture, Arc<Gh>) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n").unwrap();
     let clock = ManualClock::new();
-    let gh = Arc::new(Gh { get, post_fails, seen: Mutex::new(Vec::new()) });
+    let gh = Arc::new(Gh {
+        get,
+        post_fails,
+        seen: Mutex::new(Vec::new()),
+    });
     let runner = Arc::new(FakeRunner::new(clock.clone()).route("gh", gh.clone()));
-    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
+    let ports = Ports {
+        clock: Arc::new(clock),
+        runner: runner.clone(),
+        spawn: Arc::new(FakeSpawn::new()),
+        ..Ports::real()
+    };
     let mut env = Env::open_home_with(&ports, home.clone()).unwrap();
-    reconcile(&mut env.store, &[condition(kind, subject)], "2026-01-01T00:00:00.000Z").unwrap();
-    (Fixture { _dir: dir, home, env, runner }, gh)
+    reconcile(
+        &mut env.store,
+        &[condition(kind, subject)],
+        "2026-01-01T00:00:00.000Z",
+    )
+    .unwrap();
+    (
+        Fixture {
+            _dir: dir,
+            home,
+            env,
+            runner,
+        },
+        gh,
+    )
 }
 
 fn fixture(get: Value) -> Fixture {
@@ -104,19 +133,35 @@ fn refused(out: Result<Output, CpdError>, code: ErrorCode) -> CpdError {
 }
 
 fn gh_calls(f: &Fixture) -> Vec<Call> {
-    f.runner.calls().into_iter().filter(|c| c.tool == "gh").collect()
+    f.runner
+        .calls()
+        .into_iter()
+        .filter(|c| c.tool == "gh")
+        .collect()
 }
 
 fn closed_at(f: &mut Fixture) -> Option<String> {
-    f.env.store.read(|c| Ok(c.query_row("SELECT closed_at FROM inbox_items WHERE id = 1", [], |r| r.get(0))?)).unwrap()
+    f.env
+        .store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT closed_at FROM inbox_items WHERE id = 1", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
 }
 
 fn closed_events(f: &mut Fixture) -> Vec<Value> {
     f.env
         .store
         .read(|c| {
-            let mut s = c.prepare("SELECT data FROM events WHERE kind = 'inbox-closed' ORDER BY id")?;
-            let rows = s.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            let mut s =
+                c.prepare("SELECT data FROM events WHERE kind = 'inbox-closed' ORDER BY id")?;
+            let rows = s
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .unwrap()
@@ -157,7 +202,10 @@ fn stdin_of(call: &Call) -> Value {
 
 #[test]
 fn approve_posts_the_environments_the_user_can_approve_and_closes_the_item() {
-    let mut f = fixture(json!([entry(7, "production", true), entry(9, "staging", false)]));
+    let mut f = fixture(json!([
+        entry(7, "production", true),
+        entry(9, "staging", false)
+    ]));
     put_cache(&f, &cache(&[run_entry("acme/pay", 123)]));
     let out = fields(approve_in(&mut f.env, 1));
 
@@ -166,20 +214,35 @@ fn approve_posts_the_environments_the_user_can_approve_and_closes_the_item() {
     assert_eq!(calls[0].args, ["api", GET]);
     assert_eq!(calls[0].cwd.as_deref(), Some(f.home.root()));
     assert_eq!(calls[0].deadline, std::time::Duration::from_secs(15));
-    assert_eq!(calls[1].args, ["api", "--method", "POST", GET, "--input", "-"]);
+    assert_eq!(
+        calls[1].args,
+        ["api", "--method", "POST", GET, "--input", "-"]
+    );
     assert_eq!(calls[1].deadline, std::time::Duration::from_secs(15));
-    assert_eq!(stdin_of(&calls[1]), json!({"environment_ids": [7], "state": "approved", "comment": ""}));
-    assert_eq!(out, json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": ["production"]}));
+    assert_eq!(
+        stdin_of(&calls[1]),
+        json!({"environment_ids": [7], "state": "approved", "comment": ""})
+    );
+    assert_eq!(
+        out,
+        json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": ["production"]})
+    );
     assert!(out.get("already").is_none());
 
     assert!(closed_at(&mut f).is_some());
-    assert_eq!(closed_events(&mut f), [json!({"item": 1, "kind": "deploy"})]);
+    assert_eq!(
+        closed_events(&mut f),
+        [json!({"item": 1, "kind": "deploy"})]
+    );
     assert_eq!(read_cache(&f)["runs"], json!([]));
 }
 
 #[test]
 fn every_approvable_environment_is_posted_sorted_by_name() {
-    let mut f = fixture(json!([entry(3, "staging", true), entry(7, "production", true)]));
+    let mut f = fixture(json!([
+        entry(3, "staging", true),
+        entry(7, "production", true)
+    ]));
     let out = fields(approve_in(&mut f.env, 1));
     let calls = gh_calls(&f);
     assert_eq!(calls.len(), 2, "{calls:?}");
@@ -191,7 +254,14 @@ fn every_approvable_environment_is_posted_sorted_by_name() {
 fn approve_removes_only_that_run_from_the_cache() {
     let mut f = fixture(json!([entry(7, "production", true)]));
     let others = [run_entry("acme/pay", 124), run_entry("acme/web", 123)];
-    put_cache(&f, &cache(&[run_entry("acme/pay", 123), others[0].clone(), others[1].clone()]));
+    put_cache(
+        &f,
+        &cache(&[
+            run_entry("acme/pay", 123),
+            others[0].clone(),
+            others[1].clone(),
+        ]),
+    );
     fields(approve_in(&mut f.env, 1));
     assert_eq!(read_cache(&f), cache(&others));
 }
@@ -205,9 +275,15 @@ fn nothing_approvable_posts_nothing_and_still_clears_the_cache_and_the_item() {
         let calls = gh_calls(&f);
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(calls[0].args, ["api", GET]);
-        assert_eq!(out, json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": [], "already": true}));
+        assert_eq!(
+            out,
+            json!({"id": 1, "repo": "acme/pay", "run_id": 123, "environments": [], "already": true})
+        );
         assert!(closed_at(&mut f).is_some());
-        assert_eq!(closed_events(&mut f), [json!({"item": 1, "kind": "deploy"})]);
+        assert_eq!(
+            closed_events(&mut f),
+            [json!({"item": 1, "kind": "deploy"})]
+        );
         assert_eq!(read_cache(&f)["runs"], json!([]));
     }
 }
@@ -276,14 +352,22 @@ fn a_failed_read_leaves_the_item_open_and_the_cache_intact() {
     put_raw(&f, &raw);
     refused(approve_in(&mut f.env, 1), ErrorCode::GhFailed);
     let calls = gh_calls(&f);
-    assert_eq!(calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(), [["api", GET]]);
+    assert_eq!(
+        calls.iter().map(|c| c.args.clone()).collect::<Vec<_>>(),
+        [["api", GET]]
+    );
     assert_eq!(closed_at(&mut f), None);
     assert_eq!(std::fs::read_to_string(cache_path(&f)).unwrap(), raw);
 }
 
 #[test]
 fn a_failed_post_leaves_the_item_open_and_the_cache_intact() {
-    let (mut f, _) = fixture_of(Kind::Deploy, "deploy:acme/pay#123", Some(json!([entry(7, "production", true)])), true);
+    let (mut f, _) = fixture_of(
+        Kind::Deploy,
+        "deploy:acme/pay#123",
+        Some(json!([entry(7, "production", true)])),
+        true,
+    );
     let raw = cache(&[run_entry("acme/pay", 123)]).to_string();
     put_raw(&f, &raw);
     refused(approve_in(&mut f.env, 1), ErrorCode::GhFailed);
@@ -300,7 +384,12 @@ struct Cli {
 
 #[test]
 fn inbox_approve_parses_with_the_item_id() {
-    assert!(matches!(Cli::try_parse_from(["cpd", "approve", "7"]).unwrap().command, Command::Approve(_)));
+    assert!(matches!(
+        Cli::try_parse_from(["cpd", "approve", "7"])
+            .unwrap()
+            .command,
+        Command::Approve(_)
+    ));
     assert!(Cli::try_parse_from(["cpd", "approve"]).is_err());
     assert!(Cli::try_parse_from(["cpd", "approve", "x"]).is_err());
     // Red against the stub: the id reaches the seam, so item 7 does not exist.

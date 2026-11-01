@@ -69,7 +69,8 @@ pub(crate) enum Rule {
 /// A row that keeps a recorded design, by name: the name carries the record id.
 #[derive(Clone, Debug)]
 pub(crate) struct Exempt {
-    #[allow(dead_code)] // the record id names the row for the reader of the sample; no check reads it
+    #[allow(dead_code)]
+    // the record id names the row for the reader of the sample; no check reads it
     pub name: &'static str,
     /// The row in the sample's buffer.
     pub row: u16,
@@ -164,7 +165,14 @@ fn inked(cell: &Cell) -> bool {
 /// The rows of `buf` as text, for a message.
 pub(crate) fn dump(buf: &Buffer) -> String {
     (buf.area.y..buf.area.bottom())
-        .map(|y| format!("{y:>2}|{}|", (buf.area.x..buf.area.right()).map(|x| buf[(x, y)].symbol()).collect::<String>()))
+        .map(|y| {
+            format!(
+                "{y:>2}|{}|",
+                (buf.area.x..buf.area.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -187,9 +195,17 @@ pub(crate) fn check(subject: &str, width: u16, sample: &Sample) {
 
 /// [`check`] for a pane whose canvas is at `scroll`.
 pub(crate) fn check_at(subject: &str, width: u16, sample: &Sample, scroll: Scroll) {
-    let Sample { buf, container, boxes } = sample;
+    let Sample {
+        buf,
+        container,
+        boxes,
+    } = sample;
     let fail = |x: u16, y: u16, what: &str| {
-        panic!("{subject} at width {width}: {what} at cell ({x}, {y}) = {:?}\n{}", sym(buf, x, y), dump(buf))
+        panic!(
+            "{subject} at width {width}: {what} at cell ({x}, {y}) = {:?}\n{}",
+            sym(buf, x, y),
+            dump(buf)
+        )
     };
     // (1) the margin columns of the container are blank and unstyled on every row, boxes or not. At the canvas's corner
     // only: a scrolled canvas reaches the pane's edges by design, and so does a box the pane clips on the right.
@@ -229,8 +245,16 @@ pub(crate) fn check_at(subject: &str, width: u16, sample: &Sample, scroll: Scrol
         if clipped(placed) {
             continue;
         }
-        if scroll == Scroll::Corner && r.x < container.x + spacing::MARGIN_X || r.right() + spacing::MARGIN_X > container.right() {
-            fail(r.x, r.y, &format!("(1) box {name} {r:?} keeps less than the margin from the container {container:?}"));
+        if scroll == Scroll::Corner && r.x < container.x + spacing::MARGIN_X
+            || r.right() + spacing::MARGIN_X > container.right()
+        {
+            fail(
+                r.x,
+                r.y,
+                &format!(
+                    "(1) box {name} {r:?} keeps less than the margin from the container {container:?}"
+                ),
+            );
         }
         let min_rows = if placed.kind == Kind::Rail { 4 } else { 2 };
         if r.width < spacing::MIN_WIDTH && placed.exempt.iter().any(|e| e.rule == Rule::Minimum) {
@@ -241,7 +265,13 @@ pub(crate) fn check_at(subject: &str, width: u16, sample: &Sample, scroll: Scrol
             for y in r.y..r.bottom() {
                 for x in r.x..r.right() {
                     if WALL_GLYPHS.contains(&sym(buf, x, y)) {
-                        fail(x, y, &format!("(9) box {name} {r:?} is below the minimum and draws a wall glyph"));
+                        fail(
+                            x,
+                            y,
+                            &format!(
+                                "(9) box {name} {r:?} is below the minimum and draws a wall glyph"
+                            ),
+                        );
                     }
                 }
             }
@@ -255,18 +285,35 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     let (r, name) = (placed.rect, placed.name);
     let (right, rail) = (r.right() - 1, placed.kind == Kind::Rail);
     // the rows: `top` is the top border, `closing` the bottom one (the closing row of a rail), the body rows between
-    let (top, closing) = if rail { (r.y + 1, r.bottom() - 2) } else { (r.y, r.bottom() - 1) };
+    let (top, closing) = if rail {
+        (r.y + 1, r.bottom() - 2)
+    } else {
+        (r.y, r.bottom() - 1)
+    };
     let walls = |y: u16, left: &[&str], end: Option<&str>, what: &str| {
         if !left.contains(&sym(buf, r.x, y)) {
-            fail(r.x, y, &format!("(2) box {name}: the first column is not {what}"));
+            fail(
+                r.x,
+                y,
+                &format!("(2) box {name}: the first column is not {what}"),
+            );
         }
         if let Some(end) = end.filter(|_| !rail)
-            && sym(buf, right, y) != end {
-                fail(right, y, &format!("(2) box {name}: the last column is not {end}"));
-            }
+            && sym(buf, right, y) != end
+        {
+            fail(
+                right,
+                y,
+                &format!("(2) box {name}: the last column is not {end}"),
+            );
+        }
         // a rail's title runs to the area's last cell (the Inbox's pill ends there); the body and closing rows leave it blank
         if rail && y != top && !blank(&buf[(right, y)]) && !exempted(placed, y, Rule::RightEdge) {
-            fail(right, y, &format!("(2) box {name}: a rail writes its last column"));
+            fail(
+                right,
+                y,
+                &format!("(2) box {name}: a rail writes its last column"),
+            );
         }
     };
     walls(top, &["╭"], Some("╮"), "╭");
@@ -279,7 +326,11 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
         for y in [r.y, r.bottom() - 1] {
             for x in r.x..r.right() {
                 if !blank(&buf[(x, y)]) {
-                    fail(x, y, &format!("(6) box {name}: the row above or below a rail is not blank"));
+                    fail(
+                        x,
+                        y,
+                        &format!("(6) box {name}: the row above or below a rail is not blank"),
+                    );
                 }
             }
         }
@@ -290,15 +341,31 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
         let body = y < closing;
         if body && !exempted(placed, y, Rule::Padding) {
             if !blank(&buf[(r.x + 1, y)]) {
-                fail(r.x + 1, y, &format!("(3) box {name}: the cell after the wall is not blank"));
+                fail(
+                    r.x + 1,
+                    y,
+                    &format!("(3) box {name}: the cell after the wall is not blank"),
+                );
             }
             if !rail && !blank(&buf[(right - 1, y)]) {
-                fail(right - 1, y, &format!("(3) box {name}: the cell before the right wall is not blank"));
+                fail(
+                    right - 1,
+                    y,
+                    &format!("(3) box {name}: the cell before the right wall is not blank"),
+                );
             }
         }
         for x in r.x + 1..=right {
-            if x > last_content && !blank(&buf[(x, y)]) && !(x == right && !rail) && !exempted(placed, y, Rule::RightEdge) {
-                fail(x, y, &format!("(4) box {name}: content past column {last_content}"));
+            if x > last_content
+                && !blank(&buf[(x, y)])
+                && !(x == right && !rail)
+                && !exempted(placed, y, Rule::RightEdge)
+            {
+                fail(
+                    x,
+                    y,
+                    &format!("(4) box {name}: content past column {last_content}"),
+                );
             }
         }
     }
@@ -308,15 +375,26 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
             continue;
         }
         if (r.x + 1..right).all(|x| !inked(&buf[(x, y)])) {
-            fail(r.x + 1, y, &format!("(5) box {name}: a blank row under the top border or above the bottom one"));
+            fail(
+                r.x + 1,
+                y,
+                &format!(
+                    "(5) box {name}: a blank row under the top border or above the bottom one"
+                ),
+            );
         }
     }
     // (8) the title: `╭─` then the pill's left cap
     let pill = (r.x..r.right()).find(|&x| sym(buf, x, top) == PILL_LEFT);
     if let Some(x) = pill.filter(|_| placed.kind != Kind::FullText)
-        && (x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─") {
-            fail(x, top, &format!("(8) box {name}: the title does not start `╭─` then the pill's left cap"));
-        }
+        && (x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─")
+    {
+        fail(
+            x,
+            top,
+            &format!("(8) box {name}: the title does not start `╭─` then the pill's left cap"),
+        );
+    }
 }
 
 /// A section title's three rows: blank above and below the title row, which starts one column in with `──` and then, when a
@@ -324,24 +402,51 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
 fn check_rule(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     let (r, name) = (placed.rect, placed.name);
     if r.height != 3 {
-        fail(r.x, r.y, &format!("(10) section title {name} {r:?} is not three rows"));
+        fail(
+            r.x,
+            r.y,
+            &format!("(10) section title {name} {r:?} is not three rows"),
+        );
     }
     for y in [r.y, r.y + 2] {
         for x in r.x..r.right() {
             if !blank(&buf[(x, y)]) {
-                fail(x, y, &format!("(10) section title {name}: the row above or below the title row is not blank"));
+                fail(
+                    x,
+                    y,
+                    &format!(
+                        "(10) section title {name}: the row above or below the title row is not blank"
+                    ),
+                );
             }
         }
     }
     let y = r.y + 1;
     if r.width >= 3 && (sym(buf, r.x + 1, y) != "─" || sym(buf, r.x + 2, y) != "─") {
-        fail(r.x + 1, y, &format!("(10) section title {name}: the title row does not start one column in with `──`"));
+        fail(
+            r.x + 1,
+            y,
+            &format!(
+                "(10) section title {name}: the title row does not start one column in with `──`"
+            ),
+        );
     }
     if !blank(&buf[(r.x, y)]) || !blank(&buf[(r.right() - 1, y)]) {
-        fail(r.x, y, &format!("(10) section title {name}: the title row's first or last column is not blank"));
+        fail(
+            r.x,
+            y,
+            &format!(
+                "(10) section title {name}: the title row's first or last column is not blank"
+            ),
+        );
     }
     if let Some(x) = (r.x..r.right()).find(|&x| sym(buf, x, y) == PILL_LEFT)
-        && x != r.x + 3 {
-            fail(x, y, &format!("(10) section title {name}: the pill's left cap is not right after `──`"));
-        }
+        && x != r.x + 3
+    {
+        fail(
+            x,
+            y,
+            &format!("(10) section title {name}: the pill's left cap is not right after `──`"),
+        );
+    }
 }

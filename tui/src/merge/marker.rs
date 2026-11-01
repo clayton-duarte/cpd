@@ -46,10 +46,17 @@ pub fn write_merged_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(),
 fn write_with(ports: &Ports, home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
     let target = path(home, pull);
     let pid = std::process::id();
-    let at = ports.clock.utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+    let at = ports
+        .clock
+        .utc()
+        .format(&Rfc3339)
+        .expect("a UTC time is RFC 3339");
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::Internal, format!("Cannot write the merge marker {}: {e}.", target.display()))
-            .with("path", target.display().to_string())
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("Cannot write the merge marker {}: {e}.", target.display()),
+        )
+        .with("path", target.display().to_string())
     };
     let mut json = serde_json::json!({ "pid": pid, "at": at });
     if merged {
@@ -68,14 +75,17 @@ pub fn remove(home: &CpdHome, pull: &Pull) {
 /// Every readable marker: its file, its pull request as `<owner>/<repo>#<n>` and its content. A file that is not a
 /// marker is none (a view cannot fail on it, and the next merge action replaces it).
 fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
-    let Ok(entries) = std::fs::read_dir(path_dir(home)) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(path_dir(home)) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
             let (owner_repo, number) = name.strip_suffix(".json")?.rsplit_once("__")?;
             let (owner, repo) = owner_repo.split_once("__")?;
-            let marker: Marker = serde_json::from_str(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
+            let marker: Marker =
+                serde_json::from_str(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
             Some((entry.path(), format!("{owner}/{repo}#{number}"), marker))
         })
         .collect()
@@ -92,7 +102,10 @@ pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
 pub fn live_with(ports: &Ports, home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
     markers(home)
         .into_iter()
-        .filter(|(_, pull, marker)| u32::try_from(marker.pid).is_ok_and(|pid| ports.spawn.alive(Pid(pid))) || (marker.merged && open.contains(pull)))
+        .filter(|(_, pull, marker)| {
+            u32::try_from(marker.pid).is_ok_and(|pid| ports.spawn.alive(Pid(pid)))
+                || (marker.merged && open.contains(pull))
+        })
         .map(|(_, pull, _)| pull)
         .collect()
 }
@@ -139,28 +152,52 @@ mod tests {
     fn put(dir: &tempfile::TempDir, file: &str, pid: u32) {
         let merging = dir.path().join("run/tui/merging");
         std::fs::create_dir_all(&merging).unwrap();
-        std::fs::write(merging.join(file), format!(r#"{{"pid": {pid}, "at": "2026-10-20T12:00:00Z"}}"#)).unwrap();
+        std::fs::write(
+            merging.join(file),
+            format!(r#"{{"pid": {pid}, "at": "2026-10-20T12:00:00Z"}}"#),
+        )
+        .unwrap();
     }
 
     fn files(dir: &tempfile::TempDir) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir.path().join("run/tui/merging"))
-            .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
             .unwrap_or_default();
         names.sort();
         names
     }
 
     #[test]
-    fn the_marker_is_one_file_per_pull_request_with_this_pid_and_an_rfc_3339_time_and_no_temporary_file_is_left() {
+    fn the_marker_is_one_file_per_pull_request_with_this_pid_and_an_rfc_3339_time_and_no_temporary_file_is_left()
+     {
         let dir = tempfile::tempdir().unwrap();
         write(&home(&dir), &pull("acme/api", 3)).unwrap();
-        assert_eq!(files(&dir), ["acme__api__3.json"], "one file, named <owner>__<repo>__<n>.json, no temporary file beside it");
-        let text = std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
+        assert_eq!(
+            files(&dir),
+            ["acme__api__3.json"],
+            "one file, named <owner>__<repo>__<n>.json, no temporary file beside it"
+        );
+        let text =
+            std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["pid"], std::process::id(), "the action's pid: {text}");
-        let at = json["at"].as_str().unwrap_or_else(|| panic!("an `at` string: {text}"));
-        assert!(OffsetDateTime::parse(at, &Rfc3339).is_ok(), "{at:?} is RFC 3339");
-        assert_eq!(json.as_object().unwrap().len(), 2, "only pid and at: {text}");
+        let at = json["at"]
+            .as_str()
+            .unwrap_or_else(|| panic!("an `at` string: {text}"));
+        assert!(
+            OffsetDateTime::parse(at, &Rfc3339).is_ok(),
+            "{at:?} is RFC 3339"
+        );
+        assert_eq!(
+            json.as_object().unwrap().len(),
+            2,
+            "only pid and at: {text}"
+        );
     }
 
     #[test]
@@ -169,8 +206,13 @@ mod tests {
         put(&dir, "acme__api__3.json", DEAD_PID);
         put(&dir, "acme__web__4.json", std::process::id());
         write(&home(&dir), &pull("acme/api", 3)).unwrap();
-        let text = std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["pid"], std::process::id(), "replaced: {text}");
+        let text =
+            std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()["pid"],
+            std::process::id(),
+            "replaced: {text}"
+        );
         assert_eq!(files(&dir), ["acme__api__3.json", "acme__web__4.json"]);
     }
 
@@ -188,12 +230,22 @@ mod tests {
     #[test]
     fn only_a_marker_whose_pid_is_alive_is_live_and_a_stale_one_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::new(), "no directory: none");
+        assert_eq!(
+            live(&home(&dir), &BTreeSet::new()),
+            BTreeSet::new(),
+            "no directory: none"
+        );
         put(&dir, "acme__api__3.json", std::process::id());
         put(&dir, "acme__web__4.json", DEAD_PID);
-        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::from(["acme/api#3".to_owned()]));
+        assert_eq!(
+            live(&home(&dir), &BTreeSet::new()),
+            BTreeSet::from(["acme/api#3".to_owned()])
+        );
         // a restarted view reads the same files
-        assert_eq!(live(&home(&dir), &BTreeSet::new()), live(&home(&dir), &BTreeSet::new()));
+        assert_eq!(
+            live(&home(&dir), &BTreeSet::new()),
+            live(&home(&dir), &BTreeSet::new())
+        );
     }
 }
 

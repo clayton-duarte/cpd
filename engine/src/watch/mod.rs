@@ -23,95 +23,95 @@
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
 mod archive;
-mod asks;
 mod archive_leads;
-mod auto_merge;
-mod open;
-mod distill;
-mod engine;
-mod ensure;
-mod escalations;
-pub mod host_alert;
-mod inbox;
-mod janitor;
-mod jira;
-mod react;
-mod liveness;
-mod lock;
-mod log;
-mod models;
-mod parked;
-mod closed;
-mod hosts;
-mod poll_run;
-mod pr;
-mod provider_hold;
-mod report;
-pub mod restart;
-mod schedule;
-mod sleep;
-pub mod team;
-mod titles;
-mod wake;
-mod workers;
-#[cfg(test)]
-mod local_time_tests;
-#[cfg(test)]
-mod incident_tests;
-#[cfg(test)]
-mod provider_hold_e3_tests;
-#[cfg(test)]
-mod explore_tests;
-#[cfg(test)]
-mod janitor_tests;
-#[cfg(test)]
-mod inbox_tests;
-#[cfg(test)]
-mod stuck_explore_tests;
-#[cfg(test)]
-mod repeated_asks_tests;
-#[cfg(test)]
-mod parked_tests;
-#[cfg(test)]
-mod closed_tests;
-#[cfg(test)]
-mod stacked_ready_tests;
-#[cfg(test)]
-mod open_tests;
 #[cfg(test)]
 mod archive_leads_tests;
 #[cfg(test)]
 mod archive_tests;
+mod asks;
+mod auto_merge;
+mod closed;
 #[cfg(test)]
-mod open_description_tests;
-#[cfg(test)]
-mod report_restart_tests;
-#[cfg(test)]
-mod open_jira_tests;
-#[cfg(test)]
-mod schedule_tests;
-#[cfg(test)]
-mod testkit;
-#[cfg(test)]
-mod pill_texts;
-#[cfg(test)]
-mod poll_run_tests;
-#[cfg(test)]
-mod incident_option_tests;
-#[cfg(test)]
-mod runner_tests;
+mod closed_tests;
+mod distill;
 #[cfg(test)]
 mod durable_drain_sleep_tests;
 #[cfg(test)]
 mod durable_e2_tests;
 #[cfg(test)]
 mod durable_flow_tests;
+mod engine;
+mod ensure;
+mod escalations;
+#[cfg(test)]
+mod explore_tests;
+pub mod host_alert;
+mod hosts;
 #[cfg(test)]
 mod hosts_tests;
+mod inbox;
+#[cfg(test)]
+mod inbox_tests;
+#[cfg(test)]
+mod incident_option_tests;
+#[cfg(test)]
+mod incident_tests;
+mod janitor;
+#[cfg(test)]
+mod janitor_tests;
+mod jira;
+mod liveness;
+#[cfg(test)]
+mod local_time_tests;
+mod lock;
+mod log;
+mod models;
+mod open;
+#[cfg(test)]
+mod open_description_tests;
+#[cfg(test)]
+mod open_jira_tests;
+#[cfg(test)]
+mod open_tests;
+mod parked;
+#[cfg(test)]
+mod parked_tests;
+#[cfg(test)]
+mod pill_texts;
+mod poll_run;
+#[cfg(test)]
+mod poll_run_tests;
 #[cfg(test)]
 mod ports_tests;
+mod pr;
+mod provider_hold;
+#[cfg(test)]
+mod provider_hold_e3_tests;
 #[cfg(test)]
 mod provider_hold_tests;
+mod react;
+#[cfg(test)]
+mod repeated_asks_tests;
+mod report;
+#[cfg(test)]
+mod report_restart_tests;
+pub mod restart;
+#[cfg(test)]
+mod runner_tests;
+mod schedule;
+#[cfg(test)]
+mod schedule_tests;
+mod sleep;
+#[cfg(test)]
+mod stacked_ready_tests;
+#[cfg(test)]
+mod stuck_explore_tests;
+pub mod team;
+#[cfg(test)]
+mod testkit;
+mod titles;
+mod wake;
+mod workers;
 
 use std::fs;
 use std::io;
@@ -162,7 +162,10 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
 }
 
 /// `cpd watch` on `ports` in `CPD_HOME`: the engine runs its ticks, waiting through `ports.clock`, until `until` is set.
-pub fn run_with(ports: &cpd_core::ports::Ports, until: &std::sync::atomic::AtomicBool) -> Result<Output, CpdError> {
+pub fn run_with(
+    ports: &cpd_core::ports::Ports,
+    until: &std::sync::atomic::AtomicBool,
+) -> Result<Output, CpdError> {
     engine::run_with(ports, &CpdHome::from_env()?, until)
 }
 
@@ -173,8 +176,19 @@ fn detached_launch(program: &Path, args: &[&str], home: &CpdHome, log: PathBuf) 
     Launch {
         program: program.to_string_lossy().into_owned(),
         args: args.iter().map(|a| (*a).to_owned()).collect(),
-        env_set: vec![("CPD_HOME".to_owned(), home.root().to_string_lossy().into_owned())],
-        env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
+        env_set: vec![(
+            "CPD_HOME".to_owned(),
+            home.root().to_string_lossy().into_owned(),
+        )],
+        env_remove: [
+            "CPD_PLAN",
+            "CPD_SESSION",
+            "CPD_ATTEMPT",
+            "TMUX",
+            "TMUX_PANE",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         cwd: Some(home.root().to_owned()),
         setsid: true,
         stdout_to: Some(log),
@@ -213,8 +227,8 @@ fn sweep_detached(engine: &mut engine::Engine) {
 mod tests {
     use cpd_core::host::spawn::{FakeSpawn, Spawn};
 
-    use super::*;
     use super::testkit::Fx;
+    use super::*;
 
     #[test]
     fn a_detached_childs_pid_is_in_its_file_until_the_engine_sees_it_end() {
@@ -224,9 +238,16 @@ mod tests {
         let file = fx.engine.home.root().join("run/x/child.pid");
         let pid = spawn.spawn(&Launch::default()).unwrap();
 
-        assert_eq!(record_detached(&mut fx.engine, pid, file.clone()).unwrap(), pid.0);
+        assert_eq!(
+            record_detached(&mut fx.engine, pid, file.clone()).unwrap(),
+            pid.0
+        );
         assert_eq!(fs::read_to_string(&file).unwrap(), format!("{}\n", pid.0));
-        assert_eq!(fs::read_dir(file.parent().unwrap()).unwrap().count(), 1, "no temporary file is left");
+        assert_eq!(
+            fs::read_dir(file.parent().unwrap()).unwrap().count(),
+            1,
+            "no temporary file is left"
+        );
         sweep_detached(&mut fx.engine);
         assert!(file.exists(), "it runs");
 

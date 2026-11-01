@@ -10,13 +10,13 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::error::{CpdError, ErrorCode};
-use super::merge_method::{MergeMethods, Method};
 use super::comments;
+use super::merge_method::{MergeMethods, Method};
 use super::status::{Approval, ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
+use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
-use crate::host::limit::limit;
 use crate::host::deadline::Failed;
+use crate::host::limit::limit;
 use crate::host::runner::{Call, Runner};
 use crate::ports::Ports;
 
@@ -143,28 +143,59 @@ pub(super) struct Killed {
 
 /// The `gh_failed` of a call killed after `timeout`.
 fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
-    failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
+    failed(
+        args,
+        format!(
+            "gh {} took longer than {}s and was killed.",
+            args[0],
+            timeout.as_secs_f64()
+        ),
+        None,
+        stderr,
+    )
 }
 
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
 /// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
-pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
+pub(super) fn run_raw_with(
+    runner: &dyn Runner,
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, CpdError> {
     run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
 }
 
 /// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result):
 /// one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
-pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
+pub(super) fn run_timed_with(
+    runner: &dyn Runner,
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Result<Output, Killed>, CpdError> {
     let mut command = Command::new("gh");
-    command.args(args).current_dir(cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null());
     match runner.output(&mut command, "gh", timeout) {
         Ok(out) => Ok(Ok(Output {
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             exit: out.status.code(),
         })),
-        Err(Failed::Timeout(_)) => Ok(Err(Killed { stderr: String::new() })),
-        Err(Failed::Io(e)) => Err(failed(args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+        Err(Failed::Timeout(_)) => Ok(Err(Killed {
+            stderr: String::new(),
+        })),
+        Err(Failed::Io(e)) => Err(failed(
+            args,
+            format!("Cannot run gh: {e}."),
+            None,
+            &e.to_string(),
+        )),
     }
 }
 
@@ -179,15 +210,30 @@ fn run_on(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdE
     let out = run_raw_with(runner, cwd, args, TIMEOUT)?;
     match out.exit {
         Some(0) => Ok(out.stdout),
-        Some(code) => Err(failed(args, format!("gh {} exited {code}.", args[0]), Some(code), &out.stderr)),
-        None => Err(failed(args, format!("gh {} was killed by a signal.", args[0]), None, &out.stderr)),
+        Some(code) => Err(failed(
+            args,
+            format!("gh {} exited {code}.", args[0]),
+            Some(code),
+            &out.stderr,
+        )),
+        None => Err(failed(
+            args,
+            format!("gh {} was killed by a signal.", args[0]),
+            None,
+            &out.stderr,
+        )),
     }
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(args: &[&str], stdout: &str) -> Result<T, CpdError> {
     serde_json::from_str(stdout).map_err(|e| {
-        failed(args, format!("gh {} printed unexpected JSON: {e}.", args[0]), Some(0), "")
-            .with("stdout", tail(stdout, TAIL_LINES))
+        failed(
+            args,
+            format!("gh {} printed unexpected JSON: {e}.", args[0]),
+            Some(0),
+            "",
+        )
+        .with("stdout", tail(stdout, TAIL_LINES))
     })
 }
 
@@ -215,13 +261,36 @@ pub struct HeadPr {
 /// The newest (highest number) pull request whose head is `head`, in any state, created at or after `since`, if any. A pull
 /// request older than `since` (the row's start) is not the row's and is not seen, whatever its state; `None` (an adopted PR)
 /// sees every pull request. Both times are compared as instants.
-pub fn head_pr(cwd: &Path, head: &str, since: Option<jiff::Timestamp>) -> Result<Option<HeadPr>, CpdError> {
-    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state,createdAt"];
+pub fn head_pr(
+    cwd: &Path,
+    head: &str,
+    since: Option<jiff::Timestamp>,
+) -> Result<Option<HeadPr>, CpdError> {
+    let args = [
+        "pr",
+        "list",
+        "--head",
+        head,
+        "--state",
+        "all",
+        "--json",
+        "number,url,state,createdAt",
+    ];
     let found: Vec<HeadPr> = parse(&args, &run(cwd, &args)?)?;
     let mut kept = Vec::new();
     for f in found {
         if let Some(since) = since {
-            let created: jiff::Timestamp = f.created_at.parse().map_err(|e| failed(&args, format!("gh printed the createdAt {:?} of pull request #{}: {e}", f.created_at, f.number), Some(0), ""))?;
+            let created: jiff::Timestamp = f.created_at.parse().map_err(|e| {
+                failed(
+                    &args,
+                    format!(
+                        "gh printed the createdAt {:?} of pull request #{}: {e}",
+                        f.created_at, f.number
+                    ),
+                    Some(0),
+                    "",
+                )
+            })?;
             if created < since {
                 continue;
             }
@@ -266,12 +335,23 @@ pub struct Adoptable {
 /// Reads the pull request `number` of the repo at `cwd` (gh resolves it through its `origin`) and the User's login.
 pub fn adoptable(cwd: &Path, number: i64) -> Result<Adoptable, CpdError> {
     let n = number.to_string();
-    let view = ["pr", "view", &n, "--json", "number,url,state,isCrossRepository,headRefName,baseRefName,author"];
+    let view = [
+        "pr",
+        "view",
+        &n,
+        "--json",
+        "number,url,state,isCrossRepository,headRefName,baseRefName,author",
+    ];
     let v: AdoptView = parse(&view, &run(cwd, &view)?)?;
     let who = ["api", "user", "--jq", ".login"];
     let user = run(cwd, &who)?.trim().to_owned();
     if user.is_empty() {
-        return Err(failed(&who, "gh api user printed no login.".to_owned(), Some(0), ""));
+        return Err(failed(
+            &who,
+            "gh api user printed no login.".to_owned(),
+            Some(0),
+            "",
+        ));
     }
     Ok(Adoptable {
         number: v.number,
@@ -287,24 +367,51 @@ pub fn adoptable(cwd: &Path, number: i64) -> Result<Adoptable, CpdError> {
 
 /// `gh pr create`. It has no `--json`: the URL is its last stdout line, and the
 /// number is the last path segment of that URL.
-pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) -> Result<PrRef, CpdError> {
-    let args = ["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body];
+pub fn create_pr(
+    cwd: &Path,
+    base: &str,
+    head: &str,
+    title: &str,
+    body: &str,
+) -> Result<PrRef, CpdError> {
+    let args = [
+        "pr", "create", "--base", base, "--head", head, "--title", title, "--body", body,
+    ];
     let stdout = run(cwd, &args)?;
-    let url = stdout.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let url = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
     let number = url
         .rsplit_once("/pull/")
         .filter(|(host, _)| host.starts_with("http"))
         .and_then(|(_, n)| n.parse::<i64>().ok());
     match number {
-        Some(number) => Ok(PrRef { number, url: url.to_owned() }),
-        None => Err(failed(&args, "gh pr create printed no pull request URL.".to_owned(), Some(0), "")
-            .with("stdout", tail(&stdout, TAIL_LINES))),
+        Some(number) => Ok(PrRef {
+            number,
+            url: url.to_owned(),
+        }),
+        None => Err(failed(
+            &args,
+            "gh pr create printed no pull request URL.".to_owned(),
+            Some(0),
+            "",
+        )
+        .with("stdout", tail(&stdout, TAIL_LINES))),
     }
 }
 
 pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdError> {
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"];
+    let args = [
+        "pr",
+        "view",
+        &n,
+        "--json",
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url",
+    ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
@@ -336,8 +443,21 @@ pub fn head_commit(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<Strin
 }
 
 /// `gh run list --commit <sha> --json databaseId,name,status,conclusion --limit 100`: the GitHub Actions workflow runs of a commit.
-pub fn workflow_runs(runner: &dyn Runner, cwd: &Path, sha: &str) -> Result<Vec<WorkflowRun>, CpdError> {
-    let args = ["run", "list", "--commit", sha, "--json", "databaseId,name,status,conclusion", "--limit", "100"];
+pub fn workflow_runs(
+    runner: &dyn Runner,
+    cwd: &Path,
+    sha: &str,
+) -> Result<Vec<WorkflowRun>, CpdError> {
+    let args = [
+        "run",
+        "list",
+        "--commit",
+        sha,
+        "--json",
+        "databaseId,name,status,conclusion",
+        "--limit",
+        "100",
+    ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
@@ -356,7 +476,9 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
     }
     let n = number.to_string();
     let close = ["pr", "close", &n, "--repo", repo];
-    let Err(failure) = run(cwd, &close) else { return Ok(()) };
+    let Err(failure) = run(cwd, &close) else {
+        return Ok(());
+    };
     let view = ["pr", "view", &n, "--repo", repo, "--json", "state"];
     match run(cwd, &view).and_then(|out| parse::<State>(&view, &out)) {
         Ok(State { state }) if state == "CLOSED" || state == "MERGED" => Ok(()),
@@ -376,15 +498,23 @@ pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<()
 /// with `{"body": <body>}` on stdin. Not `gh pr edit`: it fails on repos with the deprecated classic Projects
 /// (commands.md §9.5) and needs a repository cwd. A `repo` that is not `owner/name` is `gh_failed`, before any call.
 pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<(), CpdError> {
-    repo_parts(repo)
-        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+    repo_parts(repo).ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::GhFailed,
+            format!("{repo:?} is not an owner/name repo."),
+        )
+        .with("repo", repo)
+    })?;
     let endpoint = format!("repos/{repo}/pulls/{number}");
     let args = ["api", "-X", "PATCH", endpoint.as_str(), "--input", "-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
         args: args.iter().map(|a| (*a).to_owned()).collect(),
-        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        envs: vec![
+            ("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())),
+            ("NO_COLOR".to_owned(), Some("1".to_owned())),
+        ],
         cwd: Some(cwd.to_path_buf()),
         deadline: TIMEOUT,
         stdin: Some(serde_json::json!({"body": body}).to_string().into_bytes()),
@@ -393,13 +523,30 @@ pub fn describe_pr(cwd: &Path, repo: &str, number: i64, body: &str) -> Result<()
     let out = match Ports::current().runner.run(&call) {
         Ok(out) => out,
         Err(Failed::Timeout(_)) => return Err(killed(&args, TIMEOUT, "")),
-        Err(Failed::Io(e)) => return Err(failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+        Err(Failed::Io(e)) => {
+            return Err(failed(
+                &args,
+                format!("Cannot run gh: {e}."),
+                None,
+                &e.to_string(),
+            ));
+        }
     };
     let stderr = String::from_utf8_lossy(&out.stderr);
     match out.status.code() {
         Some(0) => Ok(()),
-        Some(code) => Err(failed(&args, format!("gh {} exited {code}.", args[0]), Some(code), &stderr)),
-        None => Err(failed(&args, format!("gh {} was killed by a signal.", args[0]), None, &stderr)),
+        Some(code) => Err(failed(
+            &args,
+            format!("gh {} exited {code}.", args[0]),
+            Some(code),
+            &stderr,
+        )),
+        None => Err(failed(
+            &args,
+            format!("gh {} was killed by a signal.", args[0]),
+            None,
+            &stderr,
+        )),
     }
 }
 
@@ -419,26 +566,56 @@ pub struct MergeView {
 }
 
 /// The pull request `number` of `repo`, read fresh from GitHub.
-pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
+pub fn view_for_merge(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<MergeView, CpdError> {
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"];
+    let args = [
+        "pr",
+        "view",
+        &n,
+        "--repo",
+        repo,
+        "--json",
+        "state,mergeStateStatus,headRefOid,title,mergedAt",
+    ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `gh pr view <n> --repo <repo> --json statusCheckRollup`: the checks of the head, for `pr merge` when the repo policy requires some.
-pub fn checks_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<Vec<Check>, CpdError> {
+pub fn checks_for_merge(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<Vec<Check>, CpdError> {
     #[derive(Deserialize)]
     struct Rollup {
         #[serde(rename = "statusCheckRollup")]
         checks: Option<Vec<Check>>,
     }
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--repo", repo, "--json", "statusCheckRollup"];
+    let args = [
+        "pr",
+        "view",
+        &n,
+        "--repo",
+        repo,
+        "--json",
+        "statusCheckRollup",
+    ];
     parse::<Rollup>(&args, &run_on(runner, cwd, &args)?).map(|r| r.checks.unwrap_or_default())
 }
 
 /// `gh repo view <repo> --json deleteBranchOnMerge`: whether the repo deletes a merged branch itself.
-pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<bool, CpdError> {
+pub fn delete_branch_on_merge(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+) -> Result<bool, CpdError> {
     #[derive(Deserialize)]
     struct Setting {
         #[serde(rename = "deleteBranchOnMerge")]
@@ -449,8 +626,18 @@ pub fn delete_branch_on_merge(runner: &dyn Runner, cwd: &Path, repo: &str) -> Re
 }
 
 /// `gh repo view <repo> --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`: the methods the repo allows.
-pub fn merge_methods(runner: &dyn Runner, cwd: &Path, repo: &str) -> Result<MergeMethods, CpdError> {
-    let args = ["repo", "view", repo, "--json", "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"];
+pub fn merge_methods(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+) -> Result<MergeMethods, CpdError> {
+    let args = [
+        "repo",
+        "view",
+        repo,
+        "--json",
+        "squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed",
+    ];
     parse(&args, &run_on(runner, cwd, &args)?)
 }
 
@@ -470,23 +657,47 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`. It does not pass `--delete-branch`: GitHub's own
 /// `delete_branch_on_merge` deletes the branch and repoints a stacked pull request (pro-d240).
-pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, method: Method, head: &str) -> Result<(), CpdError> {
+pub fn merge_pr(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+    method: Method,
+    head: &str,
+) -> Result<(), CpdError> {
     let n = number.to_string();
     let flag = format!("--{}", method.as_str());
-    let args = ["pr", "merge", &n, "--repo", repo, flag.as_str(), "--match-head-commit", head];
+    let args = [
+        "pr",
+        "merge",
+        &n,
+        "--repo",
+        repo,
+        flag.as_str(),
+        "--match-head-commit",
+        head,
+    ];
     run_on(runner, cwd, &args).map(drop)
 }
 
 /// `gh api --method POST repos/<repo>/pulls/<number>/reviews --input -` with `body` on stdin: GitHub's create-review
 /// call; its answer's stdout. A non-zero exit, a signal and a timeout (60 s) are `gh_failed`.
-pub fn post_review(runner: &dyn Runner, repo: &str, number: &str, body: Vec<u8>) -> Result<String, CpdError> {
+pub fn post_review(
+    runner: &dyn Runner,
+    repo: &str,
+    number: &str,
+    body: Vec<u8>,
+) -> Result<String, CpdError> {
     let endpoint = format!("repos/{repo}/pulls/{number}/reviews");
     let args = ["api", "--method", "POST", endpoint.as_str(), "--input", "-"];
     let call = Call {
         tool: "gh".to_owned(),
         program: "gh".to_owned(),
         args: args.iter().map(|a| (*a).to_owned()).collect(),
-        envs: vec![("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())), ("NO_COLOR".to_owned(), Some("1".to_owned()))],
+        envs: vec![
+            ("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned())),
+            ("NO_COLOR".to_owned(), Some("1".to_owned())),
+        ],
         cwd: Some(Path::new(".").to_path_buf()),
         deadline: TIMEOUT,
         stdin: Some(body),
@@ -495,13 +706,30 @@ pub fn post_review(runner: &dyn Runner, repo: &str, number: &str, body: Vec<u8>)
     let out = match runner.run(&call) {
         Ok(out) => out,
         Err(Failed::Timeout(_)) => return Err(killed(&args, TIMEOUT, "")),
-        Err(Failed::Io(e)) => return Err(failed(&args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+        Err(Failed::Io(e)) => {
+            return Err(failed(
+                &args,
+                format!("Cannot run gh: {e}."),
+                None,
+                &e.to_string(),
+            ));
+        }
     };
     let stderr = String::from_utf8_lossy(&out.stderr);
     match out.status.code() {
         Some(0) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
-        Some(code) => Err(failed(&args, format!("gh api exited {code}."), Some(code), &stderr)),
-        None => Err(failed(&args, "gh api was killed by a signal.".to_owned(), None, &stderr)),
+        Some(code) => Err(failed(
+            &args,
+            format!("gh api exited {code}."),
+            Some(code),
+            &stderr,
+        )),
+        None => Err(failed(
+            &args,
+            "gh api was killed by a signal.".to_owned(),
+            None,
+            &stderr,
+        )),
     }
 }
 
@@ -524,14 +752,24 @@ pub fn pull_head(runner: &dyn Runner, repo: &str, number: &str) -> Result<String
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
-pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
+pub fn inline_comments(
+    runner: &dyn Runner,
+    cwd: &Path,
+    number: i64,
+) -> Result<Vec<InlineComment>, CpdError> {
     let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
     let args = ["api", endpoint.as_str(), "--paginate"];
     let stdout = run_on(runner, cwd, &args)?;
     let mut comments = Vec::new();
     for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
         comments.extend(page.map_err(|e| {
-            failed(&args, format!("gh api printed unexpected JSON: {e}."), Some(0), "").with("stdout", tail(&stdout, TAIL_LINES))
+            failed(
+                &args,
+                format!("gh api printed unexpected JSON: {e}."),
+                Some(0),
+                "",
+            )
+            .with("stdout", tail(&stdout, TAIL_LINES))
         })?);
     }
     Ok(comments)
@@ -722,7 +960,11 @@ struct RawPr {
     /// Selected by the direct read only (`read_absent`); `None` when the reply has no such key, `Some(Null)` for a null.
     #[serde(rename = "viewerDidAuthor", default)]
     viewer_did_author: Option<bool>,
-    #[serde(rename = "viewerLatestReviewRequest", default, deserialize_with = "present")]
+    #[serde(
+        rename = "viewerLatestReviewRequest",
+        default,
+        deserialize_with = "present"
+    )]
     viewer_review_request: Option<Value>,
 }
 
@@ -763,18 +1005,27 @@ struct Reply<'a> {
 
 impl Reply<'_> {
     fn fail(&self, message: String) -> CpdError {
-        failed(self.args, message, self.out.exit, &self.out.stderr).with("stdout", tail(&self.out.stdout, TAIL_LINES))
+        failed(self.args, message, self.out.exit, &self.out.stderr)
+            .with("stdout", tail(&self.out.stdout, TAIL_LINES))
     }
 
     /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its
     /// message (`reason` `HTTP 5xx`) and printed no GraphQL `errors`, or, when its stdout holds no complete JSON
     /// (`unparsable`), with its own failure to parse a response that ended early (`reason` [`CUT_RESPONSE`]; contract
     /// §7.6 step 4, hs-d354).
-    fn fail_unless_transient(&self, message: String, graphql_errors: bool, unparsable: bool) -> CpdError {
+    fn fail_unless_transient(
+        &self,
+        message: String,
+        graphql_errors: bool,
+        unparsable: bool,
+    ) -> CpdError {
         let status = if graphql_errors || self.out.exit == Some(0) {
             None
         } else {
-            http_5xx(self.out).or_else(|| (unparsable && self.out.stderr.contains(CUT_RESPONSE)).then(|| CUT_RESPONSE.to_owned()))
+            http_5xx(self.out).or_else(|| {
+                (unparsable && self.out.stderr.contains(CUT_RESPONSE))
+                    .then(|| CUT_RESPONSE.to_owned())
+            })
         };
         let e = self.fail(message);
         match status {
@@ -786,8 +1037,13 @@ impl Reply<'_> {
     /// The body, whatever the exit code (`gh` exits 1 on a partial result); no
     /// JSON, or no `data`, is `gh_failed`: transient when it is an HTTP 5xx, or a cut response with no JSON.
     fn envelope<T: for<'de> Deserialize<'de>>(&self) -> Result<(T, Vec<GqlError>), CpdError> {
-        let envelope: Envelope<T> = serde_json::from_str(&self.out.stdout)
-            .map_err(|e| self.fail_unless_transient(format!("gh {} printed no usable JSON: {e}.", self.args[0]), false, true))?;
+        let envelope: Envelope<T> = serde_json::from_str(&self.out.stdout).map_err(|e| {
+            self.fail_unless_transient(
+                format!("gh {} printed no usable JSON: {e}.", self.args[0]),
+                false,
+                true,
+            )
+        })?;
         let errors = envelope.errors.unwrap_or_default();
         match envelope.data {
             Some(data) => Ok((data, errors)),
@@ -795,7 +1051,11 @@ impl Reply<'_> {
                 format!(
                     "gh {} answered without data: {}",
                     self.args[0],
-                    errors.iter().filter_map(|e| e.message.as_deref()).collect::<Vec<_>>().join("; ")
+                    errors
+                        .iter()
+                        .filter_map(|e| e.message.as_deref())
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 ),
                 !errors.is_empty(),
                 false,
@@ -804,18 +1064,29 @@ impl Reply<'_> {
     }
 
     fn polled(&self, raw: RawPr, bots: &[String]) -> Result<PolledPr, CpdError> {
-        let state = PrState::of_graphql(&raw.state).map_err(|e| self.fail(e.message().to_owned()))?;
-        let mergeable = Mergeable::of_graphql(&raw.mergeable).map_err(|e| self.fail(e.message().to_owned()))?;
-        let merge_state = MergeState::of_graphql(&raw.merge_state).map_err(|e| self.fail(e.message().to_owned()))?;
+        let state =
+            PrState::of_graphql(&raw.state).map_err(|e| self.fail(e.message().to_owned()))?;
+        let mergeable =
+            Mergeable::of_graphql(&raw.mergeable).map_err(|e| self.fail(e.message().to_owned()))?;
+        let merge_state = MergeState::of_graphql(&raw.merge_state)
+            .map_err(|e| self.fail(e.message().to_owned()))?;
         let approvals: Vec<Approval> = raw
             .latest_reviews
             .nodes
             .iter()
             .filter(|r| r.state == "APPROVED")
             .filter_map(|r| r.author.as_ref())
-            .map(|a| Approval { login: a.login.clone(), bot_type: a.kind == "Bot" })
+            .map(|a| Approval {
+                login: a.login.clone(),
+                bot_type: a.kind == "Bot",
+            })
             .collect();
-        let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
+        let rollup = raw
+            .commits
+            .nodes
+            .first()
+            .and_then(|n| n.commit.as_ref())
+            .and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
             default_branch: raw.repository.default_branch_ref.map(|b| b.name),
@@ -825,7 +1096,11 @@ impl Reply<'_> {
             title: raw.title,
             draft: raw.draft,
             state,
-            review_decision: ReviewDecision::of_reviews(raw.review_decision.as_deref(), &approvals, bots),
+            review_decision: ReviewDecision::of_reviews(
+                raw.review_decision.as_deref(),
+                &approvals,
+                bots,
+            ),
             checks: ChecksSummary::of_rollup(rollup.map(|r| r.state.as_str())),
             mergeable,
             merge_state,
@@ -842,30 +1117,57 @@ const CUT_RESPONSE: &str = "unexpected end of JSON input";
 /// `HTTP 5xx` as `gh` prints it (`gh: HTTP 502: Bad Gateway`, `... (HTTP 503)`), in its stderr, or in its stdout when
 /// stderr is empty: the status, `HTTP 502`. Matches `HTTP 5\d\d`.
 fn http_5xx(out: &Output) -> Option<String> {
-    let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
+    let text = if out.stderr.trim().is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    };
     text.match_indices("HTTP 5").find_map(|(at, _)| {
         let status = text.get(at..at + "HTTP 5".len() + 2)?;
-        status["HTTP 5".len()..].bytes().all(|b| b.is_ascii_digit()).then(|| status.to_owned())
+        status["HTTP 5".len()..]
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| status.to_owned())
     })
 }
 
 /// A failure of the poll's call `call` (`search` or `lookup`): `details` always holds `call`, `transient` and `reason`
 /// (an HTTP 5xx or a timeout is transient; nothing else is), so the engine parses one shape (contract §7.6 step 4).
 fn polled_call(call: &str, e: CpdError) -> CpdError {
-    let transient = e.details().get("transient").cloned().unwrap_or(Value::Bool(false));
+    let transient = e
+        .details()
+        .get("transient")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     let reason = e.details().get("reason").cloned().unwrap_or(Value::Null);
-    e.with("call", call).with("transient", transient).with("reason", reason)
+    e.with("call", call)
+        .with("transient", transient)
+        .with("reason", reason)
 }
 
 /// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
 /// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
-fn graphql(runner: &dyn Runner, cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
+fn graphql(
+    runner: &dyn Runner,
+    cwd: &Path,
+    query: &str,
+) -> Result<(Vec<String>, Output), CpdError> {
     graphql_with(runner, cwd, query, &[])
 }
 
 /// [`graphql`] with string variables, each sent as its own `-f name=value` (a body keeps its newlines).
-fn graphql_with(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)]) -> Result<(Vec<String>, Output), CpdError> {
-    let mut args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
+fn graphql_with(
+    runner: &dyn Runner,
+    cwd: &Path,
+    query: &str,
+    vars: &[(&str, &str)],
+) -> Result<(Vec<String>, Output), CpdError> {
+    let mut args = vec![
+        "api".to_owned(),
+        "graphql".to_owned(),
+        "-f".to_owned(),
+        format!("query={query}"),
+    ];
     for (name, value) in vars {
         args.push("-f".to_owned());
         args.push(format!("{name}={value}"));
@@ -874,41 +1176,94 @@ fn graphql_with(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &st
     let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
     match run_timed_with(runner, cwd, &refs, timeout)? {
         Ok(out) => Ok((args, out)),
-        Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
+        Err(k) => Err(killed(&refs, timeout, &k.stderr)
+            .with("transient", true)
+            .with("reason", "timeout")),
     }
 }
 
 /// The GraphQL node id of the pull request `repo`#`number`.
-pub fn pull_request_id(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
-    let (owner, name) = repo_parts(repo)
-        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
-    let query = format!("query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id }} }} }}");
+pub fn pull_request_id(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<String, CpdError> {
+    let (owner, name) = repo_parts(repo).ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::GhFailed,
+            format!("{repo:?} is not an owner/name repo."),
+        )
+        .with("repo", repo)
+    })?;
+    let query = format!(
+        "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id }} }} }}"
+    );
     posted(runner, cwd, &query, &[], "/repository/pullRequest/id")
 }
 
 /// Replies in the review thread `thread` (never resolves it); the new comment's url.
-pub fn reply_to_thread(runner: &dyn Runner, cwd: &Path, thread: &str, body: &str) -> Result<String, CpdError> {
+pub fn reply_to_thread(
+    runner: &dyn Runner,
+    cwd: &Path,
+    thread: &str,
+    body: &str,
+) -> Result<String, CpdError> {
     let query = "mutation($thread: ID!, $body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) { comment { id url } } }";
-    posted(runner, cwd, query, &[("thread", thread), ("body", body)], "/addPullRequestReviewThreadReply/comment/url")
+    posted(
+        runner,
+        cwd,
+        query,
+        &[("thread", thread), ("body", body)],
+        "/addPullRequestReviewThreadReply/comment/url",
+    )
 }
 
 /// Comments on the pull request whose node id is `pull`; the new comment's url.
-pub fn reply_to_comment(runner: &dyn Runner, cwd: &Path, pull: &str, body: &str) -> Result<String, CpdError> {
+pub fn reply_to_comment(
+    runner: &dyn Runner,
+    cwd: &Path,
+    pull: &str,
+    body: &str,
+) -> Result<String, CpdError> {
     let query = "mutation($pull: ID!, $body: String!) { addComment(input: {subjectId: $pull, body: $body}) { commentEdge { node { id url } } } }";
-    posted(runner, cwd, query, &[("pull", pull), ("body", body)], "/addComment/commentEdge/node/url")
+    posted(
+        runner,
+        cwd,
+        query,
+        &[("pull", pull), ("body", body)],
+        "/addComment/commentEdge/node/url",
+    )
 }
 
 /// Runs a call and reads the string at `pointer` of its `data`; any failure is `gh_failed`.
-fn posted(runner: &dyn Runner, cwd: &Path, query: &str, vars: &[(&str, &str)], pointer: &str) -> Result<String, CpdError> {
+fn posted(
+    runner: &dyn Runner,
+    cwd: &Path,
+    query: &str,
+    vars: &[(&str, &str)],
+    pointer: &str,
+) -> Result<String, CpdError> {
     let (args, out) = graphql_with(runner, cwd, query, vars)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let reply = Reply { args: &refs, out: &out };
+    let reply = Reply {
+        args: &refs,
+        out: &out,
+    };
     if out.exit != Some(0) {
-        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+        return Err(reply.fail(format!(
+            "gh {} exited {}.",
+            refs[0],
+            out.exit
+                .map_or("with a signal".to_owned(), |c| c.to_string())
+        )));
     }
     let (data, errors): (Value, _) = reply.envelope()?;
     if let Some(first) = errors.first() {
-        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            first.message.as_deref().unwrap_or("(no message)")
+        )));
     }
     data.pointer(pointer)
         .and_then(Value::as_str)
@@ -952,44 +1307,101 @@ struct RawAutoPull {
 }
 
 /// The ONE read of `pr post`'s auto-merge: whether the repo allows it, the pull request's node id and whether it has a request.
-pub fn auto_merge_read(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<AutoMergeRead, CpdError> {
-    let (owner, name) = repo_parts(repo)
-        .ok_or_else(|| CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo))?;
+pub fn auto_merge_read(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<AutoMergeRead, CpdError> {
+    let (owner, name) = repo_parts(repo).ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::GhFailed,
+            format!("{repo:?} is not an owner/name repo."),
+        )
+        .with("repo", repo)
+    })?;
     let query = format!(
         "query {{ repository(owner: \"{owner}\", name: \"{name}\") {{ autoMergeAllowed squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed pullRequest(number: {number}) {{ id autoMergeRequest {{ enabledAt }} }} }} }}"
     );
     let (args, out) = graphql_with(runner, cwd, &query, &[])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let reply = Reply { args: &refs, out: &out };
+    let reply = Reply {
+        args: &refs,
+        out: &out,
+    };
     if out.exit != Some(0) {
-        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+        return Err(reply.fail(format!(
+            "gh {} exited {}.",
+            refs[0],
+            out.exit
+                .map_or("with a signal".to_owned(), |c| c.to_string())
+        )));
     }
     let (data, errors): (RawAutoRead, _) = reply.envelope()?;
     if let Some(first) = errors.first() {
-        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            first.message.as_deref().unwrap_or("(no message)")
+        )));
     }
-    let pull = data.repository.pull_request.ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
-    Ok(AutoMergeRead { allowed: data.repository.allowed, id: pull.id, requested: pull.request.is_some(), methods: data.repository.methods })
+    let pull = data
+        .repository
+        .pull_request
+        .ok_or_else(|| reply.fail(format!("GitHub has no pull request {repo}#{number}.")))?;
+    Ok(AutoMergeRead {
+        allowed: data.repository.allowed,
+        id: pull.id,
+        requested: pull.request.is_some(),
+        methods: data.repository.methods,
+    })
 }
 
 /// Turns on auto-merge with `method` for the pull request whose node id is `pull` (`enablePullRequestAutoMerge`, never `gh pr merge`).
 /// `Ok(Err(message))` is GitHub's refusal (GraphQL `errors`); a `gh` that failed or printed no usable answer is `gh_failed`.
-pub fn enable_auto_merge(runner: &dyn Runner, cwd: &Path, pull: &str, method: Method) -> Result<Result<(), String>, CpdError> {
-    let query = &format!("mutation($pull: ID!) {{ enablePullRequestAutoMerge(input: {{pullRequestId: $pull, mergeMethod: {}}})  {{ pullRequest {{ autoMergeRequest {{ enabledAt }} }} }} }}", method.graphql());
+pub fn enable_auto_merge(
+    runner: &dyn Runner,
+    cwd: &Path,
+    pull: &str,
+    method: Method,
+) -> Result<Result<(), String>, CpdError> {
+    let query = &format!(
+        "mutation($pull: ID!) {{ enablePullRequestAutoMerge(input: {{pullRequestId: $pull, mergeMethod: {}}})  {{ pullRequest {{ autoMergeRequest {{ enabledAt }} }} }} }}",
+        method.graphql()
+    );
     let (args, out) = graphql_with(runner, cwd, query, &[("pull", pull)])?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let reply = Reply { args: &refs, out: &out };
+    let reply = Reply {
+        args: &refs,
+        out: &out,
+    };
     let body: Option<Envelope<Value>> = serde_json::from_str(&out.stdout).ok();
-    if let Some(first) = body.as_ref().and_then(|b| b.errors.as_ref()).and_then(|e| e.first()) {
-        return Ok(Err(first.message.clone().unwrap_or_else(|| "(no message)".to_owned())));
+    if let Some(first) = body
+        .as_ref()
+        .and_then(|b| b.errors.as_ref())
+        .and_then(|e| e.first())
+    {
+        return Ok(Err(first
+            .message
+            .clone()
+            .unwrap_or_else(|| "(no message)".to_owned())));
     }
     if out.exit != Some(0) {
-        return Err(reply.fail(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string()))));
+        return Err(reply.fail(format!(
+            "gh {} exited {}.",
+            refs[0],
+            out.exit
+                .map_or("with a signal".to_owned(), |c| c.to_string())
+        )));
     }
     let (data, _): (Value, _) = reply.envelope()?;
-    match data.pointer("/enablePullRequestAutoMerge/pullRequest/autoMergeRequest/enabledAt").and_then(Value::as_str) {
+    match data
+        .pointer("/enablePullRequestAutoMerge/pullRequest/autoMergeRequest/enabledAt")
+        .and_then(Value::as_str)
+    {
         Some(_) => Ok(Ok(())),
-        None => Err(reply.fail("gh api graphql answered without an auto-merge request.".to_owned())),
+        None => {
+            Err(reply.fail("gh api graphql answered without an auto-merge request.".to_owned()))
+        }
     }
 }
 
@@ -999,7 +1411,13 @@ pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<S
     let search = || {
         let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        parse_search(&Reply { args: &refs, out: &out }, bots)
+        parse_search(
+            &Reply {
+                args: &refs,
+                out: &out,
+            },
+            bots,
+        )
     };
     search().map_err(|e| polled_call("search", e))
 }
@@ -1007,20 +1425,33 @@ pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<S
 fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
     let (data, errors): (RawSearchData, _) = reply.envelope()?;
     if let Some(first) = errors.first() {
-        return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            first.message.as_deref().unwrap_or("(no message)")
+        )));
     }
-    let (Some(authored), Some(requested), Some(rate)) = (data.search, data.review_requests, data.rate_limit) else {
-        return Err(reply.fail("gh api graphql answered without search, reviewRequests or rateLimit.".to_owned()));
+    let (Some(authored), Some(requested), Some(rate)) =
+        (data.search, data.review_requests, data.rate_limit)
+    else {
+        return Err(reply.fail(
+            "gh api graphql answered without search, reviewRequests or rateLimit.".to_owned(),
+        ));
     };
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
             let pr = reply.polled(raw, bots)?;
-            let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
+            let at = match prs
+                .iter()
+                .position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number))
+            {
                 Some(at) => at,
                 None => {
-                    prs.push(Listed { pr, membership: Membership::default() });
+                    prs.push(Listed {
+                        pr,
+                        membership: Membership::default(),
+                    });
                     prs.len() - 1
                 }
             };
@@ -1032,20 +1463,38 @@ fn parse_search(reply: &Reply, bots: &[String]) -> Result<Search, CpdError> {
             }
         }
     }
-    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    Ok(Search {
+        issue_count,
+        prs,
+        rate: Rate {
+            cost: rate.cost,
+            remaining: rate.remaining,
+            reset_at: rate.reset_at,
+        },
+    })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
 pub(super) fn repo_parts(repo: &str) -> Option<(&str, &str)> {
-    let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
-    repo.split_once('/').filter(|(owner, name)| part(owner) && part(name))
+    let part = |p: &str| {
+        !p.is_empty()
+            && p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    };
+    repo.split_once('/')
+        .filter(|(owner, name)| part(owner) && part(name))
 }
 
 /// The pull requests `(owner/name, number)`, one alias each, in one call, 15 s at
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<Option<PolledPr>>, CpdError> {
+pub fn lookup(
+    runner: &dyn Runner,
+    cwd: &Path,
+    prs: &[(String, i64)],
+    bots: &[String],
+) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
@@ -1057,7 +1506,12 @@ pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[St
 /// selected, both required in the reply. An `OPEN` pull request carries what the viewer's own flags are
 /// (`authored` = `viewerDidAuthor`, `review_requested` = a latest review request); a merged or closed one has neither.
 /// `None` for one GitHub cannot find. Failures are the lookup's (`details.call` `lookup`). An empty `prs` makes no call.
-pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
+pub fn read_absent(
+    runner: &dyn Runner,
+    cwd: &Path,
+    prs: &[(String, i64)],
+    bots: &[String],
+) -> Result<Vec<Option<Listed>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
@@ -1066,12 +1520,19 @@ pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots:
 
 /// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
 fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError> {
-    let extra = if viewer { " viewerDidAuthor viewerLatestReviewRequest { id }" } else { "" };
+    let extra = if viewer {
+        " viewerDidAuthor viewerLatestReviewRequest { id }"
+    } else {
+        ""
+    };
     let mut query = String::from("query {");
     for (i, (repo, number)) in prs.iter().enumerate() {
         let (owner, name) = repo_parts(repo).ok_or_else(|| {
-            CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo."))
-                .with("repo", repo.as_str())
+            CpdError::new(
+                ErrorCode::GhFailed,
+                format!("{repo:?} is not an owner/name repo."),
+            )
+            .with("repo", repo.as_str())
         })?;
         query.push_str(&format!(
             " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ {}{extra} }} }}",
@@ -1085,24 +1546,48 @@ fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError>
 /// The comments of the pull requests `(owner/name, number)`, one alias each, in one call, 15 s at most: what
 /// `comments::query` reads, `parse`d with the `bots` logins (contract §7.6 step 3a). Any failure is `gh_failed` with
 /// the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
-pub fn read_comments(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<comments::Read>, CpdError> {
+pub fn read_comments(
+    runner: &dyn Runner,
+    cwd: &Path,
+    prs: &[(String, i64)],
+    bots: &[String],
+) -> Result<Vec<comments::Read>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
     let read = || {
         for (repo, _) in prs {
             repo_parts(repo).ok_or_else(|| {
-                CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo.as_str())
+                CpdError::new(
+                    ErrorCode::GhFailed,
+                    format!("{repo:?} is not an owner/name repo."),
+                )
+                .with("repo", repo.as_str())
             })?;
         }
-        let pairs: Vec<(&str, i64)> = prs.iter().map(|(repo, number)| (repo.as_str(), *number)).collect();
+        let pairs: Vec<(&str, i64)> = prs
+            .iter()
+            .map(|(repo, number)| (repo.as_str(), *number))
+            .collect();
         let (args, out) = graphql(runner, cwd, &comments::query(&pairs))?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let reply = Reply { args: &refs, out: &out };
+        let reply = Reply {
+            args: &refs,
+            out: &out,
+        };
         if out.exit != Some(0) {
             let json = serde_json::from_str::<Value>(&out.stdout);
             let errors = json.as_ref().is_ok_and(|v| v.get("errors").is_some());
-            return Err(reply.fail_unless_transient(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string())), errors, json.is_err()));
+            return Err(reply.fail_unless_transient(
+                format!(
+                    "gh {} exited {}.",
+                    refs[0],
+                    out.exit
+                        .map_or("with a signal".to_owned(), |c| c.to_string())
+                ),
+                errors,
+                json.is_err(),
+            ));
         }
         comments::parse(&pairs, &out.stdout, bots).map_err(|e| reply.fail(e.message().to_owned()))
     };
@@ -1119,7 +1604,11 @@ fn checks_query(prs: &[(&str, i64, Option<&str>)]) -> String {
         let (owner, name) = repo_parts(repo).unwrap_or_default();
         let page = after.map_or(String::new(), |c| format!(", after: \"{c}\""));
         // The labels are read once, on the first page.
-        let labels = if after.is_none() { " labels(first: 100) { nodes { name } }" } else { "" };
+        let labels = if after.is_none() {
+            " labels(first: 100) { nodes { name } }"
+        } else {
+            ""
+        };
         query.push_str(&format!(
             " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{{labels} commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100{page}) {{ pageInfo {{ hasNextPage endCursor }} {CHECKS_FIELDS} }} }} }} }} }} }} }}"
         ));
@@ -1200,7 +1689,11 @@ impl From<RawCheck> for Check {
             conclusion: r.conclusion,
             state: r.state,
             url: None,
-            workflow: r.check_suite.and_then(|s| s.workflow_run).and_then(|w| w.workflow).and_then(|w| w.name),
+            workflow: r
+                .check_suite
+                .and_then(|s| s.workflow_run)
+                .and_then(|w| w.workflow)
+                .and_then(|w| w.name),
             started_at: r.started_at.or(r.created_at),
         }
     }
@@ -1226,7 +1719,10 @@ fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<ChecksPage>, CpdEr
     }
     let (mut data, errors): (BTreeMap<String, Option<Repo>>, _) = reply.envelope()?;
     if let Some(e) = errors.first() {
-        return Err(reply.fail(format!("gh api graphql answered with errors: {}", e.message.as_deref().unwrap_or("(no message)"))));
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            e.message.as_deref().unwrap_or("(no message)")
+        )));
     }
     let mut pages = Vec::with_capacity(count);
     for (i, &first) in firsts.iter().enumerate() {
@@ -1240,18 +1736,37 @@ fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<ChecksPage>, CpdEr
         let labels = match (pull.labels, first) {
             (Some(l), _) => l.nodes.into_iter().map(|l| l.name).collect(),
             (None, false) => Vec::new(),
-            (None, true) => return Err(reply.fail(format!("gh api graphql answered {alias} without labels."))),
+            (None, true) => {
+                return Err(reply.fail(format!("gh api graphql answered {alias} without labels.")));
+            }
         };
-        let rollup = pull.commits.nodes.into_iter().next().and_then(|n| n.commit).and_then(|c| c.rollup);
+        let rollup = pull
+            .commits
+            .nodes
+            .into_iter()
+            .next()
+            .and_then(|n| n.commit)
+            .and_then(|c| c.rollup);
         pages.push(match rollup {
             None => (Vec::new(), None, labels),
             Some(r) => {
-                let next = match (r.contexts.page_info.has_next_page, r.contexts.page_info.end_cursor) {
+                let next = match (
+                    r.contexts.page_info.has_next_page,
+                    r.contexts.page_info.end_cursor,
+                ) {
                     (false, _) => None,
                     (true, Some(cursor)) => Some(cursor),
-                    (true, None) => return Err(reply.fail(format!("gh api graphql answered {alias} with a next page and no endCursor."))),
+                    (true, None) => {
+                        return Err(reply.fail(format!(
+                            "gh api graphql answered {alias} with a next page and no endCursor."
+                        )));
+                    }
                 };
-                (r.contexts.nodes.into_iter().map(Check::from).collect(), next, labels)
+                (
+                    r.contexts.nodes.into_iter().map(Check::from).collect(),
+                    next,
+                    labels,
+                )
             }
         });
     }
@@ -1269,25 +1784,47 @@ pub struct PrChecks {
 /// most; each pull request with more than 100 contexts is read again, page by page, with those only. Each result is the
 /// PR's typed checks (a CheckRun has `name`, a StatusContext `context`). Any failure
 /// is `gh_failed` with the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
-pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<PrChecks>, CpdError> {
+pub fn read_checks(
+    runner: &dyn Runner,
+    cwd: &Path,
+    prs: &[(String, i64)],
+) -> Result<Vec<PrChecks>, CpdError> {
     let mut all: Vec<PrChecks> = prs.iter().map(|_| PrChecks::default()).collect();
     let mut pending: Vec<(usize, Option<String>)> = (0..prs.len()).map(|i| (i, None)).collect();
     while !pending.is_empty() {
         let page = || {
             for (repo, _) in prs {
                 repo_parts(repo).ok_or_else(|| {
-                    CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo.as_str())
+                    CpdError::new(
+                        ErrorCode::GhFailed,
+                        format!("{repo:?} is not an owner/name repo."),
+                    )
+                    .with("repo", repo.as_str())
                 })?;
             }
-            let asked: Vec<(&str, i64, Option<&str>)> =
-                pending.iter().map(|(i, after)| (prs[*i].0.as_str(), prs[*i].1, after.as_deref())).collect();
+            let asked: Vec<(&str, i64, Option<&str>)> = pending
+                .iter()
+                .map(|(i, after)| (prs[*i].0.as_str(), prs[*i].1, after.as_deref()))
+                .collect();
             let (args, out) = graphql(runner, cwd, &checks_query(&asked))?;
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            let reply = Reply { args: &refs, out: &out };
+            let reply = Reply {
+                args: &refs,
+                out: &out,
+            };
             if out.exit != Some(0) {
                 let json = serde_json::from_str::<Value>(&out.stdout);
                 let errors = json.as_ref().is_ok_and(|v| v.get("errors").is_some());
-                return Err(reply.fail_unless_transient(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string())), errors, json.is_err()));
+                return Err(reply.fail_unless_transient(
+                    format!(
+                        "gh {} exited {}.",
+                        refs[0],
+                        out.exit
+                            .map_or("with a signal".to_owned(), |c| c.to_string())
+                    ),
+                    errors,
+                    json.is_err(),
+                ));
             }
             let firsts: Vec<bool> = asked.iter().map(|(_, _, after)| after.is_none()).collect();
             parse_checks(&reply, &firsts)
@@ -1308,20 +1845,53 @@ pub fn read_checks(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Re
     Ok(all)
 }
 
-fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool, bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
+fn lookup_call(
+    runner: &dyn Runner,
+    cwd: &Path,
+    prs: &[(String, i64)],
+    viewer: bool,
+    bots: &[String],
+) -> Result<Vec<Option<Listed>>, CpdError> {
     let query = lookup_query(prs, viewer)?;
     let (args, out) = graphql(runner, cwd, &query)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer, bots)
+    parse_lookup(
+        &Reply {
+            args: &refs,
+            out: &out,
+        },
+        prs.len(),
+        viewer,
+        bots,
+    )
 }
 
 /// The `count` aliases `p0`… of a lookup's reply; with `viewer`, each `OPEN` one carries its viewer flags.
-fn parse_lookup(reply: &Reply, count: usize, viewer: bool, bots: &[String]) -> Result<Vec<Option<Listed>>, CpdError> {
+fn parse_lookup(
+    reply: &Reply,
+    count: usize,
+    viewer: bool,
+    bots: &[String],
+) -> Result<Vec<Option<Listed>>, CpdError> {
     let (mut data, errors): (BTreeMap<String, Option<RawRepoLookup>>, _) = reply.envelope()?;
-    if let Some(other) = errors.iter().find(|e| e.kind.as_deref() != Some("NOT_FOUND")) {
-        return Err(reply.fail(format!("gh api graphql answered with errors: {}", other.message.as_deref().unwrap_or("(no message)"))));
+    if let Some(other) = errors
+        .iter()
+        .find(|e| e.kind.as_deref() != Some("NOT_FOUND"))
+    {
+        return Err(reply.fail(format!(
+            "gh api graphql answered with errors: {}",
+            other.message.as_deref().unwrap_or("(no message)")
+        )));
     }
-    let not_found = |alias: &str| errors.iter().any(|e| e.path.as_ref().and_then(|p| p.first()).and_then(Value::as_str) == Some(alias));
+    let not_found = |alias: &str| {
+        errors.iter().any(|e| {
+            e.path
+                .as_ref()
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                == Some(alias)
+        })
+    };
     let mut found = Vec::with_capacity(count);
     for i in 0..count {
         let alias = format!("p{i}");
@@ -1333,12 +1903,20 @@ fn parse_lookup(reply: &Reply, count: usize, viewer: bool, bots: &[String]) -> R
             Some(raw) => {
                 let mut membership = Membership::default();
                 if viewer {
-                    let authored = raw.viewer_did_author.ok_or_else(|| reply.fail(format!("gh api graphql answered {alias} without viewerDidAuthor.")))?;
-                    let request = raw
-                        .viewer_review_request
-                        .clone()
-                        .ok_or_else(|| reply.fail(format!("gh api graphql answered {alias} without viewerLatestReviewRequest.")))?;
-                    membership = Membership { authored, review_requested: !request.is_null() };
+                    let authored = raw.viewer_did_author.ok_or_else(|| {
+                        reply.fail(format!(
+                            "gh api graphql answered {alias} without viewerDidAuthor."
+                        ))
+                    })?;
+                    let request = raw.viewer_review_request.clone().ok_or_else(|| {
+                        reply.fail(format!(
+                            "gh api graphql answered {alias} without viewerLatestReviewRequest."
+                        ))
+                    })?;
+                    membership = Membership {
+                        authored,
+                        review_requested: !request.is_null(),
+                    };
                 }
                 let pr = reply.polled(raw, bots)?;
                 if pr.state != PrState::Open {
@@ -1347,7 +1925,11 @@ fn parse_lookup(reply: &Reply, count: usize, viewer: bool, bots: &[String]) -> R
                 Some(Listed { pr, membership })
             }
             None if not_found(&alias) => None,
-            None => return Err(reply.fail(format!("gh api graphql answered null for {alias} without NOT_FOUND."))),
+            None => {
+                return Err(reply.fail(format!(
+                    "gh api graphql answered null for {alias} without NOT_FOUND."
+                )));
+            }
         });
     }
     Ok(found)
@@ -1365,7 +1947,11 @@ mod tests {
     }
 
     fn reply(stdout: &str, exit: i32) -> Output {
-        Output { stdout: stdout.to_owned(), stderr: "gh: boom".to_owned(), exit: Some(exit) }
+        Output {
+            stdout: stdout.to_owned(),
+            stderr: "gh: boom".to_owned(),
+            exit: Some(exit),
+        }
     }
 
     fn pr(repo: &str, number: i64, draft: bool, state: &str, rollup: &str) -> String {
@@ -1382,7 +1968,12 @@ mod tests {
     }
 
     fn looked_up(out: &Output, count: usize) -> Result<Vec<Option<PolledPr>>, CpdError> {
-        Ok(parse_lookup(&Reply { args: &ARGS, out }, count, false, &[])?.into_iter().map(|p| p.map(|l| l.pr)).collect())
+        Ok(
+            parse_lookup(&Reply { args: &ARGS, out }, count, false, &[])?
+                .into_iter()
+                .map(|p| p.map(|l| l.pr))
+                .collect(),
+        )
     }
 
     fn read(out: &Output, count: usize) -> Result<Vec<Option<Listed>>, CpdError> {
@@ -1412,11 +2003,34 @@ mod tests {
             "p1":{"pullRequest":{"commits":{"nodes":[{"commit":null}]}}},
             "p2":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}}}}"#;
         let out = reply(body, 0);
-        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, &[false; 3]).unwrap();
+        let pages = parse_checks(
+            &Reply {
+                args: &ARGS,
+                out: &out,
+            },
+            &[false; 3],
+        )
+        .unwrap();
         assert_eq!(pages[0].1.as_deref(), Some("c1"));
-        let got: Vec<(Option<&str>, Option<&str>, Option<&str>)> =
-            pages[0].0.iter().map(|c| (c.name.as_deref().or(c.context.as_deref()), c.conclusion.as_deref(), c.state.as_deref())).collect();
-        assert_eq!(got, [(Some("a"), Some("CANCELLED"), None), (Some("b"), None, None), (Some("c"), None, Some("PENDING"))]);
+        let got: Vec<(Option<&str>, Option<&str>, Option<&str>)> = pages[0]
+            .0
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_deref().or(c.context.as_deref()),
+                    c.conclusion.as_deref(),
+                    c.state.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (Some("a"), Some("CANCELLED"), None),
+                (Some("b"), None, None),
+                (Some("c"), None, Some("PENDING"))
+            ]
+        );
         assert!(pages[1].0.is_empty() && pages[2].0.is_empty() && pages[1].1.is_none());
     }
 
@@ -1424,10 +2038,32 @@ mod tests {
     fn labels_are_parsed_and_a_first_page_without_them_is_gh_failed() {
         let with = r#"{"data":{"p0":{"pullRequest":{"labels":{"nodes":[{"name":"dont merge"}]},"commits":{"nodes":[]}}}}}"#;
         let out = reply(with, 0);
-        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[true]).unwrap()[0].2, ["dont merge"]);
+        assert_eq!(
+            parse_checks(
+                &Reply {
+                    args: &ARGS,
+                    out: &out
+                },
+                &[true]
+            )
+            .unwrap()[0]
+                .2,
+            ["dont merge"]
+        );
         let without = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[]}}}}}"#;
         let out = reply(without, 0);
-        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[true]).unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(
+            parse_checks(
+                &Reply {
+                    args: &ARGS,
+                    out: &out
+                },
+                &[true]
+            )
+            .unwrap_err()
+            .code(),
+            ErrorCode::GhFailed
+        );
     }
 
     #[test]
@@ -1437,9 +2073,27 @@ mod tests {
             {"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":null,"startedAt":null,"checkSuite":{"workflowRun":null}},
             {"__typename":"StatusContext","context":"c","state":"SUCCESS","createdAt":"2026-10-30T14:39:33Z"}]}}}}]}}}}}"#;
         let out = reply(body, 0);
-        let pages = parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap();
-        let got: Vec<(Option<&str>, Option<&str>)> = pages[0].0.iter().map(|c| (c.workflow.as_deref(), c.started_at.as_deref())).collect();
-        assert_eq!(got, [(Some("W"), Some("2026-10-30T04:19:08Z")), (None, None), (None, Some("2026-10-30T14:39:33Z"))]);
+        let pages = parse_checks(
+            &Reply {
+                args: &ARGS,
+                out: &out,
+            },
+            &[false],
+        )
+        .unwrap();
+        let got: Vec<(Option<&str>, Option<&str>)> = pages[0]
+            .0
+            .iter()
+            .map(|c| (c.workflow.as_deref(), c.started_at.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (Some("W"), Some("2026-10-30T04:19:08Z")),
+                (None, None),
+                (None, Some("2026-10-30T14:39:33Z"))
+            ]
+        );
     }
 
     #[test]
@@ -1447,14 +2101,41 @@ mod tests {
         let body = r#"{"data":{"p0":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
             {"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"FAILURE","startedAt":5}]}}}}]}}}}}"#;
         let out = reply(body, 0);
-        assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(
+            parse_checks(
+                &Reply {
+                    args: &ARGS,
+                    out: &out
+                },
+                &[false]
+            )
+            .unwrap_err()
+            .code(),
+            ErrorCode::GhFailed
+        );
     }
 
     #[test]
     fn a_checks_reply_missing_an_alias_or_with_a_null_pull_request_is_gh_failed() {
-        for body in [r#"{"data":{}}"#, r#"{"data":{"p0":{"pullRequest":null}}}"#, r#"{"data":{"p0":null}}"#] {
+        for body in [
+            r#"{"data":{}}"#,
+            r#"{"data":{"p0":{"pullRequest":null}}}"#,
+            r#"{"data":{"p0":null}}"#,
+        ] {
             let out = reply(body, 0);
-            assert_eq!(parse_checks(&Reply { args: &ARGS, out: &out }, &[false]).unwrap_err().code(), ErrorCode::GhFailed, "{body}");
+            assert_eq!(
+                parse_checks(
+                    &Reply {
+                        args: &ARGS,
+                        out: &out
+                    },
+                    &[false]
+                )
+                .unwrap_err()
+                .code(),
+                ErrorCode::GhFailed,
+                "{body}"
+            );
         }
     }
 
@@ -1479,18 +2160,30 @@ mod tests {
             let mut v: Value = serde_json::from_str(&node).unwrap();
             match serde_json::from_str::<Value>(reviews).unwrap() {
                 Value::Null => {
-                    v.as_object_mut().unwrap().remove("latestOpinionatedReviews");
+                    v.as_object_mut()
+                        .unwrap()
+                        .remove("latestOpinionatedReviews");
                 }
                 r => v["latestOpinionatedReviews"] = r,
             }
             let out = reply(&format!(r#"{{"data":{{"p0":{{"pullRequest":{v}}}}}}}"#), 0);
-            looked_up(&out, 1).unwrap().remove(0).unwrap().review_decision
+            looked_up(&out, 1)
+                .unwrap()
+                .remove(0)
+                .unwrap()
+                .review_decision
         };
         let nodes = |n: &str| format!(r#"{{"nodes":[{n}]}}"#);
         let approved = |a: &str| nodes(&format!(r#"{{"state":"APPROVED","author":{a}}}"#));
-        assert_eq!(with(&approved(r#"{"__typename":"Bot","login":"lane"}"#)), ReviewDecision::None);
+        assert_eq!(
+            with(&approved(r#"{"__typename":"Bot","login":"lane"}"#)),
+            ReviewDecision::None
+        );
         assert_eq!(with(&approved("null")), ReviewDecision::None);
-        assert_eq!(with(&approved(r#"{"__typename":"User","login":"alice"}"#)), ReviewDecision::Approved);
+        assert_eq!(
+            with(&approved(r#"{"__typename":"User","login":"alice"}"#)),
+            ReviewDecision::Approved
+        );
         assert_eq!(with("null"), ReviewDecision::None);
     }
 
@@ -1502,22 +2195,43 @@ mod tests {
             pr("o/b", 8, false, "OPEN", "null"),
         );
         let found = search(&reply(&body, 0)).unwrap();
-        assert_eq!((found.issue_count, found.rate.cost, found.rate.remaining), (2, 1, 4990));
+        assert_eq!(
+            (found.issue_count, found.rate.cost, found.rate.remaining),
+            (2, 1, 4990)
+        );
         assert_eq!(found.rate.reset_at, "2026-05-01T11:00:00Z");
-        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
-        assert_eq!((a.repo.as_str(), a.number, a.draft, a.state, a.checks), ("o/a", 7, true, PrState::Open, ChecksSummary::Failed));
-        assert_eq!((a.review_decision, a.title.as_str(), a.merged_at.as_deref()), (ReviewDecision::Approved, "T7", None));
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else {
+            panic!("{:?}", found.prs)
+        };
+        assert_eq!(
+            (a.repo.as_str(), a.number, a.draft, a.state, a.checks),
+            ("o/a", 7, true, PrState::Open, ChecksSummary::Failed)
+        );
+        assert_eq!(
+            (a.review_decision, a.title.as_str(), a.merged_at.as_deref()),
+            (ReviewDecision::Approved, "T7", None)
+        );
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
-        assert_eq!((a.mergeable, a.merge_state), (Mergeable::Conflicting, MergeState::Dirty));
+        assert_eq!(
+            (a.mergeable, a.merge_state),
+            (Mergeable::Conflicting, MergeState::Dirty)
+        );
     }
 
     #[test]
-    fn a_search_reports_each_pull_requests_base_and_default_branch_and_none_when_the_reply_has_none() {
+    fn a_search_reports_each_pull_requests_base_and_default_branch_and_none_when_the_reply_has_none()
+     {
         let based = |node: String, base: &str| {
-            node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#))
-                .replace(r#"{"nameWithOwner":"o/a"}"#, r#"{"nameWithOwner":"o/a","defaultBranchRef":{"name":"main"}}"#)
+            node.replace(
+                r#""mergedAt":null"#,
+                &format!(r#""baseRefName":"{base}","mergedAt":null"#),
+            )
+            .replace(
+                r#"{"nameWithOwner":"o/a"}"#,
+                r#"{"nameWithOwner":"o/a","defaultBranchRef":{"name":"main"}}"#,
+            )
         };
         let body = format!(
             r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
@@ -1525,9 +2239,17 @@ mod tests {
             pr("o/a", 2, false, "OPEN", "null"),
         );
         let found = search(&reply(&body, 0)).unwrap();
-        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
-        assert_eq!((a.base_ref.as_deref(), a.default_branch.as_deref()), (Some("feature"), Some("main")));
-        assert_eq!((b.base_ref.as_deref(), b.default_branch.as_deref()), (None, None));
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else {
+            panic!("{:?}", found.prs)
+        };
+        assert_eq!(
+            (a.base_ref.as_deref(), a.default_branch.as_deref()),
+            (Some("feature"), Some("main"))
+        );
+        assert_eq!(
+            (b.base_ref.as_deref(), b.default_branch.as_deref()),
+            (None, None)
+        );
     }
 
     #[test]
@@ -1543,67 +2265,142 @@ mod tests {
         );
         let found = search(&reply(&body, 0)).unwrap();
         assert_eq!(found.issue_count, 4);
-        let listed: Vec<_> = found.prs.iter().map(|l| (l.pr.repo.as_str(), l.pr.number, l.membership.authored, l.membership.review_requested)).collect();
-        assert_eq!(listed, [("o/a", 1, true, false), ("o/a", 2, true, true), ("o/b", 3, false, true)]);
+        let listed: Vec<_> = found
+            .prs
+            .iter()
+            .map(|l| {
+                (
+                    l.pr.repo.as_str(),
+                    l.pr.number,
+                    l.membership.authored,
+                    l.membership.review_requested,
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("o/a", 1, true, false),
+                ("o/a", 2, true, true),
+                ("o/b", 3, false, true)
+            ]
+        );
     }
 
     #[test]
     fn a_reply_without_the_review_request_search_is_gh_failed() {
         let body = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":9,"resetAt":"r"}}}"#;
-        assert_eq!(search(&reply(body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(
+            search(&reply(body, 0)).unwrap_err().code(),
+            ErrorCode::GhFailed
+        );
     }
 
     #[test]
     fn mergeable_and_merge_state_are_typed_whatever_they_are() {
         for (mergeable, merge_state, want) in [
-            ("MERGEABLE", "BLOCKED", (Mergeable::Clean, MergeState::Blocked)),
-            ("UNKNOWN", "UNKNOWN", (Mergeable::Unknown, MergeState::Unknown)),
-            ("MERGEABLE", "HAS_HOOKS", (Mergeable::Clean, MergeState::HasHooks)),
+            (
+                "MERGEABLE",
+                "BLOCKED",
+                (Mergeable::Clean, MergeState::Blocked),
+            ),
+            (
+                "UNKNOWN",
+                "UNKNOWN",
+                (Mergeable::Unknown, MergeState::Unknown),
+            ),
+            (
+                "MERGEABLE",
+                "HAS_HOOKS",
+                (Mergeable::Clean, MergeState::HasHooks),
+            ),
         ] {
-            let node = pr("o/a", 7, false, "OPEN", "null")
-                .replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#, &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#));
+            let node = pr("o/a", 7, false, "OPEN", "null").replace(
+                r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#,
+                &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#),
+            );
             let body = format!(
                 r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
             );
             let found = &search(&reply(&body, 0)).unwrap().prs[0].pr;
-            assert_eq!((found.mergeable, found.merge_state), want, "{mergeable} {merge_state}");
+            assert_eq!(
+                (found.mergeable, found.merge_state),
+                want,
+                "{mergeable} {merge_state}"
+            );
         }
     }
 
     #[test]
     fn a_mergeable_or_merge_state_outside_the_sets_is_gh_failed_in_the_search_and_the_lookup() {
         for (name, from, to) in [
-            ("mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":"MAYBE""#),
-            ("merge_state", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"QUEUED""#),
-            ("lowercase", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"dirty""#),
-            ("null mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":null"#),
+            (
+                "mergeable",
+                r#""mergeable":"CONFLICTING""#,
+                r#""mergeable":"MAYBE""#,
+            ),
+            (
+                "merge_state",
+                r#""mergeStateStatus":"DIRTY""#,
+                r#""mergeStateStatus":"QUEUED""#,
+            ),
+            (
+                "lowercase",
+                r#""mergeStateStatus":"DIRTY""#,
+                r#""mergeStateStatus":"dirty""#,
+            ),
+            (
+                "null mergeable",
+                r#""mergeable":"CONFLICTING""#,
+                r#""mergeable":null"#,
+            ),
         ] {
             let node = pr("o/a", 7, false, "OPEN", "null").replace(from, to);
             let body = format!(
                 r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
             );
-            assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed, "search {name}");
+            assert_eq!(
+                search(&reply(&body, 0)).unwrap_err().code(),
+                ErrorCode::GhFailed,
+                "search {name}"
+            );
             let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
-            assert_eq!(looked_up(&reply(&body, 0), 1).unwrap_err().code(), ErrorCode::GhFailed, "lookup {name}");
+            assert_eq!(
+                looked_up(&reply(&body, 0), 1).unwrap_err().code(),
+                ErrorCode::GhFailed,
+                "lookup {name}"
+            );
         }
     }
 
     #[test]
     fn a_pull_request_without_the_two_fields_is_gh_failed() {
-        let node = pr("o/a", 7, false, "OPEN", "null").replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","#, "");
+        let node = pr("o/a", 7, false, "OPEN", "null").replace(
+            r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","#,
+            "",
+        );
         let body = format!(
             r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
         );
-        assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
+        assert_eq!(
+            search(&reply(&body, 0)).unwrap_err().code(),
+            ErrorCode::GhFailed
+        );
     }
 
     #[test]
     fn a_pull_request_without_a_commit_has_no_checks() {
-        let body = pr("o/a", 7, false, "OPEN", "null").replace(r#"{"commit":{"statusCheckRollup":null}}"#, r#"{"commit":null}"#);
+        let body = pr("o/a", 7, false, "OPEN", "null").replace(
+            r#"{"commit":{"statusCheckRollup":null}}"#,
+            r#"{"commit":null}"#,
+        );
         let body = format!(
             r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{body}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
         );
-        assert_eq!(search(&reply(&body, 0)).unwrap().prs[0].pr.checks, ChecksSummary::None);
+        assert_eq!(
+            search(&reply(&body, 0)).unwrap().prs[0].pr.checks,
+            ChecksSummary::None
+        );
     }
 
     #[test]
@@ -1619,9 +2416,17 @@ mod tests {
         for (name, stdout, exit) in [
             ("empty", "", 0),
             ("html", "<html><body>Unicorn!</body></html>", 0),
-            ("errors only", r#"{"errors":[{"message":"Expected NAME"}]}"#, 1),
+            (
+                "errors only",
+                r#"{"errors":[{"message":"Expected NAME"}]}"#,
+                1,
+            ),
             ("data and errors", with_errors.as_str(), 1),
-            ("null search", r#"{"data":{"search":null,"rateLimit":null}}"#, 0),
+            (
+                "null search",
+                r#"{"data":{"search":null,"rateLimit":null}}"#,
+                0,
+            ),
             ("empty data", "{}", 0),
             ("unknown state", unknown_state.as_str(), 0),
         ] {
@@ -1632,10 +2437,27 @@ mod tests {
 
     #[test]
     fn an_http_5xx_is_read_from_stderr_or_from_stdout_when_stderr_is_empty() {
-        let out = |stdout: &str, stderr: &str| Output { stdout: stdout.to_owned(), stderr: stderr.to_owned(), exit: Some(1) };
-        assert_eq!(http_5xx(&out("", "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)")).as_deref(), Some("HTTP 502"));
-        assert_eq!(http_5xx(&out("", "gh: Service Unavailable (HTTP 503)")).as_deref(), Some("HTTP 503"));
-        assert_eq!(http_5xx(&out("gh: HTTP 504: Gateway Timeout", "")).as_deref(), Some("HTTP 504"));
+        let out = |stdout: &str, stderr: &str| Output {
+            stdout: stdout.to_owned(),
+            stderr: stderr.to_owned(),
+            exit: Some(1),
+        };
+        assert_eq!(
+            http_5xx(&out(
+                "",
+                "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)"
+            ))
+            .as_deref(),
+            Some("HTTP 502")
+        );
+        assert_eq!(
+            http_5xx(&out("", "gh: Service Unavailable (HTTP 503)")).as_deref(),
+            Some("HTTP 503")
+        );
+        assert_eq!(
+            http_5xx(&out("gh: HTTP 504: Gateway Timeout", "")).as_deref(),
+            Some("HTTP 504")
+        );
         // stdout is read only when stderr is empty; a 4xx, a bare 5 and a body without a status are no 5xx.
         assert_eq!(http_5xx(&out("HTTP 502", "gh: exit status 1")), None);
         assert_eq!(http_5xx(&out("", "gh: HTTP 401: Bad credentials")), None);
@@ -1647,12 +2469,29 @@ mod tests {
     fn a_failure_of_a_poll_call_holds_call_transient_and_reason_whatever_it_was() {
         let details = |e: CpdError| Value::Object(polled_call("search", e).details().clone());
         let plain = details(CpdError::new(ErrorCode::GhFailed, "x"));
-        assert_eq!((&plain["call"], &plain["transient"], &plain["reason"]), (&json!("search"), &json!(false), &Value::Null));
-        let transient = details(CpdError::new(ErrorCode::GhFailed, "x").with("transient", true).with("reason", "HTTP 502"));
-        assert_eq!((&transient["transient"], &transient["reason"]), (&json!(true), &json!("HTTP 502")));
+        assert_eq!(
+            (&plain["call"], &plain["transient"], &plain["reason"]),
+            (&json!("search"), &json!(false), &Value::Null)
+        );
+        let transient = details(
+            CpdError::new(ErrorCode::GhFailed, "x")
+                .with("transient", true)
+                .with("reason", "HTTP 502"),
+        );
+        assert_eq!(
+            (&transient["transient"], &transient["reason"]),
+            (&json!(true), &json!("HTTP 502"))
+        );
         // Only an answer that is no GraphQL result and exited non-zero is transient.
-        let body = |stdout: &str, exit: i32| search(&Output { stdout: stdout.to_owned(), stderr: "gh: HTTP 502: Bad Gateway".to_owned(), exit: Some(exit) });
-        let transient = |r: Result<Search, CpdError>| r.unwrap_err().details().get("transient").cloned();
+        let body = |stdout: &str, exit: i32| {
+            search(&Output {
+                stdout: stdout.to_owned(),
+                stderr: "gh: HTTP 502: Bad Gateway".to_owned(),
+                exit: Some(exit),
+            })
+        };
+        let transient =
+            |r: Result<Search, CpdError>| r.unwrap_err().details().get("transient").cloned();
         assert_eq!(transient(body("<html>", 1)), Some(json!(true)));
         assert_eq!(transient(body("<html>", 0)), None);
         assert_eq!(transient(body(r#"{"errors":[{"message":"x"}]}"#, 1)), None);
@@ -1663,7 +2502,10 @@ mod tests {
         let e = search(&reply("", 1)).unwrap_err();
         let details = serde_json::to_value(&e).unwrap();
         let details = &details["error"]["details"];
-        assert_eq!(details["argv"], json!(["gh", "api", "graphql", "-f", "query=Q"]));
+        assert_eq!(
+            details["argv"],
+            json!(["gh", "api", "graphql", "-f", "query=Q"])
+        );
         assert_eq!(details["exit"], json!(1));
         assert_eq!(details["stderr"], json!("gh: boom"));
     }
@@ -1673,22 +2515,42 @@ mod tests {
         let body = format!(
             r#"{{"data":{{"p0":{{"pullRequest":{}}},"p1":{{"pullRequest":null}}}},
             "errors":[{{"type":"NOT_FOUND","path":["p1","pullRequest"],"message":"Could not resolve"}}]}}"#,
-            pr("o/a", 7, false, "MERGED", r#"{"state":"SUCCESS"}"#).replace(r#""mergedAt":null"#, r#""mergedAt":"2026-05-02T00:00:00Z""#),
+            pr("o/a", 7, false, "MERGED", r#"{"state":"SUCCESS"}"#)
+                .replace(r#""mergedAt":null"#, r#""mergedAt":"2026-05-02T00:00:00Z""#),
         );
         let found = looked_up(&reply(&body, 1), 2).unwrap();
-        let [Some(a), None] = &found[..] else { panic!("{found:?}") };
-        assert_eq!((a.number, a.state, a.checks, a.merged_at.as_deref()), (7, PrState::Merged, ChecksSummary::Passed, Some("2026-05-02T00:00:00Z")));
+        let [Some(a), None] = &found[..] else {
+            panic!("{found:?}")
+        };
+        assert_eq!(
+            (a.number, a.state, a.checks, a.merged_at.as_deref()),
+            (
+                7,
+                PrState::Merged,
+                ChecksSummary::Passed,
+                Some("2026-05-02T00:00:00Z")
+            )
+        );
     }
 
     #[test]
-    fn the_direct_read_selects_the_two_viewer_fields_after_the_poll_fields_and_the_lookup_does_not() {
+    fn the_direct_read_selects_the_two_viewer_fields_after_the_poll_fields_and_the_lookup_does_not()
+    {
         let prs = [("o/a".to_owned(), 7), ("o/b".to_owned(), 8)];
         let plain = lookup_query(&prs, false).unwrap();
         let direct = lookup_query(&prs, true).unwrap();
         assert!(!plain.contains("viewer"));
-        assert_eq!(direct.matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }").count(), 2);
+        assert_eq!(
+            direct
+                .matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }")
+                .count(),
+            2
+        );
         assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner defaultBranchRef { name } }"));
-        assert_eq!(direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""), plain);
+        assert_eq!(
+            direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""),
+            plain
+        );
     }
 
     fn with_viewer(node: String, author: &str, request: &str) -> String {
@@ -1696,29 +2558,69 @@ mod tests {
     }
 
     #[test]
-    fn the_direct_read_types_the_viewer_flags_of_an_open_pull_request_and_clears_those_of_a_decided_one() {
+    fn the_direct_read_types_the_viewer_flags_of_an_open_pull_request_and_clears_those_of_a_decided_one()
+     {
         let open = with_viewer(pr("o/a", 1, false, "OPEN", "null"), "true", r#"{"id":"R"}"#);
         let other = with_viewer(pr("o/a", 2, false, "OPEN", "null"), "false", "null");
-        let closed = with_viewer(pr("o/a", 3, false, "CLOSED", "null"), "true", r#"{"id":"R"}"#);
-        let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{open}}},"p1":{{"pullRequest":{other}}},"p2":{{"pullRequest":{closed}}}}}}}"#);
+        let closed = with_viewer(
+            pr("o/a", 3, false, "CLOSED", "null"),
+            "true",
+            r#"{"id":"R"}"#,
+        );
+        let body = format!(
+            r#"{{"data":{{"p0":{{"pullRequest":{open}}},"p1":{{"pullRequest":{other}}},"p2":{{"pullRequest":{closed}}}}}}}"#
+        );
         let found = read(&reply(&body, 0), 3).unwrap();
-        let flags: Vec<_> = found.iter().map(|l| l.as_ref().map(|l| (l.membership.authored, l.membership.review_requested))).collect();
-        assert_eq!(flags, vec![Some((true, true)), Some((false, false)), Some((false, false))]);
+        let flags: Vec<_> = found
+            .iter()
+            .map(|l| {
+                l.as_ref()
+                    .map(|l| (l.membership.authored, l.membership.review_requested))
+            })
+            .collect();
+        assert_eq!(
+            flags,
+            vec![
+                Some((true, true)),
+                Some((false, false)),
+                Some((false, false))
+            ]
+        );
     }
 
     #[test]
     fn the_direct_read_without_either_viewer_field_is_gh_failed_and_a_not_found_alias_is_none() {
         for (name, node) in [
-            ("no author", pr("o/a", 1, false, "OPEN", "null").replace(r#""mergeStateStatus":"DIRTY","#, r#""mergeStateStatus":"DIRTY","viewerLatestReviewRequest":null,"#)),
-            ("no request", pr("o/a", 1, false, "OPEN", "null").replace(r#""mergeStateStatus":"DIRTY","#, r#""mergeStateStatus":"DIRTY","viewerDidAuthor":true,"#)),
+            (
+                "no author",
+                pr("o/a", 1, false, "OPEN", "null").replace(
+                    r#""mergeStateStatus":"DIRTY","#,
+                    r#""mergeStateStatus":"DIRTY","viewerLatestReviewRequest":null,"#,
+                ),
+            ),
+            (
+                "no request",
+                pr("o/a", 1, false, "OPEN", "null").replace(
+                    r#""mergeStateStatus":"DIRTY","#,
+                    r#""mergeStateStatus":"DIRTY","viewerDidAuthor":true,"#,
+                ),
+            ),
             ("neither", pr("o/a", 1, false, "MERGED", "null")),
         ] {
             let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
-            assert_eq!(read(&reply(&body, 0), 1).unwrap_err().code(), ErrorCode::GhFailed, "{name}");
+            assert_eq!(
+                read(&reply(&body, 0), 1).unwrap_err().code(),
+                ErrorCode::GhFailed,
+                "{name}"
+            );
         }
-        let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
+        let gone =
+            r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
         assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
-        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(), vec![]);
+        assert_eq!(
+            read_absent(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(),
+            vec![]
+        );
     }
 
     #[test]
@@ -1734,8 +2636,14 @@ mod tests {
             ("html", "<html></html>"),
             ("no data", r#"{"errors":[{"message":"Bad credentials"}]}"#),
             ("null data", r#"{"data":null,"errors":[{"message":"x"}]}"#),
-            ("null without NOT_FOUND", r#"{"data":{"p0":{"pullRequest":null}}}"#),
-            ("other error", r#"{"data":{"p0":null},"errors":[{"type":"RATE_LIMITED","path":["p0"],"message":"x"}]}"#),
+            (
+                "null without NOT_FOUND",
+                r#"{"data":{"p0":{"pullRequest":null}}}"#,
+            ),
+            (
+                "other error",
+                r#"{"data":{"p0":null},"errors":[{"type":"RATE_LIMITED","path":["p0"],"message":"x"}]}"#,
+            ),
             ("missing alias", r#"{"data":{}}"#),
         ] {
             let e = looked_up(&reply(stdout, 1), 1).unwrap_err();
@@ -1747,20 +2655,40 @@ mod tests {
     fn a_repo_that_is_not_owner_name_is_refused_before_gh_runs() {
         let nowhere = Path::new("/nonexistent");
         let runner = runner();
-        for repo in ["", "a", "a/", "/b", "a/b/c", "a b/c", "o/n\"}) { x", "o\"/n", "ö/n"] {
+        for repo in [
+            "",
+            "a",
+            "a/",
+            "/b",
+            "a/b/c",
+            "a b/c",
+            "o/n\"}) { x",
+            "o\"/n",
+            "ö/n",
+        ] {
             let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)], &[]).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{repo:?}");
-            assert!(e.message().contains("owner/name"), "{repo:?}: {}", e.message());
+            assert!(
+                e.message().contains("owner/name"),
+                "{repo:?}: {}",
+                e.message()
+            );
         }
     }
 
     #[test]
     fn an_empty_lookup_makes_no_call() {
-        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(), vec![]);
+        assert_eq!(
+            lookup(&runner(), Path::new("/nonexistent"), &[], &[]).unwrap(),
+            vec![]
+        );
     }
 
     #[test]
     fn repos_of_every_allowed_character_pass() {
-        assert_eq!(repo_parts("Some-Org_1/repo.name-2"), Some(("Some-Org_1", "repo.name-2")));
+        assert_eq!(
+            repo_parts("Some-Org_1/repo.name-2"),
+            Some(("Some-Org_1", "repo.name-2"))
+        );
     }
 }

@@ -4,9 +4,9 @@
 
 use rusqlite::Connection;
 
+use super::Catalog;
 use super::schema::NAMED;
 use super::verdict::reference_database;
-use super::Catalog;
 use crate::error::CpdError;
 use crate::home::CpdHome;
 
@@ -14,7 +14,10 @@ use crate::home::CpdHome;
 /// `compat` is `"additive"` or `"breaking"`, as `build.rs` parsed it.
 #[doc(hidden)]
 pub fn named_migrations() -> Vec<(&'static str, &'static str, &'static str)> {
-    NAMED.iter().map(|n| (n.name, n.compat.as_str(), n.sql)).collect()
+    NAMED
+        .iter()
+        .map(|n| (n.name, n.compat.as_str(), n.sql))
+        .collect()
 }
 
 /// A fresh in-memory database after the legacy set, the runner's table, the
@@ -22,5 +25,11 @@ pub fn named_migrations() -> Vec<(&'static str, &'static str, &'static str)> {
 /// `NAMED[named_count]` is applied to. `home` is for a migration's Rust part.
 #[doc(hidden)]
 pub fn prefix_database(named_count: usize, home: &CpdHome) -> Result<Connection, CpdError> {
-    reference_database(&Catalog { named: &NAMED[..named_count], schema_hash: "" }, home)
+    reference_database(
+        &Catalog {
+            named: &NAMED[..named_count],
+            schema_hash: "",
+        },
+        home,
+    )
 }

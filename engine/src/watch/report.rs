@@ -25,9 +25,9 @@ use cpd_core::error::CpdError;
 use cpd_core::events::repeat::{self, Recent, Same};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
-use cpd_core::pr::jira_sync::Target;
 use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::job::home::JobHome;
+use cpd_core::pr::jira_sync::Target;
 use cpd_core::session::tell_managers;
 use cpd_core::store::Store;
 
@@ -131,13 +131,22 @@ impl About {
     }
 
     fn event(&self, text: String, failure: &Failure) -> NewEvent {
-        let event = NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details);
+        let event = NewEvent::error(
+            text,
+            SOURCE,
+            &failure.code,
+            &failure.message,
+            &failure.details,
+        );
         match self {
             About::Machine | About::TitleRun(_) => event,
             About::Plan(p) | About::Move(p, ..) => event.plan(p.clone()),
             About::Session(s) => event.session(s.clone()),
             About::Job(p, j) => event.plan(p.clone()).job(j.clone()),
-            About::Attempt(p, a) => event.plan(p.clone()).job(a.job().clone()).attempt(a.clone()),
+            About::Attempt(p, a) => event
+                .plan(p.clone())
+                .job(a.job().clone())
+                .attempt(a.clone()),
         }
     }
 }
@@ -152,7 +161,11 @@ pub(super) struct Failure {
 
 impl From<&CpdError> for Failure {
     fn from(e: &CpdError) -> Failure {
-        Failure { code: e.code().as_str().to_owned(), message: e.message().to_owned(), details: Value::Object(e.details().clone()) }
+        Failure {
+            code: e.code().as_str().to_owned(),
+            message: e.message().to_owned(),
+            details: Value::Object(e.details().clone()),
+        }
     }
 }
 
@@ -167,8 +180,17 @@ fn stuck_prefix(group: &StuckGroup) -> String {
 /// The one message of a PR's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
 /// own minutes and `failed_cause`, oldest first. `<key>` and `<T>` stay as written for the Manager to choose.
 fn stuck_text(group: &StuckGroup) -> String {
-    let entries =
-        group.jobs.iter().map(|j| format!("{}/{} ({} min ago, {})", group.plan, j.job, j.minutes, j.cause)).collect::<Vec<_>>().join("; ");
+    let entries = group
+        .jobs
+        .iter()
+        .map(|j| {
+            format!(
+                "{}/{} ({} min ago, {})",
+                group.plan, j.job, j.minutes, j.cause
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     format!(
         "{}and their Lead has not retried or cancelled them: {}. Retry each (cpd job retry <key> --plan {} --tier <T>), nudge the Lead, or ask the User.",
         stuck_prefix(group),
@@ -182,12 +204,22 @@ fn stuck_text(group: &StuckGroup) -> String {
 /// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the PR is a newer Event, so the group
 /// is told again.
 fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
-    let Some(manager) = live_manager(conn, &group.context)? else { return Ok(false) };
-    Ok(!message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))?)
+    let Some(manager) = live_manager(conn, &group.context)? else {
+        return Ok(false);
+    };
+    Ok(!message_exists(
+        conn,
+        &manager,
+        Some(group.event),
+        &stuck_prefix(group),
+    )?)
 }
 
 /// The id of the Context's live Manager (role `manager`, not archived), if there is one.
-pub(super) fn live_manager(conn: &Connection, context: &ContextId) -> Result<Option<String>, CpdError> {
+pub(super) fn live_manager(
+    conn: &Connection,
+    context: &ContextId,
+) -> Result<Option<String>, CpdError> {
     Ok(conn
         .query_row(
             "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1",
@@ -198,7 +230,12 @@ pub(super) fn live_manager(conn: &Connection, context: &ContextId) -> Result<Opt
 }
 
 /// Whether a message from the User's side (`from` null) to `manager`, newer than Event `after` when given, begins with `prefix`.
-pub(super) fn message_exists(conn: &Connection, manager: &str, after: Option<i64>, prefix: &str) -> Result<bool, CpdError> {
+pub(super) fn message_exists(
+    conn: &Connection,
+    manager: &str,
+    after: Option<i64>,
+    prefix: &str,
+) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND id > ?2 AND kind = 'session-message'
                          AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?3) = 1)",
@@ -236,7 +273,11 @@ pub(super) struct Report {
 
 impl Report {
     pub(super) fn new(repeat: Duration) -> Report {
-        Report { open: HashMap::new(), appended: HashMap::new(), repeat }
+        Report {
+            open: HashMap::new(),
+            appended: HashMap::new(),
+            repeat,
+        }
     }
 }
 
@@ -245,15 +286,30 @@ impl Report {
     /// unless the same failure is already reported and not cleared, or the store holds an `error` Event of
     /// the same step, scope and code (matched by [`About::lead`]) appended less than `repeat` ago (an engine
     /// restart forgets memory, not the store): then it is only remembered as still open.
-    pub(super) fn fail(&mut self, store: &mut Store, log: &mut Log, step: Step, about: About, failure: impl Into<Failure>) {
+    pub(super) fn fail(
+        &mut self,
+        store: &mut Store,
+        log: &mut Log,
+        step: Step,
+        about: About,
+        failure: impl Into<Failure>,
+    ) {
         let failure = failure.into();
         self.forget_old();
         let key = (step, about);
-        if self.open.get(&key).is_some_and(|(code, _)| *code == failure.code) {
+        if self
+            .open
+            .get(&key)
+            .is_some_and(|(code, _)| *code == failure.code)
+        {
             return;
         }
         let repeated = (key.0, key.1.clone(), failure.code.clone());
-        if let Some(&(_, event)) = self.appended.get(&repeated).filter(|(at, _)| at.elapsed() < self.repeat) {
+        if let Some(&(_, event)) = self
+            .appended
+            .get(&repeated)
+            .filter(|(at, _)| at.elapsed() < self.repeat)
+        {
             // Appended recently: only remember it is still failing.
             self.open.insert(key, (failure.code, event));
             return;
@@ -261,7 +317,11 @@ impl Report {
         let (step, about) = &key;
         let lead = about.lead(*step);
         if self.repeat > Duration::ZERO {
-            let same = Same::Lead { source: "watch", code: &failure.code, lead: &lead };
+            let same = Same::Lead {
+                source: "watch",
+                code: &failure.code,
+                lead: &lead,
+            };
             match store.read(|conn| repeat::recent(conn, self.repeat, &same)) {
                 Ok(Some(Recent { event, age })) => {
                     let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
@@ -270,11 +330,24 @@ impl Report {
                     return;
                 }
                 Ok(None) => {}
-                Err(e) => log.line(&format!("cannot read the error Events: {} ({})", e.message(), e.code().as_str())),
+                Err(e) => log.line(&format!(
+                    "cannot read the error Events: {} ({})",
+                    e.message(),
+                    e.code().as_str()
+                )),
             }
         }
-        log.line(&format!("{step} failed for {}: {} ({})", about.describe(), failure.message, failure.code));
-        let text = format!("{lead} {} It tries again at every tick. See: {}", failure.message, about.see());
+        log.line(&format!(
+            "{step} failed for {}: {} ({})",
+            about.describe(),
+            failure.message,
+            failure.code
+        ));
+        let text = format!(
+            "{lead} {} It tries again at every tick. See: {}",
+            failure.message,
+            about.see()
+        );
         let appended = store.write(SOURCE, |tx| {
             events::append(tx, about.event(text.clone(), &failure))
         });
@@ -284,7 +357,11 @@ impl Report {
                 self.open.insert(key, (failure.code, event));
             }
             // Not marked as reported: the next tick tries again.
-            Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
+            Err(e) => log.line(&format!(
+                "cannot append the error Event: {} ({})",
+                e.message(),
+                e.code().as_str()
+            )),
         }
     }
 
@@ -305,16 +382,28 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use cpd_core::home::CpdHome;
     use cpd_core::ids::{ContextId, PrKey};
+    use serde_json::json;
 
     fn failure(code: &str) -> Failure {
-        Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
+        Failure {
+            code: code.to_owned(),
+            message: "It failed.".to_owned(),
+            details: json!({}),
+        }
     }
 
     fn errors(store: &mut Store) -> i64 {
-        store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT count(*) FROM events WHERE kind = 'error'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     /// A step that fails, clears and fails again at every tick (E2 does: its
@@ -329,18 +418,42 @@ mod tests {
 
         let mut report = Report::new(Duration::from_secs(600));
         for _ in 0..3 {
-            report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+            report.fail(
+                &mut store,
+                &mut log,
+                Step::E2,
+                About::Machine,
+                failure("tmux_failed"),
+            );
             report.clear(Step::E2, &About::Machine);
         }
         assert_eq!(errors(&mut store), 1);
-        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("store_failed"));
-        report.fail(&mut store, &mut log, Step::E3, About::Machine, failure("tmux_failed"));
+        report.fail(
+            &mut store,
+            &mut log,
+            Step::E2,
+            About::Machine,
+            failure("store_failed"),
+        );
+        report.fail(
+            &mut store,
+            &mut log,
+            Step::E3,
+            About::Machine,
+            failure("tmux_failed"),
+        );
         assert_eq!(errors(&mut store), 3);
 
         // Past the period it is appended again.
         let mut report = Report::new(Duration::ZERO);
         for _ in 0..2 {
-            report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+            report.fail(
+                &mut store,
+                &mut log,
+                Step::E2,
+                About::Machine,
+                failure("tmux_failed"),
+            );
             report.clear(Step::E2, &About::Machine);
         }
         assert_eq!(errors(&mut store), 5);
@@ -352,7 +465,11 @@ mod tests {
         let about = About::TitleRun(SessionId::parse("lead1").unwrap());
         assert_eq!(about.see(), "cpd session show lead1");
         let event = about.event("x".to_owned(), &failure("title_failed"));
-        assert_eq!(format!("{event:?}").matches("session: None").count(), 1, "{event:?}");
+        assert_eq!(
+            format!("{event:?}").matches("session: None").count(),
+            1,
+            "{event:?}"
+        );
     }
 
     /// An E19 row failure is keyed per row: its lead names the PR and the target; the Event is scoped to the Plan.
@@ -361,10 +478,20 @@ mod tests {
         let plan = PlanId::parse("plan-a").unwrap();
         let about = About::Move(plan.clone(), PrKey::parse("pr1").unwrap(), Target::InReview);
         assert_eq!(about.see(), "cpd plan show --plan plan-a");
-        assert!(about.lead(Step::E19).contains(&format!("the {} move of PR pr1 of Plan plan-a", Target::InReview.as_str())));
-        assert_ne!(about, About::Move(plan, PrKey::parse("pr2").unwrap(), Target::InReview));
+        assert!(about.lead(Step::E19).contains(&format!(
+            "the {} move of PR pr1 of Plan plan-a",
+            Target::InReview.as_str()
+        )));
+        assert_ne!(
+            about,
+            About::Move(plan, PrKey::parse("pr2").unwrap(), Target::InReview)
+        );
         let event = about.event("x".to_owned(), &failure("jira_failed"));
-        assert_eq!(format!("{event:?}").matches("plan: Some").count(), 1, "{event:?}");
+        assert_eq!(
+            format!("{event:?}").matches("plan: Some").count(),
+            1,
+            "{event:?}"
+        );
     }
 
     /// engine-G6: a failure that cleared leaves nothing in the maps once the repeat period has passed.
@@ -378,14 +505,26 @@ mod tests {
 
         // Within the period the Event is remembered, to hold a repeat back.
         let mut report = Report::new(Duration::from_secs(600));
-        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        report.fail(
+            &mut store,
+            &mut log,
+            Step::E2,
+            About::Machine,
+            failure("tmux_failed"),
+        );
         report.clear(Step::E2, &About::Machine);
         assert_eq!((report.open.len(), report.appended.len()), (0, 1));
 
         // Past the period, the next success forgets it.
         let mut report = Report::new(Duration::ZERO);
         for step in steps {
-            report.fail(&mut store, &mut log, step, About::Machine, failure("tmux_failed"));
+            report.fail(
+                &mut store,
+                &mut log,
+                step,
+                About::Machine,
+                failure("tmux_failed"),
+            );
         }
         assert_eq!(report.open.len(), 3);
         for step in steps {
@@ -398,7 +537,11 @@ mod tests {
     /// `plan-b`), and a Context `ctx-c` with no Manager and its Plan `plan-c`.
     fn managers(store: &mut Store, archive_b: bool) {
         let t = "2026-01-01T00:00:00.000Z";
-        let archived = if archive_b { format!("'{t}'") } else { "NULL".to_owned() };
+        let archived = if archive_b {
+            format!("'{t}'")
+        } else {
+            "NULL".to_owned()
+        };
         store
             .write("test", |tx| {
                 for c in ["ctx-a", "ctx-b", "ctx-c"] {
@@ -446,9 +589,21 @@ mod tests {
         let mut report = Report::new(Duration::from_secs(600));
         let about = About::Plan(PlanId::parse("plan-a").unwrap());
         for _ in 0..3 {
-            report.fail(&mut store, &mut log, Step::E3, about.clone(), failure("store_failed"));
+            report.fail(
+                &mut store,
+                &mut log,
+                Step::E3,
+                about.clone(),
+                failure("store_failed"),
+            );
         }
-        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        report.fail(
+            &mut store,
+            &mut log,
+            Step::E2,
+            About::Machine,
+            failure("tmux_failed"),
+        );
         assert_eq!((errors(&mut store), messages(&mut store).len()), (2, 0));
     }
 
@@ -458,7 +613,13 @@ mod tests {
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         let mut log = Log::open(&home).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        Report::new(Duration::from_secs(600)).fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        Report::new(Duration::from_secs(600)).fail(
+            &mut store,
+            &mut log,
+            Step::E2,
+            About::Machine,
+            failure("tmux_failed"),
+        );
         assert_eq!((errors(&mut store), messages(&mut store).len()), (1, 0));
     }
 
@@ -485,7 +646,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        store.read(|conn| Ok(conn.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|conn| Ok(conn.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?))
+            .unwrap()
     }
 
     /// The Job as the stuck query reads it: failed `minutes` ago, whose `job-failed` Event is `event`, for `crashed`.
@@ -515,7 +678,9 @@ mod tests {
     }
 
     fn txns(store: &mut Store) -> i64 {
-        store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|conn| Ok(conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?))
+            .unwrap()
     }
 
     /// hs-d318: a stuck Job reaches the Manager of its Context as one message from the User's side, no wake, and the next
@@ -525,11 +690,30 @@ mod tests {
         let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-a", "plan-a", "a");
 
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", failed, 12)]).unwrap(), 1);
-        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, true, text_of("plan-a", "repo", &[("a", 12)]))]);
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-a", "plan-a", "repo", "a", failed, 12)]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            messages(&mut store),
+            [(
+                "mgr-a".to_owned(),
+                None,
+                true,
+                text_of("plan-a", "repo", &[("a", 12)])
+            )]
+        );
         for minutes in [12, 13, 600] {
             assert_eq!(
-                tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", failed, minutes)]).unwrap(),
+                tell_stuck_jobs(
+                    &mut store,
+                    &[stuck("ctx-a", "plan-a", "repo", "a", failed, minutes)]
+                )
+                .unwrap(),
                 0,
                 "{minutes} min"
             );
@@ -544,11 +728,23 @@ mod tests {
         let old = job_failed(&mut store, "ctx-a", "plan-a", "old");
         let fresh = job_failed(&mut store, "ctx-a", "plan-a", "fresh");
 
-        let jobs = [stuck("ctx-a", "plan-a", "repo", "old", old, 30), stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12)];
-        assert_eq!(tell_stuck_jobs(&mut store, &jobs).unwrap(), 1, "one PR, one message");
+        let jobs = [
+            stuck("ctx-a", "plan-a", "repo", "old", old, 30),
+            stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12),
+        ];
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &jobs).unwrap(),
+            1,
+            "one PR, one message"
+        );
         assert_eq!(
             messages(&mut store),
-            [("mgr-a".to_owned(), None, true, text_of("plan-a", "repo", &[("old", 30), ("fresh", 12)]))]
+            [(
+                "mgr-a".to_owned(),
+                None,
+                true,
+                text_of("plan-a", "repo", &[("old", 30), ("fresh", 12)])
+            )]
         );
     }
 
@@ -557,13 +753,40 @@ mod tests {
     fn a_job_that_fails_again_after_a_retry_is_sent_again() {
         let (_dir, mut store) = store_with_managers();
         let first = job_failed(&mut store, "ctx-a", "plan-a", "a");
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", first, 10)]).unwrap(), 1);
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-a", "plan-a", "repo", "a", first, 10)]
+            )
+            .unwrap(),
+            1
+        );
 
         let second = job_failed(&mut store, "ctx-a", "plan-a", "a");
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", second, 11)]).unwrap(), 1);
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", second, 12)]).unwrap(), 0);
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-a", "plan-a", "repo", "a", second, 11)]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-a", "plan-a", "repo", "a", second, 12)]
+            )
+            .unwrap(),
+            0
+        );
         let sent: Vec<String> = messages(&mut store).into_iter().map(|m| m.3).collect();
-        assert_eq!(sent, [text_of("plan-a", "repo", &[("a", 10)]), text_of("plan-a", "repo", &[("a", 11)])]);
+        assert_eq!(
+            sent,
+            [
+                text_of("plan-a", "repo", &[("a", 10)]),
+                text_of("plan-a", "repo", &[("a", 11)])
+            ]
+        );
     }
 
     /// No live Manager: nothing is sent and nothing is written, so a quiet tick stays quiet; a Manager that comes later, or
@@ -573,8 +796,19 @@ mod tests {
         let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-c", "plan-c", "c");
         let before = txns(&mut store);
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 0);
-        assert_eq!((messages(&mut store), txns(&mut store)), (vec![], before), "the Context c has no Manager");
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            (messages(&mut store), txns(&mut store)),
+            (vec![], before),
+            "the Context c has no Manager"
+        );
 
         let t = "2026-01-01T00:00:00.000Z";
         let add = |store: &mut Store, id: &str, context: &str| {
@@ -590,24 +824,57 @@ mod tests {
                 .unwrap();
         };
         add(&mut store, "mgr-c", "ctx-c");
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 1);
-        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c"]);
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            messages(&mut store)
+                .iter()
+                .map(|m| m.0.as_str())
+                .collect::<Vec<_>>(),
+            ["mgr-c"]
+        );
 
         // The told Manager is archived and another takes its place: the new one is told.
         store
             .write("test", |tx| {
-                tx.execute("UPDATE sessions SET archived_at = ?1 WHERE id = 'mgr-c'", [t])?;
+                tx.execute(
+                    "UPDATE sessions SET archived_at = ?1 WHERE id = 'mgr-c'",
+                    [t],
+                )?;
                 Ok(())
             })
             .unwrap();
         assert_eq!(
-            tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(),
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]
+            )
+            .unwrap(),
             0,
             "an archived Manager is not live"
         );
         add(&mut store, "mgr-c2", "ctx-c");
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 1);
-        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c", "mgr-c2"]);
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            messages(&mut store)
+                .iter()
+                .map(|m| m.0.as_str())
+                .collect::<Vec<_>>(),
+            ["mgr-c", "mgr-c2"]
+        );
     }
 
     /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this PR
@@ -619,13 +886,24 @@ mod tests {
         let other = job_failed(&mut store, "ctx-a", "plan-a", "b");
         let b = job_failed(&mut store, "ctx-b", "plan-b", "a");
 
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", a, 10)]).unwrap(), 1);
         assert_eq!(
-            tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "other", "b", other, 10)]).unwrap(),
+            tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", a, 10)]).unwrap(),
+            1
+        );
+        assert_eq!(
+            tell_stuck_jobs(
+                &mut store,
+                &[stuck("ctx-a", "plan-a", "other", "b", other, 10)]
+            )
+            .unwrap(),
             1,
             "another PR of the same plan is its own record"
         );
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-b", "plan-b", "repo", "a", b, 10)]).unwrap(), 1, "another Context's Manager");
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &[stuck("ctx-b", "plan-b", "repo", "a", b, 10)]).unwrap(),
+            1,
+            "another Context's Manager"
+        );
         let to: Vec<String> = messages(&mut store).into_iter().map(|m| m.0).collect();
         assert_eq!(to, ["mgr-a", "mgr-a", "mgr-b"]);
 
@@ -642,6 +920,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "z", z, 10)]).unwrap(), 1);
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "z", z, 10)]).unwrap(),
+            1
+        );
     }
 }

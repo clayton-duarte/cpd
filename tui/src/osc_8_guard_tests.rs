@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 fn product_files(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
         let path = entry.expect("a directory entry").path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
         if path.is_dir() {
             if name != "tests" {
                 product_files(&path, found);
@@ -36,7 +40,8 @@ fn product_lines(text: &str) -> Vec<(usize, String)> {
                 let item = lines[i];
                 depth += item.matches('{').count() as i32 - item.matches('}').count() as i32;
                 i += 1;
-                if depth <= 0 && (item.trim_end().ends_with(';') || item.trim_end().ends_with('}')) {
+                if depth <= 0 && (item.trim_end().ends_with(';') || item.trim_end().ends_with('}'))
+                {
                     break;
                 }
             }
@@ -56,17 +61,32 @@ fn no_product_file_of_the_tui_writes_an_osc_8_sequence() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     product_files(&src, &mut files);
-    assert!(files.len() > 20, "the walk found the tui's product files: {}", files.len());
+    assert!(
+        files.len() > 20,
+        "the walk found the tui's product files: {}",
+        files.len()
+    );
     let mut offenders = Vec::new();
     for path in files {
-        let rel = path.strip_prefix(&src).expect("under src").to_string_lossy().into_owned();
+        let rel = path
+            .strip_prefix(&src)
+            .expect("under src")
+            .to_string_lossy()
+            .into_owned();
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
         for (number, code) in product_lines(&text) {
-            if code.contains("\\x1b]8;") || code.contains("\\u{1b}]8;") || code.contains('\u{1b}') && code.contains("]8;") {
+            if code.contains("\\x1b]8;")
+                || code.contains("\\u{1b}]8;")
+                || code.contains('\u{1b}') && code.contains("]8;")
+            {
                 offenders.push(format!("tui/src/{rel}:{number}: {code}"));
             }
         }
     }
     offenders.sort();
-    assert!(offenders.is_empty(), "these lines write an OSC 8 sequence; draw a `link::Link` instead:\n{}", offenders.join("\n"));
+    assert!(
+        offenders.is_empty(),
+        "these lines write an OSC 8 sequence; draw a `link::Link` instead:\n{}",
+        offenders.join("\n")
+    );
 }

@@ -1,6 +1,6 @@
 //! Red tests of the `model` domain's one-provider rule (contract §8.3 "Models").
 
-use super::{check_one_provider, provider_of, Models};
+use super::{Models, check_one_provider, provider_of};
 use crate::error::ErrorCode;
 use serde_json::json;
 use std::path::Path;
@@ -8,12 +8,20 @@ use std::path::Path;
 const FILE: &str = "/policy/acme/owner.toml";
 
 fn models(o: &str, s: &str, h: &str, g: &str) -> Models {
-    Models { o: o.into(), s: s.into(), h: h.into(), g: g.into() }
+    Models {
+        o: o.into(),
+        s: s.into(),
+        h: h.into(),
+        g: g.into(),
+    }
 }
 
 #[test]
 fn provider_of_a_ref_is_the_text_before_the_first_slash() {
-    assert_eq!(provider_of("github-copilot/claude-opus-5.5"), "github-copilot");
+    assert_eq!(
+        provider_of("github-copilot/claude-opus-5.5"),
+        "github-copilot"
+    );
 }
 
 #[test]

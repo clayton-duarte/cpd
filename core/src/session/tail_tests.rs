@@ -15,7 +15,11 @@ fn world() -> (tempfile::TempDir, CpdHome, SessionId) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("home").into()), None).unwrap();
     std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-    std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"tail\"\n").unwrap();
+    std::fs::write(
+        home.config(),
+        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"tail\"\n",
+    )
+    .unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     store
         .write("fixture", |tx| {
@@ -54,7 +58,8 @@ fn welcome() -> String {
 }
 
 fn bye(reconnect: bool) -> String {
-    r#"{"type":"bye","reason":"shutdown","reconnect":RECONNECT}"#.replace("RECONNECT", if reconnect { "true" } else { "false" })
+    r#"{"type":"bye","reason":"shutdown","reconnect":RECONNECT}"#
+        .replace("RECONNECT", if reconnect { "true" } else { "false" })
 }
 
 #[test]
@@ -80,11 +85,20 @@ fn tail_folds_the_transcript_and_streams() {
     let path = home.run_dir().join("host").join("lead1.sock");
     assert_eq!(fakes.host_conn.paths(), vec![path], "the socket of §6.14");
     let sent = fakes.host_conn.sent(0);
-    let hello: serde_json::Value = serde_json::from_str(sent.first().expect("hello first")).unwrap();
-    assert_eq!((hello["type"].as_str(), hello["client"].as_str()), (Some("hello"), Some("cpd session tail")), "{sent:?}");
-    let attach: serde_json::Value = serde_json::from_str(sent.get(1).expect("attach second")).unwrap();
+    let hello: serde_json::Value =
+        serde_json::from_str(sent.first().expect("hello first")).unwrap();
+    assert_eq!(
+        (hello["type"].as_str(), hello["client"].as_str()),
+        (Some("hello"), Some("cpd session tail")),
+        "{sent:?}"
+    );
+    let attach: serde_json::Value =
+        serde_json::from_str(sent.get(1).expect("attach second")).unwrap();
     assert_eq!(attach["type"].as_str(), Some("attach"), "{sent:?}");
-    assert!(attach.get("cursor").is_none() || attach["cursor"].is_null(), "the first attach has no cursor: {sent:?}");
+    assert!(
+        attach.get("cursor").is_none() || attach["cursor"].is_null(),
+        "the first attach has no cursor: {sent:?}"
+    );
 }
 
 #[test]
@@ -113,12 +127,25 @@ fn tail_reconnects_with_the_cursor_after_bye() {
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("assistant: First answer."), "{text:?}");
     assert!(text.contains("assistant: Second answer."), "{text:?}");
-    assert_eq!(text.matches("user: run the checks").count(), 1, "the snapshot is printed once, not repeated: {text:?}");
+    assert_eq!(
+        text.matches("user: run the checks").count(),
+        1,
+        "the snapshot is printed once, not repeated: {text:?}"
+    );
 
     // The second attach carries the cursor of the last applied frame.
-    assert_eq!(fakes.host_conn.sent(0).len(), 2, "hello and attach before the bye");
+    assert_eq!(
+        fakes.host_conn.sent(0).len(),
+        2,
+        "hello and attach before the bye"
+    );
     let sent = fakes.host_conn.sent(1);
-    let attach: serde_json::Value = serde_json::from_str(sent.get(1).expect("hello then attach")).unwrap();
+    let attach: serde_json::Value =
+        serde_json::from_str(sent.get(1).expect("hello then attach")).unwrap();
     assert_eq!(attach["type"].as_str(), Some("attach"), "{sent:?}");
-    assert_eq!(attach["cursor"], serde_json::json!({"epoch": "e1", "seq": 2}), "{sent:?}");
+    assert_eq!(
+        attach["cursor"],
+        serde_json::json!({"epoch": "e1", "seq": 2}),
+        "{sent:?}"
+    );
 }

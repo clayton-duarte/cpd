@@ -22,12 +22,12 @@ pub(crate) mod add;
 mod addendum;
 mod approve;
 mod approve_touches;
-mod chain;
 pub(crate) mod cancel;
+mod chain;
 mod edit;
-pub(crate) mod fix_retry;
 #[cfg(test)]
 mod explore_tests;
+pub(crate) mod fix_retry;
 #[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
@@ -134,7 +134,12 @@ pub struct EditArgs {
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// The new Dependencies, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "k1,k2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Option<Vec<JobKey>>,
     /// Remove every Dependency
     #[arg(long = "no-needs")]
@@ -269,7 +274,13 @@ impl Env {
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
-    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&PrKey>, tier: Tier) -> Result<(), CpdError> {
+    fn check_tier(
+        &mut self,
+        plan: &PlanId,
+        job: &JobKey,
+        pr: Option<&PrKey>,
+        tier: Tier,
+    ) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
             plan_phase(conn, plan)?;
@@ -277,7 +288,11 @@ impl Env {
                 Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
                 None => {
                     let pr: Option<Option<String>> = conn
-                        .query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+                        .query_row(
+                            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+                            [plan.as_str(), job.as_str()],
+                            |r| r.get(0),
+                        )
                         .optional()?;
                     match pr {
                         Some(None) => explore_models(conn, &home, plan),
@@ -299,7 +314,11 @@ impl Env {
         self.check_tier_models(&models, tier)
     }
 
-    fn check_tier_models(&mut self, models: &crate::policy::model::Models, tier: Tier) -> Result<(), CpdError> {
+    fn check_tier_models(
+        &mut self,
+        models: &crate::policy::model::Models,
+        tier: Tier,
+    ) -> Result<(), CpdError> {
         let catalog = match &self.catalog {
             Some(fixed) => fixed.clone(),
             None => config::catalog::load_with(models, &mut self.store)?,
@@ -310,8 +329,16 @@ impl Env {
 }
 
 /// The models of an explore Job (it has no PR): its Context owner's.
-fn explore_models(conn: &Connection, home: &crate::home::CpdHome, plan: &PlanId) -> Result<crate::policy::model::Models, CpdError> {
-    let context: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+fn explore_models(
+    conn: &Connection,
+    home: &crate::home::CpdHome,
+    plan: &PlanId,
+) -> Result<crate::policy::model::Models, CpdError> {
+    let context: String = conn.query_row(
+        "SELECT context FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
     crate::policy::model::models_of_context(conn, home, &context)
 }
 
@@ -326,25 +353,35 @@ pub(crate) fn check_kind_tier(kind: &str, tier: Tier) -> Result<(), CpdError> {
     if tier.letter() == letter && (1..=3).contains(&tier.effort()) {
         return Ok(());
     }
-    Err(CpdError::new(ErrorCode::TierNotAllowed, format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."))
-        .with("tier", tier.to_string())
-        .with("kind", kind)
-        .with("allowed", range))
+    Err(CpdError::new(
+        ErrorCode::TierNotAllowed,
+        format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."),
+    )
+    .with("tier", tier.to_string())
+    .with("kind", kind)
+    .with("allowed", range))
 }
 
 /// The Plan's phase, else `plan_not_found`.
 fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
-        .optional()?
-        .ok_or_else(|| CpdError::plan_not_found(plan))
+    conn.query_row(
+        "SELECT phase FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
 /// The Job `key` among `jobs`, else `job_not_found`.
 pub(crate) fn find<'a>(jobs: &'a [Job], plan: &PlanId, key: &JobKey) -> Result<&'a Job, CpdError> {
     jobs.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
-        CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
-            .with("plan", plan.as_str())
-            .with("job", key.as_str())
+        CpdError::new(
+            ErrorCode::JobNotFound,
+            format!("No Job {key} in Plan {plan}."),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())
     })
 }
 
@@ -353,18 +390,28 @@ fn sorted_needs(needs: &[JobKey]) -> Result<Vec<String>, CpdError> {
     let mut keys: Vec<String> = needs.iter().map(|k| k.as_str().to_owned()).collect();
     keys.sort();
     if let Some(pair) = keys.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("job", pair[0].as_str()));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("--needs lists {} twice.", pair[0]),
+        )
+        .with("job", pair[0].as_str()));
     }
     Ok(keys)
 }
 
 /// Every key of `needs` is a Job of the Plan (`needs_unknown`) (§5.1).
 fn check_needs_known(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
-    let unknown: Vec<&String> = needs.iter().filter(|n| !jobs.iter().any(|j| j.key == **n)).collect();
+    let unknown: Vec<&String> = needs
+        .iter()
+        .filter(|n| !jobs.iter().any(|j| j.key == **n))
+        .collect();
     if !unknown.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no Job {}.", join(&unknown)))
-            .with("plan", plan.as_str())
-            .with("needs", serde_json::json!(unknown)));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnknown,
+            format!("Plan {plan} has no Job {}.", join(&unknown)),
+        )
+        .with("plan", plan.as_str())
+        .with("needs", serde_json::json!(unknown)));
     }
     Ok(())
 }
@@ -395,7 +442,9 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
 /// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
 /// (§5.1). An `open` PR allows only `work`.
 fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str) -> Result<(), CpdError> {
-    let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else { return Ok(()) };
+    let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else {
+        return Ok(());
+    };
     let allowed = kinds_allowed(&row.shape);
     if row.status == "open" {
         if kind == "work" {
@@ -428,7 +477,11 @@ fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str) -> Res
 
 /// An `impl` Job that is not a draft needs at least one `test` Job of its PR (`test_job_required`, §5.1).
 fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
-    let tests: Vec<&str> = jobs.iter().filter(|j| j.pr == job.pr && j.kind == "test" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    let tests: Vec<&str> = jobs
+        .iter()
+        .filter(|j| j.pr == job.pr && j.kind == "test" && j.status != "cancelled")
+        .map(|j| j.key.as_str())
+        .collect();
     if job.kind != "impl" || job.needs.iter().any(|n| tests.contains(&n.as_str())) {
         return Ok(());
     }
@@ -443,7 +496,11 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
 
 /// A `verify` Job that is not a draft needs at least one `impl` Job of its PR (`impl_job_required`, §5.1).
 fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
-    let impls: Vec<&str> = jobs.iter().filter(|j| j.pr == job.pr && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    let impls: Vec<&str> = jobs
+        .iter()
+        .filter(|j| j.pr == job.pr && j.kind == "impl" && j.status != "cancelled")
+        .map(|j| j.key.as_str())
+        .collect();
     if job.kind != "verify" || job.needs.iter().any(|n| impls.contains(&n.as_str())) {
         return Ok(());
     }
@@ -459,11 +516,18 @@ fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
 /// No key of `needs` is a `cancelled` or `failed` Job, nor an `open` or `update` Job, which nothing waits for
 /// (`needs_unavailable`) (§5.1).
 fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
-    let reserved: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && matches!(j.kind.as_str(), "open" | "update")).map(|j| j.key.as_str()).collect();
+    let reserved: Vec<&str> = jobs
+        .iter()
+        .filter(|j| needs.contains(&j.key) && matches!(j.kind.as_str(), "open" | "update"))
+        .map(|j| j.key.as_str())
+        .collect();
     if !reserved.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need an open or update Job: nothing waits for them.")
-            .with("plan", plan.as_str())
-            .with("jobs", reserved));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job cannot need an open or update Job: nothing waits for them.",
+        )
+        .with("plan", plan.as_str())
+        .with("jobs", reserved));
     }
     let unavailable: Vec<serde_json::Value> = jobs
         .iter()
@@ -471,16 +535,23 @@ fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Resul
         .map(|j| serde_json::json!({"key": j.key, "status": j.status}))
         .collect();
     if !unavailable.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need a cancelled or failed Job.")
-            .with("plan", plan.as_str())
-            .with("needs", unavailable));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job cannot need a cancelled or failed Job.",
+        )
+        .with("plan", plan.as_str())
+        .with("needs", unavailable));
     }
     Ok(())
 }
 
 /// `job retry`: no key of `needs` is a `cancelled` Job (`needs_unavailable`, exit 3, `details.needs`; a `failed`
 /// need is allowed, §5.4, hs-d647): a Job held by a cancelled need can never start.
-pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+pub(crate) fn check_needs_not_cancelled(
+    jobs: &[Job],
+    plan: &PlanId,
+    needs: &[String],
+) -> Result<(), CpdError> {
     let cancelled: Vec<serde_json::Value> = jobs
         .iter()
         .filter(|j| needs.contains(&j.key) && j.status == "cancelled")
@@ -498,12 +569,25 @@ pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[St
 }
 
 /// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
-fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
-    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr_str() != pr).map(|j| j.key.as_str()).collect();
+fn check_needs_same_pr(
+    jobs: &[Job],
+    plan: &PlanId,
+    pr: &str,
+    needs: &[String],
+) -> Result<(), CpdError> {
+    let others: Vec<&str> = jobs
+        .iter()
+        .filter(|j| needs.contains(&j.key) && j.pr_str() != pr)
+        .map(|j| j.key.as_str())
+        .collect();
     if !others.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsOtherPr,
-            format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {pr}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
+            format!(
+                "A Dependency can only link Jobs of the same PR: {} {} not in PR {pr}.",
+                others.join(", "),
+                if others.len() == 1 { "is" } else { "are" }
+            ),
         )
         .with("plan", plan.as_str())
         .with("pr", pr)
@@ -517,7 +601,10 @@ fn check_pr_live(prs: &[PrRow], plan: &PlanId, pr: &str) -> Result<(), CpdError>
     match prs.iter().find(|p| p.key.as_str() == pr) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
             ErrorCode::PrEnded,
-            format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
+            format!(
+                "PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.",
+                p.status
+            ),
         )
         .with("plan", plan.as_str())
         .with("pr", pr)
@@ -527,5 +614,8 @@ fn check_pr_live(prs: &[PrRow], plan: &PlanId, pr: &str) -> Result<(), CpdError>
 }
 
 fn join(keys: &[&String]) -> String {
-    keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+    keys.iter()
+        .map(|k| k.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }

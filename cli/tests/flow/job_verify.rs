@@ -3,7 +3,10 @@
 
 use serde_json::{Value, json};
 
-use super::job::{add_kind, add_needing, count, events, fixture, job, job_row, lock, plan, plan_lock, pull_request, review, setup, shaped_pr, spec_file, test_spec_file};
+use super::job::{
+    add_kind, add_needing, count, events, fixture, job, job_row, lock, plan, plan_lock,
+    pull_request, review, setup, shaped_pr, spec_file, test_spec_file,
+};
 use crate::common::fx::Fx;
 use crate::common::refused;
 
@@ -22,7 +25,10 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
     let spec = spec_file(&fx.env);
     let needs = needs.join(",");
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify", "--pr", pr, "--plan", "pl"];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify",
+        "--pr", pr, "--plan", "pl",
+    ];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -33,7 +39,11 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
 }
 
 fn writes(fx: &Fx) -> (i64, i64, i64) {
-    (count(&fx.env, "jobs"), count(&fx.env, "events"), count(&fx.env, "txns"))
+    (
+        count(&fx.env, "jobs"),
+        count(&fx.env, "events"),
+        count(&fx.env, "txns"),
+    )
 }
 
 #[test]
@@ -42,14 +52,35 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
     tdd(&fx);
     lock(&fx.env, "pl");
     let out = verify(&fx, "v", &["i"], "api", false).ok();
-    assert_eq!((&out["job"]["kind"], &out["job"]["status"]), (&json!("verify"), &json!("queued")), "{out}");
+    assert_eq!(
+        (&out["job"]["kind"], &out["job"]["status"]),
+        (&json!("verify"), &json!("queued")),
+        "{out}"
+    );
     assert_eq!(job_row(&fx.env, "pl", "v", "kind"), json!("verify"));
-    assert_ne!(job_row(&fx.env, "pl", "v", "fingerprint"), Value::Null, "a queued Job has its fingerprint");
-    assert_eq!((job_row(&fx.env, "pl", "v", "tests"), job_row(&fx.env, "pl", "v", "test_files")), (Value::Null, Value::Null));
-    assert_eq!(events(&fx, "job-added").last().unwrap()["data"]["kind"], "verify");
+    assert_ne!(
+        job_row(&fx.env, "pl", "v", "fingerprint"),
+        Value::Null,
+        "a queued Job has its fingerprint"
+    );
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "v", "tests"),
+            job_row(&fx.env, "pl", "v", "test_files")
+        ),
+        (Value::Null, Value::Null)
+    );
+    assert_eq!(
+        events(&fx, "job-added").last().unwrap()["data"]["kind"],
+        "verify"
+    );
 
     let out = verify(&fx, "v2", &["i"], "api", true).ok();
-    assert_eq!((&out["job"]["kind"], &out["job"]["status"]), (&json!("verify"), &json!("draft")), "{out}");
+    assert_eq!(
+        (&out["job"]["kind"], &out["job"]["status"]),
+        (&json!("verify"), &json!("draft")),
+        "{out}"
+    );
 }
 
 #[test]
@@ -59,7 +90,11 @@ fn a_verify_job_that_needs_no_impl_job_of_its_pr_is_refused() {
     lock(&fx.env, "pl");
     let before = writes(&fx);
     for needs in [&[][..], &["d"], &["t"], &["d", "t"]] {
-        let e = refused(&verify(&fx, "v", needs, "api", false), "impl_job_required", 3);
+        let e = refused(
+            &verify(&fx, "v", needs, "api", false),
+            "impl_job_required",
+            3,
+        );
         assert_eq!(e["details"]["plan"], "pl", "{needs:?}");
         assert_eq!(e["details"]["job"], "v", "{needs:?}");
         assert_eq!(e["details"]["jobs"], json!(["i"]), "{needs:?}");
@@ -67,15 +102,25 @@ fn a_verify_job_that_needs_no_impl_job_of_its_pr_is_refused() {
     }
     // A cancelled impl Job does not count.
     add_needing(&fx, "pl", "i2", "impl", &["t"], "api").ok();
-    fixture(&fx.env, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'i2'");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'i2'",
+    );
     let before = writes(&fx);
-    let e = refused(&verify(&fx, "v", &["i2"], "api", false), "impl_job_required", 3);
+    let e = refused(
+        &verify(&fx, "v", &["i2"], "api", false),
+        "impl_job_required",
+        3,
+    );
     assert_eq!(e["details"]["job"], "v");
     let jobs = e["details"]["jobs"].as_array().unwrap();
     assert!(jobs.contains(&json!("i")), "{jobs:?}");
     assert_eq!(writes(&fx), before, "a refusal wrote");
     // Needing the live impl Job is enough.
-    assert_eq!(verify(&fx, "v", &["i"], "api", false).ok()["job"]["status"], "queued");
+    assert_eq!(
+        verify(&fx, "v", &["i"], "api", false).ok()["job"]["status"],
+        "queued"
+    );
 }
 
 #[test]
@@ -87,10 +132,24 @@ fn a_plan_review_and_a_lock_refuse_a_draft_verify_job_without_an_impl_need() {
     fx.env.outline_for_review("pl");
     let before = (writes(&fx), count(&fx.env, "plan_reviews"));
     let e = refused(&review(&fx, "pl"), "impl_job_required", 3);
-    assert_eq!((&e["details"]["plan"], &e["details"]["job"], &e["details"]["jobs"]), (&json!("pl"), &json!("v"), &json!(["i"])));
+    assert_eq!(
+        (
+            &e["details"]["plan"],
+            &e["details"]["job"],
+            &e["details"]["jobs"]
+        ),
+        (&json!("pl"), &json!("v"), &json!(["i"]))
+    );
     let e = refused(&plan_lock(&fx, "pl"), "impl_job_required", 3);
-    assert_eq!((&e["details"]["job"], &e["details"]["jobs"]), (&json!("v"), &json!(["i"])));
-    assert_eq!((writes(&fx), count(&fx.env, "plan_reviews")), before, "a refusal wrote");
+    assert_eq!(
+        (&e["details"]["job"], &e["details"]["jobs"]),
+        (&json!("v"), &json!(["i"]))
+    );
+    assert_eq!(
+        (writes(&fx), count(&fx.env, "plan_reviews")),
+        before,
+        "a refusal wrote"
+    );
 
     // A missing test Job is refused first: an impl draft that needs no test Job of its PR.
     add_needing(&fx, "pl", "i2", "impl", &["d"], "api").ok();
@@ -104,7 +163,11 @@ fn a_plan_review_and_a_lock_refuse_a_draft_verify_job_without_an_impl_need() {
     job(&fx, &["edit", "v", "--needs", "i"], "pl").ok();
     assert_eq!(review(&fx, "pl").ok()["review"]["status"], "pending");
     let lock = plan_lock(&fx, "pl");
-    assert_ne!(lock.json()["error"]["code"], "impl_job_required", "{lock:?}");
+    assert_ne!(
+        lock.json()["error"]["code"],
+        "impl_job_required",
+        "{lock:?}"
+    );
 }
 
 #[test]
@@ -115,10 +178,19 @@ fn a_draft_can_be_edited_to_kind_verify_in_a_tdd_pr() {
     let out = job(&fx, &["edit", "e", "--kind", "verify"], "pl").ok();
     assert_eq!(out["fields"], json!(["kind"]), "{out}");
     assert_eq!(job_row(&fx.env, "pl", "e", "kind"), json!("verify"));
-    assert_eq!(events(&fx, "job-edited").last().unwrap()["data"], json!({"fields": ["kind"]}));
-    assert_eq!(job(&fx, &["edit", "e", "--kind", "verify"], "pl").ok()["already"], true);
+    assert_eq!(
+        events(&fx, "job-edited").last().unwrap()["data"],
+        json!({"fields": ["kind"]})
+    );
+    assert_eq!(
+        job(&fx, &["edit", "e", "--kind", "verify"], "pl").ok()["already"],
+        true
+    );
     // `job add --kind verify` takes it as a value too.
-    assert_eq!(add_kind(&fx, "pl", "f", "verify", &spec_file(&fx.env), "api").ok()["job"]["kind"], "verify");
+    assert_eq!(
+        add_kind(&fx, "pl", "f", "verify", &spec_file(&fx.env), "api").ok()["job"]["kind"],
+        "verify"
+    );
 }
 
 #[test]
@@ -131,14 +203,21 @@ fn docs_and_config_prs_refuse_a_verify_job_and_a_free_pr_allows_it() {
     let spec = spec_file(&fx.env);
     let before = writes(&fx);
     for (pr, allowed) in [("docs", json!(["docs"])), ("cfg", json!(["work"]))] {
-        let e = refused(&add_kind(&fx, "pl", "v", "verify", &spec, pr), "shape_violation", 3);
+        let e = refused(
+            &add_kind(&fx, "pl", "v", "verify", &spec, pr),
+            "shape_violation",
+            3,
+        );
         assert_eq!(e["details"]["kind"], "verify", "{pr}");
         assert_eq!(e["details"]["pr"], pr);
         assert_eq!(e["details"]["allowed"], allowed, "{pr}");
         assert_eq!(writes(&fx), before, "{pr} wrote");
     }
     // `free` (the PR `repo` of `plan`): allowed.
-    assert_eq!(add_kind(&fx, "pl", "v", "verify", &spec, "repo").ok()["job"]["kind"], "verify");
+    assert_eq!(
+        add_kind(&fx, "pl", "v", "verify", &spec, "repo").ok()["job"]["kind"],
+        "verify"
+    );
 }
 
 #[test]
@@ -159,8 +238,19 @@ fn an_open_pr_refuses_a_verify_job() {
         ),
     );
     let before = writes(&fx);
-    let e = refused(&add_kind(&fx, "pl", "v", "verify", &spec_file(&fx.env), "fix"), "shape_violation", 3);
-    assert_eq!((&e["details"]["status"], &e["details"]["kind"], &e["details"]["allowed"]), (&json!("open"), &json!("verify"), &json!(["work"])));
+    let e = refused(
+        &add_kind(&fx, "pl", "v", "verify", &spec_file(&fx.env), "fix"),
+        "shape_violation",
+        3,
+    );
+    assert_eq!(
+        (
+            &e["details"]["status"],
+            &e["details"]["kind"],
+            &e["details"]["allowed"]
+        ),
+        (&json!("open"), &json!("verify"), &json!(["work"]))
+    );
     assert_eq!(writes(&fx), before, "a refusal wrote");
 }
 
@@ -169,13 +259,35 @@ fn a_verify_job_has_no_tests_and_a_spec_with_tests_is_refused() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs"]),
+    );
     let before = writes(&fx);
-    let e = refused(&add_kind(&fx, "pl", "v", "verify", &tests, "repo"), "spec_invalid", 2);
+    let e = refused(
+        &add_kind(&fx, "pl", "v", "verify", &tests, "repo"),
+        "spec_invalid",
+        2,
+    );
     assert_eq!(e["details"]["path"], "$.tests");
     assert_eq!(writes(&fx), before, "a refusal wrote");
     // The plain Spec is complete for it, and a draft cannot be given tests by an edit.
     add_kind(&fx, "pl", "v", "verify", &spec_file(&fx.env), "repo").ok();
-    assert_eq!((job_row(&fx.env, "pl", "v", "tests"), job_row(&fx.env, "pl", "v", "test_files")), (Value::Null, Value::Null));
-    assert_eq!(refused(&job(&fx, &["edit", "v", "--spec", &tests], "pl"), "spec_invalid", 2)["details"]["path"], "$.tests");
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "v", "tests"),
+            job_row(&fx.env, "pl", "v", "test_files")
+        ),
+        (Value::Null, Value::Null)
+    );
+    assert_eq!(
+        refused(
+            &job(&fx, &["edit", "v", "--spec", &tests], "pl"),
+            "spec_invalid",
+            2
+        )["details"]["path"],
+        "$.tests"
+    );
 }

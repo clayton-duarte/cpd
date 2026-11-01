@@ -42,7 +42,16 @@ impl Curate {
             .store()
             .write("fixture", |tx| {
                 for id in ids {
-                    let record = Record { id: RecordId::parse(id).unwrap(), at: "2026-10-20T10:00:00.000Z".into(), by: By { session: None, plan: None }, text: format!("text of {id}"), draft: Draft::Note };
+                    let record = Record {
+                        id: RecordId::parse(id).unwrap(),
+                        at: "2026-10-20T10:00:00.000Z".into(),
+                        by: By {
+                            session: None,
+                            plan: None,
+                        },
+                        text: format!("text of {id}"),
+                        draft: Draft::Note,
+                    };
                     record.insert(tx, &context).unwrap();
                 }
                 Ok(())
@@ -61,19 +70,43 @@ impl Curate {
                 doc_paths: docs.contains(id).then(|| vec!["docs/a.md".to_owned()]),
             })
             .collect();
-        let proposals: Vec<Proposal> = retire.iter().map(|id| Proposal { record: RecordId::parse(id).unwrap(), reason: Reason::Duplicate, target: ids.last().unwrap().to_string() }).collect();
-        propose(&mut self.fx.env.store(), &ContextId::parse(context).unwrap(), &curations, &proposals).unwrap();
+        let proposals: Vec<Proposal> = retire
+            .iter()
+            .map(|id| Proposal {
+                record: RecordId::parse(id).unwrap(),
+                reason: Reason::Duplicate,
+                target: ids.last().unwrap().to_string(),
+            })
+            .collect();
+        propose(
+            &mut self.fx.env.store(),
+            &ContextId::parse(context).unwrap(),
+            &curations,
+            &proposals,
+        )
+        .unwrap();
     }
 
     /// The open items of `kind` of `cpd inbox list`, as JSON.
     fn items(&self, kind: &str) -> Vec<Value> {
         let json = self.fx.cpd(&["inbox", "list"]).ok();
-        json["items"].as_array().unwrap().iter().filter(|i| i["kind"] == kind).cloned().collect()
+        json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["kind"] == kind)
+            .cloned()
+            .collect()
     }
 
     fn assert_item(&self, kind: &str, context: &str, label: &str) {
         let items = self.items(kind);
-        assert!(items.iter().any(|i| i["context"] == context && i["label"] == label), "no {kind} item `{label}` of {context}: {items:?}");
+        assert!(
+            items
+                .iter()
+                .any(|i| i["context"] == context && i["label"] == label),
+            "no {kind} item `{label}` of {context}: {items:?}"
+        );
         let item = items.into_iter().find(|i| i["context"] == context).unwrap();
         assert_eq!(item["urgency"], "cyan", "{item}");
         assert_eq!(item["subject"], format!("{kind}:{context}"), "{item}");
@@ -88,21 +121,55 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n9"]);
     fx.records("control", &["hs-n4", "hs-n5"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n9"], &["hs-n1", "hs-n2"], &[]);
+    fx.propose(
+        "building",
+        &["hs-n1", "hs-n2", "hs-n3", "hs-n9"],
+        &["hs-n1", "hs-n2"],
+        &[],
+    );
     fx.propose("control", &["hs-n4", "hs-n5"], &["hs-n4"], &[]);
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
     fx.assert_item("curate-retire", "control", "control: 1 to retire");
-    assert_eq!(fx.items("curate-retire").len(), 2, "{:?}", fx.items("curate-retire"));
+    assert_eq!(
+        fx.items("curate-retire").len(),
+        2,
+        "{:?}",
+        fx.items("curate-retire")
+    );
     assert!(fx.items("curate-docs").is_empty());
 
     // the count follows the pending rows, and the item closes when none is
-    fx.fx.cpd(&["context", "retire", "--context", "building", "--approve", "hs-n1"]).ok();
+    fx.fx
+        .cpd(&[
+            "context",
+            "retire",
+            "--context",
+            "building",
+            "--approve",
+            "hs-n1",
+        ])
+        .ok();
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 1 to retire");
-    fx.fx.cpd(&["context", "retire", "--context", "building", "--reject", "hs-n2"]).ok();
+    fx.fx
+        .cpd(&[
+            "context",
+            "retire",
+            "--context",
+            "building",
+            "--reject",
+            "hs-n2",
+        ])
+        .ok();
     fx.tick();
-    assert!(fx.items("curate-retire").iter().all(|i| i["context"] != "building"), "building is closed: {:?}", fx.items("curate-retire"));
+    assert!(
+        fx.items("curate-retire")
+            .iter()
+            .all(|i| i["context"] != "building"),
+        "building is closed: {:?}",
+        fx.items("curate-retire")
+    );
     assert_eq!(fx.items("curate-retire").len(), 1);
 }
 
@@ -110,26 +177,57 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
 fn e8_opens_a_curate_docs_item_and_closes_it_when_none_pending() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &[], &["hs-n1", "hs-n3"]);
+    fx.propose(
+        "building",
+        &["hs-n1", "hs-n2", "hs-n3"],
+        &[],
+        &["hs-n1", "hs-n3"],
+    );
     fx.tick();
     fx.assert_item("curate-docs", "building", "building: 2 doc candidates");
-    assert!(fx.items("curate-retire").is_empty(), "{:?}", fx.items("curate-retire"));
+    assert!(
+        fx.items("curate-retire").is_empty(),
+        "{:?}",
+        fx.items("curate-retire")
+    );
 
-    fx.fx.cpd(&["context", "docs", "--context", "building", "--dismiss", "hs-n1,hs-n3"]).ok();
+    fx.fx
+        .cpd(&[
+            "context",
+            "docs",
+            "--context",
+            "building",
+            "--dismiss",
+            "hs-n1,hs-n3",
+        ])
+        .ok();
     fx.tick();
-    assert!(fx.items("curate-docs").is_empty(), "curate-docs is closed: {:?}", fx.items("curate-docs"));
+    assert!(
+        fx.items("curate-docs").is_empty(),
+        "curate-docs is closed: {:?}",
+        fx.items("curate-docs")
+    );
 }
 
 #[test]
 fn e8_opens_the_curate_items_cyan() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1"], &["hs-n3"]);
+    fx.propose(
+        "building",
+        &["hs-n1", "hs-n2", "hs-n3"],
+        &["hs-n1"],
+        &["hs-n3"],
+    );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 1 to retire");
     fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     for kind in ["curate-retire", "curate-docs"] {
-        assert!(fx.items(kind).iter().all(|i| i["urgency"] == "cyan"), "{:?}", fx.items(kind));
+        assert!(
+            fx.items(kind).iter().all(|i| i["urgency"] == "cyan"),
+            "{:?}",
+            fx.items(kind)
+        );
     }
 }
 
@@ -138,7 +236,16 @@ impl Curate {
     fn set_floor(&self, floor: u32) {
         let path = self.fx.env.cpd_home().join("config.toml");
         let text = fs::read_to_string(&path).unwrap();
-        let lines: Vec<String> = text.lines().map(|l| if l.starts_with("context_curation_min_records") { format!("context_curation_min_records = {floor}") } else { l.to_owned() }).collect();
+        let lines: Vec<String> = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("context_curation_min_records") {
+                    format!("context_curation_min_records = {floor}")
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect();
         fs::write(&path, lines.join("\n") + "\n").unwrap();
     }
 
@@ -155,19 +262,33 @@ impl Curate {
 fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n4"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n4"], &["hs-n1", "hs-n2"], &["hs-n3"]);
+    fx.propose(
+        "building",
+        &["hs-n1", "hs-n2", "hs-n3", "hs-n4"],
+        &["hs-n1", "hs-n2"],
+        &["hs-n3"],
+    );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
     fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     let before = fx.pending("building");
 
-    fx.fx.env.sql("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'building'");
+    fx.fx
+        .env
+        .sql("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'building'");
     fx.tick();
-    assert!(fx.items("curate-retire").is_empty() && fx.items("curate-docs").is_empty(), "both items closed: {:?} {:?}", fx.items("curate-retire"), fx.items("curate-docs"));
+    assert!(
+        fx.items("curate-retire").is_empty() && fx.items("curate-docs").is_empty(),
+        "both items closed: {:?} {:?}",
+        fx.items("curate-retire"),
+        fx.items("curate-docs")
+    );
     assert_eq!(fx.pending("building"), before, "the rows stay pending");
     assert_eq!(before, (2, 1));
 
-    fx.fx.env.sql("UPDATE contexts SET archived_at = NULL WHERE id = 'building'");
+    fx.fx
+        .env
+        .sql("UPDATE contexts SET archived_at = NULL WHERE id = 'building'");
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
     fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
@@ -179,9 +300,22 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
 fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1", "hs-n2"], &["hs-n3"]);
-    fx.records("control", &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"]);
-    fx.propose("control", &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"], &["hs-n4"], &["hs-n9"]);
+    fx.propose(
+        "building",
+        &["hs-n1", "hs-n2", "hs-n3"],
+        &["hs-n1", "hs-n2"],
+        &["hs-n3"],
+    );
+    fx.records(
+        "control",
+        &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"],
+    );
+    fx.propose(
+        "control",
+        &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"],
+        &["hs-n4"],
+        &["hs-n9"],
+    );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
     fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
@@ -192,13 +326,24 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
     fx.set_floor(5);
     fx.tick();
     assert!(
-        fx.items("curate-retire").iter().chain(fx.items("curate-docs").iter()).all(|i| i["context"] != "building"),
+        fx.items("curate-retire")
+            .iter()
+            .chain(fx.items("curate-docs").iter())
+            .all(|i| i["context"] != "building"),
         "building's items closed: {:?} {:?}",
         fx.items("curate-retire"),
         fx.items("curate-docs")
     );
-    assert_eq!((fx.pending("building"), fx.pending("control")), before, "the rows stay pending");
-    assert_eq!(fx.items("curate-retire").len(), 1, "control keeps its items");
+    assert_eq!(
+        (fx.pending("building"), fx.pending("control")),
+        before,
+        "the rows stay pending"
+    );
+    assert_eq!(
+        fx.items("curate-retire").len(),
+        1,
+        "control keeps its items"
+    );
     assert_eq!(fx.items("curate-docs").len(), 1, "control keeps its items");
 
     fx.set_floor(3);

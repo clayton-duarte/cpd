@@ -10,7 +10,10 @@
 /// and the package version.
 pub fn directives(commit: Option<&str>, version: &str) -> Vec<String> {
     let commit = commit.filter(|c| !c.is_empty()).unwrap_or("dev");
-    vec!["cargo:rerun-if-env-changed=CPD_COMMIT".to_owned(), format!("cargo:rustc-env=CPD_VERSION={version}-{commit}")]
+    vec![
+        "cargo:rerun-if-env-changed=CPD_COMMIT".to_owned(),
+        format!("cargo:rustc-env=CPD_VERSION={version}-{commit}"),
+    ]
 }
 
 fn main() {

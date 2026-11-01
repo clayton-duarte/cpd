@@ -17,20 +17,20 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::ask::{Dialogs, Question};
+use crate::dialog::{self, validate::Validator};
+use crate::widgets::open_legend;
 use cpd_core::config::Config;
+use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::deadline::Failed as RunFailed;
+use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::runner::{Call, NO_DEADLINE, Runner as ProcessRunner};
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
-use super::ask::{Dialogs, Question};
-use crate::dialog::{self, validate::Validator};
-use crate::widgets::open_legend;
-use cpd_core::error::CpdError;
 
 /// The object an archive or unarchive is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,9 +95,17 @@ pub enum Action {
     History(SessionId),
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
-    NewPlan { context: ContextId, id: PlanId, title: String },
+    NewPlan {
+        context: ContextId,
+        id: PlanId,
+        title: String,
+    },
     /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
-    NewContext { id: ContextId, title: String, owner: String },
+    NewContext {
+        id: ContextId,
+        title: String,
+        owner: String,
+    },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -110,12 +118,18 @@ pub enum Action {
     Close(SessionId),
     /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, at once, after
     /// `free` when the archived Lead holds the chat slot.
-    Archive { subject: Subject, free: Option<Free> },
+    Archive {
+        subject: Subject,
+        free: Option<Free>,
+    },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
     /// A click on an archived row: `unarchive` of its outermost archived object, then `then` (the Open of its Session, or
     /// the OpenManager of a Context row): one action that resumes the chat (contract §2.2 "Asleep", hs-d515).
-    Resume { unarchive: Subject, then: Box<Action> },
+    Resume {
+        unarchive: Subject,
+        then: Box<Action>,
+    },
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
@@ -145,27 +159,68 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::OpenManager(context) => vec!["context".into(), "manager".into(), format!("--context={context}"), "--by-user".into()],
+            Action::OpenManager(context) => vec![
+                "context".into(),
+                "manager".into(),
+                format!("--context={context}"),
+                "--by-user".into(),
+            ],
             Action::Park => words(&["session", "park"]),
             Action::History(id) => words(&["session", "history", id.as_str()]),
             Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--title={title}"), "--by-user".into()]);
+                argv.extend([
+                    format!("--context={context}"),
+                    format!("--title={title}"),
+                    "--by-user".into(),
+                ]);
                 argv
             }
             Action::NewContext { id, title, owner } => {
-                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+                vec![
+                    "context".into(),
+                    "new".into(),
+                    id.to_string(),
+                    format!("--title={title}"),
+                    format!("--owner={owner}"),
+                ]
             }
-            Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
-            Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
+            Action::RenameContext { id, title } => vec![
+                "context".into(),
+                "rename".into(),
+                id.to_string(),
+                format!("--title={title}"),
+            ],
+            Action::RenamePlan { id, title } => vec![
+                "plan".into(),
+                "rename".into(),
+                format!("--plan={id}"),
+                format!("--title={title}"),
+            ],
             Action::RenameSession { id, name } => {
-                vec!["session".into(), "rename".into(), format!("--session={id}"), "--".into(), name.clone()]
+                vec![
+                    "session".into(),
+                    "rename".into(),
+                    format!("--session={id}"),
+                    "--".into(),
+                    name.clone(),
+                ]
             }
-            Action::Fork { source, name } => vec!["session".into(), "fork".into(), source.to_string(), format!("--name={name}")],
+            Action::Fork { source, name } => vec![
+                "session".into(),
+                "fork".into(),
+                source.to_string(),
+                format!("--name={name}"),
+            ],
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
-            Action::Unarchive(subject) | Action::Resume { unarchive: subject, .. } => subject.command("unarchive"),
-            Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
+            Action::Unarchive(subject)
+            | Action::Resume {
+                unarchive: subject, ..
+            } => subject.command("unarchive"),
+            Action::CopyId(text) | Action::CopyUrl(text) => {
+                words(&["set-buffer", "-w", "--", text.as_str()])
+            }
             Action::SessionResume(id) => words(&["session", "resume", id.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
             Action::Tell { manager, text } => vec![
@@ -200,12 +255,18 @@ impl Action {
     /// slot's Lead is preceded by the step that frees the slot (F3); every other action is its own one step.
     pub fn steps(&self) -> Vec<Action> {
         match self {
-            Action::Archive { subject, free: Some(free) } => vec![
+            Action::Archive {
+                subject,
+                free: Some(free),
+            } => vec![
                 match free {
                     Free::Open(id) => Action::Open(id.clone()),
                     Free::Park => Action::Park,
                 },
-                Action::Archive { subject: subject.clone(), free: None },
+                Action::Archive {
+                    subject: subject.clone(),
+                    free: None,
+                },
             ],
             Action::Resume { unarchive, then } => {
                 let mut steps = vec![Action::Unarchive(unarchive.clone())];
@@ -219,13 +280,23 @@ impl Action {
     /// What the log says when the command succeeded, from its reply: the reference's words. The view draws nothing.
     pub fn done(&self, reply: &Value) -> String {
         match self {
-            Action::Open(_) | Action::OpenManager(_) | Action::Park | Action::History(_) | Action::Resume { .. } => String::new(),
+            Action::Open(_)
+            | Action::OpenManager(_)
+            | Action::Park
+            | Action::History(_)
+            | Action::Resume { .. } => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::NewContext { id, .. } => format!("created {id}"),
-            Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {
+            Action::RenameContext { .. }
+            | Action::RenamePlan { .. }
+            | Action::RenameSession { .. }
+                if reply["already"] == true =>
+            {
                 "already named so".into()
             }
-            Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } => "renamed".into(),
+            Action::RenameContext { .. }
+            | Action::RenamePlan { .. }
+            | Action::RenameSession { .. } => "renamed".into(),
             Action::Fork { name, .. } => format!("forking {name}"),
             Action::Close(_) if reply["already"] == true => "session is already gone".into(),
             Action::Close(_) => "closed".into(),
@@ -269,7 +340,9 @@ impl Runner {
         Runner {
             home,
             busy_ms: u64::from(config.timeouts.store_busy_ms),
-            tmux: Tmux::new(config.tmux.socket.clone()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone()),
+            tmux: Tmux::new(config.tmux.socket.clone())
+                .with_runner(ports.runner.clone())
+                .with_clock(ports.clock.clone()),
             cockpit: config.tmux.cockpit_session.clone(),
             processes: ports.runner.clone(),
         }
@@ -282,7 +355,8 @@ impl Runner {
 
     /// The live Managers of the machine (role `manager`, not archived), oldest first: who hears that the engine cannot be started.
     pub fn live_managers(&self) -> Result<Vec<SessionId>, String> {
-        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        let mut store =
+            Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
         store
             .read(|conn| {
                 let mut stmt =
@@ -296,7 +370,8 @@ impl Runner {
 
     /// The tree as of `now` (contract §1.3 text): what [`crate::widgets::inbox::click`] reads the Sessions from.
     pub fn tree(&self, now: &str) -> Result<crate::read::Tree, String> {
-        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        let mut store =
+            Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
         crate::read::tree_at(&mut store, Some(now)).map_err(|e| e.message().to_owned())
     }
 
@@ -310,21 +385,31 @@ impl Runner {
     pub fn run_all(&self, steps: &[Action]) -> Result<String, Failed> {
         let mut said = String::new();
         for step in steps.iter().flat_map(Action::steps) {
-            let fail = |why: String| Failed { step: step.clone(), why };
+            let fail = |why: String| Failed {
+                step: step.clone(),
+                why,
+            };
             let reply = match step {
-                Action::CopyId(_) | Action::CopyUrl(_) => {
-                    self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| fail(e.message().to_owned()))?
-                }
+                Action::CopyId(_) | Action::CopyUrl(_) => self
+                    .tmux
+                    .run(&step.argv())
+                    .map(|_| Value::Null)
+                    .map_err(|e| fail(e.message().to_owned()))?,
                 _ => self.command(&step).map_err(fail)?,
             };
             said = step.done(&reply);
             if let Some(open) = step.open_new(&reply).map_err(fail)? {
                 // the Plan or fork stays created when this is refused
-                self.command(&open).map_err(|why| Failed { step: open.clone(), why })?;
-                self.focus_chat().map_err(|e| fail(e.message().to_owned()))?;
+                self.command(&open).map_err(|why| Failed {
+                    step: open.clone(),
+                    why,
+                })?;
+                self.focus_chat()
+                    .map_err(|e| fail(e.message().to_owned()))?;
             }
             if matches!(step, Action::Open(_) | Action::History(_)) {
-                self.focus_chat().map_err(|e| fail(e.message().to_owned()))?;
+                self.focus_chat()
+                    .map_err(|e| fail(e.message().to_owned()))?;
             }
         }
         Ok(said)
@@ -332,10 +417,15 @@ impl Runner {
 
     /// `select-pane` on the chat slot, so typing goes to the chat (the reference's `switch_to`).
     fn focus_chat(&self) -> Result<(), cpd_core::error::CpdError> {
-        let panes: Vec<_> =
-            self.tmux.list_panes()?.into_iter().filter(|p| p.session_name == self.cockpit && p.window_name == MAIN_WINDOW).collect();
+        let panes: Vec<_> = self
+            .tmux
+            .list_panes()?
+            .into_iter()
+            .filter(|p| p.session_name == self.cockpit && p.window_name == MAIN_WINDOW)
+            .collect();
         if let Some(chat) = chat_slot(&panes, &self.cockpit) {
-            self.tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
+            self.tmux
+                .run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
         }
         Ok(())
     }
@@ -349,15 +439,27 @@ impl Runner {
     /// A click on a `curate-retire` or `curate-docs` item: `cpd context curation`, the checklist popup of what is
     /// pending, and on approve the command of the ticks (`cpd context retire|docs`); cancel runs nothing. A refusal is
     /// a `text` dialog (commands.md §17 "No notes"); returns when the dialogs close.
-    pub fn curate(&self, kind: cpd_core::inbox::model::Kind, context: &ContextId) -> Result<(), String> {
-        let title = if kind == cpd_core::inbox::model::Kind::CurateDocs { "Documentation candidates" } else { "Retire records" };
+    pub fn curate(
+        &self,
+        kind: cpd_core::inbox::model::Kind,
+        context: &ContextId,
+    ) -> Result<(), String> {
+        let title = if kind == cpd_core::inbox::model::Kind::CurateDocs {
+            "Documentation candidates"
+        } else {
+            "Retire records"
+        };
         match self.curate_flow(kind, context) {
             Ok(()) => Ok(()),
             Err(why) => self.error(title, &why),
         }
     }
 
-    fn curate_flow(&self, kind: cpd_core::inbox::model::Kind, context: &ContextId) -> Result<(), String> {
+    fn curate_flow(
+        &self,
+        kind: cpd_core::inbox::model::Kind,
+        context: &ContextId,
+    ) -> Result<(), String> {
         use crate::widgets::inbox::{approved, checklist};
         let call_cpd = |argv: Vec<String>| {
             call_argv(&*self.processes, argv).map_err(|failure| match failure {
@@ -366,9 +468,16 @@ impl Runner {
             })
         };
         let reply = call_cpd(crate::widgets::inbox::curation_argv(context))?;
-        let Some(list) = checklist(kind, context, &reply) else { return Ok(()) };
-        let rows: Vec<_> = list.rows.into_iter().map(|r| (r.id, r.text, r.detail)).collect();
-        let checked = dialog::checklist(&self.tmux, &list.title, &rows).map_err(|e| e.message().to_owned())?;
+        let Some(list) = checklist(kind, context, &reply) else {
+            return Ok(());
+        };
+        let rows: Vec<_> = list
+            .rows
+            .into_iter()
+            .map(|r| (r.id, r.text, r.detail))
+            .collect();
+        let checked = dialog::checklist(&self.tmux, &list.title, &rows)
+            .map_err(|e| e.message().to_owned())?;
         if checked.approved {
             call_cpd(approved(kind, context, &checked.ticked, &checked.unticked))?;
         }
@@ -387,7 +496,13 @@ impl Runner {
 }
 
 impl Dialogs for Runner {
-    fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError> {
+    fn input(
+        &self,
+        title: &str,
+        prompt: &str,
+        initial: &str,
+        validator: Validator,
+    ) -> Result<Option<String>, CpdError> {
         dialog::input(&self.tmux, title, prompt, initial, validator)
     }
 
@@ -395,16 +510,30 @@ impl Dialogs for Runner {
         dialog::confirm(&self.tmux, title, text, yes_label)
     }
 
-    fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
+    fn select(
+        &self,
+        title: &str,
+        prompt: &str,
+        options: &[String],
+    ) -> Result<Option<String>, CpdError> {
         dialog::select(&self.tmux, title, prompt, options)
     }
 
-    fn form(&self, title: &str, input_label: &str, select_label: &str, options: &[String]) -> Result<Option<(String, String)>, CpdError> {
+    fn form(
+        &self,
+        title: &str,
+        input_label: &str,
+        select_label: &str,
+        options: &[String],
+    ) -> Result<Option<(String, String)>, CpdError> {
         dialog::form(&self.tmux, title, input_label, select_label, options)
     }
 
     fn preview(&self, what: &Deletable) -> Result<Value, String> {
-        self.command(&Action::Delete { what: what.clone(), yes: false })
+        self.command(&Action::Delete {
+            what: what.clone(),
+            yes: false,
+        })
     }
 }
 
@@ -456,10 +585,20 @@ fn call_argv(runner: &dyn ProcessRunner, argv: Vec<String>) -> Result<Value, Fai
         stdin: None,
         stderr_to: None,
     };
-    let output = runner.run(&call).map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {}", failed_reason(e))))?;
+    let output = runner
+        .run(&call)
+        .map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {}", failed_reason(e))))?;
     let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", argv.join(" "), output.status.code().map_or_else(|| output.status.to_string(), |c| format!("exit code: {c}")), stderr.trim()))
+        Failure::Broken(format!(
+            "{PROGRAM} {} printed no JSON (exit {}): {}",
+            argv.join(" "),
+            output
+                .status
+                .code()
+                .map_or_else(|| output.status.to_string(), |c| format!("exit code: {c}")),
+            stderr.trim()
+        ))
     })?;
     if reply["ok"] == true {
         Ok(reply)
@@ -502,7 +641,10 @@ mod tests {
     }
 
     fn archive(subject: Subject) -> Action {
-        Action::Archive { subject, free: None }
+        Action::Archive {
+            subject,
+            free: None,
+        }
     }
 
     fn sequence(action: &Action) -> Vec<Vec<String>> {
@@ -512,36 +654,100 @@ mod tests {
     #[test]
     fn an_archive_of_the_chat_slots_lead_frees_the_slot_first_and_any_other_action_is_one_step() {
         let plan = Subject::Plan(PlanId::parse("ship").unwrap());
-        let open = Action::Archive { subject: plan.clone(), free: Some(Free::Open(sid("l-sketch"))) };
-        assert_eq!(sequence(&open), [vec!["session", "open", "l-sketch"], vec!["plan", "archive", "--plan=ship"]]);
-        let park = Action::Archive { subject: Subject::Session(sid("f-idle")), free: Some(Free::Park) };
-        assert_eq!(sequence(&park), [vec!["session", "park"], vec!["session", "archive", "f-idle"]]);
-        assert_eq!(sequence(&archive(plan)), [vec!["plan", "archive", "--plan=ship"]]);
-        assert_eq!(sequence(&Action::History(sid("f-idle"))), [vec!["session", "history", "f-idle"]]);
-        assert_eq!(sequence(&Action::Open(sid("l-ship"))), [vec!["session", "open", "l-ship"]]);
+        let open = Action::Archive {
+            subject: plan.clone(),
+            free: Some(Free::Open(sid("l-sketch"))),
+        };
+        assert_eq!(
+            sequence(&open),
+            [
+                vec!["session", "open", "l-sketch"],
+                vec!["plan", "archive", "--plan=ship"]
+            ]
+        );
+        let park = Action::Archive {
+            subject: Subject::Session(sid("f-idle")),
+            free: Some(Free::Park),
+        };
+        assert_eq!(
+            sequence(&park),
+            [
+                vec!["session", "park"],
+                vec!["session", "archive", "f-idle"]
+            ]
+        );
+        assert_eq!(
+            sequence(&archive(plan)),
+            [vec!["plan", "archive", "--plan=ship"]]
+        );
+        assert_eq!(
+            sequence(&Action::History(sid("f-idle"))),
+            [vec!["session", "history", "f-idle"]]
+        );
+        assert_eq!(
+            sequence(&Action::Open(sid("l-ship"))),
+            [vec!["session", "open", "l-ship"]]
+        );
     }
 
     #[test]
     fn each_action_is_one_command_of_the_contract() {
         let cases = [
-            (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
-            (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
-            (Action::OpenManager(ContextId::parse("alpha").unwrap()), vec!["context", "manager", "--context=alpha", "--by-user"]),
+            (
+                Action::Open(sid("l-ship")),
+                vec!["session", "open", "l-ship"],
+            ),
+            (
+                Action::Close(sid("l-ship")),
+                vec!["session", "close", "l-ship"],
+            ),
+            (
+                Action::OpenManager(ContextId::parse("alpha").unwrap()),
+                vec!["context", "manager", "--context=alpha", "--by-user"],
+            ),
             (Action::Park, vec!["session", "park"]),
-            (Action::History(sid("f-idle")), vec!["session", "history", "f-idle"]),
-            (archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
-            (archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
-            (archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
-            (Action::Unarchive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "unarchive", "alpha"]),
-            (Action::Unarchive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "unarchive", "--plan=ship"]),
-            (Action::Unarchive(Subject::Session(sid("f-idle"))), vec!["session", "unarchive", "f-idle"]),
+            (
+                Action::History(sid("f-idle")),
+                vec!["session", "history", "f-idle"],
+            ),
+            (
+                archive(Subject::Context(ContextId::parse("alpha").unwrap())),
+                vec!["context", "archive", "alpha"],
+            ),
+            (
+                archive(Subject::Plan(PlanId::parse("ship").unwrap())),
+                vec!["plan", "archive", "--plan=ship"],
+            ),
+            (
+                archive(Subject::Session(sid("f-idle"))),
+                vec!["session", "archive", "f-idle"],
+            ),
+            (
+                Action::Unarchive(Subject::Context(ContextId::parse("alpha").unwrap())),
+                vec!["context", "unarchive", "alpha"],
+            ),
+            (
+                Action::Unarchive(Subject::Plan(PlanId::parse("ship").unwrap())),
+                vec!["plan", "unarchive", "--plan=ship"],
+            ),
+            (
+                Action::Unarchive(Subject::Session(sid("f-idle"))),
+                vec!["session", "unarchive", "f-idle"],
+            ),
             (
                 Action::NewPlan {
                     context: ContextId::parse("alpha").unwrap(),
                     id: PlanId::parse("pay-4521").unwrap(),
                     title: "Pay 4521".into(),
                 },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521", "--by-user"],
+                vec![
+                    "plan",
+                    "new",
+                    "pay-4521",
+                    "--context=alpha",
+                    "--title=Pay 4521",
+                    "--by-user",
+                ],
             ),
             (
                 Action::NewContext {
@@ -549,20 +755,58 @@ mod tests {
                     title: "Building cpd!".into(),
                     owner: "clayton-duarte".into(),
                 },
-                vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
+                vec![
+                    "context",
+                    "new",
+                    "building-cpd",
+                    "--title=Building cpd!",
+                    "--owner=clayton-duarte",
+                ],
             ),
             (
-                Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "-Dash".into() },
+                Action::RenameContext {
+                    id: ContextId::parse("alpha").unwrap(),
+                    title: "-Dash".into(),
+                },
                 vec!["context", "rename", "alpha", "--title=-Dash"],
             ),
-            (Action::RenamePlan { id: PlanId::parse("ship").unwrap(), title: "Ship it".into() }, vec!["plan", "rename", "--plan=ship", "--title=Ship it"]),
             (
-                Action::RenameSession { id: sid("f-idle"), name: "-x y".into() },
+                Action::RenamePlan {
+                    id: PlanId::parse("ship").unwrap(),
+                    title: "Ship it".into(),
+                },
+                vec!["plan", "rename", "--plan=ship", "--title=Ship it"],
+            ),
+            (
+                Action::RenameSession {
+                    id: sid("f-idle"),
+                    name: "-x y".into(),
+                },
                 vec!["session", "rename", "--session=f-idle", "--", "-x y"],
             ),
-            (Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() }, vec!["session", "fork", "l-ship", "--name=ship (fork)"]),
+            (
+                Action::Fork {
+                    source: sid("l-ship"),
+                    name: "ship (fork)".into(),
+                },
+                vec!["session", "fork", "l-ship", "--name=ship (fork)"],
+            ),
             (Action::EnsureWatch, vec!["watch", "--ensure"]),
-            (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "--unblocks", "the engine has been down 60 s", "--", "The engine is down."]),
+            (
+                Action::Tell {
+                    manager: sid("m-alpha"),
+                    text: "The engine is down.".into(),
+                },
+                vec![
+                    "session",
+                    "send",
+                    "m-alpha",
+                    "--unblocks",
+                    "the engine has been down 60 s",
+                    "--",
+                    "The engine is down.",
+                ],
+            ),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
@@ -573,9 +817,16 @@ mod tests {
     fn open_manager_is_followed_by_session_open_of_the_manager_from_the_reply() {
         let manager = Action::OpenManager(ContextId::parse("alpha").unwrap());
         let reply = json!({"ok": true, "manager": {"session": "m-alpha", "name": "alpha-manager", "state": "idle", "pane": "%3", "window": "@2"}, "started": true});
-        assert_eq!(manager.open_new(&reply), Ok(Some(Action::Open(sid("m-alpha")))));
+        assert_eq!(
+            manager.open_new(&reply),
+            Ok(Some(Action::Open(sid("m-alpha"))))
+        );
         assert!(manager.open_new(&json!({"ok": true})).is_err());
-        assert!(manager.open_new(&json!({"ok": true, "manager": {"session": "Not an id"}})).is_err());
+        assert!(
+            manager
+                .open_new(&json!({"ok": true, "manager": {"session": "Not an id"}}))
+                .is_err()
+        );
     }
 
     #[test]
@@ -583,82 +834,199 @@ mod tests {
         let ids = ["alpha", "ship", "ship·7f3a", "f-idle", "-dash"]; // a Context, a Plan, a fork, a fork with no Plan, a `-` id
         for id in ids {
             let copy = Action::CopyId(id.into());
-            assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", id]], "{id}");
+            assert_eq!(
+                sequence(&copy),
+                [vec!["set-buffer", "-w", "--", id]],
+                "{id}"
+            );
             assert_eq!(copy.done(&json!(null)), format!("copied {id}"));
         }
         let argv = Tmux::new("sock").argv(&Action::CopyId("ship".into()).argv());
-        assert_eq!(argv, ["tmux", "-u", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
+        assert_eq!(
+            argv,
+            [
+                "tmux",
+                "-u",
+                "-L",
+                "sock",
+                "-f",
+                "/dev/null",
+                "set-buffer",
+                "-w",
+                "--",
+                "ship"
+            ]
+        );
     }
 
     #[test]
     fn copy_url_is_the_same_tmux_command_and_its_log_line_says_how_to_open_the_link() {
         let copy = Action::CopyUrl("https://x.io/1".into());
-        assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
-        assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
+        assert_eq!(
+            sequence(&copy),
+            [vec!["set-buffer", "-w", "--", "https://x.io/1"]]
+        );
+        assert_eq!(
+            copy.done(&json!(null)),
+            "copied https://x.io/1: Cmd-click the row to open it"
+        );
     }
 
     #[test]
     fn ensure_watch_says_whether_it_started_the_engine_() {
-        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": true, "pane": "%3"})), "engine started");
-        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": false, "already": true})), "already running");
-        assert_eq!(Action::EnsureWatch.failed("watch_start_failed", "x"), "watch_start_failed: x");
+        assert_eq!(
+            Action::EnsureWatch.done(&json!({"ok": true, "started": true, "pane": "%3"})),
+            "engine started"
+        );
+        assert_eq!(
+            Action::EnsureWatch.done(&json!({"ok": true, "started": false, "already": true})),
+            "already running"
+        );
+        assert_eq!(
+            Action::EnsureWatch.failed("watch_start_failed", "x"),
+            "watch_start_failed: x"
+        );
     }
 
     #[test]
     fn new_plan_and_fork_are_followed_by_session_open_of_the_new_session_from_the_reply() {
-        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
+        let new = Action::NewPlan {
+            context: ContextId::parse("alpha").unwrap(),
+            id: PlanId::parse("pay").unwrap(),
+            title: "Pay".into(),
+        };
         let reply = json!({"ok": true, "plan": {"id": "pay", "lead_session": "8d0e"}, "lead": {"session": "8d0e", "pane": "%41"}});
         let open = new.open_new(&reply).unwrap().unwrap();
         assert_eq!(
             [new.argv(), open.argv()],
-            [vec!["plan", "new", "pay", "--context=alpha", "--title=Pay", "--by-user"], vec!["session", "open", "8d0e"]]
+            [
+                vec![
+                    "plan",
+                    "new",
+                    "pay",
+                    "--context=alpha",
+                    "--title=Pay",
+                    "--by-user"
+                ],
+                vec!["session", "open", "8d0e"]
+            ]
         );
-        let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
+        let fork = Action::Fork {
+            source: sid("l-ship"),
+            name: "ship (fork)".into(),
+        };
         let reply = json!({"ok": true, "session": {"id": "a41b", "name": "ship (fork)", "plan": "ship", "pane": "%52"}});
         let open = fork.open_new(&reply).unwrap().unwrap();
         assert_eq!(
             [fork.argv(), open.argv()],
-            [vec!["session", "fork", "l-ship", "--name=ship (fork)"], vec!["session", "open", "a41b"]]
+            [
+                vec!["session", "fork", "l-ship", "--name=ship (fork)"],
+                vec!["session", "open", "a41b"]
+            ]
         );
         // a reply without the id is an error, not a silent skip; the other actions open nothing
         assert!(new.open_new(&json!({"ok": true})).is_err());
-        assert!(fork.open_new(&json!({"ok": true, "lead": {"session": "8d0e"}})).is_err());
-        for action in [Action::Open(sid("l-ship")), Action::Close(sid("l-ship")), Action::CopyId("x".into())] {
-            assert_eq!(action.open_new(&json!({"ok": true, "session": {"id": "a41b"}})), Ok(None), "{action:?}");
+        assert!(
+            fork.open_new(&json!({"ok": true, "lead": {"session": "8d0e"}}))
+                .is_err()
+        );
+        for action in [
+            Action::Open(sid("l-ship")),
+            Action::Close(sid("l-ship")),
+            Action::CopyId("x".into()),
+        ] {
+            assert_eq!(
+                action.open_new(&json!({"ok": true, "session": {"id": "a41b"}})),
+                Ok(None),
+                "{action:?}"
+            );
         }
     }
 
     #[test]
     fn the_log_line_says_what_the_reference_says() {
         let open = Action::Open(sid("l-ship"));
-        assert_eq!(open.done(&json!({"ok": true, "session": "l-ship", "pane": "%1", "displaced": null})), "");
+        assert_eq!(
+            open.done(&json!({"ok": true, "session": "l-ship", "pane": "%1", "displaced": null})),
+            ""
+        );
         let close = Action::Close(sid("l-ship"));
-        assert_eq!(close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})), "closed");
-        assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
-        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
-        assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
+        assert_eq!(
+            close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})),
+            "closed"
+        );
+        assert_eq!(
+            close.done(&json!({"ok": true, "already": true})),
+            "session is already gone"
+        );
+        let new = Action::NewPlan {
+            context: ContextId::parse("alpha").unwrap(),
+            id: PlanId::parse("pay").unwrap(),
+            title: "Pay".into(),
+        };
+        assert_eq!(
+            new.done(&json!({"ok": true})),
+            "forking pay in window park-pay"
+        );
+        let context = Action::NewContext {
+            id: ContextId::parse("alpha").unwrap(),
+            title: "Alpha".into(),
+            owner: "o".into(),
+        };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
-        let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
+        let rename = Action::RenameSession {
+            id: sid("f-idle"),
+            name: "x".into(),
+        };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");
-        assert_eq!(rename.done(&json!({"ok": true, "already": true})), "already named so");
-        let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
+        assert_eq!(
+            rename.done(&json!({"ok": true, "already": true})),
+            "already named so"
+        );
+        let fork = Action::Fork {
+            source: sid("l-ship"),
+            name: "ship (fork)".into(),
+        };
         assert_eq!(fork.done(&json!({"ok": true})), "forking ship (fork)");
         let archive = archive(Subject::Session(sid("f-idle")));
-        assert_eq!(archive.done(&json!({"ok": true, "archived": [], "closed": []})), "archived");
-        assert_eq!(archive.done(&json!({"ok": true, "already": true})), "already archived");
+        assert_eq!(
+            archive.done(&json!({"ok": true, "archived": [], "closed": []})),
+            "archived"
+        );
+        assert_eq!(
+            archive.done(&json!({"ok": true, "already": true})),
+            "already archived"
+        );
         let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
-        assert_eq!(unarchive.done(&json!({"ok": true, "archived": [], "closed": []})), "unarchived");
-        assert_eq!(unarchive.done(&json!({"ok": true, "already": true})), "already unarchived");
+        assert_eq!(
+            unarchive.done(&json!({"ok": true, "archived": [], "closed": []})),
+            "unarchived"
+        );
+        assert_eq!(
+            unarchive.done(&json!({"ok": true, "already": true})),
+            "already unarchived"
+        );
     }
 
     #[test]
     fn closing_the_session_in_the_chat_slot_is_refused_in_the_references_words() {
         let close = Action::Close(sid("l-ship"));
-        assert_eq!(close.failed("in_chat_slot", "It is in the chat slot."), IN_CHAT_SLOT);
-        assert_eq!(close.failed("not_a_lead", "Not a Lead."), "not_a_lead: Not a Lead.");
-        assert_eq!(Action::Open(sid("l-ship")).failed("in_chat_slot", "x"), "in_chat_slot: x");
+        assert_eq!(
+            close.failed("in_chat_slot", "It is in the chat slot."),
+            IN_CHAT_SLOT
+        );
+        assert_eq!(
+            close.failed("not_a_lead", "Not a Lead."),
+            "not_a_lead: Not a Lead."
+        );
+        assert_eq!(
+            Action::Open(sid("l-ship")).failed("in_chat_slot", "x"),
+            "in_chat_slot: x"
+        );
         let archive = archive(Subject::Session(sid("l-ship")));
-        assert_eq!(archive.failed("archive_blocked", "A Session is working."), "archive_blocked: A Session is working.");
+        assert_eq!(
+            archive.failed("archive_blocked", "A Session is working."),
+            "archive_blocked: A Session is working."
+        );
     }
 }

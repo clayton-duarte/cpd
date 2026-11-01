@@ -25,8 +25,20 @@ fn plan() -> PlanId {
 }
 
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-    Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } }
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![0, 1, 2, 3, 4, 5],
+    };
+    Catalog {
+        pi_version: "1.2.0".to_owned(),
+        o: model("p/opus"),
+        s: model("p/sonnet"),
+        h: model("p/haiku"),
+        g: TierModel {
+            model: "p/gemini".to_owned(),
+            efforts: vec![],
+        },
+    }
 }
 
 fn metrics(_: &merge::Attempt) -> Option<Value> {
@@ -53,12 +65,22 @@ fn fx() -> Fx {
     fs::write(adapter.join("durable-worker/main.ts"), "").unwrap();
     fs::write(
         home.config(),
-        format!("version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n[tmux]\nsocket = \"{}\"\n", adapter.display(), kit.env.tmux_socket()),
+        format!(
+            "version = 1\nmachine = \"t\"\npi_adapter = \"{}\"\n[tmux]\nsocket = \"{}\"\n",
+            adapter.display(),
+            kit.env.tmux_socket()
+        ),
     )
     .unwrap();
     let config = Config::load(&home).unwrap();
-    let setup = Setup { timeout: Duration::from_secs(30), log: kit.env.root().join("lead.log") };
-    let lead = kit.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap().path;
+    let setup = Setup {
+        timeout: Duration::from_secs(30),
+        log: kit.env.root().join("lead.log"),
+    };
+    let lead = kit
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap()
+        .path;
     kit.env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -71,7 +93,14 @@ fn fx() -> Fx {
         lead = lead.display()
     ));
     kit.env.repo_policy("acme", "repo", "");
-    Fx { kit, home, config, catalog: catalog(), repo, lead }
+    Fx {
+        kit,
+        home,
+        config,
+        catalog: catalog(),
+        repo,
+        lead,
+    }
 }
 
 impl Fx {
@@ -83,11 +112,18 @@ impl Fx {
     /// died before step 8), runner `durable` and `worker_pid` `pid`.
     fn merging_durable(&self, key: &str, pid: Pid) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.kit.env.root().join("attempt.log") };
-        let made = self.kit.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.kit.env.root().join("attempt.log"),
+        };
+        let made = self
+            .kit
+            .scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup))
+            .unwrap();
         fs::write(made.path.join("api.txt"), "api\n").unwrap();
         self.kit.git(&made.path, &["add", "-A"]);
-        self.kit.git(&made.path, &["commit", "-q", "-m", "edit api.txt"]);
+        self.kit
+            .git(&made.path, &["commit", "-q", "-m", "edit api.txt"]);
         let sha = self.kit.git(&made.path, &["rev-parse", "HEAD"]);
         self.store()
             .write("fixture", |tx| {
@@ -111,16 +147,26 @@ impl Fx {
 
     /// R as E2 runs it, for `attempt`: no driver holds its lock.
     fn recover(&self, attempt: &AttemptId) -> Option<merge::Recovered> {
-        let ctx = Ctx { home: &self.home, config: &self.config, catalog: &self.catalog, source: "watch", metrics: &metrics };
-        self.kit.scoped(|| merge::recover_attempt(&mut self.store(), &ctx, &plan(), attempt)).unwrap()
+        let ctx = Ctx {
+            home: &self.home,
+            config: &self.config,
+            catalog: &self.catalog,
+            source: "watch",
+            metrics: &metrics,
+        };
+        self.kit
+            .scoped(|| merge::recover_attempt(&mut self.store(), &ctx, &plan(), attempt))
+            .unwrap()
     }
 
     fn attempt_row(&self, attempt: &AttemptId) -> (String, Option<String>, Option<String>) {
         self.store()
             .read(|c| {
-                Ok(c.query_row("SELECT status, outcome, cause FROM attempts WHERE plan = 'pay' AND id = ?1", [attempt.to_string()], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?)
+                Ok(c.query_row(
+                    "SELECT status, outcome, cause FROM attempts WHERE plan = 'pay' AND id = ?1",
+                    [attempt.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
             })
             .unwrap()
     }
@@ -129,15 +175,46 @@ impl Fx {
 #[test]
 fn r_kills_the_durable_runner_of_a_merging_attempt_whose_driver_died() {
     let fx = fx();
-    let spec = fx.home.worker_spec(&plan(), &AttemptId::parse("api-a1").unwrap());
-    let runner = fx.kit.fakes.spawn.add_process(Pid(1), &format!("/opt/node/bin/node {} --model p/sonnet --spec {}", fx.kit.env.root().join("pi/durable-worker/main.ts").display(), spec.display()));
+    let spec = fx
+        .home
+        .worker_spec(&plan(), &AttemptId::parse("api-a1").unwrap());
+    let runner = fx.kit.fakes.spawn.add_process(
+        Pid(1),
+        &format!(
+            "/opt/node/bin/node {} --model p/sonnet --spec {}",
+            fx.kit
+                .env
+                .root()
+                .join("pi/durable-worker/main.ts")
+                .display(),
+            spec.display()
+        ),
+    );
     let (attempt, worktree) = fx.merging_durable("api", runner);
 
-    let recovered = fx.recover(&attempt).expect("the driver lock is free: R runs");
+    let recovered = fx
+        .recover(&attempt)
+        .expect("the driver lock is free: R runs");
 
     // R3: the merge did not happen; the Attempt ends `crashed` and its worktree is kept.
-    assert!(matches!(recovered.end, Some(End::Failed { cause: Failure::Crashed, .. })), "{recovered:?}");
-    assert_eq!(fx.attempt_row(&attempt), ("ended".to_owned(), Some("failed".to_owned()), Some("crashed".to_owned())));
+    assert!(
+        matches!(
+            recovered.end,
+            Some(End::Failed {
+                cause: Failure::Crashed,
+                ..
+            })
+        ),
+        "{recovered:?}"
+    );
+    assert_eq!(
+        fx.attempt_row(&attempt),
+        (
+            "ended".to_owned(),
+            Some("failed".to_owned()),
+            Some("crashed".to_owned())
+        )
+    );
     assert!(Path::new(&worktree).exists());
     // R8: SIGKILL at once, by the stored pid: no SIGTERM, no wait.
     assert_eq!(fx.kit.fakes.spawn.signals(), [(runner, Signal::Kill)]);

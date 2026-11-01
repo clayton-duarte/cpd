@@ -19,9 +19,21 @@ fn home(fx: &Fx) -> CpdHome {
 
 /// A Plan in `phase`, its Lead Session beside it; `archived` as a flag.
 fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
-    let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
-    let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
-    let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
+    let locked = if matches!(phase, "grounding" | "plan") {
+        "NULL"
+    } else {
+        "'2000-01-01T00:00:00.000Z'"
+    };
+    let done = if phase == "done" {
+        "'2000-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let archived = if archived {
+        "'2000-01-03T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     fx.env.sql(
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -93,7 +105,8 @@ fn render(fx: &Fx) -> (Value, String) {
 const NONE: &str = "No other active Plan touches these files.";
 
 /// The table of `## Overlaps` up to its rows: one row per this Job, other Plan and other PR.
-const HEADER: &str = "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
+const HEADER: &str =
+    "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
 
 #[test]
 fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
@@ -107,11 +120,17 @@ fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
         overlaps,
         json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
     );
-    let table = format!("## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |\n");
+    let table = format!(
+        "## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |\n"
+    );
     assert!(text.contains(&table), "{text}");
     assert!(!text.contains(NONE), "{text}");
     // After the PRs table, before the PR sections.
-    let (prs, overlaps, section) = (text.find("## PRs").unwrap(), text.find("## Overlaps").unwrap(), text.find("## PR api").unwrap());
+    let (prs, overlaps, section) = (
+        text.find("## PRs").unwrap(),
+        text.find("## Overlaps").unwrap(),
+        text.find("## PR api").unwrap(),
+    );
     assert!(prs < overlaps && overlaps < section, "{text}");
 }
 
@@ -164,14 +183,33 @@ fn two_overlapping_jobs_of_one_other_pr_give_one_row_listing_both() {
         overlaps,
         json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "z", "status": "running"}, {"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
     );
-    let table = format!("## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `z` (running), `y` (queued) | `core/src/x.rs` |\n");
+    let table = format!(
+        "## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `z` (running), `y` (queued) | `core/src/x.rs` |\n"
+    );
     assert!(text.contains(&table), "{text}");
 }
 
 #[test]
 fn paths_are_listed_once_and_the_table_caps_them_at_five() {
     let fx = fixture();
-    job(&fx, "mine", "api", "wide", "draft", &["a/1.rs", "a/2.rs", "a/1.rs", "a/3.rs", "elsewhere/", "a/4.rs", "a/5.rs", "a/6.rs", "a/7.rs"]);
+    job(
+        &fx,
+        "mine",
+        "api",
+        "wide",
+        "draft",
+        &[
+            "a/1.rs",
+            "a/2.rs",
+            "a/1.rs",
+            "a/3.rs",
+            "elsewhere/",
+            "a/4.rs",
+            "a/5.rs",
+            "a/6.rs",
+            "a/7.rs",
+        ],
+    );
     plan(&fx, "busy", "dispatch", false);
     pr(&fx, "busy", "svc", "/r/api", "dispatch");
     job(&fx, "busy", "svc", "dir", "queued", &["a/"]);
@@ -210,11 +248,28 @@ fn rows_are_ordered_by_this_jobs_key_then_the_other_plan_then_the_pr() {
     job(&fx, "alpha", "p9", "l", "queued", &["core/src/"]);
 
     let (overlaps, _) = render(&fx);
-    let listed: Vec<(&str, &str, &str)> =
-        overlaps.as_array().unwrap().iter().map(|o| (o["job"].as_str().unwrap(), o["plan"].as_str().unwrap(), o["pr"].as_str().unwrap())).collect();
+    let listed: Vec<(&str, &str, &str)> = overlaps
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| {
+            (
+                o["job"].as_str().unwrap(),
+                o["plan"].as_str().unwrap(),
+                o["pr"].as_str().unwrap(),
+            )
+        })
+        .collect();
     assert_eq!(
         listed,
-        [("b", "alpha", "p9"), ("b", "beta", "p1"), ("b", "beta", "p2"), ("x", "alpha", "p9"), ("x", "beta", "p1"), ("x", "beta", "p2")]
+        [
+            ("b", "alpha", "p9"),
+            ("b", "beta", "p1"),
+            ("b", "beta", "p2"),
+            ("x", "alpha", "p9"),
+            ("x", "beta", "p1"),
+            ("x", "beta", "p2")
+        ]
     );
 }
 
@@ -233,7 +288,12 @@ fn the_jobs_of_this_plans_merged_pr_are_not_checked() {
     job(&fx, "busy", "svc", "y", "queued", touches);
 
     let (overlaps, text) = render(&fx);
-    let listed: Vec<&str> = overlaps.as_array().unwrap().iter().map(|o| o["job"].as_str().unwrap()).collect();
+    let listed: Vec<&str> = overlaps
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["job"].as_str().unwrap())
+        .collect();
     assert_eq!(listed, ["landed", "x"]);
     let table = format!(
         "## Overlaps\n\n{HEADER}| `landed` | `busy` | `svc` | `y` (queued) | `core/src/` |\n| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |\n"
@@ -246,7 +306,14 @@ fn no_overlap_says_so() {
     let fx = fixture();
     plan(&fx, "busy", "dispatch", false);
     pr(&fx, "busy", "svc", "/r/api", "dispatch");
-    job(&fx, "busy", "svc", "y", "queued", &["core/src/y.rs", "core/src", "cli/"]);
+    job(
+        &fx,
+        "busy",
+        "svc",
+        "y",
+        "queued",
+        &["core/src/y.rs", "core/src", "cli/"],
+    );
 
     let (overlaps, text) = render(&fx);
     assert_eq!(overlaps, json!([]));
@@ -255,7 +322,8 @@ fn no_overlap_says_so() {
 }
 
 #[test]
-fn done_and_archived_plans_merged_and_cancelled_prs_cancelled_jobs_and_other_repos_are_not_listed() {
+fn done_and_archived_plans_merged_and_cancelled_prs_cancelled_jobs_and_other_repos_are_not_listed()
+{
     let fx = fixture();
     let touches: &[&str] = &["core/src/"];
     plan(&fx, "finished", "done", false);
@@ -332,7 +400,19 @@ fn the_plan_review_summary_carries_the_overlaps_and_nothing_is_refused() {
     job(&fx, "busy", "svc", "y", "queued", &["core/src/"]);
 
     fx.env.outline_for_review("mine");
-    let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    let out = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
     let text = fs::read_to_string(out["summary"].as_str().unwrap()).unwrap();
-    assert!(text.contains("\nOverlaps: 1\n- core/src/x.rs: busy/svc/y (queued)\n"), "{text}");
+    assert!(
+        text.contains("\nOverlaps: 1\n- core/src/x.rs: busy/svc/y (queued)\n"),
+        "{text}"
+    );
 }

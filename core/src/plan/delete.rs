@@ -48,7 +48,10 @@ pub(crate) struct Targets {
 impl Targets {
     fn push_worktree(&mut self, repo: Option<String>, path: Option<String>) {
         if let Some(path) = path {
-            let wt = Worktree { repo: repo.map(PathBuf::from), path: PathBuf::from(path) };
+            let wt = Worktree {
+                repo: repo.map(PathBuf::from),
+                path: PathBuf::from(path),
+            };
             if !self.worktrees.contains(&wt) {
                 self.worktrees.push(wt);
             }
@@ -119,7 +122,11 @@ impl Targets {
     }
 
     /// What `plan` has outside the database: its live rows' paths and those of its rows already deleted.
-    pub(crate) fn of_plan(conn: &Connection, home: &CpdHome, plan: &PlanId) -> Result<Targets, CpdError> {
+    pub(crate) fn of_plan(
+        conn: &Connection,
+        home: &CpdHome,
+        plan: &PlanId,
+    ) -> Result<Targets, CpdError> {
         let mut targets = Targets::default();
         let p = plan.as_str();
         // The PRs: their repository, Lead worktree and Lead Branch.
@@ -130,7 +137,13 @@ impl Targets {
                FROM history WHERE tbl = 'prs' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1",
         )?;
         let prs = stmt
-            .query_map([p], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .query_map([p], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (repo, worktree, branch) in prs {
             targets.push_worktree(Some(repo.clone()), worktree);
@@ -152,7 +165,13 @@ impl Targets {
                        FROM history WHERE tbl = 'prs' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1) p ON p.key = j.pr",
         )?;
         let attempts = stmt
-            .query_map([p], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .query_map([p], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (repo, worktree, branch) in attempts {
             targets.push_worktree(Some(repo.clone()), Some(worktree));
@@ -181,7 +200,12 @@ impl Targets {
                 branches += 1;
             }
         }
-        let files = self.files.iter().chain(&self.dirs).filter(|f| f.exists()).count() as u64;
+        let files = self
+            .files
+            .iter()
+            .chain(&self.dirs)
+            .filter(|f| f.exists())
+            .count() as u64;
         Ok((worktrees, branches, files))
     }
 
@@ -189,18 +213,28 @@ impl Targets {
     /// directories (the disk a delete frees).
     pub(crate) fn measure(&self) -> (u64, u64) {
         let worktrees: Vec<&Worktree> = self.worktrees.iter().filter(|w| w.path.exists()).collect();
-        let bytes = worktrees.iter().map(|w| size(&w.path)).sum::<u64>() + self.files.iter().chain(&self.dirs).map(|f| size(f)).sum::<u64>();
+        let bytes = worktrees.iter().map(|w| size(&w.path)).sum::<u64>()
+            + self
+                .files
+                .iter()
+                .chain(&self.dirs)
+                .map(|f| size(f))
+                .sum::<u64>();
         (worktrees.len() as u64, bytes)
     }
 }
 
 /// The bytes under `path` (its own size for a file), symbolic links not followed; 0 when it is gone.
 fn size(path: &Path) -> u64 {
-    let Ok(meta) = fs::symlink_metadata(path) else { return 0 };
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
     if !meta.is_dir() {
         return meta.len();
     }
-    let Ok(entries) = fs::read_dir(path) else { return 0 };
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
     entries.flatten().map(|e| size(&e.path())).sum::<u64>() + meta.len()
 }
 
@@ -218,7 +252,10 @@ fn absolute(path: &Path) -> Result<(), CpdError> {
     if path.is_absolute() && path.parent().is_some() {
         Ok(())
     } else {
-        Err(CpdError::bad_row(format!("{} is not an absolute path to remove.", path.display())))
+        Err(CpdError::bad_row(format!(
+            "{} is not an absolute path to remove.",
+            path.display()
+        )))
     }
 }
 
@@ -252,7 +289,16 @@ pub(crate) fn finish(targets: &Targets) -> Result<Removed, CpdError> {
         if wt.path.exists() {
             if let Some(repo) = repo {
                 // Git's own removal first, so the repository forgets it; the directory is removed below whatever it says.
-                let _ = run(repo, &["worktree", "remove", "--force", "--force", &wt.path.to_string_lossy()]);
+                let _ = run(
+                    repo,
+                    &[
+                        "worktree",
+                        "remove",
+                        "--force",
+                        "--force",
+                        &wt.path.to_string_lossy(),
+                    ],
+                );
             }
             remove_tree(&wt.path)?;
         }
@@ -271,7 +317,10 @@ pub(crate) fn finish(targets: &Targets) -> Result<Removed, CpdError> {
     for dir in &targets.dirs {
         remove_tree(dir)?;
     }
-    Ok(Removed { worktrees, disk_freed_mb: megabytes(bytes) })
+    Ok(Removed {
+        worktrees,
+        disk_freed_mb: megabytes(bytes),
+    })
 }
 
 /// The rows a Plan delete counts (the Event's and the preview's).
@@ -285,20 +334,39 @@ pub(crate) struct Inventory {
 impl Inventory {
     pub(crate) fn of_plan(conn: &Connection, plan: &PlanId) -> Result<Inventory, CpdError> {
         let count = |table: &str| -> Result<u64, CpdError> {
-            Ok(conn.query_row(&format!("SELECT count(*) FROM {table} WHERE plan = ?1"), [plan.as_str()], |r| r.get::<_, i64>(0))? as u64)
+            Ok(conn.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE plan = ?1"),
+                [plan.as_str()],
+                |r| r.get::<_, i64>(0),
+            )? as u64)
         };
-        Ok(Inventory { jobs: count("jobs")?, attempts: count("attempts")?, sessions: count("sessions")? })
+        Ok(Inventory {
+            jobs: count("jobs")?,
+            attempts: count("attempts")?,
+            sessions: count("sessions")?,
+        })
     }
 
     pub(crate) fn counts(self, worktrees: u64, bytes: u64) -> Counts {
-        Counts { jobs: self.jobs, attempts: self.attempts, sessions: self.sessions, worktrees, disk_freed_mb: megabytes(bytes) }
+        Counts {
+            jobs: self.jobs,
+            attempts: self.attempts,
+            sessions: self.sessions,
+            worktrees,
+            disk_freed_mb: megabytes(bytes),
+        }
     }
 }
 
 /// What stops a delete of `plans` (commands.md §4.14; contract §2.2 "Deleted"): a Plan that is neither archived nor
 /// asleep (when `check_asleep`), and what is still live: the archive rule's blockers, an Attempt not `ended` and a PR that
 /// is not `merged` or `cancelled`. `sessions` are Sessions of the delete that belong to no Plan (a Manager).
-pub(crate) fn blockers(conn: &Connection, plans: &[PlanId], sessions: &[SessionId], check_asleep: bool) -> Result<Vec<Blocker>, CpdError> {
+pub(crate) fn blockers(
+    conn: &Connection,
+    plans: &[PlanId],
+    sessions: &[SessionId],
+    check_asleep: bool,
+) -> Result<Vec<Blocker>, CpdError> {
     let mut found = Vec::new();
     let mut ids = sessions.to_vec();
     for plan in plans {
@@ -324,7 +392,8 @@ pub(crate) fn blockers(conn: &Connection, plans: &[PlanId], sessions: &[SessionI
     }
     found.extend(live_blockers(conn, &ids, plans)?);
     for plan in plans {
-        let mut stmt = conn.prepare("SELECT id FROM attempts WHERE plan = ?1 AND status <> 'ended' ORDER BY id")?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM attempts WHERE plan = ?1 AND status <> 'ended' ORDER BY id")?;
         for id in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
             let id = id?;
             found.push(Blocker {
@@ -335,9 +404,16 @@ pub(crate) fn blockers(conn: &Connection, plans: &[PlanId], sessions: &[SessionI
             });
         }
         let mut stmt = conn.prepare("SELECT key, status FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
-        for pr in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        for pr in stmt.query_map([plan.as_str()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
             let (key, status) = pr?;
-            found.push(Blocker { kind: "pr", id: key.clone(), plan: Some(plan.to_string()), reason: format!("PR {key} of Plan {plan} is {status}.") });
+            found.push(Blocker {
+                kind: "pr",
+                id: key.clone(),
+                plan: Some(plan.to_string()),
+                reason: format!("PR {key} of Plan {plan} is {status}."),
+            });
         }
     }
     Ok(found)
@@ -389,29 +465,57 @@ pub(crate) fn rerun(targets: &Targets, yes: bool) -> Result<Output, CpdError> {
     }
     let (worktrees, branches, files) = targets.left()?;
     let left: Value = json!({"worktrees": worktrees, "branches": branches, "files": files});
-    Ok(Output::success(json!({"preview": true, "already": true, "left": left})))
+    Ok(Output::success(
+        json!({"preview": true, "already": true, "left": left}),
+    ))
 }
 
 /// `plan delete` (§4.14).
 pub(super) fn plan_delete(args: DeleteArgs) -> Result<Output, CpdError> {
     let id = args.id;
-    let Env { home, config, mut store, .. } = Env::open()?;
-    let deleted: Option<Option<String>> =
-        store.read(|conn| Ok(conn.query_row("SELECT deleted_at FROM plans WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?))?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
+    let deleted: Option<Option<String>> = store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT deleted_at FROM plans WHERE id = ?1",
+                [id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    })?;
     match deleted {
         None => Err(CpdError::plan_not_found(&id)),
-        Some(Some(_)) => rerun(&store.read(|conn| Targets::of_plan(conn, &home, &id))?, args.yes),
+        Some(Some(_)) => rerun(
+            &store.read(|conn| Targets::of_plan(conn, &home, &id))?,
+            args.yes,
+        ),
         Some(None) => {
             let (context, objects, inventory, targets, live) = store.read(|conn| {
                 let row = super::row::load(conn, &id)?;
                 let live = blockers(conn, std::slice::from_ref(&id), &[], true)?;
-                Ok((row.context, Objects::of_plan(conn, &id)?, Inventory::of_plan(conn, &id)?, Targets::of_plan(conn, &home, &id)?, live))
+                Ok((
+                    row.context,
+                    Objects::of_plan(conn, &id)?,
+                    Inventory::of_plan(conn, &id)?,
+                    Targets::of_plan(conn, &home, &id)?,
+                    live,
+                ))
             })?;
             if !live.is_empty() {
                 return Err(archive_blocked(&live, None));
             }
             let tmux = Tmux::new(config.tmux.socket.clone());
-            refuse_chat_slot(&mut store, &tmux, &config.tmux.cockpit_session, &objects.sessions)?;
+            refuse_chat_slot(
+                &mut store,
+                &tmux,
+                &config.tmux.cockpit_session,
+                &objects.sessions,
+            )?;
             let (worktrees, bytes) = targets.measure();
             let counts = inventory.counts(worktrees, bytes);
             let out = json!({
@@ -430,9 +534,18 @@ pub(super) fn plan_delete(args: DeleteArgs) -> Result<Output, CpdError> {
                 delete_rows(tx, &id)?;
                 let text = format!(
                     "Plan {id} deleted: {} Jobs, {} Attempts, {} Sessions, {} worktrees, ~{} MB.",
-                    counts.jobs, counts.attempts, counts.sessions, counts.worktrees, counts.disk_freed_mb
+                    counts.jobs,
+                    counts.attempts,
+                    counts.sessions,
+                    counts.worktrees,
+                    counts.disk_freed_mb
                 );
-                append(tx, NewEvent::plan_deleted(text, &counts).plan(id.clone()).context(context.clone()))?;
+                append(
+                    tx,
+                    NewEvent::plan_deleted(text, &counts)
+                        .plan(id.clone())
+                        .context(context.clone()),
+                )?;
                 Ok(())
             })?;
             // The paths again, now from `history`: where a rerun reads them too.
