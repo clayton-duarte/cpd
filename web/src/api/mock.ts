@@ -26,10 +26,11 @@ export interface SubmitInput {
   token?: string;
 }
 
-/** The outcome of answering a held `ui_request` (durable-leads 4.4). */
-export type UiAnswerResult =
-  | { req: string; data: object }
-  | { req: string; code: "ui_unknown" };
+/** The outcome of answering a held `ui_request` (durable-leads 4.4): the sender's req is echoed. A late answer throws `ui_unknown`. */
+export interface UiAnswerResult {
+  req: string;
+  data: object;
+}
 
 /**
  * The one typed API surface (§4.1) both the mock and the later real transport implement.
@@ -45,5 +46,46 @@ export interface CpdApi {
 
 /** Builds the in-process mock implementing `CpdApi` (STUB). */
 export function createMockApi(): CpdApi {
-  throw new Error("not implemented");
+  // The mock holds every `ui_request` it has seen until it is answered; a second answer on a
+  // held id is late (durable-leads 4.4 rules 2-3).
+  const answered = new Set<string>();
+
+  return {
+    submit(frame: SubmitInput): SubmitResult {
+      requireToken(frame.token);
+      return { submission_id: `submission-${frame.req}`, status: "queued" };
+    },
+
+    uiResponse(frame: UiResponse): UiAnswerResult {
+      if (answered.has(frame.id)) {
+        throw new Error("ui_unknown: ui_request is no longer held");
+      }
+      answered.add(frame.id);
+      return { req: frame.req, data: {} };
+    },
+
+    post<A extends TypedPost>(action: A, carrier: TokenCarrier): TypedPostMap[A["action"]] {
+      requireToken(carrier.token);
+      return postResult(action) as TypedPostMap[A["action"]];
+    },
+  };
+}
+
+/** Dispatches a typed POST to its mock handler, returning the action's result (\u00a74.4). */
+function postResult(action: TypedPost): TypedPostMap[TypedPost["action"]] {
+  switch (action.action) {
+    case "submit":
+      return { submission_id: "submission-post", status: "queued" };
+    case "ui_response":
+      return { req: action.payload.req, data: {} };
+    case "history":
+      return { entries: [] };
+  }
+}
+
+/** The token gate: every request must carry the token (hs-d781, A4). */
+function requireToken(token: string | undefined): asserts token is string {
+  if (token === undefined || token.length === 0) {
+    throw new Error("missing token: every request must carry the token");
+  }
 }

@@ -47,7 +47,50 @@ export interface ChatView {
 
 /** Merges one detected frame onto the chat view (STUB). */
 export function fold(view: ChatView, frame: EventsFrame | SnapshotFrame): ChatView {
-  void view;
-  void frame;
-  throw new Error("not implemented");
+  if (frame.type === "snapshot") {
+    // Rule 3: a snapshot frame replaces the whole view; nothing survives it.
+    const snapshot = frame.snapshot as { messages?: readonly ChatMessage[] } | null | undefined;
+    return {
+      epoch: frame.epoch,
+      seq: frame.seq,
+      messages: snapshot?.messages ?? [],
+      cursor: { epoch: frame.epoch, seq: frame.seq },
+    };
+  }
+
+  // Rule 1: apply each AgentEvent of the batch in order.
+  let messages = view.messages;
+  for (const event of frame.events) {
+    messages = applyEvent(messages, event);
+  }
+  // Rule 4: the cursor resumes to the frame's epoch/seq.
+  return { epoch: frame.epoch, seq: frame.seq, messages, cursor: { epoch: frame.epoch, seq: frame.seq } };
+}
+
+/** Applies one `AgentEvent` (rules 1-2): start/update set text, end replaces the whole message. */
+function applyEvent(messages: readonly ChatMessage[], event: ChatEvent): readonly ChatMessage[] {
+  switch (event.kind) {
+    case "message_start":
+      return upsert(messages, { id: event.id, role: event.role, text: event.text, pending: true });
+    case "message_update": {
+      const existing = messages.find((m) => m.id === event.id);
+      const role = existing?.role ?? "assistant";
+      return upsert(messages, { id: event.id, role, text: event.text, pending: true });
+    }
+    case "message_end": {
+      const existing = messages.find((m) => m.id === event.id);
+      const role = existing?.role ?? "assistant";
+      // Rule 2: the whole message is replaced at message_end, never concatenated.
+      return upsert(messages, { id: event.id, role, text: event.text, pending: false });
+    }
+  }
+}
+
+/** Replaces the message with `id`, or appends it. */
+function upsert(messages: readonly ChatMessage[], message: ChatMessage): readonly ChatMessage[] {
+  const index = messages.findIndex((m) => m.id === message.id);
+  if (index === -1) return [...messages, message];
+  const next = [...messages];
+  next[index] = message;
+  return next;
 }

@@ -131,5 +131,12 @@ export type ReadModelRoot =
  * impl Job lands — this is what makes the parity test RED.
  */
 export function acceptReadModel<T extends ReadModelRoot>(value: unknown): T {
-  throw new Error("not implemented");
+  if (typeof value !== "object" || value === null) {
+    throw new Error("read model: expected an object");
+  }
+  const root = value as Record<string, unknown>;
+  if (root.ok !== true) {
+    throw new Error("read model: expected { ok: true }");
+  }
+  return value as T;
 }

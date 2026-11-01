@@ -275,15 +275,49 @@ export interface AbortSubmissionResult {
 
 /** The typed v1 H→C sample frames used by the wire pinning tests (STUB). */
 export function v1HostSamples(): readonly ToClient[] {
-  throw new Error("not implemented");
+  return [
+    {
+      type: "welcome",
+      protocol: 1,
+      host_version: "0.1.0",
+      pi_durable: "0.1.0",
+      session: "session-1",
+      role: "lead",
+      epoch: "e1",
+      client_id: "client-1",
+      cwd: "/tmp",
+      limits: { client_line: LIMITS_CLIENT_LINE },
+    },
+    { type: "attached", req: "r1", mode: "snapshot", epoch: "e1", from_seq: 0, head_seq: 5, client_id: "client-1" },
+    { type: "snapshot", epoch: "e1", seq: 5, snapshot: {} },
+    { type: "events", epoch: "e1", seq: 6, events: [] },
+    { type: "result", req: "r1", data: {} },
+    { type: "error", req: "r1", code: "bad_args", message: "bad args" },
+    { type: "host_state", state: "idle", clients: 1, held_ui: 0 },
+    { type: "pong", req: "r1" },
+    { type: "bye", reason: "shutdown", reconnect: false },
+  ];
 }
+
+/** The v1 line limit reported in `welcome.limits` (protocol.ts:2-9). */
+const LIMITS_CLIENT_LINE = 64 * 1024 * 1024;
 
 /** The typed P1.6 sample frames — ui_request, ui_response, ui_resolved (STUB). */
 export function p16UiSamples(): readonly (UiRequest | UiResponse | UiResolvedFrame)[] {
-  throw new Error("not implemented");
+  return [
+    { type: "ui_request", id: "u1", method: "confirm", title: "Approve?", message: "Apply the plan?", purpose: "plan_review" },
+    { type: "ui_response", req: "r1", id: "u1", confirmed: true },
+    { type: "ui_resolved", id: "u1", outcome: "answered", by: "client-1" },
+  ];
 }
 
 /** The typed P1.8 result samples (STUB). */
 export function p18ResultSamples(): readonly (HistoryResult | ListModelsResult | ConfigureResult | ForkResult | CompactResult)[] {
-  throw new Error("not implemented");
+  return [
+    { entries: [], next: undefined },
+    { models: [] },
+    { agent: {} },
+    { conversation_id: "conversation-1" },
+    { task_id: "task-1" },
+  ];
 }
