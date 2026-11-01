@@ -4,12 +4,13 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::parked;
 use super::prs::PrRow;
@@ -369,21 +370,33 @@ pub fn close_reviews(
 /// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
 fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let Some(outline) = &s.plan.outline else {
-        return Err(CpdError::new(
-            ErrorCode::OutlineMissing,
-            format!(
-                "Plan {id} has no outline: write what was settled with the User, then ask again."
-            ),
-        )
-        .with("plan", id.as_str())
-        .with("next", "cpd plan outline --file <outline.json>"));
+        return Err(outline_missing(id));
     };
-    let mut without: Vec<&str> = s
-        .prs
+    outline_incomplete(id, outline, &s.prs, &s.jobs).map_or(Ok(()), Err)
+}
+
+/// `outline_missing`: the Plan has no outline.
+pub(super) fn outline_missing(id: &PlanId) -> CpdError {
+    CpdError::new(
+        ErrorCode::OutlineMissing,
+        format!("Plan {id} has no outline: write what was settled with the User, then ask again."),
+    )
+    .with("plan", id.as_str())
+    .with("next", "cpd plan outline --file <outline.json>")
+}
+
+/// `outline_incomplete`: a live PR with a draft Job has no `done_when` (`details.prs`, in key order).
+pub(super) fn outline_incomplete(
+    id: &PlanId,
+    outline: &Outline,
+    prs: &[PrRow],
+    jobs: &[Job],
+) -> Option<CpdError> {
+    let mut without: Vec<&str> = prs
         .iter()
         .filter(|p| {
             p.status != "cancelled"
-                && s.jobs
+                && jobs
                     .iter()
                     .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
         })
@@ -391,15 +404,17 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
         .filter(|key| !outline.done_when.contains_key(*key))
         .collect();
     if without.is_empty() {
-        return Ok(());
+        return None;
     }
     without.sort();
-    Err(CpdError::new(
-        ErrorCode::OutlineIncomplete,
-        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+    Some(
+        CpdError::new(
+            ErrorCode::OutlineIncomplete,
+            format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+        )
+        .with("plan", id.as_str())
+        .with("prs", without),
     )
-    .with("plan", id.as_str())
-    .with("prs", without))
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
@@ -419,12 +434,21 @@ pub(super) fn check_drafts_complete(
     jobs: &[Job],
 ) -> Result<(), CpdError> {
     let waiting = parked::waiting_set(conn, id, jobs)?;
+    drafts_incomplete(id, jobs, &waiting).map_or(Ok(()), Err)
+}
+
+/// The pure part of [`check_drafts_complete`]: `waiting` Jobs are exempt.
+pub(super) fn drafts_incomplete(
+    id: &PlanId,
+    jobs: &[Job],
+    waiting: &BTreeSet<String>,
+) -> Option<CpdError> {
     let mut stubs: Vec<&Job> = jobs
         .iter()
         .filter(|j| j.is_draft() && !waiting.contains(j.key.as_str()) && !j.missing().is_empty())
         .collect();
     if stubs.is_empty() {
-        return Ok(());
+        return None;
     }
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
     let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
@@ -432,15 +456,17 @@ pub(super) fn check_drafts_complete(
         .iter()
         .map(|j| json!({"key": j.key, "missing": j.missing()}))
         .collect();
-    Err(CpdError::new(
-        ErrorCode::DraftIncomplete,
-        format!(
-            "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
-            keys.join(", ")
-        ),
+    Some(
+        CpdError::new(
+            ErrorCode::DraftIncomplete,
+            format!(
+                "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
+                keys.join(", ")
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("jobs", listed),
     )
-    .with("plan", id.as_str())
-    .with("jobs", listed))
 }
 
 /// `plan decide` (§4.7). In a phase after `plan`, a current approval also
