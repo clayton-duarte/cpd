@@ -326,15 +326,17 @@ fn a_base_merge_change_passes() {
 fn an_open_and_an_update_job_are_exempt() {
     // An `open` and an `update` Job store cpd's fixed Spec as `touches`: prose, which matches no path.
     let prose = "[\"The base is main: run git fetch origin main and merge it as the Context says.\"]";
-    let ahead = [("src/from_base.rs", "// from the base\n")];
+    // The Attempt's own commit changes a source file: outside the prose touches, and not brought by any base merge, so
+    // only the kind exemption can let it pass (the base-merge exemption is isolated in `a_base_merge_change_passes`).
+    let authored = [("src/authored.rs", "// authored\n")];
     for kind in ["open", "update"] {
-        let mut cpd_job = rig(Spec { kind, touches: prose, base_ahead: &ahead, brings_base: true, ..Spec::default() });
+        let mut cpd_job = rig(Spec { kind, touches: prose, changed: &authored, ..Spec::default() });
         assert!(cpd_job.submit().is_ok(), "{kind}: the touches check skips this kind");
         merged_ok(&mut cpd_job, kind);
     }
 
     // The control: a `work` Job with the same prose touches and the same diff is refused.
-    let mut work = rig(Spec { kind: "work", touches: prose, base_ahead: &ahead, brings_base: true, ..Spec::default() });
+    let mut work = rig(Spec { kind: "work", touches: prose, changed: &authored, ..Spec::default() });
     refused(work.submit(), ErrorCode::TouchesViolation);
 }
 

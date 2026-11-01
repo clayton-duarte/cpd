@@ -142,7 +142,6 @@ The Lead receives the summary, not the artefact: put the answer first. You may r
 {% for item in touches %}
 - `{{ item }}`
 {% endfor %}
-
 {% if generated %}
 ### Generated paths (may change without listing)
 

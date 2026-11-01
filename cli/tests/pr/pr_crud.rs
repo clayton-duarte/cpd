@@ -120,7 +120,7 @@ impl Crud {
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                cancel_reason, cancel_requested_at, created_txn, created_at)
-             VALUES ('pay-1', '{pr}', '{key}', '{kind}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, iif('{status}' IN ('draft', 'cancelled'), NULL, printf('%064d', 1)),
+             VALUES ('pay-1', '{pr}', '{key}', '{kind}', 'Job {key}', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', '{status}', 0, iif('{status}' IN ('draft', 'cancelled'), NULL, printf('%064d', 1)),
                      iif('{status}' = 'cancelled', 'x', NULL), iif('{status}' = 'cancelled', 't', NULL), cpd_txn(), 't');"
         ));
     }

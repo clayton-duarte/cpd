@@ -68,7 +68,7 @@ fn fixture(policy: &str) -> Fx {
     let made = create_attempt_worktree(&repo, &lead, &plan(), &AttemptId::parse(ATTEMPT).unwrap(), &setup).unwrap();
     env.sql(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-           VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, 'open', '{}', cpd_txn(), 't');
+           VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 1, 'open', '{}', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
            VALUES ('pay', '{ATTEMPT}', 'open-repo', 1, 'S2', 'ladder', 'running', '{}', '{}', '{}', 't');",
         "f".repeat(64),

@@ -89,7 +89,7 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
+                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', ?4, 0, ?1,
                          iif(?4 = 'merged', ?2, NULL), iif(?4 = 'cancelled', 'not needed', NULL), iif(?4 = 'cancelled', 't', NULL), ?3, 't')",
                 params!["f".repeat(64), merged_sha, tx.id(), job],
             )?;
@@ -238,7 +238,7 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
-                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?3, 0, ?1,
+                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', ?3, 0, ?1,
                          iif(?3 = 'merged', ?2, NULL), ?4, 't')",
                 params!["f".repeat(64), sha, job, tx.id()],
             )?;
@@ -360,7 +360,7 @@ fn pr_open_adds_the_opener_when_the_pr_has_none() {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, fingerprint, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'up-repo', 'Bring the pull request up to date', 'S1', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', ?1, ?2, 't')",
+                 VALUES ('pay', 'repo', 'up-repo', 'Bring the pull request up to date', 'S1', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'queued', 1, 'update', ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             Ok(())
@@ -421,7 +421,7 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', 'ui', 'UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, ?1, ?2, 't')",
+                     VALUES ('pay', 'repo', 'ui', 'UI', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'queued', 0, ?1, ?2, 't')",
                     params!["f".repeat(64), tx.id()],
                 )?;
                 Ok(())
@@ -974,7 +974,7 @@ fn orphaned_merge(fx: &Poll) {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
-                 VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                 VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(
@@ -1023,7 +1023,7 @@ fn unrecorded_merge(fx: &Poll) -> (PathBuf, String) {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                 VALUES ('pay', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(
@@ -1491,7 +1491,7 @@ impl Poll {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
-                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', iif(?1 = 'draft', NULL, ?2),
+                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', ?1, 1, 'open', iif(?1 = 'draft', NULL, ?2),
                              iif(?1 = 'merged', 'abc', NULL), iif(?1 = 'failed', 'crashed', NULL),
                              iif(?1 = 'cancelled', 'start over', NULL), iif(?1 = 'cancelled', 't', NULL), ?3, 't')",
                     params![status, "f".repeat(64), tx.id()],
@@ -1818,7 +1818,7 @@ fn poll_stacked_pr(fx: &Poll) {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
-                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                 params!["f".repeat(64), merged, tx.id()],
             )?;
             Ok(())
@@ -2687,7 +2687,7 @@ fn kept_attempt(fx: &Poll) -> (PathBuf, String) {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, ?1, 'no', 't', ?2, 't')",
+                 VALUES ('pay', 'repo', 'b', 'B', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'cancelled', 0, ?1, 'no', 't', ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(
@@ -3861,7 +3861,7 @@ pub(crate) fn added(phase: &str) -> Added {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                 params!["f".repeat(64), merged_sha, tx.id()],
             )?;
             Ok(())
@@ -4066,7 +4066,7 @@ impl Poll {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
+                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
                     params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
                 )?;
                 tx.execute(

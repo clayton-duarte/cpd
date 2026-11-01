@@ -113,7 +113,7 @@ pub(super) fn fixture(env: &TestEnv, sql: &str) {
 pub(super) fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
     let mut sql = format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"**\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
     );
     for need in needs {
         sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -357,7 +357,7 @@ fn add_draft(live: &Live, pr: &str, key: &str) {
         &live.fx.env,
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"**\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ),
     );
 }

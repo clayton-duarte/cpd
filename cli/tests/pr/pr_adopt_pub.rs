@@ -106,7 +106,7 @@ fn fx(status: &str) -> Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, merged_sha, created_txn, created_at)
-                     VALUES ('pay', 'web', 'api', 'The API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                     VALUES ('pay', 'web', 'api', 'The API', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                     params!["f".repeat(64), merged, tx.id()],
                 )?;
                 Ok(())
@@ -202,7 +202,7 @@ fn submitted_open_job(fx: &Fx) -> AttemptId {
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, fingerprint, created_txn, created_at)
-                 VALUES ('pay', 'web', 'open-web', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, 'open', ?1, ?2, 't')",
+                 VALUES ('pay', 'web', 'open-web', 'Open the pull request', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 1, 'open', ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(

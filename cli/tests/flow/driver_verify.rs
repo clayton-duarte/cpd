@@ -29,7 +29,7 @@ fn a_verify_job_runs_and_merges_like_a_docs_job() {
 BEGIN SELECT RAISE(ABORT, 'pr_locked'); END;"
     ));
     let spec = live.fx.env.root().join("verify-spec.json");
-    fs::write(&spec, r#"{"goal": "Check it end to end.", "context": "The PR is built.", "touches": ["e2e/"], "acceptance": ["e2e passes"], "out_of_scope": []}"#).unwrap();
+    fs::write(&spec, r#"{"goal": "Check it end to end.", "context": "The PR is built.", "touches": ["e2e.txt"], "acceptance": ["e2e passes"], "out_of_scope": []}"#).unwrap();
     let added = live
         .fx
         .cpd(&["job", "add", "e2e", "--title", "E2E", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--kind", "verify", "--needs", "build", "--pr", "repo", "--plan", PLAN])

@@ -617,6 +617,22 @@
       "--reason"
     ]
   },
+  "job approve-touches": {
+    "flags": {
+      "--help": false,
+      "--path": true,
+      "--plan": true,
+      "--reason": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--path",
+      "--reason"
+    ]
+  },
   "job cancel": {
     "flags": {
       "--help": false,

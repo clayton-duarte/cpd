@@ -87,7 +87,10 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                         .replace(" UNION ALL SELECT 'skipped_n', NEW.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
                         .replace(", 'summary', OLD.summary", "").replace(", 'summary', NEW.summary", "")
                         .replace(" UNION ALL SELECT 'summary', OLD.summary WHERE OLD.summary IS NOT NEW.summary", "")
-                        .replace(" UNION ALL SELECT 'summary', NEW.summary WHERE OLD.summary IS NOT NEW.summary", ""))
+                        .replace(" UNION ALL SELECT 'summary', NEW.summary WHERE OLD.summary IS NOT NEW.summary", "")
+                        .replace(", 'touches_approved', OLD.touches_approved", "").replace(", 'touches_approved', NEW.touches_approved", "")
+                        .replace(" UNION ALL SELECT 'touches_approved', OLD.touches_approved WHERE OLD.touches_approved IS NOT NEW.touches_approved", "")
+                        .replace(" UNION ALL SELECT 'touches_approved', NEW.touches_approved WHERE OLD.touches_approved IS NOT NEW.touches_approved", ""))
                 })
                 .collect())
         })
@@ -145,6 +148,8 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
                 assert_eq!(row.remove("skipped_n"), Some(Value::Null));
                 // `summary` is the column of `explore-kinds`, which sorts after this migration: null in every row.
                 assert_eq!(row.remove("summary"), Some(Value::Null));
+                // `touches_approved` is the column of `job-touches-approved`, later still: null in every row.
+                assert_eq!(row.remove("touches_approved"), Some(Value::Null));
             }
             // `runner` and `worker_pid` are the columns of `worker-runner`, which sorts after this migration: `pi` and null.
             if let Some(row) = row.as_object_mut().filter(|_| *table == "attempts") {

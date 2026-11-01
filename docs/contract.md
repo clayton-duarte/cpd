@@ -1637,6 +1637,7 @@ CREATE TABLE jobs (
   resources           TEXT CHECK (resources IS NULL OR (json_valid(resources) AND json_type(resources) = 'array' AND json_array_length(resources) >= 1)),  -- the exclusive resources the Job takes (Spec, optional; §2.2); guarded by jobs_locked, in no fingerprint; added by the migration job-resources
   skipped_n           INTEGER CHECK (skipped_n IS NULL OR skipped_n >= 1),  -- E3's skip order (§3.7): set the first time E3 skips a Ready Job for want of a pool, cleared when it starts; NOT Locked (E3 writes it after the lock); added by the migration job-tenancy
   summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),  -- an explore Job's bounded summary (§2.2 "Explore Jobs"); NOT NULL exactly when an explore Job is merged; added by the migration explore-kinds
+  touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),  -- the paths the Lead approved a Job to change beyond its Spec `touches` (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-touches-approved
   UNIQUE (plan, key),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),

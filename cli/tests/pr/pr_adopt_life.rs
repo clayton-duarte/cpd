@@ -159,7 +159,7 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, kind, created_txn, created_at)
-                     VALUES ('pay', 'web', 'm', 'M', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, ?3, 't')",
+                     VALUES ('pay', 'web', 'm', 'M', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, ?3, 't')",
                     params!["f".repeat(64), kind, tx.id()],
                 )?;
                 tx.execute(

@@ -156,13 +156,13 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
     let mut jobs = format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-         VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't', '{kind}', {tests}, {test_files});"
+         VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't', '{kind}', {tests}, {test_files});"
     );
     if kind == "impl" {
         jobs.push_str(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, created_at, kind, tests, test_files, merged_sha)
-               VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+               VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                        cpd_txn(), 't', 'test', '[\"t::one\"]', '[\"tests/\"]', 'c0ffee');
              INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 't');",
         );
