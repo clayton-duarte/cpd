@@ -287,7 +287,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
-        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "phase": "grounding", "lead_session": session, "prs": []})
+        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "phase": "grounding", "lead_session": session, "workflows": []})
     );
     assert_eq!(
         (
@@ -1347,7 +1347,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         repo.canonicalize().unwrap().display().to_string()
     );
     assert_eq!(
-        (&pay["workflows"][0]["key"], &pay["workflows"][0]["pr"]),
+        (&pay["workflows"][0]["key"], &pay["workflows"][0]["base_workflow"]),
         (&json!("pay"), &Value::Null)
     );
     let ids = |args: &[&str]| -> Vec<String> {
@@ -1383,7 +1383,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     );
     let pr = &out["workflows"][0];
     assert_eq!(
-        (&pr["lead_worktree"], &pr["pr"]),
+        (&pr["lead_worktree"], &pr["base_workflow"]),
         (&Value::Null, &Value::Null)
     );
     assert_eq!(pr["pull_request"], Value::Null);
@@ -1649,7 +1649,7 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
         "{old}"
     );
     assert!(old.contains("Status: — · Kind: `open`"), "{old}");
-    assert!(old.contains("Added by cpd when the PR starts"), "{old}");
+    assert!(old.contains("Added by cpd when the Workflow starts"), "{old}");
 }
 
 // ---------- plan review, plan decide ----------
@@ -2399,8 +2399,8 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
-               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
-                        "base_sha": head, "reused": false, "pushed": false, "base_pr": null}],
+               "workflows": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
+                        "base_sha": head, "reused": false, "pushed": false, "base_workflow": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
     assert_eq!(
@@ -2449,12 +2449,12 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let phase = inproc::events(&fx, "plan-phase").last().unwrap().clone();
     assert_eq!(
         phase["data"],
-        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "prs": ["pay"]})
+        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "workflows": ["pay"]})
     );
-    let started = inproc::events(&fx, "pr-started");
+    let started = inproc::events(&fx, "workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
-        (&started[0]["data"]["pr"], &started[0]["data"]["by"]),
+        (&started[0]["data"]["workflow"], &started[0]["data"]["by"]),
         (&json!("pay"), &json!("lock"))
     );
 
@@ -2496,9 +2496,9 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
     assert_eq!(
         (
-            &out["prs"][0]["base_sha"],
-            &out["prs"][0]["pushed"],
-            &out["prs"][0]["reused"]
+            &out["workflows"][0]["base_sha"],
+            &out["workflows"][0]["pushed"],
+            &out["workflows"][0]["reused"]
         ),
         (&json!(head), &json!(true), &json!(false))
     );
@@ -2539,9 +2539,9 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
         .join("pay.pay.pay");
     assert_eq!(
         (
-            &out["prs"][0]["base_sha"],
-            &out["prs"][0]["reused"],
-            &out["prs"][0]["pushed"]
+            &out["workflows"][0]["base_sha"],
+            &out["workflows"][0]["reused"],
+            &out["workflows"][0]["pushed"]
         ),
         (&json!(remote_tip), &json!(true), &json!(false))
     );
@@ -2597,7 +2597,7 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
     );
 
     assert_eq!(
-        (&error["details"]["branch"], &error["details"]["pr"]),
+        (&error["details"]["branch"], &error["details"]["workflow"]),
         (&json!("pay/pay"), &json!("pay"))
     );
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
@@ -2622,7 +2622,7 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!(
-        (&out["prs"][0]["reused"], &out["prs"][0]["pushed"]),
+        (&out["workflows"][0]["reused"], &out["workflows"][0]["pushed"]),
         (&json!(true), &json!(false))
     );
     assert_eq!(
@@ -2806,7 +2806,7 @@ fn lock_refusals_change_nothing() {
             .to_string()
     );
     assert_eq!(
-        (&error["details"]["pr"], &error["details"]["step"]),
+        (&error["details"]["workflow"], &error["details"]["step"]),
         (&json!("pay"), &json!("pre-start"))
     );
     assert!(!path.exists());

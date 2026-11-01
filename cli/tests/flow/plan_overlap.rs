@@ -106,7 +106,7 @@ const NONE: &str = "No other active Plan touches these files.";
 
 /// The table of `## Overlaps` up to its rows: one row per this Job, other Plan and other PR.
 const HEADER: &str =
-    "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
+    "| Job | Other Plan | Workflow | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
 
 #[test]
 fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {

@@ -117,7 +117,7 @@ fn the_review_summary_and_plan_md_carry_the_warning() {
         "{summary}"
     );
     let plan_md = std::fs::read_to_string(&plan_md).unwrap();
-    assert!(plan_md.contains("\n## Lint\n\n| Rule | PR | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n| `parallel_write_overlap` | `api` | `a` | `b` | `src/a.rs` | a and b have no dependency path"), "{plan_md}");
+    assert!(plan_md.contains("\n## Lint\n\n| Rule | Workflow | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n| `parallel_write_overlap` | `api` | `a` | `b` | `src/a.rs` | a and b have no dependency path"), "{plan_md}");
 
     drop(fx);
     let fx = base();

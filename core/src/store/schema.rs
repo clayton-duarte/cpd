@@ -566,7 +566,7 @@ fn delete_owner(table: &str) -> Option<String> {
     };
     Some(match table {
         "workflows" | "pr_posts" | "job_pools" | "workflow_needs" | "plan_reviews" | "jobs"
-        | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        | "dependencies" | "attempts" | "escalations" | "job_addenda" => plan_deleted("OLD.plan"),
         "context_records" | "record_retirements" | "record_curations" => {
             context_deleted("OLD.context")
         }

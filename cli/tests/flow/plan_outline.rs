@@ -668,7 +668,7 @@ fn a_review_with_a_pr_that_has_a_draft_and_no_done_when_is_refused_and_writes_no
         "outline_incomplete",
         3,
     );
-    assert_eq!(error["details"]["prs"], json!(["ui"]));
+    assert_eq!(error["details"]["workflows"], json!(["ui"]));
     assert_eq!(state(&fx), before);
 
     // Every PR with a draft covered: the review goes through. `idle` is ended first: a live PR with no draft Job
@@ -990,7 +990,7 @@ Overlaps: none
 
 Lint: none
 
-Later: later-one, PR next
+Later: later-one, Workflow next
 
 Full plan ({})
 ",

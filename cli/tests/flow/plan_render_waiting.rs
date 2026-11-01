@@ -171,5 +171,5 @@ fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
         .find(|p| p["key"] == "alpha")
         .unwrap_or_else(|| panic!("{show}"));
     assert_eq!(alpha["needs"], serde_json::json!([]), "{show}");
-    assert_eq!(alpha["base_pr"], "pay/zeta", "{show}");
+    assert_eq!(alpha["base_workflow"], "pay/zeta", "{show}");
 }

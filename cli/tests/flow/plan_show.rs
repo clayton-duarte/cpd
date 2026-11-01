@@ -194,7 +194,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     assert_eq!(prs.len(), 1);
     assert_eq!(
         prs[0],
-        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "closed_unmerged": false,
+        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_workflow": null, "needs": [], "status": "dispatch", "closed_unmerged": false,
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null, "shape": "free",
