@@ -85,37 +85,37 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #1c1a20;
+  --foreground: #d8d2cc;
+  --card: #24222a;
+  --card-foreground: #d8d2cc;
+  --popover: #24222a;
+  --popover-foreground: #d8d2cc;
+  --primary: #7aa2ce;
+  --primary-foreground: #1c1a20;
+  --secondary: #2a2730;
+  --secondary-foreground: #d8d2cc;
+  --muted: #2a2730;
+  --muted-foreground: #aba3af;
+  --accent: #2a2730;
+  --accent-foreground: #d8d2cc;
+  --destructive: #e17f6e;
+  --border: #5a504a;
+  --input: #5a504a;
+  --ring: #7aa2ce;
+  --chart-1: #7aa2ce;
+  --chart-2: #8da96e;
+  --chart-3: #c29653;
+  --chart-4: #ca88a3;
+  --chart-5: #67ada7;
+  --sidebar: #1c1a20;
+  --sidebar-foreground: #d8d2cc;
+  --sidebar-primary: #7aa2ce;
+  --sidebar-primary-foreground: #1c1a20;
+  --sidebar-accent: #2a2730;
+  --sidebar-accent-foreground: #d8d2cc;
+  --sidebar-border: #5a504a;
+  --sidebar-ring: #7aa2ce;
 }
 
 @layer base {
@@ -135,5 +135,9 @@
   }
   .dark {
     color-scheme: dark;
+  }
+  .dark ::selection {
+    background: #5a504a;
+    color: #d8d2cc;
   }
 }
