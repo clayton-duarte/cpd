@@ -277,7 +277,11 @@ impl Live {
         let launch = self.fx.take_launch(self.fx.fakes.spawn.launches().len() - 1);
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         let lock = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap());
-        let _fd3 = self.fx.hand_over(fs::File::open(lock).unwrap());
+        // The starter holds the driver lock (`flock`) and hands it to the driver as fd 3 (§3.4): take it here, or an engine tick
+        // run while this driver lives (E2's `lock::probe`) sees a free lock and ends the Attempt `crashed` for a dead driver.
+        let lock_file = fs::OpenOptions::new().read(true).write(true).open(&lock).unwrap();
+        assert!(cpd_core::lock::try_lock(&lock_file).unwrap(), "the driver lock of {id} is free");
+        let _fd3 = self.fx.hand_over(lock_file);
         let ran = self.fx.run_launch_with(&launch, |_, nap| hook(self, &id, nap));
         assert_eq!(ran.exit, 0, "{}", ran.stdout);
         (id, ran)

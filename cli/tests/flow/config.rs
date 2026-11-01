@@ -73,6 +73,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "fork_quiet_seconds": 5,
                 "distill_minutes": 15,
                 "stall_seconds": 1200,
+                "stall_minutes": 15,
                 "explore_minutes": 20,
                 "pi_stop_seconds": 10,
                 "sleep_seconds": 3600,
@@ -233,6 +234,7 @@ store_busy_ms = 1
 fork_quiet_seconds = 1
 distill_minutes = 1
 stall_seconds = 0
+stall_minutes = 1
 pi_stop_seconds = 1
 sleep_seconds = 1
 archive_sleep_seconds = 1

@@ -731,6 +731,17 @@
     },
     "required": []
   },
+  "metrics": {
+    "flags": {
+      "--format": true,
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "models refresh": {
     "flags": {
       "--help": false
@@ -1512,6 +1523,16 @@
     "positionals": {
       "max": 0,
       "min": 0
+    },
+    "required": []
+  },
+  "session tail": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
     },
     "required": []
   },

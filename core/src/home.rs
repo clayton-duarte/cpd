@@ -294,6 +294,12 @@ impl CpdHome {
         self.plan_dir(plan).join("attempts").join(format!("{attempt}.report.json"))
     }
 
+    /// `run/<plan>/durable/<attempt>.sqlite`: a `durable` Worker's transcript, appended by its host every turn
+    /// (contract §6.12 `storePath`). The driver watches it for the stall rule (§3.4 A4, hs-d798).
+    pub fn durable_store(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.plan_dir(plan).join("durable").join(format!("{attempt}.sqlite"))
+    }
+
     /// `run/<plan>/logs/attempt-<attempt>.log`: the Attempt driver's stderr.
     pub fn driver_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("attempt-{attempt}.log"))
@@ -440,6 +446,7 @@ mod tests {
         assert_eq!(h.tmux_restart_pid(), p("/h/.cpd/run/tmux-restart.pid"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
+        assert_eq!(h.durable_store(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/durable/api-schema-a2.sqlite"));
         assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
         assert_eq!(h.review_diff(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.diff"));
         assert_eq!(

@@ -117,6 +117,8 @@ pub struct Timeouts {
     pub distill_minutes: u32,
     /// A Worker's tool call idle this long has its processes killed (§3.4 A4); 0 = off.
     pub stall_seconds: u32,
+    /// A `durable` Attempt whose transcript has not grown this long raises the stall signal (§3.4 A4, hs-d798).
+    pub stall_minutes: u32,
     /// The grace pi gets to stop after `SIGTERM` before `SIGKILL` (§6.7).
     pub pi_stop_seconds: u32,
     /// A finished Lead or Manager is put to sleep after this (§3.7 E13).
@@ -318,6 +320,7 @@ impl Config {
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
             distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
             stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
+            stall_minutes: positive(&mut r, "timeouts.stall_minutes", 15)?,
             pi_stop_seconds: positive(&mut r, "timeouts.pi_stop_seconds", 10)?,
             sleep_seconds: positive(&mut r, "timeouts.sleep_seconds", 3600)?,
             archive_sleep_seconds: positive(&mut r, "timeouts.archive_sleep_seconds", 86400)?,

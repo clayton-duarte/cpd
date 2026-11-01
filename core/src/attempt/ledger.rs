@@ -443,8 +443,22 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
     }
+    // hs-d798: the same transaction that wrote `attempts.metrics` appends the `attempt-ended` Event, whose `data`
+    // is the metrics blob: the ten keys copied from it, or all ten null when there are none.
     let tier = attempt.tier.to_string();
     let show = format!("cpd job show {job} --plan {plan}");
+    let ended = format!(
+        "Attempt {id} of Job {job} ended ({}, {}). Next: {show}",
+        end.outcome(),
+        end.cause()
+    );
+    events::append(
+        tx,
+        NewEvent::attempt_ended(ended, metrics)
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
             // hs-d514: the merge that leaves a draft and no queued or running Job but `open` and `update` Jobs turns the Lead. An `open` Job's own merge never turns it.

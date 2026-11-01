@@ -3,12 +3,19 @@
 //! The expected numbers are what cpd 1 computes for the same files:
 //! `sessionMetrics(path)` of `src/metrics/session.ts` run under node, on
 //! `PLAIN` itself and, for the fork, on `FORK`'s header and the entries after it.
+//!
+//! Also: the `cpd metrics` command (hs-d798, commands.md §14.7), a read-only aggregate
+//! of the machine's Ledger.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+use crate::common::fx::Fx;
+use crate::common::Run;
 
 use cpd_core::error::ErrorCode;
 use cpd_core::metrics::{self, Metrics};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// A Worker's session: a model, a thinking level, an entry of a kind metrics skip, a model
 /// change, two assistant messages.
@@ -139,4 +146,205 @@ fn every_complete_line_must_be_a_session_entry() {
     assert_eq!(refused_at(&format!("{header}\n{no_usage}\n")), 2, "an assistant message needs usage");
     let no_model = r#"{"type":"model_change","timestamp":"2026-01-01T00:00:01.000Z"}"#;
     assert_eq!(refused_at(&format!("{header}\n{USER}\n{no_model}\n")), 3);
+}
+
+// ---------- cpd metrics (commands.md §14.7, hs-d798) ----------
+
+/// The metrics blob of an `attempt-ended` Event and its `attempts.metrics` column.
+fn attempt_metrics(cost_usd: f64, duration_s: f64, model: Option<&str>) -> String {
+    let model = model.map_or("null".to_owned(), |m| format!("\"{m}\""));
+    format!(
+        r#"{{"turns": 3, "tokens_in": 900, "tokens_out": 400, "cache_read": 2000, "cache_write": 500,
+             "cost_usd": {cost_usd}, "duration_s": {duration_s}, "model": {model}, "stop_reason": "stop",
+             "thinking_level": "high"}}"#
+    )
+}
+
+/// A fixture store: Context `ctx`, Plan `pl`, PR `repo` merged, Job `api` merged, Attempt
+/// `api-a1` ended `merged` with its `attempts.metrics` blob and its `attempt-ended` Event.
+fn fixture_metrics() -> Fx {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    env.write_config("version = 1\nmachine = \"m1\"\n");
+    env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pl', 'ctx', 'Pl', 'done', 'lead1', 't', 't', 't');
+         INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+           VALUES (1, 'acme/pl', 1, 'https://github.com/acme/pl/1', 'Pl #1', 0, 'merged', 'approved', 'passed', 't', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, merged_at,
+                          pr_number, pr_url, pr_opened_at, pull_request)
+           VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'merged', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't', 't', 't',
+                   1, 'https://github.com/acme/pl/1', 't', 1);
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, merged_sha, created_txn, created_at, kind)
+           VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'merged-sha-test', cpd_txn(), 't', 'work');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,
+                               base_sha, merged_sha, started_at, ended_at, metrics)
+           VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'cpd/pl--api-a1', '/repos/pl--api-a1',
+                   '0123456789abcdef0123456789abcdef01234567', '0123456789abcdef0123456789abcdef01234567', 't', 't',
+                   '{\"turns\": 3, \"tokens_in\": 900, \"tokens_out\": 400, \"cache_read\": 2000, \"cache_write\": 500, \"cost_usd\": 1.234, \"duration_s\": 62.5, \"model\": \"claude-sonnet-x\", \"stop_reason\": \"stop\", \"thinking_level\": \"high\"}');
+        ",
+    );
+    fx
+}
+
+/// A fixture store: Context `ctx`, Plan `pl`, PR `repo`, Job `api` `failed` with Attempt
+/// `api-a1` ended `failed` with a `gate_failed` cause.
+fn fixture_metrics_failed() -> Fx {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    env.write_config("version = 1\nmachine = \"m1\"\n");
+    env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pl', 'ctx', 'Pl', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at)
+           VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'dispatch', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at, kind)
+           VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't', 'work');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,
+                               base_sha, started_at, ended_at)
+           VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'failed', 'gate_failed', 'cpd/pl--api-a1', '/repos/pl--api-a1',
+                   '0123456789abcdef0123456789abcdef01234567', 't', 't');
+        ",
+    );
+    fx
+}
+
+#[test]
+fn cpd_metrics_aggregates_a_fixture_store() {
+    let fx = fixture_metrics();
+    let store = fx.env.cpd_home().join("cpd.db").display().to_string();
+    let run = fx.cpd(&["metrics"]);
+    let out = run.ok();
+    assert_eq!(
+        out,
+        json!({
+            "ok": true,
+            "store": store,
+            "per_tier": {
+                "S2": {
+                    "attempts": 1,
+                    "merged": 1,
+                    "failed_by_cause": {},
+                    "duration_s": { "avg": 62.5, "median": 62.5 },
+                    "cost_usd": { "avg": 1.234, "total": 1.234 }
+                }
+            },
+            "per_model": {
+                "claude-sonnet-x": {
+                    "attempts": 1,
+                    "merged": 1,
+                    "failed_by_cause": {},
+                    "duration_s": { "avg": 62.5, "median": 62.5 },
+                    "cost_usd": { "avg": 1.234, "total": 1.234 }
+                }
+            },
+            "retries": {},
+            "plans": { "pl": 1.234 },
+            "queue": { "job_added_to_attempt_started": { "avg": 0.0, "max": 0.0 }, "job_blocked_episodes": 0 }
+        })
+    );
+}
+
+/// The parsed Prometheus text exposition format: the families' `# HELP`/`# TYPE` and their series.
+#[derive(Default)]
+struct Prometheus {
+    help: BTreeMap<String, String>,
+    types: BTreeMap<String, String>,
+    /// family name -> the label set as written -> its value.
+    series: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
+/// Parses `body` enforcing the text format: `# HELP` and `# TYPE` before each family's first series, a known gauge
+/// type, and no duplicate series. Panics on a violation.
+fn parse_prometheus(body: &str) -> Prometheus {
+    let mut prom = Prometheus::default();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    for line in body.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# HELP ") {
+            let (name, text) = rest.split_once(' ').expect("a HELP line needs a name and text");
+            assert!(prom.help.insert(name.to_owned(), text.to_owned()).is_none(), "duplicate HELP for {name}");
+            assert!(prom.series.get(name).map_or(true, BTreeMap::is_empty), "HELP for {name} comes after its series");
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# TYPE ") {
+            let (name, kind) = rest.split_once(' ').expect("a TYPE line needs a name and kind");
+            assert_eq!(kind, "gauge", "{name} is not a gauge");
+            assert!(prom.types.insert(name.to_owned(), kind.to_owned()).is_none(), "duplicate TYPE for {name}");
+            continue;
+        }
+        assert!(!line.starts_with('#'), "an unknown comment line: {line}");
+        let (name, labels, value) = if let Some(open) = line.find('{') {
+            let close = line.rfind('}').expect("a series needs a closing brace");
+            (&line[..open], line[open + 1..close].to_owned(), line[close + 1..].trim())
+        } else {
+            let (name, value) = line.split_once(' ').expect("a series needs a name and a value");
+            (name, String::new(), value.trim())
+        };
+        assert!(prom.help.contains_key(name), "series {name} before its HELP");
+        assert!(prom.types.contains_key(name), "series {name} before its TYPE");
+        assert!(seen.insert((name.to_owned(), labels.clone())), "duplicate series {name}{{{labels}}}");
+        let value: f64 = value.parse().unwrap_or_else(|e| panic!("series {name} has value {value:?}: {e}"));
+        prom.series.entry(name.to_owned()).or_default().insert(labels, value);
+    }
+    prom
+}
+
+#[test]
+fn prometheus_output_parses() {
+    let fx = fixture_metrics();
+    let run = fx.cpd(&["metrics", "--format", "prometheus"]);
+    let out = run.ok();
+    assert_eq!(out["ok"], true);
+    let body = out["data"].as_str().unwrap();
+    let prom = parse_prometheus(body);
+
+    // Every family of the Spec is a gauge with its # HELP and # TYPE before its series.
+    for family in [
+        "cpd_attempts",
+        "cpd_attempts_merged",
+        "cpd_attempts_failed",
+        "cpd_attempt_duration_seconds",
+        "cpd_attempt_cost_usd_total",
+        "cpd_attempt_cost_usd_avg",
+        "cpd_model_attempts",
+        "cpd_model_cost_usd_total",
+        "cpd_attempt_retries",
+        "cpd_plan_cost_usd_per_merged_pr",
+        "cpd_queue_wait_seconds",
+        "cpd_job_blocked_episodes",
+    ] {
+        assert!(prom.help.contains_key(family), "no HELP for {family}");
+        assert_eq!(prom.types.get(family).map(String::as_str), Some("gauge"), "no TYPE gauge for {family}");
+    }
+
+    let series = |name: &str, labels: &str| {
+        *prom
+            .series
+            .get(name)
+            .and_then(|s| s.get(labels))
+            .unwrap_or_else(|| panic!("no series {name}{{{labels}}}"))
+    };
+    assert_eq!(series("cpd_attempts", "tier=\"S2\",model=\"claude-sonnet-x\""), 1.0);
+    assert_eq!(series("cpd_attempts_merged", "tier=\"S2\""), 1.0);
+    assert_eq!(series("cpd_attempt_duration_seconds", "tier=\"S2\",stat=\"avg\""), 62.5);
+    assert_eq!(series("cpd_attempt_duration_seconds", "tier=\"S2\",stat=\"median\""), 62.5);
+    assert_eq!(series("cpd_attempt_cost_usd_total", "tier=\"S2\""), 1.234);
+    assert_eq!(series("cpd_attempt_cost_usd_avg", "tier=\"S2\""), 1.234);
+    assert_eq!(series("cpd_model_attempts", "model=\"claude-sonnet-x\""), 1.0);
+    assert_eq!(series("cpd_model_cost_usd_total", "model=\"claude-sonnet-x\""), 1.234);
+    assert_eq!(series("cpd_plan_cost_usd_per_merged_pr", "plan=\"pl\""), 1.234);
+    assert_eq!(series("cpd_queue_wait_seconds", "phase=\"added_to_started\",stat=\"avg\""), 0.0);
+    assert_eq!(series("cpd_queue_wait_seconds", "phase=\"added_to_started\",stat=\"max\""), 0.0);
+    assert_eq!(series("cpd_job_blocked_episodes", ""), 0.0);
 }
