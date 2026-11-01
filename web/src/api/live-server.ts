@@ -28,6 +28,30 @@ export interface LiveSession {
   name?: string;
 }
 
+/** One Plan's Job counts as `cpd plan list` prints them (web/README.md "Where the numbers come from"). */
+export interface LivePlanCounts {
+  draft: number;
+  queued: number;
+  running: number;
+  merged: number;
+  failed: number;
+  cancelled: number;
+}
+
+/**
+ * One `cpd plan list` row the plans read answers (web/README.md "Context tree rows"): the Plan's
+ * key (`id`), its Context, its Lead Session and its Job counts. The rail draws a Plan row from it.
+ */
+export interface LivePlan {
+  id: string;
+  context: string;
+  title: string;
+  phase: string;
+  lead_session: string | null;
+  archived_at: string | null;
+  counts: LivePlanCounts;
+}
+
 /** Every external boundary is injected; the handler itself touches nothing real. */
 export interface LiveDeps {
   /** The lead and manager Sessions, from `cpd session list --role lead --role manager`. */
@@ -44,6 +68,8 @@ export interface LiveDeps {
   stat(id: string): Promise<number | undefined>;
   /** The open Inbox items, from `cpd inbox list`; the rail renders them unchanged (web/README.md "The live Inbox in the right rail"). Optional so the handler's other routes build without it. */
   inbox?(): Promise<readonly InboxItem[]>;
+  /** The Plans, from `cpd plan list`; the rail's Plan tree reads them (web/README.md "Where the numbers come from"). Optional so the handler's other routes build without it. */
+  plans?(): Promise<readonly LivePlan[]>;
 }
 
 /** Handles one request; resolves true when it matched a /__cpd/ route (the caller stops), false to pass through. */
@@ -281,6 +307,12 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     }
     if (path === "/__cpd/inbox" && method === "GET") {
       sendJson(res, 200, { ok: true, items: (await deps.inbox?.()) ?? [] });
+      return true;
+    }
+    if (path === "/__cpd/plans" && method === "GET") {
+      // The read is optional: an adapter with no plans wiring answers an empty list, so the
+      // rail falls back to its Session tree (web/README.md "The fallback").
+      sendJson(res, 200, { ok: true, plans: (await deps.plans?.()) ?? [] });
       return true;
     }
 

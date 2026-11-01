@@ -9,7 +9,7 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from "reac
 import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
-import type { LiveSession } from "../api/live-server";
+import type { LiveSession, LivePlan } from "../api/live-server";
 import type { InboxItem } from "../api/readmodel";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
@@ -104,10 +104,12 @@ export function ApprovalDialog({
  */
 function ContextColumn({
   sessions,
+  plans,
   selectedId,
   onSelectSession,
 }: {
   sessions: readonly LiveSession[];
+  plans?: readonly LivePlan[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }): ReactElement {
@@ -117,7 +119,12 @@ function ContextColumn({
         className="h-full min-h-0"
         style={{ "--sidebar-width": "100%" } as CSSProperties}
       >
-        <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
+        <AppSidebar
+          sessions={sessions}
+          plans={plans}
+          selectedId={selectedId}
+          onSelectSession={onSelectSession}
+        />
       </SidebarProvider>
     </div>
   );
@@ -134,12 +141,14 @@ export function App({ token, live }: AppProps): ReactElement {
   const contextPanel = usePanelRef();
   const inboxPanel = usePanelRef();
   const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [plans, setPlans] = useState<readonly LivePlan[] | undefined>(undefined);
   const [inbox, setInbox] = useState<readonly InboxItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
 
-  // Fetch the lead/manager Sessions and the live Inbox once; the cancelled flag keeps a
-  // resolution from setting state after unmount (web/README.md "The Context tree", "The live
-  // Inbox in the right rail"). Both stay empty when the read fails.
+  // Fetch the lead/manager Sessions, the live Inbox and the Plans once; the cancelled flag keeps
+  // a resolution from setting state after unmount (web/README.md "The Context tree", "The live
+  // Inbox in the right rail"). Every read stays empty when it fails, and a Plans read the API does
+  // not offer leaves `plans` undefined, so the rail keeps its Session tree ("The fallback").
   useEffect(() => {
     if (live === undefined) return;
     let cancelled = false;
@@ -154,6 +163,15 @@ export function App({ token, live }: AppProps): ReactElement {
       void inboxRead.then(
         (items) => {
           if (!cancelled) setInbox(items);
+        },
+        () => {},
+      );
+    }
+    const plansRead = live.plans?.();
+    if (plansRead !== undefined) {
+      void plansRead.then(
+        (list) => {
+          if (!cancelled) setPlans(list);
         },
         () => {},
       );
@@ -174,7 +192,12 @@ export function App({ token, live }: AppProps): ReactElement {
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-svh">
       <ResizablePanel defaultSize={CONTEXT_DEFAULT_WIDTH} panelRef={contextPanel}>
-        <ContextColumn sessions={sessions} selectedId={selectedId} onSelectSession={setSelectedId} />
+        <ContextColumn
+          sessions={sessions}
+          plans={plans}
+          selectedId={selectedId}
+          onSelectSession={setSelectedId}
+        />
       </ResizablePanel>
       <ResizableHandle
         disableDoubleClick

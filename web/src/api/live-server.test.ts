@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createLiveHandler, type LiveDeps, type LiveHandler, type LiveSession } from "./live-server";
+import { createLiveHandler, type LiveDeps, type LiveHandler, type LivePlan, type LiveSession } from "./live-server";
 import type { SnapshotFrame } from "../fold/fold";
 
 const TOKEN = "test-token";
@@ -30,6 +30,17 @@ const durableSession: LiveSession = {
   role: "manager",
   runner: "durable",
   title: "durable manager",
+};
+
+// One `cpd plan list` row: the plans read passes it through unchanged.
+const plan: LivePlan = {
+  id: "pay-4521",
+  context: "building-cpd",
+  title: "Retry failed payments",
+  phase: "dispatch",
+  lead_session: "596d007f-0000-0000-0000-000000000000",
+  archived_at: null,
+  counts: { draft: 1, queued: 2, running: 1, merged: 4, failed: 0, cancelled: 0 },
 };
 
 /** Reads the committed pi fixture beside this test. */
@@ -392,4 +403,49 @@ test("the send route runs cpd session send with the unblocks reason", async () =
   expect(res.status()).toBe(200);
   expect(JSON.parse(res.body())).toEqual({ ok: true });
   expect(sent).toEqual([[piSession.id, "please resume", "the user answered"]]);
+});
+
+// The plans read (web/README.md "Where the numbers come from"): a read-only GET /__cpd/plans on
+// the dev live adapter, the token like its siblings, answering { ok: true, plans: [...] }.
+
+test("GET /__cpd/plans answers the plans dependency's rows with the token", async () => {
+  const handler = createLiveHandler(deps({ plans: async () => [plan] }));
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  expect(JSON.parse(res.body())).toEqual({ ok: true, plans: [plan] });
+});
+
+test("GET /__cpd/plans is refused without the token", async () => {
+  const handler = createLiveHandler(deps({ plans: async () => [plan] }));
+
+  const missing = await call(handler, { method: "GET", url: "/__cpd/plans" });
+  expect(missing.matched).toBe(true);
+  expect(missing.res.status()).toBe(401);
+  expect(JSON.parse(missing.res.body())).toEqual({ ok: false, error: "missing or wrong token" });
+
+  // The refusal is the route's own, not a pass-through of an unknown /__cpd/ path: with the
+  // token the same request is a route the handler matches.
+  const wired = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(wired.matched).toBe(true);
+});
+
+test("GET /__cpd/plans answers an empty list without the plans dependency", async () => {
+  const handler = createLiveHandler(deps());
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  expect(JSON.parse(res.body())).toEqual({ ok: true, plans: [] });
 });
