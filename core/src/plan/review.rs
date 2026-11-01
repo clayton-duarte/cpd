@@ -389,43 +389,6 @@ pub fn close_reviews(
     Ok(closed)
 }
 
-/// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
-/// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
-fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
-    let Some(outline) = &s.plan.outline else {
-        return Err(CpdError::new(
-            ErrorCode::OutlineMissing,
-            format!(
-                "Plan {id} has no outline: write what was settled with the User, then ask again."
-            ),
-        )
-        .with("plan", id.as_str())
-        .with("next", "cpd plan outline --file <outline.json>"));
-    };
-    let mut without: Vec<&str> = s
-        .prs
-        .iter()
-        .filter(|p| {
-            p.status != "cancelled"
-                && s.jobs
-                    .iter()
-                    .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
-        })
-        .map(|p| p.key.as_str())
-        .filter(|key| !outline.done_when.contains_key(*key))
-        .collect();
-    if without.is_empty() {
-        return Ok(());
-    }
-    without.sort();
-    Err(CpdError::new(
-        ErrorCode::OutlineIncomplete,
-        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
-    )
-    .with("plan", id.as_str())
-    .with("prs", without))
-}
-
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
     CpdError::new(
         ErrorCode::NoDraftJobs,
