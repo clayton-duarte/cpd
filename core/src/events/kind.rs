@@ -257,8 +257,9 @@ mod tests {
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6) and 19 (`context pending`'s plan-level
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (`job-addendum`, pro-d294).
+    // The 18 in the name is the Job's fixed test name, not the protocol number.
     #[test]
-    fn the_protocol_is_20_with_the_job_addendum_kind() {
+    fn the_protocol_is_18_with_the_job_addendum_kind() {
         assert_eq!(PROTOCOL, 20);
     }
 
