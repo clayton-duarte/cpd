@@ -98,6 +98,41 @@ test("createLiveApi subscribe opens an EventSource and yields parsed snapshot fr
   expect(source.closed).toBe(true);
 });
 
+/** The paged transcript call, under either name an implementation may expose it. */
+interface PagedResult {
+  messages: readonly unknown[];
+  more: boolean;
+}
+
+test("history() asks the transcript route for the page above the oldest id it was given", async () => {
+  const calls: Call[] = [];
+  const messages = [{ id: "m5", role: "assistant", text: "five" }];
+  const api = createLiveApi({
+    token: "t0k",
+    fetch: jsonFetch({ ok: true, messages, more: true }, calls),
+    EventSource: FakeSource,
+  }) as unknown as {
+    transcript?: (id: string, page?: { limit?: number; before?: string }) => Promise<PagedResult>;
+    history?: (id: string, before?: string, limit?: number) => Promise<PagedResult>;
+  };
+
+  // One of the two methods the contract names for a page of older turns must exist.
+  const paged = api.transcript ?? api.history;
+  expect(typeof paged).toBe("function");
+
+  const page = api.transcript
+    ? await api.transcript("s1", { limit: 5, before: "m8" })
+    : await api.history!("s1", "m8", 5);
+
+  expect(page).toEqual({ messages, more: true });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.url).toContain("/__cpd/sessions/s1/transcript");
+  // `before` is the oldest id already held; `limit` is how many precede it are asked for.
+  expect(calls[0]!.url).toContain("before=m8");
+  expect(calls[0]!.url).toContain("limit=5");
+  expect(new Headers(calls[0]!.init?.headers).get("x-cpd-token")).toBe("t0k");
+});
+
 test("createLiveApi send posts the message to the send route", async () => {
   const calls: Call[] = [];
   const api = createLiveApi({
