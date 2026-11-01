@@ -124,7 +124,7 @@ fn old_store_migrates_with_history() {
             json!(["pay", "web", "/r", "main", "waiting", "pay/web"]),
         ]
     );
-    assert_eq!(rows(&mut store, "SELECT plan, pr, needs FROM workflow_needs"), vec![json!(["pay", "web", "api"])]);
+    assert_eq!(rows(&mut store, "SELECT plan, workflow, needs FROM workflow_needs"), vec![json!(["pay", "web", "api"])]);
 
     // The object columns are renamed, and the old ones are gone.
     assert!(columns(&mut store, "workflow_needs").contains(&"workflow".to_owned()));
@@ -166,8 +166,8 @@ fn old_store_migrates_with_history() {
     let indexes = named(&mut store, "index");
     assert!(indexes.contains(&"workflows_head_ref_live".to_owned()) && !indexes.contains(&"prs_head_ref_live".to_owned()), "{indexes:?}");
 
-    // The triggers still work: the renamed lock trigger refuses a Lead Branch move after the lock.
-    let moved = write(&mut store, "UPDATE workflows SET lead_branch = 'other/api' WHERE key = 'api'").unwrap_err();
+    // The triggers still work: the renamed shape trigger refuses the move.
+    let moved = write(&mut store, "UPDATE workflows SET shape = 'tdd' WHERE key = 'api'").unwrap_err();
     let message = moved.details()["sqlite_message"].as_str().unwrap_or_default().to_owned();
     assert!(message.contains("locked"), "the lock trigger fires: {moved:?}");
 
