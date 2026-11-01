@@ -7,6 +7,7 @@
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
 //! - [`cancel`]: `plan cancel`, which abandons a Plan;
+//! - [`shared`]: `is_shared`, the predicate for lockfile paths (contract §2.6);
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
@@ -42,6 +43,9 @@ mod render_all_jobs_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
+pub mod shared;
+#[cfg(test)]
+mod shared_tests;
 mod show;
 #[cfg(test)]
 mod sql_trace;
@@ -53,7 +57,7 @@ mod tier_advice_tests;
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, PrTitle, Text, Title};
-use crate::config::Tier;
+use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -127,6 +131,9 @@ pub struct NewArgs {
     /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
+    /// The new Lead's runner; default the config key `lead_runner`
+    #[arg(long, value_name = "pi|durable")]
+    runner: Option<WorkerRunner>,
 }
 
 /// Filters only: neither falls back to `CPD_PLAN`, so the TUI lists every Plan.

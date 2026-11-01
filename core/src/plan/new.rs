@@ -25,22 +25,24 @@ struct Created {
     name: String,
     cwd: String,
     tier: String,
+    runner: String,
 }
 
 fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     let Some(plan) = row::find(conn, id)? else {
         return Ok(None);
     };
-    let (name, cwd, tier) = conn.query_row(
-        "SELECT name, cwd, tier FROM sessions WHERE id = ?1",
+    let (name, cwd, tier, runner) = conn.query_row(
+        "SELECT name, cwd, tier, runner FROM sessions WHERE id = ?1",
         [plan.lead_session.as_str()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
     Ok(Some(Created {
         plan,
         name,
         cwd,
         tier,
+        runner,
     }))
 }
 
@@ -110,7 +112,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             && plan.plan.title == args.title.as_str()
             && plan.plan.jira == jira
             && plan.name == name
-            && args.tier.is_none_or(|t| t.to_string() == plan.tier);
+            && args.tier.is_none_or(|t| t.to_string() == plan.tier)
+            && args.runner.is_none_or(|r| r.as_str() == plan.runner);
         if !same {
             return Err(CpdError::new(
                 ErrorCode::PlanExists,
@@ -133,7 +136,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     }
     let cwd = caller_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
-    let lead_runner = env.config.lead_runner;
+    let lead_runner = args.runner.unwrap_or(env.config.lead_runner);
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();

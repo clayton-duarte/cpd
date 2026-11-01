@@ -6,6 +6,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { uiResponsePost } from "../api/actions";
+import type { LiveApi } from "../api/live";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
 import type {
@@ -17,6 +18,7 @@ import type {
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Chat, Inbox, Logs, Plan, Tree, type ChatFrame, type LogEntry } from "../views";
+import { LiveChat } from "../views/live-chat";
 
 /** The shell renders the current route and any held approval request. */
 export interface AppProps {
@@ -26,6 +28,11 @@ export interface AppProps {
   api?: CpdApi;
   /** The token every request carries (§4.2); absent when there is no socket. */
   token?: string;
+  /**
+   * The dev live adapter, built only when `main.tsx`'s `/__cpd/health` probe answers `ok`
+   * (web/README.md "The UI wiring"); absent otherwise, so the mock's Chat renders.
+   */
+  live?: LiveApi;
 }
 
 // The empty-but-valid read-model slices the shell renders before the real reads land; the
@@ -124,7 +131,7 @@ export function ApprovalDialog({
 }
 
 /** Renders the app shell with the held approval, if any. */
-export function App({ uiRequest, api, token }: AppProps): ReactElement {
+export function App({ uiRequest, api, token, live }: AppProps): ReactElement {
   const [dark, setDark] = useState(false);
 
   function toggleTheme(): void {
@@ -168,7 +175,16 @@ export function App({ uiRequest, api, token }: AppProps): ReactElement {
           <Route path="/plan" element={<Plan plan={emptyPlanShow} />} />
           <Route path="/inbox" element={<Inbox inbox={emptyInbox} />} />
           <Route path="/logs" element={<Logs events={emptyLog} />} />
-          <Route path="/chat" element={<Chat epoch="e" frames={emptyFrames} api={api} token={token} />} />
+          <Route
+            path="/chat"
+            element={
+              live !== undefined ? (
+                <LiveChat api={live} token={token} />
+              ) : (
+                <Chat epoch="e" frames={emptyFrames} api={api} token={token} />
+              )
+            }
+          />
         </Routes>
       </main>
       {uiRequest ? <ApprovalDialog request={uiRequest} api={api} token={token} /> : null}
