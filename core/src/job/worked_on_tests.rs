@@ -22,7 +22,7 @@ struct Fixture {
     store: Store,
 }
 
-/// Context `ctx`; Plans `pay` and `ops`, each with a Lead (`l-pay`, `l-ops`) in `lead_state`; PRs `p1`, `p2` of `pay` and `p1` of `ops`.
+/// Context `ctx`; Plans `pay` and `ops`, each with a Lead (`l-pay`, `l-ops`) in `lead_state`; Workflows `p1`, `p2` of `pay` and `p1` of `ops`.
 fn fixture(lead_state: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -156,7 +156,7 @@ fn worked_on_ignores_jobs_created_before_the_failure_other_prs_and_jobs_that_are
         f.job("pay", "p1", key, status);
     }
     assert!(!f.holds("a"));
-    // Control: a queued Job of its PR created after the failure does.
+    // Control: a queued Job of its Workflow created after the failure does.
     f.job("pay", "p1", "fix", "queued");
     assert!(f.holds("a"));
 }
@@ -212,7 +212,7 @@ fn a_failed_job_is_not_stuck_while_a_fix_job_of_its_pr_is_queued_or_running() {
     f.failed("pay", "p1", "a");
     assert_eq!(f.stuck().len(), 1, "no fix yet");
     f.job("pay", "p2", "other", "queued");
-    assert_eq!(f.stuck().len(), 1, "a Job of another PR does not help");
+    assert_eq!(f.stuck().len(), 1, "a Job of another Workflow does not help");
     f.job("pay", "p1", "fix", "queued");
     assert_eq!(f.stuck(), [], "a queued fix");
     f.set("pay", "fix", "running");

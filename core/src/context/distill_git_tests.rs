@@ -1,5 +1,5 @@
 //! `context distill`'s `git grep` of the docs check (contract §4.6 step 3): for each record of the batch and each
-//! repo of the Context's PRs, `git -C <repo> grep -l -w <id> -- docs '*.md'`, spawned through the
+//! repo of the Context's Workflows, `git -C <repo> grep -l -w <id> -- docs '*.md'`, spawned through the
 //! [`Runner`](crate::host::runner::Runner) (`distill::grep_hits_with`), never as a direct `Command`.
 //!
 //! Two kinds of test, none of which runs git or any process:

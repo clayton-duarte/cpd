@@ -17,7 +17,7 @@ struct Fixture {
     store: Store,
 }
 
-/// Plans `pay` (PRs `api`, `web`) and `ops` (PR `api`).
+/// Plans `pay` (Workflows `api`, `web`) and `ops` (Workflow `api`).
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -215,7 +215,7 @@ fn fix_retry_waits_while_another_job_of_the_pr_created_after_the_failure_is_queu
     assert_eq!(f.status("pay", "f"), "failed");
     assert!(f.retried().is_empty());
     f.set("pay", "other", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "nothing else is working on the PR");
+    assert_eq!(f.retry("pay", "j"), vec!["f"], "nothing else is working on the Workflow");
 }
 
 #[test]
@@ -264,7 +264,7 @@ fn fix_retry_ignores_other_prs_and_other_plans() {
     f.failed("ops", "api", "other-plan", "open");
     f.failed("pay", "api", "f", "update");
     f.job("pay", "api", "j", "work", "merged");
-    assert_eq!(f.retry("pay", "j"), vec!["f"], "only the Job of the fix's PR");
+    assert_eq!(f.retry("pay", "j"), vec!["f"], "only the Job of the fix's Workflow");
     assert_eq!(f.status("pay", "other-pr"), "failed");
     assert_eq!(f.status("ops", "other-plan"), "failed");
     assert_eq!(f.retried().len(), 1);

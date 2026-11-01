@@ -99,13 +99,13 @@ fn moved(at: &str, plan: &str, place: &str) -> String {
 }
 
 /// One Context and these Plans, each named by its Lead Session (the label), oldest first:
-/// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
-/// - `rel` ("cpd visual lead"): PR 7, open, failing checks, changes requested; the Lead parked;
-/// - `fresh` ("fresh lead"): PR 11, as `pr open` wrote its row (no review, no checks); the Lead parked;
-/// - `ship` ("v1"): in dispatch, no PR; the Lead in the chat slot;
-/// - `sketch` ("sketch lead"): no PR; the Lead has no pane (`none`);
-/// - `away` ("away lead"): PR 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
-/// - `never` ("never lead"): no PR; the Lead was never moved.
+/// - `old` ("cpd-ui"): done, its merged Workflow 3, every check passed, no review; the Lead in the chat slot;
+/// - `rel` ("cpd visual lead"): Workflow 7, open, failing checks, changes requested; the Lead parked;
+/// - `fresh` ("fresh lead"): Workflow 11, as `pr open` wrote its row (no review, no checks); the Lead parked;
+/// - `ship` ("v1"): in dispatch, no Workflow; the Lead in the chat slot;
+/// - `sketch` ("sketch lead"): no Workflow; the Lead has no pane (`none`);
+/// - `away` ("away lead"): Workflow 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
+/// - `never` ("never lead"): no Workflow; the Lead was never moved.
 fn populate(store: &mut Store) {
     let mut s = context("alpha");
     let plans: [(&str, &str, &str, Option<(i64, (&str, &str, &str))>, &str, Option<&str>); 7] = [
@@ -199,14 +199,14 @@ fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     let (got, _) = column(25);
     let expected = ["", " homeserver", " \u{F4BC} 23%  \u{EFC5} 41%", ""];
     assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
-    assert!(!got.iter().any(|r| r.contains("PRs") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
+    assert!(!got.iter().any(|r| r.contains("Workflows") || r.contains("acme/repo#")), "\n{}", got.join("\n"));
 }
 
 #[test]
 fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
     let (got, _) = column(25);
     let got = got.join("\n");
-    for hidden in ["v1", "sketch lead", "never lead", "no PR", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
+    for hidden in ["v1", "sketch lead", "never lead", "no Workflow", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
         assert!(!got.contains(hidden), "{hidden}:\n{got}");
     }
 }
@@ -337,7 +337,7 @@ fn the_pr_states_and_checks_are_listed_in_their_colours() {
     for (name, state) in palette::PR_LEGEND {
         assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
     }
-    let checks = find(&buf, "PR Checks").1;
+    let checks = find(&buf, "Workflow Checks").1;
     for (name, c) in palette::CHECKS_LEGEND {
         let (icon, m) = palette::checks(c);
         let (x, y) = find_after(&buf, checks, &format!(" {name}"));

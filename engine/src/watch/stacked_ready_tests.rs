@@ -1,4 +1,4 @@
-//! E8's `pr-ready` rule and stacked pull requests (contract §2.2, §3.7; pro-d118): a PR whose base is not the repo's
+//! E8's `pr-ready` rule and stacked pull requests (contract §2.2, §3.7; pro-d118): a Workflow whose base is not the repo's
 //! default branch is never ready; a NULL base or default branch is unknown, not ready. Rows are inserted with
 //! `base_ref` and `default_branch`, the columns of the `pr-base` migration.
 
@@ -32,7 +32,7 @@ fn closed_events(fx: &mut Fx) -> usize {
     fx.events("inbox-closed").len()
 }
 
-/// A stacked clean PR opens no item, owned by a Plan or not.
+/// A stacked clean Workflow opens no item, owned by a Plan or not.
 #[test]
 fn stacked_ready_inbox_opens_no_pr_ready_for_a_stacked_pr() {
     let mut fx = fx();
@@ -49,7 +49,7 @@ fn stacked_ready_inbox_opens_no_pr_ready_for_a_stacked_pr() {
     assert_eq!(fx.query::<i64>(PR_READY_OPEN), 0);
 }
 
-/// An open item closes at the next reconcile when the PR becomes stacked: one `inbox-closed` Event.
+/// An open item closes at the next reconcile when the Workflow becomes stacked: one `inbox-closed` Event.
 #[test]
 fn stacked_ready_inbox_closes_an_open_pr_ready_when_the_pr_becomes_stacked() {
     let mut fx = fx();

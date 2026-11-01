@@ -1,6 +1,6 @@
-//! Red tests: a merged or cancelled PR's box title draws no Lead dot and no red loader (docs/commands.md §13.2 "PR boxes",
+//! Red tests: a merged or cancelled Workflow's box title draws no Lead dot and no red loader (docs/commands.md §13.2 "Workflow boxes",
 //! §17 "The Lead dot rule"; decisions pro-d217, pro-d219). The open box of the same Plan still draws its dot. Which open
-//! box shows the dot, and its colour, is the next PR's and is not asserted here.
+//! box shows the dot, and its colour, is the next Workflow's and is not asserted here.
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -14,7 +14,7 @@ use crate::read::{self, Dot, PlanBoxes, WorkflowNode};
 const AT: &str = "'2026-01-02T00:00:00.000Z'";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-/// One Plan `pay` with a working Lead and PRs `old` (merged), `new` (open) and `gone` (cancelled); a failed Job in `new`
+/// One Plan `pay` with a working Lead and Workflows `old` (merged), `new` (open) and `gone` (cancelled); a failed Job in `new`
 /// when `failed`. In-process store; no tmux, git or gh.
 fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
     let dir = tempfile::tempdir().unwrap();

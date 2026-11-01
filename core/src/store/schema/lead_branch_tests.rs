@@ -69,11 +69,11 @@ fn prs_refuses_a_lead_branch_that_is_not_derived_from_plan_and_key() {
         let failed = message(write(&mut store, &workflow("pay", key, branch)), branch);
         assert!(failed.contains("CHECK"), "{branch}: {failed}");
     }
-    // Refused for the CHECK, so the same PR with its own name goes in.
+    // Refused for the CHECK, so the same Workflow with its own name goes in.
     write(&mut store, &workflow("pay", "api", "pay/api")).expect("the derived name");
 }
 
-/// PR `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
+/// Workflow `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
 fn attempt_on(branch: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
@@ -88,15 +88,15 @@ fn attempt_on(branch: &str) -> String {
 #[test]
 fn attempts_accepts_a_linear_attempt_on_a_plan_slash_key_branch() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
-    write(&mut store, &attempt_on("pay/api")).expect("a linear Attempt's branch is its PR's Lead Branch");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
+    write(&mut store, &attempt_on("pay/api")).expect("a linear Attempt's branch is its Workflow's Lead Branch");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
     write(&mut store, &attempt_on("cpd/pay--j-a1")).expect("a parallel Attempt branch keeps its name");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
     let failed = message(write(&mut store, &attempt_on("paid/api")), "another plan's branch");
     assert!(failed.contains("CHECK"), "{failed}");
 }

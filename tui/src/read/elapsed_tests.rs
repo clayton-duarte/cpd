@@ -12,7 +12,7 @@ use crate::read;
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-/// A store of Context `ctx`, Lead `lead1` and Plan `pay` with the given PRs (keys), each in `dispatch`.
+/// A store of Context `ctx`, Lead `lead1` and Plan `pay` with the given Workflows (keys), each in `dispatch`.
 pub(super) fn store_with(workflows: &[&str]) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
@@ -47,7 +47,7 @@ pub(super) fn run(store: &mut Store, sql: &str) {
         .unwrap();
 }
 
-/// A Job `key` of kind `kind` of PR `pr`, queued or running.
+/// A Job `key` of kind `kind` of Workflow `pr`, queued or running.
 pub(super) fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -57,7 +57,7 @@ pub(super) fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String
     )
 }
 
-/// A Job `key` of PR `pr` (kind `work`) with one Attempt from `from` to `to` (`None`: still running); times are `HH:MM:SS[.mmm]`.
+/// A Job `key` of Workflow `pr` (kind `work`) with one Attempt from `from` to `to` (`None`: still running); times are `HH:MM:SS[.mmm]`.
 fn worked(workflow: &str, key: &str, from: &str, to: Option<&str>) -> String {
     worked_kind(workflow, key, "work", from, to)
 }
@@ -96,7 +96,7 @@ fn now_ms(t: &str) -> i64 {
     i64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap()
 }
 
-/// The `elapsed_seconds` of each PR of Plan `pay` read at `now`, in key order.
+/// The `elapsed_seconds` of each Workflow of Plan `pay` read at `now`, in key order.
 fn elapsed(store: &mut Store, now: &str) -> Vec<Option<u64>> {
     let boxes = read::plan_boxes_at(store, &PlanId::parse("pay").unwrap(), now_ms(now)).unwrap();
     boxes.workflows.iter().map(|p| p.elapsed_seconds).collect()

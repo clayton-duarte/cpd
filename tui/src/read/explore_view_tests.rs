@@ -1,5 +1,5 @@
-//! The read model of the Plan view carries a Plan's explore Jobs (`jobs.pr` NULL, kind `scout`/`research`) beside its PR
-//! Jobs, as nodes: `plan_boxes_at(...).jobs` and `flow(...).jobs` (Plan `explore-view`, D1-A). An explore Job has no PR,
+//! The read model of the Plan view carries a Plan's explore Jobs (`jobs.pr` NULL, kind `scout`/`research`) beside its Workflow
+//! Jobs, as nodes: `plan_boxes_at(...).jobs` and `flow(...).jobs` (Plan `explore-view`, D1-A). An explore Job has no Workflow,
 //! so its Attempts count in no Workflow's cost (`WorkflowNode.cost_usd`) and no Workflow's active time (`WorkflowNode.elapsed_seconds`)
 //! and stay in the Plan's cost (decision pro-d237, unchanged by the visibility).
 //! Fixed `now_ms`: no wall clock, no sleep, no git, no tmux.
@@ -20,7 +20,7 @@ fn pay() -> PlanId {
     PlanId::parse("pay").unwrap()
 }
 
-/// An explore Job `key` (kind `scout`, no PR) of Job status `status`, with no Attempt.
+/// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -48,7 +48,7 @@ fn explore(key: &str, metrics: Option<&str>) -> String {
     explore_job(key, "running") + &explore_attempt(key, metrics)
 }
 
-/// The Job `work` of PR `api` with one Attempt of cost 0.25.
+/// The Job `work` of Workflow `api` with one Attempt of cost 0.25.
 fn work() -> String {
     job("api", "work", "work", "running")
         + "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, metrics)
@@ -56,7 +56,7 @@ fn work() -> String {
                    '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z', '{\"cost_usd\":0.25}');"
 }
 
-/// Plan `pay` with PR `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
+/// Plan `pay` with Workflow `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
 fn mixed() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = store_with(&["api"]);
     run(&mut store, &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
@@ -73,12 +73,12 @@ fn the_read_model_lists_a_plans_explore_job_beside_its_pr_jobs() {
     run(&mut store, &(job("api", "work", "work", "queued") + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(job_node(&boxes.jobs, "work").is_some(), "the PR Job is a node: {:?}", keys(&boxes.jobs));
+    assert!(job_node(&boxes.jobs, "work").is_some(), "the Workflow Job is a node: {:?}", keys(&boxes.jobs));
     let look = job_node(&boxes.jobs, "look").expect("the explore Job is a node");
     assert_eq!(look.attempts.len(), 1, "the explore Job carries its Attempts");
 
     let flow = read::flow(&mut store, &pay()).unwrap();
-    assert!(job_node(&flow.jobs, "work").is_some(), "the PR Job is in the flow: {:?}", keys(&flow.jobs));
+    assert!(job_node(&flow.jobs, "work").is_some(), "the Workflow Job is in the flow: {:?}", keys(&flow.jobs));
     assert!(job_node(&flow.jobs, "look").is_some(), "the explore Job is in the flow");
 }
 
@@ -92,7 +92,7 @@ fn a_plan_with_only_explore_jobs_is_not_empty() {
     run(&mut store, &explore("look", None));
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(boxes.workflows.is_empty(), "no PR box");
+    assert!(boxes.workflows.is_empty(), "no Workflow box");
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is the Plan's content");
     assert_every_cockpit_read_is_ok(&mut store);
 }
@@ -119,7 +119,7 @@ fn an_explore_attempts_cost_is_in_no_pr_box_and_in_the_plan_total() {
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
     assert_eq!(boxes.workflows.len(), 1);
-    near(boxes.workflows[0].cost_usd, 0.25); // the explore Attempt is in no PR box
+    near(boxes.workflows[0].cost_usd, 0.25); // the explore Attempt is in no Workflow box
 
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
     let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
@@ -143,5 +143,5 @@ fn an_explore_attempts_active_time_is_in_no_pr_box() {
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
     assert_eq!(boxes.workflows.len(), 1);
-    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60), "only the PR Job's Attempt counts");
+    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60), "only the Workflow Job's Attempt counts");
 }

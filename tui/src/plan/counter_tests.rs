@@ -1,4 +1,4 @@
-//! Red tests of the Workflow active-time counter on the bottom border of a PR box (Context record pro-d175): the duration
+//! Red tests of the Workflow active-time counter on the bottom border of a Workflow box (Context record pro-d175): the duration
 //! text of `format_elapsed`, its place, style and width on the box's bottom border, and the exit `┬` of a need line.
 
 use ratatui::buffer::Buffer;

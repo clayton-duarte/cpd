@@ -1,6 +1,6 @@
-//! E3 and the Jira ticket of a PR (contract §3.7 E3, §5.2 `error`; Plan pr-ticket): when the PR's policy sets `pr.jira_required`, an
-//! `open` Job whose PR has no `jira` and no `head_ref` is never started; E3 raises one `jira_required` error Event for it, once, and
-//! starts it at the first tick after the key is set. An adopted PR and a policy that leaves the key false need none.
+//! E3 and the Jira ticket of a Workflow (contract §3.7 E3, §5.2 `error`; Plan pr-ticket): when the Workflow's policy sets `pr.jira_required`, an
+//! `open` Job whose Workflow has no `jira` and no `head_ref` is never started; E3 raises one `jira_required` error Event for it, once, and
+//! starts it at the first tick after the key is set. An adopted Workflow and a policy that leaves the key false need none.
 
 use cpd_core::ports::Fakes;
 use serde_json::json;
@@ -43,7 +43,7 @@ fn owner_policy(fx: &Fx, pr_body: &str) {
     std::fs::write(dir.join("owner.toml"), format!("[pr]\n{pr_body}")).unwrap();
 }
 
-/// PR `repo` with Job `api` merged and the PR's Job `key` of `kind` queued: Ready. The PR is described and titled; its `jira` and
+/// Workflow `repo` with Job `api` merged and the Workflow's Job `key` of `kind` queued: Ready. The Workflow is described and titled; its `jira` and
 /// head_ref are NULL; the owner's policy holds `policy` in its `[pr]` table.
 fn with_open_job(key: &str, kind: &str, policy: &str) -> Fx {
     let mut fx = Fx::with_plan("");
@@ -64,13 +64,13 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_jira_when_required_raises_one_e
 
     ticks(&mut fx, 3);
 
-    assert_eq!(attempts(&mut fx), 0, "no Attempt for a PR with no ticket");
+    assert_eq!(attempts(&mut fx), 0, "no Attempt for a Workflow with no ticket");
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("open-repo"), None));
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("jira_required")), "{data}");
-    assert!(texts(&mut fx, "error")[0].contains("cpd pr edit repo --jira"), "{:?}", texts(&mut fx, "error"));
+    assert!(texts(&mut fx, "error")[0].contains("cpd workflow edit repo --jira"), "{:?}", texts(&mut fx, "error"));
     assert_eq!(fx.job_status("open-repo"), "queued");
 
     fx.fixture("UPDATE prs SET jira = 'ABC-1';");
@@ -98,7 +98,7 @@ fn e3_starts_the_open_job_of_a_pr_with_no_jira_when_the_policy_has_no_key() {
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 }
 
-/// Guard: an adopted PR (`head_ref` set) needs no ticket.
+/// Guard: an adopted Workflow (`head_ref` set) needs no ticket.
 #[test]
 fn e3_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required() {
     let mut fx = with_open_job("open-repo", "open", "jira_required = true\n");

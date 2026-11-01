@@ -1,4 +1,4 @@
-//! Red tests of the Workflow cost on the bottom border of a PR box (Context record pro-d179 item 3): the text
+//! Red tests of the Workflow cost on the bottom border of a Workflow box (Context record pro-d179 item 3): the text
 //! ` <duration> · <cost> `, its width, style and exit `┬`, beside the active-time counter (`counter_tests`).
 
 use ratatui::buffer::Buffer;
@@ -106,7 +106,7 @@ fn a_box_is_widened_to_hold_the_time_and_the_cost_plus_four() {
     assert_eq!(row.len(), 39);
 }
 
-/// The `┬` columns of box `a`'s bottom border, that another PR `b` needs; and the canvas, the row, the box's width.
+/// The `┬` columns of box `a`'s bottom border, that another Workflow `b` needs; and the canvas, the row, the box's width.
 fn exit(secs: Option<u64>, cost: Option<f64>) -> (Buffer, usize, usize, Vec<usize>) {
     let web = WorkflowNode { needs: vec![WorkflowKey::parse("a").unwrap()], ..sample_workflow("b") };
     let buf = canvas(&[small(secs, cost), web]);

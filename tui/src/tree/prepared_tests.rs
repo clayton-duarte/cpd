@@ -122,7 +122,7 @@ fn context(id: &str) -> String {
     )
 }
 
-/// `pr`: the Plan has a PR (the schema ties phases `deploy` and `done` to one).
+/// `pr`: the Plan has a Workflow (the schema ties phases `deploy` and `done` to one).
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, workflow: bool) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
@@ -134,7 +134,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, wor
         (
             format!(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                 VALUES ('acme/{id}', 7, 'https://github.com/acme/{id}/pull/7', 'PR of {id}', 0, '{state}', 'none', 'none',
+                 VALUES ('acme/{id}', 7, 'https://github.com/acme/{id}/pull/7', 'Workflow of {id}', 0, '{state}', 'none', 'none',
                          '2026-01-05T00:00:00.000Z', {merged}, '2026-01-06T00:00:00.000Z');"
             ),
             "7",
@@ -256,7 +256,7 @@ pub(super) fn populate(env: &mut Env) {
     s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:02.000Z");
     s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("φ: Worker question"), "2026-01-02T00:00:09.000Z");
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
-    s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
+    s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: Workflow feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
     for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
         s += &job_row("ship", key, status);
@@ -471,7 +471,7 @@ fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot()
 
 /// A live Context with no Plan or fork row ends with the clickable ` ╰\u{F0B2A} new` (hs-d688): the corner and the glyph
 /// muted (colour 8), the word `new` in the clickable colour 15. An ARCHIVED empty Context keeps the plain muted
-/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order PR may have moved `gamma`.
+/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order Workflow may have moved `gamma`.
 #[test]
 fn an_empty_live_context_draws_the_clickable_new_row() {
     let mut env = Env::new();

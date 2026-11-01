@@ -60,7 +60,7 @@ fn an_update_job_turns_conflict_into_updating() {
 fn a_closed_pr_the_user_asked_to_close_reads_closed_in_its_asked_colour() {
     let asked = pr_look(&PrFacts { asked: true, conflicting: true, ..facts(PrState::Closed) });
     assert_eq!(asked.state, palette::PR_CLOSED_ASKED);
-    assert_eq!(asked.conflict, None, "only an open PR conflicts");
+    assert_eq!(asked.conflict, None, "only an open Workflow conflicts");
     let plain = pr_look(&facts(PrState::Closed));
     assert_eq!(plain.state, ("closed", palette::pr_state(PrState::Closed)));
 }
@@ -120,7 +120,7 @@ fn failed_job() -> JobNode {
     }
 }
 
-/// The plan box's top row (its title) of one PR box, as cells.
+/// The plan box's top row (its title) of one Workflow box, as cells.
 fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
     box_top_dot(pull, None, jobs, frame)
 }

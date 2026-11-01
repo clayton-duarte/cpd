@@ -1,5 +1,5 @@
-//! `pr poll` cleans nothing (commands.md §9.2 "After a PR is merged or cancelled", contract §7.2): the clean-up
-//! of merged and cancelled PRs is `cpd janitor`'s (`janitor_tests.rs`). In process on the janitor's `Rig`: the git is
+//! `pr poll` cleans nothing (commands.md §9.2 "After a Workflow is merged or cancelled", contract §7.2): the clean-up
+//! of merged and cancelled Workflows is `cpd janitor`'s (`janitor_tests.rs`). In process on the janitor's `Rig`: the git is
 //! the in-process `Universe`, `gh` and tmux are scripted on the runner. No test starts a process or sleeps.
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ struct Gh {
 
 fn node(number: i64) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
         "isDraft":false,"state":"MERGED","createdAt":"opened","updatedAt":"U1","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
@@ -63,7 +63,7 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     };
     assert_eq!(status, "merged", "the poll saw the merge: {out:?}");
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [true; 6], "{} PR {}: the poll leaves every worktree, registration and branch", workflow.status, workflow.key);
+        assert_eq!(rig.left(workflow), [true; 6], "{} Workflow {}: the poll leaves every worktree, registration and branch", workflow.status, workflow.key);
     }
     let kills: Vec<Call> = rig.fakes.runner.calls().into_iter().filter(|c| c.program.ends_with("tmux") && c.args.iter().any(|a| a.starts_with("kill-"))).collect();
     assert!(kills.is_empty(), "the poll kills no window: {kills:?}");
@@ -71,7 +71,7 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     assert_eq!(cleanup, Vec::new(), "the poll appends no cleanup_failed Event");
 }
 
-/// The in-process `gh` of the required-checks tests: the search lists the one open PR `acme/pay#801` with the bulk rollup
+/// The in-process `gh` of the required-checks tests: the search lists the one open Workflow `acme/pay#801` with the bulk rollup
 /// `rollup` (None is a null rollup), the per-check read lists `nodes`, the comments read is empty; any other call exits 9.
 struct OpenGh {
     rollup: Option<&'static str>,
@@ -85,7 +85,7 @@ impl Handler for OpenGh {
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
                 let rollup = self.rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
                 let node = format!(
-                    r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"PR 801",
+                    r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801",
                     "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
                     "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
                 );
@@ -115,7 +115,7 @@ fn guardian() -> serde_json::Value {
     serde_json::json!({"__typename": "StatusContext", "context": "GitGuardian Security Checks", "state": "SUCCESS"})
 }
 
-/// Polls the open PR `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
+/// Polls the open Workflow `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
 fn stored_checks(rollup: Option<&'static str>, nodes: Vec<serde_json::Value>, policy: &str) -> String {
     let mut rig = Rig::new();
     rig.workflow("api", "open");
@@ -155,12 +155,12 @@ fn poll_stores_passed_when_the_required_check_passed() {
 
 // --- the widened update-Job trigger (contract §3.7 E5, §3.8; commands.md §9.2; hs-d794, hs-n617) ---
 //
-// The poll queues a PR's `update` Job for two causes: the conflict (unchanged, `update_for_conflict`)
-// and a base PR's merge that repoints the pull request to the default branch with the default branch
+// The poll queues a Workflow's `update` Job for two causes: the conflict (unchanged, `update_for_conflict`)
+// and a base Workflow's merge that repoints the pull request to the default branch with the default branch
 // ahead of the Lead Branch without a conflict, `reason` `base-merged`. The ahead decision is computed
 // from git in the poll's read phase; these tests pass it as the boolean directly.
 
-/// A Plan `pay` in `deploy` with the PRs `keys` `open` (the janitor `Rig`).
+/// A Plan `pay` in `deploy` with the Workflows `keys` `open` (the janitor `Rig`).
 fn open_rig(keys: &[&'static str]) -> Rig {
     let mut rig = Rig::new();
     for key in keys {
@@ -203,7 +203,7 @@ fn a_base_merge_with_main_ahead_queues_an_update_job() {
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
-    // The repoint happened (GitHub moved the PR to the default branch) and main is ahead without a conflict.
+    // The repoint happened (GitHub moved the Workflow to the default branch) and main is ahead without a conflict.
     let queued = store
         .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
         .unwrap()
@@ -231,7 +231,7 @@ fn a_base_merge_with_main_contained_queues_nothing() {
 
     let ahead = ahead.expect("the control: an ahead default branch queues its update Job");
     assert_eq!(contained, None, "a default branch already contained queues nothing");
-    assert_eq!(update_jobs(&mut store), vec![ahead.as_str().to_owned()], "only the ahead PR's update Job exists");
+    assert_eq!(update_jobs(&mut store), vec![ahead.as_str().to_owned()], "only the ahead Workflow's update Job exists");
 }
 
 #[test]

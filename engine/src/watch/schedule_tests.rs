@@ -138,7 +138,7 @@ fn allocated(fx: &mut Fx, id: &str) -> (String, String) {
         .unwrap()
 }
 
-/// The `(lead_branch, lead_worktree, repo)` of the Plan's PR `repo`.
+/// The `(lead_branch, lead_worktree, repo)` of the Plan's Workflow `repo`.
 fn lead(fx: &mut Fx) -> (String, String, String) {
     fx.engine
         .store
@@ -146,7 +146,7 @@ fn lead(fx: &mut Fx) -> (String, String, String) {
         .unwrap()
 }
 
-/// An `Fx` with Plan `pay` and its PR `repo` (Lead Branch `cpd/pay/repo`, workflow worktree `/repos/r.lead`): the forms the
+/// An `Fx` with Plan `pay` and its Workflow `repo` (Lead Branch `cpd/pay/repo`, Lead worktree `/repos/r.lead`): the forms the
 /// Attempt branch CHECK allows. `add_job` fills the Jobs.
 fn new_plan() -> Fx {
     let mut fx = Fx::new("");
@@ -166,7 +166,7 @@ fn parallel_branch(id: &str) -> String {
     cpd_core::git::attempt_branch(&cpd_core::ids::PlanId::parse("pay").unwrap(), &cpd_core::ids::AttemptId::parse(id).unwrap())
 }
 
-/// A live linear Attempt `lin-a1` of the PR `repo`: on its Lead Branch, in its workflow worktree.
+/// A live linear Attempt `lin-a1` of the Workflow `repo`: on its Lead Branch, in its Lead worktree.
 fn add_live_linear(fx: &mut Fx) {
     fx.add_running("lin", "running", &ago(1));
     fx.fixture("UPDATE attempts SET branch = 'cpd/pay/repo', worktree = '/repos/r.lead' WHERE id = 'lin-a1';");
@@ -242,7 +242,7 @@ fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     add_live_linear(&mut fx);
     fx.add_job_in("other", "web", &[], "");
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "web-a1"), ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()), "not held, alone in its PR");
+    assert_eq!(allocated(&mut fx, "web-a1"), ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()), "not held, alone in its Workflow");
 }
 
 /// A config.toml whose `worker_runner` is `line` (a whole TOML line, or none), written over the engine's home after it started.

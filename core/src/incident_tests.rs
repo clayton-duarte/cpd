@@ -1,6 +1,6 @@
 //! Red tests for incident mode v2 (contract §2.2 "Incident", §3.7, §5.2; commands.md §25,
 //! hs-d643): the Manager-only `cpd incident start`/`end`, the readable `status`, the Plan-scoped
-//! `incident`/`incident_plans` state, `is_held`, `--until-pr` and the auto-end on the until-PR
+//! `incident`/`incident_plans` state, `is_held`, `--until-workflow` and the auto-end on the until-Workflow
 //! merge. The inc-v2-impl Job implements the stubs in `incident.rs`, `events/typed.rs` and
 //! `events/kind.rs` and makes these pass.
 
@@ -18,8 +18,8 @@ use crate::output::Output;
 use crate::store::Store;
 
 /// A temporary store with a live Manager `mgr`, the Leads `lead1` (`pay`) and `lead2` (`ops`), a
-/// Worker `w1` and an archived Manager `mgr-old`; the Plans `pay` (its PRs `api` and `ship`) and
-/// `ops` (its PR `web`); the Job `a` of `pay` and its running Attempt `a-a1`.
+/// Worker `w1` and an archived Manager `mgr-old`; the Plans `pay` (its Workflows `api` and `ship`) and
+/// `ops` (its Workflow `web`); the Job `a` of `pay` and its running Attempt `a-a1`.
 ///
 /// `ship` is `open` with a `pull_requests` row, so a test can record its merge with one update;
 /// `api` and `web` are `waiting`.
@@ -279,7 +279,7 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    // A PR of a named Plan is stored and reported.
+    // A Workflow of a named Plan is stored and reported.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/ship")).unwrap());
     assert_eq!(out["incident"]["until_pr"], json!("pay/ship"));
     assert_eq!(incident_until(&mut f.store), Some((Some("pay".to_owned()), Some("pay/ship".to_owned()))), "until_plan and until_pr are stored");
@@ -289,20 +289,20 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     incident::end(&mut f.store, Some(&mgr)).unwrap();
     assert!(incident_row(&mut f.store).is_none());
 
-    // A PR of a Plan not named is until_pr_not_incident (exit 3).
-    let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("ops/web")).expect_err("a foreign Plan's PR is refused");
+    // A Workflow of a Plan not named is until_pr_not_incident (exit 3).
+    let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("ops/web")).expect_err("a foreign Plan's Workflow is refused");
     assert_eq!(err.code(), ErrorCode::UntilWorkflowNotIncident);
     assert_eq!(err.exit().code(), 3);
     assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
 
-    // A PR of a named Plan that does not exist is pr_not_found (exit 4).
-    let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/nope")).expect_err("an unknown PR is refused");
+    // A Workflow of a named Plan that does not exist is pr_not_found (exit 4).
+    let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/nope")).expect_err("an unknown Workflow is refused");
     assert_eq!(err.code(), ErrorCode::WorkflowNotFound);
     assert_eq!(err.exit().code(), 4);
 
     // A value that is not `<plan>/<key>` is usage (exit 2).
     for bad in ["nope", "pay/", "/ship", "pay/ship/x"] {
-        let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some(bad)).expect_err("a malformed until-pr is refused");
+        let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some(bad)).expect_err("a malformed until-workflow is refused");
         assert_eq!(err.code(), ErrorCode::Usage, "{bad:?}");
         assert_eq!(err.exit().code(), 2, "{bad:?}");
     }
@@ -317,9 +317,9 @@ fn incident_ends_when_the_until_pr_merges() {
 
     incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/ship")).unwrap();
 
-    // The until-PR is not merged: the auto-end does nothing.
+    // The until-Workflow is not merged: the auto-end does nothing.
     let merged = f.store.write("test", |tx| incident::end_if_until_workflow_merged(tx)).unwrap();
-    assert!(!merged, "an unmerged until-PR does not end the incident");
+    assert!(!merged, "an unmerged until-Workflow does not end the incident");
     assert!(incident_row(&mut f.store).is_some(), "the incident stays on");
     assert_eq!(plan_set(&mut f.store), ["pay"], "the Plan set stays");
 
@@ -331,12 +331,12 @@ fn incident_ends_when_the_until_pr_merges() {
             incident::end_if_until_workflow_merged(tx)
         })
         .unwrap();
-    assert!(merged, "a merged until-PR ends the incident");
+    assert!(merged, "a merged until-Workflow ends the incident");
     assert!(incident_row(&mut f.store).is_none(), "the incident row is deleted");
     assert!(incident_plans(&mut f.store).is_empty(), "every incident_plans row is deleted");
 
     let ended = events(&mut f.store).into_iter().find(|(kind, _)| kind == "incident-ended").expect("one incident-ended Event");
-    assert_eq!(ended.1["cause"], json!("until-pr"), "the auto-end names its cause");
+    assert_eq!(ended.1["cause"], json!("until-workflow"), "the auto-end names its cause");
     assert_eq!(ended.1["by"], json!("engine"), "the engine ends it");
 
     // Nothing left to end: a second call is false and appends nothing.
@@ -521,10 +521,10 @@ fn incident_started_and_ended_events_are_known_kinds() {
     );
 
     let until =
-        NewEvent::incident_started("Incident mode on.", "mgr", "fixing PR ci", "2026-10-14T21:10:00.000Z", ["pay"], Some("pay/ship"));
+        NewEvent::incident_started("Incident mode on.", "mgr", "fixing Workflow ci", "2026-10-14T21:10:00.000Z", ["pay"], Some("pay/ship"));
     assert_eq!(
         until.data(),
-        &json!({"by": "mgr", "reason": "fixing PR ci", "started_at": "2026-10-14T21:10:00.000Z", "plans": ["pay"], "until_pr": "pay/ship"})
+        &json!({"by": "mgr", "reason": "fixing Workflow ci", "started_at": "2026-10-14T21:10:00.000Z", "plans": ["pay"], "until_pr": "pay/ship"})
     );
 
     let ended_event = NewEvent::incident_ended("Incident mode off.", "mgr", "2026-10-14T22:00:00.000Z", "manual");
@@ -626,7 +626,7 @@ fn incident_start_on_a_live_incident_is_idempotent() {
     let before = events(&mut f.store).len();
     assert_eq!(before, 1, "the fresh start appends one incident-started Event");
 
-    // The same Plan, no --reason and no --until-pr: nothing changed.
+    // The same Plan, no --reason and no --until-workflow: nothing changed.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "", None).unwrap());
     assert_eq!(out["changed"], json!(false), "an unchanged update reports changed false");
     assert_eq!(plan_array(&out["incident"]["plans"]), ["pay"]);
@@ -634,8 +634,8 @@ fn incident_start_on_a_live_incident_is_idempotent() {
     assert_eq!(events(&mut f.store).len(), before, "an unchanged update appends no Event");
 }
 
-/// Assumption A2 (hs-d664): a new `--until-pr` replaces the stored one, and an absent
-/// `--until-pr` whose stored `until_plan` is not in the new set clears both columns.
+/// Assumption A2 (hs-d664): a new `--until-workflow` replaces the stored one, and an absent
+/// `--until-workflow` whose stored `until_plan` is not in the new set clears both columns.
 #[test]
 fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     let mut f = fixture();
@@ -643,7 +643,7 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
-    // Fresh start with `pay` and `ops` and `ops/web` as the auto-end PR.
+    // Fresh start with `pay` and `ops` and `ops/web` as the auto-end Workflow.
     incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", Some("ops/web")).unwrap();
     assert_eq!(
         incident_until(&mut f.store),
@@ -651,24 +651,24 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
         "the fresh start stores until_plan and until_pr"
     );
 
-    // A new --until-pr replaces the stored one.
+    // A new --until-workflow replaces the stored one.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", Some("pay/api")).unwrap());
     assert_eq!(out["changed"], json!(true));
     assert_eq!(out["incident"]["until_pr"], json!("pay/api"), "the output reports the new until_pr");
     assert_eq!(
         incident_until(&mut f.store),
         Some((Some("pay".to_owned()), Some("pay/api".to_owned()))),
-        "a new until-pr replaces both columns"
+        "a new until-workflow replaces both columns"
     );
 
-    // `ops` leaves; with no --until-pr its stored until_plan is not in the new set, so both clear.
+    // `ops` leaves; with no --until-workflow its stored until_plan is not in the new set, so both clear.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap());
     assert_eq!(out["changed"], json!(true));
     assert_eq!(out["incident"]["until_pr"], json!(null), "the output reports no until_pr");
     assert_eq!(
         incident_until(&mut f.store),
         Some((None, None)),
-        "an absent until-pr whose stored until_plan left clears both columns"
+        "an absent until-workflow whose stored until_plan left clears both columns"
     );
     assert_eq!(plan_set(&mut f.store), ["pay"]);
 }

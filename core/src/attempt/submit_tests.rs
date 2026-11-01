@@ -1,10 +1,10 @@
-//! Red tests for `attempt submit` from a linear Attempt's workflow worktree (contract §7.3, commands.md §6.1,
-//! hs-d680/hs-d682/hs-d683): the Attempt's worktree is the PR's workflow worktree and its branch the Lead
-//! Branch, so `wrong_worktree` accepts a cwd inside the workflow worktree. Red until `wlinear-impl` gives the
-//! starter the workflow worktree and Lead Branch.
+//! Red tests for `attempt submit` from a linear Attempt's Lead worktree (contract §7.3, commands.md §6.1,
+//! hs-d680/hs-d682/hs-d683): the Attempt's worktree is the Workflow's Lead worktree and its branch the Lead
+//! Branch, so `wrong_worktree` accepts a cwd inside the Lead worktree. Red until `wlinear-impl` gives the
+//! starter the Lead worktree and Lead Branch.
 //!
 //! The Attempt is the one `driver::start_with` records; the caller's cwd is a real temp directory that is the
-//! fake git's workflow worktree, so no test changes the process's environment and none starts a process.
+//! fake git's Lead worktree, so no test changes the process's environment and none starts a process.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,7 +29,7 @@ fn catalog() -> Catalog {
     Catalog { pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: TierModel { model: "g/m".to_owned(), efforts: vec![] } }
 }
 
-/// Plan `pay`, its PR `api` and Job `a`, and the fake git of the workflow worktree on `cpd/pay/api`.
+/// Plan `pay`, its Workflow `api` and Job `a`, and the fake git of the Lead worktree on `cpd/pay/api`.
 struct Rig {
     _tmp: TempDir,
     fakes: Fakes,
@@ -104,12 +104,12 @@ fn a_linear_attempt_submits_from_the_workflow_worktree() {
     let id = AttemptId::parse("a-a1").unwrap();
     let attempt = rig.store.read(|conn| row::load(conn, &plan, &id)).unwrap();
     assert_eq!(attempt.branch, "cpd/pay/api", "the linear Attempt's branch is the Lead Branch");
-    // The caller's cwd is the workflow worktree; submit checks the Attempt's own worktree and branch.
+    // The caller's cwd is the Lead worktree; submit checks the Attempt's own worktree and branch.
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(&rig.lead_worktree).unwrap();
     let worktree = PathBuf::from(&attempt.worktree);
     let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone() };
     let result = Ports::scope(&ports, || super::submit::require_inside(&attempt, &worktree));
     std::env::set_current_dir(previous).unwrap();
-    assert!(result.is_ok(), "submit accepts a cwd in the workflow worktree on the Lead Branch: {result:?}");
+    assert!(result.is_ok(), "submit accepts a cwd in the Lead worktree on the Lead Branch: {result:?}");
 }

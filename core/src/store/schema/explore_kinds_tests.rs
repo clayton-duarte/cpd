@@ -29,7 +29,7 @@ const BASE: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
      INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
        VALUES ('pay', 'api', '/r', 'main', 'waiting', 'pay/api', cpd_txn(), 't');";
 
-/// The same Plan and PR before `workflow-rename`: the object table is `prs`.
+/// The same Plan and Workflow before `workflow-rename`: the object table is `prs`.
 const BASE_BEFORE: &str = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
      INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
        VALUES ('lead', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -38,7 +38,7 @@ const BASE_BEFORE: &str = "INSERT INTO contexts (id, title, created_at, created_
      INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
        VALUES ('pay', 'api', '/r', 'main', 'waiting', 'pay/api', cpd_txn(), 't');";
 
-/// A fully migrated store with Plan `pay` and its PR `api`.
+/// A fully migrated store with Plan `pay` and its Workflow `api`.
 fn fresh() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -65,15 +65,15 @@ fn job_before(key: &str, kind: &str, workflow: &str) -> String {
 #[test]
 fn migration_allows_a_null_pr_only_for_explore_kinds() {
     let (_dir, mut store) = fresh();
-    write(&mut store, &job("s", "scout", "NULL")).expect("a scout Job belongs to the Plan, with no PR");
-    write(&mut store, &job("r", "research", "NULL")).expect("a research Job belongs to the Plan, with no PR");
-    let refused = message(write(&mut store, &job("w", "work", "NULL")), "a work Job with no PR");
+    write(&mut store, &job("s", "scout", "NULL")).expect("a scout Job belongs to the Plan, with no Workflow");
+    write(&mut store, &job("r", "research", "NULL")).expect("a research Job belongs to the Plan, with no Workflow");
+    let refused = message(write(&mut store, &job("w", "work", "NULL")), "a work Job with no Workflow");
     assert!(refused.contains("CHECK"), "{refused}");
-    let refused = message(write(&mut store, &job("s2", "scout", "'api'")), "a scout Job with a PR");
+    let refused = message(write(&mut store, &job("s2", "scout", "'api'")), "a scout Job with a Workflow");
     assert!(refused.contains("CHECK"), "{refused}");
-    let refused = message(write(&mut store, &job("r2", "research", "'api'")), "a research Job with a PR");
+    let refused = message(write(&mut store, &job("r2", "research", "'api'")), "a research Job with a Workflow");
     assert!(refused.contains("CHECK"), "{refused}");
-    write(&mut store, &job("w2", "work", "'api'")).expect("a work Job keeps its PR");
+    write(&mut store, &job("w2", "work", "'api'")).expect("a work Job keeps its Workflow");
 }
 
 #[test]

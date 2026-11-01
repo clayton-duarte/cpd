@@ -1,5 +1,5 @@
 //! `sessions.working_pr` and its three triggers (contract §3.6 `The Lead's Workflow`, §4.4; decisions pro-d217,
-//! pro-d219, pro-d259): non-null only for a `working` Lead whose Plan has a PR with that key; leaving `working`
+//! pro-d219, pro-d259): non-null only for a `working` Lead whose Plan has a Workflow with that key; leaving `working`
 //! clears it; a new Session names nothing.
 
 use crate::error::{CpdError, ErrorCode};

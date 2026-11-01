@@ -122,17 +122,17 @@ fn a_phi_plan_review_blocked_session_is_not_a_dialog() {
     assert!(data(&mut fx, "inbox-opened").iter().all(|e| e["kind"] != "dialog"), "{:?}", data(&mut fx, "inbox-opened"));
 }
 
-/// The text of the one message for a PR's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
+/// The text of the one message for a Workflow's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
 /// Manager to choose.
 pub(super) fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
     format!(
-        "Jobs of PR pay/repo failed and their Lead has not retried or cancelled them: \
+        "Jobs of Workflow pay/repo failed and their Lead has not retried or cancelled them: \
          pay/{key} ({minutes} min ago, {cause}). \
          Retry each (cpd job retry <key> --plan pay --tier <T>), nudge the Lead, or ask the User."
     )
 }
 
-/// hs-d647: the stuck Jobs of one PR are ONE message to the Manager, oldest `job-failed` Event first, each Job with
+/// hs-d647: the stuck Jobs of one Workflow are ONE message to the Manager, oldest `job-failed` Event first, each Job with
 /// its own minutes and `failed_cause`; it is sent once, and no item opens (hs-d318).
 #[test]
 fn stuck_jobs_of_one_pr_are_one_message_to_the_manager() {
@@ -143,7 +143,7 @@ fn stuck_jobs_of_one_pr_are_one_message_to_the_manager() {
     failed_job(&mut fx, "fresh", 2);
 
     tick(&mut fx);
-    // Three ticks later: still the one message for the PR, and no item opened.
+    // Three ticks later: still the one message for the Workflow, and no item opened.
     for _ in 0..3 {
         tick(&mut fx);
     }
@@ -153,7 +153,7 @@ fn stuck_jobs_of_one_pr_are_one_message_to_the_manager() {
             "mgr1".to_owned(),
             None,
             true,
-            "Jobs of PR pay/repo failed and their Lead has not retried or cancelled them: \
+            "Jobs of Workflow pay/repo failed and their Lead has not retried or cancelled them: \
              pay/old (2 min ago, crashed); pay/fresh (2 min ago, crashed). \
              Retry each (cpd job retry <key> --plan pay --tier <T>), nudge the Lead, or ask the User."
                 .to_owned()
@@ -185,7 +185,7 @@ fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
     assert_eq!(data(&mut fx, "inbox-opened"), Vec::<Value>::new());
 }
 
-/// pro-d88: a failed Job with a `queued` fix Job of its PR created after it is being worked on, so the Manager hears
+/// pro-d88: a failed Job with a `queued` fix Job of its Workflow created after it is being worked on, so the Manager hears
 /// nothing while the fix is underway; when the fix is cancelled the next tick sends the one message, once.
 #[test]
 fn a_failed_job_with_a_fix_underway_sends_the_manager_no_nudge_until_the_fix_ends() {
@@ -491,8 +491,8 @@ fn a_stuck_job_wakes_its_context_manager() {
     assert_eq!(messages.len(), 1, "{messages:?}");
     let data = &messages[0];
     assert_eq!((fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'").as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
-    // hs-d647: the stuck Jobs of a PR are one message (contract §3.7 "A stuck Job").
+    // hs-d647: the stuck Jobs of a Workflow are one message (contract §3.7 "A stuck Job").
     let text = data["text"].as_str().unwrap();
-    assert!(text.starts_with("Jobs of PR pay/repo failed "), "{data}");
+    assert!(text.starts_with("Jobs of Workflow pay/repo failed "), "{data}");
     assert!(text.contains("pay/api (2 min ago, crashed)"), "{data}");
 }

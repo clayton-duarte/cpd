@@ -20,7 +20,7 @@ use crate::output::Output;
 use crate::ports::{Fakes, Ports};
 use crate::store::Store;
 
-/// A PR the rig stores, with its two worktrees: the Lead worktree on the Lead Branch and one parallel Attempt's.
+/// A Workflow the rig stores, with its two worktrees: the Lead worktree on the Lead Branch and one parallel Attempt's.
 pub(crate) struct Workflow {
     pub(crate) key: &'static str,
     pub(crate) status: &'static str,
@@ -47,7 +47,7 @@ impl Workflow {
     }
 }
 
-/// Plan `pay` in one repo `pay` whose `origin/main` is its only commit, with the PRs added by [`Rig::pr`].
+/// Plan `pay` in one repo `pay` whose `origin/main` is its only commit, with the Workflows added by [`Rig::pr`].
 pub(crate) struct Rig {
     pub(crate) tmp: TempDir,
     pub(crate) fakes: Fakes,
@@ -102,15 +102,15 @@ impl Rig {
             .unwrap();
     }
 
-    /// PR `key` with status `open`, `merged` or `cancelled`: its Lead worktree (clean, pushed) on its Lead Branch and one
-    /// ended parallel Attempt `<key>-a1` with its worktree and branch. A cancelled PR's row has no `lead_worktree`,
-    /// as `pr cancel` leaves it; its Lead worktree is the path contract §7.1 names.
+    /// Workflow `key` with status `open`, `merged` or `cancelled`: its Lead worktree (clean, pushed) on its Lead Branch and one
+    /// ended parallel Attempt `<key>-a1` with its worktree and branch. A cancelled Workflow's row has no `lead_worktree`,
+    /// as `workflow cancel` leaves it; its Lead worktree is the path contract §7.1 names.
     pub(crate) fn workflow(&mut self, key: &'static str, status: &'static str) -> &Workflow {
         self.workflow_with(key, status, "cancelled", "failed")
     }
 
     /// [`Rig::pr`] with the Job's status `job` (`merged`, `running`, `failed` or `cancelled`) and the Attempt's outcome
-    /// `attempt` (`failed` or `merged`). `dispatch` is a PR status too: a Lead worktree and no pull request yet.
+    /// `attempt` (`failed` or `merged`). `dispatch` is a Workflow status too: a Lead worktree and no pull request yet.
     pub(crate) fn workflow_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Workflow {
         let plan = PlanId::parse("pay").unwrap();
         let lead_branch = format!("cpd/pay/{key}");
@@ -141,7 +141,7 @@ impl Rig {
                 (
                     format!(
                         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                           VALUES ('acme/pay', {n}, 'https://github.com/acme/pay/pull/{n}', 'PR {n}', 0, '{state}', 'none', 'none', 'opened', {merged}, 'opened');"
+                           VALUES ('acme/pay', {n}, 'https://github.com/acme/pay/pull/{n}', 'Workflow {n}', 0, '{state}', 'none', 'none', 'opened', {merged}, 'opened');"
                     ),
                     format!("'{}'", lead.display()),
                     format!("'t', {n}, 'https://github.com/acme/pay/pull/{n}', 'opened', (SELECT id FROM pull_requests WHERE number = {n})"),
@@ -188,7 +188,7 @@ impl Rig {
         self.universe.lock().unwrap().worktrees(self.repo.id()).iter().any(|w| w.path == path)
     }
 
-    /// Everything of the PR still on disk or in git: `(lead directory, lead registration, lead branch, attempt
+    /// Everything of the Workflow still on disk or in git: `(lead directory, lead registration, lead branch, attempt
     /// directory, attempt registration, attempt branch)`.
     pub(crate) fn left(&self, workflow: &Workflow) -> [bool; 6] {
         [
@@ -247,8 +247,8 @@ fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
     rig.workflow("web", "cancelled");
     let outcomes = outcomes(rig.pass());
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [false; 6], "{} PR {}: every worktree, registration and local branch is gone", workflow.status, workflow.key);
-        assert!(outcomes.iter().any(|(key, _)| key == workflow.key), "an outcome for PR {}: {outcomes:?}", workflow.key);
+        assert_eq!(rig.left(workflow), [false; 6], "{} Workflow {}: every worktree, registration and local branch is gone", workflow.status, workflow.key);
+        assert!(outcomes.iter().any(|(key, _)| key == workflow.key), "an outcome for Workflow {}: {outcomes:?}", workflow.key);
     }
     assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
@@ -274,11 +274,11 @@ fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
     let outcomes = outcomes(rig.pass());
     for key in ["api", "web"] {
         let workflow = rig.workflows.iter().find(|p| p.key == key).unwrap();
-        assert_eq!(rig.left(workflow), [true; 6], "PR {key} is untouched");
-        assert!(outcomes.contains(&(key.to_owned(), "pending".to_owned())), "PR {key} is pending: {outcomes:?}");
+        assert_eq!(rig.left(workflow), [true; 6], "Workflow {key} is untouched");
+        assert!(outcomes.contains(&(key.to_owned(), "pending".to_owned())), "Workflow {key} is pending: {outcomes:?}");
     }
     let idle = rig.workflows.iter().find(|p| p.key == "lock").unwrap();
-    assert_eq!(rig.left(idle), [false; 6], "an idle PR is cleaned in the same pass");
+    assert_eq!(rig.left(idle), [false; 6], "an idle Workflow is cleaned in the same pass");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -369,12 +369,12 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     assert_eq!(map.get("skipped"), Some(&Value::from("running")), "{map:?}");
     assert!(!map.contains_key("outcomes"), "{map:?}");
     for workflow in &rig.workflows {
-        assert_eq!(rig.left(workflow), [true; 6], "PR {} is untouched", workflow.key);
+        assert_eq!(rig.left(workflow), [true; 6], "Workflow {} is untouched", workflow.key);
     }
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
-/// Contract §7.2 "Ended Attempts of merged Jobs on a live PR": the PR `key` in `status` with its Job in status `job` and
+/// Contract §7.2 "Ended Attempts of merged Jobs on a live Workflow": the Workflow `key` in `status` with its Job in status `job` and
 /// its Attempt ended `attempt`, after one pass: `(left, outcomes, errors)`.
 fn live_pass(status: &'static str, job: &str, attempt: &str) -> (Rig, [bool; 6], Vec<(String, String)>) {
     let mut rig = Rig::new();
@@ -411,7 +411,7 @@ fn janitor_pass_sweeps_a_merged_attempt_of_a_live_pr_whatever_its_job_status() {
 fn janitor_pass_keeps_the_attempts_of_a_live_pr_whose_job_is_not_merged() {
     let (rig, left, outcomes) = live_pass("open", "failed", "failed");
     assert_eq!(left, [true; 6], "a failed Job's Attempts are kept for debugging");
-    assert!(outcomes.iter().all(|(key, _)| key != "api"), "no outcome for the PR: {outcomes:?}");
+    assert!(outcomes.iter().all(|(key, _)| key != "api"), "no outcome for the Workflow: {outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 

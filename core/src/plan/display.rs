@@ -6,7 +6,7 @@
 //!   (`engine/src/watch/schedule.rs` `READY`): the Dependencies not `merged`, an `open` or `update` Job's other Jobs
 //!   ([`crate::job::open::unfinished`]), a Job of a Workflow that has not started shows nothing more; a Workflow's needs not `merged` and its base Workflow not started (§3.8).
 //!   A `cancelled` need counts for nothing: it blocks nothing.
-//! - **Superseded**: a `cancelled` Workflow names the Workflow that carried its work, from its `pr-cancelled` Event.
+//! - **Superseded**: a `cancelled` Workflow names the Workflow that carried its work, from its `workflow-cancelled` Event.
 
 use std::collections::{BTreeMap, BTreeSet};
 

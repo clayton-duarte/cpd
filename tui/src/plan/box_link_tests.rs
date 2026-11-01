@@ -1,4 +1,4 @@
-//! The Plan view's PR box titles are the `Link` widget (pro-d60): `#<number> <state>` underlined, then the cue, ordinary
+//! The Plan view's Workflow box titles are the `Link` widget (pro-d60): `#<number> <state>` underlined, then the cue, ordinary
 //! cells and no OSC 8; a plain left click on any of it opens the pull request and does nothing else.
 
 use std::sync::Arc;

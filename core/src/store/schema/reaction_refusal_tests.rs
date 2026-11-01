@@ -1,5 +1,5 @@
-//! The reaction queue's link to its PR and its refusal (contract §4.4 `slack_reactions`; migration `slack-reaction-refusal`):
-//! `plan` and `pr` name the PR whose merge a reaction is, `refused_at` and `refusal` park a reaction Slack refused.
+//! The reaction queue's link to its Workflow and its refusal (contract §4.4 `slack_reactions`; migration `slack-reaction-refusal`):
+//! `plan` and `pr` name the Workflow whose merge a reaction is, `refused_at` and `refusal` park a reaction Slack refused.
 
 use super::*;
 use crate::error::CpdError;
@@ -28,7 +28,7 @@ const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
 fn workflow(key: &str, number: u32, reaction: &str) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
+           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'Workflow {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
          INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'merged', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
                    (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', '2026-10-01T10:00:00.000Z');
@@ -41,7 +41,7 @@ fn workflow(key: &str, number: u32, reaction: &str) -> String {
 fn workflow_before(key: &str, number: u32, reaction: &str) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
+           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'Workflow {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'merged', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
                    (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', '2026-10-01T10:00:00.000Z');

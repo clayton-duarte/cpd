@@ -21,7 +21,7 @@ fn sqlite_message(err: &CpdError) -> String {
     err.details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
 }
 
-/// A Plan `pl` with a `free` PR `a`; Jobs of the kinds before `verify` in every status; Dependencies and an Attempt.
+/// A Plan `pl` with a `free` Workflow `a`; Jobs of the kinds before `verify` in every status; Dependencies and an Attempt.
 const FIXTURE: &str = "
   INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
   INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -115,7 +115,7 @@ fn job_of_kind(key: &str, kind: &str, status: &str, columns: &str, values: &str)
     )
 }
 
-/// A fully migrated store holding only the Plan and PR of [`FIXTURE`].
+/// A fully migrated store holding only the Plan and Workflow of [`FIXTURE`].
 fn migrated_empty() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();

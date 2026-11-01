@@ -135,7 +135,7 @@ fn sql(store: &mut Store, sql: &str) {
         .unwrap();
 }
 
-/// Plan `pl` (Lead `lead-pl`), its open PR `repo`, Job `a` running, and Attempt `a-a1` in `status` (`running` or `merging`)
+/// Plan `pl` (Lead `lead-pl`), its open Workflow `repo`, Job `a` running, and Attempt `a-a1` in `status` (`running` or `merging`)
 /// with Worker Session `w1` `working`.
 fn seed(store: &mut Store, status: &str) {
     let submitted = if status == "merging" { ", submitted_sha, submitted_at" } else { "" };

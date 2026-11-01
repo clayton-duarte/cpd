@@ -225,7 +225,7 @@ pub(super) fn session(id: &str, role: &str, context: &str, plan: Option<&str>, a
     )
 }
 
-/// A Plan `id` in `context` with its one PR and its Lead Session `l-<id>` (file `file`).
+/// A Plan `id` in `context` with its one Workflow and its Lead Session `l-<id>` (file `file`).
 fn plan(id: &str, context: &str, file: Option<&str>) -> String {
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)

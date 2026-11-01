@@ -14,7 +14,7 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
     })
 }
 
-/// A fully migrated store with Plan `pay`, its PR `api` and a running Job `j`: the rows an Attempt needs.
+/// A fully migrated store with Plan `pay`, its Workflow `api` and a running Job `j`: the rows an Attempt needs.
 fn fresh() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();

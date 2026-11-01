@@ -1,5 +1,5 @@
-//! The Plan view's chart draws one Plan-level ` explore Jobs ` box above the PR boxes for a Plan that has an explore Job
-//! (Plan `explore-view`, D1-A): the same pills as a PR box, no footer and no need-line to a PR. The cost/active-time rule
+//! The Plan view's chart draws one Plan-level ` explore Jobs ` box above the Workflow boxes for a Plan that has an explore Job
+//! (Plan `explore-view`, D1-A): the same pills as a Workflow box, no footer and no need-line to a Workflow. The cost/active-time rule
 //! is unchanged (pro-d237). Fixed `now_ms` and frame: no wall clock, no sleep, no git, no tmux.
 
 use cpd_core::error::CpdError;
@@ -30,7 +30,7 @@ fn run(store: &mut Store, sql: &str) {
         .unwrap();
 }
 
-/// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with PR `api` (`/repo`, base `main`).
+/// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with Workflow `api` (`/repo`, base `main`).
 fn db() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = db_without_workflow();
     run(
@@ -41,7 +41,7 @@ fn db() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// [`db`] without the PR: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
+/// [`db`] without the Workflow: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
 fn db_without_workflow() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
@@ -58,7 +58,7 @@ fn db_without_workflow() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// A PR Job `key` of PR `pr`, queued or running, Tier S3.
+/// A Workflow Job `key` of Workflow `pr`, queued or running, Tier S3.
 fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -68,7 +68,7 @@ fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
     )
 }
 
-/// An explore Job `key` (kind `scout`, no PR) of Job status `status`, Tier S1, with no Attempt.
+/// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, Tier S1, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     let failed_cause = if status == "failed" { "'crashed'" } else { "NULL" };
     format!(
@@ -118,10 +118,10 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let lines = rows(&chart.buf);
 
     let explore = lines.iter().position(|l| l.contains(" explore Jobs ")).expect("the explore Jobs box");
-    let api = lines.iter().position(|l| l.contains(" api · ")).expect("the api PR box");
-    assert!(explore < api, "the explore box is above the PR box: {lines:?}");
+    let api = lines.iter().position(|l| l.contains(" api · ")).expect("the api Workflow box");
+    assert!(explore < api, "the explore box is above the Workflow box: {lines:?}");
     assert!(lines[explore + 1].contains("look"), "the look pill is inside the explore box: {:?}", lines[explore + 1]);
-    assert!(lines[api + 1].contains("api-1"), "the api pill stays inside its PR box: {:?}", lines[api + 1]);
+    assert!(lines[api + 1].contains("api-1"), "the api pill stays inside its Workflow box: {:?}", lines[api + 1]);
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn an_explore_only_plans_chart_is_the_explore_box_alone() {
     assert_eq!(lines.iter().filter(|l| l.contains('╭')).count(), 1, "one box only: {lines:?}");
     assert!(lines.iter().any(|l| l.contains(" explore Jobs ")), "the explore box: {lines:?}");
     assert!(lines.iter().any(|l| l.contains("look")), "its pill: {lines:?}");
-    assert!(!lines.iter().any(|l| l.contains("no Jobs")), "no PR box and no `no Jobs` box: {lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("no Jobs")), "no Workflow box and no `no Jobs` box: {lines:?}");
 }
 
 #[test]

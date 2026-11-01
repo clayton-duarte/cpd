@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 
 use super::engine::Engine;
 
-/// The stored title of PR `repo` of the Plan [`Fx::with_plan`] adds.
+/// The stored title of Workflow `repo` of the Plan [`Fx::with_plan`] adds.
 pub(super) const PR_TITLE: &str = "Charge the card at checkout";
 
 /// A time `minutes` ago, as cpd writes times (contract §1.3).
@@ -67,7 +67,7 @@ impl Fx {
         fx
     }
 
-    /// `new`, then Plan `pay` in `dispatch` with its PR `repo` (`dispatch`) and its Lead Session `lead1` (`stopped`).
+    /// `new`, then Plan `pay` in `dispatch` with its Workflow `repo` (`dispatch`) and its Lead Session `lead1` (`stopped`).
     pub(super) fn with_plan(config_extra: &str) -> Fx {
         Fx::with_plan_in("dispatch", config_extra)
     }
@@ -124,13 +124,13 @@ impl Fx {
         self.engine.store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
-    /// Job `key` of Plan `pay` in PR `repo`, `queued` with its Locked-Job fingerprint, then moved to another status by `then`
+    /// Job `key` of Plan `pay` in Workflow `repo`, `queued` with its Locked-Job fingerprint, then moved to another status by `then`
     /// (SQL run after the fingerprint is set).
     pub(super) fn add_job(&mut self, key: &str, needs: &[&str], then: &str) {
         self.add_job_in("repo", key, needs, then);
     }
 
-    /// `add_job` in PR `pr` of Plan `pay`.
+    /// `add_job` in Workflow `pr` of Plan `pay`.
     pub(super) fn add_job_in(&mut self, workflow: &str, key: &str, needs: &[&str], then: &str) {
         self.add_job_on("S2", workflow, key, needs, then);
     }

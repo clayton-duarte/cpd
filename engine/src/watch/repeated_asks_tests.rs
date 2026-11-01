@@ -168,7 +168,7 @@ fn the_key_is_the_first_sixty_characters_with_digits_masked() {
     assert_eq!(all.len(), 3, "{all:?}");
 }
 
-/// A second Plan `shop` with its own Lead and a queued Job `api` (explore kind, no PR).
+/// A second Plan `shop` with its own Lead and a queued Job `api` (explore kind, no Workflow).
 fn shop(fx: &mut Fx) {
     fx.fixture(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)

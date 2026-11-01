@@ -7,7 +7,7 @@ use ratatui::widgets::Widget;
 use crate::box_widget::SectionTitle;
 use crate::section;
 
-const CASES: [(&str, Option<usize>); 2] = [("PRs", Some(3)), ("Logs", None)];
+const CASES: [(&str, Option<usize>); 2] = [("Workflows", Some(3)), ("Logs", None)];
 const WIDTHS: [u16; 2] = [20, 30];
 
 /// A buffer of `x` cells everywhere, so that a cell a widget leaves alone shows.
@@ -38,10 +38,10 @@ fn row(buf: &Buffer, y: u16) -> String {
 fn section_title_is_three_rows_a_blank_one_the_rule_and_a_blank_one() {
     assert_eq!(SectionTitle::ROWS, 3);
     let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
-    draw("PRs", Some(3), Rect::new(0, 1, 20, 3), &mut buf);
+    draw("Workflows", Some(3), Rect::new(0, 1, 20, 3), &mut buf);
     assert_eq!(row(&buf, 0).trim(), "", "above the area");
     assert_eq!(row(&buf, 1).trim(), "", "row 0 is blank");
-    assert!(row(&buf, 2).contains("PRs"), "row 1 is the title: {:?}", row(&buf, 2));
+    assert!(row(&buf, 2).contains("Workflows"), "row 1 is the title: {:?}", row(&buf, 2));
     assert_eq!(row(&buf, 3).trim(), "", "row 2 is blank");
     assert_eq!(row(&buf, 4).trim(), "", "under the area");
 }
@@ -87,7 +87,7 @@ fn section_title_body_is_the_area_under_its_three_rows() {
     // the widget draws the three rows above the body and leaves the body alone
     let area = Rect::new(2, 4, 30, 10);
     let mut buf = filled(40, 16);
-    draw("PRs", Some(3), area, &mut buf);
+    draw("Workflows", Some(3), area, &mut buf);
     let body = SectionTitle::body(area);
     assert_ne!(row(&buf, body.y - 2), "x".repeat(40), "the title row is the row above the body's first blank row");
     for y in body.y..body.bottom() {

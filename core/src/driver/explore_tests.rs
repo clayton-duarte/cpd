@@ -74,7 +74,7 @@ fn worker_env_of_an_explore_attempt_has_cpd_job_kind() {
     rig.add_job("look", "scout", "H2");
     rig.add_job("dig", "research", "S1");
     let (scout, research) = (rig.start("look"), rig.start("dig"));
-    // A Worker of another kind: a `work` Job of a PR.
+    // A Worker of another kind: a `work` Job of a Workflow.
     rig.sql(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
            VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay/api', '/lw', 't', cpd_txn(), 't');
@@ -165,7 +165,7 @@ fn policy_of_an_explore_worker_resolves_from_the_contexts_owner() {
     let owner = PolicyKey::Owner(OwnerLogin::parse("acme").unwrap());
 
     let found = rig.env.store.read(|conn| crate::policy::show::key_of_session(conn, &worker));
-    assert_eq!(found.as_ref().ok().map(|(_, key)| key), Some(&owner), "the Context owner's policy, no PR and no error: {found:?}");
+    assert_eq!(found.as_ref().ok().map(|(_, key)| key), Some(&owner), "the Context owner's policy, no Workflow and no error: {found:?}");
     assert_eq!(found.as_ref().ok().map(|(role, _)| *role), Some("worker"));
     // As a Lead's does.
     let lead_key = rig.env.store.read(|conn| {

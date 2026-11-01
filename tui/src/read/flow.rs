@@ -130,7 +130,7 @@ pub struct WorkflowNode {
     pub pull: Option<Pull>,
     /// What a Workflow that has not started waits for, sorted (Workflow references): empty when it can start (hs-d521).
     pub waiting_on: Vec<String>,
-    /// For a `cancelled` Workflow, the Workflow that carried its work (a reference), from its `pr-cancelled` Event.
+    /// For a `cancelled` Workflow, the Workflow that carried its work (a reference), from its `workflow-cancelled` Event.
     pub superseded_by: Option<String>,
     /// `None` when no Job of the Workflow has an Attempt, else its active time in whole seconds, see Context record pro-d175.
     pub elapsed_seconds: Option<u64>,

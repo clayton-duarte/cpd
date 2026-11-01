@@ -301,7 +301,7 @@ pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, Wo
 
 /// E7, Workflow start (§3.7, §3.8): starts each startable Workflow. A failed setup (worktree,
 /// remote check or `pre-start`) marks the Workflow `start_failed_at` and appends one
-/// `error` `pr_start_failed` for the Lead; the engine does not try that Workflow again,
+/// `error` `workflow_start_failed` for the Lead; the engine does not try that Workflow again,
 /// the Lead retries with `cpd workflow start`.
 fn start_prs(engine: &mut Engine) {
     let waiting = match startable_workflows(engine) {

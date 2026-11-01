@@ -1,5 +1,5 @@
 //! The cost of a Workflow (`WorkflowNode.cost_usd`, Context record pro-d179): the total of the costs of every Attempt of every
-//! Job of the PR, by the rule of the Plan row. Read by `plan_boxes_at` at a fixed `now`: no wall clock, no sleeps; the
+//! Job of the Workflow, by the rule of the Plan row. Read by `plan_boxes_at` at a fixed `now`: no wall clock, no sleeps; the
 //! session files are written into the test's own temporary directory.
 
 use std::fs;
@@ -14,7 +14,7 @@ use crate::read;
 const NOW_MS: i64 = 1_800_000_000_000;
 const NOW: &str = "2026-10-18T15:07:30.000Z";
 
-/// Job `key` of PR `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
+/// Job `key` of Workflow `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
 /// is the stored JSON of an ended Attempt, `None` for a live one (NULL `metrics`, running); `file` the Session's file.
 /// `with_job` adds the Job's own row (once per Job).
 fn attempt(workflow: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, file: Option<&str>, with_job: bool) -> String {

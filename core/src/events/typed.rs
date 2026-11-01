@@ -483,7 +483,7 @@ impl NewEvent {
     }
 
     /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
-    /// the incident; `until_pr` (the `<plan>/<key>` auto-end Workflow) is in `data` only when set.
+    /// the incident; `until_workflow` (the `<plan>/<key>` auto-end Workflow) is in `data` only when set.
     pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "reason": reason, "started_at": started_at, "plans": plans});
         if let Some(until_workflow) = until_workflow {
@@ -493,7 +493,7 @@ impl NewEvent {
     }
 
     /// `incident-plans` (contract §5.2, hs-d664): a `cpd incident start --plan` on a live incident
-    /// that changed the Plan set or `until_pr`. `plans` is the new set; `until_pr` (the
+    /// that changed the Plan set or `until_workflow`. `plans` is the new set; `until_workflow` (the
     /// `<plan>/<key>` auto-end Workflow) is in `data` only when set, mirroring `incident-started`.
     pub fn incident_plans(text: impl Into<String>, by: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "plans": plans});
@@ -503,7 +503,7 @@ impl NewEvent {
         make(Kind::IncidentPlans, text, data)
     }
 
-    /// `incident-ended` (contract §5.2, commands.md §25.2): `cause` is `"manual"` or `"until-pr"`.
+    /// `incident-ended` (contract §5.2, commands.md §25.2): `cause` is `"manual"` or `"until-workflow"`.
     pub fn incident_ended(text: impl Into<String>, by: &str, ended_at: &str, cause: &str) -> NewEvent {
         make(Kind::IncidentEnded, text, json!({"by": by, "ended_at": ended_at, "cause": cause}))
     }

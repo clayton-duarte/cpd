@@ -1,4 +1,4 @@
-//! The `pr-closed` Inbox kind: an `open` PR of cpd whose stored pull request is `closed` (never merged).
+//! The `pr-closed` Inbox kind: an `open` Workflow of cpd whose stored pull request is `closed` (never merged).
 
 use super::model::{Item, Kind, Urgency, reconcile};
 use super::rules::conditions_with;
@@ -19,7 +19,7 @@ fn fixture(state: &str) -> Fixture {
     fixture_of(state, "open")
 }
 
-/// [`fixture`] with the PR `api` in `status` (`open`, `merged` or `cancelled`).
+/// [`fixture`] with the Workflow `api` in `status` (`open`, `merged` or `cancelled`).
 fn fixture_of(state: &str, status: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -57,7 +57,7 @@ impl Fixture {
             .unwrap();
     }
 
-    /// `pr cancel` of the open PR: the status is all the rule may read.
+    /// `workflow cancel` of the open Workflow: the status is all the rule may read.
     fn cancel(&mut self) {
         self.sql("PRAGMA ignore_check_constraints = ON; UPDATE workflows SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
     }

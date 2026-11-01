@@ -1,5 +1,5 @@
 //! Red tests of THE RULE (pro-d88) on the TUI side: a failed Job is being worked on when its Plan's Lead works, or a
-//! queued or running Job of its PR was created after its `job-failed` Event. `plan_boxes` lists those Jobs
+//! queued or running Job of its Workflow was created after its `job-failed` Event. `plan_boxes` lists those Jobs
 //! (`NeedsUser::worked_on`), the failed pill turns for them, and the tree's Lead dot is the red loader for a Plan that
 //! has one. The store is in-process, built with SQL in explicit transactions; no tmux, git or gh.
 
@@ -29,7 +29,7 @@ struct Fixture {
     store: Store,
 }
 
-/// Context `ctx`, Plan `pay` (Lead `l-pay`, in `lead_state`) with PRs `p1`, `p2`, `p3`.
+/// Context `ctx`, Plan `pay` (Lead `l-pay`, in `lead_state`) with Workflows `p1`, `p2`, `p3`.
 fn fixture(lead_state: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -118,7 +118,7 @@ impl Fixture {
 fn plan_boxes_lists_the_failed_jobs_being_worked_on() {
     let mut idle = fixture("idle");
     idle.failures_and_fixes();
-    assert_eq!(idle.worked_on(), ["j-a", "j-c"], "idle Lead: the failed Jobs with a queued or running fix of their PR, sorted");
+    assert_eq!(idle.worked_on(), ["j-a", "j-c"], "idle Lead: the failed Jobs with a queued or running fix of their Workflow, sorted");
 
     let mut working = fixture("working");
     working.failures_and_fixes();

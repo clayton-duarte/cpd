@@ -1,5 +1,5 @@
 //! The Jira transition queue (contract §4.4 `jira_transitions`; migration `jira-transitions`):
-//! one row per PR and target, PENDING, SETTLED or PARKED, never a history table.
+//! one row per Workflow and target, PENDING, SETTLED or PARKED, never a history table.
 
 use super::*;
 use crate::error::CpdError;
@@ -100,7 +100,7 @@ fn jira_transitions_refuses_an_unknown_target_a_half_settled_row_a_half_parked_r
     bad(insert("settled_at, outcome", "'s', 'deleted'"), "unknown outcome", &mut store);
     bad(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', 'nope', 'done', 'q');".into(),
-        "no such PR",
+        "no such Workflow",
         &mut store,
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 0);
@@ -124,7 +124,7 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
     write(&mut store, &again).expect("ON CONFLICT DO NOTHING");
     assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 1);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions WHERE queued_at = 'q'"), 1, "the first row is untouched");
-    write(&mut store, &row("b", "done")).expect("same target, another PR");
-    write(&mut store, &row("a", "in_review")).expect("another target, same PR");
+    write(&mut store, &row("b", "done")).expect("same target, another Workflow");
+    write(&mut store, &row("a", "in_review")).expect("another target, same Workflow");
     assert_eq!(count(&mut store, "SELECT count(*) FROM jira_transitions"), 3);
 }

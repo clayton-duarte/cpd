@@ -1,5 +1,5 @@
-//! Red tests: the phase colour of a working Lead's dot in the plan view's PR box title and in the Dispatch column's
-//! open-PR rows, from docs/commands.md §13.2 ("PR boxes", the open-PR rows of the `PRs` section) and §17 ("The Lead
+//! Red tests: the phase colour of a working Lead's dot in the plan view's Workflow box title and in the Dispatch column's
+//! open-Workflow rows, from docs/commands.md §13.2 ("Workflow boxes", the open-Workflow rows of the `Workflows` section) and §17 ("The Lead
 //! dot rule"), and docs/contract.md §6.1.1, amended by dot-docs: a working Lead's spinner is the bright pair of its
 //! Plan's phase colour (grounding grey 15, plan magenta 13, dispatch cyan 14, deploy yellow 11, done green 10), a
 //! working Session that leads no Plan is cyan 14, and a Plan with a failed Job shows the red loader whatever its
@@ -37,7 +37,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     }
 }
 
-/// pro-d200: the PR box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
+/// pro-d200: the Workflow box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
     let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
@@ -61,7 +61,7 @@ fn dots_plan_box_title_dot_follows_work() {
     assert_eq!(title_dot(&workflow_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
 }
 
-/// A PR of a Plan whose Lead works (or not), with one pull request.
+/// A Workflow of a Plan whose Lead works (or not), with one pull request.
 fn workflow_node(lead_dot: Option<Dot>) -> WorkflowNode {
     WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),

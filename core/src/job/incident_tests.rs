@@ -14,7 +14,7 @@ use crate::store::Store;
 use super::open::{Cause, queue_update};
 
 /// A store with a live incident over the Plan `pay` (the incident Plan) and the Plan `ops`
-/// outside it (held); each has one PR (`api`, `web`) in `waiting`.
+/// outside it (held); each has one Workflow (`api`, `web`) in `waiting`.
 struct Fixture {
     _dir: tempfile::TempDir,
     store: Store,

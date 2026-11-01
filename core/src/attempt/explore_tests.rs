@@ -141,7 +141,7 @@ pub(crate) fn run_sql(env: &mut Env, sql: &str) {
         .unwrap();
 }
 
-/// A queued explore Job `key` in Plan `pay` (no PR, the artefact as its `touches`), with its true fingerprint.
+/// A queued explore Job `key` in Plan `pay` (no Workflow, the artefact as its `touches`), with its true fingerprint.
 pub(crate) fn add_job(env: &mut Env, key: &str, kind: &str, tier: &str) {
     run_sql(
         env,

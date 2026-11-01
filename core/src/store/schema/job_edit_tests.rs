@@ -38,7 +38,7 @@ fn attempt(key: &str, ended: bool) -> String {
     sql
 }
 
-/// A fully migrated store with Plan `pl` (locked), its PR `a` and the Jobs the tests name.
+/// A fully migrated store with Plan `pl` (locked), its Workflow `a` and the Jobs the tests name.
 fn store() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();

@@ -63,7 +63,7 @@ impl fmt::Display for Step {
             Step::E2 => "E2 (liveness)",
             Step::E3 => "E3 (scheduling)",
             Step::E4 => "E4 (open Jobs)",
-            Step::E5 => "E5 (Workflow)",
+            Step::E5 => "E5 (pull request poll)",
             Step::E7 => "E7 (Workflow start)",
             Step::Workers => "the @cpd_workers step",
             Step::HostAlert => "the @cpd_host_alert step",
@@ -163,6 +163,15 @@ fn stuck_prefix(group: &StuckGroup) -> String {
     }
 }
 
+/// The old spelling of [`stuck_prefix`] a message stored before the Workflow rename begins with (map `stuck_prefix`
+/// hazard): the dedupe must match it too, or the Manager is told again of Workflows whose failures predate the rename.
+fn stuck_prefix_legacy(group: &StuckGroup) -> Option<String> {
+    match &group.home {
+        JobHome::Workflow(workflow) => Some(format!("Jobs of PR {}/{workflow} failed ", group.plan)),
+        JobHome::Plan => None,
+    }
+}
+
 /// The one message of a Workflow's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
 /// own minutes and `failed_cause`, oldest first. `<key>` and `<T>` stay as written for the Manager to choose.
 fn stuck_text(group: &StuckGroup) -> String {
@@ -182,7 +191,15 @@ fn stuck_text(group: &StuckGroup) -> String {
 /// is told again.
 fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
     let Some(manager) = live_manager(conn, &group.context)? else { return Ok(false) };
-    Ok(!message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))?)
+    if message_exists(conn, &manager, Some(group.event), &stuck_prefix(group))? {
+        return Ok(false);
+    }
+    if let Some(legacy) = stuck_prefix_legacy(group) {
+        if message_exists(conn, &manager, Some(group.event), &legacy)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The id of the Context's live Manager (role `manager`, not archived), if there is one.

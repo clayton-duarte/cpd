@@ -1,5 +1,5 @@
-//! The restack of a `waiting` PR after the lock (contract §3.8, §4.4 `prs_locked`, §4.5 `pr-restack`): its `base`
-//! may move to the Lead Branch of a PR of its Plan and repo, and the need on that PR may go.
+//! The restack of a `waiting` Workflow after the lock (contract §3.8, §4.4 `prs_locked`, §4.5 `pr-restack`): its `base`
+//! may move to the Lead Branch of a Workflow of its Plan and repo, and the need on that Workflow may go.
 
 use crate::error::{CpdError, ErrorCode};
 use crate::store::Store;
@@ -60,7 +60,7 @@ fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
 #[test]
 fn prs_locked_lets_a_waiting_pr_stack_on_a_pr_of_its_plan_and_repo_after_the_lock() {
     let (_dir, mut store) = locked(&["a", "b"], &[]);
-    write(&mut store, "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'").expect("a restack of a waiting PR");
+    write(&mut store, "UPDATE workflows SET base = 'pay/a' WHERE key = 'b'").expect("a restack of a waiting Workflow");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn pr_needs_no_delete_lets_a_waiting_prs_need_go_when_it_is_the_prs_base_pr_afte
         "UPDATE workflows SET base = 'pay/a' WHERE plan = 'pay' AND key = 'b';
          DELETE FROM workflow_needs WHERE workflow = 'b' AND needs = 'a';",
     )
-    .expect("the need on the base PR goes with the restack");
+    .expect("the need on the base Workflow goes with the restack");
     let deleted = store
         .read(|conn| {
             Ok(conn.query_row("SELECT count(*) FROM history WHERE tbl = 'workflow_needs' AND op = 'delete' AND pk = '[\"pay\",\"b\",\"a\"]'", [], |r| r.get::<_, i64>(0))?)
@@ -123,6 +123,6 @@ fn pr_needs_no_delete_still_refuses_after_the_lock_a_need_that_is_not_the_prs_ba
         "UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't', base = 'pay/a' WHERE key = 'd'",
     )
     .ok();
-    // Whether or not the base moved, a `dispatch` PR keeps its needs.
+    // Whether or not the base moved, a `dispatch` Workflow keeps its needs.
     assert_locked(&mut store, "DELETE FROM workflow_needs WHERE workflow = 'd' AND needs = 'a'");
 }

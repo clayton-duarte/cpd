@@ -541,7 +541,7 @@ fn a_process_that_ends_during_the_grace_is_not_killed() {
 
 // ---- The workflow-worktree model (hs-d680/hs-d682/hs-d683, `wlinear-tests`) ------------------------------------------
 
-/// A temporary store holding Plan `pay`, its PR `api` (`cpd/pay/api`, workflow worktree `/repos/r.lead`) and the
+/// A temporary store holding Plan `pay`, its Workflow `api` (`cpd/pay/api`, Lead worktree `/repos/r.lead`) and the
 /// queued Jobs `a` and `b`; `live` seeds a running Attempt `a-a1` of Job `a` (a live sibling).
 struct StartRig {
     _dir: tempfile::TempDir,
@@ -629,7 +629,7 @@ fn a_linear_attempt_takes_the_workflow_worktree() {
     assert_eq!(
         allocated(&mut rig, "a-a1"),
         ("cpd/pay/api".to_owned(), "/repos/r.lead".to_owned()),
-        "the first live Attempt of the PR reuses the workflow worktree on its Lead Branch"
+        "the first live Attempt of the Workflow reuses the Lead worktree on its Lead Branch"
     );
 }
 

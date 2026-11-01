@@ -754,7 +754,7 @@ fn offsets_unchanged_write_nothing_whatever_the_time() {
     assert!(!home.home.run_dir().join("tui/plan-scroll.json").exists());
 }
 
-/// Plan `p1` of one PR `api`, its Lead `lead` in the chat slot.
+/// Plan `p1` of one Workflow `api`, its Lead `lead` in the chat slot.
 const PLAN_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('lead', 'lead', 'ctx', NULL, NULL, 'n', '/s/lead.jsonl', '/repo', 'O3', NULL, 'idle', NULL,

@@ -1,6 +1,6 @@
 //! Red tests for the Plan-scoped engine hold (contract §3.7 E3/E4/E7, Job inc-v2-engine, hs-d643):
 //! while one `incident` row exists, E3 starts only a Job of a Plan in `incident_plans` or an
-//! explicitly urgent Job; E4 and E7 act only on the PRs of Plans in `incident_plans`; E9, E10 and
+//! explicitly urgent Job; E4 and E7 act only on the Workflows of Plans in `incident_plans`; E9, E10 and
 //! E11 still hold machine-wide.
 //!
 //! The inc-v2-engine Job implements the two stubs these tests call
@@ -46,8 +46,8 @@ fn incident_includes(engine: &mut Engine, plan: &str) {
         .unwrap();
 }
 
-/// A Plan `pay` in `dispatch`: the `dispatch` PR `api` (E4 has an `open` Job to add) and the
-/// `waiting` PR `ship` (E7 has it to start).
+/// A Plan `pay` in `dispatch`: the `dispatch` Workflow `api` (E4 has an `open` Job to add) and the
+/// `waiting` Workflow `ship` (E7 has it to start).
 fn seed_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
@@ -67,7 +67,7 @@ fn seed_dispatch_workflow(engine: &mut Engine) {
         .unwrap();
 }
 
-/// A second Plan `ops` in `dispatch`: the `dispatch` PR `web` and the `waiting` PR `app`.
+/// A second Plan `ops` in `dispatch`: the `dispatch` Workflow `web` and the `waiting` Workflow `app`.
 fn seed_held_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
@@ -156,16 +156,16 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     assert!(!held(engine, "pay"), "a Plan in the incident is not held");
     assert!(held(engine, "ops"), "a Plan outside the incident is held");
 
-    // E4 acts on the incident Plan's `dispatch` PR only: the held Plan's PR gets no `open` Job.
+    // E4 acts on the incident Plan's `dispatch` Workflow only: the held Plan's Workflow gets no `open` Job.
     open::run(engine);
-    assert_eq!(open_jobs(engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's PR");
+    assert_eq!(open_jobs(engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's Workflow");
 
-    // E7 selects only the incident Plan's `waiting` PR; the held Plan's PR is left alone.
+    // E7 selects only the incident Plan's `waiting` Workflow; the held Plan's Workflow is left alone.
     let startable = engine::startable_workflows(engine).unwrap();
     assert_eq!(
         startable,
         vec![(PlanId::parse("pay").unwrap(), WorkflowKey::parse("ship").unwrap())],
-        "E7 starts only the incident Plan's PR"
+        "E7 starts only the incident Plan's Workflow"
     );
 
     // E9, E10 and E11 still hold machine-wide; the other steps run.

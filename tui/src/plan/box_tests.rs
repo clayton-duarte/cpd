@@ -1,4 +1,4 @@
-//! The Plan view's PR boxes are the box widget's (hs-d578, hs-d596): the chart pads nothing itself, `boxes.rs` draws no
+//! The Plan view's Workflow boxes are the box widget's (hs-d578, hs-d596): the chart pads nothing itself, `boxes.rs` draws no
 //! border of its own, and a title follows the corner and one dash.
 
 use ratatui::Terminal;
@@ -38,7 +38,7 @@ fn the_pr_boxes_are_drawn_by_the_box_widget() {
         .take_while(|line| !line.starts_with("#[cfg(test)]"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(product.contains("BoxWidget"), "boxes.rs draws the PR boxes with BoxWidget");
+    assert!(product.contains("BoxWidget"), "boxes.rs draws the Workflow boxes with BoxWidget");
     for hand_built in ["Block::bordered", "BorderType::Rounded", "rect.inner(Margin"] {
         assert!(!product.contains(hand_built), "boxes.rs still hand-builds a box: {hand_built}");
     }

@@ -19,7 +19,7 @@ fn session_row(id: &str, role: &str) -> String {
     )
 }
 
-/// The Centre of a Plan of one PR `api` (repo `api-repo`, base `main`, `dispatch`, no Jobs), as the view reads it.
+/// The Centre of a Plan of one Workflow `api` (repo `api-repo`, base `main`, `dispatch`, no Jobs), as the view reads it.
 fn centre() -> Centre {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();

@@ -30,13 +30,13 @@ struct Fixture {
     env: Env,
 }
 
-/// Plan `pay` in `phase` with `prs` PRs (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
-/// `repo` is the PRs' repo path.
+/// Plan `pay` in `phase` with `prs` Workflows (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
+/// `repo` is the Workflows' repo path.
 fn fixture_at(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>) -> Fixture {
     fixture_with(phase, workflows, repo, false)
 }
 
-/// [`fixture_at`], or, with `repo_is_temp_dir`, with the PRs' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
+/// [`fixture_at`], or, with `repo_is_temp_dir`, with the Workflows' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
 /// and fixed at insert: the `prs_locked` trigger refuses a later change of `repo`).
 fn fixture_with(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>, repo_is_temp_dir: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
@@ -106,7 +106,7 @@ impl Fixture {
         self.spec_file(name, &explore_spec())
     }
 
-    /// An existing queued Job of `kind` (explore: no PR, derived touches) with a true fingerprint, in its own transaction.
+    /// An existing queued Job of `kind` (explore: no Workflow, derived touches) with a true fingerprint, in its own transaction.
     fn job(&mut self, key: &str, kind: &str, status: &str, tier: &str, needs: &[&str]) {
         let explore = matches!(kind, "scout" | "research");
         let (workflow, touches) = if explore { ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]")) } else { ("'api'".to_owned(), "[\"a\"]".to_owned()) };
@@ -259,7 +259,7 @@ fn explore_add_needs_no_pr_flag_when_the_plan_has_two_prs() {
         let spec = f.explore_spec("s.json");
         let out = f.add("s1", "scout", "H2", &spec, None, false, &[]);
         if let Err(e) = &out {
-            assert_ne!(e.code(), ErrorCode::WorkflowRequired, "an explore Job belongs to the Plan, not to a PR");
+            assert_ne!(e.code(), ErrorCode::WorkflowRequired, "an explore Job belongs to the Plan, not to a Workflow");
         }
         assert_eq!(fields(out)["job"]["pr"], Value::Null, "phase {phase}");
         assert_eq!(f.column("s1", "workflow"), None);
@@ -382,7 +382,7 @@ fn explore_spec_context_may_name_machine_paths() {
 
 #[test]
 fn explore_spec_skips_the_touches_tree_check() {
-    // The PRs' repo is a directory that is no git tree: a tree check would read it and fail.
+    // The Workflows' repo is a directory that is no git tree: a tree check would read it and fail.
     let repo = tempfile::tempdir().unwrap();
     let mut f = fixture_at("dispatch", &["api"], Some(repo.path()));
     let spec = f.explore_spec("s.json");
@@ -417,7 +417,7 @@ fn explore_needs_only_explore_jobs() {
 
 #[test]
 fn work_spec_may_cite_an_explore_artefact_path() {
-    // The PRs' repo is the directory that holds `$CPD_HOME`, so the artefact path lies inside a primary checkout by name.
+    // The Workflows' repo is the directory that holds `$CPD_HOME`, so the artefact path lies inside a primary checkout by name.
     let mut f = fixture_with("dispatch", &["api"], None, true);
     let root = f.dir.path().display().to_string();
     let artefact = format!("{}/run/pay/explore/s1.md", f.env.home.root().display());
@@ -429,7 +429,7 @@ fn work_spec_may_cite_an_explore_artefact_path() {
         assert_ne!(e.code(), ErrorCode::SpecInvalid, "the artefact of an explore Job is no primary checkout: {e}");
     }
 
-    // A primary-checkout path of the Plan's PR is still refused.
+    // A primary-checkout path of the Plan's Workflow is still refused.
     let mut spec = work_spec();
     spec["context"] = json!(format!("Read {root}/src/lib.rs."));
     let path = f.spec_file("w2.json", &spec);

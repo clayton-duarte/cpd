@@ -4,7 +4,7 @@
 //!
 //! The commands read the process environment (`CPD_HOME`): a test takes `LOCK`, points it at a temp home and `Drop` puts it back.
 //! No test lets `plan lock` or `plan cancel` reach git, tmux or the engine: the lock is driven to an error that comes before
-//! git (no draft Job; not approved; a PR with no draft Job), and the cancel is the Jobs step (`cancel_jobs`) alone.
+//! git (no draft Job; not approved; a Workflow with no draft Job), and the cancel is the Jobs step (`cancel_jobs`) alone.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -53,7 +53,7 @@ fn plan_arg() -> PlanArg {
     PlanArg { plan: Some(plan_id()) }
 }
 
-/// Plan `pay` in `phase` with PR `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the PR `web`.
+/// Plan `pay` in `phase` with Workflow `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the Workflow `web`.
 fn fixture(phase: &str, extra_workflow: bool) -> Fixture {
     let lock = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
@@ -99,7 +99,7 @@ impl Fixture {
             .unwrap();
     }
 
-    /// A complete draft `work` Job of PR `api`.
+    /// A complete draft `work` Job of Workflow `api`.
     fn draft(&mut self, key: &str) {
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
@@ -107,7 +107,7 @@ impl Fixture {
         ));
     }
 
-    /// An explore Job as `job add` makes it: no PR, `queued`, a fingerprint, the derived touches.
+    /// An explore Job as `job add` makes it: no Workflow, `queued`, a fingerprint, the derived touches.
     fn explore(&mut self, key: &str, kind: &str, status: &str) {
         let tier = if kind == "scout" { "H2" } else { "S2" };
         self.sql(&format!(
@@ -232,7 +232,7 @@ fn plan_review_counts_no_explore_job() {
 
 #[test]
 fn adding_an_explore_job_keeps_an_approved_review_approved() {
-    // The PR `web` has no draft Job, so a lock that passes the approval check ends in `pr_empty`, before git.
+    // The Workflow `web` has no draft Job, so a lock that passes the approval check ends in `pr_empty`, before git.
     let mut f = fixture("plan", true);
     f.draft("d1");
     f.approve_current();
@@ -270,7 +270,7 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     assert_eq!(work["pr"], "api");
     for workflow in out["workflows"].as_array().unwrap() {
         let listed: Vec<&str> = workflow["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {workflow}");
+        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no Workflow row mentions an explore Job: {workflow}");
     }
     assert_eq!(out["counts"]["queued"], 3);
 }

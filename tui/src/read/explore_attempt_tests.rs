@@ -18,7 +18,7 @@ fn pay() -> PlanId {
     PlanId::parse("pay").unwrap()
 }
 
-/// An explore Job `key` (kind `scout`, no PR) of Job status `status`, with no Attempt.
+/// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -46,7 +46,7 @@ fn explore(key: &str, metrics: Option<&str>) -> String {
     explore_job(key, "running") + &explore_attempt(key, metrics)
 }
 
-/// The Job `work` of PR `api` with one Attempt of cost 0.25.
+/// The Job `work` of Workflow `api` with one Attempt of cost 0.25.
 fn work() -> String {
     job("api", "work", "work", "running")
         + "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, metrics)
@@ -54,7 +54,7 @@ fn work() -> String {
                    '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z', '{\"cost_usd\":0.25}');"
 }
 
-/// Plan `pay` with PR `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
+/// Plan `pay` with Workflow `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
 fn mixed() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = store_with(&["api"]);
     run(&mut store, &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
@@ -128,7 +128,7 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
     let flow = read::flow(&mut store, &pay()).unwrap();
     let keys: Vec<&str> = flow.jobs.iter().map(|j| j.key.as_str()).collect();
     assert!(keys.contains(&"work") && keys.contains(&"look"), "{keys:?}");
-    assert!(flow.jobs.iter().find(|j| j.key.as_str() == "look").unwrap().workflow.is_none(), "the explore Job has no PR");
+    assert!(flow.jobs.iter().find(|j| j.key.as_str() == "look").unwrap().workflow.is_none(), "the explore Job has no Workflow");
 }
 
 #[test]

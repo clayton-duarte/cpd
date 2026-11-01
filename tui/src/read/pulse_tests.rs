@@ -39,7 +39,7 @@ fn context(id: &str) -> String {
 
 /// A Plan `id` in `context`, phase dispatch, with Lead Session `l-<id>` in `state` (`blocked` takes a label).
 fn plan(id: &str, context: &str, created: &str, state: &str) -> String {
-    let label = (state == "blocked").then_some("cpd: PR feedback");
+    let label = (state == "blocked").then_some("cpd: Workflow feedback");
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'dispatch', 'l-{id}', '{created}', '2026-01-02T00:00:00.000Z');
@@ -359,7 +359,7 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
     // the Inbox, commands.md §17).
     sql(
         &mut store,
-        "UPDATE sessions SET state = 'blocked', state_label = 'cpd: PR feedback' WHERE id = 'l-p2';
+        "UPDATE sessions SET state = 'blocked', state_label = 'cpd: Workflow feedback' WHERE id = 'l-p2';
          INSERT INTO inbox_items (kind, urgency, subject, label, context, plan, session, opened_at)
            VALUES ('dialog', 'red', 'session:l-p2', 'p2 asks you', 'ctx', 'p2', 'l-p2', '2026-10-18T15:00:00.000Z');",
     );

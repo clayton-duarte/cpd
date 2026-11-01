@@ -1,4 +1,4 @@
-//! Red tests of the need lines between the PR boxes (docs/commands.md §13.2, rules R2 to R5 of Plan plan-lines): a need line
+//! Red tests of the need lines between the Workflow boxes (docs/commands.md §13.2, rules R2 to R5 of Plan plan-lines): a need line
 //! ends in a `┴` on the needing box's top border, a box keeps a dash after its title, and every connector cell touches what it
 //! joins, in the canvas and in the drawn view, scrolled or not. The checker is [`violations`] and [`reaches`] of `lines_tests`.
 
@@ -28,7 +28,7 @@ fn sp(n: usize) -> String {
     " ".repeat(n)
 }
 
-/// A PR `key` of repo `repo`, base `main`, `dispatch`, needing `needs`.
+/// A Workflow `key` of repo `repo`, base `main`, `dispatch`, needing `needs`.
 fn workflow(key: &str, repo: &str, needs: &[&str]) -> WorkflowNode {
     WorkflowNode { repo_name: repo.into(), needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(), ..sample_workflow(key) }
 }
@@ -57,7 +57,7 @@ fn pill(live: Live, key: &str, tier: &str) -> String {
     format!("{CAP_L}{} {key}│{tier}{CAP_R}", live.icon(0).0)
 }
 
-/// The rectangle of each PR's box, read off the canvas: the title starts two cells after the box's `╭`, the box's `╮` is the
+/// The rectangle of each Workflow's box, read off the canvas: the title starts two cells after the box's `╭`, the box's `╮` is the
 /// first one after the title on that row and its `╰` the first one down the box's left column. (Chart lines inside a box use
 /// `╭` and `╮` too, so the corners are found from the titles, not by scanning for them.) In the order of `prs`.
 fn box_rects(buf: &Buffer, workflows: &[WorkflowNode]) -> Vec<Rect> {

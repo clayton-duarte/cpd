@@ -12,7 +12,7 @@ fn plan() -> PlanId {
     PlanId::parse("pl").unwrap()
 }
 
-/// A store with Plan `pl` in `phase` and its PR `r` (`dispatch`), then `extra` SQL.
+/// A store with Plan `pl` in `phase` and its Workflow `r` (`dispatch`), then `extra` SQL.
 fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -35,7 +35,7 @@ fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// SQL for the Job `key` of PR `pr`: a stub draft, a full draft (`full`) or any other status, with its needs.
+/// SQL for the Job `key` of Workflow `pr`: a stub draft, a full draft (`full`) or any other status, with its needs.
 fn job(key: &str, workflow: &str, kind: &str, status: &str, full: bool, needs: &[&str]) -> String {
     let (tier, spec) = if full || status != "draft" { ("'S2'", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]'") } else { ("NULL", "NULL, NULL, NULL, NULL, NULL") };
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "f".repeat(64)) };
@@ -127,7 +127,7 @@ fn a_draft_of_a_pr_that_waits_for_another_pr_waits_after_the_lock_only() {
     let (_d, mut s) = store("dispatch", &extra);
     assert!(parked(&mut s).is_empty());
     let (_d, mut s) = store("plan", &extra);
-    assert_eq!(parked(&mut s), ["k"], "a PR that waits for the lock does not wait");
+    assert_eq!(parked(&mut s), ["k"], "a Workflow that waits for the lock does not wait");
 }
 
 #[test]

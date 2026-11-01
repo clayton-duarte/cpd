@@ -1,4 +1,4 @@
-//! The migration `tier-catalog-source` (contract §4.4, §4.5; pro-d26, Plan bifrost, PR catfp): `tier_catalog` is rebuilt empty
+//! The migration `tier-catalog-source` (contract §4.4, §4.5; pro-d26, Plan bifrost, Workflow catfp): `tier_catalog` is rebuilt empty
 //! with `models_sha` in its primary key, `(pi_version, models_sha, letter, model)`. It is a cache: the rows are recomputed by the
 //! next `cpd tiers`, so the rebuild drops them.
 

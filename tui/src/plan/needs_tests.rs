@@ -63,7 +63,7 @@ fn no_chat_slot_needs_no_clock() {
     none_of(&needs(&snap(None, None), Instant::now()));
 }
 
-/// A Plan of one PR with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
+/// A Plan of one Workflow with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
 fn tests_centre(jobs: usize) -> Centre {
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey};

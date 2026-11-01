@@ -14,7 +14,7 @@ use crate::store::Store;
 
 use super::ledger::{self, End, Ladder, Stage};
 
-/// A temporary store with a Plan `pay`, its PR `api` and the Job `a`, whose Attempts the tests add.
+/// A temporary store with a Plan `pay`, its Workflow `api` and the Job `a`, whose Attempts the tests add.
 pub(super) struct Fixture {
     _dir: tempfile::TempDir,
     pub(super) store: Store,

@@ -1,6 +1,6 @@
 //! Red tests for a linear Attempt's merge (contract §7.4, hs-d680/hs-d682/hs-d683): its branch is the
-//! PR's Lead Branch, so the merge diffs `base_sha...submitted_sha` for the tamper check, skips the rebase
-//! and the fast-forward, keeps rule P's push and runs the Gate in the workflow worktree, and records
+//! Workflow's Lead Branch, so the merge diffs `base_sha...submitted_sha` for the tamper check, skips the rebase
+//! and the fast-forward, keeps rule P's push and runs the Gate in the Lead worktree, and records
 //! `merged_sha = submitted_sha`. R recovers a linear Attempt in `merging` whose `submitted_sha` is an
 //! ancestor of the Lead Branch tip with `merged_sha = submitted_sha`. Red until `wlinear-impl` teaches the
 //! merge and R the linear case.
@@ -40,7 +40,7 @@ fn commit(u: &mut Universe, repo: RepoId, parents: &[Oid], files: &[(&str, &str)
     u.commit(repo, &tree, parents, message)
 }
 
-/// A temp `$CPD_HOME` whose PR `pay/api` is `open` on its Lead Branch `cpd/pay/api`, with one `merging`
+/// A temp `$CPD_HOME` whose Workflow `pay/api` is `open` on its Lead Branch `cpd/pay/api`, with one `merging`
 /// linear Attempt `a-a1` whose `submitted_sha` is `submitted` and whose `base_sha` is `base`.
 struct Rig {
     _tmp: TempDir,
@@ -51,7 +51,7 @@ struct Rig {
     id: AttemptId,
 }
 
-/// The store and the workflow worktree of a linear Attempt whose commit `attempt_tree` is `submitted`,
+/// The store and the Lead worktree of a linear Attempt whose commit `attempt_tree` is `submitted`,
 /// optionally followed by a sibling's commit `sibling_tree` on top (the Lead Branch tip is past `submitted`).
 fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();

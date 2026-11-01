@@ -172,8 +172,8 @@ fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
 /// `starting` or `running` Attempt with no `stop_request`, and appends one `incident-started` Event;
 /// `reason` must be non-empty. A start while `incident` is live replaces `incident_plans` with
 /// exactly the named Plans, keeps `started_at`, `started_by` and `reason`, runs no stop-request
-/// sweep, and appends one `incident-plans` Event only when the set or `until_pr` changed. `until_pr`
-/// is the optional `<plan>/<key>` auto-end Workflow; when it is absent the stored `until_plan`/`until_pr`
+/// sweep, and appends one `incident-plans` Event only when the set or `until_workflow` changed. `until_workflow`
+/// is the optional `<plan>/<key>` auto-end Workflow; when it is absent the stored `until_plan`/`until_workflow`
 /// are cleared.
 pub fn start(
     store: &mut Store,
@@ -307,9 +307,9 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
 }
 
 /// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
-/// recorded. When the stored `until_pr` Workflow is merged, deletes the `incident` row and every
-/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-pr"`, `by`
-/// `"engine"`), returning true; false when incident mode is off, no `until_pr` is stored, or the
+/// recorded. When the stored `until_workflow` Workflow is merged, deletes the `incident` row and every
+/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-workflow"`, `by`
+/// `"engine"`), returning true; false when incident mode is off, no `until_workflow` is stored, or the
 /// Workflow is not merged.
 pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let stored = tx
@@ -332,7 +332,7 @@ pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError>
     tx.execute("DELETE FROM incident_plans", [])?;
     tx.execute("DELETE FROM incident WHERE id = 1", [])?;
     let ended_at = clock::now();
-    append(tx, NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-pr"))?;
+    append(tx, NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-workflow"))?;
     Ok(true)
 }
 

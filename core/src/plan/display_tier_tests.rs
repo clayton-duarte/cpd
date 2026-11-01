@@ -25,7 +25,7 @@ fn event(kind: &str, job: &str) -> String {
     format!("INSERT INTO events (txn, at, kind, context, plan, job, text, data) VALUES (cpd_txn(), 't', '{kind}', 'ctx', 'pl', '{job}', 'x', '{{}}');")
 }
 
-/// A store holding the Plan `p` with its PR `r` (`dispatch`) and the Job `a` (`status`, `tier`, `retry_tier`), then `extra` SQL.
+/// A store holding the Plan `p` with its Workflow `r` (`dispatch`) and the Job `a` (`status`, `tier`, `retry_tier`), then `extra` SQL.
 fn store_with(status: &str, tier: Option<&str>, retry_tier: Option<&str>, extra: &str) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();

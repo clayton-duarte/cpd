@@ -16,7 +16,7 @@ use crate::store::Store;
 use super::open::hold_refused;
 
 /// A store with a live incident over the Plan `pay` (the incident Plan) and the Plan `ops`
-/// outside it (held); each has one PR (`api`, `web`).
+/// outside it (held); each has one Workflow (`api`, `web`).
 struct Fixture {
     _dir: tempfile::TempDir,
     store: Store,
@@ -67,7 +67,7 @@ fn pr_open_refuses_a_held_plan_for_an_agent() {
     assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
     assert_eq!(err.exit().code(), 3, "incident_hold is exit 3");
     assert_eq!(err.details()["plan"], json!("ops"), "details.plan names the held Plan");
-    assert_eq!(err.details()["pr"], json!("web"), "details.pr names the PR the caller resolved");
+    assert_eq!(err.details()["pr"], json!("web"), "details.pr names the Workflow the caller resolved");
     assert_eq!(err.details()["incident"]["reason"], json!("why"), "details.incident is the incident");
 }
 

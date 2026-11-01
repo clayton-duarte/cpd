@@ -1,4 +1,4 @@
-//! The closed-unmerged predicate: an `open` PR whose stored pull request is `closed`.
+//! The closed-unmerged predicate: an `open` Workflow whose stored pull request is `closed`.
 
 use super::closed::{ClosedUnmerged, closed_unmerged};
 use crate::home::CpdHome;
@@ -49,7 +49,7 @@ impl Fixture {
         ));
     }
 
-    /// PR `key` of `plan` in `status` (`open` or `merged`) on pull request `n`.
+    /// Workflow `key` of `plan` in `status` (`open` or `merged`) on pull request `n`.
     fn workflow_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
         let merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
         self.sql(&format!(
@@ -99,7 +99,7 @@ fn a_cancelled_pr_whose_pull_request_is_closed_is_not_closed_unmerged() {
     let mut f = fixture();
     f.pull(7, "closed");
     f.workflow_on("pay", "api", "open", 7);
-    // `pr cancel` of an open PR: the status is all that the predicate may read.
+    // `workflow cancel` of an open Workflow: the status is all that the predicate may read.
     f.sql("PRAGMA ignore_check_constraints = ON; UPDATE workflows SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
     assert_eq!(f.found(None), []);
 }

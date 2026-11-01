@@ -128,8 +128,8 @@ fn the_tree_animates_a_working_dot_of_every_work() {
 
 const T: &str = "'2026-01-02T01:00:00.000Z'";
 
-/// The tree of a store with one Plan `px` in `phase`, its Lead `l-x` working, one PR `work` (status `dispatch`) and
-/// `extra` SQL (more PRs, Jobs, Attempts). No tmux, git or gh.
+/// The tree of a store with one Plan `px` in `phase`, its Lead `l-x` working, one Workflow `work` (status `dispatch`) and
+/// `extra` SQL (more Workflows, Jobs, Attempts). No tmux, git or gh.
 fn scenario(phase: &str, extra: &str) -> Tree {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
@@ -156,7 +156,7 @@ fn scenario(phase: &str, extra: &str) -> Tree {
     read::tree(&mut store).unwrap()
 }
 
-/// A PR `key` of Plan `px`, `status` in the PR table, its pull request `mergeable` as given.
+/// A Workflow `key` of Plan `px`, `status` in the Workflow table, its pull request `mergeable` as given.
 fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     let opened = if status == "open" {
         format!("{number}, 'https://github.com/acme/repo/pull/{number}', {T}, (SELECT id FROM pull_requests WHERE number = {number}),")
@@ -179,7 +179,7 @@ fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     )
 }
 
-/// A Job `key` of PR `pr` of kind `kind` and `status`.
+/// A Job `key` of Workflow `pr` of kind `kind` and `status`.
 fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
     format!(
@@ -199,15 +199,15 @@ fn attempt(job: &str, status: &str) -> String {
     )
 }
 
-/// `dots_tree_dispatch_with_open_pr_is_yellow`: in dispatch, an open PR (any of them, not only the first), a
+/// `dots_tree_dispatch_with_open_pr_is_yellow`: in dispatch, an open Workflow (any of them, not only the first), a
 /// conflicting one, or a queued or running `open`/`update` Job makes the Lead's dot yellow (`Work::Review`).
 #[test]
 fn dots_tree_dispatch_with_open_pr_is_yellow() {
     let review = Dot::Working(Some(Work::Review));
-    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "mergeable")), "px"), review, "an open PR");
-    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "conflicting")), "px"), review, "a conflicting PR");
+    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "mergeable")), "px"), review, "an open Workflow");
+    assert_eq!(lead_dot(&scenario("dispatch", &workflow("api", 1, "open", "conflicting")), "px"), review, "a conflicting Workflow");
     let second = format!("{}{}", workflow("a-first", 1, "dispatch", "unknown"), workflow("b-second", 2, "open", "mergeable"));
-    assert_eq!(lead_dot(&scenario("dispatch", &second), "px"), review, "only the second PR is open");
+    assert_eq!(lead_dot(&scenario("dispatch", &second), "px"), review, "only the second Workflow is open");
     for kind in ["open", "update"] {
         for status in ["queued", "running"] {
             let extra = job("work", "j1", kind, status);
@@ -216,13 +216,13 @@ fn dots_tree_dispatch_with_open_pr_is_yellow() {
     }
 }
 
-/// `dots_tree_dispatch_with_work_jobs_only_is_cyan`: running and queued work Jobs, no open PR: `Work::Dispatch`.
+/// `dots_tree_dispatch_with_work_jobs_only_is_cyan`: running and queued work Jobs, no open Workflow: `Work::Dispatch`.
 #[test]
 fn dots_tree_dispatch_with_work_jobs_only_is_cyan() {
     let extra = format!("{}{}", job("work", "j1", "work", "running"), job("work", "j2", "work", "queued"));
     assert_eq!(lead_dot(&scenario("dispatch", &extra), "px"), Dot::Working(Some(Work::Dispatch)));
     let conflicting = format!("{}{}", workflow("api", 1, "open", "conflicting"), extra);
-    assert_eq!(lead_dot(&scenario("dispatch", &conflicting), "px"), Dot::Working(Some(Work::Review)), "an open PR turns it yellow");
+    assert_eq!(lead_dot(&scenario("dispatch", &conflicting), "px"), Dot::Working(Some(Work::Review)), "an open Workflow turns it yellow");
 }
 
 /// `dots_tree_grounding_plan_and_done_are_magenta`: never white for grounding nor green for done.
@@ -233,7 +233,7 @@ fn dots_tree_grounding_plan_and_done_are_magenta() {
     }
 }
 
-/// `dots_tree_draft_job_beats_open_pr`: a draft Job (a new batch) is planning even while a PR is open.
+/// `dots_tree_draft_job_beats_open_pr`: a draft Job (a new batch) is planning even while a Workflow is open.
 #[test]
 fn dots_tree_draft_job_beats_open_pr() {
     for phase in ["dispatch", "done"] {

@@ -83,7 +83,7 @@ impl Fx {
         self.sql("UPDATE sessions SET state = 'idle' WHERE id = 'l-pay'");
     }
 
-    /// A Job of `kind` and `status` of the PR `p<n>` of Plan `pay`.
+    /// A Job of `kind` and `status` of the Workflow `p<n>` of Plan `pay`.
     fn job(&mut self, n: i64, key: &str, kind: &str, status: &str) {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
         let sha = if status == "merged" { "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" } else { "NULL" };

@@ -1,12 +1,12 @@
 //! E8 on failed explore Jobs (`scout`/`research`, `jobs.pr` NULL; contract §3.7 "A stuck Job"): E8 does not fail on them,
-//! and the stuck explore Jobs of a Plan are one message to the Manager, once, whatever the Plan's PR Jobs do.
+//! and the stuck explore Jobs of a Plan are one message to the Manager, once, whatever the Plan's Workflow Jobs do.
 
 use serde_json::Value;
 
 use super::inbox_tests::{data, failed_job, fx, manager, messages, open_items, stuck_text, tick};
 use super::testkit::{Fx, ago};
 
-/// A `failed` explore Job `key` of Plan `pay` (kind `scout`, no PR) whose `job-failed` Event is `minutes` old.
+/// A `failed` explore Job `key` of Plan `pay` (kind `scout`, no Workflow) whose `job-failed` Event is `minutes` old.
 fn failed_explore(fx: &mut Fx, key: &str, minutes: i64) {
     fx.fixture(&format!(
         "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
@@ -88,7 +88,7 @@ fn only_the_leads_state_says_an_explore_job_is_being_worked_on() {
     assert_eq!(messages(&mut fx), []);
 
     idle_lead(&mut fx);
-    // A queued PR Job created after the failure does not hold an explore Job back: it has no PR.
+    // A queued Workflow Job created after the failure does not hold an explore Job back: it has no Workflow.
     fx.fixture(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                            fingerprint, created_txn, created_at)

@@ -227,8 +227,8 @@ fn a_build_that_adds_a_migration_origin_main_lacks_is_refused_before_building() 
 
     assert_refused_before_building(&rig, &run);
     assert!(run.stderr.contains("this build carries migration 29991231T2359-branch-only.sql that is not on origin/main"), "{}", run.stderr);
-    assert!(run.stderr.contains(&format!("apply it to {}/cpd.db before the PR merges", rig.cpd_home().display())), "{}", run.stderr);
-    assert!(run.stderr.contains("Merge main into this branch, or wait until the PR merges, then install again."), "{}", run.stderr);
+    assert!(run.stderr.contains(&format!("apply it to {}/cpd.db before the Workflow merges", rig.cpd_home().display())), "{}", run.stderr);
+    assert!(run.stderr.contains("Merge main into this branch, or wait until the Workflow merges, then install again."), "{}", run.stderr);
 }
 
 #[test]

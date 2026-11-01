@@ -13,7 +13,7 @@ use crate::store::Store;
 
 use super::ledger::{self, End, Ladder, Stage};
 
-/// A temporary store with a Plan `pay`, its PR `api`, Job `a` `running` with the Attempt `a-a1`
+/// A temporary store with a Plan `pay`, its Workflow `api`, Job `a` `running` with the Attempt `a-a1`
 /// the engine stopped (`stop_request = 'cancelled'`, its `cancel_requested_at` set by
 /// `job cancel`), and the queued Job `b` that needs `a`.
 fn fixture() -> (tempfile::TempDir, Store) {
