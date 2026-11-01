@@ -14,22 +14,25 @@ PRAGMA legacy_alter_table = OFF;
 
 -- 1. Drop the hand-written triggers, the index and the generated history triggers that name the object, so nothing
 -- is left pointing at a table that no longer exists (the reconcile regenerates the history triggers, K4).
-DROP TRIGGER prs_locked;
-DROP TRIGGER prs_status;
-DROP TRIGGER prs_shape_fixed;
-DROP TRIGGER prs_head_ref_fixed;
-DROP TRIGGER pr_needs_locked;
-DROP TRIGGER pr_needs_no_delete;
-DROP TRIGGER pr_needs_hist_del;
-DROP TRIGGER jobs_pr_dependencies;
-DROP TRIGGER dependencies_same_pr;
-DROP INDEX prs_head_ref_live;
-DROP TRIGGER prs_hist_ins;
-DROP TRIGGER prs_hist_upd;
-DROP TRIGGER prs_hist_del;
-DROP TRIGGER prs_no_delete;
-DROP TRIGGER pr_needs_hist_ins;
-DROP TRIGGER pr_needs_hist_upd;
+-- `IF EXISTS`: on a fresh store the rebuilds of `prs`, `pr_needs` and `jobs` dropped the generated history
+-- triggers and the reconcile of this transaction has not recreated them yet, while an existing store reconciled
+-- them at its last open; both paths must end with the same schema.
+DROP TRIGGER IF EXISTS prs_locked;
+DROP TRIGGER IF EXISTS prs_status;
+DROP TRIGGER IF EXISTS prs_shape_fixed;
+DROP TRIGGER IF EXISTS prs_head_ref_fixed;
+DROP TRIGGER IF EXISTS pr_needs_locked;
+DROP TRIGGER IF EXISTS pr_needs_no_delete;
+DROP TRIGGER IF EXISTS pr_needs_hist_del;
+DROP TRIGGER IF EXISTS jobs_pr_dependencies;
+DROP TRIGGER IF EXISTS dependencies_same_pr;
+DROP INDEX IF EXISTS prs_head_ref_live;
+DROP TRIGGER IF EXISTS prs_hist_ins;
+DROP TRIGGER IF EXISTS prs_hist_upd;
+DROP TRIGGER IF EXISTS prs_hist_del;
+DROP TRIGGER IF EXISTS prs_no_delete;
+DROP TRIGGER IF EXISTS pr_needs_hist_ins;
+DROP TRIGGER IF EXISTS pr_needs_hist_upd;
 
 -- 2. Rename the tables and their object columns. A rename keeps every row and writes no `history` row.
 ALTER TABLE prs RENAME TO workflows;
