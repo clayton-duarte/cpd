@@ -71,7 +71,7 @@ fn commit(u: &mut Universe, repo: RepoId, parents: &[Oid], files: &[(&str, &str)
     u.commit(repo, &tree, parents, message)
 }
 
-/// A temp `$CPD_HOME` whose PR `pay/api` is `open` on its Lead Branch `cpd/pay/api`, with one `merging` linear Attempt
+/// A temp `$CPD_HOME` whose PR `pay/api` is `dispatch` on its Lead Branch `cpd/pay/api`, with one `merging` linear Attempt
 /// `a-a1` of a `work` Job, whose submitted commit is `BASE` plus `changed`. `base_ahead` is the base branch's own commit
 /// over the branch point, which the Attempt merges when `brings_base`.
 struct Rig {
@@ -141,7 +141,7 @@ fn rig(changed: &[(&str, &str)], base_ahead: &[(&str, &str)], brings_base: bool)
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
                  INSERT INTO prs (plan, key, name, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
-                   VALUES ('pay', 'api', 'cpd', '{}', 'main', 'open', '{lead}', '{}', 't', cpd_txn(), 't');
+                   VALUES ('pay', 'api', 'cpd', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
                  INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status,
                                    appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '{TOUCHES}', '[\"b\"]', '[]', 'work', 'running', 0, '{placeholder}', cpd_txn(), 't');
