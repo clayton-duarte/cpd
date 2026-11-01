@@ -155,6 +155,8 @@ pub struct PrSet {
 #[serde(deny_unknown_fields)]
 pub struct GatesSet {
     pub merge: Option<Gate>,
+    /// `gate.pr` (R11): the pull request's Gate, its TOML key unchanged by the rename.
+    #[serde(rename = "pr")]
     pub workflow: Option<Gate>,
     pub text: Option<String>,
 }
@@ -804,7 +806,7 @@ macro_rules! domains {
 
 domains! {
     gate, Gates, [Lead, Worker], [Machine, Owner, Repo], Gates, GatesSet;
-    workflow, Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, PrSet;
+    workflow = "pr", Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, PrSet;
     deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
     code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;

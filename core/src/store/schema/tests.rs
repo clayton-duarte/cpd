@@ -35,6 +35,11 @@ fn at_version(conn: &Connection, n: usize) {
     conn.pragma_update(None, "user_version", n as i64).unwrap();
 }
 
+/// The six Event kinds of the object before the rename (`pr-added` and its siblings, `workflow-event-kinds`):
+/// `workflow-event-kinds` adds their new names and leaves these in `event_kinds` as history, since past Events
+/// hold them (contract §4.5 K1, §5.2).
+const RETIRED_OBJECT_KINDS: usize = 6;
+
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
     // One database taken through the migrations one at a time: the schema after
@@ -1811,7 +1816,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         rows_before.insert("workflow_needs".into(), workflow_needs);
         assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-        assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
+        // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
+        assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
@@ -2918,8 +2924,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, and the six of `workflow-event-kinds`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + RETIRED_OBJECT_KINDS as i64])]);
 }
 
 // ---------- named migration session-titles ----------
