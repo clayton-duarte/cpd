@@ -36,6 +36,15 @@ pub(super) fn find(
     )))
 }
 
+/// The Tier advice the `tier_advice` rule reads (contract §2.7).
+#[allow(dead_code)] // stub: its caller `find` reads it once the rule is implemented
+pub(super) fn advice(
+    _env: &mut Env,
+    _context: &str,
+) -> Result<Vec<super::tier_advice::Advice>, CpdError> {
+    Ok(Vec::new())
+}
+
 /// `plan lint` (§4.15).
 pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();

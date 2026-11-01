@@ -39,10 +39,11 @@ pub enum Rule {
     PrEmpty,
     DependencyCycle,
     ParallelWriteOverlap,
+    TierAdvice,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 9] = [
+    pub const ALL: [Rule; 10] = [
         Rule::DraftIncomplete,
         Rule::OutlineMissing,
         Rule::OutlineIncomplete,
@@ -52,6 +53,7 @@ impl Rule {
         Rule::PrEmpty,
         Rule::DependencyCycle,
         Rule::ParallelWriteOverlap,
+        Rule::TierAdvice,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,12 +67,13 @@ impl Rule {
             Rule::PrEmpty => "pr_empty",
             Rule::DependencyCycle => "dependency_cycle",
             Rule::ParallelWriteOverlap => "parallel_write_overlap",
+            Rule::TierAdvice => "tier_advice",
         }
     }
 
     pub fn severity(self) -> Severity {
         match self {
-            Rule::ParallelWriteOverlap => Severity::Warn,
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -112,6 +115,7 @@ impl Finding {
                     self.other.as_deref().unwrap_or("")
                 )
             }
+            Rule::TierAdvice => String::new(),
             _ => self.message.clone(),
         }
     }
@@ -137,6 +141,7 @@ pub struct Input<'a> {
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
     pub waiting: &'a BTreeSet<String>,
+    pub advice: &'a [crate::plan::tier_advice::Advice],
 }
 
 impl<'a> Input<'a> {
@@ -155,14 +160,19 @@ impl<'a> Input<'a> {
             jobs,
             outline,
             waiting,
+            advice: &[],
         }
+    }
+
+    pub fn with_advice(self, advice: &'a [crate::plan::tier_advice::Advice]) -> Self {
+        Input { advice, ..self }
     }
 }
 
 type RuleFn = fn(&Input) -> Vec<Finding>;
 
 /// The rules, in catalogue order: another rule is one variant, one function and one line here.
-const RULES: [RuleFn; 9] = [
+const RULES: [RuleFn; 10] = [
     draft_incomplete_rule,
     outline_missing_rule,
     outline_incomplete_rule,
@@ -172,6 +182,7 @@ const RULES: [RuleFn; 9] = [
     pr_empty_rule,
     dependency_cycle_rule,
     parallel_write_overlap_rule,
+    tier_advice_rule,
 ];
 
 impl Rule {
@@ -186,7 +197,9 @@ impl Rule {
             Rule::ShapeIncomplete => ErrorCode::ShapeIncomplete,
             Rule::PrEmpty => ErrorCode::PrEmpty,
             Rule::DependencyCycle => ErrorCode::DependencyCycle,
-            Rule::ParallelWriteOverlap => unreachable!("a warning carries no refusal"),
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => {
+                unreachable!("a warning carries no refusal")
+            }
         }
     }
 }
@@ -403,6 +416,10 @@ fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
         }
     }
     out
+}
+
+fn tier_advice_rule(_: &Input) -> Vec<Finding> {
+    Vec::new()
 }
 
 /// Every finding, sorted by catalogue position, then by pr, job, other (None first).
