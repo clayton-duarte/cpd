@@ -261,7 +261,8 @@
       "--by-user": false,
       "--context": true,
       "--help": false,
-      "--plan": true
+      "--plan": true,
+      "--runner": true
     },
     "positionals": {
       "max": 0,
@@ -869,6 +870,7 @@
       "--help": false,
       "--jira": true,
       "--name": true,
+      "--runner": true,
       "--tier": true,
       "--title": true
     },
