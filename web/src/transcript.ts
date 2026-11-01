@@ -2,7 +2,7 @@
 // TypeScript contract", hs-d819). A real cpd Session renders into the existing Chat through one
 // fold `snapshot` frame: a pi Session is parsed from its session file's JSONL, a durable Session
 // from the plain lines of `cpd session tail` (docs/contract.md 6.20).
-import type { SnapshotFrame } from "./fold/fold";
+import type { SnapshotFrame } from "./fold/fold.ts";
 
 /** One rendered transcript message of a real Session. */
 export interface TranscriptMessage {

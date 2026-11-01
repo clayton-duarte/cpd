@@ -2,7 +2,7 @@
 // hs-d819). Framework-free and dependency-injected: every external boundary is a `LiveDeps`
 // function, so no test spawns cpd, opens a socket or starts a server.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessage } from "../transcript";
+import { parsePiSession, parseTailOutput, toSnapshotFrame, type TranscriptMessage } from "../transcript.ts";
 
 /** One Session the picker offers. */
 export interface LiveSession {
