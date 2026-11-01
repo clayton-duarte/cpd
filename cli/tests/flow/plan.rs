@@ -2232,7 +2232,11 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
         .ok();
     assert_eq!(
         (&out["review"]["status"], &out["current"], &out["jobs"]),
-        (&json!("approved"), &json!(true), &json!(["c", "open-pay-2"]))
+        (
+            &json!("approved"),
+            &json!(true),
+            &json!(["c", "open-pay-2"])
+        )
     );
     let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
     assert_eq!(decided["data"]["jobs"], json!(["c", "open-pay-2"]));
@@ -2323,8 +2327,16 @@ fn a_waiting_stub_refuses_a_review_request_like_any_stub() {
     seed_tiers(&fx.env);
     let spec = spec_file(&fx.env, "waiting");
     fx.cpd(&[
-        "job", "edit", "waiting-stub", "--no-needs", "--tier", "S2", "--spec", &spec,
-        "--plan", "pay",
+        "job",
+        "edit",
+        "waiting-stub",
+        "--no-needs",
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--plan",
+        "pay",
     ])
     .ok();
     let out = fx
@@ -3469,7 +3481,16 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     seed_tiers(&fx.env);
     let spec = spec_file(&fx.env, "batch");
     fx.cpd(&[
-        "job", "edit", "next-1", "--no-needs", "--tier", "S2", "--spec", &spec, "--plan", "pay",
+        "job",
+        "edit",
+        "next-1",
+        "--no-needs",
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--plan",
+        "pay",
     ])
     .ok();
     fx.cpd(&[

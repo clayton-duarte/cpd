@@ -157,7 +157,12 @@ fn complete_draft_needing_a_draft_that_waits_is_refused() {
         &fx.env,
         "DELETE FROM dependencies WHERE plan = 'pl' AND job = 'p';",
     );
-    stub(&fx, "ok", &["--tier", "S2", "--spec", &spec, "--needs", "p"]).ok();
+    stub(
+        &fx,
+        "ok",
+        &["--tier", "S2", "--spec", &spec, "--needs", "p"],
+    )
+    .ok();
 }
 
 #[test]
@@ -173,7 +178,11 @@ fn edit_removing_a_waiting_need_is_accepted() {
     );
     assert_eq!(job_row(&fx.env, "pl", "k", "status"), "draft");
     // Putting the waiting need back is refused: the door refuses the complete draft it would make.
-    refused(&job(&fx, &["edit", "k", "--needs", "a"], "pl"), "draft_parked", 3);
+    refused(
+        &job(&fx, &["edit", "k", "--needs", "a"], "pl"),
+        "draft_parked",
+        3,
+    );
     assert_eq!(count(&fx.env, "dependencies"), 0);
 }
 
@@ -223,7 +232,11 @@ fn stub_in_a_pr_that_waits_for_another_pr_is_accepted() {
     // A complete draft in the same waiting PR is refused: the PR's wait is a wait.
     let spec = spec_file(&fx.env);
     refused(
-        &stub(&fx, "full", &["--tier", "S2", "--spec", &spec, "--pr", "web"]),
+        &stub(
+            &fx,
+            "full",
+            &["--tier", "S2", "--spec", &spec, "--pr", "web"],
+        ),
         "draft_parked",
         3,
     );
