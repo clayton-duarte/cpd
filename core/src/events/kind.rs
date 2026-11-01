@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 20;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
