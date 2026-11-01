@@ -181,9 +181,7 @@ fn aborts_a_running_attempt_failed_aborted() {
     // The Attempt's end and both Events are one write transaction.
     let txn = txn_of(
         &fx,
-        &format!(
-            "tbl = 'attempts' AND op = 'update' AND json_extract(after, '$.cause') = 'aborted'"
-        ),
+        "tbl = 'attempts' AND op = 'update' AND json_extract(after, '$.cause') = 'aborted'",
     );
     assert_eq!(
         event_txn_of(&fx, "attempt-aborted"),
