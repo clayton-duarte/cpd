@@ -53,7 +53,7 @@ mod tier_advice_tests;
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, PrTitle, Text, Title};
-use crate::config::Tier;
+use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -127,6 +127,9 @@ pub struct NewArgs {
     /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
+    /// The new Lead's runner; default the config key `lead_runner`
+    #[arg(long, value_name = "pi|durable")]
+    runner: Option<WorkerRunner>,
 }
 
 /// Filters only: neither falls back to `CPD_PLAN`, so the TUI lists every Plan.
