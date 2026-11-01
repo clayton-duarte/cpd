@@ -27,7 +27,7 @@ pub enum Outcome {
 pub fn stacked(conn: &Connection, plan: &str, pr: &str) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = (SELECT base FROM workflows WHERE plan = ?1 AND key = ?2))",
-        [plan, pr],
+        [plan, workflow],
         |r| r.get(0),
     )?)
 }

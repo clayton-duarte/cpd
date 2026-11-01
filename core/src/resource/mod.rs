@@ -308,7 +308,7 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
         [plan.as_str(), key],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     ).optional()?;
-    let Some((pr, listed, owner, repo)) = found else { return Ok(None) };
+    let Some((workflow, listed, owner, repo)) = found else { return Ok(None) };
     let Some(listed) = listed else { return Ok(None) };
     let mut names: Vec<String> =
         serde_json::from_str(&listed).map_err(|_| CpdError::bad_row(format!("Job {key} of Plan {plan} has resources {listed:?}")))?;
@@ -316,7 +316,7 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
     let (Some(owner), Some(repo)) = (owner, repo) else {
         return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its PR {pr} has no repo")));
     };
-    Ok(Some(Wanted { pr, owner: OwnerLogin::parse(&owner)?, repo: RepoName::parse(&repo)?, names }))
+    Ok(Some(Wanted { workflow, owner: OwnerLogin::parse(&owner)?, repo: RepoName::parse(&repo)?, names }))
 }
 
 /// The holders of the slots of `pool`, in slot order: `None` for a free slot (whatever its file still holds), else its record.

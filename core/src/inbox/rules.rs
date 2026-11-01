@@ -458,7 +458,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            let (plan, pr, key, context, event, at, cause): (String, Option<String>, String, String, i64, String, String) =
+            let (plan, workflow, key, context, event, at, cause): (String, Option<String>, String, String, i64, String, String) =
                 (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
             let age = now - time_of("Event time", &at)?;
             if age < stuck_after {
@@ -470,7 +470,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
             }
             out.push(StuckJob {
                 plan,
-                home: JobHome::of("PR key", pr.as_deref())?,
+                home: JobHome::of("PR key", workflow.as_deref())?,
                 job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
@@ -544,7 +544,7 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
         Ok(lookup) => lookup,
         Err(e) => return kept_review_items(store, Some(&e)),
     };
-    let read = |p: &Post| -> Option<&GhPr> { lookup.prs.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
+    let read = |p: &Post| -> Option<&GhPr> { lookup.workflows.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
     if posts.iter().all(|p| read(p).is_none()) {
         let none = CpdError::new(ErrorCode::GhFailed, "GitHub could not read any pull request posted in the team channel.");
         return kept_review_items(store, Some(&none));
@@ -554,16 +554,16 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
         .into_iter()
         .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
         .filter_map(|post| {
-            let pr = read(post)?;
-            matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)).then_some((post, pr))
+            let workflow = read(post)?;
+            matches!(team::status(post, workflow, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)).then_some((post, workflow))
         })
-        .map(|(post, pr)| {
+        .map(|(post, workflow)| {
             let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
             Condition {
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
                 subject: format!("pr:{}#{}", post.repo, post.number),
-                label: format!("review {name}#{}\n{}", post.number, pr.title),
+                label: format!("review {name}#{}\n{}", post.number, workflow.title),
                 url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
                 context: None,
                 plan: None,
@@ -1044,7 +1044,7 @@ mod tests {
             stuck,
             [StuckJob {
                 plan: PlanId::parse("pay").unwrap(),
-                home: JobHome::Pr(WorkflowKey::parse("p1").unwrap()),
+                home: JobHome::Workflow(WorkflowKey::parse("p1").unwrap()),
                 job: JobKey::parse("a").unwrap(),
                 context: ContextId::parse("ctx").unwrap(),
                 event: latest,
@@ -1071,7 +1071,7 @@ mod tests {
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.len(), 1, "one PR, one group");
         let group = &groups[0];
-        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Pr(WorkflowKey::parse("p1").unwrap()), b));
+        assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Workflow(WorkflowKey::parse("p1").unwrap()), b));
         assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
         assert_eq!(group.jobs[0].event, a);
     }
@@ -1093,7 +1093,7 @@ mod tests {
         f.event("job-failed", None, Some("b"), "2026-01-01T22:00:00.000Z", r#"{}"#);
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Pr(WorkflowKey::parse("p2").unwrap()), JobHome::Pr(WorkflowKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
+        assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Workflow(WorkflowKey::parse("p2").unwrap()), JobHome::Workflow(WorkflowKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
     }
 
     #[test]
@@ -1454,7 +1454,7 @@ mod tests {
     }
 
     fn lookup(prs: &[(&str, u64, GhPr)]) -> Lookup {
-        Lookup { me: ME_LOGIN.to_owned(), prs: prs.iter().map(|(repo, n, pr)| (((*repo).to_owned(), *n), Some(pr.clone()))).collect() }
+        Lookup { me: ME_LOGIN.to_owned(), prs: workflows.iter().map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone()))).collect() }
     }
 
     fn team<'a>(github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>) -> Team<'a> {
@@ -1465,7 +1465,7 @@ mod tests {
     /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
     fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
         write_cache(f, posts);
-        let lookup = lookup(prs);
+        let lookup = lookup(workflows);
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
         all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect()
     }
@@ -1509,8 +1509,8 @@ mod tests {
             ("tagged under a draft", tagged(post("acme/pay", 1)), GhPr { draft: true, ..open_pr() }, false),
         ];
         let mut f = fixture("dispatch");
-        for (rule, post, pr, opens) in cases {
-            let found = reviews(&mut f, &[post], &[("acme/pay", 1, pr)]);
+        for (rule, post, workflow, opens) in cases {
+            let found = reviews(&mut f, &[post], &[("acme/pay", 1, workflow)]);
             assert_eq!(found.len(), usize::from(opens), "{rule}: {found:?}");
         }
     }
@@ -1623,7 +1623,7 @@ mod tests {
         let mut f = fixture("dispatch");
         write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
-        answer.prs.insert(("acme/gone".to_owned(), 2), None);
+        answer.workflows.insert(("acme/gone".to_owned(), 2), None);
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
         assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
 

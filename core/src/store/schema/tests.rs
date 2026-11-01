@@ -266,7 +266,7 @@ fn migrated_pr_keys_follow_4_5() {
         ("/src/123456789012345678901234567", "pr-123456789012345678901"),
         ("/", "pr-"),
     ] {
-        assert_eq!(migrated_pr_key(repo).as_str(), key, "{repo}");
+        assert_eq!(migrated_workflow_key(repo).as_str(), key, "{repo}");
     }
 }
 
@@ -377,7 +377,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
     assert_eq!(migrate, 2);
 
-    let prs = rows(
+    let workflows = rows(
         &mut store,
         "SELECT plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                 pull_request, all_merged_at, start_failed_at, created_txn, created_at, started_at, merged_at
@@ -385,7 +385,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     );
     let n = Value::Null;
     assert_eq!(
-        prs,
+        workflows,
         vec![
             serde_json::json!(["gr", "pay", "/src/pay", "main", "waiting", "cpd/gr", n, n, n, n, n, n, n,
                                migrate, "2026-01-01T00:00:00.001Z", n, n]),
@@ -464,7 +464,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     let mut expected: Vec<Value> = ["di", "dn", "gr", "pl", "pr"]
         .iter()
         .map(|plan| {
-            let key = prs.iter().find(|p| p[0] == *plan).unwrap()[1].clone();
+            let key = workflows.iter().find(|p| p[0] == *plan).unwrap()[1].clone();
             serde_json::json!([2, "prs", serde_json::json!([plan, key]).to_string(), "insert"])
         })
         .collect();
@@ -2291,7 +2291,7 @@ fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
 /// - `mg`: its PR merged;
 /// - `wt`: its PR waiting.
 fn version_5_four_prs(home: &CpdHome) {
-    let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
+    let workflow = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
         let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'/wt'", "'2026-01-02T00:00:00.000Z'") };
         format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -2312,28 +2312,28 @@ fn version_5_four_prs(home: &CpdHome) {
     let sql = format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
          {}{}{}{}",
-        pr(
+        workflow(
             "op1",
             "api",
             "open",
             ", pr_number, pr_url, pr_opened_at, pr_polled_at, pr_title, pr_review_decision, pr_checks",
             ", 7, 'https://github.com/acme/api/pull/7', '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'Add api', 'approved', 'passed'",
         ),
-        pr(
+        workflow(
             "op2",
             "web",
             "open",
             ", pr_number, pr_url, pr_opened_at",
             ", 8, 'https://github.com/acme/web/pull/8', '2026-01-05T00:00:01.000Z'",
         ),
-        pr(
+        workflow(
             "mg",
             "docs",
             "merged",
             ", pr_number, pr_url, pr_opened_at, merged_at",
             ", 9, 'https://github.com/acme/docs/pull/9', '2026-01-05T00:00:02.000Z', '2026-01-08T00:00:00.000Z'",
         ),
-        pr("wt", "cli", "waiting", "", ""),
+        workflow("wt", "cli", "waiting", "", ""),
     );
     database_at(home, 5, &sql);
 }
@@ -2388,7 +2388,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
         .collect();
     let some = |s: &str| Some(s.to_owned());
     assert_eq!(
-        prs,
+        workflows,
         vec![
             ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
             ("op1".into(), "open".into(), Some(2), Some(7), None),
@@ -3732,7 +3732,7 @@ fn before_slack_reactions() -> (tempfile::TempDir, crate::home::CpdHome, Vec<Nam
     let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-slack-reactions")).collect();
     assert!(earlier.len() < NAMED.len(), "slack-reactions is a built-in migration");
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
-    let pr = |key: &str, number: u32, state: &str, merged_at: &str, reaction: &str, reacted_at: &str| {
+    let workflow = |key: &str, number: u32, state: &str, merged_at: &str, reaction: &str, reacted_at: &str| {
         format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
@@ -3750,10 +3750,10 @@ fn before_slack_reactions() -> (tempfile::TempDir, crate::home::CpdHome, Vec<Nam
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');
          {}{}{}{}",
-        pr("a", 1, "merged", "'2026-10-01T10:00:00.000Z'", "'git-merge'", "'2026-10-01T10:05:00.000Z'"),
-        pr("b", 2, "merged", "'2026-10-02T10:00:00.000Z'", "'git-merge'", "NULL"),
-        pr("c", 3, "open", "NULL", "'git-merge'", "NULL"),
-        pr("d", 4, "merged", "'2026-10-04T10:00:00.000Z'", "NULL", "NULL"),
+        workflow("a", 1, "merged", "'2026-10-01T10:00:00.000Z'", "'git-merge'", "'2026-10-01T10:05:00.000Z'"),
+        workflow("b", 2, "merged", "'2026-10-02T10:00:00.000Z'", "'git-merge'", "NULL"),
+        workflow("c", 3, "open", "NULL", "'git-merge'", "NULL"),
+        workflow("d", 4, "merged", "'2026-10-04T10:00:00.000Z'", "NULL", "NULL"),
     );
     store
         .write("fixture", |tx| {

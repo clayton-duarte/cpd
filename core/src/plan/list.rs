@@ -28,7 +28,7 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
     let phase = args.phase.map(|p| p.as_str());
     let heads = row::query(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
     let mut counts = job_counts(conn)?;
-    let mut prs = prs(conn)?;
+    let mut workflows = workflows(conn)?;
     let out = heads
         .into_iter()
         .map(|plan| {
@@ -36,7 +36,7 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
                 "lead_session": plan.lead_session, "archived_at": plan.archived_at,
                 "counts": counts_value(&counts.remove(plan.id.as_str()).unwrap_or_default()),
-                "workflows": prs.remove(plan.id.as_str()).unwrap_or_default(),
+                "workflows": workflows.remove(plan.id.as_str()).unwrap_or_default(),
             })
         })
         .collect();
@@ -61,7 +61,7 @@ fn counts_value(by_status: &BTreeMap<String, i64>) -> Value {
 
 /// What the Dispatch column shows of every PR (§13.2, §17), by Plan, in key order:
 /// `key`, `repo`, `status`, `pr` and `pull_request`.
-fn prs(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
+fn workflows(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT r.plan, r.key, r.repo, r.status, r.pr_number, r.pr_url, r.pr_opened_at,
                 q.id, q.repo, q.number, q.url, q.title, q.draft, q.state, q.review_decision, q.checks, q.created_at, q.merged_at,
@@ -69,15 +69,15 @@ fn prs(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
            FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
     )?;
     let mut by_plan: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for row in stmt.query_map([], pr_row)? {
-        let (plan, pr) = row?;
-        by_plan.entry(plan).or_default().push(pr);
+    for row in stmt.query_map([], workflow_row)? {
+        let (plan, workflow) = row?;
+        by_plan.entry(plan).or_default().push(workflow);
     }
     Ok(by_plan)
 }
 
-fn pr_row(r: &Row) -> rusqlite::Result<(String, Value)> {
-    let pr = match (r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?) {
+fn workflow_row(r: &Row) -> rusqlite::Result<(String, Value)> {
+    let workflow = match (r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?) {
         (Some(number), Some(url), Some(opened_at)) => json!({"number": number, "url": url, "opened_at": opened_at}),
         _ => Value::Null,
     };
@@ -109,7 +109,7 @@ fn pr_row(r: &Row) -> rusqlite::Result<(String, Value)> {
         }
         .to_json(),
     };
-    let value = json!({"key": r.get::<_, String>(1)?, "repo": r.get::<_, String>(2)?, "status": r.get::<_, String>(3)?, "pr": pr, "pull_request": pull_request});
+    let value = json!({"key": r.get::<_, String>(1)?, "repo": r.get::<_, String>(2)?, "status": r.get::<_, String>(3)?, "pr": workflow, "pull_request": pull_request});
     Ok((r.get(0)?, value))
 }
 

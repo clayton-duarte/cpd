@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::auto_merge::{self, Outcome};
 use super::postable::unready;
 use super::posts::{self, PostRecord};
-use super::{Env, pr_policy};
+use super::{Env, workflow_policy};
 use crate::args::{PlanArg, WorkflowArg};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
@@ -40,32 +40,32 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?.clone();
-    let key = pr.key.clone();
+    let workflow = plan.select(&args.workflow)?.clone();
+    let key = workflow.key.clone();
 
     // (a)
-    if pr.status != "open" {
+    if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("PR {key} of Plan {id} is {}: pr post needs an open PR.", pr.status),
+            format!("PR {key} of Plan {id} is {}: pr post needs an open PR.", workflow.status),
         )
         .with("pr", key.as_str())
-        .with("status", pr.status.as_str()));
+        .with("status", workflow.status.as_str()));
     }
     // (b)
     if let Some(done) = env.store.read(|conn| posts::find(conn, id.as_str(), key.as_str()))? {
         return Err(already_posted(&key, &done));
     }
     // (c)
-    let policy = pr_policy(&mut env, &id, &key)?;
+    let policy = workflow_policy(&mut env, &id, &key)?;
     // (d)
-    if !policy.pr.post.enabled {
+    if !policy.workflow.post.enabled {
         return Err(CpdError::new(ErrorCode::PostDisabled, format!("PR {key}: posting is not enabled for its owner."))
             .with("pr", key.as_str())
             .with("key", "pr.post.enabled"));
     }
     // (e)
-    let row = pr.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
+    let row = workflow.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     if !pull.authored {
         return Err(CpdError::new(ErrorCode::NotAuthored, format!("Pull request {} of PR {key} is not the User's own.", pull.number))
@@ -73,7 +73,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("number", pull.number));
     }
     // (f)
-    let channel = [policy.pr.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
+    let channel = [policy.workflow.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
         .into_iter()
         .find(|c| !c.is_empty())
         .ok_or_else(|| {
@@ -112,7 +112,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("rebase", m.rebase));
     }
     // (h)
-    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url).map_err(|e| {
+    let message = crate::policy::render_post(&policy.workflow.post.template, &pull.title, &pull.url).map_err(|e| {
         CpdError::new(ErrorCode::PolicyInvalid, format!("The pr.post.template does not render: {e}."))
             .with("key", "pr.post.template")
     })?;
@@ -133,7 +133,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         ts: text("ts"),
         link: text("link"),
         posted_at: timestamp(env.ports.clock.utc()),
-        reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
+        reaction: Some(policy.workflow.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
         reacted_at: None,
         auto_merge: "pending".to_owned(),
         auto_merge_at: None,

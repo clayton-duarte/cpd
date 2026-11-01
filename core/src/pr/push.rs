@@ -7,7 +7,7 @@ use serde_json::json;
 use super::row::PlanWorkflows;
 use crate::plan::WorkflowRow;
 use super::open::{agent, hold_refused};
-use super::{Args, Env, gate, hide_untracked, illegal_phase, pr_policy, require_clean_lead};
+use super::{Args, Env, gate, hide_untracked, illegal_phase, workflow_policy, require_clean_lead};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
@@ -21,22 +21,22 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    let pr = require_open(&plan, &args)?;
-    let key = pr.key.clone();
+    let workflow = require_open(&plan, &args)?;
+    let key = workflow.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
-    let branch = pr.lead_branch.clone();
-    let remote_branch = pr.remote_branch().to_owned();
-    let adopted = pr.head_ref.is_some();
-    let lead = pr.lead(&id)?.clone();
-    let policy = pr_policy(&mut env, &id, &key)?;
+    let branch = workflow.lead_branch.clone();
+    let remote_branch = workflow.remote_branch().to_owned();
+    let adopted = workflow.head_ref.is_some();
+    let lead = workflow.lead(&id)?.clone();
+    let policy = workflow_policy(&mut env, &id, &key)?;
 
     // 1. G, read once; 2. when the PR's gate is local, the Lead worktree brought to G and the Gate on it there.
-    let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
-    if policy.gate.pr == Gate::Local {
-        require_clean_lead(&lead, &id, pr)?;
+    let sha = git::run::rev_parse(std::path::Path::new(&workflow.repo), &format!("refs/heads/{branch}"))?;
+    if policy.gate.workflow == Gate::Local {
+        require_clean_lead(&lead, &id, workflow)?;
         git::sync_lead(&lead, &branch)?;
         let hidden = hide_untracked(&lead)?;
-        let gated = gate(&env, &policy, &id, pr, &lead, &sha, &format!("pr push --pr {key}"));
+        let gated = gate(&env, &policy, &id, workflow, &lead, &sha, &format!("pr push --pr {key}"));
         hidden.restore()?;
         gated?;
     }
@@ -71,9 +71,9 @@ fn require_open<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a Workflow
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
-    let pr = plan.select(&args.pr)?;
-    if pr.status != "open" {
-        return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
+    let workflow = plan.select(&args.workflow)?;
+    if workflow.status != "open" {
+        return Err(workflow.refuse(&plan.plan.id, COMMAND, "open"));
     }
-    Ok(pr)
+    Ok(workflow)
 }

@@ -89,7 +89,7 @@ pub struct Jira {
 /// The `pr` domain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Pr {
+pub struct Workflow {
     pub feedback: Feedback,
     pub post: Post,
     pub jira: Jira,
@@ -171,7 +171,7 @@ pub trait HasText {
     fn text(&self) -> &str;
 }
 
-impl HasText for Pr {
+impl HasText for Workflow {
     fn text(&self) -> &str {
         &self.text
     }
@@ -393,26 +393,26 @@ impl Set for GatesSet {
     type Value = Gates;
 
     fn fill(&self, base: &Gates) -> (Gates, Vec<&'static str>) {
-        let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.pr.is_none())]);
+        let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.workflow.is_none())]);
         let value = Gates {
             merge: self.merge.unwrap_or(base.merge),
-            pr: self.pr.unwrap_or(base.pr),
+            pr: self.workflow.unwrap_or(base.workflow),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
     }
 
     fn complete(&self) -> Option<Gates> {
-        Some(Gates { merge: self.merge?, pr: self.pr?, text: self.text.clone()? })
+        Some(Gates { merge: self.merge?, pr: self.workflow?, text: self.text.clone()? })
     }
 }
 
 impl Set for PrSet {
-    type Value = Pr;
+    type Value = Workflow;
 
     /// `[pr] gate` is the deprecated alias, not a key of the `pr` domain: `parse_scope` moves it into
     /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
-    fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
+    fn fill(&self, base: &Workflow) -> (Workflow, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
         let post = self.post.as_ref();
         let jira = self.jira.as_ref();
@@ -432,7 +432,7 @@ impl Set for PrSet {
             (JIRA_ESTIMATE_FIELDS, jira.and_then(|j| j.estimate_fields.as_ref()).is_none()),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
-        let value = Pr {
+        let value = Workflow {
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
             post: Post {
                 enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
@@ -455,8 +455,8 @@ impl Set for PrSet {
         (value, left_out)
     }
 
-    fn complete(&self) -> Option<Pr> {
-        Some(Pr {
+    fn complete(&self) -> Option<Workflow> {
+        Some(Workflow {
             feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
             post: {
                 let p = self.post.as_ref()?;
@@ -789,7 +789,7 @@ macro_rules! domains {
             let warnings = layers
                 .iter()
                 .filter_map(|(src, scope)| {
-                    scope.pr.as_ref()?.gate.map(|_| {
+                    scope.workflow.as_ref()?.gate.map(|_| {
                         format!(
                             "{src}: the deprecated [pr] gate key is set; use [gate] merge and [gate] pr instead \
                              (local maps to both local, ci/none to both none)"
@@ -804,7 +804,7 @@ macro_rules! domains {
 
 domains! {
     gate, Gates, [Lead, Worker], [Machine, Owner, Repo], Gates, GatesSet;
-    pr, Pr, [Lead, Worker], [Machine, Owner, Repo], Pr, PrSet;
+    workflow, Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, PrSet;
     deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
     code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;

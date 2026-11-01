@@ -47,31 +47,31 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?;
-    if pr.status != "open" {
+    let workflow = plan.select(&args.workflow)?;
+    if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("PR {} of Plan {id} is {}: pr reply needs an open PR.", pr.key, pr.status),
+            format!("PR {} of Plan {id} is {}: pr reply needs an open PR.", workflow.key, workflow.status),
         )
         .with("plan", id.as_str())
-        .with("pr", pr.key.as_str())
-        .with("status", pr.status.as_str()));
+        .with("pr", workflow.key.as_str())
+        .with("status", workflow.status.as_str()));
     }
-    let row = pr.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
+    let row = workflow.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     let list = pull.feedback.unwrap_or_default();
     let Some(item) = list.iter().find(|i| i.id == args.to) else {
         let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
         return Err(CpdError::new(
             ErrorCode::FeedbackNotFound,
-            format!("PR {} has no open feedback item {:?}.", pr.key, args.to),
+            format!("PR {} has no open feedback item {:?}.", workflow.key, args.to),
         )
-        .with("pr", pr.key.as_str())
+        .with("pr", workflow.key.as_str())
         .with("to", args.to.as_str())
         .with("open", json!(open)));
     };
 
-    let lead = pr.lead(&id)?;
+    let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
     let url = match item.kind {
         Kind::Thread => gh::reply_to_thread(runner, lead, &item.id, &format!("{text}\n\n{MARKER}"))?,
@@ -80,5 +80,5 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
             gh::reply_to_comment(runner, lead, &node, &format!("Re: {}\n\n{text}\n\n{MARKER}", item.url))?
         }
     };
-    Ok(Output::success(json!({"replied": {"pr": pr.key, "to": args.to, "url": url}})))
+    Ok(Output::success(json!({"replied": {"pr": workflow.key, "to": args.to, "url": url}})))
 }

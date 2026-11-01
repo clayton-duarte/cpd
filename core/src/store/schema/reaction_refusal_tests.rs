@@ -25,7 +25,7 @@ const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
        VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');";
 
 /// A merged object with its post, after `workflow-rename`: the table is `workflows` and the columns `workflow`.
-fn pr(key: &str, number: u32, reaction: &str) -> String {
+fn workflow(key: &str, number: u32, reaction: &str) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
@@ -38,7 +38,7 @@ fn pr(key: &str, number: u32, reaction: &str) -> String {
 }
 
 /// The same before `workflow-rename`: the table is `prs`, the columns `pr`.
-fn pr_before(key: &str, number: u32, reaction: &str) -> String {
+fn workflow_before(key: &str, number: u32, reaction: &str) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
@@ -61,9 +61,9 @@ fn before_refusal() -> (tempfile::TempDir, CpdHome) {
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000002', 'git-merge', 'q2', 'r2');
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000001', 'eyes', 'q3', NULL);
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000099', 'git-merge', 'q4', NULL);",
-        pr_before("a", 1, "'git-merge'"),
-        pr_before("b", 2, "'git-merge'"),
-        pr_before("c", 3, "NULL"),
+        workflow_before("a", 1, "'git-merge'"),
+        workflow_before("b", 2, "'git-merge'"),
+        workflow_before("c", 3, "NULL"),
     );
     write(&mut store, &sql).unwrap();
     drop(store);
@@ -92,7 +92,7 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, pr: Value| {
-        serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": pr, "refused_at": null, "refusal": null})
+        serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null})
     };
     let expected = vec![
         row("1793040000.000001", "git-merge", "q1", Value::Null, "pay".into(), "a".into()),
@@ -111,7 +111,7 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
     let (_dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    write(&mut store, &format!("{PLAN}{}", pr("a", 1, "'git-merge'"))).unwrap();
+    write(&mut store, &format!("{PLAN}{}", workflow("a", 1, "'git-merge'"))).unwrap();
     let insert = |columns: &str, values: &str| format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at, {columns}) VALUES ('C0X', '1793040000.000001', 'e', 'q', {values});");
     for (columns, values, what) in [
         ("plan", "'pay'", "plan without pr"),

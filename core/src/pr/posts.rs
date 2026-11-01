@@ -30,7 +30,7 @@ pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord
     Ok(conn
         .query_row(
             "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND workflow = ?2",
-            [plan, pr],
+            [plan, workflow],
             |r| {
                 Ok(PostRecord { channel: r.get(0)?, ts: r.get(1)?, link: r.get(2)?, posted_at: r.get(3)?, reaction: r.get(4)?, reacted_at: r.get(5)?, auto_merge: r.get(6)?, auto_merge_at: r.get(7)? })
             },
@@ -43,7 +43,7 @@ pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Res
     let rows = tx.execute(
         "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
          ON CONFLICT (plan, workflow) DO NOTHING",
-        rusqlite::params![plan, pr, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
+        rusqlite::params![plan, workflow, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
     )?;
     Ok(rows == 1)
 }
@@ -55,7 +55,7 @@ pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> R
         "UPDATE pr_posts SET auto_merge = ?3,
            auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
          WHERE plan = ?1 AND workflow = ?2 AND auto_merge = 'pending'",
-        [plan, pr, state],
+        [plan, workflow, state],
     )?;
     Ok(rows == 1)
 }

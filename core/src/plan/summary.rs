@@ -31,7 +31,7 @@ pub struct Input<'a> {
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
-    pub base_prs: &'a BTreeMap<String, String>,
+    pub base_workflows: &'a BTreeMap<String, String>,
 }
 
 /// A Job under review: a `draft` with its Tier and its Spec.
@@ -45,7 +45,7 @@ fn locked(job: &Job) -> bool {
 }
 
 fn repo_name(pr: &WorkflowRow) -> String {
-    pr.name.clone().or_else(|| Path::new(&pr.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| pr.repo.clone())
+    workflow.name.clone().or_else(|| Path::new(&workflow.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| workflow.repo.clone())
 }
 
 /// `Order:` and `Stacked on:` (block 7): empty when no PR counts.
@@ -57,17 +57,17 @@ fn order(i: &Input, counting: &[&WorkflowRow]) -> Vec<String> {
     let counts = |need: &str| keys.contains(need);
     let mut items: Vec<String> = Vec::new();
     let mut tied: BTreeSet<&str> = keys.clone();
-    for pr in counting {
-        for need in pr.needs.iter().filter(|n| counts(n)) {
-            items.push(format!("{need} → {}", pr.key));
-            tied.remove(pr.key.as_str());
+    for workflow in counting {
+        for need in workflow.needs.iter().filter(|n| counts(n)) {
+            items.push(format!("{need} → {}", workflow.key));
+            tied.remove(workflow.key.as_str());
             tied.remove(need.as_str());
         }
     }
     if !tied.is_empty() {
         items.push(tied.into_iter().collect::<Vec<_>>().join(" · "));
     }
-    let stacked: Vec<String> = counting.iter().filter_map(|p| i.base_prs.get(p.key.as_str()).map(|base| format!("{} on {base}", p.key))).collect();
+    let stacked: Vec<String> = counting.iter().filter_map(|p| i.base_workflows.get(p.key.as_str()).map(|base| format!("{} on {base}", p.key))).collect();
     vec![
         format!("Order: {}", items.join(", ")),
         format!("Stacked on: {}", if stacked.is_empty() { "none".to_owned() } else { stacked.join(", ") }),
@@ -83,7 +83,7 @@ fn overlaps_block(overlaps: &[Overlap]) -> Vec<String> {
         let (path, other) = (o.paths.first().map_or("", String::as_str), &o.other_jobs[0]);
         let more = o.paths.len() - 1 + o.other_jobs.len() - 1;
         let more = if more > 0 { format!(" +{more}") } else { String::new() };
-        out.push(format!("- {path}: {}/{}/{} ({}){more}", o.plan, o.pr, other.key, other.status));
+        out.push(format!("- {path}: {}/{}/{} ({}){more}", o.plan, o.workflow, other.key, other.status));
     }
     if overlaps.len() > OVERLAPS_SHOWN {
         out.push(format!("- +{} more overlaps", overlaps.len() - OVERLAPS_SHOWN));
@@ -100,11 +100,11 @@ fn list(head: &str, rows: Vec<String>) -> Vec<String> {
 pub fn markdown(kind: &Kind, i: &Input) -> String {
     let plan = i.plan;
     let outline = plan.outline.as_ref();
-    let mut counting: Vec<&WorkflowRow> = i.prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut counting: Vec<&WorkflowRow> = i.workflows.iter().filter(|p| p.status != "cancelled").collect();
     counting.sort_by(|a, b| a.key.cmp(&b.key));
     let mut reviewed: Vec<&Job> = i.jobs.iter().filter(|j| under_review(j)).collect();
-    reviewed.sort_by(|a, b| (&a.pr, &a.key).cmp(&(&b.pr, &b.key)));
-    let has_review = |pr: &WorkflowRow| reviewed.iter().any(|j| j.pr_str() == pr.key.as_str());
+    reviewed.sort_by(|a, b| (&a.workflow, &a.key).cmp(&(&b.workflow, &b.key)));
+    let has_review = |pr: &WorkflowRow| reviewed.iter().any(|j| j.workflow_str() == workflow.key.as_str());
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {
@@ -115,15 +115,15 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     });
     blocks.push(vec![format!("Goal: {}", outline.map_or(NONE.to_owned(), |o| inline(&o.goal)))]);
 
-    let mut prs = vec!["## PRs".to_owned()];
-    for pr in counting.iter().filter(|p| has_review(p)) {
-        let title = pr.title.as_deref().map_or(NONE.to_owned(), inline);
-        prs.push(format!("- {} ({}, base {}): {title}", pr.key, inline(&repo_name(pr)), inline(&pr.base)));
-        for done in outline.and_then(|o| o.done_when.get(pr.key.as_str())).into_iter().flatten() {
-            prs.push(format!("  Done when: {}", inline(done)));
+    let mut workflows = vec!["## PRs".to_owned()];
+    for workflow in counting.iter().filter(|p| has_review(p)) {
+        let title = workflow.title.as_deref().map_or(NONE.to_owned(), inline);
+        workflows.push(format!("- {} ({}, base {}): {title}", workflow.key, inline(&repo_name(workflow)), inline(&workflow.base)));
+        for done in outline.and_then(|o| o.done_when.get(workflow.key.as_str())).into_iter().flatten() {
+            workflows.push(format!("  Done when: {}", inline(done)));
         }
     }
-    blocks.push(if prs.len() > 1 { prs } else { Vec::new() });
+    blocks.push(if workflows.len() > 1 { workflows } else { Vec::new() });
 
     let decisions = outline.iter().flat_map(|o| &o.decisions).enumerate();
     blocks.push(list("## Decisions", decisions.map(|(n, d)| format!("D{} {} → {}", n + 1, inline(&d.question), inline(&d.answer))).collect()));

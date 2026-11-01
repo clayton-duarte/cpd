@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::spec::{self, Spec};
 use super::{
-    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows, find,
+    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_workflow, check_workflow_live, check_shape_allows, find,
     plan_phase, sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
@@ -17,7 +17,7 @@ use crate::home::CpdHome;
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, Job};
 
 const COMMAND: &str = "job edit";
@@ -47,7 +47,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 /// [`edit`] on an open `env`: what a test hands in.
 pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
+    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.workflow.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
             "Nothing to edit: pass --title, --tier, --spec, --pr, --kind, --needs or --no-needs.",
@@ -72,14 +72,14 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     let spec_kind = stored_kind.unwrap_or_else(|| "work".to_owned());
     let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read_for(path, &spec_kind)).transpose()?;
     if let Some(tier) = args.tier {
-        let pr = args.pr.clone();
-        env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
+        let workflow = args.workflow.clone();
+        env.check_tier(&plan, &args.key, workflow.as_ref(), tier)?;
     }
     let edits = Edits {
         title: args.title.map(|t| t.as_str().to_owned()),
         tier: args.tier.map(|t| t.to_string()),
         spec,
-        pr: args.pr.map(|p| p.as_str().to_owned()),
+        pr: args.workflow.map(|p| p.as_str().to_owned()),
         needs,
         kind: args.kind,
         worker: std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()),
@@ -97,8 +97,8 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
                 let state = if before.is_draft() { "" } else { " (queued, Locked)" };
                 let text = format!("Job {key} of Plan {plan}{state} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
-                if let Some(pr) = &after.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(pr)?)?;
+                if let Some(workflow) = &after.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok((after, fields, false))
             }
@@ -132,7 +132,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if locked {
         let attempts: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
         let editable = before.status == "queued" && !matches!(before.kind.as_str(), "open" | "update") && attempts == 0;
-        let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.pr.is_none() && edits.kind.is_none() && edits.needs.is_none();
+        let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.workflow.is_none() && edits.kind.is_none() && edits.needs.is_none();
         if !editable || !spec_only {
             let why = if editable {
                 "only its Spec (--spec) can change; title, Tier, PR, kind and Dependencies are Locked".to_owned()
@@ -167,7 +167,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         } else {
             // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
             let user_home = std::env::home_dir().unwrap_or_default();
-            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &user_home)?;
+            spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_workflows(conn, plan)?), &user_home)?;
             spec.check_files_relative()?;
         }
         after.spec = Some(spec.stored());
@@ -189,36 +189,36 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
             after.test_files = None;
         }
     }
-    if let Some(pr) = &edits.pr {
-        let prs = load_prs(conn, plan)?;
-        if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
+    if let Some(workflow) = &edits.workflow {
+        let workflows = load_workflows(conn, plan)?;
+        if !workflows.iter().any(|p| p.key.as_str() == workflow.as_str()) {
             return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}."))
                 .with("plan", plan.as_str())
-                .with("pr", pr.as_str()));
+                .with("pr", workflow.as_str()));
         }
-        check_pr_live(&prs, plan, pr)?;
-        after.pr = Some(pr.clone());
+        check_workflow_live(&workflows, plan, workflow)?;
+        after.workflow = Some(workflow.clone());
     }
-    let moved = after.pr != before.pr;
+    let moved = after.workflow != before.workflow;
     if let (false, Some(spec)) = (explore, &edits.spec) {
-        let prs = load_prs(conn, plan)?;
-        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
+        let workflows = load_workflows(conn, plan)?;
+        if let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == after.workflow_str()) {
             // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
-            let mut pr = pr.clone();
-            let lead_exists = crate::git::run::run(std::path::Path::new(&pr.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", pr.lead_branch)])
+            let mut workflow = workflow.clone();
+            let lead_exists = crate::git::run::run(std::path::Path::new(&workflow.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", workflow.lead_branch)])
                 .is_ok_and(|o| o.code == 0);
             if locked && !lead_exists {
-                pr.lead_worktree = None;
+                workflow.lead_worktree = None;
             }
-            super::add::check_touches(&pr, &prs, &spec.touches)?;
+            super::add::check_touches(&workflow, &workflows, &spec.touches)?;
         }
     }
     if edits.spec.is_some() || moved {
         let names: Option<Vec<String>> = after.resources.as_ref().and_then(|r| serde_json::from_value(r.clone()).ok());
-        super::add::check_resources_declared(conn, home, plan, after.pr_str(), key.as_str(), names.as_deref())?;
+        super::add::check_resources_declared(conn, home, plan, after.workflow_str(), key.as_str(), names.as_deref())?;
     }
     if !explore && (moved || after.kind != before.kind) {
-        check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
+        check_shape_allows(&load_workflows(conn, plan)?, plan, after.workflow_str(), &after.kind)?;
     }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
     if let Some(needs) = &edits.needs {
@@ -227,7 +227,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     let needs = edits.needs.clone().unwrap_or_else(|| before.needs.clone());
     if edits.needs.is_some() || moved {
-        check_needs_same_pr(&all, plan, after.pr_str(), &needs)?;
+        check_needs_same_workflow(&all, plan, after.workflow_str(), &needs)?;
     }
     after.needs = needs;
     if moved {
@@ -238,7 +238,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
                 format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
             )
             .with("plan", plan.as_str())
-            .with("pr", after.pr_str())
+            .with("pr", after.workflow_str())
             .with("jobs", needing));
         }
     }
@@ -270,7 +270,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
             _ => {}
         }
     }
-    if before.pr != after.pr {
+    if before.workflow != after.workflow {
         fields.push("pr");
     }
     if before.needs != after.needs {
@@ -311,7 +311,7 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     let mut written: Vec<(&str, bool, Option<String>)> =
         vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
     written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
-    written.push(("pr", before.pr != after.pr, after.pr.clone()));
+    written.push(("pr", before.workflow != after.workflow, after.workflow.clone()));
     let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));
     if !changed.is_empty() {

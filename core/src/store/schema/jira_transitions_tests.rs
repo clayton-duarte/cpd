@@ -24,7 +24,7 @@ const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
        VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');";
 
 /// A dispatched object, after `workflow-rename`: the table is `workflows`.
-fn pr(key: &str, jira: &str) -> String {
+fn workflow(key: &str, jira: &str) -> String {
     format!(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
@@ -32,11 +32,11 @@ fn pr(key: &str, jira: &str) -> String {
 }
 
 fn two_prs() -> String {
-    format!("{PLAN}{}{}", pr("a", "'ABC-1'"), pr("b", "NULL"))
+    format!("{PLAN}{}{}", workflow("a", "'ABC-1'"), workflow("b", "NULL"))
 }
 
 /// The same two objects before `workflow-rename`: the table is `prs`.
-fn pr_before(key: &str, jira: &str) -> String {
+fn workflow_before(key: &str, jira: &str) -> String {
     format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
@@ -44,7 +44,7 @@ fn pr_before(key: &str, jira: &str) -> String {
 }
 
 fn two_prs_before() -> String {
-    format!("{PLAN}{}{}", pr_before("a", "'ABC-1'"), pr_before("b", "NULL"))
+    format!("{PLAN}{}{}", workflow_before("a", "'ABC-1'"), workflow_before("b", "NULL"))
 }
 
 fn count(store: &mut Store, sql: &str) -> i64 {

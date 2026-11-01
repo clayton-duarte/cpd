@@ -100,7 +100,7 @@ pub fn queue(tx: &WriteTxn<'_>, plan: &str, pr: &str, target: Target) -> Result<
     let rows = tx.execute(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES (?1, ?2, ?3, (SELECT at FROM txns WHERE id = cpd_txn()))
          ON CONFLICT (plan, pr, target) DO NOTHING",
-        [plan, pr, target.as_str()],
+        [plan, workflow, target.as_str()],
     )?;
     Ok(rows == 1)
 }
@@ -136,10 +136,10 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, refusal: &Refusal) -> Re
     if rows != 1 {
         return Ok(false);
     }
-    let (plan, pr, target): (String, String, String) =
+    let (plan, workflow, target): (String, String, String) =
         tx.query_row("SELECT plan, pr, target FROM jira_transitions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     let details = json!({
-        "id": id, "plan": plan, "pr": pr, "ticket": refusal.ticket, "target": target, "status": refusal.status, "reason": refusal.reason,
+        "id": id, "plan": plan, "pr": workflow, "ticket": refusal.ticket, "target": target, "status": refusal.status, "reason": refusal.reason,
     });
     let text = format!(
         "Jira refused to move ticket {} of PR {pr} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the PR's ticket (cpd pr edit {pr} --jira <KEY>) or the policy key pr.jira.{target} changes.",
@@ -182,7 +182,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        let pr = |key: &str, jira: &str, status: &str| {
+        let workflow = |key: &str, jira: &str, status: &str| {
             let (started, worktree) = if status == "cancelled" { ("NULL", "NULL".to_owned()) } else { ("'t'", format!("'/nowhere/{key}'")) };
             format!(
                 "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
@@ -196,9 +196,9 @@ mod tests {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
              {}{}{}",
-            pr("api", "'ABC-1'", "dispatch"),
-            pr("web", "NULL", "dispatch"),
-            pr("old", "'ABC-3'", "cancelled"),
+            workflow("api", "'ABC-1'", "dispatch"),
+            workflow("web", "NULL", "dispatch"),
+            workflow("old", "'ABC-3'", "cancelled"),
         );
         store
             .write("fixture", |tx| {
@@ -210,7 +210,7 @@ mod tests {
     }
 
     fn q(store: &mut Store, pr: &str, target: Target) -> bool {
-        store.write("t", |tx| queue(tx, "pay", pr, target)).unwrap()
+        store.write("t", |tx| queue(tx, "pay", workflow, target)).unwrap()
     }
 
     fn refusal(status: &str) -> Refusal {
@@ -246,7 +246,7 @@ mod tests {
         q(&mut store, "api", Target::InReview);
         let first = store.read(|c| next_due(c, &[])).unwrap().unwrap();
         assert_eq!((first.id, first.target, first.ticket.as_str()), (1, Target::InProgress, "ABC-1"));
-        assert_eq!((first.plan.as_str(), first.pr.as_str()), ("pay", "api"));
+        assert_eq!((first.plan.as_str(), first.workflow.as_str()), ("pay", "api"));
         assert_eq!(store.read(|c| next_due(c, &[1])).unwrap().map(|d| d.id), Some(2));
         assert_eq!(store.read(|c| next_due(c, &[1, 2])).unwrap(), None);
     }

@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_keys() {
+    fn workflow_keys() {
         for ok in ["a", "schema", "web-2", "a-", &format!("a{}", "b".repeat(23))] {
             assert_eq!(WorkflowKey::parse(ok).unwrap().to_string(), ok);
             assert_eq!(ok.parse::<WorkflowKey>().unwrap().as_str(), ok);

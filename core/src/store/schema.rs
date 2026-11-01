@@ -381,7 +381,7 @@ fn fill_prs(conn: &Connection) -> Result<()> {
          FROM plans WHERE id = ?1",
     )?;
     for (plan, repo) in plans {
-        insert.execute((&plan, migrated_pr_key(&repo).as_str()))?;
+        insert.execute((&plan, migrated_workflow_key(&repo).as_str()))?;
     }
     Ok(())
 }
@@ -390,7 +390,7 @@ fn fill_prs(conn: &Connection) -> Result<()> {
 /// its repo, lower-cased, each character outside `[a-z0-9-]` replaced by `-`,
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
-fn migrated_pr_key(repo: &str) -> WorkflowKey {
+fn migrated_workflow_key(repo: &str) -> WorkflowKey {
     let name = Path::new(repo).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     let mut key: String =
         name.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' { c } else { '-' }).collect();

@@ -218,8 +218,8 @@ fn run_checks(
 ) -> Result<(), CpdError> {
     // A stacked PR's check reads the root base too (§7.5), so one more ref than an unstacked PR's.
     let (lead, base_refs) = env.store.read(|conn| {
-        let (lead, repo, pr_base) = lead_branch(conn, plan, key)?;
-        Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &pr_base)?))
+        let (lead, repo, workflow_base) = lead_branch(conn, plan, key)?;
+        Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &workflow_base)?))
     })?;
     // A linear Attempt runs on the Lead Branch, so the Lead Branch diff `lead...sha` is empty: its tamper and
     // red-test diffs compare against the Attempt's `base_sha` instead (hs-d716), as the merge does (hs-d680).

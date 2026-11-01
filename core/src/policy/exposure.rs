@@ -57,7 +57,7 @@ pub fn check_exposed(file: &Path, kind: ScopeKind, scope: &Scope) -> Result<(), 
             return Err(policy_invalid(file, Some(domain.name()), why));
         }
     }
-    if scope.pr.as_ref().is_some_and(|pr| pr.post.is_some()) && !PR_POST_EXPOSURE.contains(&kind) {
+    if scope.workflow.as_ref().is_some_and(|workflow| workflow.post.is_some()) && !PR_POST_EXPOSURE.contains(&kind) {
         let exposed: Vec<&str> = PR_POST_EXPOSURE.iter().map(|k| k.word()).collect();
         let why = format!(
             "the table `{}` is exposed to {} only, not a {} file",

@@ -50,11 +50,11 @@ impl KeyArgs {
         if self.repo.is_some() && self.owner.is_none() {
             return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
         }
-        if let Some(pr) = &self.pr {
+        if let Some(workflow) = &self.workflow {
             let plan = self.plan.as_ref().ok_or_else(|| {
                 CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
             })?;
-            Ok(Some(store.read(|conn| key_of_pr(conn, plan.as_str(), pr.as_str()))?))
+            Ok(Some(store.read(|conn| key_of_workflow(conn, plan.as_str(), workflow.as_str()))?))
         } else if let Some(context) = &self.context {
             Ok(Some(store.read(|conn| context_owner(conn, context.as_str()).map(PolicyKey::Owner))?))
         } else if let Some(owner) = &self.owner {
@@ -84,7 +84,7 @@ fn context_owner(conn: &Connection, context: &str) -> Result<OwnerLogin, CpdErro
 }
 
 /// `Repo(owner, name)`, or `Owner(owner)` for a PR whose `name` is null.
-fn pr_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, CpdError> {
+fn workflow_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, CpdError> {
     Ok(match name {
         Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
         None => PolicyKey::Owner(owner),
@@ -92,17 +92,17 @@ fn pr_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, CpdError
 }
 
 /// The key of PR `pr` of Plan `plan`, and of the Context of the Plan.
-fn key_of_pr(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdError> {
+fn key_of_workflow(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdError> {
     let context: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?;
     let context = context.ok_or_else(|| not_found(ErrorCode::PlanNotFound, "Plan", "plan", plan))?;
     let name: Option<Option<String>> = conn
-        .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, pr], |r| r.get(0))
+        .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, workflow], |r| r.get(0))
         .optional()?;
     let name = name.ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", pr)
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
     })?;
-    pr_key(context_owner(conn, &context)?, name)
+    workflow_key(context_owner(conn, &context)?, name)
 }
 
 /// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's PR (an explore Job has none: its Context's owner, as a Lead's).
@@ -125,7 +125,7 @@ pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(
                 [&plan, &attempt],
                 |r| r.get(0),
             )?;
-            Ok(("worker", pr_key(owner, name)?))
+            Ok(("worker", workflow_key(owner, name)?))
         }
         _ => Err(CpdError::new(ErrorCode::SessionMalformed, format!("Session {session} has role {role} and no Attempt."))),
     }
@@ -205,24 +205,24 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
     let entries: Vec<(&str, Value)> = match domain {
         Domain::Gates => {
             let g = &resolved.policy.gate;
-            vec![(MERGE, value(&g.merge)), (GATE_PR, value(&g.pr))]
+            vec![(MERGE, value(&g.merge)), (GATE_PR, value(&g.workflow))]
         }
-        Domain::Pr => {
-            let pr = &resolved.policy.pr;
+        Domain::Workflow => {
+            let workflow = &resolved.policy.workflow;
             vec![
-                (FEEDBACK_CHECKS, value(&pr.feedback.checks)),
-                (POST_ENABLED, value(&pr.post.enabled)),
-                (POST_CHANNEL, value(&pr.post.channel)),
-                (POST_TEMPLATE, value(&pr.post.template)),
-                (POST_MERGED_REACTION, value(&pr.post.merged_reaction)),
-                (JIRA_REQUIRED, value(&pr.jira_required)),
-                (HUMAN_GATED_CONTEXTS, value(&pr.human_gated_contexts)),
-                (EXCUSED_LABELS, value(&pr.excused_labels)),
-                (REQUIRED_CHECKS, value(&pr.required_checks)),
-                (JIRA_IN_PROGRESS, value(&pr.jira.in_progress)),
-                (JIRA_IN_REVIEW, value(&pr.jira.in_review)),
-                (JIRA_DONE, value(&pr.jira.done)),
-                (JIRA_ESTIMATE_FIELDS, value(&pr.jira.estimate_fields)),
+                (FEEDBACK_CHECKS, value(&workflow.feedback.checks)),
+                (POST_ENABLED, value(&workflow.post.enabled)),
+                (POST_CHANNEL, value(&workflow.post.channel)),
+                (POST_TEMPLATE, value(&workflow.post.template)),
+                (POST_MERGED_REACTION, value(&workflow.post.merged_reaction)),
+                (JIRA_REQUIRED, value(&workflow.jira_required)),
+                (HUMAN_GATED_CONTEXTS, value(&workflow.human_gated_contexts)),
+                (EXCUSED_LABELS, value(&workflow.excused_labels)),
+                (REQUIRED_CHECKS, value(&workflow.required_checks)),
+                (JIRA_IN_PROGRESS, value(&workflow.jira.in_progress)),
+                (JIRA_IN_REVIEW, value(&workflow.jira.in_review)),
+                (JIRA_DONE, value(&workflow.jira.done)),
+                (JIRA_ESTIMATE_FIELDS, value(&workflow.jira.estimate_fields)),
             ]
         }
         Domain::Hooks => {

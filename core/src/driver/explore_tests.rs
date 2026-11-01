@@ -180,7 +180,7 @@ fn clean_up_leaves_explore_attempts_and_their_directory_alone() {
     use crate::janitor_tests::Rig as Janitor;
 
     let mut rig = Janitor::new();
-    rig.pr("api", "open");
+    rig.workflow("api", "open");
     let mut env = Env::open_home_with(&rig.fakes.ports, rig.home.clone()).unwrap();
     add_job(&mut env, "look", "scout", "H2");
     let id = start_running(&mut env, &rig.fakes, "look");

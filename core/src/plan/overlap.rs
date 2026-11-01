@@ -47,7 +47,7 @@ pub struct Overlap {
 impl Overlap {
     pub fn to_json(&self) -> Value {
         let other_jobs: Vec<Value> = self.other_jobs.iter().map(|j| json!({"key": j.key, "status": j.status})).collect();
-        json!({"job": self.job, "plan": self.plan, "pr": self.pr, "other_jobs": other_jobs, "paths": self.paths})
+        json!({"job": self.job, "plan": self.plan, "pr": self.workflow, "other_jobs": other_jobs, "paths": self.paths})
     }
 }
 
@@ -75,7 +75,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(plan, pr, repo, job, status, touches)| {
+        .map(|(plan, workflow, repo, job, status, touches)| {
             // A stub draft has no Spec yet: no files to compare.
             let touches = touches
                 .map(|text| {
@@ -84,7 +84,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
                 })
                 .transpose()?
                 .unwrap_or_default();
-            Ok(Other { plan, pr, repo, job, status, touches })
+            Ok(Other { plan, workflow, repo, job, status, touches })
         })
         .collect()
 }
@@ -92,7 +92,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
 /// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
 /// `cancelled`.
 fn is_open(pr: &WorkflowRow) -> bool {
-    !matches!(pr.status.as_str(), "merged" | "cancelled")
+    !matches!(workflow.status.as_str(), "merged" | "cancelled")
 }
 
 /// Every overlap of this Plan's open work with `others`: the Jobs not
@@ -105,7 +105,7 @@ pub fn find(prs: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap>
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
     for job in open {
-        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str() && is_open(p)) else { continue };
+        let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == job.workflow_str() && is_open(p)) else { continue };
         let mut paths: Vec<&str> = Vec::new();
         // A stub draft has no Spec yet, so no files to compare.
         let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());
@@ -116,20 +116,20 @@ pub fn find(prs: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap>
         }
         // By (other Plan, other PR): the Jobs there that overlap this one, and which of its paths they overlap.
         let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
-        for other in others.iter().filter(|o| o.repo == pr.repo) {
+        for other in others.iter().filter(|o| o.repo == workflow.repo) {
             let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();
             if hit.is_empty() {
                 continue;
             }
-            let (other_jobs, overlapped) = groups.entry((&other.plan, &other.pr)).or_default();
+            let (other_jobs, overlapped) = groups.entry((&other.plan, &other.workflow)).or_default();
             other_jobs.push(OtherJob { key: other.job.clone(), status: other.status.clone() });
             overlapped.extend(hit);
         }
-        for ((other_plan, other_pr), (other_jobs, overlapped)) in groups {
+        for ((other_plan, other_workflow), (other_jobs, overlapped)) in groups {
             out.push(Overlap {
                 job: job.key.clone(),
                 plan: other_plan.to_owned(),
-                pr: other_pr.to_owned(),
+                pr: other_workflow.to_owned(),
                 other_jobs,
                 paths: overlapped.into_iter().map(|i| paths[i].to_owned()).collect(),
             });

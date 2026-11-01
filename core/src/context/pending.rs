@@ -14,7 +14,7 @@ use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId};
 use crate::plan::display::Display;
 use crate::plan::jobs::{self as plan_jobs, Job};
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::output::Output;
 
 #[derive(Args, Debug)]
@@ -61,7 +61,7 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
             let all_jobs = plan_jobs::load(conn, &plan_id)?;
             Ok(json!({
                 "id": id, "title": title, "phase": phase, "lead_session": lead_session,
-                "jobs": explore_jobs(&display, &all_jobs), "workflows": prs(conn, &id, &display, &all_jobs)?,
+                "jobs": explore_jobs(&display, &all_jobs), "workflows": workflows(conn, &id, &display, &all_jobs)?,
             }))
         })
         .collect()
@@ -72,7 +72,7 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
 /// the same display rule as a PR Job). `tier` is the displayed Tier, `touches` the parsed JSON (`[]` when null).
 fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
     all.iter()
-        .filter(|job| job.pr.is_none() && job.status != "cancelled")
+        .filter(|job| job.workflow.is_none() && job.status != "cancelled")
         .map(|job| {
             let blockers = display.job_blockers(all, job);
             let touches = job.spec.as_ref().map(|spec| spec.touches.clone()).unwrap_or_else(|| json!([]));
@@ -93,9 +93,9 @@ fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
 /// The Plan's PRs not `merged` and not `cancelled`, in key order. A PR that cannot start yet has `waiting_on`: the keys of
 /// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
 /// hs-d523: a display status, the stored one is `queued`); see [`Display`].
-fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
     let plan_id = PlanId::parse(plan)?;
-    let all_prs = load_prs(conn, &plan_id)?;
+    let all_prs = load_workflows(conn, &plan_id)?;
     let mut stmt = conn.prepare(
         "SELECT p.key, p.repo, p.base, p.status, p.lead_branch, g.number, g.url, g.state
            FROM workflows p LEFT JOIN pull_requests g ON g.id = p.pull_request
@@ -114,12 +114,12 @@ fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Re
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(key, mut pr)| {
-            pr["jobs"] = json!(jobs(conn, plan, &key, display, all_jobs)?);
+        .map(|(key, mut workflow)| {
+            workflow["jobs"] = json!(jobs(conn, plan, &key, display, all_jobs)?);
             if let Some(row) = all_prs.iter().find(|p| p.key.as_str() == key) {
-                add_waiting_on(&mut pr, display.pr_blockers(row));
+                add_waiting_on(&mut workflow, display.workflow_blockers(row));
             }
-            Ok(pr)
+            Ok(workflow)
         })
         .collect()
 }
@@ -132,7 +132,7 @@ fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job])
           WHERE plan = ?1 AND workflow = ?2 AND status <> 'cancelled' ORDER BY seq",
     )?;
     let rows = stmt
-        .query_map([plan, pr], |r| {
+        .query_map([plan, workflow], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -182,25 +182,25 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
     let mut out = format!("# Pending work in {context}\n");
     for plan in plans {
         let _ = write!(out, "\n## {} ({}): {}\n", text(&plan["id"]), text(&plan["phase"]), text(&plan["title"]));
-        for pr in plan["workflows"].as_array().expect("workflows") {
+        for workflow in plan["workflows"].as_array().expect("workflows") {
             let _ = write!(
                 out,
                 "\n### PR {} ({}, base {}): {}\n\n",
-                text(&pr["key"]),
-                text(&pr["repo"]),
-                text(&pr["base"]),
-                text(&pr["status"])
+                text(&workflow["key"]),
+                text(&workflow["repo"]),
+                text(&workflow["base"]),
+                text(&workflow["status"])
             );
-            if let Some(keys) = waiting_on(pr) {
+            if let Some(keys) = waiting_on(workflow) {
                 let _ = write!(out, "waiting on {keys}\n\n");
             }
-            let pull = &pr["pull_request"];
+            let pull = &workflow["pull_request"];
             if pull.is_null() {
                 out.push_str("no pull request\n\n");
             } else {
                 let _ = write!(out, "#{} {} {}\n\n", pull["number"], text(&pull["state"]), text(&pull["url"]));
             }
-            for job in pr["jobs"].as_array().expect("jobs") {
+            for job in workflow["jobs"].as_array().expect("jobs") {
                 let touches: Vec<String> =
                     job["touches"].as_array().expect("touches").iter().map(text).collect();
                 let status = match waiting_on(job) {

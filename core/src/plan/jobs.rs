@@ -71,8 +71,8 @@ pub struct Job {
 
 impl Job {
     /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
-    pub fn pr_str(&self) -> &str {
-        self.pr.as_deref().unwrap_or_default()
+    pub fn workflow_str(&self) -> &str {
+        self.workflow.as_deref().unwrap_or_default()
     }
 
     pub fn is_draft(&self) -> bool {
@@ -135,7 +135,7 @@ impl Job {
     pub fn to_json(&self) -> Value {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         let mut value = json!({
-            "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
+            "key": self.key, "seq": self.seq, "pr": self.workflow, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
             "appended": self.appended, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
@@ -184,7 +184,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources))| {
+        .map(|((seq, key, workflow, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -214,7 +214,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 needs: needs.remove(&key).unwrap_or_default(),
                 seq,
                 key,
-                pr,
+                workflow,
                 title,
                 tier,
                 status,

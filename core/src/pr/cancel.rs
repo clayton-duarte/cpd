@@ -10,13 +10,13 @@ use serde_json::json;
 
 use super::add::needs_refs;
 use super::open::{merged_prs, opened_prs};
-use super::{CancelArgs, Env, find_pr, plan_phase, pulls};
+use super::{CancelArgs, Env, find_workflow, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::WorkflowRow;
 use crate::plan::jobs;
 use crate::store::WriteTxn;
@@ -79,8 +79,8 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                     ),
                 };
                 let event = match &superseded_by {
-                    Some(by) => NewEvent::pr_cancelled_superseded(text, &key, by),
-                    None => NewEvent::pr_cancelled(text, &key),
+                    Some(by) => NewEvent::workflow_cancelled_superseded(text, &key, by),
+                    None => NewEvent::workflow_cancelled(text, &key),
                 };
                 append(tx, event.plan(plan.clone()))?;
                 moved_to = if gave.is_some() { finish(tx, &plan, &key)? } else { advance(tx, &plan, &key)? };
@@ -153,8 +153,8 @@ pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), Cp
         let mut stmt = tx.prepare("SELECT DISTINCT workflow FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY workflow")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
-    for pr in prs {
-        cancel_jobs_with(tx, plan, &WorkflowKey::parse(&pr)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
+    for workflow in workflows {
+        cancel_jobs_with(tx, plan, &WorkflowKey::parse(&workflow)?, &["draft"], ARCHIVED_REASON, "belongs to an archived Plan")?;
     }
     Ok(())
 }
@@ -213,14 +213,14 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option<
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Option<&str>) -> Result<Decision, CpdError> {
-    let prs = load_prs(conn, plan)?;
-    let pr = find_pr(&prs, plan, key)?;
+    let workflows = load_workflows(conn, plan)?;
+    let workflow = find_workflow(&workflows, plan, key)?;
     let phase = plan_phase(conn, plan)?;
     let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
     let mut needing: Vec<String> =
-        prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
+        workflows.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
     // A base PR cannot be cancelled while a PR is stacked on it (contract §3.8 "Stacked PRs" step 9).
-    needing.extend(stacked_on(conn, plan, pr)?);
+    needing.extend(stacked_on(conn, plan, workflow)?);
     let in_use = |jobs: Vec<String>| {
         CpdError::new(
             ErrorCode::WorkflowInUse,
@@ -234,7 +234,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
         .with("jobs", jobs)
         .with("workflows", needing.clone())
     };
-    let from = match (pr.status.as_str(), locked) {
+    let from = match (workflow.status.as_str(), locked) {
         ("cancelled", _) => return Ok(Decision::Already),
         (status, _) if superseded.is_some() && !(status == "dispatch" && locked) => {
             return Err(CpdError::new(
@@ -248,7 +248,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
         }
         ("waiting", _) => "waiting",
         ("dispatch", true) => "dispatch",
-        ("open", true) if matches!(phase, Phase::Dispatch | Phase::Deploy) => return decide_open(conn, plan, key, pr, &needing),
+        ("open", true) if matches!(phase, Phase::Dispatch | Phase::Deploy) => return decide_open(conn, plan, key, workflow, &needing),
         (status, _) => {
             let only = match (locked, status) {
                 (false, _) => "only a waiting PR is cancelled",
@@ -265,7 +265,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
     // Only a `running` Job holds the PR, and a `merged` one unless superseded (its work another PR carried): `draft`, `queued` and `failed` Jobs
     // go with the PR (`cancel_jobs`).
     let holds = |j: &jobs::Job| j.status == "running" || (j.status == "merged" && superseded.is_none());
-    let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr_str() == key.as_str() && holds(j)).map(|j| j.key).collect();
+    let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.workflow_str() == key.as_str() && holds(j)).map(|j| j.key).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));
     }
@@ -313,7 +313,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &s
 fn stacked_on(conn: &Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Vec<String>, CpdError> {
     let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
     let found = stmt
-        .query_map([plan.as_str(), pr.repo.as_str(), pr.lead_branch.as_str(), pr.key.as_str()], |r| r.get::<_, String>(0))?
+        .query_map([plan.as_str(), workflow.repo.as_str(), workflow.lead_branch.as_str(), workflow.key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(found)
 }
@@ -321,7 +321,7 @@ fn stacked_on(conn: &Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Vec<
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
 /// wrote) and no PR that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
 fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &WorkflowRow, needing: &[String]) -> Result<Decision, CpdError> {
-    let (Some(id), Some(pull), Some(worktree)) = (pr.pull_request, &pr.pull, &pr.lead_worktree) else {
+    let (Some(id), Some(pull), Some(worktree)) = (workflow.pull_request, &workflow.pull, &workflow.lead_worktree) else {
         return Err(CpdError::bad_row(format!("PR {key} of Plan {plan} is open without a pull request or a Lead worktree")));
     };
     let state = pulls::load(conn, id)?.state;
@@ -350,7 +350,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &Workflo
         number: pull.number,
         url: pull.url.clone(),
         lead_worktree: worktree.display().to_string(),
-        lead_branch: pr.lead_branch.clone(),
+        lead_branch: workflow.lead_branch.clone(),
     };
     Ok(Decision::Cancel { from: "open", released: Some(released), superseded_by: None })
 }

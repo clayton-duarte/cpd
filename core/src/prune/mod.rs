@@ -206,7 +206,7 @@ fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
 
 /// True when `base` reaches main through merged PRs.
 fn reached(prs: &[Merged], base: &str, level: usize) -> bool {
-    base == "main" || (level < MAX_LEVELS && prs.iter().any(|p| p.head == base && reached(prs, &p.base, level + 1)))
+    base == "main" || (level < MAX_LEVELS && workflows.iter().any(|p| p.head == base && reached(workflows, &p.base, level + 1)))
 }
 
 /// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
@@ -216,20 +216,20 @@ fn merged_via_pr(ports: &Ports, repo: &Path, prs: &[Merged], branch: &str, head:
     let legacy = lead.strip_prefix("cpd/").and_then(|rest| rest.split_once('/')).map(|(plan, _)| format!("cpd/{plan}"));
     let prefix = format!("{lead}/");
     let plan_prefix = attempt_plan.map(|plan| format!("{plan}/"));
-    for pr in prs {
-        let named = pr.head == lead
-            || pr.head.starts_with(&prefix)
-            || legacy.as_deref() == Some(pr.head.as_str())
-            || plan_prefix.as_deref().is_some_and(|p| pr.head.starts_with(p));
-        if !named || !reached(prs, &pr.base, 0) {
+    for workflow in workflows {
+        let named = workflow.head == lead
+            || workflow.head.starts_with(&prefix)
+            || legacy.as_deref() == Some(workflow.head.as_str())
+            || plan_prefix.as_deref().is_some_and(|p| workflow.head.starts_with(p));
+        if !named || !reached(workflows, &workflow.base, 0) {
             continue;
         }
-        let have = matches!(git(ports, repo, &["cat-file", "-e", &format!("{}^{{commit}}", pr.oid)]), Ok(o) if o.status.success());
-        if !have && !matches!(git(ports, repo, &["fetch", "-q", "origin", &format!("pull/{}/head", pr.number)]), Ok(o) if o.status.success()) {
-            failed.push(format!("cannot fetch pull/{}/head", pr.number));
+        let have = matches!(git(ports, repo, &["cat-file", "-e", &format!("{}^{{commit}}", workflow.oid)]), Ok(o) if o.status.success());
+        if !have && !matches!(git(ports, repo, &["fetch", "-q", "origin", &format!("pull/{}/head", workflow.number)]), Ok(o) if o.status.success()) {
+            failed.push(format!("cannot fetch pull/{}/head", workflow.number));
             continue;
         }
-        if matches!(git(ports, repo, &["merge-base", "--is-ancestor", head, &pr.oid]), Ok(o) if o.status.success()) {
+        if matches!(git(ports, repo, &["merge-base", "--is-ancestor", head, &workflow.oid]), Ok(o) if o.status.success()) {
             return true;
         }
     }
@@ -254,7 +254,7 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
     let url = git_ok(ports, repo, &["remote", "get-url", "origin"])?;
     let slug = slug(&url);
     git_ok(ports, repo, &["fetch", "-q", "origin"])?;
-    let prs = merged_prs(ports, &slug)?;
+    let workflows = merged_prs(ports, &slug)?;
     let list = worktrees(ports, repo)?;
 
     let mut failed = Vec::new();
@@ -283,7 +283,7 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
             if lead.is_some_and(|l| args.drop.iter().any(|d| d == l)) {
                 dropped = true;
             } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success()) {
-            } else if wt.branch.as_deref().is_some_and(|b| merged_via_pr(ports, repo, &prs, b, &wt.head, &mut failed)) {
+            } else if wt.branch.as_deref().is_some_and(|b| merged_via_pr(ports, repo, &workflows, b, &wt.head, &mut failed)) {
             } else {
                 reason = Some("not merged");
             }

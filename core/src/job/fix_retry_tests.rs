@@ -32,7 +32,7 @@ fn fixture() -> Fixture {
                VALUES ('{plan}', 'ctx', 'P', 'dispatch', 'l-{plan}', '{T}', '{T}');"
         ));
     }
-    for (plan, pr) in [("pay", "api"), ("pay", "web"), ("ops", "api")] {
+    for (plan, workflow) in [("pay", "api"), ("pay", "web"), ("ops", "api")] {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('{plan}', '{pr}', '/r', 'main', 'dispatch', 'cpd/{plan}/{pr}', '/lw', 1, '{T}', '{T}');"
@@ -84,7 +84,7 @@ impl Fixture {
 
     /// A failed Job with one ended Attempt at `S2` and its Event.
     fn failed(&mut self, plan: &str, pr: &str, key: &str, kind: &str) {
-        self.job(plan, pr, key, kind, "failed");
+        self.job(plan, workflow, key, kind, "failed");
         self.attempt(plan, key, 1, "S2");
         self.failure(plan, key);
     }
@@ -132,7 +132,7 @@ impl Fixture {
 
     /// A running Job with a `running` (or `merging`) Attempt, for the ledger.
     fn running(&mut self, plan: &str, pr: &str, key: &str, attempt_status: &str, cancel: bool) {
-        self.job(plan, pr, key, "work", "running");
+        self.job(plan, workflow, key, "work", "running");
         if cancel {
             self.sql(&format!("UPDATE jobs SET cancel_reason = 'r', cancel_requested_at = '{T}' WHERE plan = '{plan}' AND key = '{key}'"));
         }

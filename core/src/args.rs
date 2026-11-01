@@ -49,14 +49,14 @@ impl WorkflowArg {
     /// `--pr`, zero or two or more PRs that are not `cancelled` is
     /// `pr_required` (exit 2).
     pub fn select<'a>(&self, plan: &PlanId, prs: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
-        if let Some(key) = &self.pr {
-            return prs.iter().find(|p| p.key == *key).ok_or_else(|| {
+        if let Some(key) = &self.workflow {
+            return workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
                 CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
                     .with("plan", plan.as_str())
                     .with("pr", key.as_str())
             });
         }
-        let live: Vec<&WorkflowRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+        let live: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
         match live.as_slice() {
             [only] => Ok(only),
             [] => Err(CpdError::new(
@@ -312,14 +312,14 @@ mod tests {
     #[test]
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
-        let pr = |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
+        let workflow = |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
         let arg = |key: Option<&str>| WorkflowArg { pr: key.map(|k| WorkflowKey::parse(k).unwrap()) };
-        let prs = [pr("a", "cancelled"), pr("b", "waiting")];
-        assert_eq!(arg(None).select(&plan, &prs).unwrap().key.as_str(), "b");
-        assert_eq!(arg(Some("a")).select(&plan, &prs).unwrap().key.as_str(), "a");
-        let err = arg(Some("z")).select(&plan, &prs).unwrap_err();
+        let workflows = [workflow("a", "cancelled"), workflow("b", "waiting")];
+        assert_eq!(arg(None).select(&plan, &workflows).unwrap().key.as_str(), "b");
+        assert_eq!(arg(Some("a")).select(&plan, &workflows).unwrap().key.as_str(), "a");
+        let err = arg(Some("z")).select(&plan, &workflows).unwrap_err();
         assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowNotFound, 4));
-        for many in [&[pr("a", "waiting"), pr("b", "open")][..], &[pr("a", "cancelled")][..], &[][..]] {
+        for many in [&[workflow("a", "waiting"), workflow("b", "open")][..], &[workflow("a", "cancelled")][..], &[][..]] {
             let err = arg(None).select(&plan, many).unwrap_err();
             assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowRequired, 2));
         }

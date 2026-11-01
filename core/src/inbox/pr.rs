@@ -170,7 +170,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
         let owner = plan.as_ref().zip(key.as_ref());
         let facts = Facts { row: &pull, handled, owned: owner.is_some(), posted, clean };
         let status = classify(&facts, || {
-            owner.is_some_and(|(plan, key)| crate::pr::policy_of_pr(conn, home, plan, key).is_ok_and(|p| p.pr.post.enabled))
+            owner.is_some_and(|(plan, key)| crate::pr::policy_of_workflow(conn, home, plan, key).is_ok_and(|p| p.workflow.post.enabled))
         });
         let name = pull.repo.split_once('/').map_or(pull.repo.as_str(), |(_, name)| name);
         out.push(Condition {

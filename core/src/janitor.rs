@@ -122,7 +122,7 @@ fn run(env: &mut Env) -> Result<Output, CpdError> {
     let outcomes: Vec<Value> = entries
         .iter()
         .map(|e| {
-            let mut v = json!({"plan": e.plan, "pr": e.pr, "status": e.status, "path": e.path, "outcome": e.outcome});
+            let mut v = json!({"plan": e.plan, "pr": e.workflow, "status": e.status, "path": e.path, "outcome": e.outcome});
             if let Some(reason) = &e.reason {
                 v["reason"] = json!(reason);
             }
@@ -135,7 +135,7 @@ fn run(env: &mut Env) -> Result<Output, CpdError> {
 /// The `cleanup_failed` Event of a `kept` or `failed` entry (DESIGN 5).
 fn event(e: &Entry) -> (PlanId, NewEvent) {
     let reason = e.reason.clone().unwrap_or_default();
-    let (status, pr, plan, path) = (&e.status, &e.pr, &e.plan, &e.path);
+    let (status, workflow, plan, path) = (&e.status, &e.workflow, &e.plan, &e.path);
     let (message, text) = if e.outcome == "kept" {
         let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} kept {path} untouched: {reason}");
         (m.clone(), m)
@@ -146,7 +146,7 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
         let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} did not remove {path}: {reason}");
         (m.clone(), format!("{m}. The next janitor pass retries."))
     };
-    let details = json!({"plan": plan, "pr": pr, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
+    let details = json!({"plan": plan, "pr": workflow, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
     (plan.clone(), NewEvent::error(text, SOURCE, ErrorCode::CleanupFailed.as_str(), &message, details))
 }
 
@@ -215,11 +215,11 @@ impl Merged {
 /// (`pr cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that is a worktree of the repo
 /// on the PR's Lead Branch (or its aside leftover is on disk).
 pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare(
+    let mut workflows = conn.prepare(
         "SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status
            FROM workflows p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled') ORDER BY p.plan, p.key",
     )?;
-    let rows = prs
+    let rows = workflows
         .query_map([], |r| {
             let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request, r.get::<_, String>(7)?))
@@ -234,19 +234,19 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
             AND json_extract(data, '$.details.pr') = ?2",
     )?;
     let mut found = Vec::new();
-    for (plan, pr, repo, lead_branch, lead_worktree, pull_request, status) in rows {
+    for (plan, workflow, repo, lead_branch, lead_worktree, pull_request, status) in rows {
         let live = status == "dispatch" || status == "open";
         let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?, r.get::<_, bool>(4)?)))?
+            .query_map([&plan, &workflow], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?, r.get::<_, bool>(4)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .filter(|(_, _, _, ended, sweepable)| !live || *ended && *sweepable)
             .map(|(id, branch, worktree, ended, _)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
         let plan = PlanId::parse(&plan)?;
-        let pr = WorkflowKey::parse(&pr)?;
+        let workflow = WorkflowKey::parse(&workflow)?;
         let lead_worktree = if status == "cancelled" {
-            git::pr_lead_worktree_path(Path::new(&repo), &plan, &pr, &lead_branch)
+            git::workflow_lead_worktree_path(Path::new(&repo), &plan, &workflow, &lead_branch)
                 .ok()
                 .filter(|path| {
                     aside(&path.to_string_lossy()).exists()
@@ -261,8 +261,8 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
         } else {
             lead_worktree
         };
-        let seen: i64 = reported.query_row([plan.as_str(), pr.as_str()], |r| r.get(0))?;
-        found.push(Merged { plan, pr, status, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh: seen == 0 });
+        let seen: i64 = reported.query_row([plan.as_str(), workflow.as_str()], |r| r.get(0))?;
+        found.push(Merged { plan, workflow, status, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh: seen == 0 });
     }
     Ok(found)
 }
@@ -274,7 +274,7 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, pan
     paths.extend(merged.lead_path().cloned());
     let entry = |path: &str, outcome: &'static str, reason: Option<String>, renamed: bool| Entry {
         plan: merged.plan.clone(),
-        pr: merged.pr.clone(),
+        pr: merged.workflow.clone(),
         status: merged.status.clone(),
         path: path.to_owned(),
         outcome,

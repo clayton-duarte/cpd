@@ -40,7 +40,7 @@ pub struct PolicyEmoji {
 
 fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<Due> {
     let merge = match (r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?) {
-        (Some(plan), Some(pr)) => Some(MergeOf { plan, pr }),
+        (Some(plan), Some(workflow)) => Some(MergeOf { plan, workflow }),
         _ => None,
     };
     Ok(Due { id: r.get(0)?, channel: r.get(1)?, ts: r.get(2)?, emoji: r.get(3)?, merge })
@@ -63,7 +63,7 @@ pub fn queue_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str) -> Result<bool, CpdE
          SELECT channel, ts, reaction, (SELECT at FROM txns WHERE id = cpd_txn()), plan, workflow FROM pr_posts
           WHERE plan = ?1 AND workflow = ?2 AND reaction IS NOT NULL
          ON CONFLICT (channel, ts, emoji) DO NOTHING",
-        [plan, pr],
+        [plan, workflow],
     )?;
     Ok(rows == 1)
 }
@@ -140,11 +140,11 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
     let text = match (&row.merge, file) {
         (Some(merge), Some(file)) => {
             details["plan"] = json!(merge.plan);
-            details["pr"] = json!(merge.pr);
+            details["pr"] = json!(merge.workflow);
             details["file"] = json!(file.display().to_string());
             format!(
                 "The merge reaction of PR {} of Plan {} on Slack message {} of {} was not placed. {what}. Set pr.post.merged_reaction in {} to an emoji of the workspace; the engine tries again when the policy names another emoji.",
-                merge.pr, merge.plan, row.ts, row.channel, file.display()
+                merge.workflow, merge.plan, row.ts, row.channel, file.display()
             )
         }
         _ => format!(
@@ -165,11 +165,11 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
 /// A policy that does not resolve is its error, unchanged.
 pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, pr: &str) -> Result<PolicyEmoji, CpdError> {
     let plan_id = PlanId::parse(plan)?;
-    let key = WorkflowKey::parse(pr)?;
-    let emoji = super::policy_of_pr(conn, home, &plan_id, &key)?.pr.post.merged_reaction;
+    let key = WorkflowKey::parse(workflow)?;
+    let emoji = super::policy_of_workflow(conn, home, &plan_id, &key)?.workflow.post.merged_reaction;
     let (owner, name): (String, Option<String>) = conn.query_row(
         "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
-        [plan, pr],
+        [plan, workflow],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let owner = OwnerLogin::parse(&owner)?;

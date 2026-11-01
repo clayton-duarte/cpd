@@ -53,7 +53,7 @@ fn fixture() -> Fixture {
 /// The incident hold refusal for `plan`/`pr` from an agent, as its `CpdError`.
 fn refused(f: &mut Fixture, plan: &PlanId, pr: &WorkflowKey) -> crate::error::CpdError {
     f.store
-        .read(|c| hold_refused(c, plan, pr, true))
+        .read(|c| hold_refused(c, plan, workflow, true))
         .expect_err("a held Plan is refused for an agent")
 }
 

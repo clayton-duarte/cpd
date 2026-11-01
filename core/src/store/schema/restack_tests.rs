@@ -27,7 +27,7 @@ fn plan_sql(id: &str) -> String {
     )
 }
 
-fn pr(plan: &str, key: &str, repo: &str) -> String {
+fn workflow(plan: &str, key: &str, repo: &str) -> String {
     format!(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan}', '{key}', '{repo}', 'main', 'waiting', '{plan}/{key}', cpd_txn(), 't');"
@@ -47,7 +47,7 @@ fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let mut sql = plan_sql("pay");
     for key in keys {
-        sql += &pr("pay", key, "/r");
+        sql += &workflow("pay", key, "/r");
     }
     for (p, n) in needs {
         sql += &need(p, n);
@@ -75,7 +75,7 @@ fn prs_locked_still_refuses_every_other_base_change_of_a_pr_after_the_lock() {
              INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                VALUES ('pay', 'd', '/r', 'main', 'dispatch', 'pay/d', '/w', 't', cpd_txn(), 't');",
             plan_sql("oth"),
-            pr("oth", "x", "/r"),
+            workflow("oth", "x", "/r"),
         ),
     )
     .unwrap();

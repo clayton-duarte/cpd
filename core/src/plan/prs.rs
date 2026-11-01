@@ -98,15 +98,15 @@ pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, V
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT workflow, needs FROM workflow_needs WHERE plan = ?1")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (pr, need) = row?;
-        needs.entry(pr).or_default().push(need);
+        let (workflow, need) = row?;
+        needs.entry(workflow).or_default().push(need);
     }
     needs.values_mut().for_each(|list| list.sort());
     Ok(needs)
 }
 
 /// Every PR of `plan` in key order, `cancelled` ones included.
-pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRow>, CpdError> {
+pub fn load_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRow>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref, started_at, jira
@@ -166,8 +166,8 @@ mod tests {
             })
             .unwrap();
         let plan = PlanId::parse("pay").unwrap();
-        let prs = store.read(|conn| load_prs(conn, &plan)).unwrap();
-        let [api, web] = prs.as_slice() else { panic!("{prs:?}") };
+        let workflows = store.read(|conn| load_workflows(conn, &plan)).unwrap();
+        let [api, web] = workflows.as_slice() else { panic!("{prs:?}") };
         assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
         assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
         let pull = api.pull.as_ref().unwrap();

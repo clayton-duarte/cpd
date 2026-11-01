@@ -318,7 +318,7 @@ fn incident_ends_when_the_until_pr_merges() {
     incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/ship")).unwrap();
 
     // The until-PR is not merged: the auto-end does nothing.
-    let merged = f.store.write("test", |tx| incident::end_if_until_pr_merged(tx)).unwrap();
+    let merged = f.store.write("test", |tx| incident::end_if_until_workflow_merged(tx)).unwrap();
     assert!(!merged, "an unmerged until-PR does not end the incident");
     assert!(incident_row(&mut f.store).is_some(), "the incident stays on");
     assert_eq!(plan_set(&mut f.store), ["pay"], "the Plan set stays");
@@ -328,7 +328,7 @@ fn incident_ends_when_the_until_pr_merges() {
         .write("test", |tx| {
             tx.execute("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE id = 7", [])?;
             tx.execute("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'ship'", [])?;
-            incident::end_if_until_pr_merged(tx)
+            incident::end_if_until_workflow_merged(tx)
         })
         .unwrap();
     assert!(merged, "a merged until-PR ends the incident");
@@ -341,7 +341,7 @@ fn incident_ends_when_the_until_pr_merges() {
 
     // Nothing left to end: a second call is false and appends nothing.
     let before = events(&mut f.store).len();
-    let again = f.store.write("test", |tx| incident::end_if_until_pr_merged(tx)).unwrap();
+    let again = f.store.write("test", |tx| incident::end_if_until_workflow_merged(tx)).unwrap();
     assert!(!again);
     assert_eq!(events(&mut f.store).len(), before, "no second incident-ended Event");
 }

@@ -34,7 +34,7 @@ use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 use crate::ports::Ports;
 
-pub use start::{explore_dir, Allocation, Origin, StartCtx, Started, pr_has_live_linear, start, start_with, start_with_allocation};
+pub use start::{explore_dir, Allocation, Origin, StartCtx, Started, workflow_has_live_linear, start, start_with, start_with_allocation};
 
 /// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]

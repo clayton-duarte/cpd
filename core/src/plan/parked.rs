@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use super::fingerprint::{load_prs, plan_fingerprint};
+use super::fingerprint::{load_workflows, plan_fingerprint};
 use super::jobs::{self, Job};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, WorkflowKey};
@@ -15,14 +15,14 @@ use crate::pr::start::not_ready;
 /// What decides whether a draft waits: the Plan's Jobs and the PRs that wait for another PR (only after the lock).
 struct Waits<'a> {
     all: &'a [Job],
-    pr_waits: BTreeSet<String>,
+    workflow_waits: BTreeSet<String>,
 }
 
 impl Waits<'_> {
     /// `job` needs, directly or through drafts that wait themselves, a Job that is `queued`, `running` or `failed`;
     /// or its PR waits for another PR.
     fn waiting(&self, job: &Job, seen: &mut BTreeSet<String>) -> bool {
-        if self.pr_waits.contains(job.pr_str()) {
+        if self.workflow_waits.contains(job.workflow_str()) {
             return true;
         }
         job.needs.iter().any(|need| {
@@ -44,10 +44,10 @@ fn locked(phase: &str) -> bool {
 fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet<String>, CpdError> {
     let mut waits = BTreeSet::new();
     if locked(phase) {
-        for pr in load_prs(conn, plan)? {
-            let key = WorkflowKey::parse(pr.key.as_str())?;
+        for workflow in load_workflows(conn, plan)? {
+            let key = WorkflowKey::parse(workflow.key.as_str())?;
             if !not_ready(conn, plan, &key)?.is_empty() {
-                waits.insert(pr.key.to_string());
+                waits.insert(workflow.key.to_string());
             }
         }
     }
@@ -79,7 +79,7 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
     if !all.iter().any(|j| j.is_draft() && j.kind != "open") || covered(conn, plan, &phase)? {
         return Ok(Vec::new());
     }
-    let waits = Waits { all: &all, pr_waits: waiting_prs(conn, plan, &phase)? };
+    let waits = Waits { all: &all, workflow_waits: waiting_prs(conn, plan, &phase)? };
     Ok(all
         .iter()
         .filter(|j| j.is_draft() && j.kind != "open")
@@ -97,7 +97,7 @@ pub fn waiting_set(conn: &Connection, plan: &PlanId, all: &[Job]) -> Result<BTre
         .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
-    let waits = Waits { all, pr_waits: waiting_prs(conn, plan, &phase)? };
+    let waits = Waits { all, workflow_waits: waiting_prs(conn, plan, &phase)? };
     Ok(all
         .iter()
         .filter(|j| j.is_draft())
@@ -115,7 +115,7 @@ pub fn door(conn: &Connection, plan: &PlanId, phase: &str, others: &[Job], job: 
         return Ok(());
     }
     let all: Vec<Job> = others.iter().filter(|j| j.key != job.key).cloned().collect();
-    let waits = Waits { all: &all, pr_waits: waiting_prs(conn, plan, phase)? };
+    let waits = Waits { all: &all, workflow_waits: waiting_prs(conn, plan, phase)? };
     if waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
         return Ok(());
     }
@@ -131,6 +131,6 @@ pub fn door(conn: &Connection, plan: &PlanId, phase: &str, others: &[Job], job: 
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
-    .with("pr", job.pr_str())
+    .with("pr", job.workflow_str())
     .with("needs", job.needs.clone()))
 }

@@ -22,7 +22,7 @@ use crate::pr::pulls;
 
 /// Every PR of `plan` in key order, `cancelled` ones included, with every
 /// field of §2.2 PR (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
-pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
+pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     // The base PR is derived from `base` (contract §2.2 "The base PR"): the PR of the same repo whose Lead Branch it is.
     let mut stmt = conn.prepare(
@@ -42,7 +42,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
                 "base_pr": r.get::<_, Option<String>>(16)?,
                 "status": r.get::<_, String>(3)?,
-                "closed_unmerged": closed.iter().any(|c| c.pr.as_str() == r.get::<_, String>(0).as_deref().unwrap_or("")),
+                "closed_unmerged": closed.iter().any(|c| c.workflow.as_str() == r.get::<_, String>(0).as_deref().unwrap_or("")),
                 "lead_branch": r.get::<_, String>(4)?,
                 "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
                 "all_merged_at": r.get::<_, Option<String>>(10)?,
@@ -76,12 +76,12 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor) = env.store.read(|conn| snapshot(conn, &id))?;
+    let (plan, mut workflows, jobs, mut attempts, escalations, review, cursor) = env.store.read(|conn| snapshot(conn, &id))?;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
-    for pr in &mut prs {
-        let key = pr["key"].as_str().expect("a PR key").to_owned();
-        pr["jobs"] = json!(jobs.iter().filter(|j| j.pr_str() == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
+    for workflow in &mut workflows {
+        let key = workflow["key"].as_str().expect("a PR key").to_owned();
+        workflow["jobs"] = json!(jobs.iter().filter(|j| j.workflow_str() == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
     }
     let job_values: Vec<Value> = jobs
         .iter()
@@ -93,7 +93,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         .collect();
     Ok(Output::success(json!({
         "plan": plan.to_json(),
-        "workflows": prs,
+        "workflows": workflows,
         "jobs": job_values,
         "escalations": escalations,
         "review": review,
@@ -108,12 +108,12 @@ type Snapshot = (PlanRow, Vec<Value>, Vec<Job>, BTreeMap<String, Vec<Value>>, Ve
 /// Everything `plan show` prints that is read from the database, each row read once.
 fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
     let plan = row::load(conn, id)?;
-    let prs = pr_values(conn, id)?;
+    let workflows = workflow_values(conn, id)?;
     let jobs = jobs::load(conn, id)?;
     let attempts = attempts(conn, id)?;
     let escalations = open_escalations(conn, id)?;
-    let review = latest_review(conn, id, &plan, &jobs, &prs)?;
-    Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
+    let review = latest_review(conn, id, &plan, &jobs, &workflows)?;
+    Ok((plan, workflows, jobs, attempts, escalations, review, highest_id(conn)?))
 }
 
 /// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
@@ -123,7 +123,7 @@ fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
     let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
     let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
     let rows: Vec<WorkflowRow> = if reviews_prs(Some(plan.phase.as_str())) {
-        prs.iter()
+        workflows.iter()
             .map(|p| WorkflowRow {
                 key: WorkflowKey::parse(&text(p, "key")).expect("a PR key"),
                 repo: text(p, "repo"),
@@ -216,7 +216,7 @@ fn latest_review(conn: &Connection, id: &PlanId, plan: &PlanRow, jobs: &[Job], p
     Ok(match review {
         None => Value::Null,
         Some((id, status, fingerprint, feedback, requested_at, decided_at)) => {
-            let current = fingerprint == current_fingerprint(plan, jobs, prs);
+            let current = fingerprint == current_fingerprint(plan, jobs, workflows);
             json!({"id": id, "status": status, "fingerprint": fingerprint, "current": current,
                    "feedback": feedback, "requested_at": requested_at, "decided_at": decided_at})
         }

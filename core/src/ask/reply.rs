@@ -58,8 +58,8 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
             .query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
             .optional()?
             .flatten();
-        if let Some(pr) = pr {
-            crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(&pr)?)?;
+        if let Some(workflow) = workflow {
+            crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(&workflow)?)?;
         }
         Ok(at)
     })?;

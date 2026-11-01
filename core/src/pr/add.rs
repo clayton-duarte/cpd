@@ -25,7 +25,7 @@ use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, re
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::WorkflowRow;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::Job;
 use crate::plan::locked_fingerprint;
 use crate::store::WriteTxn;
@@ -99,7 +99,7 @@ fn read_jobs(path: &Path, shape: &str, pr: &WorkflowKey, title: &str) -> Result<
     let text = std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?;
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
     let serde_json::Value::Object(mut object) = value else { return Err(invalid("$", "expected an object".to_owned())) };
-    let stubs: Vec<Stub> = template(shape, pr, title).into_iter().filter(|s| s.kind != "open").collect();
+    let stubs: Vec<Stub> = template(shape, workflow, title).into_iter().filter(|s| s.kind != "open").collect();
     if let Some(unknown) = object.keys().find(|k| !stubs.iter().any(|s| s.suffix == k.as_str())) {
         return Err(invalid(&format!("$.{unknown}"), format!("unknown key: the {shape} template has {}", suffixes(&stubs))));
     }
@@ -138,9 +138,9 @@ struct Adopt {
 enum Decision {
     /// The PR exists with these values; its status and `lead_branch` as stored, and `appended`
     /// as the Event recorded it.
-    Already { status: String, lead_branch: String, appended: bool, base: String, base_pr: Option<String>, needs: Vec<String> },
+    Already { status: String, lead_branch: String, appended: bool, base: String, base_workflow: Option<String>, needs: Vec<String> },
     /// The PR is new, in a Plan in this phase.
-    Insert { phase: Phase, base: String, base_pr: Option<String>, needs: Vec<String> },
+    Insert { phase: Phase, base: String, base_workflow: Option<String>, needs: Vec<String> },
 }
 
 /// A PR reference (contract §2.2): a bare `<key>`, a PR of the Plan the command is about, or
@@ -181,7 +181,7 @@ pub(super) fn needs_refs(own: &PlanId, needs: &[WorkflowRef]) -> Result<Vec<Stri
 /// What `--base` names: a branch (`None`: the default branch), or a base PR.
 pub(super) enum BaseArg {
     Branch(Option<String>),
-    Pr(PlanId, WorkflowKey),
+    Workflow(PlanId, WorkflowKey),
 }
 
 /// What the PR targets, once the git checks passed.
@@ -189,7 +189,7 @@ pub(super) enum BaseWanted {
     /// A branch, checked to exist (`resolve_base`).
     Branch(String),
     /// A base PR named as `<key>` or `<plan>/<key>`: its Lead Branch becomes the base.
-    Pr(PlanId, WorkflowKey),
+    Workflow(PlanId, WorkflowKey),
 }
 
 /// Reads `--base` (§2.2 "A PR reference"): a base PR when it is a bare `<key>` of a PR of `plan` in `repo`
@@ -200,8 +200,8 @@ pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base:
         && let Ok(key) = WorkflowKey::parse(value)
     {
         let repo = repo.display().to_string();
-        if known_prs(conn, plan)?.iter().any(|q| q.key == key.as_str() && q.repo == repo) {
-            return Ok(BaseArg::Pr(plan.clone(), key));
+        if known_workflows(conn, plan)?.iter().any(|q| q.key == key.as_str() && q.repo == repo) {
+            return Ok(BaseArg::Workflow(plan.clone(), key));
         }
     }
     if let Some((plan, key)) = value.split_once('/')
@@ -209,7 +209,7 @@ pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base:
     {
         let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
         if exists {
-            return Ok(BaseArg::Pr(plan, key));
+            return Ok(BaseArg::Workflow(plan, key));
         }
     }
     Ok(BaseArg::Branch(Some(value.to_owned())))
@@ -220,7 +220,7 @@ pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base:
 pub(super) fn wanted_base(repo: &Path, arg: BaseArg) -> Result<BaseWanted, CpdError> {
     match arg {
         BaseArg::Branch(branch) => Ok(BaseWanted::Branch(resolve_base(repo, branch.as_deref())?)),
-        BaseArg::Pr(plan, key) => Ok(BaseWanted::Pr(plan, key)),
+        BaseArg::Workflow(plan, key) => Ok(BaseWanted::Workflow(plan, key)),
     }
 }
 
@@ -235,7 +235,7 @@ pub(super) struct Known {
 }
 
 /// Every PR of `plan`.
-pub(super) fn known_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, CpdError> {
+pub(super) fn known_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, CpdError> {
     let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
@@ -268,7 +268,7 @@ pub(super) struct Resolved {
     /// The branch the pull request targets: a base PR's Lead Branch when stacked.
     pub base: String,
     /// The base PR as `<plan>/<key>`, derived from `base`.
-    pub base_pr: Option<String>,
+    pub base_workflow: Option<String>,
 }
 
 /// A reference naming another Plan (`pr_other_plan`): needs and base PRs are PRs of the PR's own Plan.
@@ -289,7 +289,7 @@ fn other_plan(subject: &Subject<'_>, plan: &str, key: &str) -> CpdError {
 /// base PRs stays acyclic (`dependency_cycle`). `needs` are references of the Plan, as `needs_refs` makes them.
 pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &BaseWanted, needs: &[String]) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
-    if let BaseWanted::Pr(base_plan, base_key) = base
+    if let BaseWanted::Workflow(base_plan, base_key) = base
         && base_plan != plan
     {
         return Err(other_plan(subject, base_plan.as_str(), base_key.as_str()));
@@ -299,38 +299,38 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
             return Err(other_plan(subject, need_plan, key));
         }
     }
-    let known = known_prs(conn, plan)?;
+    let known = known_workflows(conn, plan)?;
     let find = |key: &str| known.iter().find(|p| p.key == key);
 
-    let (branch, base_pr) = match base {
-        BaseWanted::Pr(_, base_key) => {
-            let Some(pr) = find(base_key.as_str()) else {
+    let (branch, base_workflow) = match base {
+        BaseWanted::Workflow(_, base_key) => {
+            let Some(workflow) = find(base_key.as_str()) else {
                 return Err(CpdError::new(ErrorCode::BaseWorkflowUnknown, format!("Plan {plan} has no PR {base_key} to stack on."))
                     .with("plan", plan.as_str())
                     .with("pr", base_key.as_str()));
             };
-            check_base_pr_state(pr)?;
-            if pr.repo != subject.repo {
+            check_base_workflow_state(workflow)?;
+            if workflow.repo != subject.repo {
                 return Err(CpdError::new(
                     ErrorCode::BaseWorkflowOtherRepo,
-                    format!("PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.", pr.key, pr.repo, subject.repo),
+                    format!("PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.", workflow.key, workflow.repo, subject.repo),
                 )
-                .with("pr", pr.key.as_str())
+                .with("pr", workflow.key.as_str())
                 .with("repo", subject.repo)
-                .with("base_repo", pr.repo.as_str()));
+                .with("base_repo", workflow.repo.as_str()));
             }
-            (pr.lead_branch.clone(), Some(pr))
+            (workflow.lead_branch.clone(), Some(workflow))
         }
         BaseWanted::Branch(branch) => {
             // A branch that is already a Lead Branch of a PR of the Plan is stacked all the same.
             let derived = derived_base_pr(&known, subject.repo, branch);
-            if let Some(pr) = derived {
-                check_base_pr_state(pr)?;
+            if let Some(workflow) = derived {
+                check_base_workflow_state(workflow)?;
             }
             (branch.clone(), derived)
         }
     };
-    let base_key = base_pr.map(|p| p.key.clone());
+    let base_key = base_workflow.map(|p| p.key.clone());
 
     let unknown: Vec<String> = needs.iter().filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none()).cloned().collect();
     if !unknown.is_empty() {
@@ -361,18 +361,18 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
             .with("plan", plan.as_str())
             .with("cycle", cycle));
     }
-    Ok(Resolved { base: branch, base_pr: base_pr.map(|p| format!("{plan}/{}", p.key)) })
+    Ok(Resolved { base: branch, base_workflow: base_workflow.map(|p| format!("{plan}/{}", p.key)) })
 }
 
 /// A base PR is not `cancelled` or `merged` (`base_pr_unavailable`).
-fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
-    if matches!(pr.status.as_str(), "cancelled" | "merged") {
+fn check_base_workflow_state(pr: &Known) -> Result<(), CpdError> {
+    if matches!(workflow.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
             ErrorCode::BaseWorkflowUnavailable,
-            format!("PR {} is {}: there is nothing to stack on, name its base branch instead.", pr.key, pr.status),
+            format!("PR {} is {}: there is nothing to stack on, name its base branch instead.", workflow.key, workflow.status),
         )
-        .with("pr", pr.key.as_str())
-        .with("status", pr.status.as_str()));
+        .with("pr", workflow.key.as_str())
+        .with("status", workflow.status.as_str()));
     }
     Ok(())
 }
@@ -448,13 +448,13 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         None => env.store.read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
     // A branch that is a PR's Lead Branch of the Plan and repo is its base PR's: it needs no branch yet (that PR may be `waiting`).
-    let lead_branch_of_pr = match &base {
-        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_pr(&known_prs(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
+    let lead_branch_of_workflow = match &base {
+        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_pr(&known_workflows(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
         _ => false,
     };
     let wanted = Wanted {
         base: match base {
-            BaseArg::Branch(Some(branch)) if lead_branch_of_pr => BaseWanted::Branch(branch),
+            BaseArg::Branch(Some(branch)) if lead_branch_of_workflow => BaseWanted::Branch(branch),
             base => wanted_base(&repo, base)?,
         },
         adopt: adopt.map(|pull| Adopt { pull, confirm: args.confirm_author }),
@@ -469,18 +469,18 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
 
     let head_ref = wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str());
-    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, unconfigured.as_ref()))? {
-        Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
+    let (status, lead_branch, appended, base, base_workflow, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, unconfigured.as_ref()))? {
+        Decision::Already { status, lead_branch, appended, base, base_workflow, needs } => (status, lead_branch, appended, base, base_workflow, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
-            no_branch_clash(&repo, &plan, &pr_branch(&plan, &wanted.key))?;
+            no_branch_clash(&repo, &plan, &workflow_branch(&plan, &wanted.key))?;
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, None)? {
-                Decision::Already { status, lead_branch, appended, base, base_pr, needs } => {
-                    Ok((status, lead_branch, appended, base, base_pr, needs, true))
+                Decision::Already { status, lead_branch, appended, base, base_workflow, needs } => {
+                    Ok((status, lead_branch, appended, base, base_workflow, needs, true))
                 }
-                Decision::Insert { phase, base, base_pr, needs } => {
+                Decision::Insert { phase, base, base_workflow, needs } => {
                     let appended = matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done);
-                    let lead_branch = pr_branch(&plan, &wanted.key);
+                    let lead_branch = workflow_branch(&plan, &wanted.key);
                     let key = &wanted.key;
                     if matches!(phase, Phase::Deploy | Phase::Done) {
                         reopen(tx, &plan, phase, key)?;
@@ -492,7 +492,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo
                     );
-                    let event = NewEvent::pr_added(
+                    let event = NewEvent::workflow_added(
                         text,
                         key,
                         &wanted.repo,
@@ -519,14 +519,14 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         append(tx, event.plan(plan.clone()).job(JobKey::parse(&stub.key)?))?;
                     }
                     crate::session::working_pr::name(tx, &plan, &wanted.key)?;
-                    Ok(("waiting".to_owned(), lead_branch, appended, base, base_pr, needs, false))
+                    Ok(("waiting".to_owned(), lead_branch, appended, base, base_workflow, needs, false))
                 }
             })?
         }
     };
     let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "jira": jira, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_workflow, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
         "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
@@ -587,8 +587,8 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
         .with("plan", plan.as_str())
         .with("phase", phase.as_str()));
     }
-    let prs = load_prs(conn, plan)?;
-    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
+    let workflows = load_workflows(conn, plan)?;
+    if let Some(existing) = workflows.iter().find(|p| p.key == wanted.key) {
         // `appended`: the PR came after the lock.
         let (lead_branch, appended, title) = conn.query_row(
             "SELECT r.lead_branch, coalesce(p.locked_at IS NOT NULL AND r.created_at >= p.locked_at, 0), r.title
@@ -596,14 +596,14 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
             [plan.as_str(), wanted.key.as_str()],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
-        if same(existing, title.as_deref(), wanted, &prs, &base_branch(conn, &wanted.base)?) {
-            let base_pr = derived_base_pr(&known_prs(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
+        if same(existing, title.as_deref(), wanted, &workflows, &base_branch(conn, &wanted.base)?) {
+            let base_workflow = derived_base_pr(&known_workflows(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
             return Ok(Decision::Already {
                 status: existing.status.clone(),
                 lead_branch,
                 appended,
                 base: existing.base.clone(),
-                base_pr,
+                base_workflow,
                 needs: existing.needs.clone(),
             });
         }
@@ -620,12 +620,12 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
     }
     // Stacked (§2.2 "The base PR"): `--base` names a base PR, or a branch that is a PR's Lead Branch; its base is its link.
     let stacked = match &wanted.base {
-        BaseWanted::Pr(..) => true,
-        BaseWanted::Branch(branch) => derived_base_pr(&known_prs(conn, plan)?, &wanted.repo, branch).is_some(),
+        BaseWanted::Workflow(..) => true,
+        BaseWanted::Branch(branch) => derived_base_pr(&known_workflows(conn, plan)?, &wanted.repo, branch).is_some(),
     };
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
-        None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&prs),
+        None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&workflows),
         None if phase == Phase::Dispatch && stacked => Vec::new(),
         None if phase == Phase::Dispatch => {
             return Err(CpdError::new(
@@ -646,7 +646,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
     if let Some(adopt) = &wanted.adopt {
         check_adoptable(conn, wanted, adopt)?;
     }
-    Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
+    Ok(Decision::Insert { phase, base: resolved.base, base_workflow: resolved.base_workflow, needs })
 }
 
 /// The refusals of `--adopt` (contract §3.8), in order, exit 3: the pull request is open, not from a fork, not a cpd one, its head free of
@@ -682,14 +682,14 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    if let Some((plan, pr)) = holder {
+    if let Some((plan, workflow)) = holder {
         return Err(CpdError::new(
             ErrorCode::AdoptTaken,
             format!("The head branch {} is already adopted by PR {pr} of Plan {plan}.", pull.head_ref),
         )
         .with("head_ref", pull.head_ref.as_str())
         .with("plan", plan)
-        .with("pr", pr));
+        .with("pr", workflow));
     }
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     if !same(&pull.author, &pull.user) && !adopt.confirm.as_deref().is_some_and(|c| same(c, &pull.author)) {
@@ -747,7 +747,7 @@ fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -
 fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError> {
     match base {
         BaseWanted::Branch(branch) => Ok(branch.clone()),
-        BaseWanted::Pr(plan, key) => known_prs(conn, plan)?
+        BaseWanted::Workflow(plan, key) => known_workflows(conn, plan)?
             .into_iter()
             .find(|p| p.key == key.as_str())
             .map(|p| p.lead_branch)
@@ -761,7 +761,7 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
 
 /// The keys of the `merged` PRs, in key order (A3).
 fn merged_keys(prs: &[WorkflowRow]) -> Vec<String> {
-    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
+    let mut keys: Vec<String> = workflows.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
     keys.sort();
     keys
 }
@@ -772,7 +772,7 @@ fn merged_keys(prs: &[WorkflowRow]) -> Vec<String> {
 fn same(existing: &WorkflowRow, title: Option<&str>, wanted: &Wanted, prs: &[WorkflowRow], base: &str) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
-        None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
+        None => existing.needs.iter().all(|n| merged_keys(workflows).contains(n)),
     };
     (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
         && title == Some(wanted.title.as_str())
@@ -806,7 +806,7 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[
 /// the exception: it carries the fixed Spec of [`open::spec`] and the config's `open_tier`, and no Dependency rows.
 fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted, appended: bool, open_tier: Tier) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
-    let pr = load_prs(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
+    let workflow = load_workflows(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
         CpdError::bad_row(format!("PR {} of Plan {plan} vanished while its template was being written", wanted.key))
     })?;
     // After the lock a stub that waits for nothing would be a parked draft (hs-d731): without `--jobs` only a PR that waits
@@ -829,7 +829,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
     }
     for stub in &stubs {
         if let Some((tier, spec)) = wanted.jobs.as_ref().and_then(|j| j.get(stub.suffix)) {
-            let roots: Vec<(String, PathBuf)> = load_prs(tx, plan)?.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect();
+            let roots: Vec<(String, PathBuf)> = load_workflows(tx, plan)?.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect();
             spec.check_primary_roots(&roots, &std::env::home_dir().unwrap_or_default())?;
             spec.check_files_relative()?;
             crate::job::add::check_resources_declared(tx, home, plan, wanted.key.as_str(), &stub.key, spec.resources.as_deref())?;
@@ -866,7 +866,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                          (SELECT at FROM txns WHERE id = cpd_txn()))",
                 rusqlite::params![
                     plan.as_str(),
-                    job.pr,
+                    job.workflow,
                     job.key,
                     job.title,
                     job.tier,
@@ -889,7 +889,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             continue;
         }
         if stub.kind == "open" {
-            let spec = open::spec(&pr);
+            let spec = open::spec(&workflow);
             tx.execute(
                 "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, created_txn, created_at)
@@ -925,7 +925,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
 /// One `pr_needs` row per need.
 pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &WorkflowKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
-        tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
+        tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), workflow.as_str(), need.as_str()])?;
     }
     Ok(())
 }
@@ -944,7 +944,7 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &WorkflowKey) -> R
 }
 
 /// The Lead Branch of a PR made now (contract §2.1): `<plan>/<key>`, without the `cpd/` prefix.
-fn pr_branch(plan: &PlanId, key: &WorkflowKey) -> String {
+fn workflow_branch(plan: &PlanId, key: &WorkflowKey) -> String {
     format!("{plan}/{key}")
 }
 

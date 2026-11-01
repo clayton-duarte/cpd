@@ -19,7 +19,7 @@ use crate::output::Output;
 use crate::ports::Ports;
 use crate::session::close_lead;
 use crate::store::Store;
-use crate::{job, pr};
+use crate::{job, workflow};
 
 const COMMAND: &str = "plan cancel";
 

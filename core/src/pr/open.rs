@@ -10,9 +10,9 @@ use super::row::PlanWorkflows;
 use crate::plan::WorkflowRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
-use super::start::base_pr;
+use super::start::base_workflow;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, illegal_phase, pr_policy, short};
+use super::{Args, Env, illegal_phase, workflow_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
@@ -20,7 +20,7 @@ use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::job;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::{Phase, jobs};
 use crate::store::WriteTxn;
 
@@ -43,7 +43,7 @@ pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &WorkflowKey
         ErrorCode::IncidentHold,
         format!("Plan {plan} is held by incident mode: an agent cannot open, push or rebase PR {pr}. The Manager ends the incident (cpd incident end) to release it."),
     )
-    .with("pr", pr.as_str())
+    .with("pr", workflow.as_str())
     .with("plan", plan.as_str())
     .with("incident", incident))
 }
@@ -72,10 +72,10 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         if let Some(live) = live_open_job(tx, &id, &key)? {
             return Err(open_job_live(&id, &key, &live));
         }
-        let pr = load_prs(tx, &id)?.into_iter().find(|p| p.key == key).ok_or_else(|| {
+        let workflow = load_workflows(tx, &id)?.into_iter().find(|p| p.key == key).ok_or_else(|| {
             CpdError::bad_row(format!("PR {key} of Plan {id} vanished while it was being queued"))
         })?;
-        job::open::add(tx, &id, &pr, tier, false, COMMAND)
+        job::open::add(tx, &id, &workflow, tier, false, COMMAND)
     })?;
     Ok(Output::success(json!({"plan": id, "pr": key, "job": job, "status": "queued"})))
 }
@@ -84,25 +84,25 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 /// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
 /// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
 /// A stacked PR's base is on the remote: the PR's base PR, read from `store` by [`base_check`].
-fn require_base_on_remote_pr(repo: &Path, pr: &WorkflowRow, base_pr: Option<&str>, then: &str) -> Result<(), CpdError> {
-    let Some(base_pr) = base_pr else { return Ok(()) };
+fn require_base_on_remote_pr(repo: &Path, pr: &WorkflowRow, base_workflow: Option<&str>, then: &str) -> Result<(), CpdError> {
+    let Some(base_workflow) = base_workflow else { return Ok(()) };
     if !git::run::has_origin(repo)? {
         return Ok(());
     }
-    let listed = git::run::run(repo, &["ls-remote", "--exit-code", "--heads", "origin", &pr.base])?;
+    let listed = git::run::run(repo, &["ls-remote", "--exit-code", "--heads", "origin", &workflow.base])?;
     match listed.code {
         0 => Ok(()),
         2 => Err(CpdError::new(
             ErrorCode::BaseNotFound,
             format!(
                 "PR {}'s base {}, the Lead Branch of {base_pr}, is not on origin: the pull request cannot target it. {then}",
-                pr.key, pr.base
+                workflow.key, workflow.base
             ),
         )
-        .with("pr", pr.key.as_str())
-        .with("base", pr.base.as_str())
-        .with("base_pr", base_pr)),
-        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git ls-remote origin {} exited {code}.", pr.base))
+        .with("pr", workflow.key.as_str())
+        .with("base", workflow.base.as_str())
+        .with("base_pr", base_workflow)),
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git ls-remote origin {} exited {code}.", workflow.base))
             .with("exit", code)
             .with("stderr", listed.stderr)),
     }
@@ -119,10 +119,10 @@ pub fn base_check(
     sha: &str,
     again: &str,
 ) -> Result<(), CpdError> {
-    let base_pr = base_pr(conn, plan, pr)?;
-    require_base_on_remote_pr(repo, pr, base_pr.as_deref(), &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
-    let base_sha = fresh_base(repo, &pr.base)?;
-    require_no_conflict(repo, worktree, pr, &base_sha, sha, again, "your branch")
+    let base_workflow = base_workflow(conn, plan, workflow)?;
+    require_base_on_remote_pr(repo, workflow, base_workflow.as_deref(), &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
+    let base_sha = fresh_base(repo, &workflow.base)?;
+    require_no_conflict(repo, worktree, workflow, &base_sha, sha, again, "your branch")
 }
 
 /// B (contract §7.6 `pr open` step 1): `origin/<base>` after `git fetch origin <base>`, read once; a repo with no
@@ -142,19 +142,19 @@ fn fresh_base(repo: &Path, base: &str) -> Result<String, CpdError> {
 /// Attempt worktree), then `again`, the command that tries the check again. `into` names the branch the base is merged into.
 fn require_no_conflict(repo: &Path, worktree: &Path, pr: &WorkflowRow, base_sha: &str, sha: &str, again: &str, into: &str) -> Result<(), CpdError> {
     let Some(files) = git::merge_conflicts(repo, base_sha, sha)? else { return Ok(()) };
-    let remote = if git::run::has_origin(repo)? { format!("origin/{}", pr.base) } else { pr.base.clone() };
+    let remote = if git::run::has_origin(repo)? { format!("origin/{}", workflow.base) } else { workflow.base.clone() };
     Err(CpdError::new(
         ErrorCode::BaseConflict,
         format!(
             "{} of PR {} conflicts with {remote} ({}) in {}: merge it into {into} and resolve the conflict, then run {again} again. Nothing was gated, pushed or opened.",
             short(sha),
-            pr.key,
+            workflow.key,
             short(base_sha),
             files.join(", ")
         ),
     )
-    .with("pr", pr.key.as_str())
-    .with("base", pr.base.as_str())
+    .with("pr", workflow.key.as_str())
+    .with("base", workflow.base.as_str())
     .with("base_sha", base_sha)
     .with("sha", sha)
     .with("files", files)
@@ -168,10 +168,10 @@ fn find_or_create(lead: &Path, pr: &WorkflowRow, existing: Option<PrRef>, title:
     if let Some(found) = existing {
         return Ok(found);
     }
-    match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, description.unwrap_or_default()) {
+    match gh::create_pr(lead, &workflow.base, workflow.remote_branch(), title, description.unwrap_or_default()) {
         Ok(created) => Ok(created),
-        Err(failed) => pr.bound_since()
-            .and_then(|since| gh::head_pr(lead, pr.remote_branch(), since))
+        Err(failed) => workflow.bound_since()
+            .and_then(|since| gh::head_pr(lead, workflow.remote_branch(), since))
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
@@ -209,18 +209,18 @@ impl Pulled {
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `description` the PR's stored description (§9.5a), the body verbatim.
 pub fn pull_request(lead: &Path, pr: &WorkflowRow, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<Pulled, CpdError> {
-    match gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)? {
+    match gh::head_pr(lead, workflow.remote_branch(), workflow.bound_since()?)? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head, bots)?, merged: true }),
-        Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
-        Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, description, bots)?, merged: false }),
-        None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, description, bots)?, merged: false }),
+        Some(head) if head.state == HeadState::Closed => Err(closed(&workflow.key, workflow.remote_branch(), &head)),
+        Some(head) => Ok(Pulled { row: opened_row(lead, workflow, Some(PrRef { number: head.number, url: head.url }), stored_title, description, bots)?, merged: false }),
+        None => Ok(Pulled { row: opened_row(lead, workflow, None, stored_title, description, bots)?, merged: false }),
     }
 }
 
 /// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0): the merge of an
 /// `open` Job adopts it (§7.4 step 8b), with no Gate and no push.
 pub fn is_merged_on_github(lead: &Path, pr: &WorkflowRow) -> Result<bool, CpdError> {
-    Ok(gh::head_pr(lead, pr.remote_branch(), pr.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
+    Ok(gh::head_pr(lead, workflow.remote_branch(), workflow.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
 }
 
 /// `pr_closed` (exit 3): the newest pull request of the Lead Branch is closed without a merge (§7.6 `pr open` step 0): it is found at the merge of an `open` Job (§7.4 step 8b), not at submit.
@@ -242,7 +242,7 @@ pub fn closed(key: &WorkflowKey, branch: &str, head: &gh::HeadPr) -> CpdError {
 /// read by the poller's own lookup, which a pull request it cannot find fails as `gh_failed`; a rerun adopts the one created.
 fn opened_row(lead: &Path, pr: &WorkflowRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<PolledPr, CpdError> {
     let title = github_title(stored_title);
-    let found = find_or_create(lead, pr, existing, &title, description)?;
+    let found = find_or_create(lead, workflow, existing, &title, description)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
@@ -397,36 +397,36 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
 /// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds). The base check and the Gates run
 /// at the merge (§7.4 step 6, hs-d679). `root` is the Attempt worktree, `sha` its HEAD.
 pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jobs::Job, root: &Path, sha: &str) -> Result<(), CpdError> {
-    let key = WorkflowKey::parse(job.pr_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr_str())))?;
-    let prs = env.plan(plan)?;
-    let pr = pr_of(&prs, &key);
-    let lead = pr.lead(plan)?.clone();
+    let key = WorkflowKey::parse(job.workflow_str()).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.workflow_str())))?;
+    let workflows = env.plan(plan)?;
+    let workflow = workflow_of(&workflows, &key);
+    let lead = workflow.lead(plan)?.clone();
     let again = format!("cpd attempt submit {attempt}");
     // 1. The pull request of the Lead Branch (open); the PR's status (update).
-    if job.kind == "update" && pr.status != "open" {
-        return Err(pr.refuse(plan, "an update Job's submit", "open"));
+    if job.kind == "update" && workflow.status != "open" {
+        return Err(workflow.refuse(plan, "an update Job's submit", "open"));
     }
     let mut adopting = false;
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
         stored_description(env, plan, &key)?;
         env.store.read(|conn| jira_required_of(conn, &env.home, plan, &key))?;
-        if let Some(head) = gh::head_pr(&lead, pr.remote_branch(), pr.bound_since()?)? {
+        if let Some(head) = gh::head_pr(&lead, workflow.remote_branch(), workflow.bound_since()?)? {
             match head.state {
-                HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
+                HeadState::Closed => return Err(closed(&key, workflow.remote_branch(), &head).with("plan", plan.as_str())),
                 HeadState::Merged => adopting = true,
                 HeadState::Open => {}
             }
         }
     }
     // 2. The policy resolves, as for `pr open`.
-    let _policy = pr_policy(env, plan, &key)?;
+    let _policy = workflow_policy(env, plan, &key)?;
     if adopting {
         return Ok(());
     }
     // 3. The Lead Branch's tip is in HEAD.
-    let repo = Path::new(&pr.repo);
-    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", pr.lead_branch))?;
+    let repo = Path::new(&workflow.repo);
+    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", workflow.lead_branch))?;
     let contained = git::run::run(root, &["merge-base", "--is-ancestor", &tip, sha])?;
     match contained.code {
         0 => {}
@@ -435,15 +435,15 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
                 ErrorCode::LeadBranchMoved,
                 format!(
                     "A Job merged into {} since your Attempt began ({} is not in HEAD), and an open or update Job is never rebased: merge it, then run {again} again.",
-                    pr.lead_branch,
+                    workflow.lead_branch,
                     short(&tip)
                 ),
             )
             .with("pr", key.as_str())
-            .with("lead_branch", pr.lead_branch.as_str())
+            .with("lead_branch", workflow.lead_branch.as_str())
             .with("lead_sha", tip.as_str())
             .with("sha", sha)
-            .with("next", format!("git -C {} merge --no-edit {}", root.display(), pr.lead_branch)));
+            .with("next", format!("git -C {} merge --no-edit {}", root.display(), workflow.lead_branch)));
         }
         code => {
             return Err(CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
@@ -482,8 +482,8 @@ pub(super) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_jso
 }
 
 /// The PR `key`, which the Plan has.
-fn pr_of<'a>(plan: &'a PlanWorkflows, key: &WorkflowKey) -> &'a WorkflowRow {
-    plan.prs.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
+fn workflow_of<'a>(plan: &'a PlanWorkflows, key: &WorkflowKey) -> &'a WorkflowRow {
+    plan.workflows.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
 }
 
 enum Step {
@@ -500,13 +500,13 @@ fn require_dispatch(plan: &PlanWorkflows, args: &Args) -> Result<Step, CpdError>
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "dispatch"));
     }
-    let pr = plan.select(&args.pr)?;
-    match pr.status.as_str() {
-        "dispatch" => Ok(Step::Go(pr.key.clone())),
+    let workflow = plan.select(&args.workflow)?;
+    match workflow.status.as_str() {
+        "dispatch" => Ok(Step::Go(workflow.key.clone())),
         "open" | "merged" => {
-            Ok(Step::Already(Output::success(json!({"plan": plan.plan.id, "phase": plan.plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
+            Ok(Step::Already(Output::success(json!({"plan": plan.plan.id, "phase": plan.plan.phase.as_str(), "pr": workflow.to_json(), "already": true}))))
         }
-        _ => Err(pr.refuse(&plan.plan.id, COMMAND, "dispatch")),
+        _ => Err(workflow.refuse(&plan.plan.id, COMMAND, "dispatch")),
     }
 }
 
@@ -550,7 +550,7 @@ pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanWorkflows, key: &Workf
         .store
         .read(|conn| jobs::load(conn, &plan.plan.id))?
         .into_iter()
-        .filter(|j| j.pr_str() == key.as_str() && !matches!(j.kind.as_str(), "open" | "update"))
+        .filter(|j| j.workflow_str() == key.as_str() && !matches!(j.kind.as_str(), "open" | "update"))
         .collect();
     let open: Vec<_> = all
         .iter()
@@ -627,7 +627,7 @@ pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome
         [plan.as_str(), key.as_str()],
         |r| r.get(0),
     )?;
-    if missing && super::policy_of_pr(conn, home, plan, key)?.pr.jira_required {
+    if missing && super::policy_of_workflow(conn, home, plan, key)?.workflow.jira_required {
         return Err(jira_required(plan, key));
     }
     Ok(())

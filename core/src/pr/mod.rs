@@ -269,22 +269,22 @@ impl Env {
 
 /// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
 /// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
-fn pr_policy(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
-    pr_policy_resolved(env, plan, key, resolve)?
+fn workflow_policy(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
+    workflow_policy_resolved(env, plan, key, resolve)?
 }
 
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
 /// which a consumer of many rows (the poll) reports for its row and goes on.
-fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn workflow_policy_resolved(env: &mut Env, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let home = env.home.clone();
-    env.store.read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
+    env.store.read(|conn| workflow_policy_in(conn, &home, plan, key, resolve))
 }
 
 type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
 
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
-fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn workflow_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
         "SELECT c.id, c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
@@ -304,15 +304,15 @@ fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key:
 
 /// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
 /// Worker Spec) reads, through its Job's PR.
-pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
-    pr_policy_in(conn, home, plan, key, resolve)?
+pub fn policy_of_workflow(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
+    workflow_policy_in(conn, home, plan, key, resolve)?
 }
 
 /// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
 pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
     let pr: String = conn.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
-    let key = WorkflowKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
-    policy_of_pr(conn, home, plan, &key)
+    let key = WorkflowKey::parse(&workflow).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
+    policy_of_workflow(conn, home, plan, &key)
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
@@ -323,7 +323,7 @@ fn illegal_phase(plan: &PlanWorkflows, command: &str, needs: &str) -> CpdError {
 /// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
 /// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
-fn pr_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) -> PathBuf {
+fn workflow_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
@@ -356,8 +356,8 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
-    prs.iter().find(|p| p.key == *key).ok_or_else(|| {
+fn find_workflow<'a>(prs: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
+    workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
@@ -391,10 +391,10 @@ struct Refused {
 fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a WorkflowRow) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
-        lead_branch: &pr.lead_branch,
-        base: &pr.base,
-        pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
-        pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        lead_branch: &workflow.lead_branch,
+        base: &workflow.base,
+        pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: workflow_log(&env.home, plan, &workflow.key, Hook::PreStart) },
+        pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: workflow_log(&env.home, plan, &workflow.key, Hook::PreMerge) },
         pre_start_commands: &policy.hooks.pre_start,
         pre_merge_commands: &policy.hooks.pre_merge,
     }
@@ -402,7 +402,7 @@ fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a Workflow
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
 fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &WorkflowRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
-    gate_in(env, policy, plan, pr, worktree, sha, false, again)
+    gate_in(env, policy, plan, workflow, worktree, sha, false, again)
 }
 
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
@@ -418,10 +418,10 @@ fn gate_in(
     pre_start: bool,
     again: &str,
 ) -> Result<(), CpdError> {
-    if policy.gate.pr != Gate::Local {
+    if policy.gate.workflow != Gate::Local {
         return Ok(());
     }
-    let hooks = gate_hooks(env, policy, plan, pr);
+    let hooks = gate_hooks(env, policy, plan, workflow);
     let then = format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
     let detached = Detached { branch: hooks.lead_branch, env: &[] };
     let operation = Operation { branch: hooks.base };
@@ -433,7 +433,7 @@ fn gate_in(
     for (hook, pipeline, setup) in steps {
         let result = git::run_hook_as(hook, pipeline, worktree, &detached, Some(&operation), setup.timeout, &setup.log, HookLog::Truncate)?;
         if result.outcome != HookOutcome::Passed {
-            return Err(refusal(plan, pr, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
+            return Err(refusal(plan, workflow, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
         }
     }
     Ok(())
@@ -456,7 +456,7 @@ fn require_clean_lead(lead: &std::path::Path, plan: &PlanId, pr: &WorkflowRow) -
         ),
     )
     .with("plan", plan.as_str())
-    .with("pr", pr.key.as_str())
+    .with("pr", workflow.key.as_str())
     .with("files", files))
 }
 
@@ -544,7 +544,7 @@ fn refusal(plan: &PlanId, pr: &WorkflowRow, sha: &str, refused: Refused, then: &
             ErrorCode::GateFailed,
             format!(
                 "The Gate failed on {} at {} (exit {exit}): nothing was pushed. {then}",
-                pr.lead_branch,
+                workflow.lead_branch,
                 short(sha)
             ),
         )
@@ -552,7 +552,7 @@ fn refusal(plan: &PlanId, pr: &WorkflowRow, sha: &str, refused: Refused, then: &
         (_, outcome) => {
             let error = CpdError::new(
                 ErrorCode::GateError,
-                format!("The Gate could not be judged on {} at {}: {hook} {outcome}. Nothing was pushed.", pr.lead_branch, short(sha)),
+                format!("The Gate could not be judged on {} at {}: {hook} {outcome}. Nothing was pushed.", workflow.lead_branch, short(sha)),
             )
             .with("reason", outcome.to_string());
             match outcome {
@@ -561,7 +561,7 @@ fn refusal(plan: &PlanId, pr: &WorkflowRow, sha: &str, refused: Refused, then: &
             }
         }
     };
-    error.with("plan", plan.as_str()).with("pr", pr.key.as_str()).with("hook", hook).with("sha", sha).with("tail", tail).with("log", log)
+    error.with("plan", plan.as_str()).with("pr", workflow.key.as_str()).with("hook", hook).with("sha", sha).with("tail", tail).with("log", log)
 }
 
 /// The first 12 characters of a SHA, for messages.

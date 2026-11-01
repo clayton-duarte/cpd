@@ -54,7 +54,7 @@ fn plan_arg() -> PlanArg {
 }
 
 /// Plan `pay` in `phase` with PR `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the PR `web`.
-fn fixture(phase: &str, extra_pr: bool) -> Fixture {
+fn fixture(phase: &str, extra_workflow: bool) -> Fixture {
     let lock = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
@@ -77,7 +77,7 @@ fn fixture(phase: &str, extra_pr: bool) -> Fixture {
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked},
                    '{{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{{\"api\":[\"works\"]}},\"goal\":\"g\",\"out_of_scope\":[],\"risks\":[]}}');"
     );
-    for pr in if extra_pr { vec!["api", "web"] } else { vec!["api"] } {
+    for workflow in if extra_workflow { vec!["api", "web"] } else { vec!["api"] } {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{pr}', '/r', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
@@ -268,8 +268,8 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     }
     let work = jobs.iter().find(|j| j["key"] == "w1").unwrap();
     assert_eq!(work["pr"], "api");
-    for pr in out["workflows"].as_array().unwrap() {
-        let listed: Vec<&str> = pr["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    for workflow in out["workflows"].as_array().unwrap() {
+        let listed: Vec<&str> = workflow["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {pr}");
     }
     assert_eq!(out["counts"]["queued"], 3);

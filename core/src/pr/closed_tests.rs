@@ -50,7 +50,7 @@ impl Fixture {
     }
 
     /// PR `key` of `plan` in `status` (`open` or `merged`) on pull request `n`.
-    fn pr_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
+    fn workflow_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
         let merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
         self.sql(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
@@ -82,7 +82,7 @@ fn row(plan: &str, key: &str, lead: &str, n: i64) -> ClosedUnmerged {
 fn an_open_pr_whose_pull_request_is_closed_is_closed_unmerged() {
     let mut f = fixture();
     f.pull(7, "closed");
-    f.pr_on("pay", "api", "open", 7);
+    f.workflow_on("pay", "api", "open", 7);
     assert_eq!(f.found(None), [row("pay", "api", "l-pay", 7)]);
 }
 
@@ -90,7 +90,7 @@ fn an_open_pr_whose_pull_request_is_closed_is_closed_unmerged() {
 fn an_open_pr_whose_pull_request_is_open_is_not_closed_unmerged() {
     let mut f = fixture();
     f.pull(7, "open");
-    f.pr_on("pay", "api", "open", 7);
+    f.workflow_on("pay", "api", "open", 7);
     assert_eq!(f.found(None), []);
 }
 
@@ -98,7 +98,7 @@ fn an_open_pr_whose_pull_request_is_open_is_not_closed_unmerged() {
 fn a_cancelled_pr_whose_pull_request_is_closed_is_not_closed_unmerged() {
     let mut f = fixture();
     f.pull(7, "closed");
-    f.pr_on("pay", "api", "open", 7);
+    f.workflow_on("pay", "api", "open", 7);
     // `pr cancel` of an open PR: the status is all that the predicate may read.
     f.sql("PRAGMA ignore_check_constraints = ON; UPDATE workflows SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
     assert_eq!(f.found(None), []);
@@ -108,7 +108,7 @@ fn a_cancelled_pr_whose_pull_request_is_closed_is_not_closed_unmerged() {
 fn a_merged_pr_is_not_closed_unmerged() {
     let mut f = fixture();
     f.pull(7, "merged");
-    f.pr_on("pay", "api", "merged", 7);
+    f.workflow_on("pay", "api", "merged", 7);
     assert_eq!(f.found(None), []);
 }
 
@@ -127,8 +127,8 @@ fn the_plan_filter_returns_only_that_plans_prs() {
     let mut f = fixture();
     f.pull(7, "closed");
     f.pull(8, "closed");
-    f.pr_on("shop", "web", "open", 8);
-    f.pr_on("pay", "api", "open", 7);
+    f.workflow_on("shop", "web", "open", 8);
+    f.workflow_on("pay", "api", "open", 7);
     assert_eq!(f.found(None), [row("pay", "api", "l-pay", 7), row("shop", "web", "l-shop", 8)], "every Plan, by plan id then key");
     assert_eq!(f.found(Some("shop")), [row("shop", "web", "l-shop", 8)]);
     assert_eq!(f.found(Some("pay")), [row("pay", "api", "l-pay", 7)]);

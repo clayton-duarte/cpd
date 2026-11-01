@@ -11,17 +11,17 @@ use serde_json::json;
 
 use super::gh;
 use super::add::{
-    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_prs, main_worktree, needs_refs, no_branch_clash,
+    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_workflows, main_worktree, needs_refs, no_branch_clash,
     resolve_refs, stacked_on, wanted_base,
 };
-use super::{EditArgs, Env, find_pr, plan_phase, pr_locked};
+use super::{EditArgs, Env, find_workflow, plan_phase, pr_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey, RepoName};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::WorkflowRow;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 
 const COMMAND: &str = "pr edit";
 
@@ -72,7 +72,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
     let wants_title = args.title.is_some() || args.jira.is_some();
     let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
-    let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others, restack_shape))?.0;
+    let stored = env.store.read(|conn| editable_workflow(conn, &plan, &key, wants_title, wants_others, restack_shape))?.0;
     if stored.head_ref.is_some()
         && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
     {
@@ -92,8 +92,8 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base, needs, title: args.title.map(|t| t.to_string()), jira: args.jira.map(|j| j.to_string()) };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
-    let (pr, fields, already) = match decision {
-        Decision::Already(pr) => (pr, Vec::new(), true),
+    let (workflow, fields, already) = match decision {
+        Decision::Already(workflow) => (workflow, Vec::new(), true),
         Decision::Update { before, after, fields } => {
             if after.repo != before.repo {
                 no_branch_clash(repo.as_deref().expect("the repo changed, so it was given"), &plan, &before.lead_branch)?;
@@ -102,18 +102,18 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                 retitle_open_pull_request(&mut env, &plan, &key, title)?;
             }
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
-                Decision::Already(pr) => Ok((pr, Vec::new(), true)),
+                Decision::Already(workflow) => Ok((workflow, Vec::new(), true)),
                 Decision::Update { before, after, fields } => {
                     update(tx, &plan, &before, &after, edits.name.as_ref(), edits.title.as_deref(), edits.jira.as_deref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
-                    append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
+                    append(tx, NewEvent::workflow_edited(text, &key, &fields).plan(plan.clone()))?;
                     crate::session::working_pr::name(tx, &plan, &key)?;
                     Ok((after, fields, false))
                 }
             })?
         }
     };
-    let mut out = json!({"pr": {"key": pr.key, "status": pr.status}, "fields": fields});
+    let mut out = json!({"pr": {"key": workflow.key, "status": workflow.status}, "fields": fields});
     if already {
         out["already"] = json!(true);
     }
@@ -140,34 +140,34 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
 /// `--title`), the Plan is in `grounding` or `plan` and the PR `waiting` (`illegal_transition`); `--title` alone
 /// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` PR passes;
 /// anything else is `pr_locked`, and `decide` checks the rest of the restack.
-fn editable_pr(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(WorkflowRow, Option<String>), CpdError> {
-    let prs = load_prs(conn, plan)?;
-    let pr = find_pr(&prs, plan, key)?;
-    if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its title and ticket are history.", pr.status))
+fn editable_workflow(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(WorkflowRow, Option<String>), CpdError> {
+    let workflows = load_workflows(conn, plan)?;
+    let workflow = find_workflow(&workflows, plan, key)?;
+    if title && matches!(workflow.status.as_str(), "merged" | "cancelled") {
+        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its title and ticket are history.", workflow.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
-            .with("status", pr.status.as_str()));
+            .with("status", workflow.status.as_str()));
     }
     if others {
         let phase = plan_phase(conn, plan)?;
-        if !matches!(phase, Phase::Grounding | Phase::Plan) && !(restack && pr.status == "waiting") {
+        if !matches!(phase, Phase::Grounding | Phase::Plan) && !(restack && workflow.status == "waiting") {
             return Err(pr_locked(plan, phase, COMMAND));
         }
-        if pr.status != "waiting" {
-            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} is {}: only a waiting PR is edited.", pr.status))
+        if workflow.status != "waiting" {
+            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} is {}: only a waiting PR is edited.", workflow.status))
                 .with("plan", plan.as_str())
                 .with("pr", key.as_str())
-                .with("from", pr.status.as_str())
+                .with("from", workflow.status.as_str())
                 .with("to", "waiting"));
         }
     }
     let stored = conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
-    Ok((pr.clone(), stored))
+    Ok((workflow.clone(), stored))
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) -> Result<Decision, CpdError> {
-    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others(), edits.restack_shape())?;
+    let (before, stored_title) = editable_workflow(conn, plan, key, edits.title.is_some() || edits.jira.is_some(), edits.others(), edits.restack_shape())?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
@@ -179,7 +179,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
     // another repo) is refused too.
     if edits.repo.is_some() || edits.base.is_some() || edits.needs.is_some() {
         let base = match &edits.base {
-            Some(BaseWanted::Pr(p, k)) => BaseWanted::Pr(p.clone(), k.clone()),
+            Some(BaseWanted::Workflow(p, k)) => BaseWanted::Workflow(p.clone(), k.clone()),
             Some(BaseWanted::Branch(b)) => BaseWanted::Branch(b.clone()),
             None => BaseWanted::Branch(before.base.clone()),
         };
@@ -187,11 +187,11 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
         if !matches!(phase, Phase::Grounding | Phase::Plan) {
-            check_restack(conn, plan, &before, &after, resolved.base_pr.as_deref()).map_err(|()| pr_locked(plan, phase, COMMAND))?;
+            check_restack(conn, plan, &before, &after, resolved.base_workflow.as_deref()).map_err(|()| pr_locked(plan, phase, COMMAND))?;
         }
     }
     if after.repo != before.repo {
-        let in_use = stacked_on(&known_prs(conn, plan)?, &before.repo, &before.lead_branch);
+        let in_use = stacked_on(&known_workflows(conn, plan)?, &before.repo, &before.lead_branch);
         if !in_use.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::WorkflowInUse,
@@ -222,10 +222,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
 
 /// After the lock, a restack is allowed only onto `A`, the base PR the edit resolves to, when `A` is a current need or
 /// already the base PR, and the needs after the edit are the current needs without `A` (§3.8 step 10).
-fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, base_pr: Option<&str>) -> Result<(), ()> {
-    let a = base_pr.and_then(|p| p.split_once('/')).map(|(_, k)| k).ok_or(())?;
-    let prs = load_prs(conn, plan).map_err(|_| ())?;
-    let already = prs.iter().any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
+fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, base_workflow: Option<&str>) -> Result<(), ()> {
+    let a = base_workflow.and_then(|p| p.split_once('/')).map(|(_, k)| k).ok_or(())?;
+    let workflows = load_workflows(conn, plan).map_err(|_| ())?;
+    let already = workflows.iter().any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
     if !already && !before.needs.iter().any(|n| n == a) {
         return Err(());
     }

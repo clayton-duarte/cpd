@@ -144,25 +144,25 @@ pub const TAGGED: &str = "you were tagged in the thread";
 
 /// `classify.classify`: the status from GitHub alone. `me` is the User's GitHub login, `bots` `inbox.bot_reviewers`.
 pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
-    if pr.draft {
+    if workflow.draft {
         return Status::Draft;
     }
-    if pr.author == me {
+    if workflow.author == me {
         return Status::Hidden;
     }
-    if pr.state != GhState::Open {
+    if workflow.state != GhState::Open {
         return Status::Done;
     }
-    match pr.decision.as_deref() {
+    match workflow.decision.as_deref() {
         Some("APPROVED") => return Status::Done,
         Some("CHANGES_REQUESTED") => return Status::ChangesRequested,
         _ => {}
     }
     let is_bot = |login: &str| bots.iter().any(|b| b == login);
-    if pr.reviews.iter().any(|r| !is_bot(&r.author) && r.author != me) {
+    if workflow.reviews.iter().any(|r| !is_bot(&r.author) && r.author != me) {
         return Status::InReview;
     }
-    if pr.reviews.iter().any(|r| is_bot(&r.author)) {
+    if workflow.reviews.iter().any(|r| is_bot(&r.author)) {
         return Status::NeedsReview(AI_ONLY);
     }
     Status::NeedsReview(NO_REVIEW)
@@ -172,7 +172,7 @@ pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
 /// unless the User's own `:eyes:` is the only claim; a mention of the User in the thread makes `IN_REVIEW` or
 /// `NEEDS_REVIEW` `NEEDS_REVIEW` again.
 pub fn status(post: &Post, pr: &GhPr, me: &str, bots: &[String]) -> Status {
-    let mut status = classify(pr, me, bots);
+    let mut status = classify(workflow, me, bots);
     if matches!(status, Status::NeedsReview(_)) && post.claim.is_some() {
         status = if post.eyes_me == Some(true) && !post.reactions.is_empty() { Status::NeedsReview(CLAIMED_BY_ME) } else { Status::InReview };
     }
@@ -237,13 +237,13 @@ pub fn parse_lookup(reply: &Value, refs: &[(String, u64)]) -> Result<Lookup, Str
     }
     let data = reply["data"].as_object().ok_or("gh api graphql answered without data.")?;
     let me = data["viewer"]["login"].as_str().filter(|l| !l.is_empty()).ok_or("gh api graphql answered without viewer.login.")?.to_owned();
-    let mut prs = BTreeMap::new();
+    let mut workflows = BTreeMap::new();
     for (i, key) in refs.iter().enumerate() {
         let raw = &data.get(&format!("p{i}")).map_or(&Value::Null, |v| &v["pullRequest"]);
-        let pr = if raw.is_null() { None } else { Some(parse_pr(raw)?) };
-        prs.insert(key.clone(), pr);
+        let workflow = if raw.is_null() { None } else { Some(parse_pr(raw)?) };
+        workflows.insert(key.clone(), workflow);
     }
-    Ok(Lookup { me, prs })
+    Ok(Lookup { me, workflows })
 }
 
 fn parse_pr(raw: &Value) -> Result<GhPr, String> {
@@ -309,7 +309,7 @@ mod tests {
         vec!["mission-lane-claude-code-assistant".to_owned(), "github-actions".to_owned()]
     }
 
-    fn pr() -> GhPr {
+    fn workflow() -> GhPr {
         GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
     }
 
@@ -332,44 +332,44 @@ mod tests {
 
     #[test]
     fn no_review_and_a_bot_only_review_need_review() {
-        assert_eq!(classify(&pr(), ME, &bots()), Status::NeedsReview("no review yet"));
-        let bot = GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..pr() };
+        assert_eq!(classify(&workflow(), ME, &bots()), Status::NeedsReview("no review yet"));
+        let bot = GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..workflow() };
         assert_eq!(classify(&bot, ME, &bots()), Status::NeedsReview("AI review only"));
-        let own_review_only = GhPr { reviews: vec![review(ME, "COMMENTED")], ..pr() };
+        let own_review_only = GhPr { reviews: vec![review(ME, "COMMENTED")], ..workflow() };
         assert_eq!(classify(&own_review_only, ME, &bots()), Status::NeedsReview("no review yet"), "the User's own review is no human's");
     }
 
     #[test]
     fn a_human_reviewer_is_in_review_even_beside_a_bot() {
-        let human = GhPr { reviews: vec![review("github-actions", "COMMENTED"), review("wes", "COMMENTED")], ..pr() };
+        let human = GhPr { reviews: vec![review("github-actions", "COMMENTED"), review("wes", "COMMENTED")], ..workflow() };
         assert_eq!(classify(&human, ME, &bots()), Status::InReview);
     }
 
     #[test]
     fn a_draft_is_a_draft_whoever_wrote_it() {
-        assert_eq!(classify(&GhPr { draft: true, ..pr() }, ME, &bots()), Status::Draft);
-        assert_eq!(classify(&GhPr { draft: true, author: ME.to_owned(), ..pr() }, ME, &bots()), Status::Draft);
+        assert_eq!(classify(&GhPr { draft: true, ..workflow() }, ME, &bots()), Status::Draft);
+        assert_eq!(classify(&GhPr { draft: true, author: ME.to_owned(), ..workflow() }, ME, &bots()), Status::Draft);
     }
 
     #[test]
     fn the_users_own_pull_request_is_hidden() {
-        assert_eq!(classify(&GhPr { author: ME.to_owned(), ..pr() }, ME, &bots()), Status::Hidden);
+        assert_eq!(classify(&GhPr { author: ME.to_owned(), ..workflow() }, ME, &bots()), Status::Hidden);
     }
 
     #[test]
     fn merged_closed_and_approved_are_done() {
         for state in [GhState::Merged, GhState::Closed] {
-            assert_eq!(classify(&GhPr { state, ..pr() }, ME, &bots()), Status::Done);
+            assert_eq!(classify(&GhPr { state, ..workflow() }, ME, &bots()), Status::Done);
         }
-        assert_eq!(classify(&GhPr { decision: Some("APPROVED".to_owned()), ..pr() }, ME, &bots()), Status::Done);
-        assert_eq!(classify(&GhPr { decision: Some("REVIEW_REQUIRED".to_owned()), ..pr() }, ME, &bots()), Status::NeedsReview("no review yet"));
+        assert_eq!(classify(&GhPr { decision: Some("APPROVED".to_owned()), ..workflow() }, ME, &bots()), Status::Done);
+        assert_eq!(classify(&GhPr { decision: Some("REVIEW_REQUIRED".to_owned()), ..workflow() }, ME, &bots()), Status::NeedsReview("no review yet"));
     }
 
     #[test]
     fn changes_requested_by_anyone_is_the_authors_move() {
-        let theirs = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review("wes", "CHANGES_REQUESTED")], ..pr() };
+        let theirs = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review("wes", "CHANGES_REQUESTED")], ..workflow() };
         assert_eq!(classify(&theirs, ME, &bots()), Status::ChangesRequested);
-        let mine = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review(ME, "CHANGES_REQUESTED")], ..pr() };
+        let mine = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), reviews: vec![review(ME, "CHANGES_REQUESTED")], ..workflow() };
         assert_eq!(classify(&mine, ME, &bots()), Status::ChangesRequested);
     }
 
@@ -377,38 +377,38 @@ mod tests {
 
     #[test]
     fn a_claim_in_slack_makes_needs_review_in_review() {
-        assert_eq!(status(&claimed(post(), Some(false)), &pr(), ME, &bots()), Status::InReview);
-        assert_eq!(status(&claimed(post(), None), &pr(), ME, &bots()), Status::InReview, "attribution unavailable: a peer's");
+        assert_eq!(status(&claimed(post(), Some(false)), &workflow(), ME, &bots()), Status::InReview);
+        assert_eq!(status(&claimed(post(), None), &workflow(), ME, &bots()), Status::InReview, "attribution unavailable: a peer's");
         let mention_only = Post { claim: Some(Claim { kind: "claimed".to_owned(), reason: "assigned to someone in Slack".to_owned() }), ..post() };
-        assert_eq!(status(&mention_only, &pr(), ME, &bots()), Status::InReview);
-        assert_eq!(status(&post(), &pr(), ME, &bots()), Status::NeedsReview("no review yet"), "no claim");
+        assert_eq!(status(&mention_only, &workflow(), ME, &bots()), Status::InReview);
+        assert_eq!(status(&post(), &workflow(), ME, &bots()), Status::NeedsReview("no review yet"), "no claim");
     }
 
     #[test]
     fn the_users_own_eyes_alone_keeps_it_needing_review() {
-        assert_eq!(status(&claimed(post(), Some(true)), &pr(), ME, &bots()), Status::NeedsReview(CLAIMED_BY_ME));
+        assert_eq!(status(&claimed(post(), Some(true)), &workflow(), ME, &bots()), Status::NeedsReview(CLAIMED_BY_ME));
     }
 
     #[test]
     fn a_tag_in_the_thread_makes_in_review_and_needs_review_need_review() {
         let tagged = Post { thread_tags_me: true, ..post() };
-        assert_eq!(status(&Post { thread_tags_me: true, ..claimed(post(), Some(false)) }, &pr(), ME, &bots()), Status::NeedsReview(TAGGED));
-        let human = GhPr { reviews: vec![review("wes", "COMMENTED")], ..pr() };
+        assert_eq!(status(&Post { thread_tags_me: true, ..claimed(post(), Some(false)) }, &workflow(), ME, &bots()), Status::NeedsReview(TAGGED));
+        let human = GhPr { reviews: vec![review("wes", "COMMENTED")], ..workflow() };
         assert_eq!(status(&tagged, &human, ME, &bots()), Status::NeedsReview(TAGGED));
-        assert_eq!(status(&tagged, &pr(), ME, &bots()), Status::NeedsReview(TAGGED));
+        assert_eq!(status(&tagged, &workflow(), ME, &bots()), Status::NeedsReview(TAGGED));
     }
 
     #[test]
     fn a_tag_does_not_revive_finished_or_hidden_work() {
         let tagged = Post { thread_tags_me: true, ..post() };
-        for (pr, want) in [
-            (GhPr { state: GhState::Merged, ..pr() }, Status::Done),
-            (GhPr { decision: Some("APPROVED".to_owned()), ..pr() }, Status::Done),
-            (GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..pr() }, Status::ChangesRequested),
-            (GhPr { draft: true, ..pr() }, Status::Draft),
-            (GhPr { author: ME.to_owned(), ..pr() }, Status::Hidden),
+        for (workflow, want) in [
+            (GhPr { state: GhState::Merged, ..workflow() }, Status::Done),
+            (GhPr { decision: Some("APPROVED".to_owned()), ..workflow() }, Status::Done),
+            (GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..workflow() }, Status::ChangesRequested),
+            (GhPr { draft: true, ..workflow() }, Status::Draft),
+            (GhPr { author: ME.to_owned(), ..workflow() }, Status::Hidden),
         ] {
-            assert_eq!(status(&tagged, &pr, ME, &bots()), want);
+            assert_eq!(status(&tagged, &workflow, ME, &bots()), want);
         }
     }
 
@@ -428,8 +428,8 @@ mod tests {
         let refs = [("acme/pay".to_owned(), 1), ("acme/gone".to_owned(), 2)];
         let lookup = parse_lookup(&reply(), &refs).unwrap();
         assert_eq!(lookup.me, ME);
-        assert_eq!(lookup.prs[&refs[0]], Some(GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..pr() }));
-        assert_eq!(lookup.prs[&refs[1]], None);
+        assert_eq!(lookup.workflows[&refs[0]], Some(GhPr { reviews: vec![review("github-actions", "COMMENTED")], ..workflow() }));
+        assert_eq!(lookup.workflows[&refs[1]], None);
     }
 
     #[test]

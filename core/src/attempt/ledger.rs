@@ -48,8 +48,8 @@ pub struct Attempt {
 
 impl Attempt {
     /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
-    pub fn pr_str(&self) -> &str {
-        self.pr.as_deref().unwrap_or_default()
+    pub fn workflow_str(&self) -> &str {
+        self.workflow.as_deref().unwrap_or_default()
     }
 }
 
@@ -93,9 +93,9 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, pr, head_ref, pr_status)) = row;
+    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, workflow, head_ref, workflow_status)) = row;
     // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
-    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch) {
+    let (repo, lead_worktree, lead_branch) = match (workflow.is_some(), repo, lead_worktree, lead_branch) {
         (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
         (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
         (false, ..) => (String::new(), worktree.clone(), String::new()),
@@ -105,7 +105,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
         remote_branch: head_ref.clone().unwrap_or_else(|| lead_branch.clone()),
-        adopted: head_ref.is_some() && pr_status.as_deref() != Some("open"),
+        adopted: head_ref.is_some() && workflow_status.as_deref() != Some("open"),
         lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
         id: id.clone(),
@@ -121,7 +121,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         submitted_sha,
         kind,
-        pr,
+        workflow,
     })
 }
 
@@ -462,22 +462,22 @@ pub fn end_opened(
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             if let Some(pull) = pull {
-                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr_str(), pull.url));
+                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.workflow_str(), pull.url));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
                 let open: i64 = tx.query_row(
                     "SELECT coalesce((SELECT json_array_length(r.feedback) FROM workflows p JOIN pull_requests r ON r.id = p.pull_request
                                        WHERE p.plan = ?1 AND p.key = ?2 AND p.status = 'open'), 0)",
-                    params![plan, attempt.pr_str()],
+                    params![plan, attempt.workflow_str()],
                     |r| r.get(0),
                 )?;
                 if open > 0 {
-                    let key = attempt.pr_str();
+                    let key = attempt.workflow_str();
                     text.push_str(&format!(" PR {key} still has {open} open review comments: cpd pr view --pr {key}, then cpd pr reply."));
                 }
             }
-            let pull = pull.map(|p| (attempt.pr_str(), p.number, p.url));
+            let pull = pull.map(|p| (attempt.workflow_str(), p.number, p.url));
             ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
         }
         End::Cancelled => {

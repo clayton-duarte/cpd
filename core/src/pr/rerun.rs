@@ -14,17 +14,17 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?;
-    if pr.status != "open" {
+    let workflow = plan.select(&args.workflow)?;
+    if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("PR {} of Plan {id} is {}: pr rerun needs an open PR.", pr.key, pr.status),
+            format!("PR {} of Plan {id} is {}: pr rerun needs an open PR.", workflow.key, workflow.status),
         )
-        .with("pr", pr.key.as_str())
-        .with("status", pr.status.as_str()));
+        .with("pr", workflow.key.as_str())
+        .with("status", workflow.status.as_str()));
     }
-    let number = pr.pull.as_ref().expect("an open PR has its pull request (prs CHECK)").number;
-    let lead = pr.lead(&id)?;
+    let number = workflow.pull.as_ref().expect("an open PR has its pull request (prs CHECK)").number;
+    let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
 
     let head_sha = gh::head_commit(runner, lead, number)?;
@@ -37,9 +37,9 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
             .collect();
         return Err(CpdError::new(
             ErrorCode::NoFailedRun,
-            format!("No GitHub Actions workflow run of commit {head_sha} of PR {} has failed: nothing was re-run.", pr.key),
+            format!("No GitHub Actions workflow run of commit {head_sha} of PR {} has failed: nothing was re-run.", workflow.key),
         )
-        .with("pr", pr.key.as_str())
+        .with("pr", workflow.key.as_str())
         .with("head_sha", head_sha.as_str())
         .with("runs", json!(listed)));
     }
@@ -51,5 +51,5 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         }
         rerun.push(json!({"id": run.id, "name": run.name}));
     }
-    Ok(Output::success(json!({"pr": pr.key, "head_sha": head_sha, "rerun": rerun})))
+    Ok(Output::success(json!({"pr": workflow.key, "head_sha": head_sha, "rerun": rerun})))
 }

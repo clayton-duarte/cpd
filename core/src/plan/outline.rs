@@ -100,8 +100,8 @@ fn decisions(fields: &Map<String, Value>) -> Result<Vec<Decision>, CpdError> {
 
 fn done_when(fields: &Map<String, Value>) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let Some(value) = fields.get("done_when") else { return Ok(BTreeMap::new()) };
-    let Value::Object(by_pr) = value else { return Err(invalid("done_when", "expected an object of PR key to lines")) };
-    by_pr
+    let Value::Object(by_workflow) = value else { return Err(invalid("done_when", "expected an object of PR key to lines")) };
+    by_workflow
         .iter()
         .map(|(key, value)| {
             let path = format!("done_when.{key}");

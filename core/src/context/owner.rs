@@ -53,9 +53,9 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
                 "SELECT workflows.plan || '/' || workflows.key FROM workflows JOIN plans ON plans.id = workflows.plan
                  WHERE plans.context = ?1 AND plans.deleted_at IS NULL ORDER BY 1",
             )?;
-            let prs = stmt.query_map([id.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            if !prs.is_empty() {
-                return Err(owner_in_use(&id, &OwnerLogin::parse(&current)?, &prs));
+            let workflows = stmt.query_map([id.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if !workflows.is_empty() {
+                return Err(owner_in_use(&id, &OwnerLogin::parse(&current)?, &workflows));
             }
         }
         if link {

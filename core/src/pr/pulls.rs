@@ -119,10 +119,10 @@ impl PullRequest {
             return Ok(false);
         }
         // GitHub never un-merges: a stored merge is final against any listing that is not MERGED (hs-d550).
-        if self.state == "merged" && listed.pr.state != super::status::PrState::Merged {
+        if self.state == "merged" && listed.workflow.state != super::status::PrState::Merged {
             return Ok(true);
         }
-        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), updated_at: self.polled()?.updated_at, ..listed.pr.clone() };
+        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), updated_at: self.polled()?.updated_at, ..listed.workflow.clone() };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
     }
 

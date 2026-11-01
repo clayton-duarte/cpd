@@ -11,7 +11,7 @@ use tempfile::TempDir;
 
 use crate::env::Env;
 use crate::fakes::git::{GitRoute, Head, Repo, Universe};
-use crate::git::{attempt_worktree_path, pr_lead_worktree_path};
+use crate::git::{attempt_worktree_path, workflow_lead_worktree_path};
 use crate::home::CpdHome;
 use crate::host::runner::Reply;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
@@ -21,7 +21,7 @@ use crate::ports::{Fakes, Ports};
 use crate::store::Store;
 
 /// A PR the rig stores, with its two worktrees: the Lead worktree on the Lead Branch and one parallel Attempt's.
-pub(crate) struct Pr {
+pub(crate) struct Workflow {
     pub(crate) key: &'static str,
     pub(crate) status: &'static str,
     pub(crate) lead: PathBuf,
@@ -31,7 +31,7 @@ pub(crate) struct Pr {
     pub(crate) attempt_id: String,
 }
 
-impl Pr {
+impl Workflow {
     /// The aside directory of a failed removal of the Lead worktree (contract §7.2).
     pub(crate) fn aside(&self) -> PathBuf {
         let mut name = self.lead.clone().into_os_string();
@@ -54,7 +54,7 @@ pub(crate) struct Rig {
     pub(crate) universe: Arc<Mutex<Universe>>,
     pub(crate) repo: Repo,
     pub(crate) home: CpdHome,
-    pub(crate) prs: Vec<Pr>,
+    pub(crate) prs: Vec<Workflow>,
     number: i64,
     /// The Attempts [`Rig::pr`] stores next are `running`, not `ended`.
     pub(crate) running: bool,
@@ -105,16 +105,16 @@ impl Rig {
     /// PR `key` with status `open`, `merged` or `cancelled`: its Lead worktree (clean, pushed) on its Lead Branch and one
     /// ended parallel Attempt `<key>-a1` with its worktree and branch. A cancelled PR's row has no `lead_worktree`,
     /// as `pr cancel` leaves it; its Lead worktree is the path contract §7.1 names.
-    pub(crate) fn pr(&mut self, key: &'static str, status: &'static str) -> &Pr {
-        self.pr_with(key, status, "cancelled", "failed")
+    pub(crate) fn workflow(&mut self, key: &'static str, status: &'static str) -> &Workflow {
+        self.workflow_with(key, status, "cancelled", "failed")
     }
 
     /// [`Rig::pr`] with the Job's status `job` (`merged`, `running`, `failed` or `cancelled`) and the Attempt's outcome
     /// `attempt` (`failed` or `merged`). `dispatch` is a PR status too: a Lead worktree and no pull request yet.
-    pub(crate) fn pr_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Pr {
+    pub(crate) fn workflow_with(&mut self, key: &'static str, status: &'static str, job: &str, outcome: &str) -> &Workflow {
         let plan = PlanId::parse("pay").unwrap();
         let lead_branch = format!("cpd/pay/{key}");
-        let lead = pr_lead_worktree_path(self.repo.dir(), &plan, &WorkflowKey::parse(key).unwrap(), &lead_branch).unwrap();
+        let lead = workflow_lead_worktree_path(self.repo.dir(), &plan, &WorkflowKey::parse(key).unwrap(), &lead_branch).unwrap();
         let attempt_id = format!("{key}-a1");
         let attempt_branch = format!("cpd/pay--{attempt_id}");
         let attempt = attempt_worktree_path(self.repo.dir(), &plan, &AttemptId::parse(&attempt_id).unwrap()).unwrap();
@@ -174,8 +174,8 @@ impl Rig {
             fp = "f".repeat(64),
             aw = attempt.display(),
         ));
-        self.prs.push(Pr { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
-        self.prs.last().unwrap()
+        self.workflows.push(Workflow { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
+        self.workflows.last().unwrap()
     }
 
     /// Whether the local branch exists in the repo.
@@ -190,14 +190,14 @@ impl Rig {
 
     /// Everything of the PR still on disk or in git: `(lead directory, lead registration, lead branch, attempt
     /// directory, attempt registration, attempt branch)`.
-    pub(crate) fn left(&self, pr: &Pr) -> [bool; 6] {
+    pub(crate) fn left(&self, pr: &Workflow) -> [bool; 6] {
         [
-            pr.lead.exists(),
-            self.registered(&pr.lead),
-            self.branch_exists(&pr.lead_branch),
-            pr.attempt.exists(),
-            self.registered(&pr.attempt),
-            self.branch_exists(&pr.attempt_branch),
+            workflow.lead.exists(),
+            self.registered(&workflow.lead),
+            self.branch_exists(&workflow.lead_branch),
+            workflow.attempt.exists(),
+            self.registered(&workflow.attempt),
+            self.branch_exists(&workflow.attempt_branch),
         ]
     }
 
@@ -243,12 +243,12 @@ fn outcomes(output: Output) -> Vec<(String, String)> {
 #[test]
 fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
     let mut rig = Rig::new();
-    rig.pr("api", "merged");
-    rig.pr("web", "cancelled");
+    rig.workflow("api", "merged");
+    rig.workflow("web", "cancelled");
     let outcomes = outcomes(rig.pass());
-    for pr in &rig.prs {
-        assert_eq!(rig.left(pr), [false; 6], "{} PR {}: every worktree, registration and local branch is gone", pr.status, pr.key);
-        assert!(outcomes.iter().any(|(key, _)| key == pr.key), "an outcome for PR {}: {outcomes:?}", pr.key);
+    for workflow in &rig.workflows {
+        assert_eq!(rig.left(workflow), [false; 6], "{} PR {}: every worktree, registration and local branch is gone", workflow.status, workflow.key);
+        assert!(outcomes.iter().any(|(key, _)| key == workflow.key), "an outcome for PR {}: {outcomes:?}", workflow.key);
     }
     assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
@@ -258,10 +258,10 @@ fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
 fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
     let mut rig = Rig::new();
     rig.running = true;
-    rig.pr("api", "merged");
+    rig.workflow("api", "merged");
     rig.running = false;
-    rig.pr("web", "cancelled");
-    rig.pr("lock", "cancelled");
+    rig.workflow("web", "cancelled");
+    rig.workflow("lock", "cancelled");
     // The driver of `web-a1` is alive: the lock file of the Attempt is held.
     std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
     let held = std::fs::OpenOptions::new()
@@ -273,24 +273,24 @@ fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
     assert!(crate::lock::try_lock(&held).unwrap());
     let outcomes = outcomes(rig.pass());
     for key in ["api", "web"] {
-        let pr = rig.prs.iter().find(|p| p.key == key).unwrap();
-        assert_eq!(rig.left(pr), [true; 6], "PR {key} is untouched");
+        let workflow = rig.workflows.iter().find(|p| p.key == key).unwrap();
+        assert_eq!(rig.left(workflow), [true; 6], "PR {key} is untouched");
         assert!(outcomes.contains(&(key.to_owned(), "pending".to_owned())), "PR {key} is pending: {outcomes:?}");
     }
-    let idle = rig.prs.iter().find(|p| p.key == "lock").unwrap();
+    let idle = rig.workflows.iter().find(|p| p.key == "lock").unwrap();
     assert_eq!(rig.left(idle), [false; 6], "an idle PR is cleaned in the same pass");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
 fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
     let mut rig = Rig::new();
-    rig.pr("api", status);
-    let pr = &rig.prs[0];
-    std::fs::write(pr.lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
+    rig.workflow("api", status);
+    let workflow = &rig.workflows[0];
+    std::fs::write(workflow.lead.join("dirty.txt"), "the Lead's own change\n").unwrap();
     let outcomes = outcomes(rig.pass());
-    let pr = &rig.prs[0];
-    assert!(pr.lead.join("dirty.txt").exists(), "the dirty worktree is unchanged");
-    assert_eq!((rig.registered(&pr.lead), rig.branch_exists(&pr.lead_branch), pr.aside().exists()), (true, true, false));
+    let workflow = &rig.workflows[0];
+    assert!(workflow.lead.join("dirty.txt").exists(), "the dirty worktree is unchanged");
+    assert_eq!((rig.registered(&workflow.lead), rig.branch_exists(&workflow.lead_branch), workflow.aside().exists()), (true, true, false));
     assert!(outcomes.contains(&("api".to_owned(), "kept".to_owned())), "{outcomes:?}");
     let errors = rig.errors();
     assert_eq!(errors.len(), 1, "one Event: {errors:?}");
@@ -298,10 +298,10 @@ fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
     assert_eq!(data["code"], "cleanup_failed");
     assert!(text.contains(status) && !text.contains(other), "the text names the status {status}, never {other}: {text}");
     assert!(text.contains("untouched"), "{text}");
-    assert!(text.contains(&pr.lead.display().to_string()), "{text}");
+    assert!(text.contains(&workflow.lead.display().to_string()), "{text}");
     assert_eq!(data["details"]["status"], status);
     assert_eq!(data["details"]["outcome"], "kept");
-    assert_eq!(data["details"]["path"], pr.lead.display().to_string());
+    assert_eq!(data["details"]["path"], workflow.lead.display().to_string());
 }
 
 #[test]
@@ -317,8 +317,8 @@ fn janitor_pass_says_kept_untouched_for_a_dirty_lead_worktree_of_a_merged_pr() {
 #[test]
 fn janitor_pass_reports_a_kept_worktree_once() {
     let mut rig = Rig::new();
-    rig.pr("api", "cancelled");
-    std::fs::write(rig.prs[0].lead.join("dirty.txt"), "wip\n").unwrap();
+    rig.workflow("api", "cancelled");
+    std::fs::write(rig.workflows[0].lead.join("dirty.txt"), "wip\n").unwrap();
     rig.pass();
     assert_eq!(rig.errors().len(), 1, "the first pass reports it");
     let second = outcomes(rig.pass());
@@ -329,14 +329,14 @@ fn janitor_pass_reports_a_kept_worktree_once() {
 #[test]
 fn janitor_pass_finishes_what_a_killed_pass_left() {
     let mut rig = Rig::new();
-    rig.pr("api", "merged");
-    let pr = &rig.prs[0];
+    rig.workflow("api", "merged");
+    let workflow = &rig.workflows[0];
     // A pass killed after the rename: the path is gone, the aside is the marker, the registration and branch remain.
-    std::fs::rename(&pr.lead, pr.aside()).unwrap();
-    assert!(rig.registered(&pr.lead) && rig.branch_exists(&pr.lead_branch));
+    std::fs::rename(&workflow.lead, workflow.aside()).unwrap();
+    assert!(rig.registered(&workflow.lead) && rig.branch_exists(&workflow.lead_branch));
     let outcomes = outcomes(rig.pass());
-    let pr = &rig.prs[0];
-    assert_eq!((pr.lead.exists(), pr.aside().exists(), rig.registered(&pr.lead), rig.branch_exists(&pr.lead_branch)), (false, false, false, false));
+    let workflow = &rig.workflows[0];
+    assert_eq!((workflow.lead.exists(), workflow.aside().exists(), rig.registered(&workflow.lead), rig.branch_exists(&workflow.lead_branch)), (false, false, false, false));
     assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
@@ -344,14 +344,14 @@ fn janitor_pass_finishes_what_a_killed_pass_left() {
 #[test]
 fn janitor_pass_finishes_an_attempt_worktree_left_as_removing() {
     let mut rig = Rig::new();
-    rig.pr("api", "merged");
-    let pr = &rig.prs[0];
+    rig.workflow("api", "merged");
+    let workflow = &rig.workflows[0];
     // A pass or A9 killed after the rename: the path is gone, the aside is the marker, the registration and branch remain.
-    std::fs::rename(&pr.attempt, pr.attempt_aside()).unwrap();
+    std::fs::rename(&workflow.attempt, workflow.attempt_aside()).unwrap();
     let outcomes = outcomes(rig.pass());
-    let pr = &rig.prs[0];
-    assert_eq!(rig.left(pr), [false; 6]);
-    assert!(!pr.attempt_aside().exists());
+    let workflow = &rig.workflows[0];
+    assert_eq!(rig.left(workflow), [false; 6]);
+    assert!(!workflow.attempt_aside().exists());
     assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed") && !outcomes.is_empty(), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
@@ -359,8 +359,8 @@ fn janitor_pass_finishes_an_attempt_worktree_left_as_removing() {
 #[test]
 fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     let mut rig = Rig::new();
-    rig.pr("api", "merged");
-    rig.pr("web", "cancelled");
+    rig.workflow("api", "merged");
+    rig.workflow("web", "cancelled");
     std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
     let held = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(rig.home.locks_dir().join("janitor.lock")).unwrap();
     assert!(crate::lock::try_lock(&held).unwrap());
@@ -368,8 +368,8 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     let map = fields(rig.pass());
     assert_eq!(map.get("skipped"), Some(&Value::from("running")), "{map:?}");
     assert!(!map.contains_key("outcomes"), "{map:?}");
-    for pr in &rig.prs {
-        assert_eq!(rig.left(pr), [true; 6], "PR {} is untouched", pr.key);
+    for workflow in &rig.workflows {
+        assert_eq!(rig.left(workflow), [true; 6], "PR {} is untouched", workflow.key);
     }
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
@@ -378,9 +378,9 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
 /// its Attempt ended `attempt`, after one pass: `(left, outcomes, errors)`.
 fn live_pass(status: &'static str, job: &str, attempt: &str) -> (Rig, [bool; 6], Vec<(String, String)>) {
     let mut rig = Rig::new();
-    rig.pr_with("api", status, job, attempt);
+    rig.workflow_with("api", status, job, attempt);
     let outcomes = outcomes(rig.pass());
-    let left = rig.left(&rig.prs[0]);
+    let left = rig.left(&rig.workflows[0]);
     (rig, left, outcomes)
 }
 
@@ -418,7 +418,7 @@ fn janitor_pass_keeps_the_attempts_of_a_live_pr_whose_job_is_not_merged() {
 #[test]
 fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jobs() {
     let mut rig = Rig::new();
-    rig.pr_with("a", "open", "merged", "failed");
+    rig.workflow_with("a", "open", "merged", "failed");
     let plan = PlanId::parse("pay").unwrap();
     let branch = "cpd/pay--b-a1".to_owned();
     let dir = attempt_worktree_path(rig.repo.dir(), &plan, &AttemptId::parse("b-a1").unwrap()).unwrap();
@@ -435,7 +435,7 @@ fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jo
         dir = dir.display(),
     ));
     let outcomes = outcomes(rig.pass());
-    assert_eq!(rig.left(&rig.prs[0]), [true, true, true, false, false, false], "a-a1 is swept, the Lead stays");
+    assert_eq!(rig.left(&rig.workflows[0]), [true, true, true, false, false, false], "a-a1 is swept, the Lead stays");
     assert_eq!((dir.exists(), rig.registered(&dir), rig.branch_exists(&branch)), (true, true, true), "b-a1 is untouched");
     assert!(outcomes.contains(&("a".to_owned(), "removed".to_owned())), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
@@ -444,7 +444,7 @@ fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jo
 #[test]
 fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
     let mut rig = Rig::new();
-    rig.pr_with("api", "open", "merged", "failed");
+    rig.workflow_with("api", "open", "merged", "failed");
     std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
     let held = std::fs::OpenOptions::new()
         .create(true)
@@ -454,7 +454,7 @@ fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
         .unwrap();
     assert!(crate::lock::try_lock(&held).unwrap());
     let outcomes = outcomes(rig.pass());
-    assert_eq!(rig.left(&rig.prs[0]), [true; 6]);
+    assert_eq!(rig.left(&rig.workflows[0]), [true; 6]);
     assert!(outcomes.contains(&("api".to_owned(), "pending".to_owned())), "{outcomes:?}");
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }

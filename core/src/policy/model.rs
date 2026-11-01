@@ -58,8 +58,8 @@ pub fn models_of_attempt(conn: &rusqlite::Connection, home: &CpdHome, plan: &Pla
 }
 
 /// The models of the PR `key' of `plan`: [`models_of_job`] for a PR.
-pub fn models_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Models, CpdError> {
-    Ok(Models::of(&crate::pr::policy_of_pr(conn, home, plan, key)?))
+pub fn models_of_workflow(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Models, CpdError> {
+    Ok(Models::of(&crate::pr::policy_of_workflow(conn, home, plan, key)?))
 }
 
 /// The models of Context `context`: its owner's key, or, for a Context with no owner, the machine layer over the

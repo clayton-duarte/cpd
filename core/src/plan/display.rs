@@ -75,9 +75,9 @@ impl Display {
     #[cfg(test)]
     pub fn of(prs: &[WorkflowRow]) -> Display {
         let mut display = Display::default();
-        for p in prs {
+        for p in workflows {
             display.statuses.insert(p.key.to_string(), p.status.clone());
-            if let Some(base) = prs.iter().find(|q| q.lead_branch == p.base) {
+            if let Some(base) = workflows.iter().find(|q| q.lead_branch == p.base) {
                 display.bases.insert(p.key.to_string(), base.key.to_string());
             }
         }
@@ -117,9 +117,9 @@ impl Display {
     }
 
     /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
-    pub fn pr_needs(&self, pr: &WorkflowRow) -> Vec<String> {
-        let mut needs = pr.needs.clone();
-        if let Some(base) = self.bases.get(pr.key.as_str()) {
+    pub fn workflow_needs(&self, pr: &WorkflowRow) -> Vec<String> {
+        let mut needs = workflow.needs.clone();
+        if let Some(base) = self.bases.get(workflow.key.as_str()) {
             if !needs.contains(base) {
                 needs.push(base.clone());
             }
@@ -129,14 +129,14 @@ impl Display {
 
     /// What the PR that has not started cannot start until, sorted (PR references): the PRs it needs that are not `merged`, and
     /// its base PR when that has not started. Empty when it can start, and for a PR that has started.
-    pub fn pr_blockers(&self, pr: &WorkflowRow) -> Vec<String> {
-        if pr.status != "waiting" {
+    pub fn workflow_blockers(&self, pr: &WorkflowRow) -> Vec<String> {
+        if workflow.status != "waiting" {
             return Vec::new();
         }
         let mut blockers: Vec<String> =
-            pr.needs.iter().filter(|n| self.statuses.get(*n).is_none_or(|s| !matches!(s.as_str(), "merged" | "cancelled"))).cloned().collect();
+            workflow.needs.iter().filter(|n| self.statuses.get(*n).is_none_or(|s| !matches!(s.as_str(), "merged" | "cancelled"))).cloned().collect();
         // the implied need (contract §2.2): met when the base PR is `open` or `merged`
-        if let Some(base) = self.bases.get(pr.key.as_str()).filter(|b| self.statuses.get(*b).is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))) {
+        if let Some(base) = self.bases.get(workflow.key.as_str()).filter(|b| self.statuses.get(*b).is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))) {
             blockers.push(base.clone());
         }
         blockers.sort();

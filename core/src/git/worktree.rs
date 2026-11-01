@@ -54,7 +54,7 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 /// The Lead worktree of a PR (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
 /// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
-pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
+pub fn workflow_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
     if lead_branch_name == legacy_lead_branch(plan) {
         lead_worktree_path(repo, plan)
     } else {
@@ -550,7 +550,7 @@ pub fn prepare_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_pr_lead_worktree(repo, plan, path, branch, base, Cut::Base, setup, &Pipeline::default())
+    prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Base, setup, &Pipeline::default())
 }
 
 /// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
@@ -564,7 +564,7 @@ pub fn prepare_stacked_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_pr_lead_worktree(repo, plan, path, branch, base, Cut::Stacked, setup, &Pipeline::default())
+    prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Stacked, setup, &Pipeline::default())
 }
 
 /// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked PR's base PR's
@@ -581,7 +581,7 @@ pub enum Cut<'a> {
 /// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], for `Cut::Stacked`; `Cut::Adopted` for an adopted PR) running `pre_start`, the PR's policy
 /// `hooks.pre-start` (§7.3), after the worktree is created. The two above run no hook: they are for a caller with none.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_pr_lead_worktree(
+pub fn prepare_workflow_lead_worktree(
     repo: &Path,
     plan: &PlanId,
     path: &Path,
@@ -658,7 +658,7 @@ pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setu
 /// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
 pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
+    let prepared = prepare_workflow_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })

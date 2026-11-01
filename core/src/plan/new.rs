@@ -184,9 +184,9 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
         }
         pane => (pane, env.store.read(|conn| lead::last_window(conn, &plan.lead_session))?),
     };
-    let prs = env.store.read(|conn| listed(conn, &plan.id))?;
+    let workflows = env.store.read(|conn| listed(conn, &plan.id))?;
     Ok(Output::success(json!({
-        "plan": summary(plan, &prs),
+        "plan": summary(plan, &workflows),
         "lead": {"session": plan.lead_session, "name": name, "forked_from": Value::Null, "cwd": created.cwd, "pane": pane, "window": window},
         "record": record,
         "already": true,
@@ -196,7 +196,7 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
 fn summary(plan: &PlanRow, prs: &[Value]) -> Value {
     json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase.as_str(),
-           "lead_session": plan.lead_session, "workflows": prs})
+           "lead_session": plan.lead_session, "workflows": workflows})
 }
 
 /// The Plan's PRs, in key order: only an `already` rerun can find any.

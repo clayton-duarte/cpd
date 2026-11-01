@@ -85,7 +85,7 @@ fn parse_head(text: &str) -> Result<String, CpdError> {
 }
 
 fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
-    let pull = parse_pull(&args.pr)?;
+    let pull = parse_pull(&args.workflow)?;
     let emoji = match args.event.as_str() {
         "APPROVE" => "github-check-mark",
         "REQUEST_CHANGES" => "github-changes-requested",

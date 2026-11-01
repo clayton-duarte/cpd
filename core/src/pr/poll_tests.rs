@@ -49,8 +49,8 @@ impl Handler for Gh {
 fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     let mut rig = Rig::new();
     // `api` is open and GitHub says it merged; `web` is cancelled already.
-    rig.pr("api", "open");
-    rig.pr("web", "cancelled");
+    rig.workflow("api", "open");
+    rig.workflow("web", "cancelled");
     let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(Gh { merged: vec![801] }));
 
     // `Env::open_with` reads `$CPD_HOME`: the one variable this test sets, to its own temp dir (as `inbox/snooze_time_tests.rs`).
@@ -62,8 +62,8 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
         store.read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE key = 'api'", [], |r| r.get(0))?)).unwrap()
     };
     assert_eq!(status, "merged", "the poll saw the merge: {out:?}");
-    for pr in &rig.prs {
-        assert_eq!(rig.left(pr), [true; 6], "{} PR {}: the poll leaves every worktree, registration and branch", pr.status, pr.key);
+    for workflow in &rig.workflows {
+        assert_eq!(rig.left(workflow), [true; 6], "{} PR {}: the poll leaves every worktree, registration and branch", workflow.status, workflow.key);
     }
     let kills: Vec<Call> = rig.fakes.runner.calls().into_iter().filter(|c| c.program.ends_with("tmux") && c.args.iter().any(|a| a.starts_with("kill-"))).collect();
     assert!(kills.is_empty(), "the poll kills no window: {kills:?}");
@@ -118,7 +118,7 @@ fn guardian() -> serde_json::Value {
 /// Polls the open PR `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
 fn stored_checks(rollup: Option<&'static str>, nodes: Vec<serde_json::Value>, policy: &str) -> String {
     let mut rig = Rig::new();
-    rig.pr("api", "open");
+    rig.workflow("api", "open");
     let dir = rig.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("pay.toml"), policy).unwrap();
@@ -164,7 +164,7 @@ fn poll_stores_passed_when_the_required_check_passed() {
 fn open_rig(keys: &[&'static str]) -> Rig {
     let mut rig = Rig::new();
     for key in keys {
-        rig.pr(key, "open");
+        rig.workflow(key, "open");
     }
     rig
 }

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::args::WorkflowArg;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::{self, PlanRow, WorkflowRow, Pull};
 
 impl WorkflowRow {
@@ -52,16 +52,16 @@ pub(super) struct PlanWorkflows {
 impl PlanWorkflows {
     /// The PR `--pr` names, else the Plan's only PR that is not `cancelled` (§1.3).
     pub fn select(&self, arg: &WorkflowArg) -> Result<&WorkflowRow, CpdError> {
-        arg.select(&&self.plan.id, &self.prs)
+        arg.select(&&self.plan.id, &self.workflows)
     }
 
     /// The PRs that are not `cancelled`.
     pub fn live(&self) -> impl Iterator<Item = &WorkflowRow> {
-        self.prs.iter().filter(|p| p.status != "cancelled")
+        self.workflows.iter().filter(|p| p.status != "cancelled")
     }
 }
 
 /// The Plan `id` with its PRs, else `plan_not_found`.
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanWorkflows, CpdError> {
-    Ok(PlanWorkflows { plan: plan::row::load(conn, id)?, prs: load_prs(conn, id)? })
+    Ok(PlanWorkflows { plan: plan::row::load(conn, id)?, prs: load_workflows(conn, id)? })
 }

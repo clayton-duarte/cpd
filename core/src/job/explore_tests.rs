@@ -33,7 +33,7 @@ struct Fixture {
 /// Plan `pay` in `phase` with `prs` PRs (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
 /// `repo` is the PRs' repo path.
 fn fixture_at(phase: &str, prs: &[&str], repo: Option<&std::path::Path>) -> Fixture {
-    fixture_with(phase, prs, repo, false)
+    fixture_with(phase, workflows, repo, false)
 }
 
 /// [`fixture_at`], or, with `repo_is_temp_dir`, with the PRs' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
@@ -69,7 +69,7 @@ fn fixture_with(phase: &str, prs: &[&str], repo: Option<&std::path::Path>, repo_
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked}, {done});"
     );
-    for pr in prs {
+    for workflow in workflows {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{pr}', '{repo}', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
@@ -109,7 +109,7 @@ impl Fixture {
     /// An existing queued Job of `kind` (explore: no PR, derived touches) with a true fingerprint, in its own transaction.
     fn job(&mut self, key: &str, kind: &str, status: &str, tier: &str, needs: &[&str]) {
         let explore = matches!(kind, "scout" | "research");
-        let (pr, touches) = if explore { ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]")) } else { ("'api'".to_owned(), "[\"a\"]".to_owned()) };
+        let (workflow, touches) = if explore { ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]")) } else { ("'api'".to_owned(), "[\"a\"]".to_owned()) };
         // The true fingerprint of the Job, computed from a twin row that the rolled-back transaction takes away again.
         let mut fingerprint = String::new();
         let _ = self.env.store.write("fingerprint", |tx| {
@@ -158,7 +158,7 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            pr: WorkflowArg { pr: pr.map(|p| WorkflowKey::parse(p).unwrap()) },
+            pr: WorkflowArg { pr: workflow.map(|p| WorkflowKey::parse(p).unwrap()) },
             plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
         };
         add_in(&mut self.env, args)

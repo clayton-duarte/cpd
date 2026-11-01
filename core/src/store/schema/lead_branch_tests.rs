@@ -42,7 +42,7 @@ fn fresh(phase: &str) -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-fn pr(plan: &str, key: &str, lead_branch: &str) -> String {
+fn workflow(plan: &str, key: &str, lead_branch: &str) -> String {
     format!(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', '{lead_branch}', cpd_txn(), 't');"
@@ -52,25 +52,25 @@ fn pr(plan: &str, key: &str, lead_branch: &str) -> String {
 #[test]
 fn prs_accepts_a_plan_slash_key_lead_branch() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("`<plan>/<key>` is a Lead Branch");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("`<plan>/<key>` is a Lead Branch");
 }
 
 #[test]
 fn prs_still_accepts_the_two_legacy_lead_branch_forms() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "cpd/pay/api")).expect("`cpd/<plan>/<key>`");
-    write(&mut store, &pr("pay", "old", "cpd/pay")).expect("`cpd/<plan>`");
+    write(&mut store, &workflow("pay", "api", "cpd/pay/api")).expect("`cpd/<plan>/<key>`");
+    write(&mut store, &workflow("pay", "old", "cpd/pay")).expect("`cpd/<plan>`");
 }
 
 #[test]
 fn prs_refuses_a_lead_branch_that_is_not_derived_from_plan_and_key() {
     let (_dir, mut store) = fresh("plan");
     for (key, branch) in [("api", "other/api"), ("api", "pay/other"), ("api", "cpd/other/api")] {
-        let failed = message(write(&mut store, &pr("pay", key, branch)), branch);
+        let failed = message(write(&mut store, &workflow("pay", key, branch)), branch);
         assert!(failed.contains("CHECK"), "{branch}: {failed}");
     }
     // Refused for the CHECK, so the same PR with its own name goes in.
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the derived name");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the derived name");
 }
 
 /// PR `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
@@ -88,15 +88,15 @@ fn attempt_on(branch: &str) -> String {
 #[test]
 fn attempts_accepts_a_linear_attempt_on_a_plan_slash_key_branch() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
     write(&mut store, &attempt_on("pay/api")).expect("a linear Attempt's branch is its PR's Lead Branch");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
     write(&mut store, &attempt_on("cpd/pay--j-a1")).expect("a parallel Attempt branch keeps its name");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the PR");
     let failed = message(write(&mut store, &attempt_on("paid/api")), "another plan's branch");
     assert!(failed.contains("CHECK"), "{failed}");
 }

@@ -38,7 +38,7 @@ fn fixture(lead_state: &str) -> Fixture {
                VALUES ('{plan}', 'ctx', 'P', 'dispatch', 'l-{plan}', '{T}', '{T}');"
         ));
     }
-    for (plan, pr) in [("pay", "p1"), ("pay", "p2"), ("ops", "p1")] {
+    for (plan, workflow) in [("pay", "p1"), ("pay", "p2"), ("ops", "p1")] {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('{plan}', '{pr}', '/r', 'main', 'dispatch', 'cpd/{plan}/{pr}', '/lw', 1, '{T}', '{T}');"
@@ -82,7 +82,7 @@ impl Fixture {
 
     /// A failed Job with its Event.
     fn failed(&mut self, plan: &str, pr: &str, key: &str) {
-        self.job(plan, pr, key, "failed");
+        self.job(plan, workflow, key, "failed");
         self.failure(plan, key);
     }
 

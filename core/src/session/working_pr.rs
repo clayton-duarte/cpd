@@ -14,7 +14,7 @@ pub fn name(tx: &Connection, plan: &PlanId, pr: &WorkflowKey) -> Result<(), CpdE
     };
     tx.execute(
         "UPDATE sessions SET working_pr = ?1 WHERE id = ?2 AND role = 'lead' AND plan = ?3 AND state = 'working' AND working_pr IS NOT ?1",
-        rusqlite::params![pr.as_str(), id, plan.as_str()],
+        rusqlite::params![workflow.as_str(), id, plan.as_str()],
     )?;
     Ok(())
 }

@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
 
-use super::fingerprint::{load_prs, plan_fingerprint};
+use super::fingerprint::{load_workflows, plan_fingerprint};
 use super::jobs::{self, Job};
 use super::prs::WorkflowRow;
 use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
@@ -31,20 +31,20 @@ const COMMAND: &str = "plan lock";
 pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, prs, held) = env.store.read(|conn| {
-        let prs = load_prs(conn, &id)?;
+    let (plan, jobs, workflows, held) = env.store.read(|conn| {
+        let workflows = load_workflows(conn, &id)?;
         let mut held = HashMap::new();
-        for pr in prs.iter().filter(|p| p.status != "cancelled") {
-            held.insert(pr.key.to_string(), start::not_ready(conn, &id, &pr.key)?);
+        for workflow in workflows.iter().filter(|p| p.status != "cancelled") {
+            held.insert(workflow.key.to_string(), start::not_ready(conn, &id, &workflow.key)?);
         }
-        Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, prs, held))
+        Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, workflows, held))
     })?;
     match plan.phase {
         Phase::Plan => {}
         Phase::Dispatch => {
             let watch = ensure_watch(&env, &id)?;
             return Ok(Output::success(json!({
-                "plan": id, "phase": "dispatch", "prs": listed(&prs, &[], &held), "watch": watch, "already": true,
+                "plan": id, "phase": "dispatch", "prs": listed(&workflows, &[], &held), "watch": watch, "already": true,
             })));
         }
         other => {
@@ -62,7 +62,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         return Err(no_draft_jobs(&id));
     }
     env.store.read(|conn| check_drafts_complete(conn, &id, &jobs))?;
-    super::shape::check(&id, &prs, &jobs)?;
+    super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
     let Some(review) = review else {
@@ -75,9 +75,9 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    let live: Vec<&WorkflowRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let live: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> =
-        live.iter().filter(|p| !drafts.iter().any(|j| j.pr_str() == p.key.as_str())).map(|p| p.key.as_str()).collect();
+        live.iter().filter(|p| !drafts.iter().any(|j| j.workflow_str() == p.key.as_str())).map(|p| p.key.as_str()).collect();
     if live.is_empty() || !empty.is_empty() {
         let message = if live.is_empty() {
             format!("Plan {id} has no PR: add one with cpd pr add.")
@@ -99,8 +99,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     // git, outside any transaction (§7.2): every PR with no needs is prepared first,
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
-    for pr in prs.iter().filter(|p| p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)) {
-        match start::prepare(&env.home, &env.config, &mut env.store, &id, pr) {
+    for workflow in workflows.iter().filter(|p| p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)) {
+        match start::prepare(&env.home, &env.config, &mut env.store, &id, workflow) {
             Ok(p) => prepared.push(p),
             Err(failed) => {
                 prepared.iter().for_each(start::Prepared::discard);
@@ -138,8 +138,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             tx,
             NewEvent::plan_phase_locked(text, &keys, started_keys).plan(id.clone()),
         )?;
-        for pr in &started {
-            start::record(tx, &id, pr, By::Lock)?;
+        for workflow in &started {
+            start::record(tx, &id, workflow, By::Lock)?;
         }
         Ok(())
     });
@@ -149,28 +149,28 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
 
     let watch = ensure_watch(&env, &id)?;
-    Ok(Output::success(json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&prs, &started, &held), "watch": watch})))
+    Ok(Output::success(json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&workflows, &started, &held), "watch": watch})))
 }
 
 /// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
 /// key order. A PR started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
 fn listed(prs: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
-    prs.iter()
+    workflows.iter()
         .filter(|p| p.status != "cancelled")
-        .map(|pr| {
-            let mut one = match started.iter().find(|s| s.key() == pr.key.as_str()) {
+        .map(|workflow| {
+            let mut one = match started.iter().find(|s| s.key() == workflow.key.as_str()) {
                 Some(s) => {
                     let mut one = s.to_json();
-                    one["needs"] = json!(pr.needs);
+                    one["needs"] = json!(workflow.needs);
                     one
                 }
                 None => json!({
-                    "key": pr.key, "status": pr.status, "needs": pr.needs, "lead_branch": pr.lead_branch,
-                    "lead_worktree": pr.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
+                    "key": workflow.key, "status": workflow.status, "needs": workflow.needs, "lead_branch": workflow.lead_branch,
+                    "lead_worktree": workflow.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
                 }),
             };
-            one["base_pr"] = json!(held.get(pr.key.as_str()).and_then(|h| h.base_pr.clone()));
+            one["base_pr"] = json!(held.get(workflow.key.as_str()).and_then(|h| h.base_workflow.clone()));
             one
         })
         .collect()

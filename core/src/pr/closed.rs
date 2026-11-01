@@ -36,10 +36,10 @@ pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<Clos
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(plan, pr, context, lead, repo, number, url, title)| {
+        .map(|(plan, workflow, context, lead, repo, number, url, title)| {
             Ok(ClosedUnmerged {
                 plan: PlanId::parse(&plan)?,
-                pr: WorkflowKey::parse(&pr)?,
+                pr: WorkflowKey::parse(&workflow)?,
                 context: ContextId::parse(&context)?,
                 lead_session: lead.as_deref().map(SessionId::parse).transpose()?,
                 repo,

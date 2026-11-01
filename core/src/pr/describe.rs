@@ -7,12 +7,12 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{DescribeArgs, Env, find_pr, gh};
+use super::{DescribeArgs, Env, find_workflow, gh};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 
 const COMMAND: &str = "pr describe";
 
@@ -52,7 +52,7 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
                 Decision::Update { status, .. } => {
                     tx.execute("UPDATE workflows SET description = ?1 WHERE plan = ?2 AND key = ?3", [text.as_str(), plan.as_str(), key.as_str()])?;
                     let message = format!("PR {key} of Plan {plan} described. Next: cpd plan render --plan {plan}");
-                    append(tx, NewEvent::pr_described(message, &key).plan(plan.clone()))?;
+                    append(tx, NewEvent::workflow_described(message, &key).plan(plan.clone()))?;
                     crate::session::working_pr::name(tx, &plan, &key)?;
                     Ok(status)
                 }
@@ -79,23 +79,23 @@ fn read_text(file: &Path) -> Result<String, CpdError> {
 
 /// The PR's status when it may be described, and with `text` whether that changes it; the open pull request's repo and number, if any.
 fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str>) -> Result<Decision, CpdError> {
-    let prs = load_prs(conn, plan)?;
-    let pr = find_pr(&prs, plan, key)?;
-    if pr.head_ref.is_some() {
+    let workflows = load_workflows(conn, plan)?;
+    let workflow = find_workflow(&workflows, plan, key)?;
+    if workflow.head_ref.is_some() {
         return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("PR {key} is an adopted pull request: its own body is kept, so it is not described."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str()));
     }
-    if matches!(pr.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its description is history.", pr.status))
+    if matches!(workflow.status.as_str(), "merged" | "cancelled") {
+        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its description is history.", workflow.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
-            .with("status", pr.status.as_str()));
+            .with("status", workflow.status.as_str()));
     }
-    let Some(text) = text else { return Ok(Decision::Already(pr.status.clone())) };
+    let Some(text) = text else { return Ok(Decision::Already(workflow.status.clone())) };
     let stored: Option<String> = conn.query_row("SELECT description FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
     if stored.as_deref() == Some(text) {
-        return Ok(Decision::Already(pr.status.clone()));
+        return Ok(Decision::Already(workflow.status.clone()));
     }
     let open = conn
         .prepare(
@@ -104,5 +104,5 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
         )?
         .query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
-    Ok(Decision::Update { status: pr.status.clone(), open })
+    Ok(Decision::Update { status: workflow.status.clone(), open })
 }
