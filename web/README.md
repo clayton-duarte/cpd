@@ -446,6 +446,22 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 
 **The adapter carries the tree's fields.** `web/src/api/live-server.ts`'s `LiveSession` gains `context` and `name`, which the dev adapter's `realDeps().list()` in `web/vite.config.ts` fills from each `cpd session list` row's `context` and `name`.
 
+### The Inbox rail in the right column
+
+The right column stops being a placeholder ("The Inbox lands here.") and becomes the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, decided by the User on 2026-11-01 from the working dev preview (`preview/chat-shell`, `1624176c7`). It is vendored 1:1 into `web/src/components/inbox-rail.tsx` under the same registry rule as the Context rail (**`new-york-v4` only**, above): `cn` imported relatively from `web/src/lib/utils.ts`, no `@` alias.
+
+**What the block is.** `sidebar-09` ("Collapsible nested sidebars", https://ui.shadcn.com/r/styles/new-york-v4/sidebar-09.json) is two sidebars side by side: an icon column — Inbox, Drafts, Sent, Junk, Trash under an Acme Inc header and the sample user — and, beside it, the mail list.
+
+**What is vendored.** Only the block's second sidebar — its header (the title over the `SidebarInput` whose placeholder is `Type to search...`) and its mail list. Each row is an anchor and renders the name with its date pushed right (`ml-auto text-xs`), the subject in `font-medium`, then the teaser in `line-clamp-2 w-[260px] text-xs whitespace-break-spaces`, under the block's row classes `flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground` — rows and classes verbatim.
+
+**What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column) and the `Unreads` switch in the second sidebar's header.
+
+**The data.** The ten mails are the registry's own sample data (`data.mails`), verbatim and in its order. Reading the real Inbox is a named follow-up: this rail is the block's sample list, not the store.
+
+**The column.** The Inbox column defaults to `25rem` and is sized and resized like the Context column (above), double-clicking its handle restoring `25rem`. The panel wraps the rail in its own `SidebarProvider` whose `--sidebar-width` is `100%`, so the block's `Sidebar` fills the panel instead of the sidebar's `16rem` default.
+
+**Why 25rem.** The teaser is a fixed `w-[260px]` and the block's own `page.tsx` sets `--sidebar-width: 350px`; at a narrower column the teaser's last characters are clipped mid-word (measured 2026-11-01: 257px of inner width against the 260px teaser). `25rem` gives the row room.
+
 ### The durable host-socket read (`chat-host`)
 
 A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` is untouched. The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
