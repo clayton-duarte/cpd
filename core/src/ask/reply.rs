@@ -55,7 +55,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
                 .attempt(AttemptId::clone(&attempt)),
         )?;
         let pr: Option<String> = tx
-            .query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+            .query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
             .optional()?
             .flatten();
         if let Some(pr) = pr {

@@ -85,8 +85,8 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
     store.read(|conn| {
         let mut set = BTreeSet::new();
         let mut leads = conn.prepare(
-            "SELECT prs.lead_branch FROM prs JOIN plans ON plans.id = prs.plan \
-             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+            "SELECT workflows.lead_branch FROM workflows JOIN plans ON plans.id = workflows.plan \
+             WHERE plans.phase != 'done' AND workflows.status != 'merged'",
         )?;
         for row in leads.query_map([], |r| r.get::<_, Option<String>>(0))? {
             set.extend(row?);
@@ -94,9 +94,9 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
         let mut attempts = conn.prepare(
             "SELECT attempts.plan, attempts.id FROM attempts \
              JOIN jobs ON jobs.plan = attempts.plan AND jobs.key = attempts.job \
-             JOIN prs ON prs.plan = jobs.plan AND prs.key = jobs.pr \
-             JOIN plans ON plans.id = prs.plan \
-             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+             JOIN workflows ON workflows.plan = jobs.plan AND workflows.key = jobs.workflow \
+             JOIN plans ON plans.id = workflows.plan \
+             WHERE plans.phase != 'done' AND workflows.status != 'merged'",
         )?;
         for row in attempts.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
             let (plan, id) = row?;

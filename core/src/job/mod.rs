@@ -234,7 +234,7 @@ impl Env {
                 Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
                 None => {
                     let pr: Option<Option<String>> = conn
-                        .query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
+                        .query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
                         .optional()?;
                     match pr {
                         Some(None) => explore_models(conn, &home, plan),

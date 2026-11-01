@@ -215,7 +215,7 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
         return Ok(None);
     }
     let live: bool = tx.query_row(
-        "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'update' AND status IN ('queued', 'running'))",
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND workflow = ?2 AND kind = 'update' AND status IN ('queued', 'running'))",
         [plan.as_str(), pr.key.as_str()],
         |r| r.get(0),
     )?;
@@ -264,7 +264,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
     let spec = job.spec.as_ref().expect("the open Job has its Spec");
     let array = |v: &Value| v.to_string();
     tx.execute(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, kind, created_txn, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?13, 1, ?11, ?12, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
         params![

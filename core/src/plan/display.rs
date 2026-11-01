@@ -43,13 +43,13 @@ impl Display {
     pub fn load(conn: &Connection, plan: &PlanId) -> Result<Display, CpdError> {
         let own = plan.as_str();
         let mut display = Display::default();
-        let mut stmt = conn.prepare("SELECT plan, key, status FROM prs")?;
+        let mut stmt = conn.prepare("SELECT plan, key, status FROM workflows")?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
             let (p, key, status) = row?;
             display.statuses.insert(reference(own, &p, &key), status);
         }
         // a stacked PR's base is the PR whose Lead Branch is its `base` (contract §2.2 "The base PR")
-        let mut stmt = conn.prepare("SELECT p.key, q.plan, q.key FROM prs p JOIN prs q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
+        let mut stmt = conn.prepare("SELECT p.key, q.plan, q.key FROM workflows p JOIN workflows q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
         for row in stmt.query_map([own], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
             let (key, base_plan, base) = row?;
             display.bases.insert(key, reference(own, &base_plan, &base));

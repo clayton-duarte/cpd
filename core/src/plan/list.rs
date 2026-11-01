@@ -36,7 +36,7 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
                 "lead_session": plan.lead_session, "archived_at": plan.archived_at,
                 "counts": counts_value(&counts.remove(plan.id.as_str()).unwrap_or_default()),
-                "prs": prs.remove(plan.id.as_str()).unwrap_or_default(),
+                "workflows": prs.remove(plan.id.as_str()).unwrap_or_default(),
             })
         })
         .collect();
@@ -66,7 +66,7 @@ fn prs(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
         "SELECT r.plan, r.key, r.repo, r.status, r.pr_number, r.pr_url, r.pr_opened_at,
                 q.id, q.repo, q.number, q.url, q.title, q.draft, q.state, q.review_decision, q.checks, q.created_at, q.merged_at,
                 q.changed_at, q.mergeable, q.merge_state, q.authored, q.review_requested
-           FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
+           FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
     )?;
     let mut by_plan: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for row in stmt.query_map([], pr_row)? {
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(plans[1]["id"], "plan-2");
         assert_eq!(plans[1]["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 0}));
         assert_eq!(
-            plans[1]["prs"],
+            plans[1]["workflows"],
             json!([
                 {"key": "api", "repo": "/r/api", "status": "open",
                  "pr": {"number": 2, "url": "https://github.com/acme/api/pull/2", "opened_at": "t"},

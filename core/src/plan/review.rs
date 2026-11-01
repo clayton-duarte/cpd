@@ -120,7 +120,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
 /// The base PR of each stacked PR of `plan`, `<plan>/<key>` by PR key: the PR whose Lead Branch is the PR's `base`. A Lead
 /// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
 fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
+    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM workflows p JOIN workflows q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
     let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -157,7 +157,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "summary": summary.display().to_string(),
         "fingerprint": s.fingerprint,
         "draft_jobs": s.jobs.iter().filter(|j| j.is_under_review()).count(),
-        "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
+        "workflows": s.prs.iter().filter(|p| p.status != "cancelled").count(),
         "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
     })))
 }
@@ -292,7 +292,7 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
         format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
     )
     .with("plan", id.as_str())
-    .with("prs", without))
+    .with("workflows", without))
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {

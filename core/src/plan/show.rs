@@ -28,8 +28,8 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                 all_merged_at, start_failed_at, created_at, started_at, merged_at, title,
-                (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base), shape, head_ref, jira
-           FROM prs WHERE plan = ?1 ORDER BY key",
+                (SELECT q.plan || '/' || q.key FROM workflows q WHERE q.repo = workflows.repo AND q.lead_branch = workflows.base), shape, head_ref, jira
+           FROM workflows WHERE plan = ?1 ORDER BY key",
     )?;
     let closed = closed_unmerged(conn, Some(plan.as_str()))?;
     let rows = stmt
@@ -93,7 +93,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         .collect();
     Ok(Output::success(json!({
         "plan": plan.to_json(),
-        "prs": prs,
+        "workflows": prs,
         "jobs": job_values,
         "escalations": escalations,
         "review": review,
@@ -254,7 +254,7 @@ mod tests {
             .unwrap();
         let current = |store: &mut crate::store::Store| store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone();
         assert_eq!(current(&mut store), true);
-        store.write("fixture", |tx| Ok(tx.execute("UPDATE prs SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
+        store.write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
         assert_eq!(current(&mut store), false, "a PR's base is in the fingerprint");
     }
 }

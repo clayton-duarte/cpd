@@ -62,9 +62,9 @@ fn overlaps(a: &str, b: &str) -> bool {
 pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, p.repo, j.key, j.status, j.touches
-           FROM prs p
+           FROM workflows p
            JOIN plans l ON l.id = p.plan
-           JOIN jobs j ON j.plan = p.plan AND j.pr = p.key
+           JOIN jobs j ON j.plan = p.plan AND j.workflow = p.key
           WHERE p.plan <> ?1 AND l.phase <> 'done' AND l.archived_at IS NULL
             AND p.status NOT IN ('merged', 'cancelled') AND j.status <> 'cancelled'
           ORDER BY p.plan, p.key, j.seq",

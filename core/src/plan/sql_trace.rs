@@ -54,14 +54,14 @@ pub(super) fn ledger(dir: &std::path::Path, plans: usize) -> Store {
                                         mergeable, merge_state)
                VALUES ('acme/api', {n}, 'https://github.com/acme/api/pull/{n}', 'Add api', 0, 'open', 'approved', 'passed',
                        't', NULL, 't', 'mergeable', 'clean');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at)
                VALUES ('plan-{n}', 'api', '/r/api', 'main', 'open', 'cpd/plan-{n}/api', '/r/api.plan-{n}', {n}, 'https://github.com/acme/api/pull/{n}',
                        't', (SELECT id FROM pull_requests WHERE number = {n}), cpd_txn(), 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('plan-{n}', 'db', '/r/db', 'main', 'waiting', 'cpd/plan-{n}/db', cpd_txn(), 't');
-             INSERT INTO pr_needs (plan, pr, needs) VALUES ('plan-{n}', 'api', 'db');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('plan-{n}', 'api', 'db');
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
                VALUES ('plan-{n}', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
                       ('plan-{n}', 'api', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
              INSERT INTO dependencies (plan, job, needs) VALUES ('plan-{n}', 'a', 'b');

@@ -97,8 +97,8 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
     let Some(reasons) = reasons.iter().map(Value::as_str).collect::<Option<Vec<&str>>>() else { return Ok(false) };
     let row: Option<(String, Option<String>, String, Option<String>)> = conn
         .query_row(
-            "SELECT p.checks, p.review_decision, p.state, p.feedback FROM prs
-             JOIN pull_requests p ON p.id = prs.pull_request WHERE prs.plan = ?1 AND prs.key = ?2",
+            "SELECT p.checks, p.review_decision, p.state, p.feedback FROM workflows
+             JOIN pull_requests p ON p.id = workflows.pull_request WHERE workflows.plan = ?1 AND workflows.key = ?2",
             params![plan, pr],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
@@ -118,9 +118,9 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             },
             "closed" => state == "closed",
             "ready_to_post" => {
-                let posted = exists(conn, "SELECT 1 FROM pr_posts WHERE plan = ?1 AND pr = ?2 LIMIT 1", params![plan, pr])?;
+                let posted = exists(conn, "SELECT 1 FROM pr_posts WHERE plan = ?1 AND workflow = ?2 LIMIT 1", params![plan, pr])?;
                 let id: i64 = conn.query_row(
-                    "SELECT pull_request FROM prs WHERE plan = ?1 AND key = ?2",
+                    "SELECT pull_request FROM workflows WHERE plan = ?1 AND key = ?2",
                     params![plan, pr],
                     |r| r.get(0),
                 )?;

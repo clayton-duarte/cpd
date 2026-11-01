@@ -190,7 +190,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         let base_refs: Vec<String> = store.read(|conn| {
             let (pr_repo, pr_base): (String, String) = conn.query_row(
                 "SELECT r.repo, r.base FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-                   JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
+                   JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE a.plan = ?1 AND a.id = ?2",
                 [target.plan.as_str(), target.id.to_string().as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;

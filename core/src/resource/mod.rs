@@ -303,7 +303,7 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
     use rusqlite::OptionalExtension;
     // An explore Job has no PR (the join finds no row): it lists no resources.
     let found: Option<(String, Option<String>, Option<String>, Option<String>)> = conn.query_row(
-        "SELECT j.pr, j.resources, c.owner, r.name FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+        "SELECT j.workflow, j.resources, c.owner, r.name FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
            JOIN plans p ON p.id = j.plan JOIN contexts c ON c.id = p.context WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), key],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),

@@ -20,7 +20,7 @@ pub(crate) fn created_after_failure(newer: &str, failed: &str) -> String {
 pub(crate) fn queued_or_running_after_failure(failed: &str) -> String {
     format!(
         "EXISTS (SELECT 1 FROM jobs f
-                  WHERE f.plan = {failed}.plan AND f.pr = {failed}.pr AND f.status IN ('queued', 'running') AND {})",
+                  WHERE f.plan = {failed}.plan AND f.workflow = {failed}.workflow AND f.status IN ('queued', 'running') AND {})",
         created_after_failure("f", failed)
     )
 }

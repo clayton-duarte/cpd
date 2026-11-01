@@ -114,7 +114,7 @@ pub(crate) fn plan_repos(
     machine: &crate::ids::MachineName,
     records: &[render::Indexed],
 ) -> Result<render::Repos, CpdError> {
-    let mut stmt = conn.prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
+    let mut stmt = conn.prepare("SELECT repo FROM workflows WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let mut out = render::Repos::new();
     for (_, record) in records {
         let Some(plan) = record.plan().filter(|_| record.kind() == RecordKind::Plan) else { continue };

@@ -59,9 +59,9 @@ pub fn queue(tx: &WriteTxn<'_>, channel: &str, ts: &str, emoji: &str) -> Result<
 /// Queues the reaction of PR `pr` of Plan `plan`'s post when its `pr_posts.reaction` is not NULL; `true` when newly queued.
 pub fn queue_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str) -> Result<bool, CpdError> {
     let rows = tx.execute(
-        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, pr)
-         SELECT channel, ts, reaction, (SELECT at FROM txns WHERE id = cpd_txn()), plan, pr FROM pr_posts
-          WHERE plan = ?1 AND pr = ?2 AND reaction IS NOT NULL
+        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, workflow)
+         SELECT channel, ts, reaction, (SELECT at FROM txns WHERE id = cpd_txn()), plan, workflow FROM pr_posts
+          WHERE plan = ?1 AND workflow = ?2 AND reaction IS NOT NULL
          ON CONFLICT (channel, ts, emoji) DO NOTHING",
         [plan, pr],
     )?;
@@ -73,7 +73,7 @@ pub fn next_due(conn: &Connection, skip: &[i64]) -> Result<Option<Due>, CpdError
     let skip = serde_json::to_string(skip).expect("integers serialize");
     Ok(conn
         .query_row(
-            "SELECT id, channel, ts, emoji, plan, pr FROM slack_reactions
+            "SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions
              WHERE reacted_at IS NULL AND refused_at IS NULL AND id NOT IN (SELECT value FROM json_each(?1)) ORDER BY id LIMIT 1",
             [skip],
             due,
@@ -93,7 +93,7 @@ pub fn mark_reacted(tx: &WriteTxn<'_>, id: i64) -> Result<bool, CpdError> {
 /// The refused merge rows (`plan` and `pr` set), oldest first; `emoji` is the refused emoji.
 pub fn parked(conn: &Connection) -> Result<Vec<Due>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT id, channel, ts, emoji, plan, pr FROM slack_reactions WHERE refused_at IS NOT NULL AND plan IS NOT NULL ORDER BY id",
+        "SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE refused_at IS NOT NULL AND plan IS NOT NULL ORDER BY id",
     )?;
     let rows = stmt.query_map([], due)?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -129,7 +129,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
     if rows != 1 {
         return Ok(false);
     }
-    let row = tx.query_row("SELECT id, channel, ts, emoji, plan, pr FROM slack_reactions WHERE id = ?1", [id], due)?;
+    let row = tx.query_row("SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE id = ?1", [id], due)?;
     let emoji = &row.emoji;
     let mut details = json!({"id": id, "emoji": emoji, "reason": reason, "channel": row.channel, "ts": row.ts});
     let what = if reason == "policy_empty" {
@@ -168,7 +168,7 @@ pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, pr: &str) -> 
     let key = PrKey::parse(pr)?;
     let emoji = super::policy_of_pr(conn, home, &plan_id, &key)?.pr.post.merged_reaction;
     let (owner, name): (String, Option<String>) = conn.query_row(
-        "SELECT c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
+        "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
         [plan, pr],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -212,7 +212,7 @@ mod tests {
                        VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                        VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                     INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, pr) VALUES ('C0POST', '1.1', 'git-merge', 'q', 'pay', 'api');
+                     INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, workflow) VALUES ('C0POST', '1.1', 'git-merge', 'q', 'pay', 'api');
                      INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('C0POST', '1.1', 'eyes', 'q');",
                 )?;
                 Ok(())

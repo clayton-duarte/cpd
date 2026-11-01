@@ -96,7 +96,7 @@ type Raw = (String, String, String, String, Option<String>, String, (Option<i64>
 /// The needs of every PR of `plan` by PR key, each list sorted, as keys of the Plan (contract §2.2).
 pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1")?;
+    let mut stmt = conn.prepare("SELECT workflow, needs FROM workflow_needs WHERE plan = ?1")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(need);
@@ -110,7 +110,7 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref, started_at, jira
-           FROM prs WHERE plan = ?1 ORDER BY key",
+           FROM workflows WHERE plan = ?1 ORDER BY key",
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
@@ -152,14 +152,14 @@ mod tests {
                      INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                        VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'api', '/r/api', 'main', 'waiting', 'cpd/pay/api', cpd_txn(), 't'),
                               ('pay', 'web', '/r/web', 'dev', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-                     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'api');
-                     UPDATE prs SET status = 'dispatch', lead_worktree = '/w/api', started_at = 't' WHERE key = 'api';
+                     INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'api');
+                     UPDATE workflows SET status = 'dispatch', lead_worktree = '/w/api', started_at = 't' WHERE key = 'api';
                      INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                        VALUES ('acme/api', 7, 'https://x/7', 'T', 0, 'open', 'none', 'none', 't', 't');
-                     UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://x/7', pr_opened_at = 'o',
+                     UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://x/7', pr_opened_at = 'o',
                             pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE key = 'api';",
                 )?;
                 Ok(())
@@ -167,7 +167,7 @@ mod tests {
             .unwrap();
         let plan = PlanId::parse("pay").unwrap();
         let prs = store.read(|conn| load_prs(conn, &plan)).unwrap();
-        let [api, web] = prs.as_slice() else { panic!("{prs:?}") };
+        let [api, web] = prs.as_slice() else { panic!("{workflows:?}") };
         assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
         assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
         let pull = api.pull.as_ref().unwrap();

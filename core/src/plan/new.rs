@@ -196,12 +196,12 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
 fn summary(plan: &PlanRow, prs: &[Value]) -> Value {
     json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase.as_str(),
-           "lead_session": plan.lead_session, "prs": prs})
+           "lead_session": plan.lead_session, "workflows": prs})
 }
 
 /// The Plan's PRs, in key order: only an `already` rerun can find any.
 fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key, repo, status FROM prs WHERE plan = ?1 ORDER BY key")?;
+    let mut stmt = conn.prepare("SELECT key, repo, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt.query_map([id.as_str()], |r| {
         Ok(json!({"key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "status": r.get::<_, String>(2)?}))
     })?;

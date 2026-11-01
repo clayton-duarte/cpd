@@ -239,7 +239,7 @@ fn run_checks(
 /// The Lead Branch and the base of the PR that holds Job `job` of `plan`.
 fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String, String), CpdError> {
     Ok(conn.query_row(
-        "SELECT r.lead_branch, r.repo, r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        "SELECT r.lead_branch, r.repo, r.base FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), job],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?)

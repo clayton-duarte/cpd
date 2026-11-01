@@ -299,7 +299,7 @@ fn merged_row(lead: &Path, head: &gh::HeadPr, bots: &[String]) -> Result<PolledP
 pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> Result<Option<Phase>, CpdError> {
     let status: Option<String> = {
         use rusqlite::OptionalExtension;
-        tx.query_row("SELECT status FROM prs WHERE plan = ?1 AND key = ?2", [id.as_str(), key.as_str()], |r| r.get(0)).optional()?
+        tx.query_row("SELECT status FROM workflows WHERE plan = ?1 AND key = ?2", [id.as_str(), key.as_str()], |r| r.get(0)).optional()?
     };
     if status.as_deref() != Some("dispatch") {
         return Ok(None);
@@ -324,7 +324,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
     };
     // `prs_status` allows no `dispatch → merged`: through `open`, in this one transaction.
     let opened = tx.execute(
-        "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+        "UPDATE workflows SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()),
                 pull_request = ?3
           WHERE plan = ?4 AND key = ?5 AND status = 'dispatch'",
         rusqlite::params![number, url, pull_request, id.as_str(), key.as_str()],
@@ -334,7 +334,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
     }
     if pulled.merged {
         let merged = tx.execute(
-            "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+            "UPDATE workflows SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND key = ?2 AND status = 'open'",
             [id.as_str(), key.as_str()],
         )?;
         if merged == 0 {
@@ -352,7 +352,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
 
     // The last PR to open moves the Plan on (§3.1, A10).
     let waiting: i64 =
-        tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('open', 'merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+        tx.query_row("SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('open', 'merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
     if waiting > 0 {
         return Ok(Some(Phase::Dispatch));
     }
@@ -371,7 +371,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
         return Ok(Some(Phase::Deploy));
     }
     // The last PR to merge ends the Plan (§3.1).
-    let unmerged: i64 = tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+    let unmerged: i64 = tx.query_row("SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
     if unmerged > 0 {
         return Ok(Some(Phase::Deploy));
     }
@@ -457,7 +457,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
 
 /// `[{key, number, url, merged_at}]` of every `merged` PR, in key order (`plan-done`'s `prs`).
 pub(super) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
-    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
             Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?, "merged_at": r.get::<_, String>(3)?}))
@@ -474,7 +474,7 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 
 /// `[{key, number, url}]` of every PR that is not `cancelled`, in key order.
 pub(super) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
-    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM workflows WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?})))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -515,7 +515,7 @@ fn live_open_job(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Res
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
-            "SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'open' AND status IN ('draft', 'queued', 'running') ORDER BY seq LIMIT 1",
+            "SELECT key FROM jobs WHERE plan = ?1 AND workflow = ?2 AND kind = 'open' AND status IN ('draft', 'queued', 'running') ORDER BY seq LIMIT 1",
             [plan.as_str(), key.as_str()],
             |r| r.get(0),
         )
@@ -579,7 +579,7 @@ pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> R
 /// there is no fallback to the Plan's title (`pr_title_required`).
 fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, CpdError> {
     let stored: Option<String> =
-        env.store.read(|conn| Ok(conn.query_row("SELECT title FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
+        env.store.read(|conn| Ok(conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
     stored.ok_or_else(|| {
         CpdError::new(
             ErrorCode::PrTitleRequired,
@@ -599,7 +599,7 @@ fn stored_description(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Optio
 /// [`stored_description`] on a connection: the one rule (`description IS NULL AND head_ref IS NULL` is `description_required`).
 pub fn stored_description_of(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
     let (stored, adopted): (Option<String>, bool) = conn.query_row(
-        "SELECT description, head_ref IS NOT NULL FROM prs WHERE plan = ?1 AND key = ?2",
+        "SELECT description, head_ref IS NOT NULL FROM workflows WHERE plan = ?1 AND key = ?2",
         [plan.as_str(), key.as_str()],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -623,7 +623,7 @@ pub fn description_required(plan: &PlanId, key: &PrKey) -> CpdError {
 /// `pr.jira_required`. A PR with a ticket, an adopted PR, or a policy that leaves it false never resolves a policy.
 pub fn jira_required_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
     let missing: bool = conn.query_row(
-        "SELECT jira IS NULL AND head_ref IS NULL FROM prs WHERE plan = ?1 AND key = ?2",
+        "SELECT jira IS NULL AND head_ref IS NULL FROM workflows WHERE plan = ?1 AND key = ?2",
         [plan.as_str(), key.as_str()],
         |r| r.get(0),
     )?;
@@ -661,7 +661,7 @@ mod tests {
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         let web = if two {
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('pay', 'web', '/r/web', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');"
         } else {
             ""
@@ -674,7 +674,7 @@ mod tests {
                        VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                        VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                        VALUES ('pay', 'api', '/r/api', 'main', 'dispatch', 'cpd/pay/api', '/w/api', cpd_txn(), 't', 't');
                      {web}"
                 ))?;
@@ -727,7 +727,7 @@ mod tests {
         let (status, number, linked, plan_phase): (String, i64, bool, String) = store
             .read(|conn| {
                 Ok(conn.query_row(
-                    "SELECT r.status, r.pr_number, r.pull_request IS NOT NULL, p.phase FROM prs r JOIN plans p ON p.id = r.plan WHERE r.key = 'api'",
+                    "SELECT r.status, r.pr_number, r.pull_request IS NOT NULL, p.phase FROM workflows r JOIN plans p ON p.id = r.plan WHERE r.key = 'api'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )?)
@@ -753,7 +753,7 @@ mod tests {
 
         assert_eq!(phase, Some(Phase::Done));
         let (status, merged_at): (String, String) =
-            store.read(|conn| Ok(conn.query_row("SELECT status, merged_at FROM prs WHERE key = 'api'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+            store.read(|conn| Ok(conn.query_row("SELECT status, merged_at FROM workflows WHERE key = 'api'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
         assert_eq!((status.as_str(), merged_at.is_empty()), ("merged", false));
         assert_eq!(kinds(&mut store), ["pr-merged", "plan-phase", "plan-done"]);
 

@@ -423,7 +423,7 @@ impl Run<'_> {
     fn grep_hits(&mut self, batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
         let repos: Vec<String> = self.store.read(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT DISTINCT prs.repo FROM prs JOIN plans ON plans.id = prs.plan WHERE plans.context = ?1 ORDER BY prs.repo",
+                "SELECT DISTINCT workflows.repo FROM workflows JOIN plans ON plans.id = workflows.plan WHERE plans.context = ?1 ORDER BY workflows.repo",
             )?;
             Ok(stmt.query_map([self.context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })?;

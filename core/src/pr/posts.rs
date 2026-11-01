@@ -29,7 +29,7 @@ pub struct PostRecord {
 pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND pr = ?2",
+            "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND workflow = ?2",
             [plan, pr],
             |r| {
                 Ok(PostRecord { channel: r.get(0)?, ts: r.get(1)?, link: r.get(2)?, posted_at: r.get(3)?, reaction: r.get(4)?, reacted_at: r.get(5)?, auto_merge: r.get(6)?, auto_merge_at: r.get(7)? })
@@ -41,8 +41,8 @@ pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord
 /// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
 pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Result<bool, CpdError> {
     let rows = tx.execute(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
-         ON CONFLICT (plan, pr) DO NOTHING",
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
+         ON CONFLICT (plan, workflow) DO NOTHING",
         rusqlite::params![plan, pr, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
     )?;
     Ok(rows == 1)
@@ -54,7 +54,7 @@ pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> R
     let rows = tx.execute(
         "UPDATE pr_posts SET auto_merge = ?3,
            auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
-         WHERE plan = ?1 AND pr = ?2 AND auto_merge = 'pending'",
+         WHERE plan = ?1 AND workflow = ?2 AND auto_merge = 'pending'",
         [plan, pr, state],
     )?;
     Ok(rows == 1)
@@ -75,12 +75,12 @@ pub struct Pending {
 pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT p.plan, p.pr, q.repo, q.number
-             FROM pr_posts p JOIN prs r ON r.plan = p.plan AND r.key = p.pr
+            "SELECT p.plan, p.workflow, q.repo, q.number
+             FROM pr_posts p JOIN workflows r ON r.plan = p.plan AND r.key = p.workflow
                JOIN plans l ON l.id = p.plan JOIN pull_requests q ON q.id = r.pull_request
              WHERE p.auto_merge = 'pending' AND r.status = 'open' AND l.archived_at IS NULL
                AND (NOT EXISTS (SELECT 1 FROM incident) OR EXISTS (SELECT 1 FROM incident_plans i WHERE i.plan = p.plan))
-               AND NOT EXISTS (SELECT 1 FROM prs b WHERE b.lead_branch = r.base)
+               AND NOT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = r.base)
              ORDER BY p.posted_at, p.plan, p.pr LIMIT 1",
             [],
             |r| Ok(Pending { plan: r.get(0)?, pr: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
@@ -123,7 +123,7 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+                    "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                      VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay/' || ?1, IIF(?2 IN ('waiting', 'cancelled'), NULL, '/r/lead'), cpd_txn(), 't', IIF(?2 IN ('waiting', 'cancelled'), NULL, 't'), 7, 'u', 't', IIF(?2 IN ('open', 'merged'), (SELECT max(id) FROM pull_requests), NULL), NULLIF(?3, ''))",
                     rusqlite::params![key, status, merged_at],
                 )?;

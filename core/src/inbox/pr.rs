@@ -142,11 +142,11 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     let mut stmt = conn.prepare(&format!(
         "SELECT {}, {}, o.plan, o.key, p.context, p.lead_session,
                 COALESCE(s.state = 'working', 0)
-                  OR EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.pr = o.key
+                  OR EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.workflow = o.key
                                 AND j.kind IN ('update', 'work') AND j.status IN ('queued', 'running')),
-                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.pr = o.key)
+                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key)
            FROM pull_requests r
-           LEFT JOIN prs o ON o.rowid = (SELECT n.rowid FROM prs n JOIN plans np ON np.id = n.plan
+           LEFT JOIN workflows o ON o.rowid = (SELECT n.rowid FROM workflows n JOIN plans np ON np.id = n.plan
                                           WHERE n.pull_request = r.id
                                           ORDER BY np.created_at DESC, np.id DESC, n.key DESC LIMIT 1)
            LEFT JOIN plans p ON p.id = o.plan

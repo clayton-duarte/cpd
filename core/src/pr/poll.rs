@@ -240,7 +240,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
     });
     if let Some(prs) = printed_prs {
-        out["prs"] = Value::Array(prs);
+        out["workflows"] = Value::Array(prs);
     }
     Ok(Output::success(out))
 }
@@ -344,10 +344,10 @@ fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
 /// The base PR of the old base, the PR of the new one and the repo's default branch are read here, so the write
 /// transaction queues the update Job a base PR's merge needs in the same transaction as the repoint.
 fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> Result<Vec<Follow>, CpdError> {
-    let mut stored = conn.prepare("SELECT base, repo FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+    let mut stored = conn.prepare("SELECT base, repo FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
     let base_pr = |repo: &str, branch: &str| -> Result<Option<String>, CpdError> {
         Ok(conn
-            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, branch], |r| r.get(0))
+            .query_row("SELECT plan || '/' || key FROM workflows WHERE repo = ?1 AND lead_branch = ?2", [repo, branch], |r| r.get(0))
             .optional()?)
     };
     let mut found = Vec::new();
@@ -380,7 +380,7 @@ fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> R
 fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> Result<(Value, Option<JobKey>), CpdError> {
     let Follow { plan, pr, from, to, number, url, from_pr, to_pr, default_branch } = follow;
     let moved = tx.execute(
-        "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
+        "UPDATE workflows SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
         [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
     )?;
     if moved == 0 {
@@ -414,7 +414,7 @@ fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead
             continue;
         }
         let row: Option<(String, String)> = conn
-            .query_row("SELECT repo, lead_branch FROM prs WHERE plan = ?1 AND key = ?2", [follow.plan.as_str(), follow.pr.as_str()], |r| {
+            .query_row("SELECT repo, lead_branch FROM workflows WHERE plan = ?1 AND key = ?2", [follow.plan.as_str(), follow.pr.as_str()], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?;
@@ -583,7 +583,7 @@ pub(super) fn queue_update_for(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, tr
 /// (§3.1). Whether the Plan became `done`.
 pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
     let moved = tx.execute(
-        "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
+        "UPDATE workflows SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND key = ?2 AND status = 'open'",
         [id.as_str(), key.as_str()],
     )?;
@@ -597,7 +597,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
     append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
     let unmerged: i64 =
-        tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+        tx.query_row("SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
     if unmerged > 0 {
         return Ok(false);
     }
@@ -621,7 +621,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
 /// its own Plan, so that engine E7 of the same tick already sees the new base.
 pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
     let mut stmt = tx.prepare(
-        "SELECT r.plan, r.key FROM prs r, prs m
+        "SELECT r.plan, r.key FROM workflows r, workflows m
           WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
           ORDER BY r.plan, r.key",
     )?;
@@ -650,7 +650,7 @@ fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
 /// order: `merged_at` is the moment the PR was seen merged, and for `just`, the
 /// one this poll merged, the time `gh` reports when it does.
 fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&str>) -> Result<Vec<serde_json::Value>, CpdError> {
-    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
             let key: String = r.get(0)?;

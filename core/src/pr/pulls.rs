@@ -189,7 +189,7 @@ pub(super) fn find(conn: &Connection, repo: &str, number: i64) -> Result<Option<
 pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRequest)>, CpdError> {
     let columns: Vec<String> = COLUMNS.split(", ").map(|c| format!("pr.{c}")).collect();
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.plan, r.key, {} FROM prs r JOIN pull_requests pr ON pr.id = r.pull_request
+        "SELECT r.plan, r.key, {} FROM workflows r JOIN pull_requests pr ON pr.id = r.pull_request
           WHERE r.status = 'open' ORDER BY r.plan, r.key",
         columns.join(", ")
     ))?;

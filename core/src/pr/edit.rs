@@ -124,7 +124,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &str) -> Result<(), CpdError> {
     let open: Option<(String, i64)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT p.repo, p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+            "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
         )?;
         Ok(stmt.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
@@ -162,7 +162,7 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
                 .with("to", "waiting"));
         }
     }
-    let stored = conn.query_row("SELECT title FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let stored = conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
     Ok((pr.clone(), stored))
 }
 
@@ -199,7 +199,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
             )
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
-            .with("prs", in_use));
+            .with("workflows", in_use));
         }
     }
     let title_changed = edits.title.as_ref().is_some_and(|t| stored_title.as_ref() != Some(t));
@@ -242,24 +242,24 @@ fn check_restack(conn: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow
 fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {
     if let Some(title) = title {
         tx.execute(
-            "UPDATE prs SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
+            "UPDATE workflows SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
             [title, plan.as_str(), after.key.as_str()],
         )?;
     }
     if let Some(jira) = jira {
         tx.execute(
-            "UPDATE prs SET jira = ?1 WHERE plan = ?2 AND key = ?3 AND jira IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
+            "UPDATE workflows SET jira = ?1 WHERE plan = ?2 AND key = ?3 AND jira IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
             [jira, plan.as_str(), after.key.as_str()],
         )?;
     }
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
-            "UPDATE prs SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
+            "UPDATE workflows SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
             rusqlite::params![after.repo.as_str(), after.base.as_str(), plan.as_str(), after.key.as_str(), name.map(RepoName::as_str)],
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
-        tx.execute("DELETE FROM pr_needs WHERE plan = ?1 AND pr = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
+        tx.execute("DELETE FROM workflow_needs WHERE plan = ?1 AND workflow = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
     }
     let added: Vec<String> = after.needs.iter().filter(|n| !before.needs.contains(n)).cloned().collect();
     insert_needs(tx, plan, &after.key, &added)

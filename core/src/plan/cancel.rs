@@ -158,7 +158,7 @@ fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<
 fn close_prs(env: &mut Env, plan: &PlanId) -> Result<(Vec<Value>, Vec<Value>), CpdError> {
     let open = env.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT r.key, p.repo, p.number, r.head_ref IS NOT NULL FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+            "SELECT r.key, p.repo, p.number, r.head_ref IS NOT NULL FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.status = 'open' AND p.state = 'open' ORDER BY r.key",
         )?;
         Ok(stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, bool>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -215,9 +215,9 @@ mod tests {
                      INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                        VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'api', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)

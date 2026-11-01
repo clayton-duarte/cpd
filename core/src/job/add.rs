@@ -326,7 +326,7 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
     let declared = crate::pr::policy_of_pr(conn, home, plan, &key)?.resources.names;
     let Some(missing) = resources.iter().find(|r| !declared.contains(r)) else { return Ok(()) };
     let (owner, name): (String, Option<String>) = conn.query_row(
-        "SELECT c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
+        "SELECT c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context WHERE r.plan = ?1 AND r.key = ?2",
         [plan.as_str(), pr],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -380,7 +380,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let array = |v: Option<&Value>| v.map(Value::to_string);
     let spec = job.spec.as_ref();
     tx.execute(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, urgent, kind, tests, test_files, resources, created_txn, created_at)
          VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",

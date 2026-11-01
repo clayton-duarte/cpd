@@ -23,7 +23,7 @@ pub struct ClosedUnmerged {
 pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<ClosedUnmerged>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, l.context, l.lead_session, g.repo, g.number, g.url, g.title
-           FROM prs p
+           FROM workflows p
            JOIN pull_requests g ON p.pull_request = g.id
            JOIN plans l ON l.id = p.plan
           WHERE p.status = 'open' AND g.state = 'closed' AND (?1 IS NULL OR p.plan = ?1)

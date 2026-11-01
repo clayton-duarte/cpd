@@ -61,7 +61,7 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
             let all_jobs = plan_jobs::load(conn, &plan_id)?;
             Ok(json!({
                 "id": id, "title": title, "phase": phase, "lead_session": lead_session,
-                "jobs": explore_jobs(&display, &all_jobs), "prs": prs(conn, &id, &display, &all_jobs)?,
+                "jobs": explore_jobs(&display, &all_jobs), "workflows": prs(conn, &id, &display, &all_jobs)?,
             }))
         })
         .collect()
@@ -98,7 +98,7 @@ fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Re
     let all_prs = load_prs(conn, &plan_id)?;
     let mut stmt = conn.prepare(
         "SELECT p.key, p.repo, p.base, p.status, p.lead_branch, g.number, g.url, g.state
-           FROM prs p LEFT JOIN pull_requests g ON g.id = p.pull_request
+           FROM workflows p LEFT JOIN pull_requests g ON g.id = p.pull_request
           WHERE p.plan = ?1 AND p.status NOT IN ('merged', 'cancelled') ORDER BY p.key",
     )?;
     let rows = stmt
@@ -129,7 +129,7 @@ fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Re
 fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT key, status, title, touches FROM jobs
-          WHERE plan = ?1 AND pr = ?2 AND status <> 'cancelled' ORDER BY seq",
+          WHERE plan = ?1 AND workflow = ?2 AND status <> 'cancelled' ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([plan, pr], |r| {
@@ -182,7 +182,7 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
     let mut out = format!("# Pending work in {context}\n");
     for plan in plans {
         let _ = write!(out, "\n## {} ({}): {}\n", text(&plan["id"]), text(&plan["phase"]), text(&plan["title"]));
-        for pr in plan["prs"].as_array().expect("prs") {
+        for pr in plan["workflows"].as_array().expect("workflows") {
             let _ = write!(
                 out,
                 "\n### PR {} ({}, base {}): {}\n\n",

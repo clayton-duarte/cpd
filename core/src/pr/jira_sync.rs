@@ -81,7 +81,7 @@ pub struct Refusal {
     pub status: String,
 }
 
-const SELECT: &str = "SELECT t.id, t.plan, t.pr, t.target, p.jira, t.refused_with FROM jira_transitions t JOIN prs p ON p.plan = t.plan AND p.key = t.pr";
+const SELECT: &str = "SELECT t.id, t.plan, t.pr, t.target, p.jira, t.refused_with FROM jira_transitions t JOIN workflows p ON p.plan = t.plan AND p.key = t.pr";
 
 fn corrupt(what: String) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, what.into())
@@ -185,7 +185,7 @@ mod tests {
         let pr = |key: &str, jira: &str, status: &str| {
             let (started, worktree) = if status == "cancelled" { ("NULL", "NULL".to_owned()) } else { ("'t'", format!("'/nowhere/{key}'")) };
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', '{status}', 'cpd/pay/{key}', {worktree}, cpd_txn(), 't', {started}, {jira});"
             )
         };

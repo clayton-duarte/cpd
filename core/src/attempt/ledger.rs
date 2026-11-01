@@ -66,9 +66,9 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.pr, r.head_ref, r.status
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-               LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+               LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
               WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
@@ -467,7 +467,7 @@ pub fn end_opened(
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
                 let open: i64 = tx.query_row(
-                    "SELECT coalesce((SELECT json_array_length(r.feedback) FROM prs p JOIN pull_requests r ON r.id = p.pull_request
+                    "SELECT coalesce((SELECT json_array_length(r.feedback) FROM workflows p JOIN pull_requests r ON r.id = p.pull_request
                                        WHERE p.plan = ?1 AND p.key = ?2 AND p.status = 'open'), 0)",
                     params![plan, attempt.pr_str()],
                     |r| r.get(0),

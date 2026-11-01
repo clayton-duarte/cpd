@@ -50,7 +50,7 @@ pub(super) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
             let status = env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, Some(&text))? {
                 Decision::Already(status) => Ok(status),
                 Decision::Update { status, .. } => {
-                    tx.execute("UPDATE prs SET description = ?1 WHERE plan = ?2 AND key = ?3", [text.as_str(), plan.as_str(), key.as_str()])?;
+                    tx.execute("UPDATE workflows SET description = ?1 WHERE plan = ?2 AND key = ?3", [text.as_str(), plan.as_str(), key.as_str()])?;
                     let message = format!("PR {key} of Plan {plan} described. Next: cpd plan render --plan {plan}");
                     append(tx, NewEvent::pr_described(message, &key).plan(plan.clone()))?;
                     crate::session::working_pr::name(tx, &plan, &key)?;
@@ -93,13 +93,13 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, text: Option<&str>) -> 
             .with("status", pr.status.as_str()));
     }
     let Some(text) = text else { return Ok(Decision::Already(pr.status.clone())) };
-    let stored: Option<String> = conn.query_row("SELECT description FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let stored: Option<String> = conn.query_row("SELECT description FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
     if stored.as_deref() == Some(text) {
         return Ok(Decision::Already(pr.status.clone()));
     }
     let open = conn
         .prepare(
-            "SELECT p.repo, p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+            "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
         )?
         .query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))

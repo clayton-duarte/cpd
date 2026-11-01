@@ -87,7 +87,7 @@ fn require_manager<'a>(conn: &Connection, caller: Option<&'a SessionId>) -> Resu
 pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
     let stored = conn
         .query_row(
-            "SELECT started_at, started_by, reason, until_pr FROM incident WHERE id = 1",
+            "SELECT started_at, started_by, reason, until_workflow FROM incident WHERE id = 1",
             [],
             |r| {
                 Ok((
@@ -205,7 +205,7 @@ pub fn start(
                 .with("until_pr", until_pr.unwrap_or_default()));
             }
             let known: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2)",
+                "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2)",
                 params![until_plan.as_str(), key],
                 |r| r.get(0),
             )?;
@@ -220,7 +220,7 @@ pub fn start(
         }
 
         let live: Option<Option<String>> = tx
-            .query_row("SELECT until_pr FROM incident WHERE id = 1", [], |r| r.get(0))
+            .query_row("SELECT until_workflow FROM incident WHERE id = 1", [], |r| r.get(0))
             .optional()?;
         if let Some(stored_until_pr) = live {
             let new_until_pr = until.as_ref().map(|(plan, key)| format!("{plan}/{key}"));
@@ -242,7 +242,7 @@ pub fn start(
             }
             if until_changed {
                 tx.execute(
-                    "UPDATE incident SET until_plan = ?1, until_pr = ?2 WHERE id = 1",
+                    "UPDATE incident SET until_plan = ?1, until_workflow = ?2 WHERE id = 1",
                     params![until.as_ref().map(|(plan, _)| plan.as_str()), new_until_pr.as_deref()],
                 )?;
             }
@@ -257,7 +257,7 @@ pub fn start(
         }
         let started_at = clock::now();
         tx.execute(
-            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr, lead)
+            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_workflow, lead)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 started_at,
@@ -314,7 +314,7 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
 pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let stored = tx
         .query_row(
-            "SELECT until_plan, until_pr FROM incident WHERE id = 1",
+            "SELECT until_plan, until_workflow FROM incident WHERE id = 1",
             [],
             |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
         )
@@ -322,7 +322,7 @@ pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let Some((Some(until_plan), Some(until_pr))) = stored else { return Ok(false) };
     let key = until_pr.split_once('/').map_or(until_pr.as_str(), |(_, key)| key);
     let merged: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
+        "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
         params![until_plan, key],
         |r| r.get(0),
     )?;

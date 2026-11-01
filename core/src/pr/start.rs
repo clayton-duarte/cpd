@@ -58,7 +58,7 @@ impl By {
 /// which engine E7's query, `pr start`'s refusal and its details are all built from.
 macro_rules! needs_unmerged {
     () => {
-        "n.plan = r.plan AND n.pr = r.key AND q.plan = n.plan AND q.key = n.needs AND q.status <> 'merged'"
+        "n.plan = r.plan AND n.workflow = r.key AND q.plan = n.plan AND q.key = n.needs AND q.status <> 'merged'"
     };
 }
 /// The base PR of `r` (§2.2 "The base PR": the PR of its repo whose Lead Branch is its base) has not opened: it is
@@ -72,9 +72,9 @@ macro_rules! base_pr_not_open {
 /// E7's condition over `prs r`: every need `merged` and the base PR, when the PR is
 /// stacked, its base PR `open` (the implied need; a `merged` one is not waited for).
 pub const READY: &str = concat!(
-    "NOT EXISTS (SELECT 1 FROM pr_needs n, prs q WHERE ",
+    "NOT EXISTS (SELECT 1 FROM workflow_needs n, workflows q WHERE ",
     needs_unmerged!(),
-    ") AND NOT EXISTS (SELECT 1 FROM prs b WHERE ",
+    ") AND NOT EXISTS (SELECT 1 FROM workflows b WHERE ",
     base_pr_not_open!(),
     ")"
 );
@@ -96,14 +96,14 @@ impl NotReady {
 
 pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
     let mut stmt = conn.prepare(concat!(
-        "SELECT n.needs FROM prs r, pr_needs n, prs q WHERE r.plan = ?1 AND r.key = ?2 AND ",
+        "SELECT n.needs FROM workflows r, workflow_needs n, workflows q WHERE r.plan = ?1 AND r.key = ?2 AND ",
         needs_unmerged!(),
         " ORDER BY n.needs"
     ))?;
     let needs = stmt
         .query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_not_open!()))?;
+    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM workflows r, workflows b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_not_open!()))?;
     let base_pr = stmt
         .query_map([plan.as_str(), key.as_str()], |r| Ok(format!("{}/{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?
@@ -116,7 +116,7 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey)
 pub(super) fn base_pr(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrRow) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
-        .query_row("SELECT plan || '/' || key FROM prs WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
+        .query_row("SELECT plan || '/' || key FROM workflows WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
         .optional()?)
 }
 
@@ -135,7 +135,7 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Resul
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row(
-            "SELECT r.repo, r.base, b.plan || '/' || b.key, b.base FROM prs r, prs b
+            "SELECT r.repo, r.base, b.plan || '/' || b.key, b.base FROM workflows r, workflows b
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status IN ('waiting', 'dispatch')
                 AND b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'merged'",
             [plan.as_str(), key.as_str()],
@@ -157,7 +157,7 @@ pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -
             return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {from}")));
         }
         let moved = tx.execute(
-            "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status IN ('waiting', 'dispatch') AND base = ?4",
+            "UPDATE workflows SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status IN ('waiting', 'dispatch') AND base = ?4",
             [plan.as_str(), key.as_str(), to.as_str(), from.as_str()],
         )?;
         if moved == 0 {
@@ -166,7 +166,7 @@ pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -
                 .with("pr", key.as_str()));
         }
         let to_pr: Option<String> = tx
-            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
+            .query_row("SELECT plan || '/' || key FROM workflows WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
             .optional()?;
         let text = format!(
             "PR {key} of Plan {plan} now targets {to} (was {from}): its base PR {from_pr} merged before its pull request existed. \
@@ -204,7 +204,7 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
     let mut base = base.to_owned();
     let mut seen = Vec::new();
     while let Some(next) = conn
-        .query_row("SELECT base FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, base.as_str()], |r| r.get::<_, String>(0))
+        .query_row("SELECT base FROM workflows WHERE repo = ?1 AND lead_branch = ?2", [repo, base.as_str()], |r| r.get::<_, String>(0))
         .optional()?
     {
         if seen.contains(&base) {
@@ -345,7 +345,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
     let (pr, lead) = (&pushed.prepared.pr, &pushed.prepared.lead);
     let worktree = lead.path.display().to_string();
     let moved = tx.execute(
-        "UPDATE prs SET status = 'dispatch', lead_worktree = ?1, started_at = (SELECT at FROM txns WHERE id = cpd_txn()), start_failed_at = NULL
+        "UPDATE workflows SET status = 'dispatch', lead_worktree = ?1, started_at = (SELECT at FROM txns WHERE id = cpd_txn()), start_failed_at = NULL
           WHERE plan = ?2 AND key = ?3 AND status = 'waiting'",
         [worktree.as_str(), plan.as_str(), pr.key.as_str()],
     )?;
@@ -397,7 +397,7 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
 pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
     store.write(source, |tx| {
         let marked = tx.execute(
-            "UPDATE prs SET start_failed_at = (SELECT at FROM txns WHERE id = cpd_txn())
+            "UPDATE workflows SET start_failed_at = (SELECT at FROM txns WHERE id = cpd_txn())
               WHERE plan = ?1 AND key = ?2 AND status = 'waiting' AND start_failed_at IS NULL",
             [plan.as_str(), key.as_str()],
         )?;

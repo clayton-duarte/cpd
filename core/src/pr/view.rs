@@ -26,7 +26,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if !matches!(pr.status.as_str(), "open" | "merged") {
         return Err(pr.refuse(&id, COMMAND, "open or merged"));
     }
-    let number = pr.pull.as_ref().expect("an open or merged PR has its pull request (prs CHECK)").number;
+    let number = pr.pull.as_ref().expect("an open or merged PR has its pull request (workflows CHECK)").number;
     let lead = pr.lead(&id)?;
 
     let policy = pr_policy(&mut env, &id, &pr.key)?;
@@ -62,13 +62,13 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let inline_comments: Vec<Value> =
         inline.iter().map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body})).collect();
 
-    let row = pr.pull_request.expect("an open or merged PR has its pull_request row (prs CHECK)");
+    let row = pr.pull_request.expect("an open or merged PR has its pull_request row (workflows CHECK)");
     let feedback = env.store.read(|conn| crate::pr::pulls::load(conn, row))?.feedback;
     let post = env.store.read(|conn| {
         let Some(p) = super::posts::find(conn, id.as_str(), pr.key.as_str())? else { return Ok(None) };
         // The queue row of the PR's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
         let row: Option<(String, Option<String>, Option<String>)> = conn
-            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND pr = ?2", [id.as_str(), pr.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND workflow = ?2", [id.as_str(), pr.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         let (reaction, reacted_at, refusal) = match row {
             Some((emoji, reacted_at, refusal)) => (Some(emoji), reacted_at, refusal),

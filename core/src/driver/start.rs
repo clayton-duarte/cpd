@@ -67,8 +67,8 @@ pub struct Started {
 pub fn pr_has_live_linear(conn: &Connection, plan: &PlanId, pr: &str, except: &str) -> Result<bool, CpdError> {
     let n: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-           JOIN prs ON prs.plan = j.plan AND prs.key = j.pr
-          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3 AND a.branch = prs.lead_branch",
+           JOIN workflows ON workflows.plan = j.plan AND workflows.key = j.workflow
+          WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended' AND a.id <> ?3 AND a.branch = workflows.lead_branch",
         params![plan.as_str(), pr, except],
         |r| r.get(0),
     )?;
@@ -251,7 +251,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
         (String::new(), String::new())
     } else {
         let pr: (String, String) = conn.query_row(
-            "SELECT r.repo, r.status FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+            "SELECT r.repo, r.status FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",
             [plan.as_str(), key.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
@@ -332,7 +332,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     }
     let live: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",
+          WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended' AND a.id <> ?3",
         params![plan.as_str(), job.pr_str(), attempt.to_string()],
         |r| r.get(0),
     )?;
@@ -352,7 +352,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     };
     let (branch, worktree) = if linear {
         let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
-            "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
+            "SELECT lead_branch, lead_worktree FROM workflows WHERE plan = ?1 AND key = ?2",
             params![plan.as_str(), job.pr_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
@@ -471,7 +471,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
         return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again.")));
     }
     // An explore Job has no PR, so no Jira transition.
-    let pr: Option<String> = tx.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let pr: Option<String> = tx.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
     if let Some(pr) = pr {
         crate::pr::jira_sync::queue(tx, plan.as_str(), &pr, crate::pr::jira_sync::Target::InProgress)?;
     }

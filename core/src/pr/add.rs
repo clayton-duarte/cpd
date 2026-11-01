@@ -236,7 +236,7 @@ pub(super) struct Known {
 
 /// Every PR of `plan`.
 pub(super) fn known_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM prs WHERE plan = ?1 ORDER BY key")?;
+    let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             Ok(Known { key: r.get(0)?, repo: r.get(1)?, base: r.get(2)?, lead_branch: r.get(3)?, status: r.get(4)? })
@@ -382,7 +382,7 @@ fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
 fn edges(conn: &Connection, plan: &PlanId, known: &[Known], except: &String) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let live = |key: &String| known.iter().any(|p| p.status != "cancelled" && &p.key == key);
     let mut graph: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1")?;
+    let mut stmt = conn.prepare("SELECT workflow, needs FROM workflow_needs WHERE plan = ?1")?;
     let rows: Vec<(String, String)> = stmt.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     for (from, to) in rows {
         if &from != except && live(&from) && live(&to) {
@@ -524,7 +524,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             })?
         }
     };
-    let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
+    let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
     let mut out = json!({"pr": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
@@ -592,7 +592,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
         // `appended`: the PR came after the lock.
         let (lead_branch, appended, title) = conn.query_row(
             "SELECT r.lead_branch, coalesce(p.locked_at IS NOT NULL AND r.created_at >= p.locked_at, 0), r.title
-               FROM prs r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
+               FROM workflows r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
             [plan.as_str(), wanted.key.as_str()],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
@@ -666,7 +666,7 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
             .with("url", pull.url.as_str()));
     }
     let is_lead_branch: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM prs WHERE repo = ?1 AND lead_branch = ?2)",
+        "SELECT EXISTS (SELECT 1 FROM workflows WHERE repo = ?1 AND lead_branch = ?2)",
         [wanted.repo.as_str(), pull.head_ref.as_str()],
         |r| r.get(0),
     )?;
@@ -677,7 +677,7 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
     }
     let holder: Option<(String, String)> = conn
         .query_row(
-            "SELECT plan, key FROM prs WHERE repo = ?1 AND head_ref = ?2 AND status IN ('waiting', 'dispatch', 'open')",
+            "SELECT plan, key FROM workflows WHERE repo = ?1 AND head_ref = ?2 AND status IN ('waiting', 'dispatch', 'open')",
             [wanted.repo.as_str(), pull.head_ref.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -783,7 +783,7 @@ fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], b
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
          SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, id, at FROM txns WHERE id = cpd_txn()",
         rusqlite::params![
             plan.as_str(),
@@ -860,7 +860,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             job.fingerprint = Some(locked_fingerprint(&job));
             let array = |v: &Vec<String>| json!(v).to_string();
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, urgent, kind, tests, test_files, resources, created_txn, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11, ?12, 0, ?13, ?14, ?15, ?16, cpd_txn(),
                          (SELECT at FROM txns WHERE id = cpd_txn()))",
@@ -891,7 +891,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
         if stub.kind == "open" {
             let spec = open::spec(&pr);
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, created_txn, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'draft', ?11, 'open', cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
                 rusqlite::params![
@@ -911,7 +911,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             continue;
         }
         tx.execute(
-            "INSERT INTO jobs (plan, pr, key, title, status, appended, kind, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, status, appended, kind, created_txn, created_at)
              VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
             rusqlite::params![plan.as_str(), wanted.key.as_str(), stub.key, stub.title, appended, stub.kind],
         )?;
@@ -925,7 +925,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
 /// One `pr_needs` row per need.
 pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
-        tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
+        tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
     }
     Ok(())
 }

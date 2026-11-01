@@ -157,7 +157,7 @@ fn refuse_running(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdEr
     let running: Vec<(String, String)> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
         )?;
         let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -556,7 +556,7 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
     let merging: Vec<String> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'merging' ORDER BY a.id",
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'merging' ORDER BY a.id",
         )?;
         let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)

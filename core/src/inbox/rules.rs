@@ -448,7 +448,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
     store.read(|conn| {
         let worked_on = failed_worked_on(conn, None)?;
         let mut stmt = conn.prepare(
-            "SELECT j.plan, j.pr, j.key, p.context, e.id, e.at, j.failed_cause
+            "SELECT j.plan, j.workflow, j.key, p.context, e.id, e.at, j.failed_cause
                FROM jobs j
                JOIN plans p ON p.id = j.plan
                JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
@@ -768,9 +768,9 @@ mod tests {
         fn job(&mut self, key: &str, status: &str) {
             let cause = if status == "failed" { "'crashed'" } else { "NULL" };
             self.sql(&format!(
-                "INSERT OR IGNORE INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                "INSERT OR IGNORE INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pay', 'p1', '/r', 'main', 'dispatch', 'cpd/pay/p1', '/lw', 1, '{T}', '{T}');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                    fingerprint, created_txn, created_at, failed_cause)
                    VALUES ('pay', 'p1', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause});"
             ));
@@ -1082,9 +1082,9 @@ mod tests {
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', 'p2', '/r', 'main', 'dispatch', 'cpd/pay/p2', '/lw', 1, '{T}', '{T}');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause)
                VALUES ('pay', 'p2', 'b', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', 1, '{T}', 'crashed');"
         ));
@@ -1330,7 +1330,7 @@ mod tests {
         std::fs::create_dir_all(&owners).unwrap();
         std::fs::write(owners.join("owner.toml"), "").unwrap();
         f.sql(&format!(
-            "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
+            "UPDATE workflows SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
                             pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"
         ));
     }

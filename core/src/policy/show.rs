@@ -97,7 +97,7 @@ fn key_of_pr(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdEr
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?;
     let context = context.ok_or_else(|| not_found(ErrorCode::PlanNotFound, "Plan", "plan", plan))?;
     let name: Option<Option<String>> = conn
-        .query_row("SELECT name FROM prs WHERE plan = ?1 AND key = ?2", [plan, pr], |r| r.get(0))
+        .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, pr], |r| r.get(0))
         .optional()?;
     let name = name.ok_or_else(|| {
         CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", pr)
@@ -121,7 +121,7 @@ pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(
         ("worker", Some(plan), Some(attempt)) => {
             let name: Option<String> = conn.query_row(
                 "SELECT p.name FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-                   LEFT JOIN prs p ON p.plan = j.plan AND p.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
+                   LEFT JOIN workflows p ON p.plan = j.plan AND p.key = j.workflow WHERE a.plan = ?1 AND a.id = ?2",
                 [&plan, &attempt],
                 |r| r.get(0),
             )?;

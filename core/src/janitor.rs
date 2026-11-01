@@ -217,7 +217,7 @@ impl Merged {
 pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
     let mut prs = conn.prepare(
         "SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status
-           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled') ORDER BY p.plan, p.key",
+           FROM workflows p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('dispatch', 'open', 'merged', 'cancelled') ORDER BY p.plan, p.key",
     )?;
     let rows = prs
         .query_map([], |r| {
@@ -227,7 +227,7 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
         "SELECT a.id, a.branch, a.worktree, a.status = 'ended', coalesce(a.outcome = 'merged' OR j.status = 'merged', 0) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
+          WHERE j.plan = ?1 AND j.workflow = ?2 ORDER BY a.id",
     )?;
     let mut reported = conn.prepare(
         "SELECT count(*) FROM events WHERE plan = ?1 AND kind = 'error' AND json_extract(data, '$.code') = 'cleanup_failed'

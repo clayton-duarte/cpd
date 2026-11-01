@@ -167,7 +167,7 @@ impl Outline {
 /// `cancelled`, every `decided` id is a record of the Plan's Context.
 fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> Result<(), CpdError> {
     let counts: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT key FROM prs WHERE plan = ?1 AND status <> 'cancelled'")?;
+        let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND status <> 'cancelled'")?;
         stmt.query_map([plan.id.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     if let Some(key) = outline.done_when.keys().find(|k| !counts.contains(k)) {

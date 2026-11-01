@@ -55,7 +55,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                 // `prs` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` PR has
                 // none (the worktree on disk stays, §3.8). They are null already but for the status's own.
                 let moved = tx.execute(
-                    "UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL,
+                    "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL,
                                     pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL
                       WHERE plan = ?1 AND key = ?2 AND status = ?3",
                     [plan.as_str(), key.as_str(), from],
@@ -115,7 +115,7 @@ fn cancel_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdE
 pub(super) fn cancel_jobs_with(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, statuses: &[&str], reason: &str, what: &str) -> Result<(), CpdError> {
     let list = statuses.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", ");
     let own: Vec<String> = {
-        let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND status IN ({list}) ORDER BY seq"))?;
+        let mut stmt = tx.prepare(&format!("SELECT key FROM jobs WHERE plan = ?1 AND workflow = ?2 AND status IN ({list}) ORDER BY seq"))?;
         stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     for job in own {
@@ -150,7 +150,7 @@ pub fn archived_with_drafts(conn: &Connection) -> Result<Vec<PlanId>, CpdError> 
 /// when it has none (engine E20).
 pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
     let prs: Vec<String> = {
-        let mut stmt = tx.prepare("SELECT DISTINCT pr FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY pr")?;
+        let mut stmt = tx.prepare("SELECT DISTINCT workflow FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY workflow")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     for pr in prs {
@@ -167,7 +167,7 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase
         return Ok(None);
     }
     let count = |statuses: &str| -> Result<i64, CpdError> {
-        Ok(tx.query_row(&format!("SELECT count(*) FROM prs WHERE plan = ?1 AND status {statuses}"), [plan.as_str()], |r| r.get(0))?)
+        Ok(tx.query_row(&format!("SELECT count(*) FROM workflows WHERE plan = ?1 AND status {statuses}"), [plan.as_str()], |r| r.get(0))?)
     };
     if count("IN ('waiting', 'dispatch')")? > 0 || count("<> 'cancelled'")? == 0 {
         return Ok(None);
@@ -192,7 +192,7 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>
         return Ok(None);
     }
     let count = |statuses: &str| -> Result<i64, CpdError> {
-        Ok(tx.query_row(&format!("SELECT count(*) FROM prs WHERE plan = ?1 AND status {statuses}"), [plan.as_str()], |r| r.get(0))?)
+        Ok(tx.query_row(&format!("SELECT count(*) FROM workflows WHERE plan = ?1 AND status {statuses}"), [plan.as_str()], |r| r.get(0))?)
     };
     if count("NOT IN ('merged', 'cancelled')")? > 0 || count("= 'merged'")? == 0 {
         return Ok(None);
@@ -232,7 +232,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
         .with("jobs", jobs)
-        .with("prs", needing.clone())
+        .with("workflows", needing.clone())
     };
     let from = match (pr.status.as_str(), locked) {
         ("cancelled", _) => return Ok(Decision::Already),
@@ -286,7 +286,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &PrKey, by: &str) ->
     }
     let found: Option<String> = conn
         .query_row(
-            "SELECT r.status FROM prs r JOIN plans p ON p.id = r.plan
+            "SELECT r.status FROM workflows r JOIN plans p ON p.id = r.plan
               WHERE r.plan = ?1 AND r.key = ?2 AND p.context = (SELECT context FROM plans WHERE id = ?3)",
             [by_plan, by_key, plan.as_str()],
             |r| r.get(0),
@@ -311,7 +311,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &PrKey, by: &str) ->
 /// The PRs of `plan` that are not `cancelled` and stacked on `pr`: those of its repo whose `base` is its Lead Branch
 /// (§2.2 "The base PR"), by key.
 fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key FROM prs WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
+    let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
     let found = stmt
         .query_map([plan.as_str(), pr.repo.as_str(), pr.lead_branch.as_str(), pr.key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -344,7 +344,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needin
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
         .with("jobs", Vec::<String>::new())
-        .with("prs", needing.to_vec()));
+        .with("workflows", needing.to_vec()));
     }
     let released = Released {
         number: pull.number,
@@ -373,9 +373,9 @@ mod tests {
                        VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                        VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                        VALUES ('pay', 'api', '/r/api', 'main', 'dispatch', 'cpd/pay/api', '/w/api', cpd_txn(), 't', 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind,
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind,
                                        fingerprint, created_txn, created_at)
                        VALUES ('pay', 'api', 'open-api', 'Open', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'open', hex(zeroblob(32)), cpd_txn(), 't');",
                 )?;
@@ -397,7 +397,7 @@ mod tests {
             .write("fixture", |tx| {
                 for (k, status, kind) in [("t-api", "draft", "test"), ("i-api", "failed", "impl")] {
                     tx.execute(
-                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind,
+                        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind,
                                            fingerprint, created_txn, created_at, failed_cause)
                          VALUES ('pay', 'api', ?1, 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?2, 1, ?3, CASE WHEN ?2 = 'draft' THEN NULL ELSE hex(zeroblob(32)) END, cpd_txn(), 't', CASE WHEN ?2 = 'failed' THEN 'x' END)",
                         [k, status, kind],

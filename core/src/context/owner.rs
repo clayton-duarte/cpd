@@ -50,7 +50,7 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
         }
         if let Some(current) = current {
             let mut stmt = tx.prepare(
-                "SELECT prs.plan || '/' || prs.key FROM prs JOIN plans ON plans.id = prs.plan
+                "SELECT workflows.plan || '/' || workflows.key FROM workflows JOIN plans ON plans.id = workflows.plan
                  WHERE plans.context = ?1 AND plans.deleted_at IS NULL ORDER BY 1",
             )?;
             let prs = stmt.query_map([id.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;

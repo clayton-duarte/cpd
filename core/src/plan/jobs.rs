@@ -165,7 +165,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
         needs.entry(job).or_default().push(need);
     }
     let mut stmt = conn.prepare(
-        "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "SELECT seq, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
                 kind, tests, test_files, test_approved, resources
            FROM jobs WHERE plan = ?1 ORDER BY seq",

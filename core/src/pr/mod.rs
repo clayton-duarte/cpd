@@ -286,7 +286,7 @@ type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, Cpd
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
 fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
-        "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
+        "SELECT c.id, c.owner, r.name FROM workflows r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
         [plan.as_str(), key.as_str()],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
@@ -310,7 +310,7 @@ pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, 
 
 /// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
 pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
-    let pr: String = conn.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
+    let pr: String = conn.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
     let key = PrKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
     policy_of_pr(conn, home, plan, &key)
 }
