@@ -291,7 +291,7 @@ fn the_explore_box_title_counts_the_jobs_per_kind() {
     let (_dir, mut store) = db();
     run(
         &mut store,
-        &(pr_job("api", "api-1", "queued")
+        &(workflow_job("api", "api-1", "queued")
             + &explore_job_of("scout", "look", "queued")
             + &explore_job_of("scout", "peek", "queued")
             + &explore_job_of("research", "dig", "queued")),
@@ -315,7 +315,7 @@ fn the_explore_box_title_counts_the_jobs_per_kind() {
 
 #[test]
 fn an_explore_only_plans_box_title_has_the_counts() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(
         &mut store,
         &(explore_job_of("scout", "look", "merged") + &explore_job_of("research", "dig", "failed")),
@@ -330,7 +330,7 @@ fn an_explore_only_plans_box_title_has_the_counts() {
 
 #[test]
 fn the_explore_box_title_counts_every_explore_job_whatever_its_status() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     let sql: String = ["queued", "running", "merged", "failed", "cancelled"]
         .iter()
         .map(|st| explore_job_of("scout", &format!("scout-{st}"), st))
@@ -353,10 +353,10 @@ fn the_explore_box_title_counts_every_explore_job_whatever_its_status() {
 
 #[test]
 fn the_explore_box_title_is_text_only_in_the_title_style() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &explore_job_of("scout", "look", "queued"));
     let plan = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    let drawn = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0);
+    let drawn = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0);
     assert_eq!(drawn.links, Links::default(), "the counts are no link");
 
     let title = " explore Jobs · 1 scout ";
@@ -510,13 +510,13 @@ fn assert_draws_every_job(store: &mut Store) {
 #[test]
 fn the_plan_view_draws_every_job_of_the_plan() {
     // a Plan of PRs of every status with a Job of every kind and status, and the explore Jobs of the Plan
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, EVERY_PR);
     run(&mut store, &every_job());
     assert_draws_every_job(&mut store);
 
     // a Plan of no PR and the explore Jobs only
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &every_job_explore_only());
     assert_draws_every_job(&mut store);
 }

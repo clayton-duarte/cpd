@@ -402,6 +402,7 @@ mod tests {
     use super::*;
     use cpd_core::home::CpdHome;
     use cpd_core::ids::{ContextId, WorkflowKey};
+    use serde_json::json;
 
     fn failure(code: &str) -> Failure {
         Failure {

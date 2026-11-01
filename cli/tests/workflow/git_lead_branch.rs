@@ -7,14 +7,9 @@ use std::time::Duration;
 use cpd_core::error::ErrorCode;
 use cpd_core::git::Pipeline;
 use cpd_core::git::{
-    Cut, Setup, attempt_branch, create_attempt_worktree, pr_lead_worktree_path,
-    prepare_pr_lead_worktree,
-};
-use cpd_core::git::{
     Cut, Setup, attempt_branch, create_attempt_worktree, prepare_workflow_lead_worktree,
     workflow_lead_worktree_path,
 };
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
 use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
 
 fn plan() -> PlanId {

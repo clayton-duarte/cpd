@@ -17,10 +17,6 @@ use common::fx::Fx as InProcess;
 use common::{Run, refused};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{
-    Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path,
-    prepare_lead_worktree,
-};
-use cpd_core::git::{
     Setup, create_attempt_worktree, create_lead_worktree, prepare_lead_worktree,
     workflow_lead_worktree_path,
 };

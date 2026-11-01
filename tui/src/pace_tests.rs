@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crate::pace::Reads;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
+use crate::pump::Pump;
 use crate::read::{
     ChatSlot, Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrState, Pull, WorkflowNode,
     WorkflowStatus,

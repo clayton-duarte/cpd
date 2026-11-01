@@ -78,8 +78,6 @@ mod policy_resources;
 mod policy_scopes;
 mod preset;
 mod repo_cmds;
-mod repo_cmds;
-mod repo_config;
 mod repo_config;
 mod resource;
 mod retire_review;

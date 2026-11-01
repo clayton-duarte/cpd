@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 #[cfg(test)]
-use crate::ids::PrKey;
+use crate::ids::WorkflowKey;
 use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;

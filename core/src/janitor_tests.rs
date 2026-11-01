@@ -234,7 +234,6 @@ impl Rig {
             lead_branch,
             attempt,
             attempt_branch,
-            attempt_id,
         });
         self.workflows.last().unwrap()
     }

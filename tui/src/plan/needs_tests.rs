@@ -81,7 +81,6 @@ fn no_chat_slot_needs_no_clock() {
 
 /// A Plan of one Workflow with `jobs` queued Jobs (the pattern of the tests in `mod.rs`).
 fn tests_centre(jobs: usize) -> Centre {
-    use crate::read::{JobNode, PrNode, PrStatus};
     use crate::read::{JobNode, WorkflowNode, WorkflowStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey};

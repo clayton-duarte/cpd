@@ -127,6 +127,7 @@ fn fx(status: &str) -> Fx {
          INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', cpd_txn(), 't', 't'{values});",
         repo = repo.display(),
+        lead = lead.display(),
     );
     let fx = Fx {
         kit,

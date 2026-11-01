@@ -4,6 +4,7 @@
 use ratatui::buffer::Buffer;
 
 use super::flow::Pill;
+use super::lines_tests::{reaches, violations};
 use super::{boxes, sample_workflow};
 use crate::read::{NeedsUser, WorkflowNode};
 use crate::test_text::rows;
