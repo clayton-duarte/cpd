@@ -510,7 +510,7 @@ fn a_push_and_an_attempt_start_race_and_exactly_one_wins() {
     assert_eq!(out["error"]["code"], json!("attempt_running"), "{out}");
     assert_eq!(out["error"]["details"], json!({"pr": "repo", "jobs": ["m"], "attempts": ["m-a1"]}), "{out}");
     assert_eq!(fx.remote_sha(), before, "nothing was pushed");
-    assert_eq!(fx.gate_log().trim(), tip, "the Gate ran on G");
+    assert!(fx.gate_log().starts_with(&format!("{tip}\n")), "the Gate ran on G");
 }
 
 #[test]

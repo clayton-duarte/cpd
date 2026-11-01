@@ -24,6 +24,9 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let pr = require_pushable(&plan, &args)?;
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    // Checked before the Gate too: a running Attempt refuses at once, without a long Gate
+    // (commands.md §9.9). The transaction below re-checks it, since an Attempt may start during the Gate.
+    env.store.read(|conn| super::rebase::refuse_running(conn, &id, &key, "do the push"))?;
     let branch = pr.lead_branch.clone();
     let remote_branch = pr.remote_branch().to_owned();
     let adopted = pr.head_ref.is_some();
