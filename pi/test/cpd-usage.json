@@ -601,6 +601,18 @@
       "--title"
     ]
   },
+  "job addendum": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 1
+    },
+    "required": []
+  },
   "job approve-tests": {
     "flags": {
       "--help": false,
