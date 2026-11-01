@@ -325,9 +325,10 @@ sibling below it, outside that region, so it never scrolls away:
 </MessageScrollerProvider>
 ```
 
-**Scroll behaviour.** `MessageScrollerProvider autoScroll` follows the reply while the person
-stays at the live edge; the person's turn is the `scrollAnchor`, so a new question settles near
-the top and the reply streams in under it; `MessageScrollerButton` jumps back to the live edge.
+**Scroll behaviour.** `MessageScrollerProvider autoScroll` opens the thread at its newest turn
+and follows the reply while the person stays at the live edge; `MessageScrollerButton` jumps back
+to the live edge. No turn carries `scrollAnchor` — the measured rule is “The thread follows its
+live edge”, below.
 Enter sends, Shift+Enter adds a line.
 
 #### How one message renders
@@ -502,6 +503,43 @@ The Chat column renders **every part of a turn** — decided by the User on 2026
 The `tool` row's title is the command or path the call names — the `arguments`' `command` of a `bash` call, its `path` of a `read`, `edit` or `write` call, else the tool's `name` — with the call's `durationMs` beside the title and the row in its error state when the result failed (`error`). Opened, the row shows the call's `arguments` and its `result` as `Code Block`s. A large result is never truncated: the Code Block carries it whole; only the live frame is bounded (next section).
 
 The pairing behind a `tool` part is measured against a real pi session file under `~/.pi/agent/sessions`: an assistant message's content blocks are `thinking` (its text under `thinking`), `text` and `toolCall` (`id`, `name`, `arguments`), and the tool's result is the **following** line's `message.role` `"toolResult"` (`toolCallId`, `toolName`, `content` of `text` and `image` blocks, `isError`, `durationMs`). `parsePiSession` pairs a `toolCall` with its `toolResult` by `toolCallId`: the part carries the call's `arguments`, and the result's text, `durationMs`, `isError` and `image` blocks land on the same turn — the `toolResult` line yields no turn of its own.
+
+### The thread follows its live edge
+
+Where the viewport sits in the thread is a measured rule, not the registry recipe's. The thread
+**opens at its newest turn** (`MessageScrollerProvider autoScroll defaultScrollPosition="end"`,
+`web/src/components/ai-elements/conversation.tsx`) and **follows new output while the reader stays
+at that live edge**. **No turn carries `scrollAnchor`.**
+
+The registry recipe for this primitive marks the person's turns
+`scrollAnchor={message.role === "user"}`; this Chat deliberately does not, and that deviation is
+the fix, not an oversight. An anchor makes the scroller settle that turn at the **top** of the
+viewport and hold the view there: when a frame's child count grows, `handleContentChange` (in
+`@shadcn/react/dist/message-scroller/index.js`) takes the first new `scrollAnchor` row and, if
+exactly one arrived while the mode was `following-bottom`, calls
+`scrollToElement(anchor, { align: "start" })` and switches to `anchored-to-message` — a mode its
+state machine never leaves for `following-bottom`, so every later frame only re-anchored the same
+row. That is why new output never arrived in view.
+
+Measured on the dev preview, 2026-11-01, while watching live session `14bd6551…` grow with the SSE
+frames counted in the page. With the anchor in place, the frame that first filled the thread
+(items 1 → 41, exactly one `scrollAnchor` row in the tail) left the viewport at `scrollTop 1286`
+against a `scrollHeight` of 5327 and a 720 px viewport — **3321 px short of the newest turn** —
+with the root reporting `data-scrollable="start end"`; the next frame moved the view *up* (to
+1250) and the gap grew to 3497 px; three frames arrived and the gap never closed. That is the
+reported bug: the Chat did not auto-scroll down when new messages arrived.
+
+With the anchor removed and `defaultScrollPosition="end"` stated explicitly, the same measurement
+reads `gap = 0` (`scrollTop` exactly `scrollHeight − clientHeight`) at every sample across three
+frames. The rest of the contract: scrolled away to 600 px, two later frames did not move the view
+(the gap stayed 1869 px, then 2147 px — scrolling away **releases** the view; later frames never
+drag it back) while the **Scroll to End** control went active; pressing it returned the view to
+`gap = 0`, and the frame after that kept `gap = 0`, so following had re-engaged.
+`MessageScrollerButton` (`web/src/views/live-chat.tsx`) is that control — it returns the reader to
+the live edge and re-engages following.
+
+The prototype is commit `8597fd602` on the local branch `preview/chat-shell` ("preview: follow the
+Chat's live edge instead of anchoring a turn").
 
 ### The markdown a turn renders
 
