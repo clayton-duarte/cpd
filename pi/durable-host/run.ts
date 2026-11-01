@@ -411,6 +411,30 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       }
     };
 
+    // §6.13 step 7 (hs-n658/hs-d812): a fresh durable Lead/Manager is not by-user and has no mapped Events, so it
+    // has no input of its own at birth; the engine's launch passes no pi argv `@<lead-message.md>` either. The host
+    // reads the Lead's first message and runs it as the first turn's input, counted by the cursor. A Session whose
+    // conversation already holds its `cpd-first-message` entry (a restart) submits nothing and reads nothing.
+    if (!session.byUser && !storedEntries.some((e) => { const entry = e as StoredEntry; return entry.kind === "cpd-first-message" && entry.data?.delivered_to === config.session; })) {
+      try {
+        const out = await deps.cpd(["session", "first-message", "--session", config.session]);
+        if (typeof out.text !== "string" || !Number.isSafeInteger(out.event)) throw new Error("cpd session first-message: the output lacks text or event");
+        const event = out.event as number;
+        // The submit below is turn-starting: mark the first message done and its Event the cursor, so prepareTurn does
+        // not ALSO store it as a silent write and the context update counts it (turn.ts).
+        turn.firstDone = true;
+        turn.firstEvent = Math.max(turn.firstEvent, event);
+        await submit({
+          content: out.text,
+          requestId: `first-message:${config.session}`,
+          whenBusy: "followUp",
+          entry: { kind: "cpd-first-message", data: { event, delivered_to: config.session } },
+        });
+      } catch (e) {
+        failed("the first message at startup", e);
+      }
+    }
+
     // The event stream: the ring of what clients are caught up on (contract §6.14).
     const first = current!;
     const epoch = deps.newEpoch();
