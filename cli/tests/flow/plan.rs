@@ -2728,10 +2728,20 @@ fn lock_refusals_change_nothing() {
         })
         .unwrap();
     fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"])
-        .ok();
-    fx.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"])
-        .ok();
+    // A review refuses the cycle and writes nothing; the approved review r3 is a fixture row for the plan as it is.
+    let error = refused(
+        &fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]),
+        "dependency_cycle",
+        3,
+    );
+    assert_eq!(error["details"]["cycle"].as_array().unwrap().len(), 3);
+    let fingerprint = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fx.env.sql(&format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at) VALUES ('pay', 'r3', 3, '{fingerprint}', 'approved', 't', 't');"
+    ));
     let error = refused(&lock(), "dependency_cycle", 3);
     assert_eq!(error["details"]["cycle"].as_array().unwrap().len(), 3);
     store(&fx.env)
