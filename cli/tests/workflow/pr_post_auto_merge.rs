@@ -63,7 +63,7 @@ fn posts(pay: &Pay) -> i64 {
 }
 
 fn post_cmd(pay: &Pay) -> crate::common::Run {
-    pay.fx.cpd(&["pr", "post", "--pr", "repo", "--plan", "pay"])
+    pay.fx.cpd(&["pr", "post", "--workflow", "repo", "--plan", "pay"])
 }
 
 /// Every recorded `gh` call, its argv joined.

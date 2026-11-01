@@ -147,7 +147,7 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
         "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction)
          VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 'opened', 'git-merge');"
     ));
-    let view = || pay.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+    let view = || pay.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
 
     let out = view();
     assert_eq!(out["post"]["reaction"], "git-merge", "no queue row yet: pr_posts.reaction: {out}");

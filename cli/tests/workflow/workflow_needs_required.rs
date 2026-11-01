@@ -1,7 +1,7 @@
 //! `pr add` in phase `dispatch` is refused `needs_required` unless it says `--needs` or `--no-needs`
 //! (commands.md §9.4, §1.3; contract). Reuses the `added` fixture of `pr.rs`.
 
-use crate::pr::{Added, added};
+use crate::workflow::{Added, added};
 use serde_json::{Value, json};
 
 fn error(run: &crate::common::Run) -> Value {
@@ -11,7 +11,7 @@ fn error(run: &crate::common::Run) -> Value {
 
 fn assert_refused(f: &Added, key: &str, shape: &str) {
     let other = f.fx.keyed_repo(&format!("other-{shape}")).canonicalize().unwrap();
-    let run = f.fx.cpd(&["pr", "add", key, "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", shape, "--plan", "pay"]);
+    let run = f.fx.cpd(&["workflow", "add", key, "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", shape, "--plan", "pay"]);
     let e = error(&run);
     assert_eq!(e["code"], "needs_required", "{shape}: {e}");
     assert_eq!(run.exit, 3, "{shape}");
@@ -70,7 +70,7 @@ fn pr_add_in_plan_phase_needs_no_flag() {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    let run = fx.cpd(&["pr", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
+    let run = fx.cpd(&["workflow", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
     assert_eq!(run.json()["pr"]["needs"], json!([]));
 }
 

@@ -3,8 +3,8 @@
 
 use serde_json::json;
 
-use super::pr::{Rows, code, poll_fx};
-use super::pr_crud::crud;
+use super::workflow::{Rows, code, poll_fx};
+use super::workflow_crud::crud;
 use super::pr_view;
 
 /// The stored `jira` of PR `key` of Plan `plan`.
@@ -50,37 +50,37 @@ fn pr_add_refuses_a_malformed_jira_key() {
 #[test]
 fn pr_edit_sets_the_jira_key_after_the_lock_and_again_is_a_no_op() {
     let fx = poll_fx("dispatch");
-    let before = fx.events("pr-edited").len();
+    let before = fx.events("workflow-edited").len();
 
-    let out = fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
+    let out = fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
 
     assert_eq!(out["fields"], json!(["jira"]));
     assert_eq!(stored(fx.store(), "pay", "repo").as_deref(), Some("ABC-1"));
-    let events = fx.events("pr-edited");
+    let events = fx.events("workflow-edited");
     assert_eq!(events.len(), before + 1);
     assert_eq!(events.last().unwrap().1["fields"], json!(["jira"]));
 
     let txns = fx.txns();
-    let out = fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
+    let out = fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
     assert_eq!(out["already"], true);
     assert_eq!(fx.txns(), txns, "no transaction");
-    assert_eq!(fx.events("pr-edited").len(), before + 1, "no Event");
+    assert_eq!(fx.events("workflow-edited").len(), before + 1, "no Event");
 }
 
 #[test]
 fn pr_edit_replaces_a_jira_key_and_sets_it_on_an_open_pr() {
     {
         let fx = poll_fx("dispatch");
-        fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
+        fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
 
-        let out = fx.cpd(&["pr", "edit", "repo", "--jira", "XYZ-22", "--plan", "pay"]).ok();
+        let out = fx.cpd(&["workflow", "edit", "repo", "--jira", "XYZ-22", "--plan", "pay"]).ok();
 
         assert_eq!(out["fields"], json!(["jira"]));
         assert_eq!(stored(fx.store(), "pay", "repo").as_deref(), Some("XYZ-22"));
     }
     let fx = pr_view::fx("open");
 
-    let out = fx.fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
+    let out = fx.fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
 
     assert_eq!(out["fields"], json!(["jira"]));
     assert_eq!(stored(fx.store(), "pay", "repo").as_deref(), Some("ABC-1"));
@@ -91,9 +91,9 @@ fn pr_edit_jira_is_refused_on_a_merged_pr_and_a_malformed_key() {
     let fx = poll_fx("done");
     let txns = fx.txns();
 
-    let run = fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]);
-    assert_eq!(code(&run), ("pr_ended".into(), 3));
-    let run = fx.cpd(&["pr", "edit", "repo", "--jira", "abc-1", "--plan", "pay"]);
+    let run = fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]);
+    assert_eq!(code(&run), ("workflow_ended".into(), 3));
+    let run = fx.cpd(&["workflow", "edit", "repo", "--jira", "abc-1", "--plan", "pay"]);
     assert_eq!(code(&run), ("usage".into(), 2));
 
     assert_eq!(stored(fx.store(), "pay", "repo"), None);
@@ -104,7 +104,7 @@ fn pr_edit_jira_is_refused_on_a_merged_pr_and_a_malformed_key() {
 fn pr_edit_with_no_flag_names_jira_among_the_flags() {
     let fx = poll_fx("dispatch");
 
-    let run = fx.cpd(&["pr", "edit", "repo", "--plan", "pay"]);
+    let run = fx.cpd(&["workflow", "edit", "repo", "--plan", "pay"]);
 
     assert_eq!(code(&run), ("nothing_to_edit".into(), 2));
     assert!(run.error()["message"].as_str().unwrap().contains("--jira"), "{}", run.error()["message"]);
@@ -114,10 +114,10 @@ fn pr_edit_with_no_flag_names_jira_among_the_flags() {
 fn plan_show_and_pr_view_print_the_prs_jira_key() {
     let fx = pr_view::fx("open");
     let show = || fx.fx.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["jira"].clone();
-    let view = || fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()["pr"]["jira"].clone();
+    let view = || fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()["pr"]["jira"].clone();
     assert_eq!((show(), view()), (json!(null), json!(null)));
 
-    fx.fx.cpd(&["pr", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
+    fx.fx.cpd(&["workflow", "edit", "repo", "--jira", "ABC-1", "--plan", "pay"]).ok();
 
     assert_eq!((show(), view()), (json!("ABC-1"), json!("ABC-1")));
 }

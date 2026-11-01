@@ -410,7 +410,7 @@ fn pr_open_is_refused_open_job_live_while_the_opener_is_live() {
     }
 }
 
-/// The kept preconditions refuse before anything runs (contract §7.6): an unmerged Job is `jobs_not_done`, a NULL title is `pr_title_required`.
+/// The kept preconditions refuse before anything runs (contract §7.6): an unmerged Job is `jobs_not_done`, a NULL title is `workflow_title_required`.
 #[test]
 fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
     // One in-process `Fx` at a time (its lock is process-wide): each block drops its own before the next.
@@ -443,7 +443,7 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
 
     let run = fx.pr("open");
 
-    assert_eq!(code(&run), ("pr_title_required".into(), 3));
+    assert_eq!(code(&run), ("workflow_title_required".into(), 3));
     assert_eq!(run.error()["details"], json!({"plan": "pay", "pr": "repo"}));
     assert_eq!((fx.plan_row().0, fx.txns(), open_jobs(&fx)), ("dispatch".to_owned(), txns, Vec::<(String, String)>::new()));
     assert!(fx.gh_calls().is_empty(), "no gh call");
@@ -1385,9 +1385,9 @@ impl Poll {
         self.calls("gh").into_iter().map(|call| call.args).collect()
     }
 
-    /// `cpd pr <command> --pr <key> --plan pay`.
+    /// `cpd pr <command> --workflow <key> --plan pay`.
     fn pr_cmd(&self, command: &str, key: &str) -> Run {
-        self.cpd(&["pr", command, "--pr", key, "--plan", "pay"])
+        self.cpd(&["pr", command, "--workflow", key, "--plan", "pay"])
     }
 
     /// The keyed repo `web`, with a bare `origin` that has `main`.
@@ -1858,7 +1858,7 @@ fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps
     assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
     assert_eq!(fx.plan_row().0, "deploy");
     // One informational Event for the Plan, once; no `pr-feedback`.
-    let told = fx.events("pr-base-changed");
+    let told = fx.events("workflow-base-changed");
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!(
         told[0].0,
@@ -1871,7 +1871,7 @@ fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps
                "number": 814, "url": "https://github.com/acme/pay/pull/814"})
     );
     assert!(fx.events("pr-feedback").is_empty());
-    assert_eq!(fx.event_count() - events, 2, "pr-merged and pr-base-changed, nothing else");
+    assert_eq!(fx.event_count() - events, 2, "pr-merged and workflow-base-changed, nothing else");
     // cpd changes no base on GitHub, runs no Gate and opens nothing: it only asked GitHub (graphql).
     assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
     assert!(!fx.home.plan_dir(&plan()).join("logs/pr-up.pre-merge.log").exists(), "no Gate ran for up");
@@ -1896,7 +1896,7 @@ fn poll_follows_a_base_retargeted_by_hand_on_any_open_pr() {
     assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "main", "to": "develop"}]));
     assert_eq!(fx.base_of("repo"), ("open".to_owned(), "develop".to_owned()));
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()), "814 still targets 812's branch, as GitHub says");
-    let told = fx.events("pr-base-changed");
+    let told = fx.events("workflow-base-changed");
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!(
         told[0].0,
@@ -1924,14 +1924,14 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
     assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]), "the closed pull request is the poll's usual pr-feedback");
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
     assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
-    assert!(fx.events("pr-base-changed").is_empty());
+    assert!(fx.events("workflow-base-changed").is_empty());
 
     // The same answers again: still nothing, and the base PR is not cancelled out from under the stacked PR.
     let (txns, events) = (fx.txns(), fx.event_count());
     assert_eq!(fx.poll()["base_changed"], json!([]));
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
-    let run = fx.cpd(&["pr", "cancel", "repo", "--plan", "pay"]);
-    let error = common::refused(&run, "pr_in_use", 3);
+    let run = fx.cpd(&["workflow", "cancel", "repo", "--plan", "pay"]);
+    let error = common::refused(&run, "workflow_in_use", 3);
     assert_eq!(error["details"]["prs"], json!(["up"]), "{error}");
     assert_eq!(fx.base_of("repo").0, "open");
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
@@ -1966,7 +1966,7 @@ fn poll_unstacks_a_dispatch_pr_in_the_transaction_that_records_its_base_prs_merg
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(fx.web_base(), "main");
-    assert_eq!(fx.plan_events("pay", "pr-base-changed"), vec![web_unstacked(&fx.branch, "poll")], "once");
+    assert_eq!(fx.plan_events("pay", "workflow-base-changed"), vec![web_unstacked(&fx.branch, "poll")], "once");
     assert_eq!(fx.plan_events("pay", "pr-feedback"), vec![]);
     assert_eq!(fx.web_status(), "dispatch", "nothing else about web changed: no Gate, no start, no pull request");
     assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
@@ -2003,7 +2003,7 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, feedback("open", "failed", "none", &["checks_failed"]));
-    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --pr repo.");
+    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --workflow repo.");
     assert_eq!(fx.plan_row().0, "deploy");
 
     // Still failing: nothing new. `ERROR` is `failed` too.
@@ -2789,7 +2789,7 @@ fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
     fx.add_waiting_web();
     // `pr open` only queues the PR's opener Job now: the open pull request is written straight, as the Lead's opener leaves it.
     fx.mark_opened("repo", 812);
-    assert_eq!(code(&fx.cpd(&["pr", "start", "web", "--plan", "pay"])), ("pr_not_ready".into(), 3));
+    assert_eq!(code(&fx.cpd(&["workflow", "start", "web", "--plan", "pay"])), ("workflow_not_ready".into(), 3));
 
     fx.search(&[]);
     fx.lookup(&[Some(pay("MERGED", None, None))]);
@@ -2799,9 +2799,9 @@ fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
     assert_eq!((fx.pr_status("repo").as_str(), fx.pr_status("web").as_str(), fx.phase().as_str()), ("merged", "waiting", "dispatch"));
     assert_eq!(fx.events("pr-merged").len(), 1);
     assert!(fx.events("plan-done").is_empty());
-    assert!(fx.events("pr-started").is_empty(), "pr poll never starts a PR");
+    assert!(fx.events("workflow-started").is_empty(), "pr poll never starts a PR");
     // Its need is merged now: it can start.
-    let started = fx.cpd(&["pr", "start", "web", "--plan", "pay"]).ok();
+    let started = fx.cpd(&["workflow", "start", "web", "--plan", "pay"]).ok();
     assert_eq!(started["pr"]["status"], "dispatch");
     assert_eq!(fx.pr_status("web"), "dispatch");
 }
@@ -2996,7 +2996,7 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
            VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
         fx.repo.display()
     ));
-    fx.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--base", "pay/side", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--base", "pay/side", "--plan", "pay"]).ok();
     fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'side';");
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
@@ -3376,8 +3376,8 @@ fn rebase_stops_at_a_conflict_in_the_lead_worktree_and_pushes_nothing() {
     let details = &run.error()["details"];
     assert_eq!(details["files"], json!(["README.md"]));
     assert_eq!(details["worktree"], fx.lead.to_str().unwrap());
-    assert_eq!(details["next"], "cpd pr rebase --pr repo --plan pay --continue");
-    assert_eq!(details["abort"], "cpd pr rebase --pr repo --plan pay --abort");
+    assert_eq!(details["next"], "cpd pr rebase --workflow repo --plan pay --continue");
+    assert_eq!(details["abort"], "cpd pr rebase --workflow repo --plan pay --abort");
     // The rebase waits in the Lead worktree, with markers; the ref and the remote are as they were.
     assert!(fx.rebasing());
     assert!(fs::read_to_string(fx.lead.join("README.md")).unwrap().contains("<<<<<<<"));
@@ -3435,7 +3435,7 @@ fn rebase_continue_stops_again_at_a_second_conflicting_commit() {
 
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
-    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --workflow repo --plan pay --continue");
     assert!(fx.rebasing());
     assert_eq!(fx.lead_sha(), before);
     assert_eq!(fx.remote_branch("cpd/pay"), Some(before.clone()));
@@ -3458,7 +3458,7 @@ fn rebase_continue_refuses_while_conflict_markers_remain() {
     let run = fx.rebase("--continue");
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
-    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --workflow repo --plan pay --continue");
 
     // Staged with the markers in it.
     fx.git(&fx.lead, &["add", "README.md"]);
@@ -3767,7 +3767,7 @@ fn open_refuses_a_pr_that_is_waiting_and_names_only_its_own_jobs() {
     assert_eq!(run.error()["details"]["from"], "waiting");
 
     let run = fx.pr_cmd("open", "nope");
-    assert_eq!(code(&run), ("pr_not_found".into(), 4));
+    assert_eq!(code(&run), ("workflow_not_found".into(), 4));
 
     // `web`'s queued Job does not keep `repo` from getting its opener (the Plan stays in dispatch: `web` waits).
     let out = fx.pr_cmd("open", "repo").ok();
@@ -3790,8 +3790,8 @@ fn rebase_touches_only_its_pr() {
     fx.git(&web_repo, &["commit", "-q", "-m", "base"]);
     fx.git(&web_repo, &["push", "-q", "origin", "main"]);
 
-    // Two PRs: --pr is required.
-    assert_eq!(code(&fx.pr("rebase")), ("pr_required".into(), 2));
+    // Two PRs: --workflow is required.
+    assert_eq!(code(&fx.pr("rebase")), ("workflow_required".into(), 2));
 
     let out = fx.pr_cmd("rebase", "web").ok();
 
@@ -3884,17 +3884,17 @@ impl Added {
         self.fx.env.query("SELECT phase FROM plans WHERE id = 'pay'")
     }
 
-    /// The `data` of the `pr-added` Events of Plan `pay`, in order.
+    /// The `data` of the `workflow-added` Events of Plan `pay`, in order.
     pub(crate) fn pr_added(&self) -> Vec<Value> {
         let data: Vec<String> = self.fx.env.read(|c| {
-            let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'pr-added' ORDER BY id")?;
+            let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'workflow-added' ORDER BY id")?;
             stmt.query_map([], |r| r.get::<_, String>(0))?.collect()
         });
         data.iter().map(|d| serde_json::from_str(d).unwrap()).collect()
     }
 
     pub(crate) fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
+        let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
         args.extend(extra);
         self.fx.cpd(&args)
     }
@@ -3922,7 +3922,7 @@ fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
     assert_eq!(out["pr"]["needs"], json!(["repo"]));
     assert_eq!(f.needs_of("fix"), ["repo"]);
     assert_eq!(f.pr_added()[0]["needs"], json!(["repo"]));
-    // A rerun (the Plan is in dispatch now) is `already`, not `pr_exists`.
+    // A rerun (the Plan is in dispatch now) is `already`, not `workflow_exists`.
     assert_eq!(f.add_fix(&["--base", "pay/side"]).ok()["already"], true);
 }
 

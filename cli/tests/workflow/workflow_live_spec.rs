@@ -6,7 +6,7 @@ use crate::common;
 
 use std::fs;
 
-use super::pr_crud::{Crud, crud};
+use super::workflow_crud::{Crud, crud};
 use cpd_core::attempt::ledger;
 use cpd_core::config::Tier;
 use cpd_core::home::CpdHome;
@@ -25,7 +25,7 @@ fn store(fx: &Crud) -> Store {
 /// `pr add <key> --repo <repo> --shape config …`: the draft opener `open-<key>` and its Spec stay.
 fn add(fx: &Crud, key: &str, repo: &std::path::Path, extra: &[&str]) {
     let title = format!("Change {key}");
-    let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+    let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
     args.extend(extra);
     args.extend(["--plan", "pay-1"]);
     fx.cpd(&args).ok();
@@ -109,7 +109,7 @@ fn an_open_jobs_worker_spec_names_the_base_a_pr_edit_set_before_the_lock() {
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -126,7 +126,7 @@ fn an_open_jobs_worker_spec_names_the_base_a_restack_set_after_the_lock() {
     let before = stored(&fx, "open-b");
     assert!(before.0.contains("main"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "a", "--no-needs", "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--base", "a", "--no-needs", "--plan", "pay-1"]).ok();
     assert_eq!(base_of(&fx, "b"), "pay-1/a");
 
     let spec = render(&fx, "open-b");
@@ -154,7 +154,7 @@ fn an_open_jobs_worker_spec_names_the_base_an_unstack_set_when_its_base_pr_merge
     );
 
     let mut s = store(&fx);
-    cpd_core::pr::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::WorkflowKey::parse("b").unwrap()).unwrap();
+    cpd_core::workflow::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::WorkflowKey::parse("b").unwrap()).unwrap();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");
@@ -170,7 +170,7 @@ fn an_open_jobs_worker_spec_names_the_repo_a_pr_edit_set() {
     let (pay, web) = (fx.pay.display().to_string(), fx.web.display().to_string());
     assert!(before.0.contains(&format!("in the repo {pay}")) || !before.0.contains(&web), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--repo", &web, "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--repo", &web, "--plan", "pay-1"]).ok();
     assert_eq!(fx.env.query::<String>("SELECT repo FROM prs WHERE key = 'b'"), web);
 
     let spec = render(&fx, "open-b");
@@ -195,7 +195,7 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     let before = stored(&fx, &job);
     assert!(before.0.contains("develop"), "{before:?}");
 
-    fx.cpd(&["pr", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
+    fx.cpd(&["workflow", "edit", "b", "--base", "main", "--plan", "pay-1"]).ok();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, &job);

@@ -8,7 +8,7 @@ use std::fs;
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, pay, poll_fx};
+use super::workflow::{Poll, Rows, node, pay, poll_fx};
 use super::pr_checks::{
     add_second_owned_pr, answer, checks_of_row, contexts, feedback_data, green, one_page, policy, read_says, reads, run, status_context,
 };
@@ -75,7 +75,7 @@ fn human_gated_pr_that_passed_this_way_is_postable() {
         .write("fixture", |tx| tx.execute_batch("UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 812;").map_err(Into::into))
         .unwrap();
 
-    let run = fx.cpd(&["pr", "post", "--pr", "repo", "--plan", "pay"]);
+    let run = fx.cpd(&["pr", "post", "--workflow", "repo", "--plan", "pay"]);
 
     let text = format!("{} {}", run.stdout, run.stderr);
     assert!(!text.contains("pr_not_ready") && !text.contains("checks_pending"), "{text}");
@@ -192,7 +192,7 @@ fn view(body: &str) -> Value {
     let mut checks = green(2);
     checks.push(status_context("UI Review", "PENDING"));
     let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&super::pr_checks::view_with(checks)));
-    fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()
+    fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()
 }
 
 #[test]

@@ -87,7 +87,7 @@ fn start_fx() -> Start {
     );
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     with_origin(&fx, &repo);
-    fx.cpd(&["pr", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     fx.cpd(&["job", "cancel", "api-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
     fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)

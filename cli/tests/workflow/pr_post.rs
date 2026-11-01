@@ -83,7 +83,7 @@ impl Pay {
     }
 
     pub(super) fn post_cmd(&self) -> crate::common::Run {
-        self.fx.cpd(&["pr", "post", "--pr", "repo", "--plan", "pay"])
+        self.fx.cpd(&["pr", "post", "--workflow", "repo", "--plan", "pay"])
     }
 
     fn posts(&self) -> Vec<Value> {
@@ -245,7 +245,7 @@ fn a_second_post_of_the_same_pr_is_refused() {
 fn refuses_a_pr_that_is_not_open() {
     let pay = post(Setup { status: "waiting", ..Setup::baseline() });
 
-    let error = pay.refuses("pr_not_open", 3);
+    let error = pay.refuses("workflow_not_open", 3);
 
     assert_eq!(error["details"], json!({"pr": "repo", "status": "waiting"}));
 }

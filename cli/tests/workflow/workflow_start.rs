@@ -105,7 +105,7 @@ impl Fx {
     /// `pr add <key> --repo <repo> [--needs <needs>]`.
     fn add(&self, key: &str, repo: &Path, needs: &[&str]) {
         let needs = needs.join(",");
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
+        let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
         } else {
@@ -189,12 +189,12 @@ impl Fx {
     }
 
     fn start(&self, key: &str) -> Run {
-        self.cpd(&["pr", "start", key, "--plan", "pay"])
+        self.cpd(&["workflow", "start", key, "--plan", "pay"])
     }
 
     /// `pr add <key> --repo <repo> <extra…> --plan pay`, its stub Job cancelled.
     fn add_with(&self, key: &str, repo: &Path, extra: &[&str]) {
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config"];
+        let mut args = vec!["workflow", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config"];
         args.extend(extra);
         args.extend(["--plan", "pay"]);
         self.cpd(&args).ok();
@@ -318,7 +318,7 @@ impl Look {
         self.0.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0)).expect("the PR's status")
     }
 
-    /// Whether the start of PR `key` failed (E7's `pr_start_failed` marks it).
+    /// Whether the start of PR `key` failed (E7's `workflow_start_failed` marks it).
     fn start_failed(&self, key: &str) -> bool {
         self.0.query_row("SELECT start_failed_at IS NOT NULL FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0)).expect("the PR's mark")
     }
@@ -381,7 +381,7 @@ fn lock_starts_only_the_prs_without_needs() {
 
     let phase = fx.events("plan-phase");
     assert_eq!(phase.last().unwrap()["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"], "prs": ["api"]}));
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
         started[0]["data"],
@@ -398,7 +398,7 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(again["prs"][1]["status"], "waiting");
     assert_eq!(again["prs"][0]["base_pr"], Value::Null);
     assert_eq!(again["prs"][1]["base_pr"], Value::Null);
-    assert_eq!(fx.events("pr-started").len(), 1);
+    assert_eq!(fx.events("workflow-started").len(), 1);
 }
 
 #[test]
@@ -436,7 +436,7 @@ fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
 
     let phase = fx.events("plan-phase");
     assert_eq!(phase.last().unwrap()["data"]["prs"], json!(["a1"]));
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(started[0]["data"]["pr"], "a1");
     assert_eq!(started[0]["data"]["by"], "lock");
@@ -447,7 +447,7 @@ fn lock_leaves_a_stacked_pr_waiting_and_starts_only_its_base_pr() {
     assert_eq!(again["already"], true);
     assert_eq!(again["prs"][0]["base_pr"], Value::Null);
     assert_eq!(again["prs"][1]["base_pr"], "pay/a1");
-    assert_eq!(fx.events("pr-started").len(), 1);
+    assert_eq!(fx.events("workflow-started").len(), 1);
 }
 
 #[test]
@@ -480,7 +480,7 @@ fn lock_starts_no_pr_down_a_stack_and_still_starts_an_independent_pr() {
     }
     assert_eq!(fx.git(&api.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
     assert_eq!(fx.git(&web.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/w1");
-    let mut started: Vec<String> = fx.events("pr-started").iter().map(|e| e["data"]["pr"].as_str().unwrap().to_owned()).collect();
+    let mut started: Vec<String> = fx.events("workflow-started").iter().map(|e| e["data"]["pr"].as_str().unwrap().to_owned()).collect();
     started.sort();
     assert_eq!(started, ["a1", "w1"]);
 }
@@ -512,7 +512,7 @@ fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs WHERE status <> 'waiting'"), 0);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"), 4);
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
     assert!(fx.calls("cpd").iter().all(|c| c.args[0] != "watch"));
 }
 
@@ -527,7 +527,7 @@ fn lock_refuses_a_pr_without_a_draft_job() {
     fx.job("ui", "web");
     fx.approve();
 
-    let error = refused(&fx.lock(), "pr_empty", 3);
+    let error = refused(&fx.lock(), "workflow_empty", 3);
 
     assert_eq!(error["details"]["prs"], json!(["api"]));
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
@@ -585,27 +585,27 @@ fn pr_start_refusals_change_nothing() {
     fx.add("a1", &repo.path, &[]);
     fx.add("a2", &repo.path, &["a1"]);
     fx.add("c", &repo.path, &[]);
-    fx.cpd(&["pr", "cancel", "c", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "cancel", "c", "--plan", "pay"]).ok();
 
     let error = refused(&fx.start("a1"), "illegal_phase", 3);
     assert_eq!((&error["details"]["phase"], &error["details"]["needs"]), (&json!("plan"), &json!("dispatch")));
     fx.dispatch();
-    refused(&fx.start("zz"), "pr_not_found", 4);
+    refused(&fx.start("zz"), "workflow_not_found", 4);
     refused(&fx.start("c"), "illegal_transition", 3);
-    let error = refused(&fx.start("a2"), "pr_not_ready", 3);
+    let error = refused(&fx.start("a2"), "workflow_not_ready", 3);
     assert_eq!(error["details"]["needs"], json!(["a1"]));
-    assert_eq!(fx.cpd(&["pr", "start", "a2"]).error()["code"], "plan_required");
+    assert_eq!(fx.cpd(&["workflow", "start", "a2"]).error()["code"], "plan_required");
 
     assert_eq!(fx.pr_status("a2"), "waiting");
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
     assert!(!fx.lead_path(&repo.path, "a2").exists());
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 
     // A PR that is already started or merged: `already`, nothing written.
     fx.merged("a1");
     let out = fx.start("a1").ok();
     assert_eq!((&out["already"], &out["pr"]["key"], &out["pr"]["status"]), (&json!(true), &json!("a1"), &json!("merged")));
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 }
 
 #[test]
@@ -628,14 +628,14 @@ fn pr_start_creates_pushes_and_records_the_start() {
     assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("a2"), "dispatch");
     assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!((started.len(), &started[0]["data"]["by"], &started[0]["data"]["pr"]), (1, &json!("pr start"), &json!("a2")));
     assert!(fx.events("error").is_empty());
 
     // Idempotent: the PR is started, so it is `already`.
     let again = fx.start("a2").ok();
     assert_eq!((&again["already"], &again["pr"]["status"]), (&json!(true), &json!("dispatch")));
-    assert_eq!(fx.events("pr-started").len(), 1);
+    assert_eq!(fx.events("workflow-started").len(), 1);
 }
 
 #[test]
@@ -655,7 +655,7 @@ fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
             .map(|key| {
                 let ports = Ports { clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())), runner: fx.fakes.ports.runner.clone(), spawn: fx.fakes.ports.spawn.clone() };
                 s.spawn(move || {
-                    let argv = ["cpd", "pr", "start", key, "--plan", "pay"].map(std::ffi::OsString::from);
+                    let argv = ["cpd", "workflow", "start", key, "--plan", "pay"].map(std::ffi::OsString::from);
                     let mut stdout = Vec::new();
                     let code = cpd::run_with(&ports, argv, &mut stdout);
                     Run { exit: exit_code(code), stdout: String::from_utf8(stdout).unwrap(), stderr: String::new() }
@@ -673,7 +673,7 @@ fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
         assert_ne!(remote_branch(&fx, &repo.path, &branch), "", "{key} pushed");
     }
     assert_eq!(branch_config(&fx, &repo.path), "", "no branch.* entry in .git/config");
-    assert_eq!(fx.events("pr-started").len(), 8);
+    assert_eq!(fx.events("workflow-started").len(), 8);
     assert!(fx.events("error").is_empty());
 }
 
@@ -694,7 +694,7 @@ fn pr_start_reuses_a_remote_lead_branch_that_contains_the_base() {
     assert_eq!((&out["pr"]["base_sha"], &out["pr"]["reused"], &out["pr"]["pushed"]), (&json!(tip), &json!(true), &json!(false)));
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip);
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{tip}\trefs/heads/pay/a2"));
-    assert_eq!(fx.events("pr-started")[0]["data"]["reused"], true);
+    assert_eq!(fx.events("workflow-started")[0]["data"]["reused"], true);
 }
 
 #[test]
@@ -727,7 +727,7 @@ fn pr_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
     assert!(!fx.lead_path(&repo.path, "a2").exists());
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{old}\trefs/heads/pay/a2"));
     assert_eq!(fx.pr_status("a2"), "waiting");
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 }
 
 #[test]
@@ -814,7 +814,7 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip);
     assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay/a2");
     assert_eq!(remote_branch(&fx, &repo.path, "pay/a2"), format!("{tip}\trefs/heads/pay/a2"));
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
         started[0]["data"],
@@ -844,14 +844,14 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
         if seen.exists() { Reply::ok("") } else { Reply::exit(1, "", "") }
     });
 
-    // E7's pr_start_failed: the engine runs until the PR is marked.
+    // E7's workflow_start_failed: the engine runs until the PR is marked.
     fx.engine_until(|look| look.start_failed("a2"));
 
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["plan"], "pay");
     let data = &errors[0]["data"];
-    assert_eq!((&data["code"], &data["source"]), (&json!("pr_start_failed"), &json!("watch")));
+    assert_eq!((&data["code"], &data["source"]), (&json!("workflow_start_failed"), &json!("watch")));
     assert_eq!((&data["details"]["pr"], &data["details"]["step"], &data["details"]["log"]), (&json!("a2"), &json!("pre-start"), &json!(fx.log("a2"))));
     assert_eq!(fx.pr_status("a2"), "waiting");
     let failed_at: String = fx.env.query("SELECT start_failed_at FROM prs WHERE key = 'a2'");
@@ -862,7 +862,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     // The engine does not try again.
     fx.engine_ticks(3);
     assert_eq!(fx.events("error").len(), 1);
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 
     // `pr start` fails the same way and changes nothing.
     let writes = (fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events"));
@@ -877,7 +877,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert_eq!(out["pr"]["status"], "dispatch");
     assert_eq!(fx.pr_status("a2"), "dispatch");
     assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("pr start")));
     assert_eq!(fx.events("error").len(), 1);
 }
@@ -910,13 +910,13 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_is_started_but_not_open() {
     let tip = stacked_on_a1(&fx, &repo);
     assert_eq!(fx.pr_status("a1"), "dispatch");
 
-    let error = refused(&fx.start("b1"), "pr_not_ready", 3);
+    let error = refused(&fx.start("b1"), "workflow_not_ready", 3);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
     assert_eq!(fx.pr_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/b1"]), "");
-    assert!(fx.events("pr-started").iter().all(|e| e["data"]["pr"] != "b1"));
+    assert!(fx.events("workflow-started").iter().all(|e| e["data"]["pr"] != "b1"));
 
     fx.env.sql(&Fx::opened_sql("a1"));
     fx.start("b1").ok();
@@ -933,13 +933,13 @@ fn e7_holds_a_stacked_pr_until_its_base_pr_is_open_and_then_starts_it_from_the_b
 
     fx.engine_ticks(2);
     assert_eq!(fx.pr_status("b1"), "waiting", "pay/a1 is not open");
-    assert!(fx.events("pr-started").iter().all(|e| e["data"]["pr"] != "b1"));
+    assert!(fx.events("workflow-started").iter().all(|e| e["data"]["pr"] != "b1"));
 
     fx.env.sql(&Fx::opened_sql("a1"));
     fx.engine_until(|look| look.status("b1") == "dispatch");
 
     assert_eq!(fx.git(&fx.lead_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), tip);
-    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
+    let started: Vec<Value> = fx.events("workflow-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
     assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("engine")));
 }
 
@@ -965,7 +965,7 @@ fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
     assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), format!("{tip}\trefs/heads/pay/b1"));
     assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("b1"), "dispatch");
-    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
+    let started: Vec<Value> = fx.events("workflow-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
         started[0]["data"],
@@ -1024,18 +1024,18 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
     fx.dispatch();
     fx.add_with("b1", &repo.path, &["--base", "pay/a1", "--no-needs"]);
 
-    let error = refused(&fx.start("b1"), "pr_not_ready", 3);
+    let error = refused(&fx.start("b1"), "workflow_not_ready", 3);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
     assert_eq!(fx.pr_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
     // a1 starts (a0 merged): b1 may.
     fx.merged("a0");
     fx.start("a1").ok();
     // a1 started but is not open: b1 still waits.
-    refused(&fx.start("b1"), "pr_not_ready", 3);
+    refused(&fx.start("b1"), "workflow_not_ready", 3);
     fx.env.sql(&Fx::opened_sql("a1"));
     assert_eq!(fx.start("b1").ok()["pr"]["status"], "dispatch");
 }
@@ -1049,7 +1049,7 @@ fn pr_start_refuses_a_pr_whose_need_of_another_plan_is_not_merged() {
     fx.env.sql(&Fx::dispatch_sql("a1"));
     fx.add_with("c1", &repo.path, &["--needs", "a1"]);
 
-    let error = refused(&fx.start("c1"), "pr_not_ready", 3);
+    let error = refused(&fx.start("c1"), "workflow_not_ready", 3);
 
     assert_eq!((&error["details"]["needs"], &error["details"]["base_pr"]), (&json!(["a1"]), &Value::Null));
     assert!(error["message"].as_str().unwrap().contains("a1"), "{error}");
@@ -1070,12 +1070,12 @@ fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
 
     fx.engine_ticks(2);
     assert_eq!(fx.pr_status("c1"), "waiting", "pay/a1 is not merged");
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 
     fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
     fx.engine_until(|look| look.status("c1") == "dispatch");
 
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     assert_eq!((started.len(), &started[0]["plan"], &started[0]["data"]["pr"], &started[0]["data"]["by"]), (1, &json!("pay"), &json!("c1"), &json!("engine")));
     assert!(fx.events("error").is_empty());
 }
@@ -1094,7 +1094,7 @@ fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
     // a1 waits for a0, and b1 for a1 to open: nothing starts.
     fx.engine_ticks(2);
     assert_eq!((fx.pr_status("a1"), fx.pr_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
-    assert!(fx.events("pr-started").is_empty());
+    assert!(fx.events("workflow-started").is_empty());
 
     // a0 merges: E7 starts a1, but b1 waits: a1 is started, not open.
     let tip = fx.land_on_origin(&repo, "what a0 merged");
@@ -1112,7 +1112,7 @@ fn e7_starts_a_stacked_pr_once_its_base_pr_is_open_and_not_before() {
     let b1 = fx.lead_path(&repo.path, "b1");
     assert_eq!(fx.git(&b1, &["rev-parse", "HEAD"]), tip);
     assert_eq!(fx.git(&b1, &["symbolic-ref", "--short", "HEAD"]), "pay/b1");
-    let started = fx.events("pr-started");
+    let started = fx.events("workflow-started");
     let by: Vec<(&Value, &Value)> = started.iter().map(|e| (&e["data"]["pr"], &e["data"]["by"])).collect();
     assert_eq!(by, vec![(&json!("a1"), &json!("engine")), (&json!("b1"), &json!("engine"))], "a1 first");
     assert!(fx.events("error").is_empty());
@@ -1133,7 +1133,7 @@ fn a1_merged_and_deleted(fx: &Fx, repo: &Repo) -> String {
     fx.land_on_origin(repo, "what a1 merged")
 }
 
-/// `pr-base-changed`'s `text` and `data` for `b1`, unstacked by `by`.
+/// `workflow-base-changed`'s `text` and `data` for `b1`, unstacked by `by`.
 fn b1_unstacked(by: &str) -> (Value, Value) {
     (
         json!("PR b1 of Plan pay now targets main (was pay/a1): its base PR pay/a1 merged before its pull request existed. \
@@ -1158,9 +1158,9 @@ fn pr_start_unstacks_a_pr_whose_base_pr_merged_and_starts_it_from_the_new_base()
     );
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from origin/main, the merged PR's branch is gone");
     assert_eq!(fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'pay' AND key = 'b1'"), "main");
-    let changed: Vec<(Value, Value)> = fx.events("pr-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
+    let changed: Vec<(Value, Value)> = fx.events("workflow-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
     assert_eq!(changed, vec![b1_unstacked("pr start")]);
-    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
+    let started: Vec<Value> = fx.events("workflow-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
     assert_eq!((started.len(), &started[0]["data"]["base"], &started[0]["data"]["by"]), (1, &json!("main"), &json!("pr start")));
     assert!(fx.events("error").is_empty());
 }
@@ -1178,9 +1178,9 @@ fn e7_unstacks_a_waiting_pr_whose_base_pr_merged_and_starts_it_from_the_new_base
     let worktree = fx.lead_path(&repo.path, "b1");
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from origin/main, the merged PR's branch is gone");
     assert_eq!(fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'pay' AND key = 'b1'"), "main");
-    let changed: Vec<(Value, Value)> = fx.events("pr-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
+    let changed: Vec<(Value, Value)> = fx.events("workflow-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
     assert_eq!(changed, vec![b1_unstacked("engine")], "one Event, whatever the number of ticks");
-    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
+    let started: Vec<Value> = fx.events("workflow-started").into_iter().filter(|e| e["data"]["pr"] == "b1").collect();
     assert_eq!((started.len(), &started[0]["data"]["base"], &started[0]["data"]["by"]), (1, &json!("main"), &json!("engine")));
     assert!(fx.events("error").is_empty(), "{:?}", fx.events("error"));
 }

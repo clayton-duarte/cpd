@@ -4,7 +4,7 @@
 use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, pay, poll_fx, reviewed, viewer};
+use super::workflow::{Poll, Rows, node, pay, poll_fx, reviewed, viewer};
 use super::pr_view;
 
 const APPROVED: &str = "APPROVED";
@@ -91,7 +91,7 @@ fn view_decision(decision: &str, reviews: Value) -> Value {
     let reply = json!({"state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": "https://github.com/acme/pay/pull/812",
                        "reviewDecision": decision, "statusCheckRollup": [], "reviews": reviews, "comments": []});
     let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&format!("{reply}\n")));
-    fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()["pr"]["review_decision"].clone()
+    fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()["pr"]["review_decision"].clone()
 }
 
 fn review(login: &str, state: &str) -> Value {

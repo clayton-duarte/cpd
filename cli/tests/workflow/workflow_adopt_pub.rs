@@ -161,7 +161,7 @@ impl Fx {
     }
 
     fn pr(&self, command: &str) -> Run {
-        self.env.cpd(&["pr", command, "--pr", "web", "--plan", "pay"])
+        self.env.cpd(&["pr", command, "--workflow", "web", "--plan", "pay"])
     }
 
     /// `(status, pr_number, pr_url)` of PR `web`.

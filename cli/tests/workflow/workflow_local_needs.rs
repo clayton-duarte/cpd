@@ -1,5 +1,5 @@
 //! hs-d522: needs and base PRs stay inside one Plan. `pr add` and `pr edit` refuse a need or a base PR that names
-//! another Plan, `pr_other_plan` (exit 3, `details` `{pr, reference, plan}`; contract §2.2 "Validation of a
+//! another Plan, `workflow_other_plan` (exit 3, `details` `{pr, reference, plan}`; contract §2.2 "Validation of a
 //! reference", commands.md §9.4, §9.5), and `pr_needs` has no `needs_plan` column. Two Plans of one Context.
 
 use crate::common;
@@ -43,14 +43,14 @@ fn fx() -> Pay {
 impl Pay {
     fn add(&self, plan: &str, key: &str, extra: &[&str]) -> Run {
         let title = format!("Change {key}");
-        let mut args = vec!["pr", "add", key, "--repo", self.repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+        let mut args = vec!["workflow", "add", key, "--repo", self.repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
         args.extend(extra);
         args.extend(["--plan", plan]);
         self.fx.cpd(&args)
     }
 
     fn edit(&self, plan: &str, args: &[&str]) -> Run {
-        let mut all = vec!["pr", "edit"];
+        let mut all = vec!["workflow", "edit"];
         all.extend(args);
         all.extend(["--plan", plan]);
         self.fx.cpd(&all)
@@ -60,9 +60,9 @@ impl Pay {
         (self.fx.env.query("SELECT count(*) FROM txns"), self.fx.env.query("SELECT count(*) FROM events"))
     }
 
-    /// `run` is refused `pr_other_plan`, exit 3, with these details, and wrote nothing.
+    /// `run` is refused `workflow_other_plan`, exit 3, with these details, and wrote nothing.
     fn refused(&self, run: &Run, pr: &str, reference: &str, writes: (i64, i64)) {
-        let error = common::refused(run, "pr_other_plan", 3);
+        let error = common::refused(run, "workflow_other_plan", 3);
         assert_eq!(error["details"]["pr"], pr, "{error}");
         assert_eq!(error["details"]["reference"], reference, "{error}");
         assert_eq!(error["details"]["plan"], "ops-1", "{error}");

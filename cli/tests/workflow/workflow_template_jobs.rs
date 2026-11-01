@@ -7,7 +7,7 @@ use std::fs;
 use serde_json::{Value, json};
 
 use crate::common::{Run, refused};
-use crate::pr_crud::{Crud, crud};
+use crate::workflow_crud::{Crud, crud};
 
 /// The Spec object `job add --spec` takes.
 fn spec() -> Value {
@@ -37,7 +37,7 @@ impl Crud {
 
     /// `pr add k --shape <shape> <extra…>` on repo `pay`, in Plan `pay-1`.
     fn add_k(&self, shape: &str, extra: &[&str]) -> Run {
-        let mut args = vec!["pr", "add", "k", "--repo", self.pay.to_str().unwrap(), "--title", "Add retries", "--shape", shape];
+        let mut args = vec!["workflow", "add", "k", "--repo", self.pay.to_str().unwrap(), "--title", "Add retries", "--shape", shape];
         args.extend(extra);
         args.extend(["--plan", "pay-1"]);
         self.cpd(&args)

@@ -69,7 +69,7 @@ impl Fx {
 
     /// `cpd pr <args> --plan <plan>`.
     fn pr_in(&self, plan: &str, args: &[&str]) -> Run {
-        let mut all = vec!["pr"];
+        let mut all = vec!["workflow"];
         all.extend(args);
         all.extend(["--plan", plan]);
         self.env.cpd(&all)
@@ -208,9 +208,9 @@ fn adopt_and_base_exclude_each_other() {
 fn pr_edit_refuses_repo_and_base_of_an_adopted_pr() {
     let fx = fx();
     fx.adopt("web", &[]).ok();
-    let error = fx.refuse(&fx.pr(&["edit", "web", "--base", "x"]), "pr_adopted");
+    let error = fx.refuse(&fx.pr(&["edit", "web", "--base", "x"]), "workflow_adopted");
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--base"}));
-    let error = fx.refuse(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "pr_adopted");
+    let error = fx.refuse(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "workflow_adopted");
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--repo"}));
     fx.pr(&["edit", "web", "--title", "Renamed"]).ok();
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Renamed");
@@ -221,7 +221,7 @@ fn the_event_and_plan_show_name_the_head_branch() {
     let fx = fx();
     fx.adopt("web", &[]).ok();
     fx.pr(&["add", "plain", "--repo", fx.pay.to_str().unwrap(), "--title", "P", "--shape", "config"]).ok();
-    let added = fx.env.cpd(&["events", "list", "--kind", "pr-added"]).ok()["events"].as_array().unwrap().clone();
+    let added = fx.env.cpd(&["events", "list", "--kind", "workflow-added"]).ok()["events"].as_array().unwrap().clone();
     assert_eq!(added.len(), 2);
     assert_eq!(added[0]["data"]["head_ref"], "feat/x");
     assert_eq!(added[0]["data"]["author"], "bob");
@@ -248,7 +248,7 @@ fn the_head_branch_of_a_pr_cannot_change_and_is_unique_among_live_prs() {
     let write = |sql: &str| fx.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?));
     write(&insert("pay-1", "a", "waiting")).expect("insert a PR with a head_ref");
     let err = write("UPDATE prs SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
-    assert!(format!("{err:?}").contains("pr_locked"), "{err:?}");
+    assert!(format!("{err:?}").contains("workflow_locked"), "{err:?}");
     let err = write(&insert("pay-2", "b", "waiting")).expect_err("a second live PR with the head");
     assert!(format!("{err:?}").to_lowercase().contains("unique"), "{err:?}");
     // A cancelled row does not count.

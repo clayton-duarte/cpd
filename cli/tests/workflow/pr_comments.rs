@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, feedback, node, pay, poll_fx};
+use super::workflow::{Poll, Rows, feedback, node, pay, poll_fx};
 
 const MARKER: &str = "<!-- cpd:reply -->";
 

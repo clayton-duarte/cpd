@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use super::pr::{Poll, Rows, code, open_jobs, poll_fx};
+use super::workflow::{Poll, Rows, code, open_jobs, poll_fx};
 
 /// A PR `repo` in `dispatch`, described, whose owner's policy holds `policy` in its `[pr]` table.
 fn fx_with(policy: &str) -> Poll {
@@ -15,7 +15,7 @@ fn fx_with(policy: &str) -> Poll {
 }
 
 fn open(fx: &Poll) -> crate::common::Run {
-    fx.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"])
+    fx.cpd(&["pr", "open", "--workflow", "repo", "--plan", "pay"])
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn pr_open_opens_an_adopted_pr_with_no_ticket_when_required() {
         .write("fixture", |tx| {
             Ok(tx.execute_batch(
                 "DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature/x';
-                 CREATE TRIGGER prs_head_ref_fixed BEFORE UPDATE OF head_ref ON prs\nBEGIN SELECT RAISE(ABORT, 'pr_locked'); END;",
+                 CREATE TRIGGER prs_head_ref_fixed BEFORE UPDATE OF head_ref ON prs\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
             )?)
         })
         .unwrap();

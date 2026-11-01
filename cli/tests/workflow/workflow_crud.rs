@@ -95,7 +95,7 @@ impl Crud {
 
     /// `cpd pr <args> --plan <plan>`, as it is: a `pr add` leaves its stub drafts.
     fn add_with_stubs(&self, plan: &str, args: &[&str]) -> Run {
-        let mut all = vec!["pr"];
+        let mut all = vec!["workflow"];
         all.extend(args);
         all.extend(["--plan", plan]);
         self.cpd(&all)
@@ -214,7 +214,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(fx.needs("web"), "api");
     assert_eq!(fx.git(&fx.pay, &["branch", "--list"]), branches, "no git write");
 
-    let added = fx.events("pr-added");
+    let added = fx.events("workflow-added");
     assert_eq!(added.len(), 2);
     assert_eq!(added[1]["plan"], "pay-1");
     assert_eq!(
@@ -253,7 +253,7 @@ fn add_in_dispatch_appends_the_pr() {
     let out = fx.add("late", &fx.pay, &["--needs", "base"]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
-    assert_eq!(fx.events("pr-added")[0]["data"]["appended"], true);
+    assert_eq!(fx.events("workflow-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
     assert_eq!(fx.add("late", &fx.pay, &["--needs", "base"]).ok()["pr"]["appended"], true);
 }
@@ -299,7 +299,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
     assert_eq!(fx.env.query::<String>("SELECT shape FROM prs WHERE key = 'api'"), "tdd");
     // No fingerprint, no `tests`: a stub, completed later by `job edit`.
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE fingerprint IS NOT NULL OR tests IS NOT NULL OR test_files IS NOT NULL"), 0);
-    // One `job-added` per stub, after `pr-added`, with the kind.
+    // One `job-added` per stub, after `workflow-added`, with the kind.
     let added = fx.events("job-added");
     let kinds: Vec<(Value, Value)> = added.iter().map(|e| (e["job"].clone(), e["data"]["kind"].clone())).collect();
     assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl")), (json!("open-api"), json!("open"))]);
@@ -307,8 +307,8 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
         added[1]["data"],
         json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "urgent": false})
     );
-    let order: Vec<i64> = [fx.events("pr-added")[0]["id"].as_i64().unwrap(), added[0]["id"].as_i64().unwrap()].to_vec();
-    assert!(order[0] < order[1], "pr-added comes first: {order:?}");
+    let order: Vec<i64> = [fx.events("workflow-added")[0]["id"].as_i64().unwrap(), added[0]["id"].as_i64().unwrap()].to_vec();
+    assert!(order[0] < order[1], "workflow-added comes first: {order:?}");
 }
 
 #[test]
@@ -497,9 +497,9 @@ fn the_shape_is_part_of_what_add_compares() {
     // The same flags, the shape included, are `already`: the default, `tdd`, is another shape.
     assert_eq!(fx.add_shape("api", Some("docs")).ok()["already"], true);
     assert_eq!(fx.writes(), writes);
-    let error = fx.refused(&fx.add_shape("api", None), "pr_exists", 3, writes);
+    let error = fx.refused(&fx.add_shape("api", None), "workflow_exists", 3, writes);
     assert_eq!(error["details"]["shape"], "docs");
-    fx.refused(&fx.add_shape("api", Some("config")), "pr_exists", 3, writes);
+    fx.refused(&fx.add_shape("api", Some("config")), "workflow_exists", 3, writes);
 }
 
 #[test]
@@ -514,14 +514,14 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
     // The default base is `main`: saying so is the same.
     assert_eq!(fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok()["already"], true);
     assert_eq!(fx.writes(), writes);
-    // Other flags are `pr_exists`, and the answer says what is stored.
-    let error = fx.refused(&fx.add("web", &fx.web, &[]), "pr_exists", 3, writes);
+    // Other flags are `workflow_exists`, and the answer says what is stored.
+    let error = fx.refused(&fx.add("web", &fx.web, &[]), "workflow_exists", 3, writes);
     assert_eq!(error["details"]["needs"], json!(["api"]));
     // So is another title.
     let other = fx.pr(&["add", "web", "--repo", fx.web.to_str().unwrap(), "--title", "Another", "--needs", "api", "--shape", "config"]);
-    let error = fx.refused(&other, "pr_exists", 3, writes);
+    let error = fx.refused(&other, "workflow_exists", 3, writes);
     assert_eq!(error["details"]["title"], "Change web");
-    fx.refused(&fx.add("web", &fx.pay, &["--needs", "api"]), "pr_exists", 3, writes);
+    fx.refused(&fx.add("web", &fx.pay, &["--needs", "api"]), "workflow_exists", 3, writes);
 }
 
 #[test]
@@ -602,7 +602,7 @@ fn add_refusals_write_nothing() {
     let writes = fx.writes();
 
     // Usage (exit 2): a bad key, a repeated need, no --repo.
-    fx.refused(&fx.add("Web", &fx.web, &[]), "invalid_pr_id", 2, writes);
+    fx.refused(&fx.add("Web", &fx.web, &[]), "invalid_workflow_id", 2, writes);
     fx.refused(&fx.add("web", &fx.web, &["--needs", "api,api"]), "usage", 2, writes);
     fx.refused(&fx.pr(&["add", "web"]), "usage", 2, writes);
     // `--title` is required, 1 to 72 characters on one line.
@@ -624,7 +624,7 @@ fn add_refusals_write_nothing() {
     let error = fx.refused(&fx.add("web", &fx.web, &["--needs", "gone"]), "needs_unavailable", 3, writes);
     assert_eq!(error["details"]["needs"], json!(["gone"]));
     // A cancelled PR keeps its key.
-    fx.refused(&fx.add("gone", &fx.pay, &[]), "pr_exists", 3, writes);
+    fx.refused(&fx.add("gone", &fx.pay, &[]), "workflow_exists", 3, writes);
 
     fx.git(&fx.web, &["branch", "pay-1/web"]);
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "branch_exists", 3, writes);
@@ -635,8 +635,8 @@ fn add_refusals_write_nothing() {
     assert_eq!(error["details"]["branch"], "pay-1");
     fx.git(&fx.web, &["branch", "-D", "pay-1"]);
 
-    fx.refused(&fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T"]), "plan_required", 2, writes);
-    let run = fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T", "--plan", "nope"]);
+    fx.refused(&fx.cpd(&["workflow", "add", "web", "--repo", web, "--title", "T"]), "plan_required", 2, writes);
+    let run = fx.cpd(&["workflow", "add", "web", "--repo", web, "--title", "T", "--plan", "nope"]);
     fx.refused(&run, "plan_not_found", 4, writes);
 }
 
@@ -657,10 +657,10 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
         let moved = fx.events("plan-phase");
         assert_eq!(moved.len(), 1, "{phase}");
         assert_eq!(moved[0]["data"], json!({"from": phase, "to": "dispatch"}));
-        let added = fx.events("pr-added");
+        let added = fx.events("workflow-added");
         assert_eq!(added.len(), 1);
         assert_eq!(added[0]["data"]["appended"], true);
-        assert!(moved[0]["id"].as_i64() < added[0]["id"].as_i64(), "plan-phase comes before pr-added");
+        assert!(moved[0]["id"].as_i64() < added[0]["id"].as_i64(), "plan-phase comes before workflow-added");
 
         // A rerun is already and writes nothing.
         let writes = fx.writes();
@@ -739,7 +739,7 @@ fn edit_changes_the_repo_the_base_and_the_needs() {
         fx.store().read(|c| Ok(c.query_row("SELECT repo, base FROM prs WHERE key = 'web'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
     assert_eq!((repo, base), (fx.web.display().to_string(), "develop".to_owned()));
     assert_eq!(fx.needs("web"), "b,c");
-    let edited = fx.events("pr-edited");
+    let edited = fx.events("workflow-edited");
     assert_eq!(edited.len(), 1);
     assert_eq!(edited[0]["plan"], "pay-1");
     assert_eq!(edited[0]["data"], json!({"pr": "web", "fields": ["repo", "base", "needs"]}));
@@ -750,7 +750,7 @@ fn edit_changes_the_repo_the_base_and_the_needs() {
     let out = fx.pr(&["edit", "web", "--no-needs"]).ok();
     assert_eq!(out["fields"], json!(["needs"]));
     assert_eq!(fx.needs("web"), "");
-    assert_eq!(fx.events("pr-edited").last().unwrap()["data"]["fields"], json!(["needs"]));
+    assert_eq!(fx.events("workflow-edited").last().unwrap()["data"]["fields"], json!(["needs"]));
     let out = fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap(), "--base", "main"]).ok();
     assert_eq!(out["fields"], json!(["repo", "base"]));
 }
@@ -771,7 +771,7 @@ fn edit_with_no_change_is_already_and_writes_nothing() {
         assert_eq!((out["already"].clone(), out["fields"].clone()), (json!(true), json!([])), "{args:?}");
         assert_eq!(fx.writes(), writes, "{args:?}");
     }
-    assert!(fx.events("pr-edited").is_empty());
+    assert!(fx.events("workflow-edited").is_empty());
 }
 
 #[test]
@@ -787,7 +787,7 @@ fn edit_refusals_write_nothing() {
     fx.refused(&fx.pr(&["edit", "web"]), "nothing_to_edit", 2, writes);
     fx.refused(&fx.pr(&["edit", "web", "--needs", "api", "--no-needs"]), "usage", 2, writes);
     fx.refused(&fx.pr(&["edit", "web", "--needs", "api,api"]), "usage", 2, writes);
-    fx.refused(&fx.pr(&["edit", "nope", "--no-needs"]), "pr_not_found", 4, writes);
+    fx.refused(&fx.pr(&["edit", "nope", "--no-needs"]), "workflow_not_found", 4, writes);
     fx.refused(&fx.pr(&["edit", "gone", "--no-needs"]), "illegal_transition", 3, writes);
 
     let not_a_repo = fx.env.root().join("not-a-repo");
@@ -838,9 +838,9 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "pr_locked", 3, writes);
+    let error = fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "workflow_locked", 3, writes);
     assert_eq!(error["details"]["phase"], "dispatch");
-    fx.refused(&fx.pr(&["cancel", "nope"]), "pr_not_found", 4, writes);
+    fx.refused(&fx.pr(&["cancel", "nope"]), "workflow_not_found", 4, writes);
 }
 
 /// Plan `pay-1` in `plan` with PRs `a`, `c` (no needs), `b` (needs `a`) and `b2` (needs `a`, `c`), then locked.
@@ -862,7 +862,7 @@ fn edit_after_the_lock_stacks_a_waiting_pr_on_a_pr_it_needs() {
     assert_eq!(out["fields"], json!(["base", "needs"]));
     assert_eq!(fx.shown("pay-1", "b"), json!(["pay-1/a", "pay-1/a", []]));
     assert_eq!(fx.needs("b"), "");
-    assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "b", "fields": ["base", "needs"]}));
+    assert_eq!(fx.events("workflow-edited").last().unwrap()["data"], json!({"pr": "b", "fields": ["base", "needs"]}));
     assert_eq!(fx.fingerprint(), fingerprint);
 
     let writes = fx.writes();
@@ -891,17 +891,17 @@ fn edit_after_the_lock_refuses_any_other_change_of_a_waiting_pr() {
         vec!["edit", "a", "--base", "main", "--no-needs"],
     ];
     for args in cases {
-        fx.refused(&fx.pr(&args), "pr_locked", 3, fx.writes());
+        fx.refused(&fx.pr(&args), "workflow_locked", 3, fx.writes());
     }
     fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'b2'");
-    fx.refused(&fx.pr(&["edit", "b2", "--base", "a", "--needs", "c"]), "pr_locked", 3, fx.writes());
+    fx.refused(&fx.pr(&["edit", "b2", "--base", "a", "--needs", "c"]), "workflow_locked", 3, fx.writes());
 }
 
 #[test]
 fn a_pr_restacked_after_the_lock_waits_for_its_base_pr_to_open() {
     let fx = restack_fixture();
     fx.pr(&["edit", "b", "--base", "a", "--no-needs"]).ok();
-    let error = fx.refused(&fx.pr(&["start", "b"]), "pr_not_ready", 3, fx.writes());
+    let error = fx.refused(&fx.pr(&["start", "b"]), "workflow_not_ready", 3, fx.writes());
     assert_eq!((&error["details"]["base_pr"], &error["details"]["needs"]), (&json!("pay-1/a"), &json!([])));
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'b'"), "waiting");
 }
@@ -921,7 +921,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     let out = fx.pr(&["edit", "api", "--title", "Renamed api"]).ok();
     assert_eq!((out["pr"].clone(), out["fields"].clone()), (json!({"key": "api", "status": "waiting"}), json!(["title"])));
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Renamed api");
-    assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
+    assert_eq!(fx.events("workflow-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
     assert_eq!(fx.fingerprint(), fingerprint, "the title is not in the plan fingerprint");
     assert_eq!(current(&fx), true);
     // `plan lock` starts the engine with `cpd watch --ensure` from `PATH`; a fake one that starts nothing keeps the
@@ -932,7 +932,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     fx.cpd(&["plan", "lock", "--plan", "pay-1"]).ok();
 
     // After the lock the other flags are refused, the title is not.
-    fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "pr_locked", 3, fx.writes());
+    fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "workflow_locked", 3, fx.writes());
     let out = fx.pr(&["edit", "api", "--title", "Locked and renamed"]).ok();
     assert_eq!(out["fields"], json!(["title"]));
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Locked and renamed");
@@ -982,7 +982,7 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
     assert_eq!(out["fields"], json!(["title"]));
     assert_eq!(gh_args(&fx), [["api", "-X", "PATCH", "repos/acme/pay/pulls/7", "-f", "title=Charge the card"]]);
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Charge the card");
-    assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
+    assert_eq!(fx.events("workflow-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
 
     // The same title again: already, and gh is not called.
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
@@ -1026,17 +1026,17 @@ fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
     {
         let Legacy { fx, .. } = legacy("merged");
         let writes = fx.writes();
-        let error = fx.refused(&fx.pr(&["edit", "old", "--title", "History"]), "pr_ended", 3, writes);
+        let error = fx.refused(&fx.pr(&["edit", "old", "--title", "History"]), "workflow_ended", 3, writes);
         assert_eq!(error["details"]["status"], "merged");
         // With another flag it is the same refusal: `--title` is checked first.
-        fx.refused(&fx.pr(&["edit", "old", "--title", "History", "--no-needs"]), "pr_ended", 3, writes);
+        fx.refused(&fx.pr(&["edit", "old", "--title", "History", "--no-needs"]), "workflow_ended", 3, writes);
     }
     // The first env is gone (an `Fx` is one per process at a time) before the second.
     let fx = crud("plan");
     fx.add("gone", &fx.pay, &[]).ok();
     fx.pr(&["cancel", "gone"]).ok();
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["edit", "gone", "--title", "History"]), "pr_ended", 3, writes);
+    let error = fx.refused(&fx.pr(&["edit", "gone", "--title", "History"]), "workflow_ended", 3, writes);
     assert_eq!(error["details"]["status"], "cancelled");
 }
 
@@ -1062,7 +1062,7 @@ fn cancel_removes_the_pr_and_keeps_its_key() {
     assert_eq!(out["pr"], json!({"key": "web", "status": "cancelled"}));
     assert!(out.get("already").is_none());
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "cancelled");
-    let cancelled = fx.events("pr-cancelled");
+    let cancelled = fx.events("workflow-cancelled");
     assert_eq!(cancelled.len(), 1);
     assert_eq!((cancelled[0]["plan"].clone(), cancelled[0]["data"].clone()), (json!("pay-1"), json!({"pr": "web"})));
 
@@ -1071,7 +1071,7 @@ fn cancel_removes_the_pr_and_keeps_its_key() {
     assert_eq!(fx.pr(&["cancel", "web"]).ok()["already"], true);
     assert_eq!(fx.writes(), writes);
     // The key is kept: a new PR cannot take it, and nothing can need it.
-    fx.refused(&fx.add("web", &fx.web, &[]), "pr_exists", 3, writes);
+    fx.refused(&fx.add("web", &fx.web, &[]), "workflow_exists", 3, writes);
     fx.refused(&fx.add("ui", &fx.web, &["--needs", "web"]), "needs_unavailable", 3, writes);
 }
 
@@ -1087,11 +1087,11 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
     fx.job("c", "api", "draft");
     let writes = fx.writes();
 
-    let error = fx.refused(&fx.pr(&["cancel", "api"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "api"]), "workflow_in_use", 3, writes);
     assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!(["a"]), json!(["web"])));
     fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'a'");
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "api"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "api"]), "workflow_in_use", 3, writes);
     assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!([]), json!(["web"])));
     fx.pr(&["edit", "web", "--no-needs"]).ok();
     fx.pr(&["cancel", "api"]).ok();
@@ -1166,7 +1166,7 @@ fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done()
     assert_eq!(fx.phase(), "done");
     // The Locked Job is untouched, the Events are those of the cancel and the Plan's move.
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'a'"), "cancelled");
-    assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "gateci"}));
+    assert_eq!(fx.events("workflow-cancelled")[0]["data"], json!({"pr": "gateci"}));
     let phases = fx.events("plan-phase");
     assert_eq!((phases.len(), phases[0]["data"]["to"].clone()), (1, json!("deploy")));
     let done = fx.events("plan-done");
@@ -1212,7 +1212,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
             UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'merged-job'");
     let writes = fx.writes();
     for key in ["running", "merged"] {
-        let error = fx.refused(&fx.pr(&["cancel", key]), "pr_in_use", 3, writes);
+        let error = fx.refused(&fx.pr(&["cancel", key]), "workflow_in_use", 3, writes);
         assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!([format!("{key}-job")]), json!([])));
         assert_eq!(fx.pr_status(key), "dispatch");
     }
@@ -1221,7 +1221,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
     assert_eq!(fx.pr_status("queued"), "cancelled");
     assert_eq!(fx.env.query::<String>("SELECT status || '/' || cancel_reason FROM jobs WHERE key = 'queued-job'"), "cancelled/pr cancelled");
 
-    // A live PR that needs it holds it (`pr_in_use`, `details.prs`).
+    // A live PR that needs it holds it (`workflow_in_use`, `details.prs`).
     fx.locked_pr("base", &fx.pay, "dispatch");
     fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
@@ -1230,7 +1230,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
         fx.web.display()
     ));
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "base"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["prs"], json!(["dependent"]));
 
     // A merged PR is refused.
@@ -1274,7 +1274,7 @@ fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_don
     // The pull request's row stays for the poll to delete.
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM pull_requests WHERE number = 7"), 1);
 
-    let cancelled = fx.events("pr-cancelled");
+    let cancelled = fx.events("workflow-cancelled");
     assert_eq!((cancelled.len(), cancelled[0]["data"].clone()), (1, json!({"pr": "web"})));
     let text = cancelled[0]["text"].as_str().unwrap();
     for named in ["#7", "/w/web", "cpd/pay-1/web"] {
@@ -1349,7 +1349,7 @@ fn an_open_pr_that_another_pr_needs_is_refused_pr_in_use() {
         fx.web.display()
     ));
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "base"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["prs"], json!(["dependent"]));
     assert_eq!(fx.pr_status("base"), "open");
 }
@@ -1448,7 +1448,7 @@ fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stac
     fx.pr(&["cancel", "ui"]).ok();
     fx.pr(&["cancel", "web"]).ok();
     fx.pr(&["cancel", "api"]).ok();
-    fx.refused(&fx.add("late", &fx.pay, &["--base", "pay-1/api"]), "base_pr_unavailable", 3, fx.writes());
+    fx.refused(&fx.add("late", &fx.pay, &["--base", "pay-1/api"]), "base_workflow_unavailable", 3, fx.writes());
 }
 
 #[test]
@@ -1463,11 +1463,11 @@ fn a_base_that_is_not_a_pr_reference_is_a_branch() {
     // A branch that does not exist is `base_not_found`, also when its first segment is not a Plan.
     let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "feature/y"]), "base_not_found", 4, fx.writes());
     assert_eq!(error["details"]["base"], "feature/y");
-    // A first segment that is another Plan is `pr_other_plan`, not a branch; one that is the Plan itself, but no PR in it, `base_pr_unknown`.
-    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "ledger-9/ghost"]), "pr_other_plan", 3, fx.writes());
+    // A first segment that is another Plan is `workflow_other_plan`, not a branch; one that is the Plan itself, but no PR in it, `base_workflow_unknown`.
+    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "ledger-9/ghost"]), "workflow_other_plan", 3, fx.writes());
     assert_eq!(error["details"]["plan"], "ledger-9");
     assert_eq!(error["details"]["reference"], "ledger-9/ghost");
-    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "pay-1/ghost"]), "base_pr_unknown", 3, fx.writes());
+    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "pay-1/ghost"]), "base_workflow_unknown", 3, fx.writes());
     assert_eq!(error["details"]["plan"], "pay-1");
     assert_eq!(error["details"]["pr"], "ghost");
     // A Lead Branch has two slashes and is never read as a reference.
@@ -1485,14 +1485,14 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
     let writes = fx.writes();
 
     // A base PR that is cancelled or merged: name its base branch instead; a need that is cancelled.
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/gone"]), "base_pr_unavailable", 3, writes);
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/gone"]), "base_workflow_unavailable", 3, writes);
     assert_eq!(error["details"]["pr"], "gone");
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/old"]), "base_pr_unavailable", 3, writes);
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/old"]), "base_workflow_unavailable", 3, writes);
     assert_eq!(error["details"]["pr"], "old");
     let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "gone"]), "needs_unavailable", 3, writes);
     assert_eq!(error["details"]["needs"], json!(["gone"]));
     // A base PR of another repo.
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/web"]), "base_pr_other_repo", 3, writes);
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/web"]), "base_workflow_other_repo", 3, writes);
     assert_eq!(error["details"], json!({"pr": "web", "repo": fx.pay.display().to_string(), "base_repo": fx.web.display().to_string()}));
     // A need that is no PR.
     let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "ghost,api"]), "needs_unknown", 3, writes);
@@ -1500,7 +1500,7 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
     // The same PR twice, however it is written; a bad reference is a bad key.
     fx.refused(&fx.add("x", &fx.pay, &["--needs", "api,api"]), "usage", 2, writes);
     fx.refused(&fx.add("x", &fx.pay, &["--needs", "api,pay-1/api"]), "usage", 2, writes);
-    fx.refused(&fx.add("x", &fx.pay, &["--needs", "pay-1/api/x"]), "invalid_pr_id", 2, writes);
+    fx.refused(&fx.add("x", &fx.pay, &["--needs", "pay-1/api/x"]), "invalid_workflow_id", 2, writes);
     // A merged PR is a need all the same.
     let out = fx.add("x", &fx.pay, &["--needs", "old"]).ok();
     assert_eq!(out["pr"]["needs"], json!(["old"]));
@@ -1538,7 +1538,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     assert_eq!(out["fields"], json!(["base", "needs"]));
     assert_eq!(fx.shown("pay-1", "web"), json!(["pay-1/api", "pay-1/api", ["schema"]]));
     assert_eq!(fx.needs("web"), "schema");
-    assert_eq!(fx.events("pr-edited").last().unwrap()["data"]["fields"], json!(["base", "needs"]));
+    assert_eq!(fx.events("workflow-edited").last().unwrap()["data"]["fields"], json!(["base", "needs"]));
     // The same again is `already`; a branch unstacks it.
     assert_eq!(fx.pr(&["edit", "web", "--base", "pay-1/api"]).ok()["already"], true);
     let out = fx.pr(&["edit", "web", "--base", "main", "--no-needs"]).ok();
@@ -1548,17 +1548,17 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     // The refusals are `pr add`'s.
     fx.pr(&["edit", "web", "--base", "pay-1/api"]).ok();
     let writes = fx.writes();
-    fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/ghost"]), "base_pr_unknown", 3, writes);
-    let error = fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/schema"]), "base_pr_other_repo", 3, writes);
+    fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/ghost"]), "base_workflow_unknown", 3, writes);
+    let error = fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/schema"]), "base_workflow_other_repo", 3, writes);
     assert_eq!(error["details"]["base_repo"], fx.web.display().to_string());
     fx.refused(&fx.pr(&["edit", "web", "--needs", "api"]), "usage", 2, writes);
     fx.refused(&fx.pr(&["edit", "web", "--needs", "ghost"]), "needs_unknown", 3, writes);
     // A new repo is checked against its base PR: a stacked PR cannot move away from it.
     fx.git(&fx.web, &["branch", "pay-1/api"]);
-    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "pay-1/api"]), "base_pr_other_repo", 3, writes);
+    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "pay-1/api"]), "base_workflow_other_repo", 3, writes);
 
     // A PR that another PR is stacked on keeps its repo.
-    let error = fx.refused(&fx.pr(&["edit", "api", "--repo", fx.web.to_str().unwrap()]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["edit", "api", "--repo", fx.web.to_str().unwrap()]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["prs"], json!(["web"]));
     // Its other fields, and the stacked PR's repo (it stays stacked only in its repo), are not blocked.
     fx.pr(&["edit", "api", "--base", "main"]).ok();
@@ -1585,9 +1585,9 @@ fn add_refuses_a_bare_base_pr_that_is_cancelled_or_merged() {
     fx.pr(&["cancel", "gone"]).ok();
     fx.merged_pr("pay-1", "old", &fx.pay, 21);
     let writes = fx.writes();
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "gone"]), "base_pr_unavailable", 3, writes);
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "gone"]), "base_workflow_unavailable", 3, writes);
     assert_eq!(error["details"]["pr"], "gone");
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "old"]), "base_pr_unavailable", 3, writes);
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "old"]), "base_workflow_unavailable", 3, writes);
     assert_eq!(error["details"]["pr"], "old");
 }
 
@@ -1636,7 +1636,7 @@ fn edit_reads_a_bare_pr_key_in_base_as_the_base_pr() {
     assert_eq!(error["details"]["base"], "api");
 
     fx.pr(&["cancel", "api"]).ok();
-    fx.refused(&fx.pr(&["edit", "web", "--base", "api"]), "base_pr_unavailable", 3, fx.writes());
+    fx.refused(&fx.pr(&["edit", "web", "--base", "api"]), "base_workflow_unavailable", 3, fx.writes());
 }
 
 // ---------- pr cancel --superseded-by (hs-d301) ----------
@@ -1664,7 +1664,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
 
     // Without the flag it is still held by its merged Job.
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["done"]));
 
     let out = fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
@@ -1674,7 +1674,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
     // The merged Job stays as it is.
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
 
-    let cancelled = fx.events("pr-cancelled");
+    let cancelled = fx.events("workflow-cancelled");
     assert_eq!(cancelled.len(), 1);
     assert_eq!(cancelled[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
     assert!(cancelled[0]["text"].as_str().unwrap().contains("other-1/storefix"));
@@ -1697,7 +1697,7 @@ fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_
     let out = fx.pr(&["cancel", "busyfix", "--superseded-by", "pay-1/storefix"]).ok();
     // The reference is recorded as the views print it: the bare key in the Plan itself.
     assert!(out.get("phase").is_none(), "{out}");
-    assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "storefix"}));
+    assert_eq!(fx.events("workflow-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "storefix"}));
 }
 
 #[test]
@@ -1717,15 +1717,15 @@ fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_o
     let writes = fx.writes();
 
     // A live Job holds the PR, the merged one does not.
-    let error = fx.refused(&by("other-1/storefix"), "pr_in_use", 3, writes);
+    let error = fx.refused(&by("other-1/storefix"), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["live"]));
     fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'live'");
     let writes = fx.writes();
 
-    fx.refused(&by("other-1/nope"), "pr_not_found", 4, writes);
-    fx.refused(&by("nope"), "pr_not_found", 4, writes);
-    fx.refused(&by("nope-9/storefix"), "pr_not_found", 4, writes);
-    fx.refused(&by("alien-1/foreign"), "pr_not_found", 4, writes);
+    fx.refused(&by("other-1/nope"), "workflow_not_found", 4, writes);
+    fx.refused(&by("nope"), "workflow_not_found", 4, writes);
+    fx.refused(&by("nope-9/storefix"), "workflow_not_found", 4, writes);
+    fx.refused(&by("alien-1/foreign"), "workflow_not_found", 4, writes);
     fx.refused(&by("dead"), "illegal_transition", 3, writes);
     fx.refused(&by("busyfix"), "usage", 2, writes);
     fx.refused(&by("pay-1/busyfix"), "usage", 2, writes);
@@ -1893,7 +1893,7 @@ fn a_running_job_holds_the_pr_cancel_and_nothing_is_cancelled() {
     fx.job_of("run", "gone", "work", "running");
     let writes = fx.writes();
 
-    let error = fx.refused(&fx.pr(&["cancel", "gone"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "gone"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["run"]));
     assert_eq!((fx.job_row("d"), fx.job_row("q"), fx.job_row("run")), ("draft/-/-".to_string(), "queued/-/-".to_string(), "running/-/-".to_string()));
     assert_eq!(fx.pr_status("gone"), "dispatch");
@@ -1915,14 +1915,14 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
     fx.job_of("d", "busyfix", "work", "draft");
 
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "workflow_in_use", 3, writes);
     assert_eq!(error["details"]["jobs"], json!(["done"]));
     assert_eq!((fx.job_row("d"), fx.pr_status("busyfix")), ("draft/-/-".to_string(), "dispatch".to_string()));
 
     fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
     assert_eq!(fx.job_row("d"), "cancelled/pr cancelled/-");
     assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
-    assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
+    assert_eq!(fx.events("workflow-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
     assert_eq!(fx.cancelled_jobs(), ["d"]);
 }
 
@@ -1941,7 +1941,7 @@ fn a_pr_that_another_pr_needs_still_refuses_and_none_of_its_jobs_is_cancelled() 
     ));
     let writes = fx.writes();
 
-    let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
+    let error = fx.refused(&fx.pr(&["cancel", "base"]), "workflow_in_use", 3, writes);
     assert_eq!((error["details"]["prs"].clone(), error["details"]["jobs"].clone()), (json!(["dependent"]), json!([])));
     assert_eq!((fx.job_row("d"), fx.job_row("q")), ("draft/-/-".to_string(), "queued/-/-".to_string()));
 

@@ -4,7 +4,7 @@
 use cpd_core::host::runner::{Call, Reply};
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, pay, poll_fx};
+use super::workflow::{Poll, Rows, node, pay, poll_fx};
 use super::pr_view;
 
 /// What the policy says of `feedback.checks`.
@@ -269,7 +269,7 @@ pub(super) fn view_with(checks: Vec<Value>) -> String {
 pub(super) fn view(checks: Vec<Value>) -> Value {
     let fx = pr_view::fx("open");
     let _ = (*fx.fx.fakes.runner).clone().on("gh", |c| c.args.starts_with(&["pr".into(), "view".into()]), Reply::ok(&view_with(checks)));
-    fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok()
+    fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()
 }
 
 #[test]

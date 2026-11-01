@@ -33,7 +33,7 @@ fn reruns(pay: &Pay) -> Vec<Call> {
     pay.fx.calls("gh").into_iter().filter(|c| c.args.starts_with(&["run".to_string(), "rerun".to_string()])).collect()
 }
 
-const ARGS: [&str; 5] = ["pr", "rerun", "--pr", "repo", "--plan"];
+const ARGS: [&str; 5] = ["pr", "rerun", "--workflow", "repo", "--plan"];
 
 fn rerun(pay: &Pay) -> Run {
     pay.fx.cpd(&[ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], "pay"])
@@ -115,7 +115,7 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
 
         let r = rerun(&pay);
 
-        assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("pr_not_open", 3), "{status}");
+        assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("workflow_not_open", 3), "{status}");
         assert_eq!(r.error()["details"], json!({"pr": "repo", "status": status}));
         assert!(pay.fx.calls("gh").is_empty(), "{status}");
     }

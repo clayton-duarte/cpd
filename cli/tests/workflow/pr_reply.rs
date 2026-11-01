@@ -60,7 +60,7 @@ fn feedback(pay: &Pay) -> Option<String> {
 fn a_reply_to_a_thread_posts_the_thread_reply_mutation_with_the_marker_and_prints_its_url() {
     let pay = setup("open", false);
 
-    let out = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Fixed in abc."]).ok();
+    let out = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Fixed in abc."]).ok();
 
     assert_eq!(out, json!({"ok": true, "replied": {"pr": "repo", "to": "PRRT_1", "url": THREAD_URL}}));
     let posted = mutations(&pay);
@@ -75,7 +75,7 @@ fn a_reply_to_a_comment_or_review_posts_an_issue_comment_quoting_its_url_and_end
     for (to, url) in [("IC_1", COMMENT_URL), ("PRR_1", "https://github.com/acme/pay/pull/812#pullrequestreview-3")] {
         let pay = setup("open", false);
 
-        let out = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", to, "--body", "Done."]).ok();
+        let out = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", to, "--body", "Done."]).ok();
 
         assert_eq!(out, json!({"ok": true, "replied": {"pr": "repo", "to": to, "url": "https://github.com/acme/repo/pull/7#issuecomment-2"}}));
         let posted = mutations(&pay);
@@ -95,7 +95,7 @@ fn the_body_can_come_from_a_file() {
     let file = pay.fx.env.root().join("body.md");
     fs::write(&file, "From a file.\n").unwrap();
 
-    let out = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body-file", file.to_str().unwrap()]).ok();
+    let out = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1", "--body-file", file.to_str().unwrap()]).ok();
 
     assert_eq!(out["ok"], true);
     let posted = mutations(&pay);
@@ -107,7 +107,7 @@ fn the_body_can_come_from_a_file() {
 fn an_unknown_item_is_refused_feedback_not_found_and_posts_nothing() {
     let pay = setup("open", false);
 
-    let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "NOPE", "--body", "Hi."]);
+    let run = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "NOPE", "--body", "Hi."]);
 
     assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("feedback_not_found", 3));
     assert_eq!(run.error()["details"], json!({"pr": "repo", "to": "NOPE", "open": ["PRRT_1", "IC_1", "PRR_1"]}));
@@ -118,9 +118,9 @@ fn an_unknown_item_is_refused_feedback_not_found_and_posts_nothing() {
 fn a_pr_that_is_not_open_is_refused_pr_not_open_and_posts_nothing() {
     let pay = setup("waiting", false);
 
-    let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
+    let run = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
 
-    assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("pr_not_open", 3));
+    assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("workflow_not_open", 3));
     assert!(pay.fx.calls("gh").is_empty());
 }
 
@@ -130,7 +130,7 @@ fn an_empty_body_or_both_or_neither_body_option_is_a_usage_error() {
     let file = pay.fx.env.root().join("body.md");
     fs::write(&file, "x").unwrap();
     let file = file.to_str().unwrap();
-    let base = ["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1"];
+    let base = ["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1"];
     let cases: Vec<Vec<&str>> = vec![
         vec!["--body", ""],
         vec!["--body", "  \n "],
@@ -151,7 +151,7 @@ fn a_gh_failure_is_gh_failed_and_writes_nothing_in_the_store() {
     let pay = setup("open", true);
     let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
 
-    let run = pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
+    let run = pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Hi."]);
 
     assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("gh_failed", 1));
     assert_eq!((count(&pay, "txns"), count(&pay, "events"), feedback(&pay)), before);
@@ -162,7 +162,7 @@ fn it_never_resolves_a_thread_and_writes_no_event() {
     let pay = setup("open", false);
     let before = (count(&pay, "txns"), count(&pay, "events"), feedback(&pay));
 
-    pay.fx.cpd(&["pr", "reply", "--pr", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Done."]).ok();
+    pay.fx.cpd(&["pr", "reply", "--workflow", "repo", "--plan", "pay", "--to", "PRRT_1", "--body", "Done."]).ok();
 
     let calls: Vec<String> = pay.fx.calls("gh").into_iter().map(|c| c.args.join("\n")).collect();
     assert!(!calls.is_empty());

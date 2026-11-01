@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use super::pr::{Poll, Rows, node, pay, poll_fx};
+use super::workflow::{Poll, Rows, node, pay, poll_fx};
 
 /// `node`, as GitHub reports its base branch and the repo's default branch (`None`: `defaultBranchRef` is null).
 fn with_base(node: String, base: &str, default: Option<&str>) -> String {
@@ -53,13 +53,13 @@ fn stacked_ready_poll_rewrites_the_row_when_the_base_is_retargeted() {
     fx.search(&[with_base(pay("OPEN", None, None), "feature-branch", Some("main"))]);
     fx.poll();
     assert_eq!(stored(&fx, 812), some("feature-branch", "main"));
-    let told = fx.events("pr-base-changed").len();
+    let told = fx.events("workflow-base-changed").len();
 
     fx.search(&[with_base(pay("OPEN", None, None), "main", Some("main"))]);
     let out = fx.poll();
     assert_eq!(stored(&fx, 812), some("main", "main"), "the retargeted row is rewritten");
     assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "feature-branch", "to": "main"}]));
-    assert_eq!(fx.events("pr-base-changed").len(), told + 1, "the base follow still happens");
+    assert_eq!(fx.events("workflow-base-changed").len(), told + 1, "the base follow still happens");
 }
 
 #[test]

@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::pr::{Poll, Rows, node, poll_fx, reviewed, viewer};
+use super::workflow::{Poll, Rows, node, poll_fx, reviewed, viewer};
 
 /// How the owner's policy file treats posting.
 #[derive(Clone, Copy, PartialEq)]

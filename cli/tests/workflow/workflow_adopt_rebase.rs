@@ -65,7 +65,7 @@ fn fx(status: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
-    env.cpd(&["pr", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Polish", "--shape", "config", "--adopt", "7", "--plan", "pay"]).ok();
+    env.cpd(&["workflow", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Polish", "--shape", "config", "--adopt", "7", "--plan", "pay"]).ok();
     env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
 
     // The start of the PR, as `pr start` leaves it: the Lead worktree on the local branch, cut from the remote head.
@@ -98,7 +98,7 @@ impl Fx {
     }
 
     fn rebase(&self, flag: &[&str]) -> Run {
-        let mut args = vec!["pr", "rebase", "--pr", "web", "--plan", "pay"];
+        let mut args = vec!["pr", "rebase", "--workflow", "web", "--plan", "pay"];
         args.extend_from_slice(flag);
         self.env.cpd(&args)
     }

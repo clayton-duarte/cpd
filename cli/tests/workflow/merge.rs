@@ -71,7 +71,7 @@ impl Deref for Fx {
 /// A PR of Plan `pay` as the tests drive it: its key, repo, Lead Branch and
 /// Lead worktree, and the bare `origin` of its repo when it has one.
 #[derive(Clone)]
-struct Pr {
+struct Workflow {
     key: String,
     repo: PathBuf,
     branch: String,
@@ -232,8 +232,8 @@ impl Fx {
     }
 
     /// The PR `repo` that [`fx`] makes: Lead Branch `cpd/pay` in `self.repo`.
-    fn first_pr(&self) -> Pr {
-        Pr { key: "repo".into(), repo: self.repo.clone(), branch: "cpd/pay".into(), lead: self.lead.clone(), origin: None }
+    fn first_pr(&self) -> Workflow {
+        Workflow { key: "repo".into(), repo: self.repo.clone(), branch: "cpd/pay".into(), lead: self.lead.clone(), origin: None }
     }
 
 
@@ -245,19 +245,19 @@ impl Fx {
     }
 
     /// [`Fx::submitted`] for a Job of `pr`.
-    fn submitted_on(&self, pr: &Pr, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
+    fn submitted_on(&self, pr: &Workflow, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
         self.submitted_as(pr, key, "work", Some((path, content)))
     }
 
     /// [`Fx::submitted_on`] for a Job of `kind`, whose Attempt commits `change` (a path and its content) or, when there is none,
     /// nothing: an `open` or `update` Worker whose base did not move submits the Lead tip as it is (contract §7.7).
-    fn submitted_as(&self, pr: &Pr, key: &str, kind: &str, change: Option<(&str, &str)>) -> (AttemptId, PathBuf) {
+    fn submitted_as(&self, pr: &Workflow, key: &str, kind: &str, change: Option<(&str, &str)>) -> (AttemptId, PathBuf) {
         self.submitted_needing(pr, key, kind, change, None)
     }
 
     /// [`Fx::submitted_as`] for a Job that needs the merged `test` Job `t`, whose `test_files` are `guarded` (a JSON array): `t` and the
     /// Dependency are written in the Job's own transaction (a Dependency of a Locked Job is refused later, `dependencies_locked`).
-    fn submitted_needing(&self, pr: &Pr, key: &str, kind: &str, change: Option<(&str, &str)>, guarded: Option<&str>) -> (AttemptId, PathBuf) {
+    fn submitted_needing(&self, pr: &Workflow, key: &str, kind: &str, change: Option<(&str, &str)>, guarded: Option<&str>) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = self.scoped(|| create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup)).unwrap();
@@ -304,7 +304,7 @@ impl Fx {
 
     /// Adds PR `key` of Plan `pay` on `repo`, started as `pr start` does: Lead Branch
     /// `cpd/pay/<key>` and its Lead worktree, pushed when the repo has an `origin`.
-    fn add_pr(&self, key: &str, repo: &Path, origin: Option<PathBuf>) -> Pr {
+    fn add_pr(&self, key: &str, repo: &Path, origin: Option<PathBuf>) -> Workflow {
         let branch = format!("cpd/pay/{key}");
         let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
@@ -322,12 +322,12 @@ impl Fx {
                 Ok(())
             })
             .unwrap();
-        Pr { key: key.into(), repo: repo.to_owned(), branch, lead: path, origin }
+        Workflow { key: key.into(), repo: repo.to_owned(), branch, lead: path, origin }
     }
 
     /// Adds PR `key` of Plan `pay`, **stacked** on `base_pr` and started as `pr start` does: its Lead Branch
     /// `cpd/pay/<key>` is cut from the head of `base_pr`'s Lead Branch, which is its `base` (contract §7.2).
-    fn add_stacked_pr(&self, key: &str, base_pr: &Pr) -> Pr {
+    fn add_stacked_pr(&self, key: &str, base_pr: &Workflow) -> Workflow {
         let repo = &base_pr.repo;
         let branch = format!("cpd/pay/{key}");
         let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
@@ -346,21 +346,21 @@ impl Fx {
                 Ok(())
             })
             .unwrap();
-        Pr { key: key.into(), repo: repo.clone(), branch, lead: path, origin: base_pr.origin.clone() }
+        Workflow { key: key.into(), repo: repo.clone(), branch, lead: path, origin: base_pr.origin.clone() }
     }
 
     /// The tip of `pr`'s Lead Branch, read in its repo.
-    fn tip(&self, pr: &Pr) -> String {
+    fn tip(&self, pr: &Workflow) -> String {
         self.git(&pr.repo, &["rev-parse", &format!("refs/heads/{}", pr.branch)])
     }
 
     /// Another Job's merge into `pr`: a commit through its Lead worktree.
-    fn advance(&self, pr: &Pr, path: &str, content: &str) -> String {
+    fn advance(&self, pr: &Workflow, path: &str, content: &str) -> String {
         self.commit(&pr.lead, path, content)
     }
 
     /// The tip of `branch` on `pr`'s `origin`.
-    fn remote_tip(&self, pr: &Pr) -> String {
+    fn remote_tip(&self, pr: &Workflow) -> String {
         self.git(pr.origin.as_ref().expect("the PR's repo has an origin"), &["rev-parse", &format!("refs/heads/{}", pr.branch)])
     }
 
@@ -818,7 +818,7 @@ fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
 
 /// PR `base` (Lead Branch `cpd/pay/base`) with a bare `origin`, a PR `web` stacked on it (Lead Branch `cpd/pay/web`),
 /// and a Job of `web` whose Attempt has one commit.
-fn stacked_job() -> (Fx, Pr, Pr, AttemptId, PathBuf) {
+fn stacked_job() -> (Fx, Workflow, Workflow, AttemptId, PathBuf) {
     let fx = plan_without_prs("");
     let origin = add_origin(&fx, &fx.repo);
     let base = fx.add_pr("base", &fx.repo, Some(origin));
@@ -834,7 +834,7 @@ fn merge_ref(fx: &Fx, attempt: &AttemptId, worktree: &Path, reference: &str) {
 }
 
 /// `pr`'s Lead Branch moves on (another Job's merge, a commit writing `path`) and is pushed.
-fn advance_and_push(fx: &Fx, pr: &Pr, path: &str, content: &str) {
+fn advance_and_push(fx: &Fx, pr: &Workflow, path: &str, content: &str) {
     fx.advance(pr, path, content);
     fx.git(&pr.lead, &["push", "-q", "origin", &pr.branch]);
 }
@@ -1363,7 +1363,7 @@ fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip(
 /// Plan `pay` with two PRs, `schema` and `web`, both started: in two repos
 /// (`pay` and `web`), or both in `pay` (then on branches `cpd/pay/schema` and
 /// `cpd/pay/web`). With `with_origin` each repo has a bare `origin`.
-fn two_prs(same_repo: bool, with_origin: bool) -> (Fx, Pr, Pr) {
+fn two_prs(same_repo: bool, with_origin: bool) -> (Fx, Workflow, Workflow) {
     let fx = plan_without_prs("");
     let origin = |repo: &Path| with_origin.then(|| add_origin(&fx, repo));
     let schema_origin = origin(&fx.repo);
@@ -1379,7 +1379,7 @@ fn two_prs(same_repo: bool, with_origin: bool) -> (Fx, Pr, Pr) {
 }
 
 /// [`die_after_step_8`] for a Job of `pr`.
-fn die_after_step_8_on(fx: &Fx, pr: &Pr, worktree: &Path) -> String {
+fn die_after_step_8_on(fx: &Fx, pr: &Workflow, worktree: &Path) -> String {
     let old = fx.tip(pr);
     fx.git(worktree, &["rebase", &old]);
     let tip = fx.git(worktree, &["rev-parse", "HEAD"]);

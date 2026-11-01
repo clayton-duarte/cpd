@@ -2,12 +2,12 @@
 //! that Worker to do the rebase instead. In-process on the fixture of the rebase tests (`pr.rs`): the git route, the Gate's `sh`
 //! and the `gh` that nothing may call are mocks. A running Attempt is an `attempts` row of status `running`.
 
-use crate::pr::{Poll, code, rebase_fx};
+use crate::workflow::{Poll, code, rebase_fx};
 
 use rusqlite::params;
 use serde_json::json;
 
-use crate::pr::Rows;
+use crate::workflow::Rows;
 
 impl Poll {
     /// A Job `key` of PR `repo` of `kind` `running`, with a running Attempt `<key>-a1`.
