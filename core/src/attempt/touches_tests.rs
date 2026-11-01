@@ -171,7 +171,13 @@ fn rig(spec: Spec<'_>) -> Rig {
         let mut ahead = BASE.to_vec();
         ahead.extend(spec.base_ahead.iter().copied());
         let mut u = universe.lock().unwrap();
-        let tip = commit(&mut u, repo.id(), &[base.clone()], &ahead, "the base moved");
+        let tip = commit(
+            &mut u,
+            repo.id(),
+            std::slice::from_ref(&base),
+            &ahead,
+            "the base moved",
+        );
         u.set_ref(repo.id(), "refs/heads/main", &tip, "the base moved");
     }
     // The Attempt: its own commit, or the merge of the base's tip.
@@ -180,7 +186,7 @@ fn rig(spec: Spec<'_>) -> Rig {
         tree.extend(spec.base_ahead.iter().copied());
     }
     tree.extend(spec.changed.iter().copied());
-    let attempt = {
+    {
         let mut u = universe.lock().unwrap();
         let parents = if spec.brings_base {
             vec![
@@ -193,8 +199,7 @@ fn rig(spec: Spec<'_>) -> Rig {
         };
         let attempt = commit(&mut u, repo.id(), &parents, &tree, "attempt");
         u.set_ref(repo.id(), "refs/heads/cpd/pay/a", &attempt, "attempt");
-        attempt
-    };
+    }
     let root = dir.join("r.a");
     universe
         .lock()
@@ -288,7 +293,7 @@ impl Rig {
         let attempt = commit(
             &mut u,
             self.repo,
-            &[self.base.clone()],
+            std::slice::from_ref(&self.base),
             &tree,
             "attempt again",
         );
