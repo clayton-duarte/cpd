@@ -45,8 +45,8 @@ There is no approvals UI here: no tree, inbox or plan wiring, no `ui_response` a
 |---|---|---|---|
 | `/__cpd/health` | GET | token | 200 `{"ok":true}` |
 | `/__cpd/sessions` | GET | token | 200 `{"ok":true,"sessions":[<LiveSession>...]}` — lead and manager Sessions |
-| `/__cpd/sessions/<id>/transcript` | GET | token | 200 `{"ok":true,"session":"<id>","messages":[<TranscriptMessage>...]}`; an unknown id is 404 `{"ok":false,"error":"session not found"}` |
-| `/__cpd/sessions/<id>/frames` | GET (SSE) | token | `text/event-stream`; one `data: <SnapshotFrame JSON>\\n\\n` event per snapshot — the current snapshot at once, then a re-sent snapshot (seq + 1) whenever the transcript changes; the client closing ends the stream |
+| `/__cpd/sessions/<id>/transcript` | GET | token; query `limit`, `before` | 200 `{"ok":true,"session":"<id>","messages":[<TranscriptMessage>...],"more":<bool>}`; an unknown id is 404 `{"ok":false,"error":"session not found"}` (“The live frame is the newest turns; history is paged”, below) |
+| `/__cpd/sessions/<id>/frames` | GET (SSE) | token | `text/event-stream`; one `data: <SnapshotFrame JSON>\\n\\n` event per snapshot — the current snapshot at once, then a re-sent snapshot (seq + 1) whenever the transcript changes; the snapshot carries the newest turns only, within `SNAPSHOT_TAIL` and `SNAPSHOT_BUDGET_BYTES` (“The live frame is the newest turns; history is paged”, below); the client closing ends the stream |
 | `/__cpd/sessions/<id>/send` | POST | token; JSON body `{"text":string,"unblocks":string}` | 200 `{"ok":true}`; the body's limits are 10.13's (text 1–20 000 characters, unblocks 1–200, else 400) |
 
 The frames stream's epoch is `"live"` and its `seq` counts the snapshots sent on one connection from 1.
@@ -64,10 +64,20 @@ export interface TranscriptMessage {
   role: "user" | "assistant" | "system" | "tool";
   /** The tool name of a `tool` message (the tail grammar's `<toolName>`). */
   name?: string;
+  /** The turn's parts, in source order — every block the parse kept (pi parse rules 3–4, below). */
+  parts: readonly TranscriptPart[];
+  /** The join of the `text` parts' text — what the plain-text paths carry. */
   text: string;
   /** A failed tool result — the tail grammar's ` (error)` suffix. */
   error?: true;
 }
+
+/** One part of a turn, in source order — the kinds the Chat renders (“The Chat column renders a whole turn”). */
+export type TranscriptPart =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool"; name: string; title: string; arguments: Record<string, unknown>; result: string; durationMs?: number; error?: true }
+  | { type: "image"; dataUrl: string };
 
 /** Parses a pi session file's JSONL text into messages (rules below). */
 export function parsePiSession(jsonl: string): TranscriptMessage[];
@@ -82,9 +92,10 @@ export function toSnapshotFrame(messages: readonly TranscriptMessage[], epoch?: 
 The pi JSONL parse rules — the real field names of a pi session file (verified against a real file under `~/.pi/agent/sessions`):
 
 1. Parse every line as JSON. A line whose `type` is not `"message"` is skipped (`session`, `session_info`, `model_change`, `thinking_level_change`, `custom`, …).
-2. Of a `message` line, keep only `message.role` `"user"` or `"assistant"`; `"system"` is skipped.
-3. `message.content` is either a plain string — the text as is — or an array of blocks: join every block with `type === "text"` by its `text` field (an empty join when there is none). `"thinking"` and `"toolCall"` blocks are skipped.
-4. The message's `id` is the line's `id` field; one message per line, in file order. The transcript is completed history: never pending.
+2. Of a `message` line, keep `message.role` `"user"`, `"assistant"` and `"system"` — a `"system"` line is a notice, and the Chat renders it as a `Marker` (“The Chat column renders a whole turn”, below).
+3. `message.content` is either a plain string — one `text` part — or an array of blocks, kept in order as the turn's `parts`: a `text` block is a `text` part (`text` stays the join of the `text` parts, an empty join when there is none), a `thinking` block is a `thinking` part (its text under `thinking`), a `toolCall` block is a `tool` part (`id`, `name`, `arguments`), and an `image` block (`data`, `mimeType`) is an `image` part. No block is skipped.
+4. A following line with `message.role` `"toolResult"` is no turn of its own: paired by `toolCallId` with the `toolCall` block it answers, its `text` blocks become the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and its `durationMs` and `isError` land on the part (`error: true`).
+5. The message's `id` is the line's `id` field; in file order. The transcript is completed history: never pending.
 
 The tail parse rules — the plain-line grammar of `docs/contract.md` §6.20, what `cpd session tail <id>` prints:
 
@@ -138,6 +149,8 @@ export interface LiveApi {
   sessions(): Promise<readonly LiveSession[]>;
   /** Subscribes to one Session's snapshot frames; the returned closure closes the stream. */
   subscribe(id: string, onFrame: (frame: SnapshotFrame) => void): () => void;
+  /** One page of the transcript: the whole one with no `page`, else the page above `page.before` ({ messages, more }). */
+  transcript(id: string, page?: { limit?: number; before?: string }): Promise<{ messages: readonly TranscriptMessage[]; more: boolean }>;
   /** Sends one message; always posts the fixed one-line reason below. */
   send(id: string, text: string): Promise<void>;
 }
@@ -154,6 +167,7 @@ export function createLiveApi(deps: {
 
 - Every request carries the token as `x-cpd-token`.
 - `sessions()` GETs `/__cpd/sessions` and resolves the `sessions` array.
+- `transcript(id, page?)` GETs `/__cpd/sessions/<id>/transcript` — `page`'s `limit` and `before` as the query — and resolves `{ messages, more }` (“The live frame is the newest turns; history is paged”, below).
 - `subscribe()` opens `new EventSource(<baseUrl>/__cpd/sessions/<id>/frames?token=<token>)` — an `EventSource` cannot set headers, so the query carries the token — parses each `data:` event's JSON as a `SnapshotFrame`, and calls `onFrame` with it; the returned closure closes the `EventSource`.
 - `send()` POSTs `/__cpd/sessions/<id>/send` with `{"text":<text>,"unblocks":"sent from the cpd web chat"}` — the **fixed one-line reason** every browser send carries, within 10.13's limits; a non-ok response rejects.
 
@@ -190,11 +204,12 @@ entry declares.
 
 Reasoning, Tool, Chain of Thought, Sources and Suggestion
 (`/docs/ai-elements/base/reasoning`, `/tool`, `/chain-of-thought`, `/sources`, `/suggestion`)
-are **not used**, and `Trace` (`/docs/components/base/trace`) is not vendored: the adapter
-hands whole text messages only (fold rule 3). `parsePiSession` drops the `thinking` and
-`toolCall` blocks, a durable `toolResult` arrives as a plain `tool` message with a name and
-text and no structured input, and nothing carries citations or suggestions — so there is no
-step to put in a Trace, and Code Block is reached only from fenced code in Markdown (below).
+are **not used**. `Trace` (`/docs/components/base/trace`), `Marker` (`/docs/components/base/marker`)
+and the `item` and `collapsible` primitives **are** vendored: the turn now renders every part,
+not only its text (“The Chat column renders a whole turn”, below), and an `ask_user_question`
+call renders the registry's Confirmation shape (“An ask renders as a question card”, below).
+A durable `toolResult` still arrives as a plain `tool` message with a name and text and no
+structured input, and nothing carries citations or suggestions.
 
 #### The stock components, their doc pages and their extra deps
 
@@ -260,11 +275,21 @@ new entries imported, `tsc --noEmit` (`pnpm run typecheck`) and `vite build`
    rewrites the shared primitives `ui/{button,input,textarea,input-group}.tsx` to the same
    `radix-rhea` preset, so the whole `ui/` directory is one style.
 
+   The Chat column's turn rendering (“The Chat column renders a whole turn”, below) adds four
+   entries under the same rule — `trace`, `marker`, `item` and `collapsible` (the Confirmation
+   shape's `button` and the badges' `badge` are already vendored):
+
+   ```
+   npx shadcn@latest add trace marker item collapsible -o -y
+   ```
+
+   It creates `web/src/components/ui/{trace,marker,item,collapsible}.tsx`.
+
 4. **The extra deps.** The add writes `@shadcn/react`, `cn` and `shiki` into
    `web/package.json`; `radix-ui` is already there. The Markdown wrapper adds `remark-gfm`
-   (`react-markdown` is already a dep). Nothing here needs `@base-ui/react`: the `base-rhea`
-   twins of `bubble`, `tooltip` and `collapsible` would, and none of those is vendored (no
-   message actions, no Trace).
+   (`react-markdown` is already a dep). Nothing here needs `@base-ui/react`: the vendored
+   entries are the `radix-rhea` twins, which run on the repo's existing `radix-ui` — including
+   the `collapsible` and `trace` entries the Chat column's turn rendering adds (above).
 
 #### The full-screen composition
 
@@ -304,36 +329,16 @@ Enter sends, Shift+Enter adds a line.
 
 #### How one message renders
 
-Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The role
-picks the branch; the text is **never** dumped as a bare `{message.text}`:
-
-```tsx
-message.role === "user" ? (
-  <MessageScrollerItem messageId={message.id} scrollAnchor>
-    <Message align="end">
-      <MessageContent>
-        <Bubble align="end" variant="muted">
-          <BubbleContent>{message.text}</BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
-  </MessageScrollerItem>
-) : (
-  <MessageScrollerItem messageId={message.id}>
-    <Message align="start">
-      <MessageContent>
-        <Markdown>{message.text}</Markdown>
-      </MessageContent>
-    </Message>
-  </MessageScrollerItem>
-)
-```
+Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The turn
+renders **part by part** — the full contract is “The Chat column renders a whole turn”, below —
+and the text is **never** dumped as a bare `{message.text}`:
 
 - The **person** is `Message align="end"` with `Bubble align="end" variant="muted"` and the
-text inside `BubbleContent`.
-- The **agent** (and every non-`user` role) is `Message align="start"` and the text goes
-through `Markdown`; a fenced block becomes a `CodeBlock` with its language title and copy
-button.
+markdown through `BubbleContent`.
+- The **agent** (and every non-`user` role) is `Message align="start"` and its parts render in
+order: text through `Markdown` (a fenced block becomes a `CodeBlock` with its language title
+and copy button), `thinking` and `tool` as `Trace` rows, an `image` inline, and a `system`
+notice as a `Marker`.
 
 #### Sessions, the live wiring and the no-adapter state
 
@@ -477,6 +482,44 @@ The rail's data is the **real Inbox**: the open items `cpd inbox list` prints, o
 **An empty Inbox.** No items renders an empty list under the header — no placeholder copy is invented.
 
 **What does not change.** The rows keep the block's classes, the header keeps its title, the column keeps its `25rem` default, and the rail is read-only: nothing in it snoozes, dismisses, claims or answers an item.
+
+### The Chat column renders a whole turn
+
+The Chat column renders **every part of a turn** — decided by the User on 2026-11-01. Text alone left real Sessions with empty turns: `parsePiSession` kept only text, so thinking, tool calls, their results and images were dropped. One `TranscriptMessage` carries the turn's ordered `parts` (`TranscriptPart`, “The TypeScript contract”, above), and `web/src/views/live-chat.tsx` renders each in order, one `MessageScrollerItem` per turn keyed by its id:
+
+| Part | Renders as | Held by |
+|---|---|---|
+| `text` (the person's turn) | a `Bubble` with its markdown through `BubbleContent` | `web/src/components/ui/bubble.tsx` |
+| `text` (the agent's) | markdown through `react-markdown`; a fenced block through the `Code Block` | `web/src/components/markdown.tsx`, `web/src/components/ui/code-block.tsx` |
+| `thinking` | a `Trace` row: closed, its title carries the part's word count; opened, the collapsible carries the thinking's text | `web/src/components/ui/trace.tsx` |
+| `tool` | a `Trace` row (below) | `web/src/components/ui/trace.tsx` |
+| `image` | inline, an `<img>` from its base64 data URL (`data:<mimeType>;base64,<data>`) | `web/src/views/live-chat.tsx` |
+| `system` (the whole message) | a `Marker`, not a Bubble and not a markdown turn | `web/src/components/ui/marker.tsx` |
+
+The `tool` row's title is the command or path the call names — the `arguments`' `command` of a `bash` call, its `path` of a `read`, `edit` or `write` call, else the tool's `name` — with the call's `durationMs` beside the title and the row in its error state when the result failed (`error`). Opened, the row shows the call's `arguments` and its `result` as `Code Block`s. A large result is never truncated: the Code Block carries it whole; only the live frame is bounded (next section).
+
+The pairing behind a `tool` part is measured against a real pi session file under `~/.pi/agent/sessions`: an assistant message's content blocks are `thinking` (its text under `thinking`), `text` and `toolCall` (`id`, `name`, `arguments`), and the tool's result is the **following** line's `message.role` `"toolResult"` (`toolCallId`, `toolName`, `content` of `text` and `image` blocks, `isError`, `durationMs`). `parsePiSession` pairs a `toolCall` with its `toolResult` by `toolCallId`: the part carries the call's `arguments`, and the result's text, `durationMs`, `isError` and `image` blocks land on the same turn — the `toolResult` line yields no turn of its own.
+
+### The live frame is the newest turns; history is paged
+
+The `frames` route sent the whole transcript as one SSE event — 20 450 029 bytes for a real Session (`97de2471…`) — and Chrome's `EventSource` never fired `onmessage` for an event that large, so the Chat rendered nothing at all. It sends the newest turns only, bounded by two constants in `web/src/api/live-server.ts`:
+
+- `SNAPSHOT_TAIL` — **40** turns.
+- `SNAPSHOT_BUDGET_BYTES` — **1 000 000** bytes of serialized frame.
+
+Turns drop oldest first until both bounds hold, and the frame is never nothing: the newest turn always ships, even when it alone exceeds a bound. The budget is the measurement, not a guess — on Chrome, 2026-11-01: an SSE event of 1 MB and one of 2 MB were delivered; events of 4 MB, 8 MB and 20 MB never fired `onmessage`.
+
+History is paged through the transcript route. `GET /__cpd/sessions/<id>/transcript` takes `limit` (capped at **500**) and `before` (the oldest turn id the reader already holds) and answers `{"messages":[<TranscriptMessage>...],"more":<bool>}` — `more` says whether an older page exists; with no `limit` it still answers the whole transcript. The client side is a `transcript(id, page?)` method on `LiveApi` (`web/src/api/live.ts`), a plain GET with the token, exactly like `sessions()`.
+
+The Chat shows a **Load earlier messages** control at the top of the thread (`web/src/views/live-chat.tsx`): it asks for the page above the oldest turn it holds (`before` = that turn's id) and prepends the answer, and it disappears when `more` is false. A frame's turns and the loaded pages are deduplicated by turn id — a turn is held once, whichever path delivered it.
+
+### An ask renders as a question card
+
+An `ask_user_question` call does not render as a JSON blob: it renders as the registry's **Confirmation** shape — the AI Elements pattern of `docs/ai-elements/base/confirmation`, built on the `item` (`web/src/components/ui/item.tsx`) and `button` primitives — in the `tool` part's place, in `web/src/views/live-chat.tsx`. The card is read-only, like the whole adapter: it shows what was asked and what was answered, it asks nothing.
+
+The call's `arguments` hold `questions`: each question's `header`, `question`, `options` of `label`/`description`, and `multiSelect` when several options may be picked. The result's `details.answers` hold, per question: `questionIndex`, `question`, `kind` (`option`, `custom` or `multi`), `answer` — the picked label, the person's typed words, or null — and, for `multi`, `selected` (the picked labels).
+
+The card shows one `Item` per question: the question's `header` as a `Badge`, the `question` text, every option with its `label` and `description`, the taken one's label marked, and a typed answer quoted as the person wrote it. A `Badge` names the outcome: the picked label for an `option` answer, **`N of M picked`** for a `multi` one, **`Typed answer`** for a `custom` one, **`No answer`** when `answer` is null. When the result records a refusal (`cancelled: true` with no answers — measured: the result carries the text “User declined to answer questions”), the card shows **`Refused`** and the refusal text in the destructive colour. A question matches its answer by `questionIndex` — never by the question's text, which pi may restate (the answer's own `question` is pi's restatement and is not used for matching).
 
 ### The durable host-socket read (`chat-host`)
 
