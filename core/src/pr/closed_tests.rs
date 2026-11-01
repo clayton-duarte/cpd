@@ -53,7 +53,7 @@ impl Fixture {
     fn pr_on(&mut self, plan: &str, key: &str, status: &str, n: i64) {
         let merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
         self.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
              VALUES ('{plan}', '{key}', '/r/acme-api', 'main', '{status}', 'cpd/{plan}/{key}', '/lw/{plan}/{key}', {n},
                      'https://github.com/acme/api/pull/{n}', '{T}', (SELECT id FROM pull_requests WHERE number = {n}), cpd_txn(), '{T}', '{T}', {merged});"
@@ -100,7 +100,7 @@ fn a_cancelled_pr_whose_pull_request_is_closed_is_not_closed_unmerged() {
     f.pull(7, "closed");
     f.pr_on("pay", "api", "open", 7);
     // `pr cancel` of an open PR: the status is all that the predicate may read.
-    f.sql("PRAGMA ignore_check_constraints = ON; UPDATE prs SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
+    f.sql("PRAGMA ignore_check_constraints = ON; UPDATE workflows SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
     assert_eq!(f.found(None), []);
 }
 
@@ -116,7 +116,7 @@ fn a_merged_pr_is_not_closed_unmerged() {
 fn a_waiting_pr_with_no_pull_request_is_not_closed_unmerged() {
     let mut f = fixture();
     f.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay', 'api', '/r/acme-api', 'main', 'waiting', 'cpd/pay/api', cpd_txn(), '{T}');"
     ));
     assert_eq!(f.found(None), []);

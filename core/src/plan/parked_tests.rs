@@ -25,7 +25,7 @@ fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pl', 'ctx', 'P', '{phase}', 'lead', 't', {locked});
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pl', 'r', '/r', 'main', 'dispatch', 'cpd/pl', '/w', cpd_txn(), 't', 't');
                  {extra}"
             ))?;
@@ -42,7 +42,7 @@ fn job(key: &str, pr: &str, kind: &str, status: &str, full: bool, needs: &[&str]
     let column = |wanted: &str, value: &str| if status == wanted { value.to_owned() } else { "NULL".to_owned() };
     let (failed, merged, cancelled) = (column("failed", "'timed_out'"), column("merged", "'abc'"), column("cancelled", "'x'"));
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
          VALUES ('pl', '{pr}', '{key}', 'T', '{kind}', {tier}, {spec}, '{status}', 1, {fingerprint}, {failed}, {merged}, {cancelled}, {cancelled}, cpd_txn(), 't');"
     );
     for need in needs {
@@ -117,9 +117,9 @@ fn an_archived_plan_has_none() {
     assert!(parked(&mut s).is_empty());
 }
 
-const WEB_NEEDS_R: &str = "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+const WEB_NEEDS_R: &str = "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
      VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
-     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'web', 'r');";
+     INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'web', 'r');";
 
 #[test]
 fn a_draft_of_a_pr_that_waits_for_another_pr_waits_after_the_lock_only() {

@@ -177,19 +177,19 @@ INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_a
   VALUES ('qq', 'ctx', 'Q', 'dispatch', 'lead1', 't', 't');
 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
   VALUES ('rr', 'ctx', 'R', 'done', 'lead1', 't', 't', 't');
-INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
   VALUES ('qq', 'followups', '/r', 'main', 'dispatch', 'cpd/qq/followups', '/w1', 't', cpd_txn(), 't');
 INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
   VALUES (5, 'acme/work', 5, 'https://github.com/acme/work/pull/5', 'Cpd', 0, 'merged', 'none', 'none', 't', 't', 't', 'unknown', 'unknown', 0, 0);
-INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at, created_txn, created_at)
+INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at, created_txn, created_at)
   VALUES ('qq', 'cpd', '/r', 'main', 'merged', 'cpd/qq/cpd', '/w2', 't', 5, 'https://github.com/acme/work/pull/5', 't', 5, 't', cpd_txn(), 't');
-INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
   VALUES ('rr', 'late', '/r', 'main', 'waiting', 'cpd/rr/late', cpd_txn(), 't');
-INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
   VALUES ('qq', 'followups', 'j', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');
 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
   VALUES ('qq', 'j-a1', 'j', 1, 'S2', 'ladder', 'running', 'cpd/qq--j-a1', '/w', 't');
-INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, created_txn, created_at)
+INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, created_txn, created_at)
   VALUES ('qq', 'cpd', 'old', 'Old', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 'abc', cpd_txn(), 't');
 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, outcome, cause, merged_sha, ended_at)
   VALUES ('qq', 'old-a1', 'old', 1, 'S2', 'ladder', 'ended', 'cpd/qq--old-a1', '/w', 't', 'merged', 'merged', 'abc', 't');

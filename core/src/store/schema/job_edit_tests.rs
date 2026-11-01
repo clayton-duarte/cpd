@@ -20,7 +20,7 @@ fn message(store: &mut Store, sql: &str) -> String {
 /// One queued Job of `kind` and spec columns `columns`/`values`.
 fn queued(key: &str, kind: &str, columns: &str, values: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind{columns}, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind{columns}, fingerprint, created_txn, created_at)
          VALUES ('pl', 'a', '{key}', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '{kind}'{values}, NULL, cpd_txn(), 't');
          UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}';"
     )
@@ -50,7 +50,7 @@ fn store() -> (tempfile::TempDir, Store) {
            VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');",
     )
     .unwrap();
@@ -91,12 +91,12 @@ fn jobs_locked_lets_the_spec_of_a_queued_job_with_no_attempt_change() {
 fn jobs_locked_still_refuses_the_other_locked_columns_of_that_job() {
     let (_dir, mut store) = with(&[queued("q", "work", "", ""), queued("i", "impl", "", ""), test_job("t")]);
     store.write("fixture", |tx| {
-        tx.execute_batch("INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pl', 'b', '/r', 'main', 'waiting', 'cpd/pl/b', cpd_txn(), 't');")?;
+        tx.execute_batch("INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pl', 'b', '/r', 'main', 'waiting', 'cpd/pl/b', cpd_txn(), 't');")?;
         Ok::<(), CpdError>(())
     })
     .unwrap();
     // The Spec change that is allowed is made first: the refusal below is of the other column alone.
-    for set in ["title = 'New'", "tier = 'S3'", "pr = 'b'", "review = 1", "kind = 'docs'"] {
+    for set in ["title = 'New'", "tier = 'S3'", "workflow = 'b'", "review = 1", "kind = 'docs'"] {
         let sql = format!("UPDATE jobs SET goal = 'other goal', {set} WHERE key = 'q'");
         assert_eq!(message(&mut store, &sql), "job_locked", "{sql}");
     }

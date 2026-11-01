@@ -79,7 +79,7 @@ fn fixture(phase: &str, extra_pr: bool) -> Fixture {
     );
     for pr in if extra_pr { vec!["api", "web"] } else { vec!["api"] } {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{pr}', '/r', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
         ));
     }
@@ -102,7 +102,7 @@ impl Fixture {
     /// A complete draft `work` Job of PR `api`.
     fn draft(&mut self, key: &str) {
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
                VALUES ('pay', 'api', '{key}', 'Draft {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'work', 'draft', 0, cpd_txn(), '{T}');"
         ));
     }
@@ -111,7 +111,7 @@ impl Fixture {
     fn explore(&mut self, key: &str, kind: &str, status: &str) {
         let tier = if kind == "scout" { "H2" } else { "S2" };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', NULL, '{key}', 'Explore {key}', '{tier}', 'g', 'c', '[\"run/pay/explore/{key}.md\"]', '[\"b\"]', '[]', '{kind}', 'queued', 1, '{}', cpd_txn(), '{T}');",
             "e".repeat(64)
         ));
@@ -252,7 +252,7 @@ fn adding_an_explore_job_keeps_an_approved_review_approved() {
 fn plan_show_lists_explore_jobs_with_a_null_pr() {
     let mut f = fixture("dispatch", true);
     f.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
            VALUES ('pay', 'api', 'w1', 'Work', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'work', 'queued', 0, '{}', cpd_txn(), '{T}');",
         "f".repeat(64)
     ));
@@ -268,7 +268,7 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     }
     let work = jobs.iter().find(|j| j["key"] == "w1").unwrap();
     assert_eq!(work["pr"], "api");
-    for pr in out["prs"].as_array().unwrap() {
+    for pr in out["workflows"].as_array().unwrap() {
         let listed: Vec<&str> = pr["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {pr}");
     }

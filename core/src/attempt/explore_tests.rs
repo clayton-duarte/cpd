@@ -146,7 +146,7 @@ pub(crate) fn add_job(env: &mut Env, key: &str, kind: &str, tier: &str) {
     run_sql(
         env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', NULL, '{key}', 'T', '{tier}', 'g', 'c', '[\"run/pay/explore/{key}.md\"]', '[\"b\"]', '[]', '{kind}', 'queued', 0, '{}', cpd_txn(), 't');",
             "f".repeat(64)
         ),

@@ -26,6 +26,15 @@ const BASE: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
        VALUES ('lead', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
        VALUES ('pay', 'ctx', 'Plan', 'plan', 'lead', 't');
+     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+       VALUES ('pay', 'api', '/r', 'main', 'waiting', 'pay/api', cpd_txn(), 't');";
+
+/// The same Plan and PR before `workflow-rename`: the object table is `prs`.
+const BASE_BEFORE: &str = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+       VALUES ('lead', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+     INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+       VALUES ('pay', 'ctx', 'Plan', 'plan', 'lead', 't');
      INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
        VALUES ('pay', 'api', '/r', 'main', 'waiting', 'pay/api', cpd_txn(), 't');";
 
@@ -39,6 +48,14 @@ fn fresh() -> (tempfile::TempDir, Store) {
 
 /// A queued Job row: `pr` is SQL (`NULL` or `'api'`).
 fn job(key: &str, kind: &str, pr: &str) -> String {
+    format!(
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+         VALUES ('pay', {pr}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
+    )
+}
+
+/// The same queued Job row before `workflow-rename`: the column is `pr`.
+fn job_before(key: &str, kind: &str, pr: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
          VALUES ('pay', {pr}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
@@ -90,7 +107,7 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
     let (_dir, home) = crate::store::tests::tmp_home();
     let before: CpdHome = home.clone();
     let mut old = crate::store::tests::open_named(&before, &NAMED[..idx]).unwrap();
-    write(&mut old, BASE).unwrap();
+    write(&mut old, BASE_BEFORE).unwrap();
     write(
         &mut old,
         &format!(
@@ -99,19 +116,19 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
              UPDATE jobs SET status = 'running' WHERE key = 'a';
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                VALUES ('pay', 'a-a1', 'a', 1, 'S1', 'ladder', 'running', 'pay/api', '/w', 't');",
-            job("a", "work", "'api'"),
-            job("b", "docs", "'api'"),
-            job("c", "verify", "'api'")
+            job_before("a", "work", "'api'"),
+            job_before("b", "docs", "'api'"),
+            job_before("c", "verify", "'api'")
         ),
     )
     .unwrap();
-    let snapshot = |s: &mut Store| -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let snapshot = |s: &mut Store, pr_column: &str| -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
         s.read(|c| {
             let col = |sql: &str| -> rusqlite::Result<Vec<String>> {
                 c.prepare(sql)?.query_map([], |r| r.get::<_, String>(0))?.collect()
             };
             Ok((
-                col("SELECT plan || '/' || key || '/' || kind || '/' || ifnull(pr, '') || '/' || status || '/' || ifnull(fingerprint, '') FROM jobs ORDER BY seq")?,
+                col(&format!("SELECT plan || '/' || key || '/' || kind || '/' || ifnull({pr_column}, '') || '/' || status || '/' || ifnull(fingerprint, '') FROM jobs ORDER BY seq"))?,
                 col("SELECT plan || '/' || id || '/' || job || '/' || status FROM attempts ORDER BY id")?,
                 col("SELECT plan || '/' || job || '/' || needs FROM dependencies ORDER BY 1")?,
                 col("SELECT type || ':' || name FROM sqlite_schema WHERE tbl_name IN ('jobs', 'attempts', 'dependencies') AND name NOT LIKE 'sqlite_%' AND type IN ('index', 'trigger') AND name NOT LIKE 'history_%' ORDER BY 1")?,
@@ -119,12 +136,12 @@ fn migration_keeps_every_existing_job_row_and_dependency() {
         })
         .unwrap()
     };
-    let (jobs, attempts, deps, objects) = snapshot(&mut old);
+    let (jobs, attempts, deps, objects) = snapshot(&mut old, "pr");
     assert_eq!((jobs.len(), attempts.len(), deps.len()), (3, 1, 1));
     drop(old);
 
     let mut new = Store::open(&home, 5000).unwrap();
-    let (jobs2, attempts2, deps2, objects2) = snapshot(&mut new);
+    let (jobs2, attempts2, deps2, objects2) = snapshot(&mut new, "workflow");
     assert_eq!((jobs, attempts, deps), (jobs2, attempts2, deps2), "every row survives");
     for o in &objects {
         assert!(objects2.contains(o), "{o} survives the rebuild");

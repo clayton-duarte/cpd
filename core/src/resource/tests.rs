@@ -332,7 +332,7 @@ fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/w', cpd_txn(), 't', 't');",
     );
     for (job, status, at) in [("a", "running", "2026-10-26T21:40:00.000Z"), ("b", "starting", "2026-10-26T21:41:00.000Z"), ("c", "running", "2026-10-26T21:42:00.000Z"), ("d", "ended", "2026-10-26T21:43:00.000Z")] {
@@ -340,7 +340,7 @@ fn store_with_attempts() -> (tempfile::TempDir, crate::store::Store) {
         let cause = if status == "ended" { "'crashed'" } else { "NULL" };
         let ended_values = if status == "ended" { ", 'failed', 'crashed', 't'" } else { "" };
         sql += &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', 'api', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job_status}', {cause}, 0, '{fingerprint}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended})
                VALUES ('pay', '{job}-a1', '{job}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{job}-a1', '/w', '{at}'{ended_values});"

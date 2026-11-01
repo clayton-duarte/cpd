@@ -76,9 +76,9 @@ fn worker_env_of_an_explore_attempt_has_cpd_job_kind() {
     let (scout, research) = (rig.start("look"), rig.start("dig"));
     // A Worker of another kind: a `work` Job of a PR.
     rig.sql(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
            VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay/api', '/lw', 't', cpd_txn(), 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
            VALUES ('pay', 'api', 'w', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'w-a1', 'w', 1, 'S2', 'ladder', 'running', 'cpd/pay--w-a1', '/w', 't');",

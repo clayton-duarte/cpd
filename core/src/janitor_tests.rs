@@ -163,10 +163,10 @@ impl Rig {
         let ended_at = if self.running { "NULL" } else { "'t'" };
         self.sql(&format!(
             "{pull}
-             INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                VALUES ('pay', '{key}', '{repo}', 'pay', 'main', '{status}', '{lead_branch}', {lead_column}, cpd_txn(), 't', {stamps}, {merged_at});
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                status, appended, fingerprint, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_txn, created_at)
                VALUES ('pay', '{key}', '{key}', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job}', 0, '{fp}', {job_columns}, cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, merged_sha, branch, worktree, base_sha, started_at, ended_at)
@@ -426,7 +426,7 @@ fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jo
     rig.universe.lock().unwrap().add_worktree(rig.repo.id(), &dir, Head::Branch(branch.clone()));
     std::fs::write(dir.join("f.txt"), "base\n").unwrap();
     rig.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at)
            VALUES ('pay', 'a', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)

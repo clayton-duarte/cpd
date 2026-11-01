@@ -148,11 +148,11 @@ fn seed(store: &mut Store, status: &str) {
              VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead-pl', 't');
              INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
              VALUES (7, 'o/r', 7, 'https://example/7', 'Ship', 0, 'open', 'none', 'none', 't', NULL, 't', 'unknown', 'unknown', 0, 0);
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
              VALUES ('pl', 'repo', '/repo', 'main', 'open', 'cpd/pl', '/lead', 7, 'https://example/7', 't', 7, cpd_txn(), 't', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
              VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'idle', 't', 't');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
              VALUES ('pl', 'repo', 'a', 'A', 'S2', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = 'a';
              UPDATE jobs SET status = 'running' WHERE key = 'a';

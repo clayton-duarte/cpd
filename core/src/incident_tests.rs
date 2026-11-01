@@ -51,15 +51,15 @@ fn fixture() -> Fixture {
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('ops', 'ctx', 'Ops', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('ops', 'web', '/r', 'main', 'waiting', 'cpd/ops', cpd_txn(), 't');
                  INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
                    VALUES (7, 'o/r', 7, 'https://example/7', 'Ship', 0, 'open', 'none', 'none', 't', NULL, 't', 'unknown', 'unknown', 0, 0);
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
                    VALUES ('pay', 'ship', '/r', 'main', 'open', 'cpd/pay/ship', '/w', 7, 'https://example/7', 't', 7, cpd_txn(), 't', 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                    VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a-a1', '/w', 't');"
@@ -79,7 +79,7 @@ fn fixture_with_attempts() -> Fixture {
     let mut sql = String::new();
     for key in ["b", "c", "d", "e"] {
         sql.push_str(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', 'api', '{key}', '{key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');\n"
         ));
     }
@@ -327,7 +327,7 @@ fn incident_ends_when_the_until_pr_merges() {
     let merged = f.store
         .write("test", |tx| {
             tx.execute("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE id = 7", [])?;
-            tx.execute("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'ship'", [])?;
+            tx.execute("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'ship'", [])?;
             incident::end_if_until_pr_merged(tx)
         })
         .unwrap();

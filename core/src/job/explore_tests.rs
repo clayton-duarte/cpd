@@ -71,7 +71,7 @@ fn fixture_with(phase: &str, prs: &[&str], repo: Option<&std::path::Path>, repo_
     );
     for pr in prs {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{pr}', '{repo}', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
         ));
     }
@@ -114,7 +114,7 @@ impl Fixture {
         let mut fingerprint = String::new();
         let _ = self.env.store.write("fingerprint", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
                    VALUES ('pay', {pr}, 'twin', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', 'draft', 1, cpd_txn(), '{T}');"
             ))?;
             for need in needs {
@@ -130,7 +130,7 @@ impl Fixture {
         let first = if needs.is_empty() { "queued" } else { "draft" };
         let first_fingerprint = if needs.is_empty() { format!("'{fingerprint}'") } else { "NULL".to_owned() };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', {pr}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
         ));
         for need in needs {

@@ -562,9 +562,9 @@ fn start_rig(live: bool) -> StartRig {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/repos/r.lead', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '/repos/r', 'main', 'dispatch', 'cpd/pay/api', '/repos/r.lead', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{placeholder}', cpd_txn(), 't'),
                           ('pay', 'api', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{placeholder}', cpd_txn(), 't');",
             ))?;

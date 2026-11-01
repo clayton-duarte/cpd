@@ -44,7 +44,7 @@ fn fresh(phase: &str) -> (tempfile::TempDir, Store) {
 
 fn pr(plan: &str, key: &str, lead_branch: &str) -> String {
     format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', '{lead_branch}', cpd_txn(), 't');"
     )
 }
@@ -76,7 +76,7 @@ fn prs_refuses_a_lead_branch_that_is_not_derived_from_plan_and_key() {
 /// PR `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
 fn attempt_on(branch: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
          VALUES ('pay', 'api', 'j', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, 'work', NULL, cpd_txn(), 't');
          UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'j';
          UPDATE jobs SET status = 'running' WHERE key = 'j';
@@ -109,13 +109,13 @@ fn prs_locked_refuses_moving_a_legacy_lead_branch() {
             &mut store,
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', 1, 'u', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                VALUES ('pay', 'api', '/r', 'main', 'merged', 'cpd/pay', '/w', cpd_txn(), 't', 't', 1, 'u', 't',
                        (SELECT id FROM pull_requests WHERE number = 1), 't');",
         )
         .unwrap();
-        let moved = write(&mut store, "UPDATE prs SET lead_branch = 'cpd/pay/api' WHERE key = 'api'");
+        let moved = write(&mut store, "UPDATE workflows SET lead_branch = 'cpd/pay/api' WHERE key = 'api'");
         assert!(message(moved, phase).contains("pr_locked"), "{phase}");
     }
 }

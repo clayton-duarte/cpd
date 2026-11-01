@@ -59,7 +59,7 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
 
     let status: String = {
         let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
-        store.read(|c| Ok(c.query_row("SELECT status FROM prs WHERE key = 'api'", [], |r| r.get(0))?)).unwrap()
+        store.read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE key = 'api'", [], |r| r.get(0))?)).unwrap()
     };
     assert_eq!(status, "merged", "the poll saw the merge: {out:?}");
     for pr in &rig.prs {

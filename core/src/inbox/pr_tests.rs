@@ -72,7 +72,7 @@ impl Fx {
     /// Plan `plan` owns pull request `n` through a `prs` row.
     fn own(&mut self, plan: &str, n: i64) {
         self.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pull_request, pr_number, pr_url,
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pull_request, pr_number, pr_url,
                               pr_opened_at, created_txn, created_at, started_at)
              VALUES ('{plan}', 'p{n}', '/r', 'main', 'open', 'cpd/{plan}/p{n}', '/lw',
                      (SELECT id FROM pull_requests WHERE number = {n}), {n}, 'https://github.com/acme/shop/pull/{n}', '{T}', 1, '{T}', '{T}');"
@@ -89,7 +89,7 @@ impl Fx {
         let sha = if status == "merged" { "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" } else { "NULL" };
         let (reason, requested) = if status == "cancelled" { ("'t'", format!("'{T}'")) } else { ("NULL", "NULL".to_owned()) };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
              VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested});"
         ));
@@ -97,7 +97,7 @@ impl Fx {
 
     fn posted(&mut self, n: i64) {
         self.sql(&format!(
-            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at) VALUES ('pay', 'p{n}', 'C1', '1.1', 'https://x/1', '{T}');"
+            "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at) VALUES ('pay', 'p{n}', 'C1', '1.1', 'https://x/1', '{T}');"
         ));
     }
 

@@ -35,7 +35,7 @@ fn fixture_of(state: &str, status: &str) -> Fixture {
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'l-pay', '{T}', '{T}');
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Title 7', 0, '{state}', 'none', 'none', '{T}', {merged}, '{T}');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at, merged_at)
            VALUES ('pay', 'api', '/r/acme-api', 'main', '{}', 'cpd/pay/api', '/lw/pay/api', 7,
                    'https://github.com/acme/api/pull/7', '{T}', (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(), '{T}', '{T}', {pr_merged});",
@@ -59,7 +59,7 @@ impl Fixture {
 
     /// `pr cancel` of the open PR: the status is all the rule may read.
     fn cancel(&mut self) {
-        self.sql("PRAGMA ignore_check_constraints = ON; UPDATE prs SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
+        self.sql("PRAGMA ignore_check_constraints = ON; UPDATE workflows SET status = 'cancelled' WHERE key = 'api'; PRAGMA ignore_check_constraints = OFF;");
     }
 
     /// One tick: the rules, then the reconcile. The open items of kind `pr-closed` afterwards.

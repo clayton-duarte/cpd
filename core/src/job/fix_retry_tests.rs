@@ -34,7 +34,7 @@ fn fixture() -> Fixture {
     }
     for (plan, pr) in [("pay", "api"), ("pay", "web"), ("ops", "api")] {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('{plan}', '{pr}', '/r', 'main', 'dispatch', 'cpd/{plan}/{pr}', '/lw', 1, '{T}', '{T}');"
         ));
     }
@@ -59,7 +59,7 @@ impl Fixture {
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
         let reason_at = if status == "cancelled" { format!("'{T}'") } else { "NULL".to_owned() };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha, cancel_reason, cancel_requested_at)
                VALUES ('{plan}', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{kind}', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha}, {reason}, {reason_at});"
         ));
