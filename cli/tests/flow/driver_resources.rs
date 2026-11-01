@@ -355,10 +355,8 @@ fn job_blocked_is_appended_once_per_waiting_episode() {
     assert_eq!(blocked(&fx).len(), 1, "the waiting went on: no second Event");
 
     // `busy` merges, the slot frees: `api` starts, and no Event is appended for it.
-    fx.env.sql(&format!(
-        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'busy-a1';
-         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND key = 'busy';"
-    ));
+    fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'busy-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND key = 'busy';");
     drop(busy);
     fx.watch_first_tick().unwrap();
 

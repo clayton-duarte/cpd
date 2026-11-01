@@ -91,7 +91,7 @@ impl Fx {
     fn slept(&self) -> Vec<String> {
         self.env.env.read(|conn| {
             let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-asleep' ORDER BY id")?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+            stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()
         })
     }
 }

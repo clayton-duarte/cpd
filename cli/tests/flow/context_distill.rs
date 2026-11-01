@@ -135,7 +135,7 @@ impl Fx {
     }
 
     fn highest_seq(&self) -> u64 {
-        self.env.read(|conn| Ok(conn.query_row("SELECT max(seq) FROM context_records WHERE context = ?1", [CONTEXT], |r| r.get::<_, i64>(0))?)) as u64
+        self.env.read(|conn| conn.query_row("SELECT max(seq) FROM context_records WHERE context = ?1", [CONTEXT], |r| r.get::<_, i64>(0))) as u64
     }
 
     fn pi_calls(&self) -> usize {

@@ -90,20 +90,6 @@ impl Fx {
         self.env.root().join("op")
     }
 
-    /// The fake `op` answers `item <sub>` (`get`, `list`, `create`, `edit`, `delete`) with `stdout`, `stderr` and
-    /// exit status `code`, until the next call of this for the same `sub`.
-    pub fn op_says(&self, sub: &str, stdout: &str, stderr: &str, code: i32) {
-        let d = self.op_dir();
-        fs::write(d.join(format!("{sub}.out")), stdout).unwrap();
-        fs::write(d.join(format!("{sub}.err")), stderr).unwrap();
-        fs::write(d.join(format!("{sub}.code")), code.to_string()).unwrap();
-    }
-
-    /// What the fake `op` read on stdin in its last `item <sub>` call (`create` or `edit`).
-    pub fn op_stdin(&self, sub: &str) -> String {
-        fs::read_to_string(self.op_dir().join(format!("stdin.{sub}"))).unwrap_or_else(|e| panic!("op got no stdin for {sub}: {e}"))
-    }
-
     fn op_log_path(&self) -> std::path::PathBuf {
         self.env.root().join("op.log")
     }

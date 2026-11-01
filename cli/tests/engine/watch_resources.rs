@@ -90,7 +90,7 @@ fn attempts(fx: &Fx) -> i64 {
 fn started(fx: &Fx) -> Vec<String> {
     fx.env.read(|conn| {
         let mut stmt = conn.prepare("SELECT job FROM events WHERE kind = 'attempt-started' ORDER BY id")?;
-        Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+        stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()
     })
 }
 

@@ -404,7 +404,7 @@ fn queued_reactions_are_reacted_to_oldest_first_one_at_a_time() {
             // The first tick started the helper's thread: wait until its route has been called.
             entered.recv_timeout(Duration::from_secs(10)).expect("the first tick starts the helper");
         }
-        if !opened && nap >= 1 + 2 * NAPS_PER_TICK {
+        if !opened && nap > 2 * NAPS_PER_TICK {
             *record.lock().unwrap() = Some(p.ts_called());
             open_tx.send(()).unwrap();
             opened = true;

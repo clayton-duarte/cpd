@@ -69,14 +69,14 @@ fn add_worker_session(fx: &Fx, id: &str, key: &str, state: &str) {
 }
 
 fn session(fx: &Fx, id: &str) -> (String, Option<String>) {
-    fx.env.read(|c| Ok(c.query_row("SELECT state, tmux_pane FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?))
+    fx.env.read(|c| c.query_row("SELECT state, tmux_pane FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))))
 }
 
 fn attempt(fx: &Fx, id: &str) -> (String, Option<String>, Option<String>) {
     fx.env.read(|c| {
-        Ok(c.query_row("SELECT status, outcome, cause FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| {
+        c.query_row("SELECT status, outcome, cause FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?)
+        })
     })
 }
 

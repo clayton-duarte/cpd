@@ -20,7 +20,6 @@ use serde_json::json;
 
 /// `build` fails while `BROKEN` exists; `run` fails unless `GREEN` exists.
 const BUILD: &str = "test ! -e BROKEN";
-const RUN: &str = "echo running; echo {{ tests }} > ../ran.txt; test -e GREEN";
 const COMMANDS: &str = "[test-commands]\nbuild = \"test ! -e BROKEN\"\nrun = \"echo running; echo {{ tests }} > ../ran.txt; test -e GREEN\"\n";
 
 /// The answer of `sh -c <command>` for the two commands of [`COMMANDS`], read off the worktree the call names (its `cwd`),

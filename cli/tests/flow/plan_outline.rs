@@ -45,6 +45,7 @@ fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
 }
 
 /// A PR of `plan`: `status` is `waiting`, `dispatch` or `cancelled`; `name` and `title` as stored (null when `None`).
+#[allow(clippy::too_many_arguments)] // one SQL row per call, each column a plain argument of the test helper
 fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, base: &str, status: &str, name: Option<&str>, title: Option<&str>, needs: &[&str]) {
     let (worktree, started) = if status == "dispatch" { ("'/w'", "'t'") } else { ("NULL", "NULL") };
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
@@ -60,6 +61,7 @@ fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, base: &str, status: &str, name
 }
 
 /// A Job of PR `pr`. `tier` `None` makes a stub draft (no Tier, no Spec). A non-draft Job is locked.
+#[allow(clippy::too_many_arguments)] // one SQL row per call, each column a plain argument of the test helper
 fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, tier: Option<&str>, touches: &[&str], needs: &[&str]) {
     let (tier, spec) = match tier {
         Some(t) => (

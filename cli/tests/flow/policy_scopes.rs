@@ -12,7 +12,6 @@ use common::{refused, Run};
 use serde_json::{json, Value};
 
 const OWNER_EMPTY: &str = "";
-const MCP_ENTRY: &str = "[mcp.servers.x]\nurl = \"https://example.com/mcp\"\n";
 
 struct Scopes {
     fx: Fx,
@@ -245,11 +244,6 @@ fn the_text_domains_are_accepted_in_all_three_scopes() {
 }
 
 // ------------------------------------------------ i8: the machine's provider is a default
-
-fn provider(out: &Value) -> (&str, &str) {
-    let key = &out["policy"]["model"]["keys"]["provider"];
-    (key["value"].as_str().unwrap(), key["source"].as_str().unwrap())
-}
 
 // ------------------------------------------- i9: a machine file is validated like any scope file
 

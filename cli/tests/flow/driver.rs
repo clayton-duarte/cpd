@@ -294,13 +294,16 @@ fn set_hooks(live: &Live, text: &str) {
     live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
 }
 
+/// The argv test of [`After`]: does this call of the program count.
+type WhenCall = Box<dyn Fn(&[String]) -> bool + Send + Sync>;
+
 /// A `Runner` over the fake one that runs `then`, once, right after the first call of `program` whose argv `when` accepts and that
 /// exited 0: what a program does by itself after its work (git's `post-rewrite` hook after a rebase) or a hook's own command (a
 /// `pre-start` hook that runs `cpd job cancel`). `then` runs on the thread that made the call, on the ports under this runner.
 struct After {
     inner: Arc<dyn Runner>,
     program: &'static str,
-    when: Box<dyn Fn(&[String]) -> bool + Send + Sync>,
+    when: WhenCall,
     then: Box<dyn Fn() + Send + Sync>,
     fired: AtomicBool,
 }
@@ -803,33 +806,4 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
 }
 
 // ---------- the update Job ----------
-
-impl Rows {
-    /// PR `repo` as `pr open` leaves it, the pull request open (812), the Plan in `deploy`, Job `api` merged and no `open` Job:
-    /// the policy `pr.gate = "local"` is the owner's.
-    fn open_pr(&self) {
-        self.fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-        self.fixture(&format!(
-            "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{}' WHERE key = 'api';
-             INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
-               VALUES ('acme/pay', 812, '{PR_URL}', '{PR_TITLE}', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
-             UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
-             UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
-            "1".repeat(40)
-        ));
-    }
-
-    /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
-    fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
-        store(&self.fx.env)
-            .read(|c| {
-                let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
-                let rows = stmt
-                    .query_map([kind], |r| Ok((r.get::<_, i64>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap()
-    }
-}
 

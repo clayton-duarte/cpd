@@ -213,7 +213,7 @@ fn on_starts_the_engine_on_the_installed_cpd_before_the_previews_tui() {
     let at = |line: &str| log.iter().position(|l| l == line).unwrap_or_else(|| panic!("{line} not in {log:?}"));
     assert!(at("installed watch --ensure") < at("preview tui"));
     assert!(at("preview plan list") < at("installed watch --ensure"));
-    assert!(at("preview tui") < at(&format!("tmux -u -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{{pane_id}}|#{{pane_dead}}|#{{@cpd_view}}|#{{@cpd_session}}")));
+    assert!(at("preview tui") < at("tmux -u -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{pane_id}|#{pane_dead}|#{@cpd_view}|#{@cpd_session}"));
     assert!(!log.contains(&"installed tui".to_owned()));
 }
 

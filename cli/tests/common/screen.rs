@@ -313,9 +313,12 @@ impl Backend for SharedBackend {
 /// step; one step at most per frame, so a step's action is always seen by the frames after it. No sleep and no poll: a
 /// frame is what the view draws, and the signals of the scripted pump decide when. A script of signals that is over before
 /// the last step ran is a test that did not do what it says: [`Steps::finish`] fails and names the step.
+/// A scripted step: (name, is the screen ready, what to do then).
+type ScreenStep = (String, Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut(&Screen)>);
+
 #[derive(Clone, Default)]
 pub struct Steps {
-    todo: Rc<RefCell<VecDeque<(String, Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut(&Screen)>)>>>,
+    todo: Rc<RefCell<VecDeque<ScreenStep>>>,
 }
 
 impl Steps {

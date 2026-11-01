@@ -475,7 +475,7 @@ fn rows_run_oldest_first_one_at_a_time() {
             // The first tick started the helper's thread: wait until its route has been called.
             entered.recv_timeout(Duration::from_secs(10)).expect("the first tick starts the helper");
         }
-        if !opened && nap >= 1 + 2 * NAPS_PER_TICK {
+        if !opened && nap > 2 * NAPS_PER_TICK {
             *record.lock().unwrap() = Some(p.targets());
             open_tx.send(()).unwrap();
             opened = true;
@@ -559,7 +559,8 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     // Each case parks `api`'s `in_review` row, changes something, and runs the engine until the control row behind it is
     // settled too. (change, does it reopen the row, the ticket and the name of the second run)
     type Change = Box<dyn Fn(&Probe)>;
-    let cases: Vec<(&str, Change, Option<(&str, &str)>)> = vec![
+    type SecondRun<'a> = Option<(&'a str, &'a str)>;
+    let cases: Vec<(&str, Change, SecondRun)> = vec![
         ("another ticket", Box::new(|p| p.write("UPDATE prs SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")), Some(("ABC-124", "In Review"))),
         ("another status name", Box::new(|p| p.owner_policy(&owner_toml("In Progress", "Under Review", "Done"))), Some((API, "Under Review"))),
         ("another title", Box::new(|p| p.write("UPDATE prs SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")), None),
