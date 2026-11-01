@@ -43,8 +43,9 @@ pub struct Team<'a> {
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
 static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
-/// Every condition of the kinds, in the order of the kinds. There is no `engine-error` (hs-d314: the engine's errors go to
-/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
+/// Every condition of the kinds, in the order of the kinds. The only `engine-error` is a stalled `durable` Attempt
+/// (hs-d798, [`stalls`]); the engine's own errors go to the Manager (hs-d314). There is no `job-stuck` (hs-d318: a
+/// stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
@@ -84,8 +85,46 @@ pub fn conditions_with(
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
+    all.extend(store.read(stalls)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
+}
+
+/// `engine-error` for a stalled `durable` Attempt (contract §2.2 "Inbox item", §3.4 A4, hs-d798): one item per
+/// Attempt that is not `ended` and has a `worker_stalled` `error` Event. Subject `error:driver/worker_stalled/<attempt>`,
+/// urgency red, the label naming the remedy. The item closes when the Attempt ends, whose condition no longer holds.
+/// The driver never writes it: E8 opens it from the store, here.
+fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT a.plan, a.id, a.job FROM attempts a
+           JOIN events e ON e.plan = a.plan AND e.attempt = a.id AND e.kind = 'error'
+                AND json_extract(e.data, '$.code') = 'worker_stalled'
+          WHERE a.status <> 'ended'
+          ORDER BY a.plan, a.id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (plan, attempt, job) in rows {
+        let plan = id("Plan id", &plan, PlanId::parse)?;
+        let job = id("Job key", &job, JobKey::parse)?;
+        out.push(Condition {
+            kind: Kind::EngineError,
+            urgency: Urgency::Red,
+            subject: format!("error:driver/worker_stalled/{attempt}"),
+            label: format!("worker stalled: cpd job cancel {job} now, or cpd attempt abort {attempt} once that command lands"),
+            url: None,
+            context: None,
+            plan: Some(plan),
+            job: Some(job),
+            session: None,
+            record: None,
+            event: None,
+            opened_at: None,
+        });
+    }
+    Ok(out)
 }
 
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the PR poll.
