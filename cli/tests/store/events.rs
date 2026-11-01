@@ -226,10 +226,12 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("job-retried", "cpj", "", &["tier"], &[]),
     ("job-cancel-requested", "cpja", "", &["reason"], &[]),
     ("job-cancelled", "cpj", "a", &["reason"], &[]),
+    ("job-blocked", "cpj", "", &["waiting"], &[]),
     ("attempt-started", "cpja", "", &["number", "tier", "origin"], &[]),
     ("attempt-status", "cpja", "", &["from", "to"], &[]),
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
+    ("attempt-ended", "cpja", "", &["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model", "stop_reason", "thinking_level"], &[]),
     ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
     ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
     ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
@@ -630,7 +632,7 @@ fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
     // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
     // while a migration holds the lock.
     let clock = Arc::new(ScriptedClock::new().at(Duration::from_millis(1500), release));
-    let ports = cpd_core::ports::Ports { clock: clock.clone(), runner: fx.fakes.runner.clone(), spawn: fx.fakes.spawn.clone() };
+    let ports = cpd_core::ports::Ports { clock: clock.clone(), runner: fx.fakes.runner.clone(), spawn: fx.fakes.spawn.clone(), ..cpd_core::ports::Ports::real() };
     let run = follow_once_on(&ports, &["--until-idle", "--since", "0"]);
     assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
     assert!(clock.elapsed() >= Duration::from_millis(1000), "did not wait: {:?}", clock.elapsed());

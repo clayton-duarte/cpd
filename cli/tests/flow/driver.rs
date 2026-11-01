@@ -517,7 +517,7 @@ fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("setup_failed")));
     assert_eq!(live.job_status(JOB), "failed");
-    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-failed"]);
+    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "attempt-ended", "job-failed"]);
     assert!(live.fx.calls("pi").is_empty());
     assert!(!live.fx.calls("tmux").iter().any(|c| c.args.iter().any(|a| a == "new-window")), "no Worker window was made");
     assert!(!live.worktree(ATTEMPT).exists());
@@ -604,7 +604,7 @@ fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     assert_cancelled(&live, &attempt, "early");
     assert!(attempt["worker_session"].is_null());
     assert!(live.fx.calls("pi").is_empty());
-    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-cancel-requested", "job-cancelled"]);
+    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-cancel-requested", "attempt-ended", "job-cancelled"]);
 }
 
 #[test]

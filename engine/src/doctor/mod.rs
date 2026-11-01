@@ -3,6 +3,7 @@
 //! Read-only, except the migration of a database's first open.
 
 mod check;
+mod host_runner;
 mod holographic;
 mod pi;
 mod state;
@@ -79,6 +80,7 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
     checks.push(with_config("tiers", Severity::Error, &pi::tiers));
     checks.push(with_config("pi_adapter", Severity::Error, &pi::adapter));
     checks.push(with_config("worker_runner", Severity::Error, &worker_runner::worker_runner));
+    checks.push(with_config("host_runner", Severity::Error, &host_runner::check));
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
     checks.push(state::watch(&home, store.as_mut()));
     checks.extend(tmux_restart(&home, zone));

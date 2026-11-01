@@ -1,4 +1,4 @@
-//! `Ports`: the three seams a test fakes (docs/implementing.md, "Ports, Spawn and run_with").
+//! `Ports`: the seams a test fakes (docs/implementing.md, "Ports, Spawn and run_with").
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -7,24 +7,39 @@ use crate::clock::{Clock, SystemClock};
 #[cfg(feature = "fakes")]
 use crate::clock::ManualClock;
 #[cfg(feature = "fakes")]
+use crate::host::host_socket::FakeHostSocket;
+#[cfg(feature = "fakes")]
 use crate::host::runner::FakeRunner;
+use crate::host::host_socket::{HostSocket, SystemHostSocket};
 use crate::host::runner::{Runner, SystemRunner};
+#[cfg(feature = "fakes")]
+use crate::session::tail::FakeHostConn;
+use crate::session::tail::{HostConn, SystemHostConn};
 #[cfg(feature = "fakes")]
 use crate::host::spawn::FakeSpawn;
 use crate::host::spawn::{ProcessSpawn, Spawn};
 
-/// Time, short processes and long-lived or replacing processes.
+/// Time, short processes, long-lived or replacing processes, the host socket and the host connection.
 #[derive(Clone)]
 pub struct Ports {
     pub clock: Arc<dyn Clock>,
     pub runner: Arc<dyn Runner>,
     pub spawn: Arc<dyn Spawn>,
+    pub host_socket: Arc<dyn HostSocket>,
+    /// The one Rust seam P1.11 adds (contract §6.20): the socket tail's connection.
+    pub host_conn: Arc<dyn HostConn>,
 }
 
 impl Ports {
-    /// `SystemClock`, `SystemRunner` and `ProcessSpawn`.
+    /// `SystemClock`, `SystemRunner`, `ProcessSpawn`, `SystemHostSocket` and `SystemHostConn`.
     pub fn real() -> Ports {
-        Ports { clock: Arc::new(SystemClock), runner: Arc::new(SystemRunner), spawn: Arc::new(ProcessSpawn) }
+        Ports {
+            clock: Arc::new(SystemClock),
+            runner: Arc::new(SystemRunner),
+            spawn: Arc::new(ProcessSpawn),
+            host_socket: Arc::new(SystemHostSocket),
+            host_conn: Arc::new(SystemHostConn),
+        }
     }
 
     /// Runs `f` with `ports` as the ambient [`Ports::current`] of this thread, then puts the previous value back, also
@@ -63,16 +78,26 @@ pub struct Fakes {
     pub clock: Arc<ManualClock>,
     pub runner: Arc<FakeRunner>,
     pub spawn: Arc<FakeSpawn>,
+    pub host_socket: Arc<FakeHostSocket>,
+    pub host_conn: Arc<FakeHostConn>,
 }
 
 #[cfg(feature = "fakes")]
 impl Fakes {
-    /// A `ManualClock`, a `FakeRunner` on that clock and a `FakeSpawn`, and the `Ports` over them.
+    /// A `ManualClock`, a `FakeRunner` on that clock, a `FakeSpawn` and a `FakeHostSocket`, and the `Ports` over them.
     pub fn new() -> Fakes {
         let clock = Arc::new(ManualClock::new());
         let runner = Arc::new(FakeRunner::new((*clock).clone()));
         let spawn = Arc::new(FakeSpawn::new());
-        let ports = Ports { clock: clock.clone(), runner: runner.clone(), spawn: spawn.clone() };
-        Fakes { ports, clock, runner, spawn }
+        let host_socket = Arc::new(FakeHostSocket::new());
+        let host_conn = Arc::new(FakeHostConn::new());
+        let ports = Ports {
+            clock: clock.clone(),
+            runner: runner.clone(),
+            spawn: spawn.clone(),
+            host_socket: host_socket.clone(),
+            host_conn: host_conn.clone(),
+        };
+        Fakes { ports, clock, runner, spawn, host_socket, host_conn }
     }
 }

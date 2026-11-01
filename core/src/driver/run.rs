@@ -5,7 +5,8 @@
 //! compare-and-swap (`crate::merge`, §7.4 steps 1 and 7); while `running`, a
 //! cancel reaches it as E2's `stop_request = cancelled` (§3.7, A5).
 
-use std::time::Duration;
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
@@ -37,6 +38,10 @@ use crate::store::{Persist, Store};
 
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
+
+/// The `source` of the informational `worker_stalled` `error` Event (contract §3.4 A4, §5.2, hs-d798): distinct
+/// from [`SOURCE`], which names a real driver failure that ends the Attempt.
+const STALL_SOURCE: &str = "driver";
 
 /// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
@@ -196,6 +201,68 @@ enum Seen {
     Runner(Option<runner::Ended>),
 }
 
+/// A4's durable stall rule (contract §3.4 A4 "Liveness and restart, `durable`", hs-d798; §8.2
+/// `timeouts.stall_minutes`): a `durable` Worker's transcript that has not grown for the limit is one stall
+/// episode. The driver appends one `worker_stalled` `error` Event per episode and kills nothing: the engine
+/// informs, the Lead decides. The quiet is measured on `ports.clock`, from the tick that last saw the transcript
+/// grow, never by mixing a file's mtime with the clock.
+struct DurableStall {
+    /// `timeouts.stall_minutes`, as a duration; zero disables the rule (§8.2: at least 1, so 0 is a build with no file).
+    limit: Duration,
+    /// The transcript's identity (its modification time and its length) when it was last seen to grow, with the
+    /// `ports.clock` instant then: the quiet counts from there.
+    grown: Option<(SystemTime, u64, Instant)>,
+    /// The identity of the last reported episode: a tick that sees the same identity appends nothing, and a
+    /// transcript that grows again (a new identity) re-arms the watch.
+    reported: Option<(SystemTime, u64)>,
+    /// The last tick at which a stall was suppressed (a check span or an open Escalation): the Worker is silent by
+    /// design then, so the quiet counts from there at the earliest, as for the pi stall.
+    suppressed_at: Option<Instant>,
+}
+
+impl DurableStall {
+    fn new(stall_minutes: u32) -> DurableStall {
+        DurableStall {
+            limit: Duration::from_secs(u64::from(stall_minutes) * 60),
+            grown: None,
+            reported: None,
+            suppressed_at: None,
+        }
+    }
+
+    /// One tick: whether this tick is a stall episode to report. `path` is the Attempt's transcript. While
+    /// `suppressed` (a check span or an Escalation of the Attempt is open) nothing is reported, and the quiet counts
+    /// from then, so a Worker silent through `attempt submit` or `cpd ask` is not called stalled on the instant it ends.
+    fn stall(&mut self, ports: &Ports, path: &Path, suppressed: bool) -> bool {
+        if self.limit.is_zero() {
+            return false;
+        }
+        let now = ports.clock.now();
+        if suppressed {
+            self.suppressed_at = Some(now);
+            return false;
+        }
+        let Ok(meta) = std::fs::metadata(path) else { return false };
+        let Ok(modified) = meta.modified() else { return false };
+        let identity = (modified, meta.len());
+        match self.grown {
+            Some((seen_m, seen_len, since)) if (seen_m, seen_len) == identity => {
+                let from = self.suppressed_at.map_or(since, |at| at.max(since));
+                if now.duration_since(from) < self.limit || self.reported == Some(identity) {
+                    return false;
+                }
+                self.reported = Some(identity);
+                true
+            }
+            // The transcript grew (or is seen for the first time): re-arm the watch from this tick.
+            _ => {
+                self.grown = Some((modified, meta.len(), now));
+                false
+            }
+        }
+    }
+}
+
 /// A1's dispatch on the Attempt's status; any other is `illegal_transition`.
 fn entry(id: &AttemptId, status: &str) -> Result<Entry, CpdError> {
     match status {
@@ -271,7 +338,7 @@ pub(super) fn log(line: &str) {
 
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
 /// the driver (commands.md §6.4).
-fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
+fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError, window: Duration) -> Result<(), CpdError> {
     let text = format!(
         "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
@@ -279,7 +346,7 @@ fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdErr
         target.id,
         target.plan
     );
-    ledger::append_error(tx, target, SOURCE, error, text)
+    ledger::append_error(tx, target, SOURCE, error, text, window)
 }
 
 impl Driver {
@@ -659,6 +726,8 @@ impl Driver {
         // The Worker's assistant messages when it was nudged: after a reload, from the Event.
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
+        // A4's durable stall rule (hs-d798): the watch on the transcript, its own ticks.
+        let mut durable = DurableStall::new(self.config.timeouts.stall_minutes);
         let mut watch = PaneWatch::default();
         // The restarts of a `durable` runner in this driver run: a reloaded driver counts from 0 again.
         let mut restarts = 0;
@@ -718,8 +787,15 @@ impl Driver {
             }
             let look = match seen {
                 Seen::Pane(look) => Some(look),
-                // A `durable` runner that is alive: A5 reads its end report below; the stall rule does not run for it.
-                Seen::Runner(None) => None,
+                // A `durable` runner that is alive: A5 reads its end report below; the pi stall rule does not run
+                // for it, but the durable stall rule does (hs-d798): a transcript that has not grown for
+                // `stall_minutes` appends one `worker_stalled` Event per episode, and kills nothing.
+                Seen::Runner(None) => {
+                    let suppressed = self.stall_suppressed()?;
+                    let path = self.home.durable_store(&now.plan, &now.id);
+                    self.report_stall(&now, &mut durable, &path, suppressed)?;
+                    None
+                },
                 Seen::Runner(Some(ended)) => {
                     let log_file = self.home.worker_log(&now.plan, &now.id);
                     let detail = match ended {
@@ -759,16 +835,7 @@ impl Driver {
                 // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
                 // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
                 // Nor while an Escalation of this Attempt is open: a pending `cpd ask` is quiet by design.
-                let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)? || {
-                    let (plan, attempt) = (self.plan.as_str().to_owned(), self.id.to_string());
-                    self.store.read(|conn| {
-                        Ok(conn.query_row(
-                            "SELECT EXISTS (SELECT 1 FROM escalations WHERE plan = ?1 AND attempt = ?2 AND status = 'open')",
-                            params![plan, attempt],
-                            |r| r.get::<_, bool>(0),
-                        )?)
-                    })?
-                };
+                let span_open = self.stall_suppressed()?;
                 let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
                 if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, file, pi, span_open)) {
                     log(&line);
@@ -828,6 +895,43 @@ impl Driver {
                 }
             }
         }
+    }
+
+    /// Whether an A4 stall is suppressed right now (contract §3.4 A4): the Worker's own `attempt submit` holds a
+    /// check span (§7.7), or an Escalation of this Attempt is `open` (a pending `cpd ask` is silent by design,
+    /// pro-d274). Both the pi stall and the durable stall read it.
+    fn stall_suppressed(&mut self) -> Result<bool, CpdError> {
+        if lock::check_span_open(&self.home, &self.plan, &self.id)? {
+            return Ok(true);
+        }
+        let (plan, attempt) = (self.plan.as_str().to_owned(), self.id.to_string());
+        self.store.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM escalations WHERE plan = ?1 AND attempt = ?2 AND status = 'open')",
+                params![plan, attempt],
+                |r| r.get::<_, bool>(0),
+            )?)
+        })
+    }
+
+    /// A4's durable stall rule (hs-d798): when the transcript of a live `durable` runner has not grown for
+    /// `timeouts.stall_minutes`, append one `worker_stalled` `error` Event for `target` and log a line. The watch is
+    /// idempotent per episode, and the driver kills nothing: the engine informs (E8 opens the Inbox item), the Lead decides.
+    fn report_stall(&mut self, target: &Target, watch: &mut DurableStall, path: &Path, suppressed: bool) -> Result<(), CpdError> {
+        if !watch.stall(&self.ports, path, suppressed) {
+            return Ok(());
+        }
+        let minutes = self.config.timeouts.stall_minutes;
+        let error = CpdError::new(
+            ErrorCode::WorkerStalled,
+            format!("The durable Worker of Attempt {} has not written its transcript {} for {minutes} minutes.", target.id, path.display()),
+        )
+        .with("attempt", target.id.to_string())
+        .with("minutes", minutes);
+        let text = error.message().to_owned();
+        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, self.config.watch.error_repeat()))?;
+        log(&format!("A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled", path.display()));
+        Ok(())
     }
 
     /// The Worker's assistant-turn count at its nudge, from the Attempt's
@@ -916,7 +1020,7 @@ impl Driver {
         let target = self.load()?;
         if let Err(e) = self.stop_worker() {
             log(&format!("stopping the Worker failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e, self.config.watch.error_repeat()));
         }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
@@ -970,7 +1074,7 @@ impl Driver {
         result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e, self.config.watch.error_repeat()));
         }
     }
 
@@ -995,7 +1099,7 @@ impl Driver {
     fn fail(&mut self, error: &CpdError) {
         log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
         let Ok(target) = self.load() else { return };
-        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error)) {
+        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error, self.config.watch.error_repeat())) {
             log(&format!("cannot append the error Event: {}", e.message()));
         }
         // An install or a store migration, not the Worker (hs-n278): the marker is left; E2 ends the Attempt

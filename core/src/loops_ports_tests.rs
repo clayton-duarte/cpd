@@ -92,7 +92,7 @@ fn rig_hooked(hook: impl FnMut(usize) + Send + 'static) -> Rig {
     let runner = Arc::new(FakeRunner::new(clock.clone()));
     let spawn = Arc::new(FakeSpawn::new());
     let hooked = Arc::new(Hooked { inner: clock.clone(), hook: Mutex::new(Box::new(hook)) });
-    Rig { ports: Ports { clock: hooked, runner: runner.clone(), spawn: spawn.clone() }, clock, runner, spawn }
+    Rig { ports: Ports { clock: hooked, runner: runner.clone(), spawn: spawn.clone(), ..Ports::real() }, clock, runner, spawn }
 }
 
 impl Rig {

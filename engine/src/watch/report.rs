@@ -22,6 +22,7 @@ use serde_json::Value;
 use super::SOURCE;
 use super::log::Log;
 use cpd_core::error::CpdError;
+use cpd_core::events::repeat::{self, Recent, Same};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::pr::jira_sync::Target;
@@ -260,8 +261,9 @@ impl Report {
         let (step, about) = &key;
         let lead = about.lead(*step);
         if self.repeat > Duration::ZERO {
-            match self.recent(store, &lead, &failure.code) {
-                Ok(Some((event, age))) => {
+            let same = Same::Lead { source: "watch", code: &failure.code, lead: &lead };
+            match store.read(|conn| repeat::recent(conn, self.repeat, &same)) {
+                Ok(Some(Recent { event, age })) => {
                     let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
                     self.appended.insert(repeated, (at, event));
                     self.open.insert(key, (failure.code, event));
@@ -284,26 +286,6 @@ impl Report {
             // Not marked as reported: the next tick tries again.
             Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
         }
-    }
-
-    /// The newest `error` Event of source `watch` with `code` whose text begins `lead`, appended less than
-    /// `repeat` ago: its id and age. `at` is real UTC time (cpd_core::clock::now), so the cutoff is SQL's now.
-    fn recent(&self, store: &mut Store, lead: &str, code: &str) -> Result<Option<(i64, Duration)>, CpdError> {
-        let window = format!("-{} seconds", self.repeat.as_secs_f64());
-        store.read(|conn| {
-            let row: Option<(i64, f64)> = conn
-                .query_row(
-                    "SELECT id, (julianday('now') - julianday(at)) * 86400.0 FROM events
-                      WHERE kind = 'error' AND json_extract(data, '$.source') = 'watch'
-                        AND json_extract(data, '$.code') = ?1 AND substr(text, 1, length(?2)) = ?2
-                        AND at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?3)
-                      ORDER BY id DESC LIMIT 1",
-                    params![code, lead, window],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            Ok(row.map(|(id, secs)| (id, Duration::from_secs_f64(secs.max(0.0)))))
-        })
     }
 
     /// `step` succeeded for `about`: a later failure is reported again.

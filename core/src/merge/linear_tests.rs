@@ -221,7 +221,7 @@ fn r_recovers_a_linear_merging_attempt() {
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
     let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
-    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone() };
+    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone(), ..Ports::real() };
     let _ = Ports::scope(&ports, || merge::recover_attempt(&mut rig.store, &ctx, &rig.plan, &rig.id));
     let (outcome, merged): (Option<String>, Option<String>) = rig
         .store

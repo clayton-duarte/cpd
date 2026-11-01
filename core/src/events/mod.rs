@@ -3,6 +3,7 @@
 //!
 //! Delivery to a Lead's pi session (§5.3) is the pi adapter's, in TypeScript.
 
+pub mod repeat;
 mod append;
 mod kind;
 mod select;

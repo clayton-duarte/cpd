@@ -11,6 +11,7 @@ use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::runner::{FakeRunner, Reply};
 
+/// The deadline the catalog module runs under.
 const DEADLINE: Duration = Duration::from_secs(30);
 
 fn pi() -> PiInstall {
@@ -245,4 +246,25 @@ fn toggle_refuses_a_config_that_does_not_parse_and_leaves_the_file() {
     let err = toggle(&home).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
     assert_eq!(std::fs::read_to_string(home.config()).unwrap(), broken);
+}
+
+// ---------- lead_runner and manager_runner (contract §6.19, P1.10) ----------
+
+use std::path::Path as StdPath;
+
+#[test]
+fn lead_and_manager_runner_default_to_pi_and_parse() {
+    let path = StdPath::new("config.toml");
+    let (config, _) = Config::parse("version = 1\nmachine = \"m1\"\n", path).expect("a config without the keys parses");
+    assert_eq!(config.lead_runner, WorkerRunner::Pi);
+    assert_eq!(config.manager_runner, WorkerRunner::Pi);
+
+    // `lead_runner = "durable"` parses; the two keys are independent (Q11).
+    let (config, _) = Config::parse("version = 1\nmachine = \"m1\"\nlead_runner = \"durable\"\n", path).expect("lead_runner = durable parses");
+    assert_eq!(config.lead_runner, WorkerRunner::Durable);
+    assert_eq!(config.manager_runner, WorkerRunner::Pi);
+
+    // An unknown key is still refused (`r.finish`).
+    let err = Config::parse("version = 1\nmachine = \"m1\"\nnot_a_key = \"x\"\n", path).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }

@@ -4,12 +4,14 @@
 //! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::events::repeat::{self, Same, Scope};
 use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
@@ -360,7 +362,7 @@ pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &st
             .with("attempt", id.clone())
     };
     let changed = tx.execute(
-        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3, actual_files = '[]',
                 submitted_at = (SELECT at FROM txns WHERE id = cpd_txn()), ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND id = ?2 AND status = 'running'",
         params![plan, id, sha],
@@ -443,8 +445,22 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
     }
+    // hs-d798: the same transaction that wrote `attempts.metrics` appends the `attempt-ended` Event, whose `data`
+    // is the metrics blob: the ten keys copied from it, or all ten null when there are none.
     let tier = attempt.tier.to_string();
     let show = format!("cpd job show {job} --plan {plan}");
+    let ended = format!(
+        "Attempt {id} of Job {job} ended ({}, {}). Next: {show}",
+        end.outcome(),
+        end.cause()
+    );
+    events::append(
+        tx,
+        NewEvent::attempt_ended(ended, metrics)
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
             // hs-d514: the merge that leaves a draft and no queued or running Job but `open` and `update` Jobs turns the Lead. An `open` Job's own merge never turns it.
@@ -652,9 +668,12 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
 }
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
-pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String) -> Result<(), CpdError> {
-    events::append(
+pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String, window: Duration) -> Result<(), CpdError> {
+    let same = Same::Message { source, code: error.code().as_str(), message: error.message(), scope: Scope::Plan(&attempt.plan) };
+    repeat::append_once(
         tx,
+        window,
+        &same,
         NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
             .plan(attempt.plan.clone())
             .job(attempt.job.clone())

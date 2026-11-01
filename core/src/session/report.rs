@@ -8,7 +8,8 @@ use serde_json::{Map, Value, json};
 use super::{Env, ReportArgs};
 use crate::args::SessionArg;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
+use crate::events::NewEvent;
+use crate::events::repeat::{self, Same, Scope};
 use crate::output::Output;
 use super::row;
 
@@ -70,6 +71,7 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
     let reference = SessionArg { session: args.session }.require()?.clone();
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
+    let window = env.config.watch.error_repeat();
     let ReportArgs { what, code, message, details, .. } = args;
     let event = env.store.write("session report", |tx| {
         let session = row::load(tx, &id)?;
@@ -79,7 +81,8 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         details.insert("plan".into(), json!(session.plan));
         let text = format!("φ adapter: {}: {}: {}", what.0, code.0, message.0);
         let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details)).context(session.context.clone()).session(session.id.clone());
-        append(tx, event)
+        let same = Same::Message { source: "adapter", code: &code.0, message: &message.0, scope: Scope::Session(&session.id) };
+        repeat::append_once(tx, window, &same, event)
     })?;
     Ok(Output::success(json!({"event": event})))
 }

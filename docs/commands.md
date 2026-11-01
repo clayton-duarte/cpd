@@ -63,6 +63,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
@@ -207,7 +208,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
-| `durable_session` | 3 | `session open` (§10.4), `session park` (§10.5), `session history` (§10.12) or `session fork` (§10.3) named a Session whose `runner` is `durable` (contract §3.6): it has no pane, so there is nothing to open, park, show or fork. A state error, as `archived` and `in_chat_slot` are; refused before any write or tmux call. Message: `Session <id> runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.`; `details: {session}` |
+| `durable_session` | 3 | `session park` (§10.5), `session history` (§10.12) or `session fork` (§10.3) named a Session whose `runner` is `durable` (contract §3.6): it has no pane, so there is nothing to park, show or fork. (`session open` no longer refuses a durable Session: it resumes it and waits for its host's socket, §10.4.) A state error, as `archived` and `in_chat_slot` are; refused before any write or tmux call. Message: `Session <id> runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.`; `details: {session}` |
 | `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
@@ -529,8 +530,8 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw.
-- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `runner` = config `manager_runner`, default `pi`, contract §6.19; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here.
 - **Otherwise** (it has a pane): nothing.
 
 The command never moves the chat slot (hs-d103); `session open <manager>` does (§10.4).
@@ -840,15 +841,15 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4) and
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `runner` = config `lead_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
    ```
    The Lead gets on-demand access to the Context through these commands. The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
-4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>` and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
-5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2).
+4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>` and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11). **For a durable Lead** (`runner` `durable`, contract §6.19) this step and its `session-moved` are skipped: no tmux, no pane. The Session is left live and `stopped`, and the engine's hosts step starts its host at the next tick (contract §6.19); the output `lead.pane` and `lead.window` are null.
+5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2). A durable Lead has no pane and no `session run`: its host is the engine's (§6.19).
 
 When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd tui builds main later.
 
@@ -1580,7 +1581,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by E3 (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by E3 (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`, and `actual_files`, the value `attempt show` prints, §6.3) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -1703,7 +1704,8 @@ Effects:
 - **One check span** (contract §7.7, hs-d679): the checks of the table run inside ONE span, `what` `checks`, in this order: for an `open` or `update` Job the policy read (the policy rows), then the tamper check, the red-test guard and the `test` or `impl` kind check. The Gate runs at the merge, not in the span (contract §7.4, hs-d679). The preconditions of §7.3 run before it.
 - **Hooks:** none at submit. The quick check (`pre-commit`) and the Gate (`pre-merge`) run at the merge, not here (§7.3, §7.4 step 6, hs-d679), and their logs are written there.
 - **Kind checks** (contract §7.7, hs-d340, hs-d341), for the kinds that have one: a `test` or `impl` Job's `[test-commands]` commands (`build`, then `run`; output in `run/<plan>/logs/<attempt>.tests-build.log` and `<attempt>.tests-run.log`; with `list`, once per name between them, `<attempt>.tests-list.log`). An `open` or `update` Job has none: its only check beyond the tamper check is the policy read above. Its title, ticket, closed-pull-request, base and Gate checks are the merge's and end the Attempt there, not here (contract §7.4 steps 5, 6 and 8b). The span holds `locks/check-<plan>--<attempt>.lock`; it appends `attempt-status` with `check` `start` (before the first check) and `end` (contract §5.2; on a pass in the transaction of the Rows below, on a refusal before the error returns), so the Attempt's timeout and the stall kill do not count it, the tamper check included. A refusal changes nothing else: the Worker fixes, commits and submits again and the checks run again.
-- **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`; the Job stays `running`; the span's `end` Event is appended in the same transaction. Submit writes no Gate column: `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are written by the merge's Gate, and only when it fails `gate_failed` (contract §7.4 step 6). **Event** `attempt-status` `{from: "running", to: "merging"}`.
+- **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`, `actual_files`; the Job stays `running`; the span's `end` Event is appended in the same transaction. Submit writes no Gate column: `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are written by the merge's Gate, and only when it fails `gate_failed` (contract §7.4 step 6). **Event** `attempt-status` `{from: "running", to: "merging"}`.
+- **Written files** (contract §7.3, "The written files"): `actual_files` is captured as the last step of the span, after the kind's check, and is written in the Rows above. A git failure while capturing is `git_failed` (exit 1); it writes nothing, the span ends and the Attempt stays `running`.
 - The driver sees `merging` at A5 and starts the merge (A8, §7.4). An `open` or `update` Job's merge does not rebase, pushes the Lead Branch and, for an `open` Job, opens the pull request and moves the PR in step 10's transaction (contract §7.4, §7.7): `pr-opened` and `plan-phase` follow its `job-merged`.
 
 ```json
@@ -1722,7 +1724,7 @@ Idempotent: yes, as stated; a HEAD that moved after a successful submit is refus
 
 Effects, for an explore Attempt that passes:
 - **Checks that do not run:** the quick check, the tamper check, the red-test check, the kind check and the Gate. There is no worktree and no commit to check.
-- **The atomic end** (one transaction, no compare-and-swap, so no merge-recovery case): the Attempt `ended` / `merged`; the Job `merged` with `jobs.summary` the summary; the SHA-256 (hex) of the artefact in the Job's `merged_sha`, the Attempt's `merged_sha` and `submitted_sha` and the `job-merged` Event's `sha` (no commit exists, so the existing CHECKs on merged rows hold). The `job-merged` Event's `data` is `{sha, tier, kind, summary, artefact, turn}` (text in §15.3).
+- **The atomic end** (one transaction, no compare-and-swap, so no merge-recovery case): the Attempt `ended` / `merged`; the Job `merged` with `jobs.summary` the summary; the SHA-256 (hex) of the artefact in the Job's `merged_sha`, the Attempt's `merged_sha` and `submitted_sha` and the `job-merged` Event's `sha` (no commit exists, so the existing CHECKs on merged rows hold); the Attempt's `actual_files` = `[]` (no repo file is written). The `job-merged` Event's `data` is `{sha, tier, kind, summary, artefact, turn}` (text in §15.3).
 - **A driver that died before the transaction** leaves an ordinary dead Attempt, which E2 ends `crashed`; the submit never stops the Worker (the driver's A9 does, or E2 for a dead driver).
 
 ### 6.2 `attempt read`
@@ -1752,7 +1754,7 @@ cpd attempt show <attempt> [--plan <id>]
 cpd attempt list [--job <key>] [--active] [--plan <id>]
 ```
 
-`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
+`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). Its `attempt` carries `actual_files` (an array of the repo-relative paths the Attempt wrote, or null; contract §2.2, §7.3); `list` does not. The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
 ```json
 {"ok": true, "attempts": [{"id": "api-schema-a1", "job": "api-schema", "number": 1, "tier": "S2", "origin": "ladder", "status": "ended", "outcome": "merged", "cause": "merged", "started_at": "…", "ended_at": "…"}]}
@@ -1782,7 +1784,7 @@ The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispa
 
 Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker, started by the Attempt's `runner` (contract §3.4 "The Worker runner and its seam"): for `pi` its window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`) and the Session rows (`session-registered`, `session-moved` `{place: "work"}`); for `durable` a child process with no window and no `session-moved`, its `worker_pid` stored, restarted and stopped as that section says; the nudge (`attempt-nudge`); the stall kill (a Worker's session file idle for `timeouts.stall_seconds` inside one tool call: pi's descendant processes are killed, pi is not, the Attempt goes on; one driver-log line, no Event; contract §3.4 A4); the merge, with no lock (hs-d243: rule S and rule P, contract §7.4); the end (`metrics` from the end report, the Worker's stop by runner, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4.
 
-Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
+Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. An error with the same `code` and `message` as one appended for the same Plan less than `watch.error_repeat_seconds` ago appends nothing (contract §3.7). Idempotent: no; a second driver cannot get fd 3.
 
 ## 7. `review`
 
@@ -2451,7 +2453,7 @@ Idempotent: no (each call re-runs what has failed). A second call right after th
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair, as `pr rebase`; a fix Job's own merge pushes for itself, contract §3.8 "Updating"; after a `push_failed` it is the command to run) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
+Publishes an `open` or `dispatch` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair, as `pr rebase`; a fix Job's own merge pushes for itself, contract §3.8 "Updating"; after a `push_failed` it is the command to run) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
 
 | Flag | Meaning |
 |---|---|
@@ -2459,7 +2461,8 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the PR is `open`, before the Gate and again after it (merged during the Gate: nothing pushed) | `illegal_transition` | 3 |
+| the PR is `open` or `dispatch`, before the Gate and again after it (merged during the Gate: nothing pushed) | `illegal_transition` | 3 |
+| no Attempt of the PR of any kind (work, open, update) is running (pro-d103, pro-d105; widened to `pr push` by hs-d801); `details` is `{pr, jobs: [keys], attempts: [ids]}`; checked before the Gate, nothing is pushed | `attempt_running` | 3 |
 | the `pre-start` passes before the Gate runs; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
 | its owner has a policy file | `owner_unconfirmed` | 1 |
@@ -2568,7 +2571,7 @@ Effects: none; one read transaction.
  "events_cursor": 48213}
 ```
 
-`runner` is `pi` or `durable` (contract §2.2): how the Session runs, `pi` for every Session that exists today; a `durable` Lead or Manager has a null `tmux_pane` and `place` `none` by design (contract §3.6). `role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
+`runner` is `pi` or `durable` (contract §2.2): how the Session runs, set at creation from `lead_runner` or `manager_runner` (contract §6.19); a `durable` Lead or Manager has a null `tmux_pane` and `place` `none` by design (contract §3.6). `role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
 
 ### 10.2 `session show`
 
@@ -2634,11 +2637,11 @@ Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accept
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session is a `lead` or a `manager` (B3-A2) | `not_a_lead` | 3 |
-| its `runner` is `pi`; a `durable` Session has no pane (contract §3.6), refused before any write or tmux call (§1.3). Send it a message with `session send` (§10.13) instead | `durable_session` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
-| the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+| its `runner` is `pi` and the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui`. A `durable` Session has no pane and skips the chat slot and this check (contract §6.19) | `no_cockpit` | 3 |
 
 Effects:
+- **Durable** (`runner` `durable`, contract §6.19): no pane and never the chat slot, so `require_pane` is not applied. When the Session is asleep or labelled `host crash loop`, one transaction clears `asleep_at` and `state_label`; the command then waits for the host's socket at `$CPD_HOME/run/host/<id>.sock` to accept (retrying on ENOENT/ECONNREFUSED with a back-off, a 30 s deadline, else `host_timeout`, exit 5) and returns `{"session": <id>, "pane": null}`. The engine's hosts step starts the host; the command starts nothing and writes no `session-moved`.
 - In the chat slot already: nothing; `"already": true`.
 - **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5) and `tmux_pane` is recorded; the pane's `@cpd_title` is set by the precedence of contract §6.1 (the dynamic `title`, else the Plan's title or the name). Then `swap-pane -d -s <its pane> -t <chat slot pane>` and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
 - If a step after the new window is created fails (`set-option -p @cpd_session`, the swap, the row or the `session-moved` write), that new window is killed (`kill-window`) before the error is returned (teardown G11).
@@ -2763,7 +2766,7 @@ Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the S
 | its place is not `chat`: the Lead in the chat slot is never closed; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects:
-- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`. A `durable` Session (`runner` `durable`, contract §3.6) has no pane to kill and takes this branch: it succeeds with `"already": true` and writes nothing, as a `pi` Session with no pane does. Stopping its host on close is P1.10, not described here.
+- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`. A `durable` Session (`runner` `durable`, contract §3.6) has no pane to kill and takes this branch: it succeeds with `"already": true` and writes nothing, as a `pi` Session with no pane does. It leaves the Session's host running (contract §6.19): the host is stopped when the Session sleeps (E13) or is archived (E14, §10.10), not by close.
 - **tmux:** `kill-pane -t <pane>`. A parked window that held only that pane closes with it.
 - **Rows**, one transaction, compare-and-swap on `tmux_pane` (when engine E2 recorded the pane as gone first, nothing is left to write: `"already": true`): `state = stopped` with **Event** `session-state` `{from, to: "stopped", label: null}` unless it already was `stopped`; `tmux_pane = NULL`; **Event** `session-moved` `{pane: null, window: null, place: "none"}`, the rows E2 writes for a pane that is gone (contract §3.6).
 
@@ -2791,7 +2794,7 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
-2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty; step 3 writes `archived_at` as for any Session.
+2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty, and its host is stopped (SIGTERM, then SIGKILL after `timeouts.pi_stop_seconds`, contract §6.19); step 3 writes `archived_at` as for any Session.
 3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now, `sessions.asleep_at` = null (hs-d515); **Event** `session-archived` `{archived: true}`.
 
 ```json
@@ -3024,13 +3027,15 @@ Reports an adapter error to the Manager (hs-d573, M4). Its callers are: **the ad
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 
-Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+Effects: **Rows**, one transaction: `events` (one `error` Event, none when the same one is in the window (below), source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Idempotent inside the window (contract §3.7): a call whose `code` and `message` equal those of an adapter `error` Event of the same Session appended less than `watch.error_repeat_seconds` ago appends nothing and prints that Event's id; any other call appends an Event. `what` and `details` are not compared. The `mcp_register_failed` exemption above is from the adapter's own memory: each refusal is still one call, and its Event follows this window.
 
 Output:
 
 ```json
 {"ok": true, "event": "4823"}
 ```
+
+`event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
 ### 10.18a `session switch-failed` (internal)
 
@@ -3110,6 +3115,44 @@ Effects:
 ```
 
 `event` is the id of the `session-resumed` Event. Idempotent: no; each call is one Event. A second call finds the Session no longer blocked once the adapter has acted.
+
+### 10.19 `session tail` (P1.11)
+
+```
+cpd session tail <id>
+```
+
+The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14), folds the frames onto the `SnapshotEvent` and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
+
+| Argument | Meaning |
+|---|---|
+| `<id>` | the target Session (the short forms of §1.3 are accepted) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager` | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` (an archived Session has no host: the stop hooks of contract §6.19 stopped it) | `archived` | 3 |
+| its `runner` is `durable`; a `pi` Session has no host socket, and its pane is read in tmux, not over a socket. Message: `Session <id> runs on pi: it has no host socket to tail. Open it with cpd session open.` | `no_host_socket` | 3 |
+| the socket path `$CPD_HOME/run/host/<id>.sock` is at most `SOCKET_PATH_MAX` (107) bytes (contract §6.14 step 1, applied symmetrically) | `usage` (`socket_path_too_long`) | 2 |
+
+Effects:
+- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`client: "cpd session tail"`), attaches without a cursor, and prints the whole transcript from the base `snapshot` frame — one line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
+- **Follow:** every live `events` frame prints the messages it completes, as they complete.
+- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in snapshot mode: the fold replaces its state, one line on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the stream never repeats lines it printed.
+- **End:** exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (none of the host's reasons can reach a tail that never detaches; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
+- **Rows / Events / tmux:** none.
+
+Output: plain lines on stdout, one per transcript line, nothing else (§1.2's exception list gains the row; diagnostics go to stderr). Example:
+
+```
+user: run the checks
+assistant: Running them now.
+tool bash: all checks pass
+assistant: All green. Ready for review.
+```
+
+Idempotent: reading only; the same transcript renders the same lines (the first snapshot's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
 
 ## 10a. `board` (hs-d514)
 
@@ -3209,6 +3252,8 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 - for any other Session (Workers, side forks): Events with `session` = itself;
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7).
 
+The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
+
 ### 11.1 `events list`
 
 ```
@@ -3263,9 +3308,11 @@ cpd watch [--ensure | --check]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515; E14, archive asleep Sessions, hs-d630) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515 — for a durable Session the engine also stops its host (contract §6.19); E14, archive asleep Sessions, hs-d630 — a durable Lead's or Manager's host is stopped too (contract §6.19)) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
+
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3702,7 +3749,7 @@ Rerunning is safe: a restart already pending keeps its time and a server that is
 - **A3** Each follow-up's failure is printed in one line on stderr and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
 - **A4** Nothing new in the store: no table, column or Event kind.
 
-## 14. `doctor`, `config`, `tiers`, `models`, `preset`
+## 14. `doctor`, `config`, `tiers`, `models`, `preset`, `metrics`
 
 ### 14.1 `doctor`
 
@@ -3738,6 +3785,7 @@ Checks, in order:
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms` and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `worker_runner` | error | for `pi`, passes without looking at anything; for `durable`, passes when `<pi_adapter>/durable-worker/main.ts` exists and pi's Node is at least 22.19.0 (the `engines.node` of the runner's package, contract §6.12): `found` is the Node version, `expected` is `>= 22.19.0` (contract §3.4 "The Worker runner and its seam") |
+| `host_runner` | error | when `lead_runner` and `manager_runner` are both `pi`, passes without looking at anything; when either is `durable`, passes when `<pi_adapter>/durable-host/main.ts` exists and pi's Node is at least 22.19.0 (contract §6.19): `found` is the Node version, `expected` is `>= 22.19.0` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
 | `tmux_restart` | warn | present only while `run/tmux-restart.pending` exists: it passes (`message` "tmux restart pending", `found` the times and versions) while the restart waits, a planned hold of E3 (contract §3.7) and not a failure; it fails, with the reason, when the restart failed (§13.3) |
@@ -3758,7 +3806,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config [--migrate]
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9) and `worker_runner` other than `"pi"` or `"durable"` (contract §8.2: the key is validated and printed, with its source like every key). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9) and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722; the migrations include `distill-tier-gx` and `drop-test-concurrency` (hs-d722, hs-d679) and a third migration (hs-d738)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -3941,6 +3989,45 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 ```
 
 `host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
+
+### 14.7 `metrics`
+
+```
+cpd metrics [--format json|prometheus]
+```
+
+The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Lead]` (§2). It opens the store read-only, reads the `attempts.metrics` blobs the `attempt-ended` Events carry (contract §5.2) and the queue Events, and prints one aggregate value; it writes nothing, appends nothing and touches nothing but the store file it reads. **Fail-open (hs-d798, quoted): `cpd metrics` reads the local store and `cpd` never depends on the LGTM exporter, Prometheus or the homeserver being up.** Nothing in cpd may depend on the exporter, Prometheus or the homeserver: a dead collector costs a metric, never a workflow.
+
+**The default (`--format json`) is one JSON value** with the keys `store`, `per_tier`, `per_model`, `retries`, `plans`, `queue`:
+
+- `per_tier` and `per_model`: per-Tier and per-model counts — attempts, merged, failed by cause, average and median duration, average cost, total cost.
+- `retries`: the retry-cause histogram (the `cause` of every `attempt-retry`, contract §5.2).
+- `plans`: per Plan, the cost in `$` per merged pull request.
+- `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+
+**`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
+
+| Metric | Labels |
+|---|---|
+| `cpd_attempts` | `tier`, `model` |
+| `cpd_attempts_merged` | `tier` |
+| `cpd_attempts_failed` | `tier`, `cause` |
+| `cpd_attempt_duration_seconds` | `tier`, `stat="avg\|median"` |
+| `cpd_attempt_cost_usd_total` | `tier` |
+| `cpd_attempt_cost_usd_avg` | `tier` |
+| `cpd_model_attempts` | `model` |
+| `cpd_model_cost_usd_total` | `model` |
+| `cpd_attempt_retries` | `cause` |
+| `cpd_plan_cost_usd_per_merged_pr` | `plan` |
+| `cpd_queue_wait_seconds` | `phase="added_to_started"`, `stat="avg\|max"` |
+| `cpd_job_blocked_episodes` | (none) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--format` is `json` or `prometheus` | `usage` | 2 |
+
+Idempotent: read-only. `job-blocked` episodes are counted from the Events (one per waiting episode, contract §3.7 E3), so a rerun gives the same numbers while the store is unchanged.
 
 ## 15. The pi adapter's protocol
 

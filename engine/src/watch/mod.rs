@@ -42,6 +42,7 @@ mod log;
 mod models;
 mod parked;
 mod closed;
+mod hosts;
 mod poll_run;
 mod pr;
 mod provider_hold;
@@ -103,6 +104,10 @@ mod runner_tests;
 mod durable_drain_sleep_tests;
 #[cfg(test)]
 mod durable_e2_tests;
+#[cfg(test)]
+mod durable_flow_tests;
+#[cfg(test)]
+mod hosts_tests;
 #[cfg(test)]
 mod ports_tests;
 #[cfg(test)]
