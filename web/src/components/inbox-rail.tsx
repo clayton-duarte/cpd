@@ -39,13 +39,15 @@ export function inboxActor(item: InboxItem, sessions: readonly LiveSession[]): s
  * under a week, weeks under 30 days and months after that.
  */
 export function relativeAge(ageSeconds: number): string {
+  const count = (n: number, singular: string, plural: string): string =>
+    `${n} ${n === 1 ? singular : plural} ago`;
   if (ageSeconds < 60) return "just now";
-  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)} minutes ago`;
-  if (ageSeconds < 86_400) return `${Math.floor(ageSeconds / 3600)} hours ago`;
+  if (ageSeconds < 3600) return count(Math.floor(ageSeconds / 60), "minute", "minutes");
+  if (ageSeconds < 86_400) return count(Math.floor(ageSeconds / 3600), "hour", "hours");
   if (ageSeconds < 172_800) return "Yesterday";
-  if (ageSeconds < 604_800) return `${Math.floor(ageSeconds / 86_400)} days ago`;
-  if (ageSeconds < 2_592_000) return `${Math.floor(ageSeconds / 604_800)} weeks ago`;
-  return `${Math.floor(ageSeconds / 2_592_000)} months ago`;
+  if (ageSeconds < 604_800) return count(Math.floor(ageSeconds / 86_400), "day", "days");
+  if (ageSeconds < 2_592_000) return count(Math.floor(ageSeconds / 604_800), "week", "weeks");
+  return count(Math.floor(ageSeconds / 2_592_000), "month", "months");
 }
 
 /** The subject line is the label's first line; the teaser is its second line when there is one. */

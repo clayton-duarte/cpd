@@ -15,6 +15,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { App } from "./App";
+import { relativeAge } from "../components/inbox-rail";
 import type { LiveApi } from "../api/live";
 import type { LiveSession } from "../api/live-server";
 import type { InboxItem } from "../api/readmodel";
@@ -434,6 +435,40 @@ test("an Inbox row's date is its age rendered relative", async () => {
   await renderLive(api);
 
   expect(inboxRows().map((row) => rowDate(row))).toEqual(ages.map(([, rendered]) => rendered));
+});
+
+// The two tests below pin web/README.md's relative-age rule for the units that can be one, as the
+// table above pins the plural forms: the singular is only for N = 1, and the day unit has none
+// because `Yesterday` owns 24 to 48 hours, so the day branch first renders `2 days ago`.
+test("relativeAge renders one minute and one hour in the singular, and just now under a minute", () => {
+  const ages: readonly (readonly [number, string])[] = [
+    [59, "just now"],
+    [60, "1 minute ago"],
+    [90, "1 minute ago"],
+    [3599, "59 minutes ago"],
+    [3_600, "1 hour ago"],
+    [7_199, "1 hour ago"],
+  ];
+
+  expect(ages.map(([age_seconds]) => relativeAge(age_seconds))).toEqual(
+    ages.map(([, rendered]) => rendered),
+  );
+});
+
+test("relativeAge renders one week and one month in the singular, and never one day because Yesterday owns 24 to 48 hours", () => {
+  const ages: readonly (readonly [number, string])[] = [
+    [604_800, "1 week ago"],
+    [1_209_600, "2 weeks ago"],
+    [2_592_000, "1 month ago"],
+    [86_400, "Yesterday"],
+    [86_401, "Yesterday"],
+    [172_799, "Yesterday"],
+    [172_800, "2 days ago"],
+  ];
+
+  expect(ages.map(([age_seconds]) => relativeAge(age_seconds))).toEqual(
+    ages.map(([, rendered]) => rendered),
+  );
 });
 
 test("an Inbox row shows the label's first line as its subject and its second line as its teaser only when there is one", async () => {
