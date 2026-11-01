@@ -293,6 +293,9 @@ impl Config {
         })?;
 
         let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        // The runner of each new Lead and Manager Session (contract §6.19, hs-d754 Q10); independent keys (Q11).
+        let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        let manager_runner = r.get("manager_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
 
         let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
             Value::Boolean(b) => Ok(b),
@@ -387,9 +390,8 @@ impl Config {
             lead_pi_packages,
             pi_adapter,
             worker_runner,
-            // P1.10 stub: the keys are not parsed yet (`r.finish` still refuses them); the fields default to `Pi`.
-            lead_runner: WorkerRunner::Pi,
-            manager_runner: WorkerRunner::Pi,
+            lead_runner,
+            manager_runner,
             context_engine_enabled,
             context_engine_bridge,
             context_engine_python,

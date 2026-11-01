@@ -11,6 +11,7 @@ use super::lead::{self, Lead};
 use super::row::{self, PlanRow};
 use super::{Env, NewArgs, read_text_file, write_file};
 use crate::args::Text;
+use crate::config::WorkerRunner;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -82,6 +83,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         .with("next", format!("cpd context unarchive {}", args.context)));
     }
     let cwd = caller_cwd()?;
+    // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
+    let lead_runner = env.config.lead_runner;
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
@@ -94,10 +97,10 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         }
         tx.execute(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at, by_user)
-             SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at, ?7
+                                   state, state_label, state_at, created_at, by_user, runner)
+             SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at, ?7, ?8
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, cwd, tier, args.by_user],
+            rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, cwd, tier, args.by_user, lead_runner.as_str()],
         )?;
         tx.execute(
             "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
@@ -122,11 +125,15 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     if !args.by_user {
         write_message(&mut env, &plan, brief.as_ref())?;
     }
-    let started = start_lead(&mut env, &plan, &cwd, &session, &name)?;
+    let started = start_lead(&mut env, &plan, &cwd, &session, &name, lead_runner)?;
+    let (pane, window) = match &started {
+        Some(started) => (json!(started.pane.as_str()), json!(started.window.as_str())),
+        None => (Value::Null, Value::Null),
+    };
     Ok(Output::success(json!({
         "plan": summary(&plan, &[]),
         "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
-                 "pane": started.pane.as_str(), "window": started.window.as_str()},
+                 "pane": pane, "window": window},
         "record": record,
     })))
 }
@@ -166,11 +173,11 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
             write_brief(env, plan, brief)?;
         }
     }
-    let (state, pane): (String, Option<String>) = env.store.read(|conn| {
+    let (state, pane, runner): (String, Option<String>, String) = env.store.read(|conn| {
         Ok(conn.query_row(
-            "SELECT state, tmux_pane FROM sessions WHERE id = ?1",
+            "SELECT state, tmux_pane, runner FROM sessions WHERE id = ?1",
             [plan.lead_session.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?)
     })?;
     let name = created.name.clone();
@@ -178,8 +185,10 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
         write_message(env, plan, brief)?;
     }
     let (pane, window) = match pane {
-        None if state == "stopped" => {
-            let started = start_lead(env, plan, &created.cwd, &plan.lead_session, &name)?;
+        // A durable Lead starts no pane (contract §6.19); the engine starts its host.
+        None if state == "stopped" && runner != "durable" => {
+            let started = start_lead(env, plan, &created.cwd, &plan.lead_session, &name, WorkerRunner::Pi)?
+                .expect("a pi Lead starts a window");
             (Some(started.pane.as_str().to_owned()), Some(started.window.as_str().to_owned()))
         }
         pane => (pane, env.store.read(|conn| lead::last_window(conn, &plan.lead_session))?),
@@ -267,11 +276,22 @@ fn header(plan: &PlanRow) -> String {
     )
 }
 
-/// Step 4: the Lead's window `park-<plan>` (contract §6.2).
-fn start_lead(env: &mut Env, plan: &PlanRow, cwd: &str, session: &SessionId, name: &str) -> Result<lead::Started, CpdError> {
+/// Step 4: the Lead's window `park-<plan>` (contract §6.2). A durable Lead starts no pane (contract §6.19): the
+/// engine's `hosts` step starts its host at the next tick, and there is no pane or window.
+fn start_lead(
+    env: &mut Env,
+    plan: &PlanRow,
+    cwd: &str,
+    session: &SessionId,
+    name: &str,
+    runner: WorkerRunner,
+) -> Result<Option<lead::Started>, CpdError> {
+    if runner == WorkerRunner::Durable {
+        return Ok(None);
+    }
     let window = crate::host::layout::park_window(session, Some(&plan.id));
     let lead = Lead { session, context: &plan.context, plan: Some(&plan.id), name, cwd: Path::new(cwd) };
-    lead::start(env, &lead, &window, "plan new")
+    lead::start(env, &lead, &window, "plan new").map(Some)
 }
 
 #[cfg(test)]

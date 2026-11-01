@@ -20,7 +20,7 @@ use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts, inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
-use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
+use cpd_core::policy::model::{Models, models_of_attempt, models_of_context, models_of_job};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
@@ -200,6 +200,13 @@ impl Engine {
     pub(super) fn catalog_of_attempt(&mut self, plan: &PlanId, id: &AttemptId) -> Result<Catalog, CpdError> {
         let home = self.home.clone();
         self.catalog_of(|store| store.read(|conn| models_of_attempt(conn, &home, plan, &id.to_string())))
+    }
+
+    /// pi's catalog of the models of Context `context`: what a host runs under (contract §6.19). A fixed catalog
+    /// (a step test's) is returned without running pi's Node.
+    pub(super) fn catalog_of_session(&mut self, context: &ContextId) -> Result<Catalog, CpdError> {
+        let home = self.home.clone();
+        self.catalog_of(|store| store.read(|conn| models_of_context(conn, &home, context.as_str())))
     }
 
     fn catalog_of(&mut self, models: impl FnOnce(&mut Store) -> Result<Models, CpdError>) -> Result<Catalog, CpdError> {

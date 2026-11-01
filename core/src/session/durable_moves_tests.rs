@@ -1,7 +1,8 @@
-//! The pane moves and a `durable` Session (commands.md §10.3 to §10.5, §10.9, §10.10, §10.12; contract §3.6): `open`, `park`,
-//! `history` and `fork` refuse it with `durable_session` before any write or tmux call; `close` succeeds as `already` and
-//! `archive` writes `archived_at`, both without a tmux call; a `pi` Session is still opened. On the fake ports and the
-//! in-process fake tmux: no process starts.
+//! The pane moves and a `durable` Session (commands.md §10.3 to §10.5, §10.9, §10.10, §10.12; contract §3.6, §6.19): `park`,
+//! `history` and `fork` refuse it with `durable_session` before any write or tmux call; `open` no longer refuses it: it
+//! resumes the Session and waits for its host's socket, opening no pane; `close` succeeds as `already` and `archive` writes
+//! `archived_at`, both without a tmux call; a `pi` Session is still opened. On the fake ports and the in-process fake
+//! tmux: no process starts.
 
 use std::fs;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::Tmux;
+use crate::host::host_socket::{FakeHostSocket, Reach};
 use crate::host::runner::FakeRunner;
 use crate::host::spawn::FakeSpawn;
 use crate::output::Output;
@@ -31,6 +33,7 @@ struct World {
     store: Store,
     ports: Ports,
     runner: FakeRunner,
+    host_socket: Arc<FakeHostSocket>,
     /// The tmux calls made while the world was built.
     base: usize,
 }
@@ -56,7 +59,13 @@ fn world() -> World {
         })
         .unwrap();
     let runner = FakeRunner::with_tmux();
-    let ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
+    let host_socket = Arc::new(FakeHostSocket::new());
+    let ports = Ports {
+        clock: Arc::new(ManualClock::new()),
+        runner: Arc::new(runner.clone()),
+        spawn: Arc::new(FakeSpawn::new()),
+        host_socket: host_socket.clone(),
+    };
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")
         .with_runner(Arc::new(runner.clone()))
@@ -73,7 +82,7 @@ fn world() -> World {
         std::env::remove_var("PI_SESSION_ID");
     }
     let base = runner.calls().len();
-    World { _dir: dir, store, ports, runner, base }
+    World { _dir: dir, store, ports, runner, host_socket, base }
 }
 
 fn try_cpd(world: &World, words: &[&str]) -> Result<Value, CpdError> {
@@ -104,10 +113,16 @@ fn count(w: &mut World, sql: &str) -> i64 {
 }
 
 #[test]
-fn open_refuses_a_durable_session_with_durable_session_and_starts_no_pane() {
+fn open_of_a_durable_session_waits_for_the_socket_and_starts_no_pane() {
     let w = world();
-    refused(&w, &["open", "dlead"]);
+    // The socket is absent on the first probe and accepts on the second (contract §6.19).
+    w.host_socket.script(vec![Reach::Absent, Reach::Accepted]);
+    let out = try_cpd(&w, &["open", "dlead"]).unwrap();
+    assert_eq!(out["session"], "dlead");
+    assert_eq!(out["pane"], Value::Null, "a durable Session never enters a pane");
     assert_eq!(new_windows(&w), 0, "no pane");
+    assert!(tmux_calls_since_start(&w).is_empty(), "no tmux call: {:?}", tmux_calls_since_start(&w));
+    assert_eq!(w.host_socket.paths().len(), 2, "probed until it accepted");
 }
 
 #[test]

@@ -1797,7 +1797,8 @@ CREATE TABLE sessions (
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
   CHECK (role <> 'manager' OR plan IS NULL),
-  CHECK ((state IN ('waiting', 'blocked')) = (state_label IS NOT NULL))   -- migration waiting-state (hs-d303): `waiting` has a label as `blocked` has
+  CHECK (state NOT IN ('waiting', 'blocked') OR state_label IS NOT NULL),   -- migration waiting-state (hs-d303): `waiting` has a label as `blocked` has
+  CHECK (state_label IS NULL OR state IN ('waiting', 'blocked') OR (state = 'stopped' AND state_label = 'host crash loop'))   -- migration session-crash-loop (P1.10, hs-d785): a crash-looped durable Session is `stopped` with the label `host crash loop`
 ) STRICT;
 CREATE INDEX sessions_plan ON sessions(plan);
 CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;   -- migration 0010

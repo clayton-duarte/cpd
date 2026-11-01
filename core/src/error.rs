@@ -281,6 +281,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     ToolTimeout = "tool_timeout" => Timeout,
+    HostTimeout = "host_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
