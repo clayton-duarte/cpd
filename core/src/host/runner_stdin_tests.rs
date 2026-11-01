@@ -30,8 +30,11 @@ fn fake() -> (FakeRunner, ManualClock) {
     (FakeRunner::new(clock.clone()), clock)
 }
 
+/// What a call read: its stdin bytes and its stdin file.
+type Read = (Option<Vec<u8>>, Option<PathBuf>);
+
 #[derive(Default)]
-struct Reads(Mutex<Vec<(Option<Vec<u8>>, Option<PathBuf>)>>);
+struct Reads(Mutex<Vec<Read>>);
 
 impl Handler for Reads {
     fn handle(&self, call: &Call) -> Reply {

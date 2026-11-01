@@ -81,6 +81,8 @@ pub struct Contexts<'a> {
 
 /// What a record write finds: this machine's latest record again (a retry), or
 /// the number its new record takes.
+// The variant carries the one value this enum exists to hand back; boxing is a type change out of scope.
+#[allow(clippy::large_enum_variant)]
 enum Next {
     Retry(i64, Record),
     Number(u32),

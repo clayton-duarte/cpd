@@ -30,7 +30,7 @@ fn load(conn: &Connection, context: &ContextId) -> Result<Loaded, CpdError> {
 }
 
 /// The curated records in force, oldest `seq` first: every record, the `topic` and `short` the curator gave it.
-fn curated<'a>(loaded: &'a Loaded) -> Vec<(&'a Record, &'a str, &'a str)> {
+fn curated(loaded: &Loaded) -> Vec<(&Record, &str, &str)> {
     let in_force = in_force_without(&loaded.records, i64::MAX, &loaded.retired);
     in_force
         .iter()

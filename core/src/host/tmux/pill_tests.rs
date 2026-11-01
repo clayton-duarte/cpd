@@ -2,8 +2,6 @@
 
 use super::pill::{fg, fg_if, pill, range};
 
-const LEFT: char = '\u{e0b6}';
-const RIGHT: char = '\u{e0b4}';
 
 #[test]
 fn tmux_fg_prints_the_colour_number() {

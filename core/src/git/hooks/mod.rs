@@ -146,6 +146,8 @@ pub struct Detached<'a> {
 /// [`run_hook`] in a worktree whose `HEAD` is detached (a gate worktree,
 /// contract §7.3, §7.6): the template variable `branch` is `detached.branch`
 /// instead of being read from `HEAD`, and `detached.env` is added to the environment.
+// Each argument is a distinct input of the hook; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 pub fn run_hook_as(
     hook: Hook,
     pipeline: &Pipeline,
@@ -159,6 +161,8 @@ pub fn run_hook_as(
     run_with_branch(&Ports::current(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
 }
 
+// Each argument is a distinct input of the hook; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 fn run_with_branch(
     ports: &Ports,
     hook: Hook,
@@ -339,11 +343,10 @@ fn primary_remote(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, Cpd
 /// `origin/HEAD`'s branch, else `main` or `master` when it exists.
 fn default_branch(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, CpdError> {
     let head = run_with(runner, dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?;
-    if head.code == 0 {
-        if let Some(name) = head.stdout.trim().strip_prefix("origin/") {
+    if head.code == 0
+        && let Some(name) = head.stdout.trim().strip_prefix("origin/") {
             return Ok(Some(name.to_owned()));
         }
-    }
     for candidate in ["main", "master"] {
         if branch_exists_with(runner, dir, candidate)? {
             return Ok(Some(candidate.to_owned()));

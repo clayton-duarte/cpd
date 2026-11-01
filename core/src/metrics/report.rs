@@ -203,11 +203,10 @@ impl Report {
                 }
                 let mut plans: BTreeMap<String, f64> = BTreeMap::new();
                 for (plan, cost) in cost_by_plan {
-                    if let Some(&n) = merged_prs.get(&plan) {
-                        if n > 0 {
+                    if let Some(&n) = merged_prs.get(&plan)
+                        && n > 0 {
                             plans.insert(plan, cost / n as f64);
                         }
-                    }
                 }
 
                 // `job-added` -> the first `attempt-started` of the same Job.

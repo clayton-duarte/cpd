@@ -250,13 +250,13 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     let w = world();
     let pool = slotted(&w, "e2e-port", 3);
 
-    let first = took(&w, &[pool.clone()], &command(1));
-    let second = took(&w, &[pool.clone()], &command(2));
-    let third = took(&w, &[pool.clone()], &command(3));
+    let first = took(&w, std::slice::from_ref(&pool), &command(1));
+    let second = took(&w, std::slice::from_ref(&pool), &command(2));
+    let third = took(&w, std::slice::from_ref(&pool), &command(3));
     assert_eq!((first.slot("e2e-port"), second.slot("e2e-port"), third.slot("e2e-port")), (Some(1), Some(2), Some(3)));
     assert_eq!(record_of(&w, &pool, 2), command(2), "each slot has its own holder record");
     assert_eq!(holders(&w.home, &pool).unwrap(), vec![Some(command(1)), Some(command(2)), Some(command(3))]);
-    match take(&w.home, &[pool.clone()], &command(4)).unwrap() {
+    match take(&w.home, std::slice::from_ref(&pool), &command(4)).unwrap() {
         Take::Busy { resource, holders } => {
             assert_eq!(resource, "e2e-port");
             assert_eq!(holders, vec![Some(command(1)), Some(command(2)), Some(command(3))], "every slot, in slot order");
@@ -267,15 +267,15 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
     // A slot freed in the middle is the lowest free one.
     drop(second);
     assert_eq!(holders(&w.home, &pool).unwrap(), vec![Some(command(1)), None, Some(command(3))]);
-    let again = took(&w, &[pool.clone()], &attempt());
+    let again = took(&w, std::slice::from_ref(&pool), &attempt());
     assert_eq!(again.slot("e2e-port"), Some(2));
 
     // A pool whose slots were lowered keeps the held slots held and offers none above the count.
     let lowered = slotted(&w, "e2e-port", 2);
     drop(first);
-    let five = took(&w, &[lowered.clone()], &command(5));
+    let five = took(&w, std::slice::from_ref(&lowered), &command(5));
     assert_eq!(five.slot("e2e-port"), Some(1));
-    match take(&w.home, &[lowered.clone()], &command(6)).unwrap() {
+    match take(&w.home, std::slice::from_ref(&lowered), &command(6)).unwrap() {
         Take::Busy { holders, .. } => assert_eq!(holders.len(), 2),
         Take::Held(_) => panic!("slot 3 is above the count and is never offered"),
     }
@@ -286,8 +286,8 @@ fn resource_take_gets_the_lowest_free_slot_and_is_busy_only_when_every_slot_is_h
 fn resource_take_is_all_or_none_across_resources_with_slots() {
     let w = world();
     let (a, b) = (slotted(&w, "a", 2), slotted(&w, "b", 1));
-    let _a1 = took(&w, &[a.clone()], &command(1));
-    let _b1 = took(&w, &[b.clone()], &command(2));
+    let _a1 = took(&w, std::slice::from_ref(&a), &command(1));
+    let _b1 = took(&w, std::slice::from_ref(&b), &command(2));
 
     // `a` has a free slot (the second), `b` has none: nothing is kept, not even `a`'s slot 2.
     match take(&w.home, &[b.clone(), a.clone()], &attempt()).unwrap() {
@@ -306,8 +306,8 @@ fn resource_take_is_all_or_none_across_resources_with_slots() {
 fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     let w = world();
     let pool = slotted(&w, "e2e-port", 2);
-    let first = took(&w, &[pool.clone()], &command(1));
-    let second = took(&w, &[pool.clone()], &command(2));
+    let first = took(&w, std::slice::from_ref(&pool), &command(1));
+    let second = took(&w, std::slice::from_ref(&pool), &command(2));
     assert_eq!(holders(&w.home, &pool).unwrap(), vec![Some(command(1)), Some(command(2))]);
 
     // The holder of slot 1 dies: the kernel closes its descriptor; no code releases a slot by name.
@@ -316,7 +316,7 @@ fn resource_slot_lock_is_free_again_when_its_holder_dies() {
     // Slot 1's file still holds its record, but the lock is free: it reads free, and the next taker gets slot 1 again.
     assert!(!fs::read_to_string(lock_path(&w.home, &pool, 1)).unwrap().is_empty());
     assert_eq!(holders(&w.home, &pool).unwrap(), vec![None, Some(command(2))]);
-    assert_eq!(took(&w, &[pool.clone()], &attempt()).slot("e2e-port"), Some(1));
+    assert_eq!(took(&w, std::slice::from_ref(&pool), &attempt()).slot("e2e-port"), Some(1));
     drop(second);
 }
 

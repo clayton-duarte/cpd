@@ -143,6 +143,7 @@ fn status_line_pills_follow_the_rule() {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
     let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let incident_range = format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}"));
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?@cpd_runner,{JOIN}{},}}\
@@ -160,7 +161,7 @@ fn status_line_pills_follow_the_rule() {
         button("costs", "colour15", "\u{EEC1}"),
         pill_button("runner", "colour15", "#{@cpd_runner}"),
         pill("colour3", "preview: #{@cpd_preview}"),
-        format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
+        incident_range,
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
         pill("colour9", "#{@cpd_version}"),
         pill("colour8", "#{@cpd_version}"),
@@ -315,7 +316,7 @@ fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
     let at = format.find(pill).unwrap_or_else(|| panic!("no runner pill in {format}"));
     let costs_end = format.find("range=user|costs").unwrap();
     assert!(at > costs_end && at < format.find("@cpd_preview").unwrap(), "after costs, before the preview marker: {format}");
-    assert!(format[..at].ends_with("#[fg=colour8]\u{2501}#[default]") || format[..at].ends_with(&format!("#[fg=colour8]\u{2501}#[default]")), "{format}");
+    assert!(format[..at].ends_with("#[fg=colour8]\u{2501}#[default]") || format[..at].ends_with(&"#[fg=colour8]\u{2501}#[default]".to_string()), "{format}");
     // Drawn only while the option is set.
     let (before, after) = (&format[..at], &format[at + pill.len()..]);
     assert!(before.contains("#{?@cpd_runner,") || before.contains("#{?#{@cpd_runner},"), "{format}");

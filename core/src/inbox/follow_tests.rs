@@ -138,7 +138,7 @@ fn a_pr_ready_item_follows_its_links_in_place() {
 fn an_unchanged_pr_ready_condition_writes_nothing() {
     let (_d, mut store) = store();
     let c = pr(Urgency::Cyan, "shop#4 in review");
-    reconcile(&mut store, &[c.clone()], T1).unwrap();
+    reconcile(&mut store, std::slice::from_ref(&c), T1).unwrap();
     let txns = count(&mut store, "SELECT count(*) FROM txns");
     let changes = reconcile(&mut store, &[c], T2).unwrap();
     assert!(changes.opened.is_empty() && changes.closed.is_empty());

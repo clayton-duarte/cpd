@@ -12,7 +12,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use super::{Args, Outcome, run};
-use crate::fakes::git::{GitRoute, Head, Repo, Universe};
+use crate::fakes::git::{GitRoute, Repo, Universe};
 use crate::home::CpdHome;
 use crate::host::runner::Reply;
 use crate::ports::Fakes;

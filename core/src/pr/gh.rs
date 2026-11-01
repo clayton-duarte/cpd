@@ -774,7 +774,7 @@ impl Reply<'_> {
         let status = if graphql_errors || self.out.exit == Some(0) {
             None
         } else {
-            http_5xx(&self.out).or_else(|| (unparsable && self.out.stderr.contains(CUT_RESPONSE)).then(|| CUT_RESPONSE.to_owned()))
+            http_5xx(self.out).or_else(|| (unparsable && self.out.stderr.contains(CUT_RESPONSE)).then(|| CUT_RESPONSE.to_owned()))
         };
         let e = self.fail(message);
         match status {
@@ -1214,7 +1214,10 @@ struct RawPageInfo {
 }
 
 /// One page of one pull request: its checks and the cursor of the next page, if any. A null commit or rollup is no checks.
-fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<(Vec<Check>, Option<String>, Vec<String>)>, CpdError> {
+/// The checks of one pull request, the cursor of its next page and its other messages.
+type ChecksPage = (Vec<Check>, Option<String>, Vec<String>);
+
+fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<ChecksPage>, CpdError> {
     let count = firsts.len();
     #[derive(Deserialize)]
     struct Repo {
@@ -1226,7 +1229,7 @@ fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<(Vec<Check>, Optio
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", e.message.as_deref().unwrap_or("(no message)"))));
     }
     let mut pages = Vec::with_capacity(count);
-    for i in 0..count {
+    for (i, &first) in firsts.iter().enumerate() {
         let alias = format!("p{i}");
         let pull = data
             .remove(&alias)
@@ -1234,7 +1237,7 @@ fn parse_checks(reply: &Reply, firsts: &[bool]) -> Result<Vec<(Vec<Check>, Optio
             .and_then(|r| r.pull_request)
             .ok_or_else(|| reply.fail(format!("gh api graphql answered null for {alias}.")))?;
         // A first page without `labels` is a broken reply; later pages do not ask for them.
-        let labels = match (pull.labels, firsts[i]) {
+        let labels = match (pull.labels, first) {
             (Some(l), _) => l.nodes.into_iter().map(|l| l.name).collect(),
             (None, false) => Vec::new(),
             (None, true) => return Err(reply.fail(format!("gh api graphql answered {alias} without labels."))),
@@ -1553,9 +1556,9 @@ mod tests {
     #[test]
     fn mergeable_and_merge_state_are_typed_whatever_they_are() {
         for (mergeable, merge_state, want) in [
-            ("MERGEABLE", "BLOCKED", (Mergeable::Mergeable, MergeState::Blocked)),
+            ("MERGEABLE", "BLOCKED", (Mergeable::Clean, MergeState::Blocked)),
             ("UNKNOWN", "UNKNOWN", (Mergeable::Unknown, MergeState::Unknown)),
-            ("MERGEABLE", "HAS_HOOKS", (Mergeable::Mergeable, MergeState::HasHooks)),
+            ("MERGEABLE", "HAS_HOOKS", (Mergeable::Clean, MergeState::HasHooks)),
         ] {
             let node = pr("o/a", 7, false, "OPEN", "null")
                 .replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#, &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#));

@@ -83,7 +83,7 @@ fn client_and_version_variables_are_defined() {
     let t = one();
     let v = d(&t, "#{version}");
     assert!(v.chars().next().is_some_and(|c| c.is_ascii_digit()), "{v}");
-    assert_eq!(d(&t, "#{client_width}x#{client_height}").contains('x'), true);
+    assert!(d(&t, "#{client_width}x#{client_height}").contains('x'));
     assert_ne!(d(&t, "#{client_name}#{client_activity}"), "#{client_name}#{client_activity}");
 }
 

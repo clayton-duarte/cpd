@@ -639,7 +639,7 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
             params![plan, attempt.id.to_string()],
             |r| r.get(0),
         )?;
-        if automatic_attempts(tx, plan, job)? + i64::from(uncounted) >= 1 + i64::from(ladder.retry_cap) {
+        if automatic_attempts(tx, plan, job)? + i64::from(uncounted) > i64::from(ladder.retry_cap) {
             return Ok(None);
         }
         return Ok((ended_with(tx, plan, job, cause)? <= GATE_RETRIES).then_some(attempt.tier));
@@ -659,7 +659,7 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
     if !ladder.catalog.is_valid(attempt.tier) {
         return Ok(ladder.catalog.step_up(attempt.tier));
     }
-    if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
+    if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? > i64::from(ladder.retry_cap) {
         return Ok(None);
     }
     // pro-d265: a crash or a conflict is not a capability problem: same Tier. Only `no_submit` climbs.

@@ -39,7 +39,7 @@ fn a_presets_table_with_all_four_letters_parses() {
 #[test]
 fn a_bad_preset_name_or_an_extra_key_or_a_missing_letter_is_refused() {
     // A name that does not match `^[a-z][a-z0-9-]{0,31}$`.
-    let (code, key) = refused_key(&format!("version = 1\nmachine = \"m1\"\n[presets.Fast]\nO = \"p/a\"\nS = \"p/b\"\nH = \"p/c\"\nG = \"p/d\"\n"));
+    let (code, key) = refused_key("version = 1\nmachine = \"m1\"\n[presets.Fast]\nO = \"p/a\"\nS = \"p/b\"\nH = \"p/c\"\nG = \"p/d\"\n");
     assert_eq!(code, ErrorCode::ConfigInvalid);
     assert_eq!(key, "presets.Fast", "a bad name is refused with `presets.<name>`");
 
@@ -49,7 +49,7 @@ fn a_bad_preset_name_or_an_extra_key_or_a_missing_letter_is_refused() {
     assert_eq!(key, "presets.fast.X", "an extra key is refused with its own path");
 
     // A missing letter (only three of the four).
-    let (code, key) = refused_key(&format!("version = 1\nmachine = \"m1\"\n[presets.fast]\nO = \"p/a\"\nS = \"p/b\"\nH = \"p/c\"\n"));
+    let (code, key) = refused_key("version = 1\nmachine = \"m1\"\n[presets.fast]\nO = \"p/a\"\nS = \"p/b\"\nH = \"p/c\"\n");
     assert_eq!(code, ErrorCode::ConfigInvalid);
     assert!(key.starts_with("presets.fast"), "a missing letter is refused at the preset: {key}");
 }
@@ -57,7 +57,7 @@ fn a_bad_preset_name_or_an_extra_key_or_a_missing_letter_is_refused() {
 #[test]
 fn a_malformed_model_ref_is_refused() {
     // A ref with no `/` (contract §8.3 `[model]` shape) is refused at its own letter.
-    let (code, key) = refused_key(&format!("version = 1\nmachine = \"m1\"\n[presets.fast]\nO = \"noprovider\"\nS = \"p/b\"\nH = \"p/c\"\nG = \"p/d\"\n"));
+    let (code, key) = refused_key("version = 1\nmachine = \"m1\"\n[presets.fast]\nO = \"noprovider\"\nS = \"p/b\"\nH = \"p/c\"\nG = \"p/d\"\n");
     assert_eq!(code, ErrorCode::ConfigInvalid);
     assert_eq!(key, "presets.fast.O", "a malformed ref is refused with `presets.<name>.<letter>`");
 }

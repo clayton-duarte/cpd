@@ -72,9 +72,9 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
     repo.branch(lead);
     let (submitted, _top) = {
         let mut u = universe.lock().unwrap();
-        let submitted = commit(&mut u, repo.id(), &[base.clone()], attempt_tree, "attempt");
+        let submitted = commit(&mut u, repo.id(), std::slice::from_ref(&base), attempt_tree, "attempt");
         let top = match sibling_tree {
-            Some(tree) => commit(&mut u, repo.id(), &[submitted.clone()], tree, "sibling"),
+            Some(tree) => commit(&mut u, repo.id(), std::slice::from_ref(&submitted), tree, "sibling"),
             None => submitted.clone(),
         };
         u.set_ref(repo.id(), &format!("refs/heads/{lead}"), &top, "commit: top");

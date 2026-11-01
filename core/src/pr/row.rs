@@ -52,7 +52,7 @@ pub(super) struct PlanPrs {
 impl PlanPrs {
     /// The PR `--pr` names, else the Plan's only PR that is not `cancelled` (§1.3).
     pub fn select(&self, arg: &PrArg) -> Result<&PrRow, CpdError> {
-        arg.select(&&self.plan.id, &self.prs)
+        arg.select(&self.plan.id, &self.prs)
     }
 
     /// The PRs that are not `cancelled`.

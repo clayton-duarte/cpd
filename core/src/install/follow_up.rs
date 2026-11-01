@@ -165,12 +165,11 @@ impl FollowUps<'_> {
         // The killed engine releases its lock a moment later, possibly well after: wait for the lock itself,
         // bounded, then start the engine once and check that it holds the lock (hs-n288).
         let lock = self.install.cpd_home.watch_lock();
-        if let Some(dir) = lock.parent() {
-            if let Err(e) = std::fs::create_dir_all(dir) {
+        if let Some(dir) = lock.parent()
+            && let Err(e) = std::fs::create_dir_all(dir) {
                 self.fail(format!("cannot create {}: {e}", dir.display()));
                 return;
             }
-        }
         let mut waited = Duration::ZERO;
         let free = loop {
             match Self::lock_free(&lock) {

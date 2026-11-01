@@ -40,7 +40,7 @@ fn count(store: &mut Store, sql: &'static str) -> i64 {
 /// A store with the migration applied over a cache that held rows.
 fn migrated() -> (tempfile::TempDir, CpdHome, Store) {
     let (dir, home, _earlier) = before_tier_catalog_source();
-    let mut store = Store::open(&home, 5000).unwrap();
+    let store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     (dir, home, store)
 }

@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
+#[cfg(test)]
+use crate::clock::SystemClock;
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, HOOK_TOOL, Runner};
 
@@ -55,11 +57,10 @@ struct Output {
 
 impl Output {
     fn push(&mut self, line: String) {
-        if self.log_error.is_none() {
-            if let Err(e) = writeln!(self.log, "{line}") {
+        if self.log_error.is_none()
+            && let Err(e) = writeln!(self.log, "{line}") {
                 self.log_error = Some(e.to_string());
             }
-        }
         if self.tail.len() == self.keep {
             self.tail.pop_front();
         }
@@ -73,11 +74,8 @@ pub fn is_withheld(key: &str) -> bool {
     key == "TMUX" || key == "TMUX_PANE" || key.starts_with("PI_") || key.starts_with("CPD_")
 }
 
-/// Runs the blocks in order in `cwd` over `runner`, each hook with `env` added to its environment: one
-/// `Runner::run` per hook, `sh -c <hook>` with the context as stdin, the hooks of a block on a thread each; a
-/// failing block stops the pipeline. A hook's output (stdout, then stderr) reaches the log and the tail when the
-/// hook ends; only the last `tail_lines` lines are kept. One `timeout` for the whole run: each call's deadline is
-/// what is left of it.
+/// [`run_on`] on the system clock.
+#[cfg(test)]
 pub fn run_with(
     runner: &dyn Runner,
     blocks: &[Vec<Rendered>],
@@ -90,8 +88,14 @@ pub fn run_with(
     run_on(runner, &SystemClock, blocks, cwd, timeout, env, log, tail_lines)
 }
 
-/// [`run_with`] with the time `timeout` is measured on read from `clock`: what a block takes (a reply's `takes` on a
+/// Runs the blocks in order in `cwd` over `runner`, each hook with `env` added to its environment: one
+/// `Runner::run` per hook, `sh -c <hook>` with the context as stdin, the hooks of a block on a thread each; a
+/// failing block stops the pipeline. A hook's output (stdout, then stderr) reaches the log and the tail when the
+/// hook ends; only the last `tail_lines` lines are kept. One `timeout` for the whole run: each call's deadline is
+/// what is left of it, with the time measured on read from `clock`: what a block takes (a reply's `takes` on a
 /// `FakeRunner` is virtual) is what the blocks after it have left.
+// Each argument is a distinct input of the run; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 pub fn run_on(
     runner: &dyn Runner,
     clock: &dyn Clock,

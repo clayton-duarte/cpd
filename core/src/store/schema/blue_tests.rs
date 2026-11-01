@@ -54,7 +54,7 @@ fn items(store: &mut Store) -> Vec<Value> {
 /// A store with `blue-tier` applied over an empty inbox.
 fn migrated() -> (tempfile::TempDir, Store) {
     let (dir, home, _earlier) = before_blue_tier();
-    let mut store = Store::open(&home, 5000).unwrap();
+    let store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     (dir, store)
 }

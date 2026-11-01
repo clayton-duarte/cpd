@@ -136,7 +136,7 @@ fn pull_requests_history_lists_every_column_and_their_checks_hold() {
 
     for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2", "mergeable = 'maybe'", "merge_state = 'ready'"] {
         let sql = format!("UPDATE pull_requests SET {bad} WHERE number = 7");
-        let err = store.write("test", |tx| Ok::<(), CpdError>({ tx.execute(&sql, [])?; })).unwrap_err();
+        let err = store.write("test", |tx| { tx.execute(&sql, [])?; Ok::<(), CpdError>(()) }).unwrap_err();
         assert!(err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"), "{bad}: {err:?}");
     }
 }
@@ -2317,6 +2317,9 @@ fn version_5_four_prs(home: &CpdHome) {
     database_at(home, 5, &sql);
 }
 
+/// A `prs` row: plan, status, pull_request, pr_number, merged_at.
+type PrsRow = (String, String, Option<i64>, Option<i64>, Option<String>);
+
 #[test]
 fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let dir = tempfile::tempdir().unwrap();
@@ -2358,7 +2361,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     );
 
     // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
-    let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
+    let prs: Vec<PrsRow> = conn
         .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
@@ -3241,7 +3244,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     let mut before = crate::store::tests::open_named(&home, &NAMED[..at]).unwrap();
     write(
         &mut before,
-        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
            ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
            ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
@@ -3255,8 +3258,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
                   ('live', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
          INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
            (cpd_txn(), 't', 'plan-created', 'ctx', 'pay', 'x', '{}'), (cpd_txn(), 't', 'plan-created', 'other', 'live', 'x', '{}'),
-           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');"
-            .to_owned(),
+           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');",
     )
     .unwrap();
     let rows_before = rows(&mut before, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans");

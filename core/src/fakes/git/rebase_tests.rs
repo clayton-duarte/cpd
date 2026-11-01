@@ -194,7 +194,7 @@ fn a_clean_rebase_replays_every_commit_of_onto_to_head_over_onto() {
     assert!(out.stderr.contains("Successfully rebased and updated refs/heads/topic.\n"), "stderr: {:?}", out.stderr);
     let new = s.chain(&s.tip(), &s.onto);
     assert_eq!(new.len(), 2);
-    assert_eq!(s.w.commit_of(&new[0]).parents, [s.onto.clone()]);
+    assert_eq!(s.w.commit_of(&new[0]).parents, std::slice::from_ref(&s.onto));
     assert_eq!(s.w.commit_of(&new[1]).parents, [new[0].clone()]);
     assert!(new.iter().all(|c| !s.tops.contains(c)), "the replayed commits are new ones");
 }
@@ -403,7 +403,7 @@ fn onto_may_be_a_remote_tracking_name() {
     s.w.tracking(&s.repo, "main", &s.onto);
     let out = s.w.git_no_editor(&s.lead, &["rebase", "origin/main"]);
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
-    assert_eq!(s.w.commit_of(&s.chain(&s.tip(), &s.onto)[0]).parents, [s.onto.clone()]);
+    assert_eq!(s.w.commit_of(&s.chain(&s.tip(), &s.onto)[0]).parents, std::slice::from_ref(&s.onto));
 }
 
 #[test]

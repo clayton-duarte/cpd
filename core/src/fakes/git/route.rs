@@ -631,11 +631,10 @@ fn log(c: &mut Ctx, args: &[String]) -> Run {
     if !flags.contains(&"-g") {
         return log_subjects(c, &toks);
     }
-    if let Some(format) = flags.iter().find_map(|f| f.strip_prefix("--format=")) {
-        if format != "%T" {
+    if let Some(format) = flags.iter().find_map(|f| f.strip_prefix("--format="))
+        && format != "%T" {
             return Err(format!("log --format={format}"));
         }
-    }
     let ([spec], true, true) = (&positionals(&toks)[..], flags.contains(&"-g"), flags.contains(&"--format=%T")) else {
         return Err("log (arguments)".to_owned());
     };
@@ -1080,11 +1079,10 @@ fn worktree_add(c: &mut Ctx, args: &[String]) -> Run {
     if std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some()) || dir.is_file() {
         return Ok(Out::fail(128, format!("fatal: '{}' already exists\n", dir.display())));
     }
-    if let Some(name) = branch {
-        if c.u.ref_oid(repo, &format!("refs/heads/{name}")).is_some() {
+    if let Some(name) = branch
+        && c.u.ref_oid(repo, &format!("refs/heads/{name}")).is_some() {
             return Ok(Out::fail(128, format!("fatal: a branch named '{name}' already exists\n")));
         }
-    }
     let Ok(commit) = c.parse(&format!("{start}^{{commit}}")) else {
         return Ok(Out::fail(128, format!("fatal: invalid reference: {start}\n")));
     };

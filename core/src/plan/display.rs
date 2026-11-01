@@ -119,11 +119,10 @@ impl Display {
     /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
     pub fn pr_needs(&self, pr: &PrRow) -> Vec<String> {
         let mut needs = pr.needs.clone();
-        if let Some(base) = self.bases.get(pr.key.as_str()) {
-            if !needs.contains(base) {
+        if let Some(base) = self.bases.get(pr.key.as_str())
+            && !needs.contains(base) {
                 needs.push(base.clone());
             }
-        }
         needs
     }
 

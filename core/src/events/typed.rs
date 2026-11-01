@@ -250,15 +250,14 @@ impl NewEvent {
             "turns": null, "tokens_in": null, "tokens_out": null, "cache_read": null, "cache_write": null,
             "cost_usd": null, "duration_s": null, "model": null, "stop_reason": null, "thinking_level": null,
         });
-        if let Some(blob) = metrics {
-            if let Some(obj) = blob.as_object() {
+        if let Some(blob) = metrics
+            && let Some(obj) = blob.as_object() {
                 for key in KEYS {
                     if let Some(value) = obj.get(key) {
                         data[key] = value.clone();
                     }
                 }
             }
-        }
         make(Kind::AttemptEnded, text, data)
     }
 

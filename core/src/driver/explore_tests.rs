@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::explore::prepare;
 use super::runner;
 use super::worker::render_spec;
-use crate::attempt::explore_tests::{Rig, add_job, artefact, catalog, plan, run_sql, start_running, submit};
+use crate::attempt::explore_tests::{Rig, add_job, artefact, catalog, plan, start_running, submit};
 use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::Config;
 use crate::env::Env;

@@ -137,11 +137,10 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     };
 
     // 7. Rule S on the Lead worktree; a stop is reported and fails nothing.
-    if let Err(stale) = git::sync_lead(&lead, branch) {
-        if let Err(e) = report_stale(&mut env, &id, &key, &lead, "rebased", &stale) {
+    if let Err(stale) = git::sync_lead(&lead, branch)
+        && let Err(e) = report_stale(&mut env, &id, &key, &lead, "rebased", &stale) {
             return Err(removing(worktree, e));
         }
-    }
 
     // 8. The Gate on R' in the temporary worktree, `pre-start` then `pre-merge`; it is removed whatever the result.
     let again = format!("pr rebase --pr {key}");
@@ -345,8 +344,8 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
             .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
-    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
-        if let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)? {
+    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0
+        && let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)? {
             return Err(CpdError::new(
                 ErrorCode::GitFailed,
                 format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --pr {key}.", short(new), short(&tip)),
@@ -356,7 +355,6 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
             .with("sha", tip.as_str())
             .with("stderr", stderr));
         }
-    }
 
     Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
 }

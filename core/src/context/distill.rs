@@ -253,7 +253,9 @@ impl Batch<'_> {
         let mut checked = Checked { curations: Vec::new(), proposals: Vec::new(), rejected: Vec::new() };
         let batch: HashMap<&RecordId, i64> = self.records.iter().map(|(seq, r)| (&r.id, *seq)).collect();
         let lines: Vec<(usize, &str)> = text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()).collect();
-        let mut parsed: Vec<(usize, Result<(RawLine, RecordId), String>)> = Vec::new();
+        // A numbered line of the output: its curation and record id, or why it is not one.
+        type NumberedLine = (usize, Result<(RawLine, RecordId), String>);
+        let mut parsed: Vec<NumberedLine> = Vec::new();
         for (n, line) in lines {
             match serde_json::from_str::<RawLine>(line) {
                 Err(e) => parsed.push((n, Err(format!("not a curation line: {e}")))),

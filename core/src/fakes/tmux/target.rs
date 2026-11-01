@@ -103,11 +103,10 @@ fn window(db: &Connection, session: i64, spec: &str) -> R<i64> {
     if let Some(w) = id_of(spec, '@') {
         return ids.contains(&w).then_some(w).ok_or(format!("can't find window: {spec}"));
     }
-    if let Ok(i) = spec.parse::<usize>() {
-        if let Some(w) = ids.get(i) {
+    if let Ok(i) = spec.parse::<usize>()
+        && let Some(w) = ids.get(i) {
             return Ok(*w);
         }
-    }
     db.query_row("SELECT id FROM windows WHERE session = ?1 AND name = ?2 ORDER BY id", (session, spec), |r| r.get(0))
         .optional()
         .expect("fake tmux state")

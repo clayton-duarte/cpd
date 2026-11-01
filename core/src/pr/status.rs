@@ -73,8 +73,11 @@ fn verdict(c: &Check) -> String {
 /// The reduction (contract §7.6 step 3b): one entry per check identity, (workflow name, `name`) for a CheckRun and `context` for a
 /// StatusContext. CANCELLED and SKIPPED entries carry no verdict and are set aside while another entry of the identity exists; of
 /// the others the newest wins (no time is older than any time), the worst verdict on equal times.
+/// A check run's name and context.
+type RunKey<'a> = (Option<&'a str>, &'a str);
+
 fn newest_runs(checks: &[Check]) -> Vec<&Check> {
-    let mut groups: Vec<((Option<&str>, &str), Vec<&Check>)> = Vec::new();
+    let mut groups: Vec<(RunKey, Vec<&Check>)> = Vec::new();
     for c in checks {
         let key = match (c.name.as_deref(), c.context.as_deref()) {
             (Some(name), _) => (Some(c.workflow.as_deref().unwrap_or("")), name),
@@ -237,7 +240,7 @@ impl PrState {
 /// GitHub's `PullRequest.mergeable`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mergeable {
-    Mergeable,
+    Clean,
     Conflicting,
     Unknown,
 }
@@ -246,7 +249,7 @@ impl Mergeable {
     /// From GraphQL's `MergeableState`; any other value is `gh_failed`.
     pub fn of_graphql(state: &str) -> Result<Mergeable, CpdError> {
         match state {
-            "MERGEABLE" => Ok(Mergeable::Mergeable),
+            "MERGEABLE" => Ok(Mergeable::Clean),
             "CONFLICTING" => Ok(Mergeable::Conflicting),
             "UNKNOWN" => Ok(Mergeable::Unknown),
             other => Err(CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown mergeable state {other:?}."))
@@ -257,7 +260,7 @@ impl Mergeable {
     /// As stored and printed.
     pub fn as_str(self) -> &'static str {
         match self {
-            Mergeable::Mergeable => "mergeable",
+            Mergeable::Clean => "mergeable",
             Mergeable::Conflicting => "conflicting",
             Mergeable::Unknown => "unknown",
         }
@@ -462,7 +465,7 @@ mod tests {
     #[test]
     fn mergeable_maps_and_an_unknown_value_is_gh_failed() {
         for (graphql, mergeable, text) in [
-            ("MERGEABLE", Mergeable::Mergeable, "mergeable"),
+            ("MERGEABLE", Mergeable::Clean, "mergeable"),
             ("CONFLICTING", Mergeable::Conflicting, "conflicting"),
             ("UNKNOWN", Mergeable::Unknown, "unknown"),
         ] {

@@ -171,7 +171,7 @@ pub(super) fn archive_lead(env: &mut Env, lead: &Row, keep: bool) -> Result<Outp
         if changed == 0 {
             return Ok(false);
         }
-        append(tx, archived_event(&lead, true))?;
+        append(tx, archived_event(lead, true))?;
         Ok(true)
     })?;
     if !changed {

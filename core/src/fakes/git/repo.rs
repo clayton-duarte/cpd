@@ -123,11 +123,10 @@ impl Repo {
     pub fn keyed(&self, name: &str) {
         let mut u = self.u();
         u.config_add(self.id, "remote.origin.url", &format!("https://github.com/acme/{name}.git"));
-        if let Head::Branch(b) = u.head(&self.dir) {
-            if let Some(at) = u.ref_oid(self.id, &format!("refs/heads/{b}")) {
+        if let Head::Branch(b) = u.head(&self.dir)
+            && let Some(at) = u.ref_oid(self.id, &format!("refs/heads/{b}")) {
                 u.set_ref(self.id, &format!("refs/remotes/origin/{b}"), &at, "fetch");
             }
-        }
     }
     /// Pushes the branch `HEAD` names to `origin` (its url resolved through `insteadOf` to a repo of the
     /// Universe): the objects, `refs/heads/<b>` there and `refs/remotes/origin/<b>` here.

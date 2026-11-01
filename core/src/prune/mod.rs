@@ -282,8 +282,10 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
             let lead = wt.branch.as_deref().map(lead_of);
             if lead.is_some_and(|l| args.drop.iter().any(|d| d == l)) {
                 dropped = true;
-            } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success()) {
-            } else if wt.branch.as_deref().is_some_and(|b| merged_via_pr(ports, repo, &prs, b, &wt.head, &mut failed)) {
+            } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success())
+                || wt.branch.as_deref().is_some_and(|b| merged_via_pr(ports, repo, &prs, b, &wt.head, &mut failed))
+            {
+                // Merged into origin/main, or through its PR: kept as merged, `reason` stays unset.
             } else {
                 reason = Some("not merged");
             }

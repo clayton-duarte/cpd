@@ -265,7 +265,7 @@ pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
         // The route's own, not recorded from git: after git's `error:` line, the rejected refs are also told on
         // stderr in the plain form (with the reason), which is what the product keeps of a rejected push
         // (`Push::Rejected`).
-        let rejections: String = updates.iter().filter(|u| u.flag == '!').map(|u| shown_plain(u)).collect();
+        let rejections: String = updates.iter().filter(|u| u.flag == '!').map(shown_plain).collect();
         let lines: String = updates.iter().map(shown).collect();
         return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: format!("{tail}{rejections}") });
     }
