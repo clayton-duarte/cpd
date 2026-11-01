@@ -4,12 +4,14 @@
 //! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::events::repeat::{self, Same, Scope};
 use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
@@ -666,9 +668,12 @@ fn next_rung(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
 }
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
-pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String) -> Result<(), CpdError> {
-    events::append(
+pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String, window: Duration) -> Result<(), CpdError> {
+    let same = Same::Message { source, code: error.code().as_str(), message: error.message(), scope: Scope::Plan(&attempt.plan) };
+    repeat::append_once(
         tx,
+        window,
+        &same,
         NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
             .plan(attempt.plan.clone())
             .job(attempt.job.clone())
