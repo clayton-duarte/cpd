@@ -56,6 +56,8 @@ fn config_defaults_context_distill_tier_to_gx() {
             "lead_pi_packages": [],
             "pi_adapter": "",
             "worker_runner": "pi",
+            "lead_runner": "pi",
+            "manager_runner": "pi",
             "context_engine_enabled": true,
             "context_engine_bridge": "",
             "context_engine_python": "",
@@ -71,6 +73,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "fork_quiet_seconds": 5,
                 "distill_minutes": 15,
                 "stall_seconds": 1200,
+                "stall_minutes": 15,
                 "explore_minutes": 20,
                 "pi_stop_seconds": 10,
                 "sleep_seconds": 3600,
@@ -219,6 +222,8 @@ context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
 worker_runner = "durable"
+lead_runner = "durable"
+manager_runner = "durable"
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1
@@ -229,6 +234,7 @@ store_busy_ms = 1
 fork_quiet_seconds = 1
 distill_minutes = 1
 stall_seconds = 0
+stall_minutes = 1
 pi_stop_seconds = 1
 sleep_seconds = 1
 archive_sleep_seconds = 1

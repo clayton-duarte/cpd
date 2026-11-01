@@ -45,7 +45,7 @@ fn snooze() -> (String, Value, Value) {
     };
     reconcile(&mut store, &[condition], "2026-01-01T00:00:00.000Z").unwrap();
     let clock = ManualClock::new();
-    let ports = Ports { clock: Arc::new(clock.clone()), runner: Arc::new(FakeRunner::new(clock)), spawn: Arc::new(FakeSpawn::new()) };
+    let ports = Ports { clock: Arc::new(clock.clone()), runner: Arc::new(FakeRunner::new(clock)), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
     // `Env::open_with` reads `$CPD_HOME`: the one variable this test sets, to its own temp dir.
     unsafe { std::env::set_var("CPD_HOME", home.root()) };
     let command = Cli::try_parse_from(["cpd", "snooze", "1", "1h"]).unwrap().command;

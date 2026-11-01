@@ -135,7 +135,7 @@ impl Spawn for Stubborn {
 
 /// The fakes' `Ports` with `clock` instead of the `ManualClock`, and `spawn` instead of the `FakeSpawn`.
 pub(crate) fn ports_with(fakes: &Fakes, clock: Arc<dyn Clock>, spawn: Arc<dyn Spawn>) -> Ports {
-    Ports { clock, runner: fakes.ports.runner.clone(), spawn }
+    Ports { clock, runner: fakes.ports.runner.clone(), spawn, ..Ports::real() }
 }
 
 /// A process the `FakeSpawn` knows, running: pids count from 1000.
@@ -704,7 +704,7 @@ fn a_failed_linear_attempt_resets_the_lead_branch() {
     }
     let worktree = root.join("r.lead");
     universe.lock().unwrap().add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
-    let ports = Ports { clock: fakes.ports.clock.clone(), runner: fakes.ports.runner.clone(), spawn: fakes.ports.spawn.clone() };
+    let ports = Ports { clock: fakes.ports.clock.clone(), runner: fakes.ports.runner.clone(), spawn: fakes.ports.spawn.clone(), ..Ports::real() };
     let result = Ports::scope(&ports, || super::run::reset_linear_lead_branch(&worktree, lead, base.as_str()));
     assert!(result.is_ok(), "the reset failed: {result:?}");
     assert_eq!(

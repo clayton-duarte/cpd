@@ -835,7 +835,7 @@ impl Fx {
     pub fn engine_tick(&self) {
         let until = Arc::new(AtomicBool::new(false));
         let clock = Arc::new(StopAtFirstNap { inner: self.fakes.clock.clone(), until: until.clone() });
-        let ports = Ports { clock, runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
+        let ports = Ports { clock, runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone(), ..Ports::real() };
         cpd_engine::watch::run_with(&ports, &until).unwrap_or_else(|e| panic!("the engine failed: {e:?}"));
     }
 

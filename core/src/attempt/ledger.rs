@@ -363,7 +363,7 @@ pub fn end_explore(tx: &WriteTxn<'_>, attempt: &Attempt, sha: &str, summary: &st
             .with("attempt", id.clone())
     };
     let changed = tx.execute(
-        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3,
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = ?3, submitted_sha = ?3, actual_files = '[]',
                 submitted_at = (SELECT at FROM txns WHERE id = cpd_txn()), ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND id = ?2 AND status = 'running'",
         params![plan, id, sha],
@@ -446,8 +446,22 @@ pub fn end_opened(
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
     }
+    // hs-d798: the same transaction that wrote `attempts.metrics` appends the `attempt-ended` Event, whose `data`
+    // is the metrics blob: the ten keys copied from it, or all ten null when there are none.
     let tier = attempt.tier.to_string();
     let show = format!("cpd job show {job} --plan {plan}");
+    let ended = format!(
+        "Attempt {id} of Job {job} ended ({}, {}). Next: {show}",
+        end.outcome(),
+        end.cause()
+    );
+    events::append(
+        tx,
+        NewEvent::attempt_ended(ended, metrics)
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
+    )?;
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
             // hs-d514: the merge that leaves a draft and no queued or running Job but `open` and `update` Jobs turns the Lead. An `open` Job's own merge never turns it.

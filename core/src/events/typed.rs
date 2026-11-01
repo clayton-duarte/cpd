@@ -187,6 +187,12 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
+    /// `job-blocked` (§5.2, hs-d798): E3 skipped a Ready Job for want of a pool slot, one Event per
+    /// waiting episode; `waiting` is the number of Ready Jobs skipped that tick.
+    pub fn job_blocked(text: impl Into<String>, waiting: u64) -> NewEvent {
+        make(Kind::JobBlocked, text, json!({"waiting": waiting}))
+    }
+
     pub fn attempt_started(text: impl Into<String>, number: impl Serialize, tier: &str, origin: &str) -> NewEvent {
         make(Kind::AttemptStarted, text, json!({"number": number, "tier": tier, "origin": origin}))
     }
@@ -225,6 +231,31 @@ impl NewEvent {
 
     pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
+    }
+
+    /// `attempt-ended` (§5.2, hs-d798): the end of a `pi` or `durable` Attempt, appended in the same
+    /// transaction that writes `attempts.metrics`. `data` is the metrics blob: the ten keys copied
+    /// from it; when there are no metrics, all ten keys are present with null.
+    pub fn attempt_ended(text: impl Into<String>, metrics: Option<&Value>) -> NewEvent {
+        const KEYS: [&str; 10] = [
+            "turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model",
+            "stop_reason", "thinking_level",
+        ];
+        // Always all ten keys, null for the missing ones: the blob may be absent or partial.
+        let mut data = json!({
+            "turns": null, "tokens_in": null, "tokens_out": null, "cache_read": null, "cache_write": null,
+            "cost_usd": null, "duration_s": null, "model": null, "stop_reason": null, "thinking_level": null,
+        });
+        if let Some(blob) = metrics {
+            if let Some(obj) = blob.as_object() {
+                for key in KEYS {
+                    if let Some(value) = obj.get(key) {
+                        data[key] = value.clone();
+                    }
+                }
+            }
+        }
+        make(Kind::AttemptEnded, text, data)
     }
 
     pub fn all_merged(text: impl Into<String>, pr: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
@@ -557,6 +588,7 @@ mod tests {
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobBlocked => vec![NewEvent::job_blocked(T, 1)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![
                 NewEvent::attempt_status(T, s, s),
@@ -567,6 +599,12 @@ mod tests {
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
             Kind::AttemptAborted => vec![NewEvent::attempt_aborted(T, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
+            Kind::AttemptEnded => vec![
+                NewEvent::attempt_ended(T, Some(&json!({"turns": 1, "tokens_in": 2, "tokens_out": 3, "cache_read": 4, "cache_write": 5, "cost_usd": 0.0, "duration_s": 6.0, "model": "m", "stop_reason": "stop", "thinking_level": "high"}))),
+                NewEvent::attempt_ended(T, None),
+                // a partial blob still yields all ten keys, the rest null
+                NewEvent::attempt_ended(T, Some(&json!({"duration_s": 6.0, "cost_usd": 0.5}))),
+            ],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
@@ -646,6 +684,19 @@ mod tests {
                 let unknown: Vec<_> = keys.iter().filter(|k| !spec.required.contains(k) && !spec.optional.contains(k)).collect();
                 assert!(missing.is_empty() && unknown.is_empty(), "{kind}: missing {missing:?}, unknown {unknown:?}");
             }
+        }
+    }
+
+    /// A partial (or absent) metrics blob still yields the ten keys, the missing ones null: the
+    /// `attempt-ended` schema requires all ten (hs-d798).
+    #[test]
+    fn attempt_ended_fills_a_partial_metrics_blob_with_null() {
+        let event = NewEvent::attempt_ended("text", Some(&json!({"duration_s": 6.0, "cost_usd": 0.5})));
+        let data = event.data();
+        assert_eq!(data["duration_s"], json!(6.0));
+        assert_eq!(data["cost_usd"], json!(0.5));
+        for key in ["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "model", "stop_reason", "thinking_level"] {
+            assert_eq!(data[key], Value::Null, "{key} is null for a partial blob");
         }
     }
 

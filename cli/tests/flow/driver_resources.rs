@@ -125,7 +125,7 @@ fn world(policy: &str, resources: &[&str]) -> World {
     fs::write(&exe, "").unwrap();
     fx.fakes.spawn.set_self_exe(&exe);
     let spawn = Arc::new(Driverish { inner: fx.fakes.spawn.clone(), locks: fx.env.cpd_home().join("locks"), kept: Mutex::default() });
-    let ports = Ports { clock: fx.fakes.ports.clock.clone(), runner: fx.fakes.ports.runner.clone(), spawn: spawn.clone() };
+    let ports = Ports { clock: fx.fakes.ports.clock.clone(), runner: fx.fakes.ports.runner.clone(), spawn: spawn.clone(), ..Ports::real() };
     World { fx, spawn, ports }
 }
 
@@ -293,4 +293,117 @@ fn resource_run_and_the_starter_cannot_both_take_the_last_slot() {
     assert_eq!(holders.len(), 1, "{error}");
     assert_eq!((&holders[0]["slot"], &holders[0]["holder"]["by"], &holders[0]["holder"]["job"]), (&Value::Null, &json!("attempt"), &json!("api")));
     assert!(w.fx.fakes.spawn.execs().is_empty(), "the command never started");
+}
+
+// ─── E3's `job-blocked` Event (contract §3.7 E3): the engine in-process on the fakes, on the `ManualClock` ───
+//
+// The engine/schedule harness, reused from [`common::engine`]'s `Fx` helpers: `engine_config`, `engine_routes`, `engine_plan`,
+// `add_job`, `add_running`, `live_driver`, `watch_ticks`. The drivers E3 starts are launches of the `FakeSpawn`.
+
+use cpd_core::host::runner::Reply;
+
+/// The engine in-process for E3: Plan `pay` (PR `repo` of the repo `acme/pay`, whose policy file is `policy`), `concurrency`
+/// Worker slots (`retry_cap = 0`). The drivers E3 starts are launches of the `FakeSpawn`, whose `self_exe` is a file that exists.
+fn engine(concurrency: u32, policy: &str) -> Fx {
+    let fx = Fx::with_ports();
+    fx.engine_config(&format!("concurrency = {concurrency}\nretry_cap = 0\n"));
+    fx.engine_routes();
+    fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
+    fx.engine_plan();
+    fx.env.sql("UPDATE prs SET name = 'pay' WHERE plan = 'pay';");
+    fx.env.repo_policy("acme", "pay", policy);
+    let exe = fx.env.root().join("cpd-installed");
+    fs::write(&exe, "").unwrap();
+    fx.fakes.spawn.set_self_exe(&exe);
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
+    fx
+}
+
+/// The `job-blocked` Events of Plan `pay`: their `job` and `data`, in order.
+fn blocked(fx: &Fx) -> Vec<(String, Value)> {
+    fx.env.read(|conn| {
+        let mut stmt = conn.prepare("SELECT job, data FROM events WHERE kind = 'job-blocked' AND plan = 'pay' ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|(job, data)| (job, serde_json::from_str(&data).unwrap())).collect())
+    })
+}
+
+/// The `skipped_n` of Job `key` (NULL: never skipped).
+fn skipped_n(fx: &Fx, key: &str) -> Option<i64> {
+    fx.env.query(&format!("SELECT skipped_n FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+}
+
+#[test]
+fn job_blocked_is_appended_once_per_waiting_episode() {
+    // One Worker slot, taken by a running Attempt: `api` is Ready but cannot start — no pool slot is free. The first tick of
+    // the waiting episode appends one `job-blocked` Event; later ticks append no second one until the Job starts.
+    let fx = engine(1, "");
+    let busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &fx.stamp_ago(60_000));
+    fx.add_job("api", &[], "");
+
+    fx.watch_first_tick().unwrap();
+
+    let first = blocked(&fx);
+    assert_eq!(first, vec![("api".to_owned(), json!({"waiting": 1}))], "one Event on the first tick of the waiting episode: {first:?}");
+
+    // The waiting goes on: no second Event.
+    fx.watch_ticks(3).unwrap();
+    assert_eq!(blocked(&fx).len(), 1, "the waiting went on: no second Event");
+
+    // `busy` merges, the slot frees: `api` starts, and no Event is appended for it.
+    fx.env.sql(&format!(
+        "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc', ended_at = 't' WHERE id = 'busy-a1';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND key = 'busy';"
+    ));
+    drop(busy);
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "running");
+    assert_eq!(blocked(&fx).len(), 1, "the Job started: the episode is over, no second Event");
+}
+
+#[test]
+fn no_job_blocked_while_a_dependency_waits() {
+    // One Worker slot, taken by a running Attempt: `dep` is Ready but cannot start, `api` waits for it — a Job whose Dependency
+    // waits is never Ready, so it produces no `job-blocked` Event and is not counted in `dep`'s `waiting`.
+    let fx = engine(1, "");
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &fx.stamp_ago(60_000));
+    fx.add_job("dep", &[], "");
+    fx.add_job("api", &["dep"], "");
+
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(blocked(&fx), vec![("dep".to_owned(), json!({"waiting": 1}))], "only `dep`, Ready and blocked");
+    assert_eq!(skipped_n(&fx, "api"), None, "`api` is never Ready: no skip, no Event");
+
+    // The waiting goes on: `dep` still has its one Event, `api` never gets one.
+    fx.watch_ticks(3).unwrap();
+    assert_eq!(blocked(&fx), vec![("dep".to_owned(), json!({"waiting": 1}))]);
+    assert_eq!(skipped_n(&fx, "api"), None);
+}
+
+#[test]
+fn no_job_blocked_for_an_archived_plan() {
+    // An archived Plan is refused while a Job is queued, so the fixture is the direct insert: `api` is queued in the archived
+    // Plan `pay`. Its Jobs are never Ready, so it produces no `job-blocked` Event and is never skipped.
+    let fx = engine(1, "");
+    let busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &fx.stamp_ago(60_000));
+    fx.add_job("api", &[], "");
+    fx.env.sql("UPDATE plans SET archived_at = 't';");
+
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(blocked(&fx), vec![], "the archived Plan's Job produced no Event");
+    assert_eq!(skipped_n(&fx, "api"), None, "its Jobs are never Ready: no skip");
+
+    fx.watch_ticks(3).unwrap();
+    assert_eq!(blocked(&fx), vec![]);
+    assert_eq!(skipped_n(&fx, "api"), None);
+    drop(busy);
 }

@@ -80,7 +80,7 @@ fn fixture_of(kind: Kind, subject: &str, get: Option<Value>, post_fails: bool) -
     let clock = ManualClock::new();
     let gh = Arc::new(Gh { get, post_fails, seen: Mutex::new(Vec::new()) });
     let runner = Arc::new(FakeRunner::new(clock.clone()).route("gh", gh.clone()));
-    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: Arc::new(FakeSpawn::new()) };
+    let ports = Ports { clock: Arc::new(clock), runner: runner.clone(), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
     let mut env = Env::open_home_with(&ports, home.clone()).unwrap();
     reconcile(&mut env.store, &[condition(kind, subject)], "2026-01-01T00:00:00.000Z").unwrap();
     (Fixture { _dir: dir, home, env, runner }, gh)

@@ -89,11 +89,13 @@ kinds! {
     JobRetried = "job-retried",
     JobCancelRequested = "job-cancel-requested",
     JobCancelled = "job-cancelled",
+    JobBlocked = "job-blocked",
     AttemptStarted = "attempt-started",
     AttemptStatus = "attempt-status",
     AttemptRetry = "attempt-retry",
     AttemptAborted = "attempt-aborted",
     AttemptNudge = "attempt-nudge",
+    AttemptEnded = "attempt-ended",
     AllMerged = "all-merged",
     PrFeedback = "pr-feedback",
     PrAdded = "pr-added",
@@ -168,11 +170,17 @@ impl Kind {
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
             JobCancelled => spec([Y, Y, Y, M, N], &["reason"], &[]),
+            JobBlocked => spec([Y, Y, Y, N, N], &["waiting"], &[]),
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
             AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
             AttemptAborted => spec([Y, Y, Y, Y, N], &["tier", "by"], &[]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),
+            AttemptEnded => spec(
+                [Y, Y, Y, Y, N],
+                &["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model", "stop_reason", "thinking_level"],
+                &[],
+            ),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title", "head_ref", "author"]),
@@ -256,9 +264,9 @@ mod tests {
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level `jobs`,
-    /// commands.md §3.12, Plan explore-view) and 20 (`attempt-aborted`).
+    /// commands.md §3.12, Plan explore-view) and 20 (`attempt-aborted`, `attempt-ended` and `job-blocked`).
     #[test]
-    fn the_protocol_is_20_with_the_attempt_aborted_kind_and_the_pending_plan_jobs_field() {
+    fn the_protocol_is_20_with_the_attempt_aborted_attempt_ended_and_job_blocked_kinds_and_the_pending_plan_jobs_field() {
         assert_eq!(PROTOCOL, 20);
     }
 

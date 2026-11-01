@@ -120,6 +120,9 @@ error_codes! {
     InstallFailed = "install_failed" => Failure,
     // The holographic engine rail (contract §4.6, hs-d677).
     EngineFailed = "engine_failed" => Failure,
+    // A `durable` Worker's transcript has not grown for `timeouts.stall_minutes` (contract §3.4 A4, hs-d798):
+    // the code of the driver's informational `error` Event. Never a command's failure (like `cleanup_failed`).
+    WorkerStalled = "worker_stalled" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,
@@ -281,6 +284,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     ToolTimeout = "tool_timeout" => Timeout,
+    HostTimeout = "host_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
@@ -309,6 +313,7 @@ error_codes! {
     PrNotOpen = "pr_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
     DurableSession = "durable_session" => Refused,
+    HostRunning = "host_running" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
     AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
@@ -554,6 +559,7 @@ mod tests {
             (ErrorCode::NoFailedRun, 3),
             (ErrorCode::AlreadyPosted, 3),
             (ErrorCode::DurableSession, 3),
+            (ErrorCode::HostRunning, 3),
             (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),
@@ -593,6 +599,7 @@ mod tests {
             (ErrorCode::LeadBranchMoved, 3),
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
+            (ErrorCode::WorkerStalled, 1),
             (ErrorCode::PolicyInvalid, 1),
             (ErrorCode::OwnerUnconfirmed, 1),
             (ErrorCode::FallbackMissing, 1),

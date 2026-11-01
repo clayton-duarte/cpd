@@ -1,17 +1,18 @@
-//! `run_with` runs the whole command on the ports it is given, also the areas that read them through `Ports::current()`
-//! (docs/implementing.md, "Ports, Spawn and run_with"): `secret list` runs the 1Password CLI and `host repair` runs
-//! `git`, and both must reach the `FakeRunner` of the test, not a real process.
+//! `run_with` runs the whole command on the ports it is given, also the areas that read them through
+//! `Ports::current()` (docs/implementing.md, "Ports, Spawn and run_with"): `secret list` runs the 1Password CLI and
+//! `host repair` runs `git`, and both must reach the `FakeRunner` of the test, not a real process.
 //!
-//! The commands read the process's environment (`CPD_HOME`, `HOME`, `PATH`, `CPD_SESSION`): a test takes `LOCK`, sets them to
-//! a temporary home and `Drop` puts them back (nextest gives a test a process of its own; under `cargo test` the lock
-//! keeps two of these apart). While red, the real ports run the 1Password CLI (not on a test machine: `NotFound`, at
-//! once) and `git` in a directory that does not exist (it fails at once): nothing real is needed or changed.
-//! `PATH` is the empty temporary home for the same reason: a machine that has the real `op` must never prompt.
+//! The commands read the process's environment (`CPD_HOME`, `HOME`, `PATH`, `CPD_SESSION`): a test takes `LOCK`, sets
+//! them to a temporary home and `Drop` puts them back (nextest gives a test a process of its own; under `cargo test`
+//! the lock keeps two of these apart). While red, the real ports run the 1Password CLI (not on a test machine:
+//! `NotFound`, at once) and `git` in a directory that does not exist (it fails at once): nothing real is needed or
+//! changed. `PATH` is the empty temporary home for the same reason: a machine that has the real `op` must never prompt.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cpd_core::home::CpdHome;
+use cpd_core::host::host_socket::Reach;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::output::Output;
 use cpd_core::ports::Fakes;
@@ -69,6 +70,23 @@ impl Home {
                 Ok(())
             })
             .expect("seed the Manager");
+        self
+    }
+
+    /// A durable Manager Session `mgr` in the store, so `session open` has a durable Session to resolve.
+    fn with_durable_manager(self) -> Home {
+        let home = CpdHome::resolve(Some(self.dir.path().as_os_str().to_owned()), None).expect("the home");
+        let mut store = Store::open(&home, 5000).expect("open the store");
+        store
+            .write("seed", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                     INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, runner)
+                       VALUES ('mgr', 'manager', 'ctx', 'Manager', '/', 'O3', 'stopped', 't', 't', 'durable');",
+                )?;
+                Ok(())
+            })
+            .expect("seed the durable Manager");
         self
     }
 }
@@ -129,4 +147,26 @@ fn host_repair_runs_git_on_the_ports_it_is_given() {
     let Ok(Output::Success(fields)) = out else { panic!("host repair succeeds on the scripted git: {out:?}") };
     assert_eq!(fields["head"], "0123456789abcdef");
     assert!(fakes.runner.unscripted().is_empty(), "{:?}", fakes.runner.unscripted());
+}
+
+#[test]
+fn session_open_waits_for_the_socket() {
+    let _home = Home::enter(Some("mgr")).with_durable_manager();
+    let fakes = Fakes::new();
+    // The socket is absent on the first probe and accepts on the second (contract §6.19). Nothing real opens.
+    fakes.host_socket.script(vec![Reach::Absent, Reach::Accepted]);
+
+    let out = run_with(&fakes.ports, argv(&["session", "open", "mgr"]));
+
+    let Ok(Output::Success(fields)) = out else {
+        panic!("session open of a durable Session waits for the socket and returns: {out:?}")
+    };
+    assert_eq!(fields["session"], "mgr");
+    assert_eq!(fields["pane"], serde_json::Value::Null, "a durable Session never enters a pane: {fields:?}");
+    let panes: Vec<_> = fakes.runner.calls().into_iter().filter(|call| call.args.iter().any(|a| a == "new-window")).collect();
+    assert!(panes.is_empty(), "no pane is opened: {panes:?}");
+    assert_eq!(fakes.clock.naps().len(), 1, "one nap between the absent and the accepting probe");
+    let paths = fakes.host_socket.paths();
+    assert_eq!(paths.len(), 2, "probed until it accepted: {paths:?}");
+    assert!(paths[0].ends_with("run/host/mgr.sock"), "{paths:?}");
 }

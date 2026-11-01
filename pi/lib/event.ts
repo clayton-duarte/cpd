@@ -4,7 +4,7 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `pr-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is `attempt-aborted`.
+ * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `pr-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is `attempt-aborted`, `attempt-ended` and `job-blocked`.
  */
 export const PROTOCOL = 20;
 
@@ -12,8 +12,8 @@ export const PROTOCOL = 20;
 export const KINDS = [
   "context-created", "context-record", "context-grounded",
   "plan-created", "plan-phase", "plan-review", "plan-outlined", "plan-done",
-  "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled",
-  "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge", "attempt-aborted",
+  "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled", "job-blocked",
+  "attempt-started", "attempt-status", "attempt-retry", "attempt-aborted", "attempt-nudge", "attempt-ended",
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed", "session-titled", "session-retiered", "session-model-changed",

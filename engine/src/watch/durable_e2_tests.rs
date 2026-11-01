@@ -25,7 +25,7 @@ fn fx(lead_runner: &str, manager_runner: &str, state: &str) -> (Fx, Arc<ManualCl
     fx.tmux_server();
     fx.engine.tmux.run(&["new-session", "-d", "-s", "cpd", "sleep", "600"].map(str::to_owned)).unwrap();
     let clock = Arc::new(ManualClock::new());
-    fx.engine.ports = Ports { clock: clock.clone(), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()) };
+    fx.engine.ports = Ports { clock: clock.clone(), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
     fx.fixture(&format!(
         "UPDATE sessions SET state = '{state}', runner = '{lead_runner}' WHERE id = 'lead1';
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)

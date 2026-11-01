@@ -4057,22 +4057,29 @@ impl Poll {
     /// Cuts Attempt `<job>-a1` for a running `test` Job of PR `key` - its red test named `t::one` in `tests/t.rs` - from
     /// the PR's Lead worktree and commits the red test. Returns the Attempt worktree; [`Poll::submit_red`] submits it.
     fn red_test_attempt(&self, key: &str, job: &str) -> PathBuf {
+        self.red_test_attempt_number(key, job, 1)
+    }
+
+    /// [`Poll::red_test_attempt`] for the Job's `number`-th Attempt: the Job row is written on the first only.
+    fn red_test_attempt_number(&self, key: &str, job: &str, number: i64) -> PathBuf {
         let lead = self.lead_worktree_of(key);
-        let attempt = AttemptId::parse(&format!("{job}-a1")).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("red.log") };
+        let attempt = AttemptId::parse(&format!("{job}-a{number}")).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join(format!("red-{number}.log")) };
         let made = self.scoped(|| create_attempt_worktree(&self.repo, &lead, &plan(), &attempt, &setup)).unwrap();
         self.store()
             .write("fixture", |tx| {
-                tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                     VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
-                    params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
-                )?;
+                if number == 1 {
+                    tx.execute(
+                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                           status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+                         VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
+                        params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
+                    )?;
+                }
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
-                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'running', ?3, ?4, ?5, 't')",
-                    params![attempt.to_string(), job, made.branch, made.path.to_str().unwrap(), made.base_sha],
+                     VALUES ('pay', ?1, ?2, ?3, 'S2', 'ladder', 'running', ?4, ?5, ?6, 't')",
+                    params![attempt.to_string(), job, number, made.branch, made.path.to_str().unwrap(), made.base_sha],
                 )?;
                 Ok(())
             })
@@ -4081,9 +4088,24 @@ impl Poll {
         made.path
     }
 
+    /// Ends the Attempt `id` `failed` (`cause` `no_submit`): the blocked Job stops running, so no Attempt of the PR runs.
+    fn end_attempt(&self, id: &str) {
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'no_submit', ended_at = 't' WHERE plan = 'pay' AND id = ?1", [id])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
     /// `cpd attempt submit red-a1 --plan pay` in the red-test Attempt's worktree.
     fn submit_red(&self, worktree: &Path) -> Run {
-        self.cpd_in(worktree, &["attempt", "submit", "red-a1", "--plan", "pay"])
+        self.submit_attempt(worktree, "red-a1")
+    }
+
+    /// `cpd attempt submit <attempt> --plan pay` in the Attempt's worktree.
+    fn submit_attempt(&self, worktree: &Path, attempt: &str) -> Run {
+        self.cpd_in(worktree, &["attempt", "submit", attempt, "--plan", "pay"])
     }
 }
 
@@ -4155,3 +4177,45 @@ impl Poll {
     }
 }
 
+/// A pre-open (`dispatch`) PR's blocked red-test Job submits once a pre-open `pr push` carries a main-side fix
+/// (hs-d801, hs-n636): the tdd submit check builds cpd from the branch's sources, so the Job's `list t::one` finds
+/// its test only when the fix (`harness.txt`) is in the Lead Branch, which pre-open only `pr push` can publish. With
+/// no push, the fix stays in the Lead worktree and the submit stays `tests_not_found`.
+#[test]
+fn a_preopen_push_lets_a_blocked_test_job_submit() {
+    let fx = poll_fx("dispatch");
+    // The Gate's `pre-merge` and the Job's `[test-commands]` share the one fake `sh`.
+    fx.env.repo_policy("acme", "pay", &format!("{REGRESS_TESTS}[hooks]\npre-merge = \"pre-merge\"\n"));
+    fx.sh(|call| if call.args[1] == "pre-merge" { Reply::ok("") } else { red_tests_answer(call) });
+
+    // The base fix reaches `main` on `origin`; the pre-open PR's Lead Branch, cut from before it, lacks it.
+    let fix = fx.advance_base("harness.txt", "the base fix\n");
+    let lead = fx.lead_worktree_of("repo");
+    assert_eq!(fx.git(&fx.repo, &["rev-parse", "origin/main"]), fix, "the base fix is on main on the remote");
+    assert!(!fx.git_output(&lead, &["cat-file", "-e", "HEAD:harness.txt"]).status.success(), "the Lead Branch lacks the base fix before the push");
+
+    // The red-test Job is blocked: its `list t::one` finds nothing, and cpd refuses the submit `tests_not_found`.
+    let red = fx.red_test_attempt("repo", "red");
+    let error = common::refused(&fx.submit_red(&red), "tests_not_found", 3);
+    assert_eq!(error["details"]["tests"], json!(["t::one"]));
+
+    // The blocked Attempt ends (the Job is failed, not retried): the push lands between Attempts (hs-d801).
+    fx.end_attempt("red-a1");
+
+    // The Lead merges the fix into the Lead Branch (no hand-push), then a pre-open `pr push` Gates and pushes it.
+    fx.git(&lead, &["fetch", "-q", "origin", "main"]);
+    fx.git(&lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    let pushed = fx.lead_sha();
+    let out = fx.pr("push").ok();
+    assert_eq!(out["pushed"], json!(true), "{out}");
+    assert_eq!(out["sha"], json!(pushed), "{out}");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(pushed.clone()), "the fix reached origin through the pre-open push");
+
+    // The Job's next Attempt is cut from the pushed Lead Branch tip, so its `list t::one` finds the test and the
+    // submit is accepted (a `test` Job; its `run` is red).
+    let again = fx.red_test_attempt_number("repo", "red", 2);
+    let submitted = fx.submit_attempt(&again, "red-a2").ok();
+    assert_eq!(submitted["submitted"], json!(true), "{submitted}");
+    assert!(again.join("harness.txt").exists(), "the Attempt worktree holds the base fix");
+    assert_eq!(fx.status_of_attempt("red-a2"), "merging", "the blocked red-test Job submitted once its test was found");
+}
