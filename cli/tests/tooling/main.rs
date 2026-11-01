@@ -21,6 +21,7 @@ mod pill_parity;
 mod pill_sites;
 mod pnpm_fresh;
 mod preview_script;
+mod real_process_scan;
 mod run_with;
 mod slot;
 mod smoke;
