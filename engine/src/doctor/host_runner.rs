@@ -14,15 +14,20 @@ const NAME: &str = "host_runner";
 const MIN_NODE: [u64; 3] = [22, 19, 0];
 const EXPECTED: &str = ">= 22.19.0";
 
-/// Both runner keys `pi` passes without looking at anything; either `durable` needs `<pi_adapter>/durable-host/main.ts`
-/// and Node >= 22.19.0 (contract §6.19).
+/// Both runner keys `pi` passes without looking at anything, as no store is consulted. Kept for the unit test that
+/// drives this path directly; `run` calls [`check_with`].
+#[allow(dead_code)]
 pub fn check(config: &Config) -> Check {
-    check_with(config, &*Ports::current().runner)
+    check_with(config, false, &*Ports::current().runner)
 }
 
-/// [`check`] on `runner`.
-pub fn check_with(config: &Config, runner: &dyn Runner) -> Check {
-    if config.lead_runner == WorkerRunner::Pi && config.manager_runner == WorkerRunner::Pi {
+/// Both runner keys `pi` and no live durable Session passes without looking at anything; otherwise the host needs
+/// `<pi_adapter>/durable-host/main.ts` and Node >= 22.19.0 (contract §6.19).
+pub fn check_with(config: &Config, durable_session: bool, runner: &dyn Runner) -> Check {
+    if config.lead_runner == WorkerRunner::Pi
+        && config.manager_runner == WorkerRunner::Pi
+        && !durable_session
+    {
         return Check::pass(NAME, Severity::Error);
     }
     let dir = match config.pi_adapter_dir() {
