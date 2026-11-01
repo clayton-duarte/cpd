@@ -371,7 +371,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
 | Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
-| Inbox (right) | the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, vendored 1:1 (“The Inbox rail in the right column”, below) — the real Inbox and the Tree/Plan panes are still out of scope (the follow-up PR `chat-inbox-live` and the ui-parity Plan) |
+| Inbox (right) | the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, vendored 1:1 (“The Inbox rail in the right column”, below) — the rail renders the live Inbox (“The live Inbox in the right rail”, below); the Tree/Plan panes stay out of scope (the ui-parity Plan) |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
 **double-clicking its handle restores `20rem`** (checked in a real browser: initial 320 px,
@@ -458,11 +458,25 @@ The right column stops being a placeholder and becomes the **Inbox rail** — th
 
 **What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column), the `Unreads` switch in the second sidebar's header, and the `Type to search...` input the block puts under the title — so the header carries the title `Inbox` alone and the rail has no input at all.
 
-**The data.** The ten mails are the registry's own sample data (`data.mails`), verbatim and in its order. Reading the real Inbox is a named follow-up: this rail is the block's sample list, not the store.
+**The data.** The rail renders the **live Inbox** — the block's ten sample mails (`data.mails`) and the `Mail` interface they need are gone with this PR. The items and the row mapping are the next section's contract (“The live Inbox in the right rail”, below).
 
 **The column.** The Inbox column defaults to `25rem` and is sized and resized like the Context column (above), double-clicking its handle restoring `25rem`. The panel wraps the rail in its own `SidebarProvider` whose `--sidebar-width` is `100%`, so the block's `Sidebar` fills the panel instead of the sidebar's `16rem` default.
 
 **Why 25rem.** The teaser is a fixed `w-[260px]` and the block's own `page.tsx` sets `--sidebar-width: 350px`; at a narrower column the teaser's last characters are clipped mid-word (measured 2026-11-01: 257px of inner width against the 260px teaser). `25rem` gives the row room.
+
+### The live Inbox in the right rail
+
+The rail's data is the **real Inbox**: the open items `cpd inbox list` prints, one row per item, read-only. An item's fields come from that command's JSON row — its `kind`, `label`, `session`, `url` and `age_seconds` are what the row renders.
+
+**Where the items come from.** `web/src/api/live-server.ts` gains a `/__cpd/inbox` route on the dev adapter, guarded by the same token check as every other `/__cpd/` route, returning `{ ok: true, items: [...] }`. Its `inbox()` dependency runs `cpd inbox list` and passes the items through unchanged. `web/src/api/live.ts` gains `inbox()` on `LiveApi`: a plain `GET /__cpd/inbox` with the token header, exactly as `sessions()` reads `/__cpd/sessions`.
+
+**The row's parts, one by one.** The name is the **actor**: for the kind `review-requested` it is `peer review`; otherwise, when the item names a Session, it is that Session's `name` (falling back to the first 8 characters of its id); otherwise it is `cpd engine`. The date is the item's `age_seconds` rendered relative: `just now` under a minute, `N minutes ago`, `N hours ago`, `Yesterday` from 24 to 48 hours, `N days ago` under a week, `N weeks ago` under 30 days, `N months ago` after that. The subject line is the item's `label`'s first line. The teaser is the label's second line when it has one (the pull request's title, for a `pr-ready`), and the row has no teaser line when it does not.
+
+**What the row links to.** The row is an anchor: its `href` is the item's `url` when the item has one, and `#` when it does not (a `curate-docs` item has none).
+
+**An empty Inbox.** No items renders an empty list under the header — no placeholder copy is invented.
+
+**What does not change.** The rows keep the block's classes, the header keeps its title, the column keeps its `25rem` default, and the rail is read-only: nothing in it snoozes, dismisses, claims or answers an item.
 
 ### The durable host-socket read (`chat-host`)
 
