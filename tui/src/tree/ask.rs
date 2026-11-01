@@ -25,7 +25,7 @@ pub enum Ask {
     Fork {
         source: SessionId,
     },
-    /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's PRs name theirs).
+    /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's Workflows name theirs).
     NewPlan {
         context: ContextId,
         taken: Vec<String>,

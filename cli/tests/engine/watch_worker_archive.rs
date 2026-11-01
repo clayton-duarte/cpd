@@ -45,7 +45,7 @@ fn fx() -> Archive {
     fs::write(&file, TRANSCRIPT).unwrap();
     let job = |key: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', 'repo', '{key}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', {cause}, 0, '{fp}', cpd_txn(), 't');",
             status = if key == "done" { "failed" } else { "running" },
             cause = if key == "done" { "'crashed'" } else { "NULL" },
@@ -60,7 +60,7 @@ fn fx() -> Archive {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{repo}', 'Title', 'config', cpd_txn(), 't', 't');
          {done_job} {live_job}
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at) VALUES

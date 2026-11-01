@@ -16,7 +16,7 @@ fn e3_starts_a_job_in_its_provider_hold_only_after_30_seconds_on_the_clock() {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '/repos/r', 'main', 'dispatch', 'cpd/pay/repo', '/repos/r.lead', 'Charge the card', 'config', cpd_txn(), 't', 't');",
     );
     let fakes = Fakes::new();

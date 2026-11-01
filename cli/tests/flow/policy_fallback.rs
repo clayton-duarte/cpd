@@ -175,7 +175,7 @@ fn f6_an_owner_already_set_keeps_its_refusals_first() {
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead-p', 'lead', 'c0', 'p1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p1', 'c0', 'P', 'grounding', 'lead-p', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('p1', 'r', '/r', 'main', 'waiting', 'cpd/p1', cpd_txn(), 't');",
     );
     let run = fx.cpd(&[
@@ -244,7 +244,7 @@ fn pr_fx(owner: &str, name: &str) -> (Fx, PathBuf) {
 
 fn add(fx: &Fx, repo: &Path) -> Run {
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api",
         "--repo",
@@ -269,10 +269,10 @@ fn f10_a_repo_with_no_origin_is_clayton_duartes() {
     let (fx, repo) = pr_fx(FALLBACK, "pay");
     repo_file(&fx, FALLBACK, "pay");
     let out = add(&fx, &repo).ok();
-    assert_eq!(out["pr"]["name"], "pay", "{out}");
+    assert_eq!(out["workflow"]["name"], "pay", "{out}");
     assert_eq!(
         fx.env
-            .query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'api'"),
+            .query::<String>("SELECT name FROM workflows WHERE plan = 'pay-1' AND key = 'api'"),
         "pay"
     );
 }

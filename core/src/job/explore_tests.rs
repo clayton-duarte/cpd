@@ -13,12 +13,12 @@ use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
 use super::{AddArgs, EditArgs, RetryArgs};
-use crate::args::{PlanArg, PrArg, Text};
+use crate::args::{PlanArg, Text, WorkflowArg};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{JobKey, PlanId, PrKey};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
@@ -28,19 +28,33 @@ const T: &str = "2026-01-01T00:00:00.000Z";
 struct Fixture {
     dir: tempfile::TempDir,
     env: Env,
+    /// `CPD_ATTEMPT` is cleared for the fixture's life (a Worker pane cannot edit a Locked Job) and restored on drop.
+    saved_attempt: Option<std::ffi::OsString>,
 }
 
-/// Plan `pay` in `phase` with `prs` PRs (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
-/// `repo` is the PRs' repo path.
-fn fixture_at(phase: &str, prs: &[&str], repo: Option<&std::path::Path>) -> Fixture {
-    fixture_with(phase, prs, repo, false)
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // SAFETY: nextest gives each test a process of its own.
+        unsafe {
+            match &self.saved_attempt {
+                Some(v) => std::env::set_var("CPD_ATTEMPT", v),
+                None => std::env::remove_var("CPD_ATTEMPT"),
+            }
+        }
+    }
 }
 
-/// [`fixture_at`], or, with `repo_is_temp_dir`, with the PRs' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
+/// Plan `pay` in `phase` with `prs` Workflows (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
+/// `repo` is the Workflows' repo path.
+fn fixture_at(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>) -> Fixture {
+    fixture_with(phase, workflows, repo, false)
+}
+
+/// [`fixture_at`], or, with `repo_is_temp_dir`, with the Workflows' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
 /// and fixed at insert: the `prs_locked` trigger refuses a later change of `repo`).
 fn fixture_with(
     phase: &str,
-    prs: &[&str],
+    workflows: &[&str],
     repo: Option<&std::path::Path>,
     repo_is_temp_dir: bool,
 ) -> Fixture {
@@ -96,13 +110,20 @@ fn fixture_with(
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked}, {done});"
     );
-    for pr in prs {
+    for workflow in workflows {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '{repo}', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{workflow}', '{repo}', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
         ));
     }
-    let mut f = Fixture { dir, env };
+    // SAFETY: nextest gives each test a process of its own; the fixture restores the variable on drop.
+    let saved_attempt = std::env::var_os("CPD_ATTEMPT");
+    unsafe { std::env::remove_var("CPD_ATTEMPT") };
+    let mut f = Fixture {
+        dir,
+        env,
+        saved_attempt,
+    };
     f.sql(&sql);
     f
 }
@@ -133,10 +154,10 @@ impl Fixture {
         self.spec_file(name, &explore_spec())
     }
 
-    /// An existing queued Job of `kind` (explore: no PR, derived touches) with a true fingerprint, in its own transaction.
+    /// An existing queued Job of `kind` (explore: no Workflow, derived touches) with a true fingerprint, in its own transaction.
     fn job(&mut self, key: &str, kind: &str, status: &str, tier: &str, needs: &[&str]) {
         let explore = matches!(kind, "scout" | "research");
-        let (pr, touches) = if explore {
+        let (workflow, touches) = if explore {
             ("NULL".to_owned(), format!("[\"run/pay/explore/{key}.md\"]"))
         } else {
             ("'api'".to_owned(), "[\"a\"]".to_owned())
@@ -145,8 +166,8 @@ impl Fixture {
         let mut fingerprint = String::new();
         let _ = self.env.store.write("fingerprint", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
-                   VALUES ('pay', {pr}, 'twin', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', 'draft', 1, cpd_txn(), '{T}');"
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
+                   VALUES ('pay', {workflow}, 'twin', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', 'draft', 1, cpd_txn(), '{T}');"
             ))?;
             for need in needs {
                 tx.execute_batch(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'twin', '{need}');"))?;
@@ -169,8 +190,8 @@ impl Fixture {
             "NULL".to_owned()
         };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
-               VALUES ('pay', {pr}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pay', {workflow}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
         ));
         for need in needs {
             self.sql(&format!(
@@ -193,7 +214,7 @@ impl Fixture {
         ));
     }
 
-    // Each argument is a field of `AddArgs`; a signature change is out of scope.
+    // The test helper's eight arguments mirror the command's inputs verbatim.
     #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
@@ -201,7 +222,7 @@ impl Fixture {
         kind: &str,
         tier: &str,
         spec: &Path,
-        pr: Option<&str>,
+        workflow: Option<&str>,
         draft: bool,
         needs: &[&str],
     ) -> Result<Output, CpdError> {
@@ -214,8 +235,8 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            pr: PrArg {
-                pr: pr.map(|p| PrKey::parse(p).unwrap()),
+            workflow: WorkflowArg {
+                workflow: workflow.map(|p| WorkflowKey::parse(p).unwrap()),
             },
             plan: PlanArg {
                 plan: Some(PlanId::parse("pay").unwrap()),
@@ -295,7 +316,7 @@ fn explore_add_scout_in_grounding_is_queued_with_derived_touches() {
     assert_eq!(out["job"]["status"], "queued");
     assert_eq!(out["job"]["pr"], Value::Null);
     assert_eq!(f.column("s1", "status").as_deref(), Some("queued"));
-    assert_eq!(f.column("s1", "pr"), None);
+    assert_eq!(f.column("s1", "workflow"), None);
     assert!(
         f.column("s1", "fingerprint")
             .is_some_and(|fp| fp.len() == 64),
@@ -346,12 +367,12 @@ fn explore_add_needs_no_pr_flag_when_the_plan_has_two_prs() {
         if let Err(e) = &out {
             assert_ne!(
                 e.code(),
-                ErrorCode::PrRequired,
-                "an explore Job belongs to the Plan, not to a PR"
+                ErrorCode::WorkflowRequired,
+                "an explore Job belongs to the Plan, not to a Workflow"
             );
         }
         assert_eq!(fields(out)["job"]["pr"], Value::Null, "phase {phase}");
-        assert_eq!(f.column("s1", "pr"), None);
+        assert_eq!(f.column("s1", "workflow"), None);
     }
 }
 
@@ -363,7 +384,7 @@ fn explore_add_refuses_the_pr_flag() {
         let tier = if kind == "scout" { "H2" } else { "S2" };
         let e = refused(
             f.add("s1", kind, tier, &spec, Some("api"), false, &[]),
-            ErrorCode::ExplorePrForbidden,
+            ErrorCode::ExploreWorkflowForbidden,
         );
         assert_eq!(e.exit().code(), 3);
         assert_eq!(f.jobs(), 0, "nothing written");
@@ -524,7 +545,7 @@ fn explore_spec_context_may_name_machine_paths() {
 
 #[test]
 fn explore_spec_skips_the_touches_tree_check() {
-    // The PRs' repo is a directory that is no git tree: a tree check would read it and fail.
+    // The Workflows' repo is a directory that is no git tree: a tree check would read it and fail.
     let repo = tempfile::tempdir().unwrap();
     let mut f = fixture_at("dispatch", &["api"], Some(repo.path()));
     let spec = f.explore_spec("s.json");
@@ -577,7 +598,7 @@ fn explore_needs_only_explore_jobs() {
 
 #[test]
 fn work_spec_may_cite_an_explore_artefact_path() {
-    // The PRs' repo is the directory that holds `$CPD_HOME`, so the artefact path lies inside a primary checkout by name.
+    // The Workflows' repo is the directory that holds `$CPD_HOME`, so the artefact path lies inside a primary checkout by name.
     let mut f = fixture_with("dispatch", &["api"], None, true);
     let root = f.dir.path().display().to_string();
     let artefact = format!("{}/run/pay/explore/s1.md", f.env.home.root().display());
@@ -595,7 +616,7 @@ fn work_spec_may_cite_an_explore_artefact_path() {
         );
     }
 
-    // A primary-checkout path of the Plan's PR is still refused.
+    // A primary-checkout path of the Plan's Workflow is still refused.
     let mut spec = work_spec();
     spec["context"] = json!(format!("Read {root}/src/lib.rs."));
     let path = f.spec_file("w2.json", &spec);
@@ -621,7 +642,7 @@ fn explore_spec_edit_while_queued_without_attempt() {
         spec,
         needs: None,
         no_needs: false,
-        pr: None,
+        workflow: None,
         kind: None,
         plan: PlanArg {
             plan: Some(PlanId::parse("pay").unwrap()),

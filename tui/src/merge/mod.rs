@@ -1,4 +1,4 @@
-//! The merge (commands.md §13.2; hs-d273, hs-d473; pro-d111): no confirmation. The Dispatch column's merge icon, the PR menu's
+//! The merge (commands.md §13.2; hs-d273, hs-d473; pro-d111): no confirmation. The Dispatch column's merge icon, the Workflow menu's
 //! Merge and the Inbox `pr-ready` item's Merge call [`start`], which runs `cpd tui action merge <owner>/<repo>#<n>
 //! --client <name>` with tmux `run-shell -b` at once.
 //!

@@ -48,7 +48,7 @@ test("the last assistant message's text", () => {
 // ---- through the adapter, with the fake cpd ----
 
 const ended = (text: string) => ({ messages: [{ role: "user", content: "go" }, { role: "assistant", content: [{ type: "text", text }] }] });
-const plan = () => planShow({ jobs: [{ key: "reg-docs" }, { key: "reg-reminder" }], prs: [{ key: "register", jobs: ["reg-docs", "reg-reminder"] }] });
+const plan = () => planShow({ jobs: [{ key: "reg-docs" }, { key: "reg-reminder" }], workflows: [{ key: "register", jobs: ["reg-docs", "reg-reminder"] }] });
 
 async function started(over: Record<string, unknown> = {}, show: unknown = plan()) {
   const f = new Fixture();
@@ -75,7 +75,7 @@ test("a Lead's run ending with future work and no key: the next run carries one 
   assert.deepEqual(f.pi.sent, [], "never a message of its own: no turn, nothing shown");
 });
 
-test("naming a key of the Plan, a Job or a PR, makes none", async (t) => {
+test("naming a key of the Plan, a Job or a Workflow, makes none", async (t) => {
   const f = await started();
   t.after(() => f.close());
   await f.pi.fire("agent_end", ended("Next batch: reg-reminder."));
@@ -115,7 +115,7 @@ test("a failing plan show: the reminder adds nothing and says nothing", async (t
       message: {
         customType: "cpd-context",
         display: true,
-        content: "could not read the Plan's PRs: No.",
+        content: "could not read the Plan's Workflows: No.",
         details: { event: 0, delivered_to: ID, records: [], summary: "cpd-context" },
       },
     },

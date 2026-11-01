@@ -318,7 +318,7 @@ fn pull_request(fx: &Fx, number: u32, merge_state: &str) {
         ),
     );
     if number == 4 {
-        sql(&mut store, "UPDATE prs SET status = 'open', pr_number = 4, pr_url = 'https://github.com/acme/shop/pull/4', pr_opened_at = '2026-01-03T00:00:00.000Z',
+        sql(&mut store, "UPDATE workflows SET status = 'open', pr_number = 4, pr_url = 'https://github.com/acme/shop/pull/4', pr_opened_at = '2026-01-03T00:00:00.000Z',
                         pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/shop' AND number = 4) WHERE plan = 'ship';");
     }
 }
@@ -491,7 +491,14 @@ fn picking_post_runs_cpd_pr_post_with_the_pr_key_and_plan_and_opens_no_popup() {
     run(&fx, pick(&screen, "shop#4 ready for user review", 0));
     assert_eq!(
         cpd_calls(&fx),
-        [words(&["pr", "post", "--pr", PR_KEY, "--plan", "ship"])]
+        [words(&[
+            "pr",
+            "post",
+            "--workflow",
+            PR_KEY,
+            "--plan",
+            "ship"
+        ])]
     );
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }
@@ -545,7 +552,7 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
     assert!(
         dialog
             .to_lowercase()
-            .contains("no pr of plan ship points at acme/shop#4"),
+            .contains("no workflow of plan ship has the pull request acme/shop#4"),
         "{dialog}"
     );
 }

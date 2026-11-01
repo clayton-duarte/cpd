@@ -23,11 +23,11 @@ Use this template exactly, one line per section header, and omit any section wit
 
 ## Out of scope and follow-ups
 
-<what was deliberately left, naming registered PR/Job keys>
+<what was deliberately left, naming registered Job and Workflow keys>
 
 ## Links
 
-<ticket, design doc, sister PRs, with inline context>
+<ticket, design doc, sister pull requests, with inline context>
 ```
 
 ## Section rules
@@ -38,9 +38,9 @@ Use this template exactly, one line per section header, and omit any section wit
 
 **Acceptance criteria:** A checklist. Each item is checkable: it describes something testable (a test run, a command output, a manual observation) and ends with its evidence once known. A reviewer should see what was promised and what proved it. Examples: "`timeout 60 npm run build` succeeds"; "`npm run test -- test/auth.test.ts` passes"; "No regressions in the main app: verified by hand on the staging build at commit 62f4e9a".
 
-**Out of scope and follow-ups:** What was deliberately left, naming registered Job and PR keys for follow-up work (for example, "Caching is not implemented; see PR cache"; "Error reporting for malformed tokens is a follow-up: PR error-reporting"). A reviewer reading this knows the boundary and can ask for what should have been done instead.
+**Out of scope and follow-ups:** What was deliberately left, naming registered Job and Workflow keys for follow-up work (for example, "Caching is not implemented; see Workflow cache"; "Error reporting for malformed tokens is a follow-up: Workflow error-reporting"). A reviewer reading this knows the boundary and can ask for what should have been done instead.
 
-**Links:** Ticket, design doc, sister PRs and other PRs this depends on, with enough inline context that a dead link costs nothing. (For example: "Design: [Cache strategy](https://...); Blocks: PR shipping"; or "Fixes [#1234](https://...) (user login timeout)").
+**Links:** Ticket, design doc, sister pull requests and other pull requests this depends on, with enough inline context that a dead link costs nothing. (For example: "Design: [Cache strategy](https://...); Blocks: PR shipping"; or "Fixes [#1234](https://...) (user login timeout)").
 
 ## Where the content comes from
 
@@ -48,9 +48,9 @@ Write the description from the Plan outline (`cpd plan show`), so nothing is wri
 
 - **What and why:** from the Plan's `goal` and the decision round(s) the User approved.
 - **How:** from the decision round(s) and the Job specs' `context` fields (what each Job needed to know about approach and trade-offs).
-- **Acceptance criteria:** the checklist per PR in the `done_when` field, with the evidence filled in once the Jobs are done (the test runs and outputs).
-- **Out of scope and follow-ups:** from the Plan's `out_of_scope` list and the `risks` that became registered follow-up PRs and Jobs.
-- **Links:** from the Plan's `decided` records (the Context decisions the Plan rests on) and from any stacked or dependent PRs.
+- **Acceptance criteria:** the checklist per Workflow in the `done_when` field, with the evidence filled in once the Jobs are done (the test runs and outputs).
+- **Out of scope and follow-ups:** from the Plan's `out_of_scope` list and the `risks` that became registered follow-up Workflows and Jobs.
+- **Links:** from the Plan's `decided` records (the Context decisions the Plan rests on) and from any stacked or dependent Workflows.
 
 ## Repo template rule
 

@@ -1,4 +1,4 @@
-//! The closed-pull-request wake step: one message from null with wake true to an idle Lead per (PR, pull request number).
+//! The closed-pull-request wake step: one message from null with wake true to an idle Lead per (Workflow, pull request number).
 
 use serde_json::Value;
 
@@ -7,10 +7,10 @@ use super::testkit::Fx;
 
 fn text(key: &str, n: i64) -> String {
     format!(
-        "PR {key} of Plan pay is open in cpd but its pull request #{n} was closed without a merge. https://github.com/acme/shop/pull/{n} \
+        "Workflow {key} of Plan pay is open in cpd but its pull request #{n} was closed without a merge. https://github.com/acme/shop/pull/{n} \
          A person or GitHub closed it (for example GitHub does when a stacked pull request's base branch is deleted). \
-         cpd has not cancelled the PR and will not. Decide: ask the User, reopen the pull request on GitHub, or give the PR up with \
-         `cpd pr cancel --pr {key}`."
+         cpd has not cancelled the Workflow and will not. Decide: ask the User, reopen the pull request on GitHub, or give the Workflow up with \
+         `cpd workflow cancel --workflow {key}`."
     )
 }
 
@@ -23,17 +23,17 @@ fn pull_request(fx: &mut Fx, n: i64, state: &str) {
     ));
 }
 
-/// PR `key` of Plan `pay`, `open` on pull request `n`.
+/// Workflow `key` of Plan `pay`, `open` on pull request `n`.
 fn open_pr(fx: &mut Fx, key: &str, n: i64) {
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
            VALUES ('pay', '{key}', '/r', 'main', 'open', 'cpd/pay/{key}', '/w/{key}', {n}, 'https://github.com/acme/shop/pull/{n}', 't', {n},
                    cpd_txn(), 't', 't');"
     ));
 }
 
-/// A fixture with an idle Lead and PR `ship` open on the closed pull request #7.
+/// A fixture with an idle Lead and Workflow `ship` open on the closed pull request #7.
 fn fixture() -> Fx {
     let mut fx = Fx::with_plan("");
     fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
@@ -98,7 +98,7 @@ fn a_new_pull_request_number_of_the_same_pr_wakes_the_lead_again() {
     closed::run(&mut fx.engine);
     pull_request(&mut fx, 8, "closed");
     fx.fixture(
-        "UPDATE prs SET pr_number = 8, pr_url = 'https://github.com/acme/shop/pull/8', pull_request = 8 WHERE plan = 'pay' AND key = 'ship';",
+        "UPDATE workflows SET pr_number = 8, pr_url = 'https://github.com/acme/shop/pull/8', pull_request = 8 WHERE plan = 'pay' AND key = 'ship';",
     );
     closed::run(&mut fx.engine);
     closed::run(&mut fx.engine);
@@ -128,18 +128,18 @@ fn a_cancelled_pr_or_an_open_pull_request_sends_nothing() {
     pull_request(&mut fx, 9, "open");
     open_pr(&mut fx, "live", 9);
     fx.fixture(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'gone', '/r', 'main', 'cancelled', 'cpd/pay/gone', cpd_txn(), 't');",
     );
     closed::run(&mut fx.engine);
     assert_eq!(texts(&mut fx), Vec::<String>::new());
-    // A PR that was open on a closed pull request and is then cancelled sends nothing either.
+    // A Workflow that was open on a closed pull request and is then cancelled sends nothing either.
     pull_request(&mut fx, 7, "closed");
     open_pr(&mut fx, "ship", 7);
-    fx.fixture("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL WHERE key = 'ship';");
+    fx.fixture("UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL WHERE key = 'ship';");
     closed::run(&mut fx.engine);
     assert_eq!(texts(&mut fx), Vec::<String>::new());
-    // Only a PR that is open on a closed pull request is told of.
+    // Only a Workflow that is open on a closed pull request is told of.
     pull_request(&mut fx, 10, "closed");
     open_pr(&mut fx, "real", 10);
     closed::run(&mut fx.engine);

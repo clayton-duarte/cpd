@@ -157,7 +157,7 @@ fn clock(at: &str, zone: &cpd_core::clock::TimeZone) -> String {
 
 /// The `error` codes of a failure the engine hit for a Lead, whose source is still `watch`: the Lead handles them
 /// (contract §2.2: not Inbox items).
-const LEAD_CODES: [&str; 2] = ["pr_start_failed", "push_failed"];
+const LEAD_CODES: [&str; 2] = ["workflow_start_failed", "push_failed"];
 
 /// Whether an `error` Event is addressed to a Lead, who handles it (audit Q5): it names a Plan and its source is not the
 /// engine's own `watch` (`pr poll`'s `cleanup_failed`, the drivers' errors), or its code is one of [`LEAD_CODES`]. The
@@ -552,9 +552,9 @@ mod error_colour {
             colour(&error(Some("pay"), "plan lock", "push_failed")),
             waiting
         );
-        // the engine's own start of a PR (source `watch`) is for the Lead too
+        // the engine's own start of a Workflow (source `watch`) is for the Lead too
         assert_eq!(
-            colour(&error(Some("pay"), "watch", "pr_start_failed")),
+            colour(&error(Some("pay"), "watch", "workflow_start_failed")),
             waiting
         );
         assert_eq!(colour(&error(Some("pay"), "watch", "push_failed")), waiting);

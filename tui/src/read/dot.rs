@@ -542,7 +542,7 @@ mod tests {
         for work in [Work::Planning, Work::Dispatch, Work::Review] {
             assert!(!Dot::Working(Some(work)).needs_you());
         }
-        // the dot of a Plan of drafts and an open PR is planning, whatever the phase: through the one rule
+        // the dot of a Plan of drafts and an open Workflow is planning, whatever the phase: through the one rule
         assert_eq!(
             Dot::of(
                 State::Working,

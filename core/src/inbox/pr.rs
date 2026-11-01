@@ -7,7 +7,7 @@ use super::model::{Condition, Item, Kind, Urgency};
 use super::rules::id;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId, WorkflowKey};
 use crate::pr::postable::unready;
 use crate::pr::pulls::{self, PullRequest};
 
@@ -90,7 +90,7 @@ impl Status {
 /// What the table reads of a pull request besides its row.
 struct Facts<'a> {
     row: &'a PullRequest,
-    /// The owner's Lead works, or the owner's PR has a live `update` or `work` Job.
+    /// The owner's Lead works, or the owner's Workflow has a live `update` or `work` Job.
     handled: bool,
     owned: bool,
     posted: bool,
@@ -99,8 +99,8 @@ struct Facts<'a> {
 }
 
 /// The STATUS table, first match wins: draft; broken; checks running; ready for user review (also when stacked); ready to
-/// merge; then a stacked PR is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
-/// else a posted PR is waiting for peer review, else waiting. `post_enabled` is asked at most once, and only when needed.
+/// merge; then a stacked Workflow is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
+/// else a posted Workflow is waiting for peer review, else waiting. `post_enabled` is asked at most once, and only when needed.
 fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     let r = f.row;
     if r.draft {
@@ -149,11 +149,11 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     let mut stmt = conn.prepare(&format!(
         "SELECT {}, {}, o.plan, o.key, p.context, p.lead_session,
                 COALESCE(s.state = 'working', 0)
-                  OR EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.pr = o.key
+                  OR EXISTS (SELECT 1 FROM jobs j WHERE j.plan = o.plan AND j.workflow = o.key
                                 AND j.kind IN ('update', 'work') AND j.status IN ('queued', 'running')),
-                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.pr = o.key)
+                EXISTS (SELECT 1 FROM pr_posts x WHERE x.plan = o.plan AND x.workflow = o.key)
            FROM pull_requests r
-           LEFT JOIN prs o ON o.rowid = (SELECT n.rowid FROM prs n JOIN plans np ON np.id = n.plan
+           LEFT JOIN workflows o ON o.rowid = (SELECT n.rowid FROM workflows n JOIN plans np ON np.id = n.plan
                                           WHERE n.pull_request = r.id
                                           ORDER BY np.created_at DESC, np.id DESC, n.key DESC LIMIT 1)
            LEFT JOIN plans p ON p.id = o.plan
@@ -178,7 +178,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
             .transpose()?;
         let key = key
             .as_deref()
-            .map(|k| id("PR key", k, PrKey::parse))
+            .map(|k| id("Workflow key", k, WorkflowKey::parse))
             .transpose()?;
         let owner = plan.as_ref().zip(key.as_ref());
         let facts = Facts {
@@ -190,7 +190,8 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
         };
         let status = classify(&facts, || {
             owner.is_some_and(|(plan, key)| {
-                crate::pr::policy_of_pr(conn, home, plan, key).is_ok_and(|p| p.pr.post.enabled)
+                crate::pr::policy_of_workflow(conn, home, plan, key)
+                    .is_ok_and(|p| p.pr.post.enabled)
             })
         });
         let name = pull
@@ -221,7 +222,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     Ok(out)
 }
 
-/// The `pr-closed` conditions: one red item per closed-unmerged PR (`crate::pr::closed::closed_unmerged`).
+/// The `pr-closed` conditions: one red item per closed-unmerged Workflow (`crate::pr::closed::closed_unmerged`).
 pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(crate::pr::closed::closed_unmerged(conn, None)?
         .into_iter()

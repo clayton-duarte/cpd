@@ -205,15 +205,15 @@ fn allocated(fx: &mut Fx, id: &str) -> (String, String) {
         .unwrap()
 }
 
-/// The `(lead_branch, lead_worktree, repo)` of the Plan's PR `repo`.
+/// The `(lead_branch, lead_worktree, repo)` of the Plan's Workflow `repo`.
 fn lead(fx: &mut Fx) -> (String, String, String) {
     fx.engine
         .store
-        .read(|conn| Ok(conn.query_row("SELECT lead_branch, lead_worktree, repo FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .read(|conn| Ok(conn.query_row("SELECT lead_branch, lead_worktree, repo FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
         .unwrap()
 }
 
-/// An `Fx` with Plan `pay` and its PR `repo` (Lead Branch `cpd/pay/repo`, workflow worktree `/repos/r.lead`): the forms the
+/// An `Fx` with Plan `pay` and its Workflow `repo` (Lead Branch `cpd/pay/repo`, Lead worktree `/repos/r.lead`): the forms the
 /// Attempt branch CHECK allows. `add_job` fills the Jobs.
 fn new_plan() -> Fx {
     let mut fx = Fx::new("");
@@ -222,7 +222,7 @@ fn new_plan() -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '/repos/r', 'main', 'dispatch', 'cpd/pay/repo', '/repos/r.lead', 'Charge the card', 'config', cpd_txn(), 't', 't');",
     );
     fx
@@ -236,7 +236,7 @@ fn parallel_branch(id: &str) -> String {
     )
 }
 
-/// A live linear Attempt `lin-a1` of the PR `repo`: on its Lead Branch, in its workflow worktree.
+/// A live linear Attempt `lin-a1` of the Workflow `repo`: on its Lead Branch, in its Lead worktree.
 fn add_live_linear(fx: &mut Fx) {
     fx.add_running("lin", "running", &ago(1));
     fx.fixture("UPDATE attempts SET branch = 'cpd/pay/repo', worktree = '/repos/r.lead' WHERE id = 'lin-a1';");
@@ -326,7 +326,7 @@ fn e3_starts_a_ready_job_parallel_beside_a_live_parallel_attempt() {
 fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     let mut fx = new_plan();
     fx.fixture(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'other', '/repos/o', 'main', 'dispatch', 'cpd/pay/other', '/repos/o.lead', 'Other', 'config', cpd_txn(), 't', 't');",
     );
     add_live_linear(&mut fx);
@@ -335,7 +335,7 @@ fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
     assert_eq!(
         allocated(&mut fx, "web-a1"),
         ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()),
-        "not held, alone in its PR"
+        "not held, alone in its Workflow"
     );
 }
 

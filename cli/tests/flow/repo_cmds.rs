@@ -69,7 +69,7 @@ fn pr_fx() -> (Fx, PathBuf) {
 
 fn add_tdd(fx: &Fx, repo: &Path) -> Run {
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "pay",
         "--repo",
@@ -189,7 +189,7 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
         repo.display(),
         lead.display()
@@ -202,13 +202,13 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
     let fingerprint = "f".repeat(64);
     // One transaction, as the Jobs of a locked Plan are written: a Job and its Dependency of another transaction are `job_locked`.
     let mut jobs = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
          VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't', '{kind}', {tests}, {test_files});"
     );
     if kind == "impl" {
         jobs.push_str(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, created_at, kind, tests, test_files, merged_sha)
                VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                        cpd_txn(), 't', 'test', '[\"t::one\"]', '[\"tests/\"]', 'c0ffee');

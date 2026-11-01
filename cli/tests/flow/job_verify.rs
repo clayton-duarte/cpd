@@ -26,8 +26,21 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
     let needs = needs.join(",");
     let title = format!("Title of {key}");
     let mut args = vec![
-        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify",
-        "--pr", pr, "--plan", "pl",
+        "job",
+        "add",
+        key,
+        "--title",
+        &title,
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--kind",
+        "verify",
+        "--workflow",
+        pr,
+        "--plan",
+        "pl",
     ];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
@@ -88,7 +101,7 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
             "--needs",
             "i",
             "--draft",
-            "--pr",
+            "--workflow",
             "api",
             "--plan",
             "pl",
@@ -148,7 +161,7 @@ fn a_plan_review_and_a_lock_refuse_a_draft_verify_job_without_an_impl_need() {
     // A draft verify Job is added with no impl need: it is checked where it stops being a draft.
     verify(&fx, "v", &["t"], "api", true).ok();
     // PR `repo` has no draft Job: a review is refused `pr_empty` while a live PR is empty, so end it.
-    fx.cpd(&["pr", "cancel", "repo", "--plan", "pl"]).ok();
+    fx.cpd(&["workflow", "cancel", "repo", "--plan", "pl"]).ok();
     fx.env.outline_for_review("pl");
     let before = (writes(&fx), count(&fx.env, "plan_reviews"));
     let e = refused(&review(&fx, "pl"), "impl_job_required", 3);
@@ -248,11 +261,11 @@ fn an_open_pr_refuses_a_verify_job() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
              VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
-             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
              {}
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';",
             pull_request("fix", 2, "open")
         ),

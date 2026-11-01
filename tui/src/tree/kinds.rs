@@ -6,7 +6,7 @@
 use cpd_core::events::Kind;
 
 /// The kinds the tree acts on: §17's list (the `inbox-*` kinds included: the Inbox says who needs the User and fills
-/// the Inbox section), with the Job, Attempt, Escalation, PR and Plan review kinds that change a Plan's counters, and
+/// the Inbox section), with the Job, Attempt, Escalation, Workflow and Plan review kinds that change a Plan's counters, and
 /// the Context records it counts.
 pub const KINDS: &[Kind] = &[
     Kind::ContextCreated,
@@ -26,10 +26,10 @@ pub const KINDS: &[Kind] = &[
     Kind::AttemptRetry,
     Kind::AttemptStatus,
     Kind::AllMerged,
-    Kind::PrAdded,
-    Kind::PrEdited,
-    Kind::PrCancelled,
-    Kind::PrStarted,
+    Kind::WorkflowAdded,
+    Kind::WorkflowEdited,
+    Kind::WorkflowCancelled,
+    Kind::WorkflowStarted,
     Kind::PrOpened,
     Kind::PrMerged,
     Kind::Escalation,
@@ -70,10 +70,10 @@ mod tests {
             Kind::AttemptStarted,
             Kind::AttemptRetry,
             Kind::AllMerged,
-            Kind::PrAdded,
-            Kind::PrEdited,
-            Kind::PrCancelled,
-            Kind::PrStarted,
+            Kind::WorkflowAdded,
+            Kind::WorkflowEdited,
+            Kind::WorkflowCancelled,
+            Kind::WorkflowStarted,
             Kind::PrOpened,
             Kind::PrMerged,
             Kind::PlanPhase,

@@ -1,21 +1,23 @@
-//! Red tests of the Workflow cost on the bottom border of a PR box (Context record pro-d179 item 3): the text
+//! Red tests of the Workflow cost on the bottom border of a Workflow box (Context record pro-d179 item 3): the text
 //! ` <duration> · <cost> `, its width, style and exit `┬`, beside the active-time counter (`counter_tests`).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::lines_tests::violations;
-use super::{boxes, sample_pr};
-use crate::read::{NeedsUser, PrNode};
+use super::{boxes, sample_workflow};
+use crate::read::{NeedsUser, WorkflowNode};
 use crate::test_text::rows;
-use cpd_core::ids::PrKey;
+use cpd_core::ids::WorkflowKey;
 
 fn chars(s: &str) -> Vec<String> {
     s.chars().map(String::from).collect()
 }
 
-fn canvas(prs: &[PrNode]) -> Buffer {
-    boxes::layout(prs, &[], &NeedsUser::default(), 0).chart.buf
+fn canvas(workflows: &[WorkflowNode]) -> Buffer {
+    boxes::layout(workflows, &[], &NeedsUser::default(), 0)
+        .chart
+        .buf
 }
 
 /// The first row of `buf` that starts with `╰`, as cells (trailing blanks trimmed).
@@ -28,16 +30,16 @@ fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
     (y, chars(r[y].trim_end()))
 }
 
-fn with(key: &str, secs: Option<u64>, cost: Option<f64>) -> PrNode {
-    PrNode {
+fn with(key: &str, secs: Option<u64>, cost: Option<f64>) -> WorkflowNode {
+    WorkflowNode {
         elapsed_seconds: secs,
         cost_usd: cost,
-        ..sample_pr(key)
+        ..sample_workflow(key)
     }
 }
 
 /// Box `a` of repo `r` and base `m`: 26 cells wide with no Jobs.
-fn small(secs: Option<u64>, cost: Option<f64>) -> PrNode {
+fn small(secs: Option<u64>, cost: Option<f64>) -> WorkflowNode {
     let mut p = with("a", secs, cost);
     p.repo_name = "r".into();
     p.base = "m".into();
@@ -146,11 +148,11 @@ fn a_box_is_widened_to_hold_the_time_and_the_cost_plus_four() {
     assert_eq!(row.len(), 39);
 }
 
-/// The `┬` columns of box `a`'s bottom border, that another PR `b` needs; and the canvas, the row, the box's width.
+/// The `┬` columns of box `a`'s bottom border, that another Workflow `b` needs; and the canvas, the row, the box's width.
 fn exit(secs: Option<u64>, cost: Option<f64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = PrNode {
-        needs: vec![PrKey::parse("a").unwrap()],
-        ..sample_pr("b")
+    let web = WorkflowNode {
+        needs: vec![WorkflowKey::parse("a").unwrap()],
+        ..sample_workflow("b")
     };
     let buf = canvas(&[small(secs, cost), web]);
     let r = rows(&buf);

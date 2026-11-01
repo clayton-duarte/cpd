@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): the lock
-//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the PR start, is in pr_start.rs) on a
+//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the Workflow start, is in workflow_start.rs) on a
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 use crate::common;
@@ -137,7 +137,7 @@ fn fx(config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'A description', 'config', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
@@ -232,7 +232,7 @@ impl Fx {
     /// `add_job_in` with the Job's Tier `tier`.
     fn add_job_on(&self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
@@ -2758,7 +2758,7 @@ fn engine_cancelled_open_job() -> Ip {
     fx
 }
 
-/// The ways on after that cancel (§3.8, §7.6): `pr open --pr repo` is the repair and is not refused `open_job_live` (no `open` Job is
+/// The ways on after that cancel (§3.8, §7.6): `pr open --workflow repo` is the repair and is not refused `open_job_live` (no `open` Job is
 /// live); E4 still adds nothing, before or after it.
 #[test]
 fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_job_live() {
@@ -2784,7 +2784,7 @@ fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_j
         "E4 added no fresh open Job for PR repo"
     );
 
-    let run = fx.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"]);
+    let run = fx.cpd(&["pr", "open", "--workflow", "repo", "--plan", "pay"]);
     fx.watch_ticks(2).unwrap();
 
     let json = run.json();
@@ -2802,7 +2802,7 @@ fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_j
     );
 }
 
-/// The other way on is `pr cancel`: it cancels the PR's own queued `open` Job with the PR, and E4 re-adds nothing (the PR is no longer
+/// The other way on is `workflow cancel`: it cancels the Workflow's own queued `open` Job with the Workflow, and E4 re-adds nothing (the Workflow is no longer
 /// `dispatch`), over several ticks. PR `repo` is the one the engine is seen to look at.
 #[test]
 fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
@@ -2811,7 +2811,7 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
     fx.add_merged_api();
     fx.add_pr("web", "Show the receipt");
     fx.add_cpd_job_in("web", "open-web", "open", "");
-    fx.cpd(&["pr", "cancel", "web", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "cancel", "web", "--plan", "pay"]).ok();
 
     fx.watch_first_tick().unwrap();
     assert!(
@@ -2831,7 +2831,7 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
     assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
     assert_eq!(
         fx.env
-            .query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'"),
+            .query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'"),
         "cancelled"
     );
 }
@@ -2879,7 +2879,7 @@ fn open_pr() -> (Ip, Says) {
         "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at, updated_at, feedback)
            VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay the bills', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened', 'U1', '[]');
-         UPDATE prs SET status = 'open', pr_number = 812, pr_url = 'https://github.com/acme/pay/pull/812', pr_opened_at = 'opened',
+         UPDATE workflows SET status = 'open', pr_number = 812, pr_url = 'https://github.com/acme/pay/pull/812', pr_opened_at = 'opened',
             pull_request = (SELECT id FROM pull_requests WHERE number = 812) WHERE plan = 'pay' AND key = 'repo';",
     );
     fx.add_merged_api();
@@ -2970,7 +2970,12 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].3;
     assert_eq!(
-        (&data["kind"], &data["by"], &data["reason"], &data["pr"]),
+        (
+            &data["kind"],
+            &data["by"],
+            &data["reason"],
+            &data["workflow"]
+        ),
         (
             &json!("update"),
             &json!("poll"),
@@ -2985,7 +2990,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     );
     assert_eq!(
         fx.env
-            .query::<String>("SELECT status FROM prs WHERE plan = 'pay'"),
+            .query::<String>("SELECT status FROM workflows WHERE plan = 'pay'"),
         "open",
         "the PR's status does not change"
     );
@@ -3072,7 +3077,7 @@ fn in_pr(fx: &Ip) {
         "UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
             pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
     );
 }
@@ -3870,11 +3875,11 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
                 pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'repo';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'web', '{repo}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
         repo = web.display()
     ));
     // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
@@ -3911,20 +3916,20 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
 
     assert_eq!(
         fx.env
-            .query::<String>("SELECT status FROM prs WHERE key = 'repo'"),
+            .query::<String>("SELECT status FROM workflows WHERE key = 'repo'"),
         "merged"
     );
     assert_eq!(
         fx.env
-            .query::<String>("SELECT status FROM prs WHERE key = 'web'"),
+            .query::<String>("SELECT status FROM workflows WHERE key = 'web'"),
         "dispatch"
     );
-    assert_eq!(fx.count("pr-started"), 1);
+    assert_eq!(fx.count("workflow-started"), 1);
     assert!(
         fx.env
             .query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'")
             < fx.env
-                .query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'")
+                .query::<i64>("SELECT id FROM events WHERE kind = 'workflow-started'")
     );
     assert!(
         lead.exists(),

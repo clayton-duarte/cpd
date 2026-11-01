@@ -24,23 +24,23 @@ fn sqlite_message(err: &CpdError) -> String {
         .to_owned()
 }
 
-/// A Plan `pl` with a `free` PR `a`; Jobs of the kinds before `verify` in every status; Dependencies and an Attempt.
+/// A Plan `pl` with a `free` Workflow `a`; Jobs of the kinds before `verify` in every status; Dependencies and an Attempt.
 const FIXTURE: &str = "
   INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
   INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
     VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
   INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
     VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
-  INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+  INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
     VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');
-  INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+  INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
     VALUES ('pl', 'a', 'w-draft', 'W', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, 'work', NULL, cpd_txn(), 't'),
            ('pl', 'a', 'd-queued', 'D', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'docs', 'FP', cpd_txn(), 't'),
            ('pl', 'a', 'i-running', 'I', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'impl', 'FP', cpd_txn(), 't'),
            ('pl', 'a', 'o-merged', 'O', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'open', 'FP', cpd_txn(), 't'),
            ('pl', 'a', 'u-failed', 'U', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'update', 'FP', cpd_txn(), 't'),
            ('pl', 'a', 'w-gone', 'G', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'work', 'FP', cpd_txn(), 't');
-  INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, tests, test_files, fingerprint, created_txn, created_at)
+  INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, tests, test_files, fingerprint, created_txn, created_at)
     VALUES ('pl', 'a', 't-queued', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'test', '[\"t::one\"]', '[\"tests/t.rs\"]', 'FP', cpd_txn(), 't');
   UPDATE jobs SET status = 'running' WHERE key IN ('i-running', 'o-merged', 'u-failed');
   UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'o-merged';
@@ -64,7 +64,17 @@ fn before_verify() -> (tempfile::TempDir, CpdHome, Vec<Named>) {
         "job-verify-kind is a built-in migration"
     );
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
-    write(&mut store, &FIXTURE.replace("FP", FP)).unwrap();
+    write(
+        &mut store,
+        &FIXTURE
+            .replace("INSERT INTO workflows (", "INSERT INTO prs (")
+            .replace(
+                "INSERT INTO jobs (plan, workflow",
+                "INSERT INTO jobs (plan, pr",
+            )
+            .replace("FP", FP),
+    )
+    .unwrap();
     drop(store);
     (dir, home, earlier)
 }
@@ -103,7 +113,12 @@ fn jobs_triggers(store: &mut Store) -> Vec<(String, String)> {
                 .into_iter()
                 .map(|(name, sql)| {
                     let code: Vec<&str> = sql.lines().map(|l| l.split("--").next().unwrap_or_default()).collect();
-                    (name, code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(", 'skipped_n', OLD.skipped_n", "").replace(", 'skipped_n', NEW.skipped_n", "")
+                    (name.replace("jobs_pr_dependencies", "jobs_workflow_dependencies"), code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(", pr, review", ", workflow, review").replace("NEW.pr IS OLD.pr", "NEW.workflow IS OLD.workflow")
+                        .replace("'pr', OLD.pr", "'workflow', OLD.workflow").replace("'pr', NEW.pr", "'workflow', NEW.workflow")
+                        .replace("WHERE OLD.pr IS NOT NEW.pr", "WHERE OLD.workflow IS NOT NEW.workflow")
+                        .replace("BEFORE UPDATE OF pr ON jobs", "BEFORE UPDATE OF workflow ON jobs")
+                        .replace("OLD.pr <> NEW.pr", "OLD.workflow <> NEW.workflow").replace("needs_other_pr", "needs_other_workflow")
+                        .replace("jobs_pr_dependencies", "jobs_workflow_dependencies").replace(", 'skipped_n', OLD.skipped_n", "").replace(", 'skipped_n', NEW.skipped_n", "")
                         .replace(" UNION ALL SELECT 'skipped_n', OLD.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
                         .replace(" UNION ALL SELECT 'skipped_n', NEW.skipped_n WHERE OLD.skipped_n IS NOT NEW.skipped_n", "")
                         .replace(", 'summary', OLD.summary", "").replace(", 'summary', NEW.summary", "")
@@ -131,12 +146,12 @@ fn job_of_kind(key: &str, kind: &str, status: &str, columns: &str, values: &str)
         "NULL".to_owned()
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint{columns}, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint{columns}, created_txn, created_at)
          VALUES ('pl', 'a', '{key}', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', '{status}', 1, '{kind}', {fingerprint}{values}, cpd_txn(), 't')"
     )
 }
 
-/// A fully migrated store holding only the Plan and PR of [`FIXTURE`].
+/// A fully migrated store holding only the Plan and Workflow of [`FIXTURE`].
 fn migrated_empty() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -201,6 +216,17 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
         store.schema_mismatch()
     );
     for (table, want) in ["jobs", "dependencies", "attempts"].iter().zip(before) {
+        let mut want = want;
+        if *table == "jobs" {
+            // `workflow-rename` renames `jobs.pr` to `jobs.workflow`: the pre-rename snapshot's key follows.
+            for row in &mut want {
+                if let Some(obj) = row.as_object_mut()
+                    && let Some(value) = obj.remove("pr")
+                {
+                    obj.insert("workflow".into(), value);
+                }
+            }
+        }
         let mut after = table_rows(&mut store, table);
         for row in &mut after {
             // `skipped_n` is the column of `job-tenancy`, which sorts after this migration: null in every row.
@@ -236,7 +262,9 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
 fn the_migration_keeps_the_triggers_of_jobs() {
     let (_dir, home, earlier) = before_verify();
     let mut old = crate::store::tests::open_named(&home, &earlier).unwrap();
-    let before = jobs_triggers(&mut old);
+    let mut before = jobs_triggers(&mut old);
+    // `jobs_pr_dependencies` became `jobs_workflow_dependencies`, so it sorts last; keep the pre-rename list ordered.
+    before.sort_by(|a, b| a.0.cmp(&b.0));
     drop(old);
     assert!(!before.is_empty(), "jobs has triggers");
 

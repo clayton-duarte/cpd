@@ -6,7 +6,7 @@ use serde_json::json;
 use super::jobs::{Job, JobSpec};
 use super::lint::{Finding, Input, Rule, Severity, run};
 use super::lint_cmd::advice;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::row::Phase;
 use super::tier_advice::Advice;
 use crate::config::{Catalog, Tier, TierModel};
@@ -18,11 +18,18 @@ fn t(s: &str) -> Tier {
     Tier::parse(s).unwrap()
 }
 
-fn job(key: &str, pr: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
-        pr: Some(pr.into()),
+        workflow: Some(workflow.into()),
         title: format!("Title {key}"),
         tier: Some("S2".into()),
         spec: Some(JobSpec {
@@ -59,8 +66,8 @@ fn at(key: &str, kind: &str, status: &str, tier: &str) -> Job {
     j
 }
 
-fn pr(key: &str) -> PrRow {
-    PrRow::fixture(key, "/repo", "main", &[], "waiting")
+fn workflow(key: &str) -> WorkflowRow {
+    WorkflowRow::fixture(key, "/repo", "main", &[], "waiting")
 }
 
 fn adv(kind: &str, tier: &str) -> Advice {
@@ -77,8 +84,8 @@ fn adv(kind: &str, tier: &str) -> Advice {
 
 fn lint(jobs: &[Job], advice: &[Advice]) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
-    let prs = [pr("web")];
-    let input = Input::new(&plan, Phase::Dispatch, &prs, jobs, None).with_advice(advice);
+    let workflows = [workflow("web")];
+    let input = Input::new(&plan, Phase::Dispatch, &workflows, jobs, None).with_advice(advice);
     run(&input)
         .into_iter()
         .filter(|f| f.rule == Rule::TierAdvice)
@@ -180,7 +187,7 @@ fn tier_advice_needs_no_catalog_and_no_store() {
 #[test]
 fn tier_advice_findings_follow_the_overlaps_in_catalogue_order() {
     let plan = PlanId::parse("pl").unwrap();
-    let prs = [pr("web")];
+    let workflows = [workflow("web")];
     let mut x = job("x", "web", "impl", "draft", &["src/a.rs"], &[]);
     x.tier = Some("S2".into());
     let y = job("y", "web", "work", "draft", &["src/a.rs"], &[]);
@@ -188,7 +195,7 @@ fn tier_advice_findings_follow_the_overlaps_in_catalogue_order() {
     b.spec.as_mut().unwrap().touches = json!(["src/b.rs"]);
     let jobs = [b, y, x];
     let advice = [adv("impl", "S1"), adv("work", "S1"), adv("docs", "S1")];
-    let input = Input::new(&plan, Phase::Dispatch, &prs, &jobs, None).with_advice(&advice);
+    let input = Input::new(&plan, Phase::Dispatch, &workflows, &jobs, None).with_advice(&advice);
     let found = run(&input);
     let order: Vec<(Rule, Option<&str>)> = found
         .iter()
@@ -232,7 +239,7 @@ fn catalog(s_efforts: &[u8]) -> Catalog {
     }
 }
 
-/// An Env on a tempdir store with context `ctx`, Plan `pl`, PR `r` and the catalog fixed.
+/// An Env on a tempdir store with context `ctx`, Plan `pl`, Workflow `r` and the catalog fixed.
 fn env(dir: &tempfile::TempDir, catalog: Catalog) -> Env {
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
@@ -249,7 +256,7 @@ fn env(dir: &tempfile::TempDir, catalog: Catalog) -> Env {
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pl', 'ctx', 'P', 'dispatch', 'lead', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pl', 'r', '/r', 'main', 'dispatch', 'cpd/pl', '/w', cpd_txn(), 't', 't');",
             )?;
             Ok(())
@@ -275,7 +282,7 @@ fn history(env: &mut Env, tag: &str, kind: &str, tier: &str, count: u32, merged:
             )
         };
         sql.push_str(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('pl', 'r', '{key}', 'T', '{kind}', '{tier}', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 1, '{}', {failed}, {sha}, NULL, NULL, cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at, metrics, merged_sha)
              VALUES ('pl', '{key}-a1', '{key}', 1, '{tier}', 'ladder', 'ended', {outcome}, {cause}, 't', 'cpd/pl--{key}-a1', '/w', 't', '{{\"cost_usd\": {cost}}}', {sha});",

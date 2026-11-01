@@ -48,9 +48,9 @@ fn fixture_store() -> (tempfile::TempDir, Store) {
          UPDATE sessions SET plan = 'pa' WHERE id = 'l-arch';
          UPDATE sessions SET plan = 'pd' WHERE id = 'l-fork';
          UPDATE sessions SET archived_at = '2026-01-05T00:00:00.000Z' WHERE id = 'l-arch';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pf', 'work', '/repo', 'main', 'dispatch', 'cpd/pf/work', '/wt', cpd_txn(), {t}, {t});
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
                            appended, fingerprint, failed_cause, created_txn, created_at)
            VALUES ('pf', 'work', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'failed',
                    0, '{FP}', 'boom', cpd_txn(), {t});",
@@ -139,8 +139,8 @@ fn the_tree_animates_a_working_dot_of_every_work() {
 
 const T: &str = "'2026-01-02T01:00:00.000Z'";
 
-/// The tree of a store with one Plan `px` in `phase`, its Lead `l-x` working, one PR `work` (status `dispatch`) and
-/// `extra` SQL (more PRs, Jobs, Attempts). No tmux, git or gh.
+/// The tree of a store with one Plan `px` in `phase`, its Lead `l-x` working, one Workflow `work` (status `dispatch`) and
+/// `extra` SQL (more Workflows, Jobs, Attempts). No tmux, git or gh.
 fn scenario(phase: &str, extra: &str) -> Tree {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
@@ -157,7 +157,7 @@ fn scenario(phase: &str, extra: &str) -> Tree {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('px', 'ctx', 'X', '{phase}', 'l-x', {T}, {locked}, {done});
          UPDATE sessions SET plan = 'px' WHERE id = 'l-x';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('px', 'work', '/repo', 'main', 'dispatch', 'cpd/px/work', '/wt', cpd_txn(), {T}, {T});
          {extra}",
         lead = session("l-x", "lead"),
@@ -171,8 +171,8 @@ fn scenario(phase: &str, extra: &str) -> Tree {
     read::tree(&mut store).unwrap()
 }
 
-/// A PR `key` of Plan `px`, `status` in the PR table, its pull request `mergeable` as given.
-fn pr(key: &str, number: u32, status: &str, mergeable: &str) -> String {
+/// A Workflow `key` of Plan `px`, `status` in the Workflow table, its pull request `mergeable` as given.
+fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     let opened = if status == "open" {
         format!(
             "{number}, 'https://github.com/acme/repo/pull/{number}', {T}, (SELECT id FROM pull_requests WHERE number = {number}),"
@@ -190,23 +190,23 @@ fn pr(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     };
     format!(
         "{pull}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
            VALUES ('px', '{key}', '/repo', 'main', '{status}', 'cpd/px/{key}', '/wt', {opened} cpd_txn(), {T}, {T});"
     )
 }
 
-/// A Job `key` of PR `pr` of kind `kind` and `status`.
-fn job(pr: &str, key: &str, kind: &str, status: &str) -> String {
+/// A Job `key` of Workflow `pr` of kind `kind` and `status`.
+fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     let fp = if status == "draft" {
         "NULL".to_owned()
     } else {
         format!("'{FP}'")
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                           created_txn, created_at, kind)
-         VALUES ('px', '{pr}', '{key}', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fp}, cpd_txn(), {T}, '{kind}');"
+         VALUES ('px', '{workflow}', '{key}', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fp}, cpd_txn(), {T}, '{kind}');"
     )
 }
 
@@ -220,36 +220,36 @@ fn attempt(job: &str, status: &str) -> String {
     )
 }
 
-/// `dots_tree_dispatch_with_open_pr_is_yellow`: in dispatch, an open PR (any of them, not only the first), a
+/// `dots_tree_dispatch_with_open_pr_is_yellow`: in dispatch, an open Workflow (any of them, not only the first), a
 /// conflicting one, or a queued or running `open`/`update` Job makes the Lead's dot yellow (`Work::Review`).
 #[test]
 fn dots_tree_dispatch_with_open_pr_is_yellow() {
     let review = Dot::Working(Some(Work::Review));
     assert_eq!(
         lead_dot(
-            &scenario("dispatch", &pr("api", 1, "open", "mergeable")),
+            &scenario("dispatch", &workflow("api", 1, "open", "mergeable")),
             "px"
         ),
         review,
-        "an open PR"
+        "an open Workflow"
     );
     assert_eq!(
         lead_dot(
-            &scenario("dispatch", &pr("api", 1, "open", "conflicting")),
+            &scenario("dispatch", &workflow("api", 1, "open", "conflicting")),
             "px"
         ),
         review,
-        "a conflicting PR"
+        "a conflicting Workflow"
     );
     let second = format!(
         "{}{}",
-        pr("a-first", 1, "dispatch", "unknown"),
-        pr("b-second", 2, "open", "mergeable")
+        workflow("a-first", 1, "dispatch", "unknown"),
+        workflow("b-second", 2, "open", "mergeable")
     );
     assert_eq!(
         lead_dot(&scenario("dispatch", &second), "px"),
         review,
-        "only the second PR is open"
+        "only the second Workflow is open"
     );
     for kind in ["open", "update"] {
         for status in ["queued", "running"] {
@@ -263,7 +263,7 @@ fn dots_tree_dispatch_with_open_pr_is_yellow() {
     }
 }
 
-/// `dots_tree_dispatch_with_work_jobs_only_is_cyan`: running and queued work Jobs, no open PR: `Work::Dispatch`.
+/// `dots_tree_dispatch_with_work_jobs_only_is_cyan`: running and queued work Jobs, no open Workflow: `Work::Dispatch`.
 #[test]
 fn dots_tree_dispatch_with_work_jobs_only_is_cyan() {
     let extra = format!(
@@ -275,11 +275,11 @@ fn dots_tree_dispatch_with_work_jobs_only_is_cyan() {
         lead_dot(&scenario("dispatch", &extra), "px"),
         Dot::Working(Some(Work::Dispatch))
     );
-    let conflicting = format!("{}{}", pr("api", 1, "open", "conflicting"), extra);
+    let conflicting = format!("{}{}", workflow("api", 1, "open", "conflicting"), extra);
     assert_eq!(
         lead_dot(&scenario("dispatch", &conflicting), "px"),
         Dot::Working(Some(Work::Review)),
-        "an open PR turns it yellow"
+        "an open Workflow turns it yellow"
     );
 }
 
@@ -295,13 +295,13 @@ fn dots_tree_grounding_plan_and_done_are_magenta() {
     }
 }
 
-/// `dots_tree_draft_job_beats_open_pr`: a draft Job (a new batch) is planning even while a PR is open.
+/// `dots_tree_draft_job_beats_open_pr`: a draft Job (a new batch) is planning even while a Workflow is open.
 #[test]
 fn dots_tree_draft_job_beats_open_pr() {
     for phase in ["dispatch", "done"] {
         let extra = format!(
             "{}{}",
-            pr("api", 1, "open", "mergeable"),
+            workflow("api", 1, "open", "mergeable"),
             job("api", "d1", "work", "draft")
         );
         assert_eq!(

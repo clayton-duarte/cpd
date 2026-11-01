@@ -29,7 +29,7 @@ fn world() -> Fx {
     let fp = "0".repeat(64);
     let job = |key: &str, pr: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pl', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = '{key}';
              UPDATE jobs SET status = 'running' WHERE key = '{key}';
@@ -47,7 +47,7 @@ fn world() -> Fx {
          INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
            VALUES ('mgr1', 'manager', 'ctx', 'M', '/', 'O3', 'idle', 't', 't'),
                   ('mgr2', 'manager', 'bare', 'M', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
            VALUES ('pl', 'named', '/r', 'main', 'waiting', 'cpd/pl/named', 'cpd', cpd_txn(), 't'),
                   ('pl', 'anon', '/r', 'main', 'waiting', 'cpd/pl/anon', NULL, cpd_txn(), 't');
          {} {}",
@@ -131,7 +131,8 @@ fn the_output_has_exactly_the_documented_fields() {
             "protected",
             "resources",
             "test-commands",
-            "tests"
+            "tests",
+            "workflow"
         ]
     );
     for (name, domain) in out["policy"].as_object().unwrap() {
@@ -168,7 +169,6 @@ fn the_output_has_exactly_the_documented_fields() {
             "pr.jira.estimate_fields",
             "pr.jira.in_progress",
             "pr.jira.in_review",
-            "pr.jira_required",
             "pr.post.channel",
             "pr.post.enabled",
             "pr.post.merged_reaction",
@@ -295,15 +295,15 @@ fn context_selects_its_owner() {
 #[test]
 fn pr_selects_its_repo_or_the_owner_when_unnamed() {
     let fx = world();
-    let named = show(&fx, &["--pr", "named", "--plan", "pl"]).ok();
+    let named = show(&fx, &["--workflow", "named", "--plan", "pl"]).ok();
     assert_eq!(key(&named), ("acme", Some("cpd")));
     assert_eq!(named["policy"]["code"]["text"], "Repo code text.");
-    let anon = show(&fx, &["--pr", "anon", "--plan", "pl"]).ok();
+    let anon = show(&fx, &["--workflow", "anon", "--plan", "pl"]).ok();
     assert_eq!(key(&anon), ("acme", None));
     // The Plan may come from CPD_PLAN.
     let out = fx.cpd_with(
         fx.env.root(),
-        &["policy", "show", "--pr", "named"],
+        &["policy", "show", "--workflow", "named"],
         &[("CPD_PLAN", "pl")],
     );
     assert_eq!(
@@ -338,7 +338,7 @@ fn usage_refusals() {
     let fx = world();
     refused(&show(&fx, &[]), "session_required", 2);
     refused(
-        &show(&fx, &["--pr", "named", "--context", "ctx"]),
+        &show(&fx, &["--workflow", "named", "--context", "ctx"]),
         "usage",
         2,
     );
@@ -348,7 +348,7 @@ fn usage_refusals() {
         2,
     );
     refused(
-        &show(&fx, &["--pr", "named", "--owner", "acme"]),
+        &show(&fx, &["--workflow", "named", "--owner", "acme"]),
         "usage",
         2,
     );
@@ -364,7 +364,7 @@ fn usage_refusals() {
         "usage",
         2,
     );
-    refused(&show(&fx, &["--pr", "named"]), "plan_required", 2);
+    refused(&show(&fx, &["--workflow", "named"]), "plan_required", 2);
 }
 
 #[test]
@@ -372,13 +372,13 @@ fn not_found_refusals() {
     let fx = world();
     refused(&show_as(&fx, "nope", None), "session_not_found", 4);
     refused(
-        &show(&fx, &["--pr", "named", "--plan", "zz"]),
+        &show(&fx, &["--workflow", "named", "--plan", "zz"]),
         "plan_not_found",
         4,
     );
     refused(
-        &show(&fx, &["--pr", "zz", "--plan", "pl"]),
-        "pr_not_found",
+        &show(&fx, &["--workflow", "zz", "--plan", "pl"]),
+        "workflow_not_found",
         4,
     );
     refused(&show(&fx, &["--context", "zz"]), "context_not_found", 4);

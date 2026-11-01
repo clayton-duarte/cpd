@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::jobs::{self, Job};
 use super::lint::{Finding, Input, Severity, run};
-use super::prs::{PrRow, load_prs};
+use super::prs::{WorkflowRow, load_workflows};
 use super::row::{self, Phase, PlanRow};
 use super::tier_advice::{self, Advice, FLOOR, recommend};
 use crate::args::PlanArg;
@@ -24,14 +24,14 @@ pub struct LintArgs {
 pub(super) fn find(
     env: &mut Env,
     plan: &PlanRow,
-    prs: &[PrRow],
+    workflows: &[WorkflowRow],
     jobs: &[Job],
 ) -> Result<Vec<Finding>, CpdError> {
     let advice = advice(env, plan.context.as_str())?;
     Ok(run(&Input::new(
         &plan.id,
         plan.phase,
-        prs,
+        workflows,
         jobs,
         plan.outline.as_ref(),
     )
@@ -70,7 +70,7 @@ pub(super) fn advice(env: &mut Env, context: &str) -> Result<Vec<Advice>, CpdErr
 pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, prs, jobs) = env.store.read(|conn| {
+    let (plan, workflows, jobs) = env.store.read(|conn| {
         let plan = row::load(conn, &id)?;
         if plan.phase == Phase::Grounding {
             return Err(CpdError::new(
@@ -83,10 +83,10 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
             .with("plan", id.as_str())
             .with("phase", plan.phase.as_str()));
         }
-        let (prs, jobs) = (load_prs(conn, &id)?, jobs::load(conn, &id)?);
-        Ok((plan, prs, jobs))
+        let (workflows, jobs) = (load_workflows(conn, &id)?, jobs::load(conn, &id)?);
+        Ok((plan, workflows, jobs))
     })?;
-    let findings = find(&mut env, &plan, &prs, &jobs)?;
+    let findings = find(&mut env, &plan, &workflows, &jobs)?;
     let errors: Vec<&Finding> = findings
         .iter()
         .filter(|f| f.severity() == Severity::Error)

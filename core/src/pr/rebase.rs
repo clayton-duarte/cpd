@@ -1,7 +1,7 @@
 //! `pr rebase` (commands.md §9.3, contract §7.6): the Lead Branch onto the base
 //! in a temporary rebase worktree, guard U, a compare-and-swap of the Lead Branch,
 //! rule S, the Gate on the rebased commit, and the push with a lease. No lock
-//! (hs-d243): merges into the PR go on meanwhile.
+//! (hs-d243): merges into the Workflow go on meanwhile.
 //!
 //! A conflict is not abandoned (hs-d289): the rebase stays in progress in the Lead
 //! worktree, and `--continue` (the rest of the rebase, the Gate, the push) or
@@ -14,18 +14,18 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::open::{agent, hold_refused, require_jobs_done};
-use super::row::PlanPrs;
-use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, pr_policy, short};
+use super::row::PlanWorkflows;
+use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, short, workflow_policy};
 use crate::config::{self, Catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, Push, RebaseWorktree, TAIL_LINES, tail};
 use crate::host::runner::Runner;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::policy::Policy;
 use crate::ports::Ports;
 
@@ -54,31 +54,30 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    let pr = require_open(&mut env, &plan, &args)?.clone();
-    let key = pr.key.clone();
+    let workflow = require_open(&mut env, &plan, &args)?.clone();
+    let key = workflow.key.clone();
     env.store
         .read(|conn| hold_refused(conn, &id, &key, agent()))?;
-    env.store
-        .read(|conn| refuse_running(conn, &id, &key, "do the rebase"))?;
-    let policy = pr_policy(&mut env, &id, &key)?;
-    let lead = pr.lead(&id)?.clone();
-    let repo = std::path::Path::new(&pr.repo);
-    let branch = pr.lead_branch.as_str();
-    let onto = onto_of(&pr);
+    refuse_running(&mut env, &id, &key)?;
+    let policy = workflow_policy(&mut env, &id, &key)?;
+    let lead = workflow.lead(&id)?.clone();
+    let repo = std::path::Path::new(&workflow.repo);
+    let branch = workflow.lead_branch.as_str();
+    let onto = onto_of(&workflow);
 
-    // 1. The base, fresh (the ref lock on `origin/<base>` is waited for, §7); for an adopted PR
+    // 1. The base, fresh (the ref lock on `origin/<base>` is waited for, §7); for an adopted Workflow
     // the remote head, which the catch-up rebases onto (pro-d15).
-    git::run::fetch(repo, &["origin", onto_branch(&pr)])?;
+    git::run::fetch(repo, &["origin", onto_branch(&workflow)])?;
     // The base is fetched too, for the update Job's merge and the Gate (the object store and `origin/<base>` stay fresh).
-    if pr.head_ref.is_some() {
-        git::run::fetch(repo, &["origin", &pr.base])?;
+    if workflow.head_ref.is_some() {
+        git::run::fetch(repo, &["origin", &workflow.base])?;
     }
     // A rebase stopped by an earlier run: that one is finished or given up first.
     if in_progress(&lead)? {
         return Err(in_progress_error(&id, &key));
     }
-    // An adopted PR that already holds origin/<head_ref>: nothing to catch up.
-    if pr.head_ref.is_some()
+    // An adopted Workflow that already holds origin/<head_ref>: nothing to catch up.
+    if workflow.head_ref.is_some()
         && git::run::run(
             repo,
             &[
@@ -102,7 +101,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         let old = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
         // 3. A conflict stops the rebase in the Lead worktree, before anything else changes.
         if let Some(files) = git::merge_conflicts(repo, &onto, &old)? {
-            return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
+            return rebase_in_lead(&mut env, &args, &id, &workflow, &policy, files);
         }
         // 4. A temporary rebase worktree at S, rebased there: R'.
         let worktree = RebaseWorktree::add(repo, &id, &key, &old)?;
@@ -113,7 +112,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
             },
             Ok(Some(files)) => {
                 worktree.remove()?;
-                return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
+                return rebase_in_lead(&mut env, &args, &id, &workflow, &policy, files);
             }
             Err(e) => return Err(removing(worktree, e)),
         };
@@ -150,7 +149,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         if retries > CAS_RETRIES {
             return Err(CpdError::new(
                 ErrorCode::CasLost,
-                format!("{branch} kept moving during the rebase (merges into PR {key}); the compare-and-swap lost {} times: rerun the command.", CAS_RETRIES + 1),
+                format!("{branch} kept moving during the rebase (merges into Workflow {key}); the compare-and-swap lost {} times: rerun the command.", CAS_RETRIES + 1),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str()));
@@ -165,44 +164,46 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     }
 
     // 8. The Gate on R' in the temporary worktree, `pre-start` then `pre-merge`; it is removed whatever the result.
-    let again = format!("pr rebase --pr {key}");
-    let gated = gate_in(&env, &policy, &id, &pr, worktree.path(), &new, true, &again);
+    let again = format!("pr rebase --workflow {key}");
+    let gated = gate_in(
+        &env,
+        &policy,
+        &id,
+        &workflow,
+        worktree.path(),
+        &new,
+        true,
+        &again,
+    );
     let removed = worktree.remove();
     gated?;
     removed?;
-    push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
+    push_rebased(&mut env, &args, &id, &workflow, &old, &new, &lease)
 }
 
-/// The running Attempts of PR `key`'s Jobs as `(job key, attempt id)`, in job/attempt order.
-/// One query, shared by `pr rebase` and `pr push` (hs-d801).
-pub(super) fn running_attempts(
-    conn: &rusqlite::Connection,
-    plan: &PlanId,
-    key: &PrKey,
-) -> Result<Vec<(String, String)>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
-    )?;
-    let rows = stmt
-        .query_map([plan.as_str(), key.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+/// A running Attempt of any Job of the Workflow refuses `attempt_running`: that Worker does the rebase, steered by the Lead.
+fn refuse_running(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
+    env.store
+        .read(|conn| refuse_running_conn(conn, plan, key, "do the rebase"))
 }
 
-/// A running Attempt of any Job of the PR refuses `attempt_running`: that Worker is steered by the
-/// Lead, not by the command. `what` is what the command would have done ("do the rebase", "do the
-/// push"). The caller passes a store or an open write transaction, so `pr push` can check it inside
-/// the transaction that serialises it with an Attempt start (ADR-0014).
-pub(super) fn refuse_running(
+/// [`refuse_running`] on a connection, with `what` naming the work the running Attempt's Worker should do instead.
+pub(super) fn refuse_running_conn(
     conn: &rusqlite::Connection,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     what: &str,
 ) -> Result<(), CpdError> {
-    let running = running_attempts(conn, plan, key)?;
+    let running: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
+        )?;
+        stmt.query_map([plan.as_str(), key.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
     if running.is_empty() {
         return Ok(());
     }
@@ -211,7 +212,7 @@ pub(super) fn refuse_running(
     let attempts: Vec<String> = running.into_iter().map(|(_, a)| a).collect();
     Err(CpdError::new(
         ErrorCode::AttemptRunning,
-        format!("Job {} of PR {key} has a running Attempt: steer that Worker to {what} (message it with `cpd session send`) instead.", jobs.join(", ")),
+        format!("Job {} of Workflow {key} has a running Attempt: steer that Worker to {what} (message it with `cpd session send`) instead.", jobs.join(", ")),
     )
     .with("pr", key.as_str())
     .with("jobs", jobs)
@@ -225,16 +226,15 @@ fn resume(args: Args) -> Result<Output, CpdError> {
 
     // C0.
     let plan = env.plan(&id)?;
-    let pr = require_open(&mut env, &plan, &args)?.clone();
-    let key = pr.key.clone();
+    let workflow = require_open(&mut env, &plan, &args)?.clone();
+    let key = workflow.key.clone();
     env.store
         .read(|conn| hold_refused(conn, &id, &key, agent()))?;
-    env.store
-        .read(|conn| refuse_running(conn, &id, &key, "do the rebase"))?;
-    let policy = pr_policy(&mut env, &id, &key)?;
-    let lead = pr.lead(&id)?.clone();
-    let repo = Path::new(&pr.repo);
-    let branch = pr.lead_branch.as_str();
+    refuse_running(&mut env, &id, &key)?;
+    let policy = workflow_policy(&mut env, &id, &key)?;
+    let lead = workflow.lead(&id)?.clone();
+    let repo = Path::new(&workflow.repo);
+    let branch = workflow.lead_branch.as_str();
     let lead_ref = format!("refs/heads/{branch}");
 
     // C1.
@@ -285,36 +285,36 @@ fn resume(args: Args) -> Result<Output, CpdError> {
         &env,
         &policy,
         &id,
-        &pr,
+        &workflow,
         &lead,
         &new,
-        &format!("pr rebase --pr {key}"),
+        &format!("pr rebase --workflow {key}"),
     )?;
-    push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
+    push_rebased(&mut env, &args, &id, &workflow, &old, &new, &lease)
 }
 
 /// `pr rebase --abort`: the stopped rebase given up, the Lead Branch and the Lead worktree as before.
-/// It asks no PR status, runs no Gate and pushes nothing.
+/// It asks no Workflow status, runs no Gate and pushes nothing.
 fn abort(args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?.clone();
+    let workflow = plan.select(&args.workflow)?.clone();
     env.store
-        .read(|conn| hold_refused(conn, &id, &pr.key, agent()))?;
-    let lead = pr.lead(&id)?.clone();
-    let branch = pr.lead_branch.as_str();
+        .read(|conn| hold_refused(conn, &id, &workflow.key, agent()))?;
+    let lead = workflow.lead(&id)?.clone();
+    let branch = workflow.lead_branch.as_str();
 
     if !in_progress(&lead)? {
-        return Err(no_rebase_error(&id, &pr.key));
+        return Err(no_rebase_error(&id, &workflow.key));
     }
     git::run::ok(&lead, &["rebase", "--abort"])?;
-    let tip = git::run::rev_parse(Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
+    let tip = git::run::rev_parse(Path::new(&workflow.repo), &format!("refs/heads/{branch}"))?;
     if let Err(stale) = git::sync_lead(&lead, branch) {
-        report_stale(&mut env, &id, &pr.key, &lead, "aborted", &stale)?;
+        report_stale(&mut env, &id, &workflow.key, &lead, "aborted", &stale)?;
     }
     Ok(Output::success(
-        json!({"plan": id, "pr": pr.key, "aborted": true, "tip": tip}),
+        json!({"plan": id, "pr": workflow.key, "aborted": true, "tip": tip}),
     ))
 }
 
@@ -327,14 +327,14 @@ fn rebase_in_lead(
     env: &mut Env,
     args: &Args,
     id: &PlanId,
-    pr: &PrRow,
+    workflow: &WorkflowRow,
     policy: &Policy,
     listed: Vec<String>,
 ) -> Result<Output, CpdError> {
-    let lead = pr.lead(id)?;
-    let repo = Path::new(&pr.repo);
-    let branch = pr.lead_branch.as_str();
-    let onto = onto_of(pr);
+    let lead = workflow.lead(id)?;
+    let repo = Path::new(&workflow.repo);
+    let branch = workflow.lead_branch.as_str();
+    let onto = onto_of(workflow);
 
     // `git rebase` refuses tracked local changes.
     let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
@@ -345,7 +345,7 @@ fn rebase_in_lead(
             format!("The Lead worktree {} has local changes to tracked files, which a rebase would refuse: nothing was changed. Commit or discard them.", lead.display()),
         )
         .with("plan", id.as_str())
-        .with("pr", pr.key.as_str())
+        .with("pr", workflow.key.as_str())
         .with("files", files));
     }
 
@@ -364,51 +364,51 @@ fn rebase_in_lead(
             .with("exit", out.code)
             .with("stderr", tail(&out.stderr, TAIL_LINES)));
         }
-        return Err(stopped(id, &pr.key, lead, branch, files));
+        return Err(stopped(id, &workflow.key, lead, branch, files));
     }
     let new = git::run::rev_parse(lead, "HEAD")?;
-    guard_u(env, id, &pr.key, repo, &old)?;
+    guard_u(env, id, &workflow.key, repo, &old)?;
     let lease = last_seen(repo, branch)?;
     gate(
         env,
         policy,
         id,
-        pr,
+        workflow,
         lead,
         &new,
-        &format!("pr rebase --pr {}", pr.key),
+        &format!("pr rebase --workflow {}", workflow.key),
     )?;
-    push_rebased(env, args, id, pr, &old, &new, &lease)
+    push_rebased(env, args, id, workflow, &old, &new, &lease)
 }
 
-/// Step 9 (and C6): the PR re-read after the Gate, R' pushed with the lease X0, then the merges that
+/// Step 9 (and C6): the Workflow re-read after the Gate, R' pushed with the lease X0, then the merges that
 /// landed during the Gate, by rule P.
 fn push_rebased(
     env: &mut Env,
     args: &Args,
     id: &PlanId,
-    pr: &PrRow,
+    workflow: &WorkflowRow,
     old: &str,
     new: &str,
     lease: &str,
 ) -> Result<Output, CpdError> {
-    let key = &pr.key;
-    let lead = pr.lead(id)?;
-    let repo = Path::new(&pr.repo);
-    let branch = pr.lead_branch.as_str();
+    let key = &workflow.key;
+    let lead = workflow.lead(id)?;
+    let repo = Path::new(&workflow.repo);
+    let branch = workflow.lead_branch.as_str();
     let lead_ref = format!("refs/heads/{branch}");
 
-    // The PR is read again: merged during the Gate, nothing is pushed.
+    // The Workflow is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(id)?;
     require_open(env, &plan, args)?;
 
-    if pr.head_ref.is_some() {
-        return push_adopted(id, pr, old, new);
+    if workflow.head_ref.is_some() {
+        return push_adopted(id, workflow, old, new);
     }
 
     // R' with the lease X0, then the merges that landed during the Gate, by rule P.
     // A rejection whose remote tip already contains R' is a success that pushed nothing:
-    // two `pr rebase` of the PR at once push the same R', and the second can lose the
+    // two `pr rebase` of the Workflow at once push the same R', and the second can lose the
     // race inside the remote (Escalation nl-pr-a1-q2).
     let lease_arg = format!("--force-with-lease={lead_ref}:{lease}");
     let refspec = format!("{new}:{lead_ref}");
@@ -441,7 +441,7 @@ fn push_rebased(
     {
         return Err(CpdError::new(
                 ErrorCode::GitFailed,
-                format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --pr {key}.", short(new), short(&tip)),
+                format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --workflow {key}.", short(new), short(&tip)),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str())
@@ -454,46 +454,51 @@ fn push_rebased(
     ))
 }
 
-/// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted PR (pro-d15).
-fn onto_of(pr: &PrRow) -> String {
-    format!("origin/{}", onto_branch(pr))
+/// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted Workflow (pro-d15).
+fn onto_of(workflow: &WorkflowRow) -> String {
+    format!("origin/{}", onto_branch(workflow))
 }
 
-fn onto_branch(pr: &PrRow) -> &str {
-    pr.head_ref.as_deref().unwrap_or(&pr.base)
+fn onto_branch(workflow: &WorkflowRow) -> &str {
+    workflow.head_ref.as_deref().unwrap_or(&workflow.base)
 }
 
-/// The push of an adopted PR (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
+/// The push of an adopted Workflow (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
 /// during the Gate go after R' the same way.
-fn push_adopted(id: &PlanId, pr: &PrRow, old: &str, new: &str) -> Result<Output, CpdError> {
-    let lead = pr.lead(id)?;
-    let repo = Path::new(&pr.repo);
-    let remote = pr.remote_branch();
+fn push_adopted(
+    id: &PlanId,
+    workflow: &WorkflowRow,
+    old: &str,
+    new: &str,
+) -> Result<Output, CpdError> {
+    let lead = workflow.lead(id)?;
+    let repo = Path::new(&workflow.repo);
+    let remote = workflow.remote_branch();
     let mut pushed = match git::push_commit(lead, remote, new)? {
         Push::Pushed { new } => new,
         Push::Contained { .. } => false,
-        Push::Rejected { stderr } => return Err(rejected(id, pr, new, stderr)),
+        Push::Rejected { stderr } => return Err(rejected(id, workflow, new, stderr)),
     };
-    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", pr.lead_branch))?;
+    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", workflow.lead_branch))?;
     if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
         match git::push_commit(lead, remote, &tip)? {
             Push::Pushed { new } => pushed |= new,
             Push::Contained { .. } => {}
-            Push::Rejected { stderr } => return Err(rejected(id, pr, &tip, stderr)),
+            Push::Rejected { stderr } => return Err(rejected(id, workflow, &tip, stderr)),
         }
     }
     Ok(Output::success(
-        json!({"plan": id, "pr": pr.key, "rebased": old != new, "old": old, "new": new, "pushed": pushed}),
+        json!({"plan": id, "pr": workflow.key, "rebased": old != new, "old": old, "new": new, "pushed": pushed}),
     ))
 }
 
-fn rejected(id: &PlanId, pr: &PrRow, sha: &str, stderr: String) -> CpdError {
+fn rejected(id: &PlanId, workflow: &WorkflowRow, sha: &str, stderr: String) -> CpdError {
     CpdError::new(
         ErrorCode::PushRejected,
-        format!("{} was rebased onto origin/{}, but its push was rejected: the remote head moved again, run cpd pr rebase --pr {}.", short(sha), pr.remote_branch(), pr.key),
+        format!("{} was rebased onto origin/{}, but its push was rejected: the remote head moved again, run cpd pr rebase --workflow {}.", short(sha), workflow.remote_branch(), workflow.key),
     )
     .with("plan", id.as_str())
-    .with("pr", pr.key.as_str())
+    .with("pr", workflow.key.as_str())
     .with("sha", sha)
     .with("stderr", stderr)
 }
@@ -575,18 +580,24 @@ pub(crate) fn unresolved_with(runner: &dyn Runner, lead: &Path) -> Result<Vec<St
     Ok(files.into_iter().collect())
 }
 
-/// `cpd pr rebase --pr <key> [--plan <id>] <flag>`: `--plan` unless `CPD_PLAN` already names the Plan.
-fn command(plan: &PlanId, key: &PrKey, flag: &str) -> String {
+/// `cpd pr rebase --workflow <key> [--plan <id>] <flag>`: `--plan` unless `CPD_PLAN` already names the Plan.
+fn command(plan: &PlanId, key: &WorkflowKey, flag: &str) -> String {
     let selected = std::env::var("CPD_PLAN").is_ok_and(|p| p == plan.as_str());
     if selected {
-        format!("cpd pr rebase --pr {key} {flag}")
+        format!("cpd pr rebase --workflow {key} {flag}")
     } else {
-        format!("cpd pr rebase --pr {key} --plan {plan} {flag}")
+        format!("cpd pr rebase --workflow {key} --plan {plan} {flag}")
     }
 }
 
 /// The rebase stopped at a conflict in the Lead worktree (the stop's `rebase_conflict`).
-fn stopped(plan: &PlanId, key: &PrKey, lead: &Path, branch: &str, files: Vec<String>) -> CpdError {
+fn stopped(
+    plan: &PlanId,
+    key: &WorkflowKey,
+    lead: &Path,
+    branch: &str,
+    files: Vec<String>,
+) -> CpdError {
     let message = format!(
         "{branch} conflicts in {} files: the rebase is stopped in {}. Resolve them and `git add` them (no commit, no push), then run `{}`; or give it up with `{}`.",
         files.len(),
@@ -599,7 +610,7 @@ fn stopped(plan: &PlanId, key: &PrKey, lead: &Path, branch: &str, files: Vec<Str
 
 fn conflict(
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     lead: &Path,
     message: String,
     files: Vec<String>,
@@ -613,14 +624,10 @@ fn conflict(
         .with("abort", command(plan, key, "--abort"))
 }
 
-fn in_progress_error(plan: &PlanId, key: &PrKey) -> CpdError {
+fn in_progress_error(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::RebaseInProgress,
-        format!(
-            "A rebase of PR {key} is already in progress in its Lead worktree: run `{}` or `{}`.",
-            command(plan, key, "--continue"),
-            command(plan, key, "--abort")
-        ),
+        format!("A rebase of Workflow {key} is already in progress in its Lead worktree: run `{}` or `{}`.", command(plan, key, "--continue"), command(plan, key, "--abort")),
     )
     .with("plan", plan.as_str())
     .with("pr", key.as_str())
@@ -628,20 +635,20 @@ fn in_progress_error(plan: &PlanId, key: &PrKey) -> CpdError {
     .with("abort", command(plan, key, "--abort"))
 }
 
-fn no_rebase_error(plan: &PlanId, key: &PrKey) -> CpdError {
+fn no_rebase_error(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::NoRebaseInProgress,
-        format!("No rebase of PR {key} is in progress in its Lead worktree."),
+        format!("No rebase of Workflow {key} is in progress in its Lead worktree."),
     )
     .with("plan", plan.as_str())
     .with("pr", key.as_str())
 }
 
 /// The Lead Branch is not where the stopped rebase started: a merge landed during the stop.
-fn moved(plan: &PlanId, key: &PrKey, tip: &str) -> CpdError {
+fn moved(plan: &PlanId, key: &WorkflowKey, tip: &str) -> CpdError {
     CpdError::new(
         ErrorCode::CasLost,
-        format!("The Lead Branch of PR {key} moved during the stop (a merge landed): run `{}`, then `cpd pr rebase --pr {key}`.", command(plan, key, "--abort")),
+        format!("The Lead Branch of Workflow {key} moved during the stop (a merge landed): run `{}`, then `cpd pr rebase --workflow {key}`.", command(plan, key, "--abort")),
     )
     .with("plan", plan.as_str())
     .with("pr", key.as_str())
@@ -708,7 +715,7 @@ fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
     error
 }
 
-/// Guard U (§7.6 step 5): every Attempt of the PR's Jobs in `merging` whose
+/// Guard U (§7.6 step 5): every Attempt of the Workflow's Jobs in `merging` whose
 /// Attempt branch tip is an ancestor of the snapshot `snapshot` (its
 /// compare-and-swap happened, its step 10 has not committed) is ended before
 /// the rebase rewrites it: by R when its driver is dead, else by its driver,
@@ -716,14 +723,14 @@ fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
 fn guard_u(
     env: &mut Env,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     repo: &Path,
     snapshot: &str,
 ) -> Result<(), CpdError> {
     let merging: Vec<String> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status = 'merging' ORDER BY a.id",
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'merging' ORDER BY a.id",
         )?;
         let rows = stmt
             .query_map([plan.as_str(), key.as_str()], |r| r.get(0))?
@@ -764,7 +771,7 @@ pub(crate) fn settle_in(
     env: &mut Env,
     catalog: &mut Option<Catalog>,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     attempt: &AttemptId,
 ) -> Result<(), CpdError> {
     let clock = env.ports.clock.clone();
@@ -773,9 +780,9 @@ pub(crate) fn settle_in(
         if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
                 let home = env.home.clone();
-                let models = env
-                    .store
-                    .read(|conn| crate::policy::model::models_of_pr(conn, &home, plan, key))?;
+                let models = env.store.read(|conn| {
+                    crate::policy::model::models_of_workflow(conn, &home, plan, key)
+                })?;
                 *catalog = Some(config::load_catalog(&env.config, &models)?);
             }
             let catalog = catalog.as_ref().expect("loaded above");
@@ -799,7 +806,7 @@ pub(crate) fn settle_in(
             return Err(CpdError::new(
                 ErrorCode::CasLost,
                 format!(
-                    "Attempt {attempt} of PR {key} is on the Lead Branch but its merge has not been recorded after {} s: nothing was changed. Rerun the command.",
+                    "Attempt {attempt} of Workflow {key} is on the Lead Branch but its merge has not been recorded after {} s: nothing was changed. Rerun the command.",
                     GUARD_WAIT.as_secs()
                 ),
             )
@@ -816,7 +823,7 @@ pub(crate) fn settle_in(
 fn report_stale(
     env: &mut Env,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     lead: &Path,
     what: &str,
     stale: &CpdError,
@@ -828,7 +835,7 @@ fn report_stale(
         .unwrap_or_default()
         .to_owned();
     let text = format!(
-        "PR {key} of Plan {plan} was {what}, but its Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {plan}",
+        "Workflow {key} of Plan {plan} was {what}, but its Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {plan}",
         lead.display()
     );
     let mut details = stale.details().clone();
@@ -849,22 +856,26 @@ fn report_stale(
     })
 }
 
-/// The selected PR must be `open` (`illegal_transition`); a Plan that has not
+/// The selected Workflow must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-/// An adopted PR may also be `dispatch` once its Jobs but the `open` and `update` ones are done (A8).
-fn require_open<'a>(env: &mut Env, plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+/// An adopted Workflow may also be `dispatch` once its Jobs but the `open` and `update` ones are done (A8).
+fn require_open<'a>(
+    env: &mut Env,
+    plan: &'a PlanWorkflows,
+    args: &Args,
+) -> Result<&'a WorkflowRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
-    let pr = plan.select(&args.pr)?;
-    if pr.head_ref.is_some() && pr.status == "dispatch" {
-        require_jobs_done(env, plan, &pr.key)?;
-        return Ok(pr);
+    let workflow = plan.select(&args.workflow)?;
+    if workflow.head_ref.is_some() && workflow.status == "dispatch" {
+        require_jobs_done(env, plan, &workflow.key)?;
+        return Ok(workflow);
     }
-    if pr.status != "open" {
-        return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
+    if workflow.status != "open" {
+        return Err(workflow.refuse(&plan.plan.id, COMMAND, "open"));
     }
-    Ok(pr)
+    Ok(workflow)
 }
 
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict, after

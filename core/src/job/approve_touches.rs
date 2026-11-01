@@ -65,8 +65,8 @@ pub(super) fn approve_in(env: &mut Env, args: ApproveTouchesArgs) -> Result<Outp
                     reason
                 );
                 append(tx, NewEvent::job_edited(text, ["touches_approved"]).plan(plan.clone()).job(key.clone()))?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &job.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok((job, approved, false))
             }

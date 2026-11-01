@@ -74,10 +74,10 @@ fn fixture(store: &mut Store) {
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
                        ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
                        ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                        VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
@@ -258,7 +258,13 @@ const SPEC: &[SpecRow] = &[
         &["title", "jira", "lead_session", "forked_from", "cwd"],
         &[],
     ),
-    ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
+    (
+        "plan-phase",
+        "cp",
+        "",
+        &["from", "to"],
+        &["jobs", "workflows"],
+    ),
     (
         "plan-review",
         "cp",
@@ -267,13 +273,13 @@ const SPEC: &[SpecRow] = &[
         &["feedback"],
     ),
     ("plan-outlined", "cp", "", &["replaced"], &[]),
-    ("plan-done", "cp", "", &["prs"], &[]),
+    ("plan-done", "cp", "", &["workflows"], &[]),
     (
         "job-added",
         "cpj",
         "",
         &[
-            "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+            "workflow", "kind", "status", "appended", "tier", "needs", "urgent",
         ],
         &["by", "reason"],
     ),
@@ -283,7 +289,7 @@ const SPEC: &[SpecRow] = &[
         "cpja",
         "",
         &["sha", "tier", "kind"],
-        &["cancel_too_late", "pr", "number", "url"],
+        &["cancel_too_late", "workflow", "number", "url"],
     ),
     (
         "job-failed",
@@ -332,13 +338,19 @@ const SPEC: &[SpecRow] = &[
         ],
         &[],
     ),
-    ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
+    (
+        "all-merged",
+        "cp",
+        "",
+        &["workflow", "merged", "cancelled"],
+        &[],
+    ),
     (
         "pr-feedback",
         "cp",
         "",
         &[
-            "pr",
+            "workflow",
             "number",
             "url",
             "state",
@@ -352,21 +364,27 @@ const SPEC: &[SpecRow] = &[
         &[],
     ),
     (
-        "pr-added",
+        "workflow-added",
         "cp",
         "",
-        &["pr", "repo", "base", "needs", "appended"],
+        &["workflow", "repo", "base", "needs", "appended"],
         &[],
     ),
-    ("pr-edited", "cp", "", &["pr", "fields"], &[]),
-    ("pr-described", "cp", "", &["pr"], &[]),
-    ("pr-cancelled", "cp", "", &["pr"], &["superseded_by"]),
+    ("workflow-edited", "cp", "", &["workflow", "fields"], &[]),
+    ("workflow-described", "cp", "", &["workflow"], &[]),
     (
-        "pr-started",
+        "workflow-cancelled",
+        "cp",
+        "",
+        &["workflow"],
+        &["superseded_by"],
+    ),
+    (
+        "workflow-started",
         "cp",
         "",
         &[
-            "pr",
+            "workflow",
             "repo",
             "base",
             "lead_branch",
@@ -379,18 +397,25 @@ const SPEC: &[SpecRow] = &[
         &[],
     ),
     (
-        "pr-base-changed",
+        "workflow-base-changed",
         "cp",
         "",
-        &["pr", "from", "to", "from_pr", "to_pr", "by"],
+        &[
+            "workflow",
+            "from",
+            "to",
+            "from_workflow",
+            "to_workflow",
+            "by",
+        ],
         &["number", "url"],
     ),
-    ("pr-opened", "cp", "", &["pr", "number", "url"], &[]),
+    ("pr-opened", "cp", "", &["workflow", "number", "url"], &[]),
     (
         "pr-merged",
         "cp",
         "",
-        &["pr", "number", "url", "merged_at"],
+        &["workflow", "number", "url", "merged_at"],
         &[],
     ),
     ("escalation", "cpja", "", &["escalation", "question"], &[]),
@@ -512,9 +537,15 @@ const SPEC: &[SpecRow] = &[
         "",
         "",
         &["by", "reason", "started_at", "plans"],
-        &["until_pr"],
+        &["until_workflow"],
     ),
-    ("incident-plans", "", "", &["by", "plans"], &["until_pr"]),
+    (
+        "incident-plans",
+        "",
+        "",
+        &["by", "plans"],
+        &["until_workflow"],
+    ),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
 ];
 
@@ -562,6 +593,16 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
         .map(Result::unwrap)
         .collect();
     let mut expected = names.clone();
+    // The retired `pr-*` object kinds stay in `event_kinds` as history (rename map R7a): past Events hold those
+    // kinds, so the store keeps the rows and reads the new ones only.
+    expected.extend([
+        "pr-added",
+        "pr-base-changed",
+        "pr-cancelled",
+        "pr-described",
+        "pr-edited",
+        "pr-started",
+    ]);
     expected.sort();
     assert_eq!(in_table, expected);
 }
@@ -1397,7 +1438,7 @@ struct Stale {
 fn kind_data(kind: Kind) -> Value {
     use Kind::*;
     match kind {
-        PlanDone => json!({"prs": []}),
+        PlanDone => json!({"workflows": []}),
         PlanPhase => json!({"from": "dispatch", "to": "deploy"}),
         PlanReview => json!({"review": "r1", "fingerprint": "f", "status": "pending"}),
         JobFailed => json!({"cause": "gate", "detail": "d", "tier": "S1", "attempts": 1}),
@@ -1412,13 +1453,13 @@ fn kind_data(kind: Kind) -> Value {
         EscalationExpired => json!({"escalation": "e1", "reason": "timeout"}),
         Error => json!({"source": "engine", "code": "push_failed", "message": "m", "details": {}}),
         PrFeedback => json!({
-            "pr": "r1", "number": 1, "url": "u", "state": "open", "checks": "failed", "review_decision": "none",
+            "workflow": "r1", "number": 1, "url": "u", "state": "open", "checks": "failed", "review_decision": "none",
             "mergeable": "mergeable", "merge_state": "clean", "conflict": false, "reasons": ["checks_failed"]
         }),
-        PrMerged => json!({"pr": "r1", "number": 1, "url": "u", "merged_at": "t"}),
-        PrCancelled => json!({"pr": "r1"}),
-        PrStarted => json!({
-            "pr": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
+        PrMerged => json!({"workflow": "r1", "number": 1, "url": "u", "merged_at": "t"}),
+        WorkflowCancelled => json!({"workflow": "r1"}),
+        WorkflowStarted => json!({
+            "workflow": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
             "reused": false, "pushed": false, "by": "cpd"
         }),
         other => panic!("no data for {other:?}"),
@@ -1515,7 +1556,7 @@ impl Stale {
                     &format!(
                         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, feedback)
                            VALUES ('o/r', {n}, 'u{n}', 't', 0, '{state}', '{review}', '{checks}', 't', 't', {feedback});
-                         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                                           pull_request, created_txn, created_at, started_at)
                            VALUES ('{plan}', '{key}', '/r', 'main', 'open', 'cpd/{plan}/{key}', '/w/{key}', {n}, 'u{n}', 't',
                                    (SELECT id FROM pull_requests WHERE number = {n}), {id}, 't', 't');",
@@ -1526,14 +1567,14 @@ impl Stale {
             .unwrap();
     }
 
-    /// A PR of `plan` that was never opened: its `prs` row has no `pull_request`.
+    /// A Workflow of `plan` that was never opened: its `workflows` row has no `pull_request`.
     fn waiting_pr(&mut self, plan: &str, key: &str) {
         self.store
             .write("pr", |tx| {
                 exec(
                     tx,
                     &format!(
-                        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                          VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', 'cpd/{plan}/{key}', {}, 't');",
                         tx.id()
                     ),
@@ -1548,7 +1589,7 @@ impl Stale {
             Kind::PrFeedback,
             plan,
             None,
-            json!({"pr": pr, "reasons": reasons}),
+            json!({"workflow": pr, "reasons": reasons}),
         )
     }
 
@@ -1559,7 +1600,7 @@ impl Stale {
                 exec(
                     tx,
                     &format!(
-                        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
                          VALUES ('{plan}', '{pr}', 'C02JU6C2Z1D', '1793040197.490209', 'https://example.slack.com/p1', 'opened', NULL, NULL)"
                     ),
                 )
@@ -1742,15 +1783,20 @@ fn follow_session_drops_a_pr_error_that_a_later_pr_start_merge_or_cancel_clears(
     let mut s = Stale::new();
     let err = |pr: &str| json!({"details": {"pr": pr}});
     let _e1 = s.ev(Kind::Error, "pay", None, err("a")); // 1 error of PR a, pr-started a 2
-    let ps1 = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "a"}));
+    let ps1 = s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "a"}));
     let _e2 = s.ev(Kind::Error, "pay", None, err("b")); // 3 error of PR b, pr-merged b 4
-    let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "b"}));
+    let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "b"}));
     let _e3 = s.ev(Kind::Error, "pay", None, err("c")); // 5 error of PR c, pr-cancelled c 6
-    let pc3 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "c"}));
+    let pc3 = s.ev(
+        Kind::WorkflowCancelled,
+        "pay",
+        None,
+        json!({"workflow": "c"}),
+    );
     let e4 = s.ev(Kind::Error, "pay", None, err("d")); // 7 error of PR d, pr-started e: streams
-    let pse = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "e"}));
+    let pse = s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "e"}));
     let e5 = s.ev(Kind::Error, "pay", None, err("f")); // 9 error of PR f, pr-merged f in another Plan: streams
-    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "f"}));
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"workflow": "f"}));
     assert_eq!(s.lead(), vec![ps1, pm2, pc3, e4, pse, e5]);
 }
 
@@ -1762,17 +1808,17 @@ fn follow_session_keeps_every_other_error_and_every_kind_that_reports_a_complete
     live.push(s.ev(Kind::Error, "pay", None, json!({}))); // error with no Job and no details.pr
     live.push(s.ev(Kind::Error, "pay", None, json!({"details": {"pr": 5}}))); // details.pr not a string
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::JobCancelled, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
     // Later Events about the same objects:
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "5"})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
-    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "5"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({"status": "approved"})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanDone, "pay", None, json!({}))); // supersedes 1
@@ -1786,14 +1832,19 @@ fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
         s.pr("pay", key, "open", "none", "failed", Some("[]")); // every row still says checks failed
     }
     let _f1 = s.feedback("pay", "a", json!(["checks_failed"])); // 1 feedback of a, pr-merged a 2
-    let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "a"}));
+    let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "a"}));
     let _f2 = s.feedback("pay", "b", json!(["checks_failed"])); // 3 feedback of b, pr-cancelled b 4
-    let pc2 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "b"}));
+    let pc2 = s.ev(
+        Kind::WorkflowCancelled,
+        "pay",
+        None,
+        json!({"workflow": "b"}),
+    );
     let f3 = s.feedback("pay", "c", json!(["checks_failed"])); // 5 feedback of c, nothing after: streams
     let f4 = s.feedback("pay", "d", json!(["checks_failed"])); // 6 feedback of d, pr-merged e: streams
-    let pme = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "e"}));
+    let pme = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "e"}));
     let f5 = s.feedback("pay", "g", json!(["checks_failed"])); // 8 feedback of g, pr-merged g in another Plan: streams
-    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "g"}));
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"workflow": "g"}));
     assert_eq!(s.lead(), vec![pm1, pc2, f3, f4, pme, f5]);
 }
 
@@ -1892,14 +1943,14 @@ fn follow_session_fails_open_when_the_object_or_a_data_field_is_missing() {
     s.pr("pay", "p6", "open", "none", "passed", None);
     let _dropped = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by the last Event
     let mut live = vec![];
-    live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no prs row
-    live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // prs.pull_request NULL
+    live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no workflows row
+    live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // workflows.pull_request NULL
     live.push(s.feedback("pay", "p6", json!(["comments"]))); // feedback NULL
     live.push(s.raw(
         Kind::PrFeedback,
         Some("pay"),
         None,
-        json!({"pr": "p1", "reasons": null}),
+        json!({"workflow": "p1", "reasons": null}),
     )); // reasons missing
     live.push(s.feedback("pay", "p2", json!([]))); // reasons empty
     live.push(s.feedback("pay", "p3", json!("checks_failed"))); // reasons not an array

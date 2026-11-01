@@ -8,8 +8,8 @@ use crate::error::CpdError;
 use crate::ids::PlanId;
 
 /// The Event kinds that change whether a draft is parked (T is the highest id of them).
-const CHANGING: &str = "'job-added', 'job-edited', 'job-merged', 'job-failed', 'job-retried', 'job-cancelled', 'plan-review', 'pr-added', \
-                        'pr-edited', 'pr-started', 'pr-cancelled', 'pr-merged', 'plan-phase'";
+const CHANGING: &str = "'job-added', 'job-edited', 'job-merged', 'job-failed', 'job-retried', 'job-cancelled', 'plan-review', 'workflow-added', \
+                        'workflow-edited', 'workflow-started', 'workflow-cancelled', 'pr-merged', 'plan-phase'";
 
 /// What the Lead has been told of a Plan's parked drafts.
 #[derive(Debug, PartialEq, Eq)]

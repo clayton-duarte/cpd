@@ -62,7 +62,7 @@ impl Fx {
     }
 
     /// An open authored pull request `acme/shop#n`: passed checks, clean, no review, comments read and none, on main.
-    fn pr(&mut self, n: i64, assignments: &str) {
+    fn workflow(&mut self, n: i64, assignments: &str) {
         let url = format!("https://github.com/acme/shop/pull/{n}");
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
@@ -76,7 +76,7 @@ impl Fx {
     /// Plan `plan` owns pull request `n` through a `prs` row.
     fn own(&mut self, plan: &str, n: i64) {
         self.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pull_request, pr_number, pr_url,
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pull_request, pr_number, pr_url,
                               pr_opened_at, created_txn, created_at, started_at)
              VALUES ('{plan}', 'p{n}', '/r', 'main', 'open', 'cpd/{plan}/p{n}', '/lw',
                      (SELECT id FROM pull_requests WHERE number = {n}), {n}, 'https://github.com/acme/shop/pull/{n}', '{T}', 1, '{T}', '{T}');"
@@ -87,7 +87,7 @@ impl Fx {
         self.sql("UPDATE sessions SET state = 'idle' WHERE id = 'l-pay'");
     }
 
-    /// A Job of `kind` and `status` of the PR `p<n>` of Plan `pay`.
+    /// A Job of `kind` and `status` of the Workflow `p<n>` of Plan `pay`.
     fn job(&mut self, n: i64, key: &str, kind: &str, status: &str) {
         let cause = if status == "failed" {
             "'crashed'"
@@ -105,7 +105,7 @@ impl Fx {
             ("NULL", "NULL".to_owned())
         };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
              VALUES ('pay', 'p{n}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause}, '{kind}', {sha}, {reason}, {requested});"
         ));
@@ -113,7 +113,7 @@ impl Fx {
 
     fn posted(&mut self, n: i64) {
         self.sql(&format!(
-            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at) VALUES ('pay', 'p{n}', 'C1', '1.1', 'https://x/1', '{T}');"
+            "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at) VALUES ('pay', 'p{n}', 'C1', '1.1', 'https://x/1', '{T}');"
         ));
     }
 
@@ -165,7 +165,7 @@ fn bot_comment() -> String {
 #[test]
 fn an_authored_draft_pr_is_a_white_draft_row() {
     let mut f = fixture();
-    f.pr(3, "draft = 1, merge_state = 'draft'");
+    f.workflow(3, "draft = 1, merge_state = 'draft'");
     let c = f.row(3);
     assert_eq!((c.urgency, c.label.as_str()), (White, "shop#3 draft\nT"));
     assert_eq!(c.subject, "pr:acme/shop#3");
@@ -178,11 +178,11 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
 #[test]
 fn an_authored_stacked_pr_is_a_white_stacked_row() {
     let mut f = fixture();
-    f.pr(
+    f.workflow(
         1,
         "base_ref = 'feature', default_branch = 'main', review_decision = 'approved'",
     );
-    f.pr(2, "base_ref = NULL, default_branch = NULL");
+    f.workflow(2, "base_ref = NULL, default_branch = NULL");
     is(&mut f, 1, White, "stacked pr pending base merge");
     is(&mut f, 2, Cyan, "waiting");
 }
@@ -190,9 +190,9 @@ fn an_authored_stacked_pr_is_a_white_stacked_row() {
 #[test]
 fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
     let mut f = fixture();
-    f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.pr(2, "checks = 'failed', merge_state = 'blocked'");
-    f.pr(
+    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(2, "checks = 'failed', merge_state = 'blocked'");
+    f.workflow(
         3,
         "review_decision = 'changes_requested', merge_state = 'blocked'",
     );
@@ -204,8 +204,8 @@ fn an_unowned_broken_pr_is_a_red_row_named_by_its_cause() {
 #[test]
 fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested() {
     let mut f = fixture();
-    f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty', checks = 'failed', review_decision = 'changes_requested'");
-    f.pr(
+    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty', checks = 'failed', review_decision = 'changes_requested'");
+    f.workflow(
         2,
         "merge_state = 'blocked', checks = 'failed', review_decision = 'changes_requested'",
     );
@@ -251,7 +251,7 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
     for (set, red, cyan) in broken {
         for (working, job, handled) in cases {
             let mut f = fixture();
-            f.pr(1, set);
+            f.workflow(1, set);
             f.own("pay", 1);
             if !working {
                 f.idle();
@@ -263,12 +263,12 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
             is(&mut f, 1, expected.0, expected.1);
         }
         let mut f = fixture();
-        f.pr(1, set);
+        f.workflow(1, set);
         f.own("pay", 1);
         f.idle();
         is(&mut f, 1, Red, red);
         let mut f = fixture();
-        f.pr(1, set);
+        f.workflow(1, set);
         is(&mut f, 1, Red, red); // unowned
     }
 }
@@ -276,8 +276,8 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
 #[test]
 fn a_pr_with_pending_checks_is_a_cyan_checks_running_row() {
     let mut f = fixture();
-    f.pr(1, "checks = 'pending'");
-    f.pr(2, "checks = 'none'");
+    f.workflow(1, "checks = 'pending'");
+    f.workflow(2, "checks = 'none'");
     is(&mut f, 1, Cyan, "checks running");
     is(&mut f, 2, Yellow, "ready to merge");
 }
@@ -286,7 +286,7 @@ fn a_pr_with_pending_checks_is_a_cyan_checks_running_row() {
 fn an_unposted_owned_postable_pr_of_a_post_owner_is_a_yellow_ready_for_review_row() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
     f.own("pay", 1);
     let c = f.row(1);
     assert_eq!(
@@ -303,14 +303,14 @@ fn ready_for_review_needs_every_condition() {
     // Baseline: it is ready for review.
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
     f.own("pay", 1);
     is(&mut f, 1, Yellow, "ready for user review");
 
     // A post.
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, Yellow, "ready to merge");
@@ -318,14 +318,14 @@ fn ready_for_review_needs_every_condition() {
     // No owner Plan.
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
     is(&mut f, 1, Yellow, "ready to merge");
 
     // The policy disabled, and without [pr.post].
     for toml in ["[pr.post]\nenabled = false\n", ""] {
         let mut f = fixture();
         f.policy(toml);
-        f.pr(1, "checks = 'passed'");
+        f.workflow(1, "checks = 'passed'");
         f.own("pay", 1);
         is(&mut f, 1, Yellow, "ready to merge");
     }
@@ -338,7 +338,7 @@ fn ready_for_review_needs_every_condition() {
     ] {
         let mut f = fixture();
         f.policy(POST);
-        f.pr(1, "checks = 'passed'");
+        f.workflow(1, "checks = 'passed'");
         f.sql(&format!("UPDATE pull_requests SET {set} WHERE number = 1"));
         f.own("pay", 1);
         is(&mut f, 1, Cyan, "waiting");
@@ -349,15 +349,15 @@ fn ready_for_review_needs_every_condition() {
 fn ready_to_merge_for_a_post_owner_needs_a_post_or_an_approval() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "feedback = NULL");
+    f.workflow(1, "feedback = NULL");
     f.own("pay", 1);
     is(&mut f, 1, Cyan, "waiting");
 
-    f.pr(2, "feedback = NULL, review_decision = 'approved'");
+    f.workflow(2, "feedback = NULL, review_decision = 'approved'");
     f.own("pay", 2);
     is(&mut f, 2, Yellow, "ready to merge");
 
-    f.pr(3, "feedback = NULL");
+    f.workflow(3, "feedback = NULL");
     f.own("pay", 3);
     f.posted(3);
     is(&mut f, 3, Yellow, "ready to merge");
@@ -367,12 +367,12 @@ fn ready_to_merge_for_a_post_owner_needs_a_post_or_an_approval() {
         let mut f = fixture();
         f.policy(toml);
         for (n, review) in [(1, "none"), (2, "approved")] {
-            f.pr(n, &format!("feedback = NULL, review_decision = '{review}'"));
+            f.workflow(n, &format!("feedback = NULL, review_decision = '{review}'"));
             f.own("pay", n);
             is(&mut f, n, Yellow, "ready to merge");
         }
         for (n, review) in [(3, "none"), (4, "approved")] {
-            f.pr(n, &format!("feedback = NULL, review_decision = '{review}'"));
+            f.workflow(n, &format!("feedback = NULL, review_decision = '{review}'"));
             is(&mut f, n, Yellow, "ready to merge");
         }
     }
@@ -382,7 +382,7 @@ fn ready_to_merge_for_a_post_owner_needs_a_post_or_an_approval() {
 fn a_posted_pr_that_is_not_ready_to_merge_is_a_cyan_in_review_row() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, "merge_state = 'blocked', checks = 'passed'");
+    f.workflow(1, "merge_state = 'blocked', checks = 'passed'");
     f.own("pay", 1);
     f.posted(1);
     is(&mut f, 1, Cyan, "waiting for peer review");
@@ -392,7 +392,7 @@ fn a_posted_pr_that_is_not_ready_to_merge_is_a_cyan_in_review_row() {
 fn an_authored_pr_that_matches_no_other_state_is_a_cyan_waiting_row() {
     let mut f = fixture();
     for (n, state) in [(1, "blocked"), (2, "behind"), (3, "unknown")] {
-        f.pr(n, &format!("checks = 'passed', merge_state = '{state}'"));
+        f.workflow(n, &format!("checks = 'passed', merge_state = '{state}'"));
         is(&mut f, n, Cyan, "waiting");
     }
 }
@@ -401,17 +401,17 @@ fn an_authored_pr_that_matches_no_other_state_is_a_cyan_waiting_row() {
 fn the_states_take_the_documented_precedence() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(
+    f.workflow(
         1,
         "draft = 1, merge_state = 'draft', mergeable = 'conflicting'",
     );
-    f.pr(
+    f.workflow(
         2,
         "mergeable = 'conflicting', merge_state = 'dirty', base_ref = 'feature'",
     );
-    f.pr(3, "base_ref = 'feature', checks = 'pending'");
-    f.pr(4, "checks = 'pending', review_decision = 'approved'");
-    f.pr(5, "review_decision = 'approved'");
+    f.workflow(3, "base_ref = 'feature', checks = 'pending'");
+    f.workflow(4, "checks = 'pending', review_decision = 'approved'");
+    f.workflow(5, "review_decision = 'approved'");
     f.own("pay", 5);
     is(&mut f, 1, White, "draft");
     is(&mut f, 2, Red, "conflict");
@@ -425,8 +425,8 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
     // owner_unset
     let mut f = fixture();
     f.sql("UPDATE contexts SET owner = NULL");
-    f.pr(1, "checks = 'passed'");
-    f.pr(2, "merge_state = 'blocked', checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
+    f.workflow(2, "merge_state = 'blocked', checks = 'passed'");
     f.own("pay", 1);
     f.own("pay", 2);
     is(&mut f, 1, Yellow, "ready to merge");
@@ -434,8 +434,8 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
     // policy_invalid
     let mut f = fixture();
     f.policy("[pr.post\nenabled = ");
-    f.pr(1, "checks = 'passed'");
-    f.pr(2, "merge_state = 'blocked', checks = 'passed'");
+    f.workflow(1, "checks = 'passed'");
+    f.workflow(2, "merge_state = 'blocked', checks = 'passed'");
     f.own("pay", 1);
     f.own("pay", 2);
     is(&mut f, 1, Yellow, "ready to merge");
@@ -445,9 +445,9 @@ fn an_unresolved_owner_policy_counts_as_post_disabled_and_fails_nothing() {
 #[test]
 fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     let mut f = fixture();
-    f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.pr(2, "mergeable = 'conflicting', merge_state = 'dirty'");
-    f.pr(3, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(2, "mergeable = 'conflicting', merge_state = 'dirty'");
+    f.workflow(3, "mergeable = 'conflicting', merge_state = 'dirty'");
     f.own("pay", 1);
     f.idle();
     f.own("pay", 2);
@@ -486,7 +486,7 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
             if pay_works { "idle" } else { "working" },
             if pay_works { "working" } else { "idle" },
         ));
-        f.pr(1, "mergeable = 'conflicting', merge_state = 'dirty'");
+        f.workflow(1, "mergeable = 'conflicting', merge_state = 'dirty'");
         f.own("pay", 1);
         f.own("pay2", 1);
         is(&mut f, 1, expected.0, expected.1);
@@ -500,19 +500,19 @@ fn the_newest_owning_plan_decides_the_owner_and_a_pr_has_one_row() {
 #[test]
 fn a_pr_that_is_not_open_or_not_authored_has_no_row() {
     let mut f = fixture();
-    f.pr(1, "authored = 0");
-    f.pr(
+    f.workflow(1, "authored = 0");
+    f.workflow(
         2,
         "state = 'merged', merged_at = '2026-01-01T00:00:00.000Z'",
     );
-    f.pr(3, "state = 'closed'");
+    f.workflow(3, "state = 'closed'");
     assert!(f.rows().is_empty(), "{:?}", f.rows());
 }
 
 #[test]
 fn a_clean_approved_unowned_pr_is_a_yellow_ready_to_merge_row() {
     let mut f = fixture();
-    f.pr(1, "review_decision = 'approved'");
+    f.workflow(1, "review_decision = 'approved'");
     is(&mut f, 1, Yellow, "ready to merge");
 }
 
@@ -521,7 +521,7 @@ const STACKED: &str = "base_ref = 'feature', default_branch = 'main'";
 #[test]
 fn stack_review_a_stacked_pr_with_pending_checks_is_checks_running() {
     let mut f = fixture();
-    f.pr(1, &format!("{STACKED}, checks = 'pending'"));
+    f.workflow(1, &format!("{STACKED}, checks = 'pending'"));
     is(&mut f, 1, Cyan, "checks running");
 }
 
@@ -529,7 +529,7 @@ fn stack_review_a_stacked_pr_with_pending_checks_is_checks_running() {
 fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    f.workflow(1, &format!("{STACKED}, checks = 'passed'"));
     f.own("pay", 1);
     is(&mut f, 1, Yellow, "ready for user review");
     // With an open bot comment it is not postable, so it stays stacked.
@@ -544,7 +544,7 @@ fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
 fn stack_review_a_posted_stacked_pr_is_in_review() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(
+    f.workflow(
         1,
         &format!("{STACKED}, checks = 'passed', review_decision = 'none'"),
     );
@@ -557,7 +557,7 @@ fn stack_review_a_posted_stacked_pr_is_in_review() {
 fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_stacked() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'pending'"));
+    f.workflow(1, &format!("{STACKED}, checks = 'pending'"));
     f.own("pay", 1);
     is(&mut f, 1, Cyan, "checks running");
     f.sql("UPDATE pull_requests SET checks = 'passed' WHERE number = 1");
@@ -572,7 +572,7 @@ fn stack_review_a_stacked_pr_walks_checks_running_ready_for_review_in_review_sta
 fn stack_review_a_posted_approved_stacked_pr_is_stacked() {
     let mut f = fixture();
     f.policy(POST);
-    f.pr(
+    f.workflow(
         1,
         &format!("{STACKED}, checks = 'passed', review_decision = 'approved'"),
     );
@@ -586,18 +586,18 @@ fn stack_review_an_unposted_stacked_pr_that_is_not_ready_for_review_is_stacked()
     // Not owned.
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    f.workflow(1, &format!("{STACKED}, checks = 'passed'"));
     is(&mut f, 1, White, "stacked pr pending base merge");
     // Post disabled.
     let mut f = fixture();
     f.policy("[pr.post]\nenabled = false\n");
-    f.pr(1, &format!("{STACKED}, checks = 'passed'"));
+    f.workflow(1, &format!("{STACKED}, checks = 'passed'"));
     f.own("pay", 1);
     is(&mut f, 1, White, "stacked pr pending base merge");
     // Comments unread.
     let mut f = fixture();
     f.policy(POST);
-    f.pr(1, &format!("{STACKED}, checks = 'passed', feedback = NULL"));
+    f.workflow(1, &format!("{STACKED}, checks = 'passed', feedback = NULL"));
     f.own("pay", 1);
     is(&mut f, 1, White, "stacked pr pending base merge");
 }
@@ -605,8 +605,8 @@ fn stack_review_an_unposted_stacked_pr_that_is_not_ready_for_review_is_stacked()
 #[test]
 fn stack_review_stacking_blocks_only_ready_to_merge() {
     let mut f = fixture();
-    f.pr(1, &format!("{STACKED}, review_decision = 'approved'"));
-    f.pr(2, "review_decision = 'approved'");
+    f.workflow(1, &format!("{STACKED}, review_decision = 'approved'"));
+    f.workflow(2, "review_decision = 'approved'");
     is(&mut f, 1, White, "stacked pr pending base merge");
     is(&mut f, 2, Yellow, "ready to merge");
 }

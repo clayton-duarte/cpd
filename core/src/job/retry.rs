@@ -54,8 +54,8 @@ pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdErro
             Decision::Queue(job) => {
                 let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
                 requeue(tx, &plan, &key, &tier, text)?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &job.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok(false)
             }

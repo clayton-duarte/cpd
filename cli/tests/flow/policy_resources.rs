@@ -19,7 +19,7 @@ fn world(repo_file: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'P', 'grounding', 'lead1', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pl', 'L', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
            VALUES ('pl', 'named', '/r', 'main', 'waiting', 'cpd/pl/named', 'cpd', cpd_txn(), 't');",
     );
     fx
@@ -33,7 +33,7 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
         .display()
         .to_string();
     let out = fx
-        .cpd(&["policy", "show", "--pr", "named", "--plan", "pl"])
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
         .ok();
     let domain = &out["policy"]["resources"];
     assert_eq!(
@@ -46,7 +46,7 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
 
     fs::write(fx.env.cpd_home().join("policy/acme/cpd.toml"), "").unwrap();
     let out = fx
-        .cpd(&["policy", "show", "--pr", "named", "--plan", "pl"])
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
         .ok();
     assert_eq!(
         out["policy"]["resources"]["keys"]["names"],
@@ -73,7 +73,7 @@ fn policy_show_resources_lists_names_with_scope_slots_and_source() {
     let (host, repo) = (real("policy/host.toml"), real("policy/acme/cpd.toml"));
 
     let out = fx
-        .cpd(&["policy", "show", "--pr", "named", "--plan", "pl"])
+        .cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"])
         .ok();
 
     let domain = &out["policy"]["resources"];

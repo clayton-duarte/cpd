@@ -54,7 +54,7 @@ fn planned(fx: &Fx) {
     .ok();
     fx.github_origin(&repo);
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "pay",
         "--repo",
@@ -84,7 +84,7 @@ fn planned(fx: &Fx) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, created_txn, created_at)
                      VALUES ('pay', 'pay', 'a', 'Job a', 'S2', 'Goal of a.', 'Context of a.', '[\"src/a.rs\"]',
                              '[\"cargo test\"]', '[]', 'draft', 0, {}, 't');",

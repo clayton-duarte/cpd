@@ -2,7 +2,7 @@
 //!
 //! - [`jobs`]: a Plan's Jobs as read, the Locked-Job fingerprint of §2.3, the cycle check;
 //! - [`display`]: what the views show of cancelled work and of work that waits (one derivation for all of them);
-//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
+//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the Workflows;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
@@ -67,7 +67,7 @@ mod tier_advice_tests;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, PrTitle, Text, Title};
+use crate::args::{Name, PlanArg, Text, Title, WorkflowTitle};
 use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
@@ -78,8 +78,7 @@ use crate::output::Output;
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
 pub(crate) use new::lead_message;
-pub use outline::Outline;
-pub use prs::{PrRow, Pull};
+pub use prs::{Pull, WorkflowRow};
 pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
 
@@ -187,7 +186,7 @@ pub struct ReviewArgs {
     plan: PlanArg,
     /// What the drafts under review do: the heading of the review; 1-72 characters on one line
     #[arg(long, value_name = "text")]
-    title: PrTitle,
+    title: WorkflowTitle,
 }
 
 #[derive(clap::Args, Debug)]

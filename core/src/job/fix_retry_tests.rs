@@ -17,7 +17,7 @@ struct Fixture {
     store: Store,
 }
 
-/// Plans `pay` (PRs `api`, `web`) and `ops` (PR `api`).
+/// Plans `pay` (Workflows `api`, `web`) and `ops` (Workflow `api`).
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -34,10 +34,10 @@ fn fixture() -> Fixture {
                VALUES ('{plan}', 'ctx', 'P', 'dispatch', 'l-{plan}', '{T}', '{T}');"
         ));
     }
-    for (plan, pr) in [("pay", "api"), ("pay", "web"), ("ops", "api")] {
+    for (plan, workflow) in [("pay", "api"), ("pay", "web"), ("ops", "api")] {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('{plan}', '{pr}', '/r', 'main', 'dispatch', 'cpd/{plan}/{pr}', '/lw', 1, '{T}', '{T}');"
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('{plan}', '{workflow}', '/r', 'main', 'dispatch', 'cpd/{plan}/{workflow}', '/lw', 1, '{T}', '{T}');"
         ));
     }
     f.sql(&sql);
@@ -55,7 +55,7 @@ impl Fixture {
     }
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
-    fn job(&mut self, plan: &str, pr: &str, key: &str, kind: &str, status: &str) {
+    fn job(&mut self, plan: &str, workflow: &str, key: &str, kind: &str, status: &str) {
         let cause = if status == "failed" {
             "'crashed'"
         } else {
@@ -69,9 +69,9 @@ impl Fixture {
             "NULL".to_owned()
         };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha, cancel_reason, cancel_requested_at)
-               VALUES ('{plan}', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{kind}', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha}, {reason}, {reason_at});"
+               VALUES ('{plan}', '{workflow}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{kind}', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha}, {reason}, {reason_at});"
         ));
     }
 
@@ -93,8 +93,8 @@ impl Fixture {
     }
 
     /// A failed Job with one ended Attempt at `S2` and its Event.
-    fn failed(&mut self, plan: &str, pr: &str, key: &str, kind: &str) {
-        self.job(plan, pr, key, kind, "failed");
+    fn failed(&mut self, plan: &str, workflow: &str, key: &str, kind: &str) {
+        self.job(plan, workflow, key, kind, "failed");
         self.attempt(plan, key, 1, "S2");
         self.failure(plan, key);
     }
@@ -162,8 +162,15 @@ impl Fixture {
     }
 
     /// A running Job with a `running` (or `merging`) Attempt, for the ledger.
-    fn running(&mut self, plan: &str, pr: &str, key: &str, attempt_status: &str, cancel: bool) {
-        self.job(plan, pr, key, "work", "running");
+    fn running(
+        &mut self,
+        plan: &str,
+        workflow: &str,
+        key: &str,
+        attempt_status: &str,
+        cancel: bool,
+    ) {
+        self.job(plan, workflow, key, "work", "running");
         if cancel {
             self.sql(&format!("UPDATE jobs SET cancel_reason = 'r', cancel_requested_at = '{T}' WHERE plan = '{plan}' AND key = '{key}'"));
         }
@@ -269,7 +276,7 @@ fn fix_retry_waits_while_another_job_of_the_pr_created_after_the_failure_is_queu
     assert_eq!(
         f.retry("pay", "j"),
         vec!["f"],
-        "nothing else is working on the PR"
+        "nothing else is working on the Workflow"
     );
 }
 
@@ -322,7 +329,7 @@ fn fix_retry_ignores_other_prs_and_other_plans() {
     assert_eq!(
         f.retry("pay", "j"),
         vec!["f"],
-        "only the Job of the fix's PR"
+        "only the Job of the fix's Workflow"
     );
     assert_eq!(f.status("pay", "other-pr"), "failed");
     assert_eq!(f.status("ops", "other-plan"), "failed");

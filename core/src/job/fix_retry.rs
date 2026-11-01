@@ -6,7 +6,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::{JobKey, PlanId};
 use crate::store::WriteTxn;
 
-/// Requeues each failed `open` or `update` Job of `merged`'s PR that `merged` fixes; returns the keys it requeued.
+/// Requeues each failed `open` or `update` Job of `merged`'s Workflow that `merged` fixes; returns the keys it requeued.
 /// Call it after the row of `merged` is `merged`, in the same transaction.
 pub(crate) fn retry_after_fix(
     tx: &WriteTxn<'_>,
@@ -15,7 +15,7 @@ pub(crate) fn retry_after_fix(
 ) -> Result<Vec<JobKey>, CpdError> {
     let sql = format!(
         "SELECT j.key, (SELECT a.tier FROM attempts a WHERE a.plan = j.plan AND a.job = j.key ORDER BY a.number DESC LIMIT 1)
-           FROM jobs j JOIN jobs m ON m.plan = j.plan AND m.pr = j.pr
+           FROM jobs j JOIN jobs m ON m.plan = j.plan AND m.workflow = j.workflow
           WHERE m.plan = ?1 AND m.key = ?2 AND m.kind NOT IN ('open', 'update')
             AND j.kind IN ('open', 'update') AND j.status = 'failed'
             AND {} AND NOT {}

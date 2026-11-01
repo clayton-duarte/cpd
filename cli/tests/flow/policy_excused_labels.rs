@@ -46,7 +46,7 @@ fn excused_labels_is_set_by_an_owner_file_and_overridden_by_a_repo_file() {
 #[test]
 fn a_repo_pr_table_without_excused_labels_resets_it_to_empty() {
     let fx = world("[pr]\nexcused_labels = [\"dont merge\"]\n");
-    write(&fx, "acme/r.toml", "[pr]\njira_required = true\n");
+    write(&fx, "acme/r.toml", "[pr]\ntext = \"r\"\n");
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
     assert_eq!(

@@ -286,7 +286,7 @@ test("a failed Plan Events read fails the whole message: nothing added, the curs
 const pjob = (n: number, status: string, tier = "H2"): PendingJob => ({ key: `job-${n}`, kind: "scout", status, tier, title: `Title ${n}` });
 const prjob = (n: number, status: string): PendingPrJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
 const ppr = (jobs: PendingPrJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });
-const pplan = (id: string, prs: ReturnType<typeof ppr>[], phase = "dispatch", jobs: PendingJob[] = []): PendingPlan => ({ id, phase, prs, jobs });
+const pplan = (id: string, workflows: ReturnType<typeof ppr>[], phase = "dispatch", jobs: PendingJob[] = []): PendingPlan => ({ id, phase, workflows, jobs });
 /** What `cpd context pending` prints for the same Plans (the fields the digest does not use are there too). */
 const pendingJson = (plans: PendingPlan[]) => ({
   ok: true,
@@ -294,7 +294,7 @@ const pendingJson = (plans: PendingPlan[]) => ({
   plans: plans.map((p) => ({
     id: p.id, title: `T ${p.id}`, phase: p.phase, lead_session: null,
     jobs: p.jobs.map((j) => ({ ...j, touches: ["a.rs"] })),
-    prs: p.prs.map((r) => ({
+    workflows: p.workflows.map((r) => ({
       key: r.key, repo: "/r", base: "main", status: r.status, lead_branch: `cpd/${p.id}/${r.key}`,
       pull_request: r.number === null ? null : { number: r.number, url: "u", state: "OPEN" },
       jobs: r.jobs.map((j) => ({ ...j, touches: ["a.rs"] })),
@@ -302,13 +302,13 @@ const pendingJson = (plans: PendingPlan[]) => ({
   })),
 });
 
-test("parsePending: Plans, PRs and Jobs; anything else is bad_output", () => {
+test("parsePending: Plans, Workflows and Jobs; anything else is bad_output", () => {
   const plans = [pplan("p", [ppr([prjob(1, "queued")]), ppr([], { key: "ui", number: null })], "dispatch", [pjob(1, "queued")])];
   assert.deepEqual(parsePending(pendingJson(plans)), plans);
   assert.throws(() => parsePending({}), { code: "bad_output" });
   assert.throws(() => parsePending({ plans: [{ id: "p", phase: "dispatch" }] }), { code: "bad_output" });
-  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], prs: [{ key: "a", status: "s", pull_request: null, jobs: [{ key: "j", status: "queued" }] }] }] }), { code: "bad_output" });
-  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], prs: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], workflows: [{ key: "a", status: "s", pull_request: null, jobs: [{ key: "j", status: "queued" }] }] }] }), { code: "bad_output" });
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", jobs: [], workflows: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
 });
 
 const twoPlans = [
@@ -349,7 +349,7 @@ test("a failed Pending work read omits the message and is reported once without 
 
 const decision = (n: number, text: string, over: Partial<ContextRecord> = {}) => record(n, { kind: "decision", text, ...over });
 const eventsOf = (kind: string, evs: Record<string, unknown>[]) => ({ ok: true, events: evs.map((e) => ({ kind, context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: Math.max(0, ...evs.map((e) => e.id as number)) });
-const prOpened = (id: number, pr: string, number: number) => ({ id, plan: "p1", data: { pr, number, url: `https://github.com/o/r/pull/${number}` } });
+const prOpened = (id: number, workflow: string, number: number) => ({ id, plan: "p1", data: { workflow, number, url: `https://github.com/o/r/pull/${number}` } });
 const take = (...posts: { id: number; from_session: string | null; text: string; at?: string }[]) => ({ ok: true, session: ID, taken: posts.map((p) => ({ at: "2026-10-21T15:30:00Z", ...p })) });
 const nothingNew = (f: Fixture) => {
   f.respond("events-list@context-record", eventsList([]));
@@ -359,7 +359,7 @@ const nothingNew = (f: Fixture) => {
 const beforeTurn = async (f: Fixture) => ((await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" })) as any[]).find((r) => r !== undefined)?.message;
 const takeCalls = (f: Fixture) => f.calls().filter((c) => c.phase === "start" && c.argv[0] === "board" && c.argv[1] === "take").map((c) => c.argv);
 
-test("a Lead gets one cpd-context message with new decisions, board posts and opened PRs", async (t) => {
+test("a Lead gets one cpd-context message with new decisions, board posts and opened pull requests", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await lead(f);
@@ -373,15 +373,15 @@ test("a Lead gets one cpd-context message with new decisions, board posts and op
   assert.equal(
     m.content,
     [
-      "Context ctx: 2 decisions · 1 board post · 1 PR opened",
+      "Context ctx: 2 decisions · 1 board post · 1 pull request opened",
       "- hs-n1: Use one table.",
       "- hs-n4: Cut the wake.",
       "",
       "Board:",
       "- User (2026-10-21 21:00 +05:30): PR #207 opened",
       "",
-      "PRs:",
-      "- PR api opened: https://github.com/o/r/pull/211",
+      "Workflows:",
+      "- Workflow api: pull request opened https://github.com/o/r/pull/211",
     ].join("\n"),
   );
   assert.equal(m.details.delivered_to, ID);
@@ -436,15 +436,15 @@ test("the Manager's Plans section has one line per Plan with counts by kind", as
   await manager(f);
   nothingNew(f);
   const events = [
-    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { pr: "a", number: 210, url: "u" } },
-    { id: 302, plan: "cross-repo", kind: "pr-opened", data: { pr: "b", number: 211, url: "u" } },
+    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { workflow: "a", number: 210, url: "u" } },
+    { id: 302, plan: "cross-repo", kind: "pr-opened", data: { workflow: "b", number: 211, url: "u" } },
     { id: 303, plan: "cross-repo", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
     { id: 304, plan: "inbox", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
-    { id: 306, plan: "cross-repo", kind: "plan-done", data: { prs: [] } },
+    { id: 306, plan: "cross-repo", kind: "plan-done", data: { workflows: [] } },
   ];
   f.respond("events-list@plan-created", { ok: true, events: events.map((e) => ({ context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: 306 });
   const m = await beforeTurn(f);
-  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, done", "- inbox: 1 Job failed"]);
+  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 2 pull requests opened (#210, #211), 1 Job failed, done", "- inbox: 1 Job failed"]);
   assert.equal(m.details.event, 306);
 });
 
@@ -467,14 +467,14 @@ test("the Manager's Plans section never counts an Escalation Event", async (t) =
   await manager(f);
   nothingNew(f);
   const events = [
-    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { pr: "a", number: 210, url: "u" } },
+    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { workflow: "a", number: 210, url: "u" } },
     { id: 303, plan: "cross-repo", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
     { id: 305, plan: "cross-repo", kind: "escalation", data: { escalation: "e1", question: "q" } },
-    { id: 306, plan: "cross-repo", kind: "plan-done", data: { prs: [] } },
+    { id: 306, plan: "cross-repo", kind: "plan-done", data: { workflows: [] } },
   ];
   f.respond("events-list@plan-created", { ok: true, events: events.map((e) => ({ context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: 306 });
   const m = await beforeTurn(f);
-  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 1 PR opened (#210), 1 Job failed, done"]);
+  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 1 pull request opened (#210), 1 Job failed, done"]);
 });
 
 test("the Manager's Pending work has one line per Plan and no Job lines", async (t) => {
@@ -491,8 +491,8 @@ test("the Manager's Pending work has one line per Plan and no Job lines", async 
   const m = await beforeTurn(f);
   assert.deepEqual(m.content.split("\n"), [
     "Pending work:",
-    "- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207",
-    "- agent-comms (plan): PR quiet-core 1 running",
+    "- inbox (dispatch): Workflow mainfix 2 running, 1 queued; Workflow prlink: pull request open #207",
+    "- agent-comms (plan): Workflow quiet-core 1 running",
   ]);
 });
 
@@ -537,8 +537,8 @@ const planPr = (key: string, number: number, closed: boolean) => ({
   pull_request: { number, url: `https://github.com/o/r/pull/${number}`, state: closed ? "closed" : "open" },
   closed_unmerged: closed,
 });
-const planWith = (...prs: ReturnType<typeof planPr>[]) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, prs });
-const closedLine = (key: string, n: number) => `PR ${key}: its pull request #${n} (https://github.com/o/r/pull/${n}) is closed without a merge and cpd still lists the PR as open. Ask the User, or cpd pr cancel --pr ${key}.`;
+const planWith = (...workflows: ReturnType<typeof planPr>[]) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, workflows });
+const closedLine = (key: string, n: number) => `Workflow ${key}: its pull request #${n} (https://github.com/o/r/pull/${n}) is closed without a merge and cpd still lists the Workflow as open. Ask the User, or cpd workflow cancel --workflow ${key}.`;
 
 test("a Lead turn start carries a standing line for a PR whose pull request closed without a merge", async (t) => {
   const f = new Fixture();
@@ -614,8 +614,8 @@ test("a failing plan show gives one visible warning line", async (t) => {
   const m = await beforeTurn(f);
   assert.ok(m, "never silence");
   const lines: string[] = m.content.split("\n");
-  assert.equal(lines.filter((l) => l.startsWith("could not read the Plan's PRs:")).length, 1);
-  assert.ok(lines.includes("could not read the Plan's PRs: database is locked"), m.content);
+  assert.equal(lines.filter((l) => l.startsWith("could not read the Plan's Workflows:")).length, 1);
+  assert.ok(lines.includes("could not read the Plan's Workflows: database is locked"), m.content);
   assert.ok(!m.content.includes("retry later"), "the error's first line only");
 });
 
@@ -648,7 +648,7 @@ test("a usage refusal of the closed PR read is reported, not rendered", async (t
   await f.quiet();
   const errors = adapterErrors(f);
   assert.equal(errors.length, 1);
-  assert.equal(errors[0]!.what, "closed-unmerged PR line");
+  assert.equal(errors[0]!.what, "closed-unmerged Workflow line");
   assert.equal(errors[0]!.code, "usage");
 });
 

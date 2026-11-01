@@ -21,7 +21,7 @@ fn history_job(fx: &Fx, key: &str, tier: &str, merged: bool, cost: &str) {
         ("failed", "no_submit")
     };
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, created_txn, created_at)
          VALUES ('old', 'old', '{key}', 'T', 'impl', '{tier}', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 1, '{}', {failed}, {sha}, cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, ended_at, branch, worktree, started_at, metrics, merged_sha)
          VALUES ('old', '{key}-a1', '{key}', 1, '{tier}', 'ladder', 'ended', '{outcome}', '{cause}', 't', 'cpd/old--{key}-a1', '/w', 't', '{{\"cost_usd\": {cost}}}', {sha});",

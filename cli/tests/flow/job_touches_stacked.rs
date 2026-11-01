@@ -30,13 +30,13 @@ fn stacked_fx(base_status: &str, branch: bool) -> (Fx, PathBuf) {
         sql += &super::job::pull_request("pl", 1, "open");
     }
     if base_status != "waiting" {
-        sql += "UPDATE prs SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = 'pl' AND key = 'repo';";
+        sql += "UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = 'pl' AND key = 'repo';";
     }
     sql += &format!(
-        "UPDATE prs SET status = '{base_status}'{set} WHERE plan = 'pl' AND key = 'repo';"
+        "UPDATE workflows SET status = '{base_status}'{set} WHERE plan = 'pl' AND key = 'repo';"
     );
-    sql += "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-            SELECT 'pl', 'web', repo, 'cpd/pl', 'waiting', 'pl/web', cpd_txn(), 't' FROM prs WHERE plan = 'pl' AND key = 'repo';";
+    sql += "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            SELECT 'pl', 'web', repo, 'cpd/pl', 'waiting', 'pl/web', cpd_txn(), 't' FROM workflows WHERE plan = 'pl' AND key = 'repo';";
     fixture(&fx.env, &sql);
     (fx, repo)
 }
@@ -55,7 +55,7 @@ fn add_into(fx: &Fx, pr: &str, key: &str, touches: &[&str]) -> crate::common::Ru
         "S2",
         "--spec",
         &spec,
-        "--pr",
+        "--workflow",
         pr,
         "--plan",
         "pl",
@@ -92,7 +92,7 @@ fn job_edit_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_o
         "--draft",
         "--title",
         "Title of k",
-        "--pr",
+        "--workflow",
         "web",
         "--plan",
         "pl",

@@ -1,4 +1,4 @@
-//! `context owner` (commands.md §3.13): sets or changes the owner of a Context while no PR row exists.
+//! `context owner` (commands.md §3.13): sets or changes the owner of a Context while no Workflow row exists.
 //! Sessions already started keep the policy text of the old owner until they restart (contract §8.3).
 
 use clap::Args;
@@ -56,14 +56,12 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
         }
         if let Some(current) = current {
             let mut stmt = tx.prepare(
-                "SELECT prs.plan || '/' || prs.key FROM prs JOIN plans ON plans.id = prs.plan
+                "SELECT workflows.plan || '/' || workflows.key FROM workflows JOIN plans ON plans.id = workflows.plan
                  WHERE plans.context = ?1 AND plans.deleted_at IS NULL ORDER BY 1",
             )?;
-            let prs = stmt
-                .query_map([id.as_str()], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if !prs.is_empty() {
-                return Err(owner_in_use(&id, &OwnerLogin::parse(&current)?, &prs));
+            let workflows = stmt.query_map([id.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if !workflows.is_empty() {
+                return Err(owner_in_use(&id, &OwnerLogin::parse(&current)?, &workflows));
             }
         }
         if link {

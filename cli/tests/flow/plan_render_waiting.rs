@@ -73,7 +73,7 @@ fn stacked_pr_keeps_waiting_on_its_base_pr_while_it_is_started_and_not_open() {
     fx.env.sql(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
          VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add api', 0, 'open', 'none', 'none', 't', NULL, 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/api/pull/7', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/api/pull/7', pr_opened_at = 't',
                 pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'api';",
     );
     let (_, text) = render(&fx);
@@ -84,7 +84,7 @@ fn stacked_pr_keeps_waiting_on_its_base_pr_while_it_is_started_and_not_open() {
 /// `alpha`, stacked on `zeta` and in `zeta`'s repo (contract §2.2: the base PR is in the same Plan and repo).
 fn stacked_alpha(env: &crate::common::TestEnv) {
     env.sql(
-        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay', 'alpha', '/r/zeta', 'alpha', 'cpd/pay/zeta', 'waiting', 'cpd/pay/alpha', cpd_txn(), 't');",
     );
 }
@@ -127,7 +127,7 @@ fn needs_cell_edges_and_order(stacked: bool) -> (String, Vec<String>, Vec<String
         .collect();
     let sections = text
         .lines()
-        .filter(|l| l.starts_with("## PR "))
+        .filter(|l| l.starts_with("## Workflow "))
         .map(String::from)
         .collect();
     (cell, edges, sections)
@@ -142,7 +142,7 @@ fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
     );
     assert_eq!(
         sections,
-        ["## PR zeta", "## PR alpha"],
+        ["## Workflow zeta", "## Workflow alpha"],
         "a need comes first"
     );
     let (stacked_cell, stacked_edges, stacked_sections) = needs_cell_edges_and_order(true);
@@ -164,12 +164,12 @@ fn stacked_pr_lists_its_base_pr_among_its_needs_and_follows_it_in_the_order() {
     pr(&fx.env, "zeta", "dispatch", "main", &[]);
     stacked_alpha(&fx.env);
     let show = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
-    let alpha = show["prs"]
+    let alpha = show["workflows"]
         .as_array()
         .unwrap()
         .iter()
         .find(|p| p["key"] == "alpha")
         .unwrap_or_else(|| panic!("{show}"));
     assert_eq!(alpha["needs"], serde_json::json!([]), "{show}");
-    assert_eq!(alpha["base_pr"], "pay/zeta", "{show}");
+    assert_eq!(alpha["base_workflow"], "pay/zeta", "{show}");
 }

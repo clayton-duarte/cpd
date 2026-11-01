@@ -183,14 +183,14 @@ fn gappy_catalog() -> Catalog {
     }
 }
 
-/// Adds the Plan's explore Job `b` of `kind` (`scout`, `research`): `running`, no PR (an explore Job
+/// Adds the Plan's explore Job `b` of `kind` (`scout`, `research`): `running`, no Workflow (an explore Job
 /// belongs to the Plan), and the fixture's other fields. The fixture's Job `a` stays `work`: `kind` is
 /// a Locked field (`jobs_locked` refuses its UPDATE on a running Job), so the test adds its own row.
 fn explore_job(f: &mut Fixture, kind: &str) {
     f.store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', NULL, 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{kind}', 'running', 0, '{}', cpd_txn(), 't');",
                 "f".repeat(64)
             ))?;

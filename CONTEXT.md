@@ -13,8 +13,6 @@ The levels, the cpd objects and their roles. The levels are Jira's words, used a
 | (none) | Workflow | Lead |
 | Task | Job | Worker |
 
-Transitional note: until the rename lands, the CLI (`cpd pr add`, `--pr`), the tables (`prs`, `pr_needs`), the Events and the docs still call a Workflow "PR", and the cockpit's third column is still titled Deploy; this glossary's words are the target. The rename deletes this note.
-
 The one rule: **PR means only the pull request** on GitHub. Plan > Workflows > Jobs. History keeps the old words: ADRs, the archive, research, old Context records and applied migrations are never rewritten.
 
 An entry is a bold term, a parenthesis with its kind and the Context record that decided it, a colon, the definition, and an `_Avoid_:` line when words are to be avoided. The kinds are entity, phase, stage, step, state, role, mechanism, policy, other and retired. A definition says what a thing is, never how a command works: the contract and [commands.md](docs/commands.md) own that, and an entry points to them. An Avoid word that is also a command is meant as a noun. A word with several senses has one entry per sense, each with a qualified name.
@@ -94,7 +92,7 @@ How a Workflow lays out its Jobs, stored when the Workflow is added and never ch
 _Avoid_: template, type
 
 **Stacked Workflow** (new, hs-d522, hs-d523):
-A Workflow whose base is another Workflow's Lead Branch (`--base <key>`), so it is cut from that base Workflow's Lead Branch head and its pull request targets that branch. It starts when its base Workflow's pull request is open (contract §3.8 "Stacked PRs").
+A Workflow whose base is another Workflow's Lead Branch (`--base <key>`), so it is cut from that base Workflow's Lead Branch head and its pull request targets that branch. It starts when its base Workflow's pull request is open (contract §3.8 "Stacked Workflows").
 _Avoid_: dependent PR, child
 
 **Lead Branch** (changed):
@@ -156,7 +154,7 @@ _Avoid_: edit (an edit changes the Spec: `job edit --spec`)
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):
-Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`cpd pr add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
+Three levels of one flow. A **phase** is the stored position of a Plan, one of five in this order: `grounding` → `plan` → `dispatch` → `deploy` → `done` (contract §3.1); a Plan in `deploy` or `done` returns to `dispatch` when a Workflow is added (`workflow add`). A **stage** is one of the three cockpit columns, read as past, present and future: Context, Plan, Dispatch. A **step** is a named piece of work the Lead or the Workers do inside a stage. An engine step is something else: the engine's own loop, written "engine step E7" (contract §3.7).
 _Avoid_: stage for a phase, step for a Job
 
 **Context stage** (stage, pro-d145):

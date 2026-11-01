@@ -66,12 +66,12 @@ fn refs() -> Vec<(String, u64)> {
 
 /// A GraphQL reply for `acme/pay#812`: open, no review; with `title` when given.
 fn reply(title: Option<&str>) -> Value {
-    let mut pr = json!({"isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
+    let mut workflow = json!({"isDraft": false, "state": "OPEN", "reviewDecision": null, "author": {"login": "ryan"},
                         "latestReviews": {"nodes": []}});
     if let Some(title) = title {
-        pr["title"] = json!(title);
+        workflow["title"] = json!(title);
     }
-    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": pr}}})
+    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": workflow}}})
 }
 
 #[test]

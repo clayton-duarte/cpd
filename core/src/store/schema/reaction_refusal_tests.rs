@@ -1,5 +1,5 @@
-//! The reaction queue's link to its PR and its refusal (contract §4.4 `slack_reactions`; migration `slack-reaction-refusal`):
-//! `plan` and `pr` name the PR whose merge a reaction is, `refused_at` and `refusal` park a reaction Slack refused.
+//! The reaction queue's link to its Workflow and its refusal (contract §4.4 `slack_reactions`; migration `slack-reaction-refusal`):
+//! `plan` and `pr` name the Workflow whose merge a reaction is, `refused_at` and `refusal` park a reaction Slack refused.
 
 use super::*;
 use crate::error::CpdError;
@@ -28,10 +28,24 @@ const PLAN: &str =
      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
        VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');";
 
-fn pr(key: &str, number: u32, reaction: &str) -> String {
+/// A merged object with its post, after `workflow-rename`: the table is `workflows` and the columns `workflow`.
+fn workflow(key: &str, number: u32, reaction: &str) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'PR {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
+           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'Workflow {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+           VALUES ('pay', '{key}', '/nowhere', 'main', 'merged', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
+                   (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', '2026-10-01T10:00:00.000Z');
+         INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction)
+           VALUES ('pay', '{key}', 'C0POST', '1793040000.00000{number}', 'https://acme.slack.com/p{number}', 't', {reaction});"
+    )
+}
+
+/// The same before `workflow-rename`: the table is `prs`, the columns `pr`.
+fn workflow_before(key: &str, number: u32, reaction: &str) -> String {
+    format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+           VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'Workflow {key}', 0, 'merged', 'none', 'none', 't', '2026-10-01T10:00:00.000Z', 't');
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'merged', 'cpd/pay/{key}', '/nowhere/lead', {number}, 'https://github.com/acme/pay/pull/{number}', 't',
                    (SELECT id FROM pull_requests WHERE number = {number}), cpd_txn(), 't', 't', '2026-10-01T10:00:00.000Z');
@@ -58,9 +72,9 @@ fn before_refusal() -> (tempfile::TempDir, CpdHome) {
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000002', 'git-merge', 'q2', 'r2');
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000001', 'eyes', 'q3', NULL);
          INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at) VALUES ('C0POST', '1793040000.000099', 'git-merge', 'q4', NULL);",
-        pr("a", 1, "'git-merge'"),
-        pr("b", 2, "'git-merge'"),
-        pr("c", 3, "NULL"),
+        workflow_before("a", 1, "'git-merge'"),
+        workflow_before("b", 2, "'git-merge'"),
+        workflow_before("c", 3, "NULL"),
     );
     write(&mut store, &sql).unwrap();
     drop(store);
@@ -72,7 +86,7 @@ fn rows(store: &mut Store) -> Vec<Value> {
         .read(|c| {
             let mut stmt = c.prepare(
                 "SELECT json_object('ts', ts, 'emoji', emoji, 'queued_at', queued_at, 'reacted_at', reacted_at,
-                                    'plan', plan, 'pr', pr, 'refused_at', refused_at, 'refusal', refusal)
+                                    'plan', plan, 'pr', workflow, 'refused_at', refused_at, 'refusal', refusal)
                    FROM slack_reactions ORDER BY id",
             )?;
             Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -92,7 +106,7 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
         "{:?}",
         store.schema_mismatch()
     );
-    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, pr: Value| serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": pr, "refused_at": null, "refusal": null});
+    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, workflow: Value| serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null});
     let expected = vec![
         row(
             "1793040000.000001",
@@ -150,7 +164,11 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
         "{:?}",
         store.schema_mismatch()
     );
-    write(&mut store, &format!("{PLAN}{}", pr("a", 1, "'git-merge'"))).unwrap();
+    write(
+        &mut store,
+        &format!("{PLAN}{}", workflow("a", 1, "'git-merge'")),
+    )
+    .unwrap();
     let insert = |columns: &str, values: &str| {
         format!(
             "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, {columns}) VALUES ('C0X', '1793040000.000001', 'e', 'q', {values});"
@@ -158,7 +176,7 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
     };
     for (columns, values, what) in [
         ("plan", "'pay'", "plan without pr"),
-        ("pr", "'a'", "pr without plan"),
+        ("workflow", "'a'", "pr without plan"),
         ("refused_at", "'t'", "refused_at without refusal"),
         ("refusal", "'invalid_name'", "refusal without refused_at"),
         (
@@ -170,7 +188,7 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
         let text = message(write(&mut store, &insert(columns, values)), what);
         assert!(text.contains("CHECK"), "{what}: {text}");
     }
-    write(&mut store, &insert("plan, pr", "'pay', 'a'")).expect("a linked row");
+    write(&mut store, &insert("plan, workflow", "'pay', 'a'")).expect("a linked row");
     write(
         &mut store,
         &insert("refused_at, refusal", "'t', 'invalid_name'").replace("'e'", "'f'"),

@@ -136,9 +136,12 @@ pub fn legend() -> Vec<(Span<'static>, String)> {
         ),
         (sample(Kind::Error), "an error, or a Job failed".to_owned()),
         (sample(Kind::Plan), "a Plan or ask Event".to_owned()),
-        (sample(Kind::PrOpened), "a PR opened".to_owned()),
+        (sample(Kind::PrOpened), "a pull request opened".to_owned()),
         (sample(Kind::Escalation), "an escalation".to_owned()),
-        (sample(Kind::Merged), "a Job or a PR merged".to_owned()),
+        (
+            sample(Kind::Merged),
+            "a Job or a Workflow merged".to_owned(),
+        ),
         (sample(Kind::Other), "any other activity".to_owned()),
         (glyph(&Bucket::default(), 8), "no activity".to_owned()),
         (
@@ -274,7 +277,7 @@ mod tests {
             (g.content.as_ref(), g.style),
             ("▁", palette::fg(Meaning::Nothing))
         );
-        // the Job and PR merged flags and a running Worker draw nothing of their own
+        // the Job and Workflow merged flags and a running Worker draw nothing of their own
         let g = glyph(
             &Bucket {
                 count: 0,

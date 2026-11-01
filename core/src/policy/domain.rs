@@ -48,7 +48,9 @@ impl GateAlias {
 #[serde(deny_unknown_fields)]
 pub struct Gates {
     pub merge: Gate,
-    pub pr: Gate,
+    /// `gate.pr` (R11): the pull request's Gate, its TOML key unchanged by the rename.
+    #[serde(rename = "pr")]
+    pub workflow: Gate,
     pub text: String,
 }
 
@@ -66,7 +68,7 @@ pub struct Feedback {
     pub checks: Checks,
 }
 
-/// `[pr.post]`: posting a PR for review (contract §8.3).
+/// `[pr.post]`: posting a Workflow for review (contract §8.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Post {
@@ -76,7 +78,7 @@ pub struct Post {
     pub merged_reaction: String,
 }
 
-/// `[pr.jira]`: the Jira status names cpd moves a PR's ticket to; empty means no transition.
+/// `[pr.jira]`: the Jira status names cpd moves a Workflow's ticket to; empty means no transition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Jira {
@@ -86,17 +88,24 @@ pub struct Jira {
     pub estimate_fields: Vec<String>,
 }
 
-/// The `pr` domain.
+/// The `pr` domain: the pull request keys (R10).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pr {
     pub feedback: Feedback,
     pub post: Post,
     pub jira: Jira,
-    pub jira_required: bool,
     pub human_gated_contexts: Vec<String>,
     pub excused_labels: Vec<String>,
     pub required_checks: Vec<String>,
+    pub text: String,
+}
+
+/// The `workflow` domain: the Workflow object's keys (R10; `jira_required` moved here from `pr`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Workflow {
+    pub jira_required: bool,
     pub text: String,
 }
 
@@ -143,10 +152,17 @@ pub struct PrSet {
     pub feedback: Option<FeedbackSet>,
     pub post: Option<PostSet>,
     pub jira: Option<JiraSet>,
-    pub jira_required: Option<bool>,
     pub human_gated_contexts: Option<Vec<String>>,
     pub excused_labels: Option<Vec<String>>,
     pub required_checks: Option<Vec<String>>,
+    pub text: Option<String>,
+}
+
+/// What a scope file's `[workflow]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSet {
+    pub jira_required: Option<bool>,
     pub text: Option<String>,
 }
 
@@ -155,7 +171,9 @@ pub struct PrSet {
 #[serde(deny_unknown_fields)]
 pub struct GatesSet {
     pub merge: Option<Gate>,
-    pub pr: Option<Gate>,
+    /// `gate.pr` (R11): the pull request's Gate, its TOML key unchanged by the rename.
+    #[serde(rename = "pr")]
+    pub workflow: Option<Gate>,
     pub text: Option<String>,
 }
 
@@ -172,6 +190,12 @@ pub trait HasText {
 }
 
 impl HasText for Pr {
+    fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl HasText for Workflow {
     fn text(&self) -> &str {
         &self.text
     }
@@ -214,7 +238,7 @@ impl HasText for Option<RepoTests> {
     }
 }
 
-/// The `protected` domain (repo scope only, no `text`): the PR's protected paths of §7.5.
+/// The `protected` domain (repo scope only, no `text`): the Workflow's protected paths of §7.5.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Protected {
@@ -407,7 +431,7 @@ pub trait Set {
     fn complete(&self) -> Option<Self::Value>;
 }
 
-/// The typed keys of the `gate` and `pr` domains, by name.
+/// The typed keys of the `gate`, `pr` and `workflow` domains, by name.
 pub const MERGE: &str = "merge";
 pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
@@ -415,7 +439,7 @@ pub const POST_ENABLED: &str = "pr.post.enabled";
 pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
-pub const JIRA_REQUIRED: &str = "pr.jira_required";
+pub const JIRA_REQUIRED: &str = "workflow.jira_required";
 pub const HUMAN_GATED_CONTEXTS: &str = "pr.human_gated_contexts";
 pub const EXCUSED_LABELS: &str = "pr.excused_labels";
 pub const REQUIRED_CHECKS: &str = "pr.required_checks";
@@ -428,10 +452,13 @@ impl Set for GatesSet {
     type Value = Gates;
 
     fn fill(&self, base: &Gates) -> (Gates, Vec<&'static str>) {
-        let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.pr.is_none())]);
+        let left_out = left_out([
+            (MERGE, self.merge.is_none()),
+            (GATE_PR, self.workflow.is_none()),
+        ]);
         let value = Gates {
             merge: self.merge.unwrap_or(base.merge),
-            pr: self.pr.unwrap_or(base.pr),
+            workflow: self.workflow.unwrap_or(base.workflow),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
@@ -440,7 +467,7 @@ impl Set for GatesSet {
     fn complete(&self) -> Option<Gates> {
         Some(Gates {
             merge: self.merge?,
-            pr: self.pr?,
+            workflow: self.workflow?,
             text: self.text.clone()?,
         })
     }
@@ -470,7 +497,6 @@ impl Set for PrSet {
                 POST_MERGED_REACTION,
                 post.and_then(|p| p.merged_reaction.as_ref()).is_none(),
             ),
-            (JIRA_REQUIRED, self.jira_required.is_none()),
             (HUMAN_GATED_CONTEXTS, self.human_gated_contexts.is_none()),
             (EXCUSED_LABELS, self.excused_labels.is_none()),
             (REQUIRED_CHECKS, self.required_checks.is_none()),
@@ -513,7 +539,6 @@ impl Set for PrSet {
                     .and_then(|j| j.estimate_fields.clone())
                     .unwrap_or_else(|| base.jira.estimate_fields.clone()),
             },
-            jira_required: self.jira_required.unwrap_or(base.jira_required),
             human_gated_contexts: self
                 .human_gated_contexts
                 .clone()
@@ -554,10 +579,29 @@ impl Set for PrSet {
                     estimate_fields: j.estimate_fields.clone()?,
                 }
             },
-            jira_required: self.jira_required?,
             human_gated_contexts: self.human_gated_contexts.clone()?,
             excused_labels: self.excused_labels.clone()?,
             required_checks: self.required_checks.clone()?,
+            text: self.text.clone()?,
+        })
+    }
+}
+
+impl Set for WorkflowSet {
+    type Value = Workflow;
+
+    fn fill(&self, base: &Workflow) -> (Workflow, Vec<&'static str>) {
+        let left_out = left_out([(JIRA_REQUIRED, self.jira_required.is_none())]);
+        let value = Workflow {
+            jira_required: self.jira_required.unwrap_or(base.jira_required),
+            text: self.text.clone().unwrap_or_else(|| base.text.clone()),
+        };
+        (value, left_out)
+    }
+
+    fn complete(&self) -> Option<Workflow> {
+        Some(Workflow {
+            jira_required: self.jira_required?,
             text: self.text.clone()?,
         })
     }
@@ -808,7 +852,7 @@ pub enum Source {
     Owner(PathBuf),
     /// The repo file, by realpath.
     Repo(PathBuf),
-    /// cpd's default for a row no PR owns whose owner has no file.
+    /// cpd's default for a row no Workflow owns whose owner has no file.
     DefaultNoOwnerFile,
 }
 
@@ -969,6 +1013,7 @@ macro_rules! domains {
 domains! {
     gate, Gates, [Lead, Worker], [Machine, Owner, Repo], Gates, GatesSet;
     pr, Pr, [Lead, Worker], [Machine, Owner, Repo], Pr, PrSet;
+    workflow, Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, WorkflowSet;
     deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
     code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;

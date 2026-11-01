@@ -17,7 +17,7 @@ use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::host::limit::limit;
-use cpd_core::ids::{JobKey, PlanId, PrKey};
+use cpd_core::ids::{JobKey, PlanId, WorkflowKey};
 use cpd_core::resource;
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
@@ -89,69 +89,69 @@ pub(super) fn backing_off_with(
     backing_off(conn, plan, key, clock.utc())
 }
 
-/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
-/// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no PR) is Ready in a live Plan (not archived)
+/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose Workflow is `dispatch`
+/// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no Workflow) is Ready in a live Plan (not archived)
 /// in `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
-/// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),
+/// An `open` or `update` Job has no Dependency rows: its rule is derived from the Workflow's other Jobs (§3.2),
 /// which are the Jobs that are neither `open` nor `update` (those do not count each other). An `open` Job is
-/// Ready when its PR is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
-/// an `update` Job when its PR is `open` and none of them is `queued` or `running`.
+/// Ready when its Workflow is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
+/// an `update` Job when its Workflow is `open` and none of them is `queued` or `running`.
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
-  LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+  LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
   WHERE j.status = 'queued' AND p.archived_at IS NULL
-    AND ((j.pr IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
-      OR (j.pr IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
+    AND ((j.workflow IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
+      OR (j.workflow IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
           AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
     AND (j.kind <> 'open' OR (r.status = 'dispatch'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                            AND o.status NOT IN ('merged', 'cancelled'))
-         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                        AND o.status = 'merged')))
     AND (j.kind <> 'update' OR (r.status = 'open'
-         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.workflow = j.workflow AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
-/// The allocation E3 derives for each Ready Job it is about to start (pro-d52), per PR, from the Ledger: a PR with a
-/// live linear Attempt starts nothing (`None`: its Jobs are held); a PR with live parallel Attempts starts all
-/// `Parallel`; a PR with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
+/// The allocation E3 derives for each Ready Job it is about to start (pro-d52), per Workflow, from the Ledger: a Workflow with a
+/// live linear Attempt starts nothing (`None`: its Jobs are held); a Workflow with live parallel Attempts starts all
+/// `Parallel`; a Workflow with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
 /// `ready`, in its order.
 fn allocations(
     conn: &Connection,
     ready: &[(PlanId, JobKey)],
 ) -> Result<Vec<Option<Allocation>>, CpdError> {
-    let mut prs = Vec::with_capacity(ready.len());
+    let mut workflows = Vec::with_capacity(ready.len());
     for (plan, key) in ready {
-        let pr: Option<String> = conn.query_row(
-            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+        let workflow: Option<String> = conn.query_row(
+            "SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2",
             params![plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
-        prs.push((plan.clone(), pr));
+        workflows.push((plan.clone(), workflow));
     }
     let mut out = Vec::with_capacity(ready.len());
-    for (plan, pr) in &prs {
-        // An explore Job belongs to the Plan, no PR: it never holds or is held by a PR's Attempts.
-        let Some(pr) = pr else {
+    for (plan, workflow) in &workflows {
+        // An explore Job belongs to the Plan, no Workflow: it never holds or is held by a Workflow's Attempts.
+        let Some(workflow) = workflow else {
             out.push(Some(Allocation::Parallel));
             continue;
         };
-        if driver::pr_has_live_linear(conn, plan, pr.as_str(), "")? {
+        if driver::workflow_has_live_linear(conn, plan, workflow.as_str(), "")? {
             out.push(None);
             continue;
         }
         let live: i64 = conn.query_row(
             "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended'",
-            params![plan.as_str(), pr.as_str()],
+              WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended'",
+            params![plan.as_str(), workflow.as_str()],
             |r| r.get(0),
         )?;
-        let siblings = prs
+        let siblings = workflows
             .iter()
-            .filter(|p| *p == &(plan.clone(), Some(pr.clone())))
+            .filter(|p| *p == &(plan.clone(), Some(workflow.clone())))
             .count();
         out.push(Some(if live == 0 && siblings == 1 {
             Allocation::Linear
@@ -192,9 +192,9 @@ fn pick(
         let mut needs = vec![0];
         if let Some(wanted) = resource::wanted(conn, &e.plan, e.key.as_str())? {
             // A name the policy does not resolve fails in the starter, which reports it.
-            if let Ok(policy) = PrKey::parse(&wanted.pr)
-                .and_then(|pr| cpd_core::pr::policy_of_pr(conn, home, &e.plan, &pr))
-            {
+            if let Ok(policy) = WorkflowKey::parse(&wanted.workflow).and_then(|workflow| {
+                cpd_core::pr::policy_of_workflow(conn, home, &e.plan, &workflow)
+            }) {
                 for pool in resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;
@@ -356,7 +356,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(allocations) => allocations,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    // A Job held by a live linear Attempt of its PR stays queued, no Event, and is not walked.
+    // A Job held by a live linear Attempt of its Workflow stays queued, no Event, and is not walked.
     let ready: Vec<Entry> = ready
         .into_iter()
         .zip(allocations)
@@ -415,7 +415,7 @@ pub(super) fn run(engine: &mut Engine) {
                 ..
             } = remaining[i].clone();
             let about = About::Job(plan.clone(), key.clone());
-            // The Job's PR repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
+            // The Job's Workflow repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
             let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
                 Ok(catalog) => catalog,
                 Err(e) => {

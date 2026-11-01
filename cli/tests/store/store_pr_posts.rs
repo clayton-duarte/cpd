@@ -38,7 +38,7 @@ fn fixture_store(env: &Home) -> Store {
                        VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                     INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'pay', '/r', 'main', 'waiting', 'cpd/pay/pay', {}, 't');",
                     tx.id()
                 ),
@@ -48,7 +48,7 @@ fn fixture_store(env: &Home) -> Store {
     store
 }
 
-const GOOD: &str = "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+const GOOD: &str = "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
     VALUES ('pay', 'pay', 'C02JU6C2Z1D', '1793040197.490209', 'https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209', 't', 'git-merge', NULL)";
 
 #[test]
@@ -61,7 +61,7 @@ fn a_second_row_for_one_pr_is_refused() {
 
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
     assert!(
-        sqlite_message(&err).contains("UNIQUE constraint failed: pr_posts.plan, pr_posts.pr"),
+        sqlite_message(&err).contains("UNIQUE constraint failed: pr_posts.plan, pr_posts.workflow"),
         "{err:?}"
     );
 }
@@ -80,7 +80,7 @@ fn a_row_outside_the_checks_is_refused() {
         ("'C02JU6C2Z1D'", "'1.2'", "'https://x'", "NULL", "'t'"),
     ] {
         let sql = format!(
-            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+            "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
              VALUES ('pay', 'pay', {channel}, {ts}, {link}, 't', {reaction}, {reacted_at})"
         );
         let err = refused(&mut store, &sql);

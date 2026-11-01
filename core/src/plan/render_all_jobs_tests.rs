@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::home::CpdHome;
 use crate::ids::PlanId;
 use crate::plan::display::Display;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, KINDS, STATUSES, is_explore};
 use crate::plan::render::{Heading, markdown};
 use crate::store::Store;
@@ -67,7 +67,7 @@ fn prs_sql(statuses: &[&str]) -> String {
         };
         sql.push_str(&format!(
             "{row}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
              VALUES ('{PLAN}', '{status}', '/r/{status}', 'main', '{status}', 'cpd/{PLAN}/{status}', {worktree}, {pull}, cpd_txn(), 't', {started}, {merged_at});\n"
         ));
     }
@@ -93,7 +93,7 @@ fn job_sql(key: &str, pr: Option<&str>, kind: &str, status: &str) -> String {
     };
     let pr = q(pr.map(str::to_owned));
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            failed_cause, merged_sha, cancel_reason, cancel_requested_at, summary, kind, tests, test_files, created_txn, created_at)
          VALUES ('{PLAN}', {pr}, '{key}', 'Title {key}', 'S2', 'Goal of {key}.', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, {fingerprint},
                  {failed_cause}, {merged_sha}, {cancel_reason}, {cancel_requested_at}, {summary}, '{kind}', {tests}, {test_files}, cpd_txn(), 't');\n"
@@ -138,7 +138,7 @@ fn assert_every_job_is_one_row(store: &mut Store) {
     let plan = PlanId::parse(PLAN).unwrap();
     let (md, mut want) = store
         .read(|conn| {
-            let prs = load_prs(conn, &plan)?;
+            let prs = load_workflows(conn, &plan)?;
             let md = markdown(
                 &Heading::Plan {
                     title: "T",

@@ -24,7 +24,7 @@ fn fixture() -> TestEnv {
 fn waiting_job_lists_its_blockers() {
     let fx = Fx::with(fixture());
     let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
-    let prs = &out["plans"][0]["prs"];
+    let prs = &out["plans"][0]["workflows"];
     let api = prs
         .as_array()
         .unwrap()
@@ -91,7 +91,7 @@ fn markdown_shows_waiting_on_blockers() {
     assert!(line("- a ").starts_with("- a queued: "), "{}", run.stdout);
     let web = run
         .stdout
-        .split("### PR web")
+        .split("### Workflow web")
         .nth(1)
         .unwrap_or_else(|| panic!("{}", run.stdout));
     assert!(
@@ -113,7 +113,7 @@ fn pending_names_the_base_pr_of_a_stacked_pr_as_its_blocker_until_it_opens() {
     // (the JSON `waiting_on` of `web`, whether the markdown says `waiting on api`)
     let waiting_on = || {
         let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
-        let prs = out["plans"][0]["prs"].as_array().unwrap();
+        let prs = out["plans"][0]["workflows"].as_array().unwrap();
         let web = prs
             .iter()
             .find(|p| p["key"] == "web")
@@ -124,7 +124,7 @@ fn pending_names_the_base_pr_of_a_stacked_pr_as_its_blocker_until_it_opens() {
         assert_eq!(md.exit, 0, "{md:?}");
         let section = md
             .stdout
-            .split("### PR web")
+            .split("### Workflow web")
             .nth(1)
             .unwrap_or_else(|| panic!("{}", md.stdout));
         (
@@ -134,13 +134,13 @@ fn pending_names_the_base_pr_of_a_stacked_pr_as_its_blocker_until_it_opens() {
     };
     // the base PR has not started, then has started and not opened: it is the blocker
     assert_eq!(waiting_on(), (Some(json!(["api"])), true));
-    fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay' AND key = 'api'");
+    fx.env.sql("UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay' AND key = 'api'");
     assert_eq!(waiting_on(), (Some(json!(["api"])), true));
     // once it is open, it blocks nothing
     fx.env.sql(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
          VALUES ('acme/api', 5, 'https://github.com/acme/api/pull/5', 'Api', 0, 'open', 'none', 'none', 't', NULL, 't');
-         UPDATE prs SET status = 'open', pr_number = 5, pr_url = 'https://github.com/acme/api/pull/5', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 5, pr_url = 'https://github.com/acme/api/pull/5', pr_opened_at = 't',
                         pull_request = (SELECT id FROM pull_requests WHERE number = 5) WHERE plan = 'pay' AND key = 'api'",
     );
     assert_eq!(waiting_on(), (None, false));

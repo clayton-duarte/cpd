@@ -1,6 +1,6 @@
 //! What every read shares: the typed enums of the rows (parsed once, at the
 //! boundary: a value the schema forbids is `store_failed`, never defaulted),
-//! Job counts, PR state, Sessions and Plan heads.
+//! Job counts, Workflow state, Sessions and Plan heads.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -179,7 +179,7 @@ impl JobCounts {
     }
 }
 
-/// The state of a PR as cpd knows it (it never asks GitHub: the engine polls).
+/// The state of a Workflow as cpd knows it (it never asks GitHub: the engine polls).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrState {
     Open,
@@ -189,8 +189,8 @@ pub enum PrState {
 }
 
 impl PrState {
-    /// The state of a PR that is `merged` or not, whose pull request row says `row_state`
-    /// (`pull_requests.state`; none before `pr open`): merged once the PR is, closed while the pull
+    /// The state of a Workflow that is `merged` or not, whose pull request row says `row_state`
+    /// (`pull_requests.state`; none before `pr open`): merged once the Workflow is, closed while the pull
     /// request is closed without a merge (A11).
     pub(super) fn of(merged: bool, row_state: Option<&str>) -> PrState {
         match row_state {
@@ -201,7 +201,7 @@ impl PrState {
     }
 }
 
-/// The summary of a PR's checks, cpd-ui's `pr.rs`: any failure wins over pending, pending over passed.
+/// The summary of a Workflow's checks, cpd-ui's `pr.rs`: any failure wins over pending, pending over passed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Checks {
     None,
@@ -222,7 +222,7 @@ impl Checks {
     }
 }
 
-/// A Plan's Pull Request: the columns of `prs`, with what `pr poll` last stored in its `pull_requests` row.
+/// A Plan's Pull Request: the columns of `workflows`, with what `pr poll` last stored in its `pull_requests` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pr {
     pub number: i64,
@@ -377,7 +377,7 @@ pub struct PlanHead {
     pub archived_at: Option<String>,
     /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
     pub fixing: bool,
-    /// Git/PR work of the Plan (pro-d200): any PR is open or conflicting, or an open/update Job is queued or running.
+    /// Git/Workflow work of the Plan (pro-d200): any Workflow is open or conflicting, or an open/update Job is queued or running.
     pub git_active: bool,
 }
 
@@ -442,7 +442,7 @@ pub(super) fn plan_heads(
 
     let mut git: BTreeSet<String> = BTreeSet::new();
     let mut stmt = conn.prepare(
-        "SELECT r.plan FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
+        "SELECT r.plan FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE (?1 IS NULL OR r.plan = ?1) AND (r.status = 'open' OR q.mergeable = 'conflicting')
          UNION
          SELECT j.plan FROM jobs j
@@ -473,8 +473,8 @@ pub(super) fn plan_heads(
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
                 r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
-           FROM plans p LEFT JOIN prs r ON r.plan = p.id
-                AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
+           FROM plans p LEFT JOIN workflows r ON r.plan = p.id
+                AND r.key = (SELECT key FROM workflows WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE p.deleted_at IS NULL AND (?1 IS NULL OR p.id = ?1) ORDER BY p.created_at, p.id",
     )?;
@@ -487,21 +487,22 @@ pub(super) fn plan_heads(
         let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
-        let pr = match (
+        let workflow = match (
             r.get::<_, Option<i64>>(6)?,
             r.get::<_, Option<String>>(7)?,
             r.get::<_, Option<String>>(8)?,
         ) {
             (Some(number), Some(url), Some(opened_at)) => {
-                // A PR with a number has its pull request (`prs` CHECK).
-                let checks = row_checks
-                    .ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
+                // A Workflow with a number has its pull request (`workflows` CHECK).
+                let checks = row_checks.ok_or_else(|| {
+                    bad_row(format!("Workflow of Plan {plan} has no pull request row"))
+                })?;
                 Some(Pr {
                     number,
                     url,
                     opened_at,
                     state: PrState::of(phase == Phase::Done, row_state.as_deref()),
-                    checks: Checks::parse(&format!("PR of Plan {plan}"), &checks)?,
+                    checks: Checks::parse(&format!("Workflow of Plan {plan}"), &checks)?,
                 })
             }
             _ => None,
@@ -522,7 +523,7 @@ pub(super) fn plan_heads(
             fixing: fixing.contains(&plan),
             git_active: git.contains(&pid),
             phase,
-            pr,
+            pr: workflow,
             id: plan,
         });
     }

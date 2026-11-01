@@ -16,7 +16,7 @@ pub struct PrFacts {
     pub asked: bool,
 }
 
-/// The state word and, for an open conflicting PR, the conflict word.
+/// The state word and, for an open conflicting pull request, the conflict word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrLook {
     pub state: (&'static str, Meaning),

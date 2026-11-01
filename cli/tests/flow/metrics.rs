@@ -211,11 +211,11 @@ fn fixture_metrics() -> Fx {
            VALUES ('pl', 'ctx', 'Pl', 'done', 'lead1', 't', 't', 't');
          INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES (1, 'acme/pl', 1, 'https://github.com/acme/pl/1', 'Pl #1', 0, 'merged', 'approved', 'passed', 't', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, merged_at,
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, merged_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'merged', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't', 't', 't',
                    1, 'https://github.com/acme/pl/1', 't', 1);
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, merged_sha, created_txn, created_at, kind)
            VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'merged-sha-test', cpd_txn(), 't', 'work');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,

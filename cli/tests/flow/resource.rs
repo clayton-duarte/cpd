@@ -466,7 +466,7 @@ fn resource_list_shows_workers_with_the_running_attempts() {
             ("running", "NULL", "", "")
         };
         sql += &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, appended, fingerprint, created_txn, created_at)
                VALUES ('pl', 'repo', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{job_status}', {cause}, 0, '{fingerprint}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at{ended})
                VALUES ('pl', '{job}-a1', '{job}', 1, 'S2', 'ladder', '{status}', 'cpd/pl--{job}-a1', '/w', '{at}'{ended_values});"
@@ -519,7 +519,7 @@ pub(super) fn job_tenant(fx: &Fx, job: &str, pool: &str, at: &str) {
     super::job::fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pl', 'repo', '{job}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                VALUES ('pl', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'running', 'cpd/pl--{job}-a1', '/w', '{at}');

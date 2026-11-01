@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 #[cfg(test)]
-use crate::ids::PrKey;
+use crate::ids::WorkflowKey;
 use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
@@ -112,10 +112,9 @@ pub fn conditions_with(
     Ok(all)
 }
 
-/// `engine-error` for a stalled `durable` Attempt (contract §2.2 "Inbox item", §3.4 A4, hs-d798): one item per
-/// Attempt that is not `ended` and has a `worker_stalled` `error` Event. Subject `error:driver/worker_stalled/<attempt>`,
-/// urgency red, the label naming the remedy. The item closes when the Attempt ends, whose condition no longer holds.
-/// The driver never writes it: E8 opens it from the store, here.
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
+/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
+/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
 fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
@@ -157,9 +156,6 @@ fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(out)
 }
 
-/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the PR poll.
-/// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
-/// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     #[derive(serde::Deserialize)]
     struct Cache {
@@ -557,7 +553,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckJob {
     pub plan: PlanId,
-    /// Where the Job belongs: E8 groups the stuck Jobs of one PR, or of the Plan's explore Jobs, into one message (hs-d647).
+    /// Where the Job belongs: E8 groups the stuck Jobs of one Workflow, or of the Plan's explore Jobs, into one message (hs-d647).
     pub home: JobHome,
     pub job: JobKey,
     /// The Plan's Context.
@@ -581,7 +577,7 @@ pub fn stuck_jobs(
     store.read(|conn| {
         let worked_on = failed_worked_on(conn, None)?;
         let mut stmt = conn.prepare(
-            "SELECT j.plan, j.pr, j.key, p.context, e.id, e.at, j.failed_cause
+            "SELECT j.plan, j.workflow, j.key, p.context, e.id, e.at, j.failed_cause
                FROM jobs j
                JOIN plans p ON p.id = j.plan
                JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
@@ -591,7 +587,7 @@ pub fn stuck_jobs(
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            let (plan, pr, key, context, event, at, cause): (String, Option<String>, String, String, i64, String, String) =
+            let (plan, workflow, key, context, event, at, cause): (String, Option<String>, String, String, i64, String, String) =
                 (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
             let age = now - time_of("Event time", &at)?;
             if age < stuck_after {
@@ -603,7 +599,7 @@ pub fn stuck_jobs(
             }
             out.push(StuckJob {
                 plan,
-                home: JobHome::of("PR key", pr.as_deref())?,
+                home: JobHome::of("Workflow key", workflow.as_deref())?,
                 job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
@@ -615,7 +611,7 @@ pub fn stuck_jobs(
     })
 }
 
-/// The stuck Jobs of one PR (hs-d647): the manager is told once per pull request, not once per Job.
+/// The stuck Jobs of one Workflow (hs-d647): the manager is told once per pull request, not once per Job.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckGroup {
     pub plan: PlanId,
@@ -628,7 +624,7 @@ pub struct StuckGroup {
     pub jobs: Vec<StuckJob>,
 }
 
-/// Groups the stuck Jobs by their Plan and PR, keeping `jobs`' oldest-first order inside a group and ordering the groups
+/// Groups the stuck Jobs by their Plan and Workflow, keeping `jobs`' oldest-first order inside a group and ordering the groups
 /// by their first Job's `job-failed` Event id (hs-d647). `jobs` is the oldest-first result of [`stuck_jobs`].
 #[must_use]
 pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
@@ -693,7 +689,7 @@ fn review_requested(
     };
     let read = |p: &Post| -> Option<&GhPr> {
         lookup
-            .prs
+            .workflows
             .get(&(p.repo.clone(), p.number))
             .and_then(Option::as_ref)
     };
@@ -709,14 +705,14 @@ fn review_requested(
         .into_iter()
         .filter(|post| !settled.contains(&format!("pr:{}#{}", post.repo, post.number)))
         .filter_map(|post| {
-            let pr = read(post)?;
+            let workflow = read(post)?;
             matches!(
-                team::status(post, pr, &lookup.me, team.bot_reviewers),
+                team::status(post, workflow, &lookup.me, team.bot_reviewers),
                 Status::NeedsReview(_)
             )
-            .then_some((post, pr))
+            .then_some((post, workflow))
         })
-        .map(|(post, pr)| {
+        .map(|(post, workflow)| {
             let name = post
                 .repo
                 .split_once('/')
@@ -725,7 +721,7 @@ fn review_requested(
                 kind: Kind::ReviewRequested,
                 urgency: Urgency::Blue,
                 subject: format!("pr:{}#{}", post.repo, post.number),
-                label: format!("review {name}#{}\n{}", post.number, pr.title),
+                label: format!("review {name}#{}\n{}", post.number, workflow.title),
                 url: Some(format!(
                     "https://github.com/{}/pull/{}",
                     post.repo, post.number
@@ -1007,9 +1003,9 @@ mod tests {
                 "NULL"
             };
             self.sql(&format!(
-                "INSERT OR IGNORE INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                "INSERT OR IGNORE INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pay', 'p1', '/r', 'main', 'dispatch', 'cpd/pay/p1', '/lw', 1, '{T}', '{T}');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                    fingerprint, created_txn, created_at, failed_cause)
                    VALUES ('pay', 'p1', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', 1, '{T}', {cause});"
             ));
@@ -1360,7 +1356,7 @@ mod tests {
             stuck,
             [StuckJob {
                 plan: PlanId::parse("pay").unwrap(),
-                home: JobHome::Pr(PrKey::parse("p1").unwrap()),
+                home: JobHome::Workflow(WorkflowKey::parse("p1").unwrap()),
                 job: JobKey::parse("a").unwrap(),
                 context: ContextId::parse("ctx").unwrap(),
                 event: latest,
@@ -1403,13 +1399,13 @@ mod tests {
             r#"{}"#,
         );
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.len(), 1, "one PR, one group");
+        assert_eq!(groups.len(), 1, "one Workflow, one group");
         let group = &groups[0];
         assert_eq!(
             (&group.plan, &group.home, group.event),
             (
                 &PlanId::parse("pay").unwrap(),
-                &JobHome::Pr(PrKey::parse("p1").unwrap()),
+                &JobHome::Workflow(WorkflowKey::parse("p1").unwrap()),
                 b
             )
         );
@@ -1431,9 +1427,9 @@ mod tests {
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', 'p2', '/r', 'main', 'dispatch', 'cpd/pay/p2', '/lw', 1, '{T}', '{T}');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause)
                VALUES ('pay', 'p2', 'b', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', 1, '{T}', 'crashed');"
         ));
@@ -1457,8 +1453,8 @@ mod tests {
         assert_eq!(
             groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(),
             [
-                JobHome::Pr(PrKey::parse("p2").unwrap()),
-                JobHome::Pr(PrKey::parse("p1").unwrap())
+                JobHome::Workflow(WorkflowKey::parse("p2").unwrap()),
+                JobHome::Workflow(WorkflowKey::parse("p1").unwrap())
             ],
             "the group of the oldest first Event leads"
         );
@@ -1803,7 +1799,7 @@ mod tests {
         assert!(pr_kinds(&mut f).is_empty());
     }
 
-    /// Makes the Plan's PR `p1` own the pull request numbered `n`. Its Context's owner keys the PR's policy (an unset
+    /// Makes the Plan's Workflow `p1` own the pull request numbered `n`. Its Context's owner keys the Workflow's policy (an unset
     /// one is `owner_unset`, not these tests' subject), with an empty owner policy file.
     fn own(f: &mut Fixture, n: i64) {
         f.job("a", "queued");
@@ -1812,7 +1808,7 @@ mod tests {
         std::fs::create_dir_all(&owners).unwrap();
         std::fs::write(owners.join("owner.toml"), "").unwrap();
         f.sql(&format!(
-            "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
+            "UPDATE workflows SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
                             pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"
         ));
     }
@@ -1848,7 +1844,7 @@ mod tests {
         assert_eq!(
             (c.plan, c.session),
             (None, None),
-            "a pull request no PR owns"
+            "a pull request no Workflow owns"
         );
     }
 
@@ -1975,12 +1971,12 @@ mod tests {
         }
     }
 
-    fn lookup(prs: &[(&str, u64, GhPr)]) -> Lookup {
+    fn lookup(workflows: &[(&str, u64, GhPr)]) -> Lookup {
         Lookup {
             me: ME_LOGIN.to_owned(),
-            prs: prs
+            workflows: workflows
                 .iter()
-                .map(|(repo, n, pr)| (((*repo).to_owned(), *n), Some(pr.clone())))
+                .map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone())))
                 .collect(),
         }
     }
@@ -1995,9 +1991,13 @@ mod tests {
     }
 
     /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
-    fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
+    fn reviews(
+        f: &mut Fixture,
+        posts: &[Value],
+        workflows: &[(&str, u64, GhPr)],
+    ) -> Vec<Condition> {
         write_cache(f, posts);
-        let lookup = lookup(prs);
+        let lookup = lookup(workflows);
         let all = conditions_with(
             &mut f.store,
             &f.home,
@@ -2073,7 +2073,7 @@ mod tests {
                 false,
             ),
             (
-                "the User's own PR",
+                "the User's own Workflow",
                 post("acme/pay", 1),
                 GhPr {
                     author: ME_LOGIN.to_owned(),
@@ -2137,13 +2137,13 @@ mod tests {
                 true,
             ),
             (
-                "tagged in the thread of a reviewed PR",
+                "tagged in the thread of a reviewed Workflow",
                 tagged(post("acme/pay", 1)),
                 reviewed_by("wes"),
                 true,
             ),
             (
-                "tagged under a merged PR",
+                "tagged under a merged Workflow",
                 tagged(post("acme/pay", 1)),
                 GhPr {
                     state: GhState::Merged,
@@ -2171,8 +2171,8 @@ mod tests {
             ),
         ];
         let mut f = fixture("dispatch");
-        for (rule, post, pr, opens) in cases {
-            let found = reviews(&mut f, &[post], &[("acme/pay", 1, pr)]);
+        for (rule, post, workflow, opens) in cases {
+            let found = reviews(&mut f, &[post], &[("acme/pay", 1, workflow)]);
             assert_eq!(found.len(), usize::from(opens), "{rule}: {found:?}");
         }
     }
@@ -2189,7 +2189,7 @@ mod tests {
                 &[("acme/pay", 1, reviewed_by("wes"))]
             )
             .is_empty(),
-            "posts of other PRs"
+            "posts of other Workflows"
         );
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
@@ -2400,7 +2400,7 @@ mod tests {
         let mut f = fixture("dispatch");
         write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
-        answer.prs.insert(("acme/gone".to_owned(), 2), None);
+        answer.workflows.insert(("acme/gone".to_owned(), 2), None);
         let all = conditions_with(
             &mut f.store,
             &f.home,
@@ -2424,7 +2424,7 @@ mod tests {
         reconcile(&mut f.store, &opened, T).unwrap();
         let blind = Lookup {
             me: ME_LOGIN.to_owned(),
-            prs: [(("acme/pay".to_owned(), 1), None)].into(),
+            workflows: [(("acme/pay".to_owned(), 1), None)].into(),
         };
         let all = conditions_with(
             &mut f.store,
@@ -2440,7 +2440,7 @@ mod tests {
                 .filter(|c| c.kind == Kind::ReviewRequested)
                 .count(),
             1,
-            "every PR unreadable: the queue stays"
+            "every Workflow unreadable: the queue stays"
         );
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }

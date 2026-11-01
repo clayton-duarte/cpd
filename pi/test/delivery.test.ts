@@ -92,11 +92,11 @@ test("job-merged with data.turn true starts a turn", async (t) => {
   assert.deepEqual(f.pi.delivered().map((s) => [(s.message.details as any).id, s.options]), [[102, { triggerTurn: true, deliverAs: "followUp" }]]);
 });
 
-test("pr-started, pr-merged, pr-base-changed, job-cancelled and attempt-retry add no message", async (t) => {
+test("workflow-started, pr-merged, workflow-base-changed, job-cancelled and attempt-retry add no message", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
-  f.emit(...["pr-started", "pr-merged", "pr-base-changed", "job-cancelled", "attempt-retry"].map((kind, i) => event(101 + i, kind)));
+  f.emit(...["workflow-started", "pr-merged", "workflow-base-changed", "job-cancelled", "attempt-retry"].map((kind, i) => event(101 + i, kind)));
   await f.drain();
   assert.deepEqual(f.pi.delivered(), []);
   assert.deepEqual(f.pi.sent, []);

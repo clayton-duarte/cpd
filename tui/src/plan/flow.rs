@@ -1,5 +1,5 @@
-//! The plan view's chart: a pure layout of one PR's Jobs as GitHub-Actions-style cards, left to right; [`super::boxes`]
-//! puts each PR's chart in its box.
+//! The plan view's chart: a pure layout of one Workflow's Jobs as GitHub-Actions-style cards, left to right; [`super::boxes`]
+//! puts each Workflow's chart in its box.
 //!
 //! In: Jobs. Out: a `Buffer` of the whole chart (no padding: the view insets the window it blits into) plus each pill's
 //! rectangle. Implied needs are dropped (transitive reduction); Jobs with the same needs share one card, stacked; a card's
@@ -113,7 +113,7 @@ pub struct Pill {
     pub rect: Rect,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `worked_on`: the Plan's failed Jobs being worked on.
+/// Jobs (one Workflow's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `worked_on`: the Plan's failed Jobs being worked on.
 pub fn flow_jobs<'a>(
     jobs: impl IntoIterator<Item = &'a JobNode>,
     worked_on: &[JobKey],
@@ -272,7 +272,7 @@ fn column_of(
     l
 }
 
-// ---------- line masks (the PR boxes' arrows use them too) ----------
+// ---------- line masks (the Workflow boxes' arrows use them too) ----------
 const U: u8 = 1;
 const D: u8 = 2;
 const L: u8 = 4;

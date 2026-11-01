@@ -48,9 +48,9 @@ fn add_draft(env: &TestEnv, plan: &str, key: &str, needs: &[&str], appended: boo
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, created_txn, created_at)
-                     VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
+                     VALUES ('{plan}', (SELECT key FROM workflows WHERE plan = '{plan}'), '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
                              '[\"cargo test\"]', '[]', 'draft', {appended}, {id}, 't');",
                     appended = i32::from(appended),
                     id = tx.id()
@@ -81,10 +81,10 @@ fn sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-/// The `## PR <key>` section of a render: from its heading to the next `## ` one.
+/// The `## Workflow <key>` section of a render: from its heading to the next `## ` one.
 fn section<'a>(text: &'a str, pr: &str) -> &'a str {
     let start = text
-        .find(&format!("\n## PR {pr}\n"))
+        .find(&format!("\n## Workflow {pr}\n"))
         .unwrap_or_else(|| panic!("no PR {pr} section:\n{text}"));
     let rest = &text[start..];
     let end = rest[1..].find("\n## ").map_or(rest.len(), |i| i + 1);
@@ -162,7 +162,7 @@ mod inproc {
         // `--shape config`: the template's stub drafts, `pay-config` and its opener, which these tests do not use:
         // they are cancelled, as a Lead cancels a stub it does not need.
         fx.cpd(&[
-            "pr",
+            "workflow",
             "add",
             "pay",
             "--repo",
@@ -287,7 +287,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
-        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "phase": "grounding", "lead_session": session, "prs": []})
+        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "phase": "grounding", "lead_session": session, "workflows": []})
     );
     assert_eq!(
         (
@@ -300,7 +300,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
     assert_eq!(
-        fx.env.query::<i64>("SELECT count(*) FROM prs"),
+        fx.env.query::<i64>("SELECT count(*) FROM workflows"),
         0,
         "a new Plan has no PR"
     );
@@ -406,7 +406,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let real = repo.canonicalize().unwrap().display().to_string();
     let other = fx.keyed_repo("web");
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api",
         "--repo",
@@ -420,7 +420,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     ])
     .ok();
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api2",
         "--repo",
@@ -434,7 +434,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     ])
     .ok();
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "web",
         "--repo",
@@ -448,7 +448,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     ])
     .ok();
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "gone",
         "--repo",
@@ -471,7 +471,8 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
         "pay",
     ])
     .ok();
-    fx.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "cancel", "gone", "--plan", "pay"])
+        .ok();
     let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"]
         .as_array()
@@ -1022,7 +1023,7 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     inproc::new_plan_only(&fx, "pay");
     let out = fx
         .cpd(&[
-            "pr",
+            "workflow",
             "add",
             "pay",
             "--repo",
@@ -1035,14 +1036,14 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
             "pay",
         ])
         .ok();
-    assert_eq!(out["pr"]["base"], "trunk");
+    assert_eq!(out["workflow"]["base"], "trunk");
     assert_eq!(
-        out["pr"]["repo"],
+        out["workflow"]["repo"],
         clone.canonicalize().unwrap().display().to_string()
     );
     let error = refused(
         &fx.cpd(&[
-            "pr",
+            "workflow",
             "add",
             "other",
             "--repo",
@@ -1188,7 +1189,7 @@ fn phase_refusals() {
     );
     store(&fx.env)
         .write("fixture", |tx| exec(tx, "UPDATE plans SET phase = 'plan' WHERE id = 'pay'; UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
-                 UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';"))
+                 UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';"))
         .unwrap();
     let error = refused(
         &fx.cpd_with(
@@ -1208,9 +1209,9 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 0);
 
-    assert_eq!(inproc::show(&fx, "pay")["prs"], json!([]));
+    assert_eq!(inproc::show(&fx, "pay")["workflows"], json!([]));
     let ids = |fx: &Fx| -> Vec<String> {
         fx.cpd(&["plan", "list"]).ok()["plans"]
             .as_array()
@@ -1342,11 +1343,14 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 2})
     );
     assert_eq!(
-        pay["prs"][0]["repo"],
+        pay["workflows"][0]["repo"],
         repo.canonicalize().unwrap().display().to_string()
     );
     assert_eq!(
-        (&pay["prs"][0]["key"], &pay["prs"][0]["pr"]),
+        (
+            &pay["workflows"][0]["key"],
+            &pay["workflows"][0]["base_workflow"]
+        ),
         (&json!("pay"), &Value::Null)
     );
     let ids = |args: &[&str]| -> Vec<String> {
@@ -1380,9 +1384,9 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         (&plan["id"], &plan["phase"]),
         (&json!("pay"), &json!("plan"))
     );
-    let pr = &out["prs"][0];
+    let pr = &out["workflows"][0];
     assert_eq!(
-        (&pr["lead_worktree"], &pr["pr"]),
+        (&pr["lead_worktree"], &pr["base_workflow"]),
         (&Value::Null, &Value::Null)
     );
     assert_eq!(pr["pull_request"], Value::Null);
@@ -1443,7 +1447,7 @@ fn show_lists_attempts_open_escalations_and_tampered_fingerprints() {
                 tx,
                 &format!(
                     "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
-                     UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';
+                     UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';
                      UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE plan = 'pay' AND status = 'draft';
                      UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'a';
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
@@ -1504,7 +1508,7 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     let (pr_key, pr_repo, pr_base): (String, String, String) = store(&fx.env)
         .read(|c| {
             Ok(c.query_row(
-                "SELECT key, repo, base FROM prs WHERE plan = 'pay'",
+                "SELECT key, repo, base FROM workflows WHERE plan = 'pay'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?)
@@ -1541,10 +1545,10 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
         text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"),
         "{text}"
     );
-    assert!(text.contains("\n## PR pay\n"), "{text}");
+    assert!(text.contains("\n## Workflow pay\n"), "{text}");
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
-    assert_eq!(out["prs"], 1);
+    assert_eq!(out["workflows"], 1);
     // a cancelled Job is shown with its status, and drawn in no graph (hs-d518)
     assert!(
         text.contains("| `gone` |") && !text.contains("[\"gone\"]"),
@@ -1570,7 +1574,7 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
     inproc::new_plan_only(&fx, "pay");
     // A template PR: `pr add` lays out its opener stub beside the shape's stubs; its other Job is merged away.
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "pay",
         "--repo",
@@ -1601,7 +1605,7 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
+                    "INSERT INTO workflows (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
                      VALUES ('pay', 'old', '{}', 'old', 'main', 'Old change', 'docs', 'waiting', 'cpd/pay/old', cpd_txn(), 't');",
                     old.display()
                 ),
@@ -1632,7 +1636,7 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
         "no placeholder for a PR whose Plan holds an open Job:\n{pay}"
     );
     assert!(
-        !pay.contains("every other Job of the PR"),
+        !pay.contains("every other Job of the Workflow"),
         "no placeholder `Needs` cell:\n{pay}"
     );
 
@@ -1640,7 +1644,7 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
     let old = section(&text, "old");
     assert!(
         old.contains("| `open-old` | Open the pull request: Old change | open |")
-            && old.contains("every other Job of the PR"),
+            && old.contains("every other Job of the Workflow"),
         "{old}"
     );
     assert!(
@@ -1648,7 +1652,10 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
         "{old}"
     );
     assert!(old.contains("Status: — · Kind: `open`"), "{old}");
-    assert!(old.contains("Added by cpd when the PR starts"), "{old}");
+    assert!(
+        old.contains("Added by cpd when the Workflow starts"),
+        "{old}"
+    );
 }
 
 // ---------- plan review, plan decide ----------
@@ -2024,13 +2031,13 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     let web = fx.keyed_repo("web");
     // Its stubs are legal after the lock on their own, incomplete (hs-d822); a complete draft that waits would be parked.
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "web",
         "--repo",
         web.to_str().unwrap(),
         "--title",
-        "Change the PR",
+        "Change the Workflow",
         "--base",
         "main",
         "--shape",
@@ -2190,9 +2197,9 @@ fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, created_txn, created_at)
-                     VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Open the pull request', 'S2', 'Open it.', 'Because.', '[\"{key}.txt\"]',
+                     VALUES ('{plan}', (SELECT key FROM workflows WHERE plan = '{plan}'), '{key}', 'Open the pull request', 'S2', 'Open it.', 'Because.', '[\"{key}.txt\"]',
                              '[\"it opens\"]', '[]', 'draft', 1, 'open', {id}, 't');",
                     id = tx.id()
                 ),
@@ -2398,8 +2405,8 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
-               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
-                        "base_sha": head, "reused": false, "pushed": false, "base_pr": null}],
+               "workflows": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "pay/pay", "lead_worktree": worktree.display().to_string(),
+                        "base_sha": head, "reused": false, "pushed": false, "base_workflow": null}],
                "watch": {"started": true, "pane": "%9"}})
     );
     assert_eq!(
@@ -2413,7 +2420,10 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
 
     let shown = inproc::show(&fx, "pay");
     assert_eq!(
-        (&shown["plan"]["phase"], &shown["prs"][0]["lead_worktree"]),
+        (
+            &shown["plan"]["phase"],
+            &shown["workflows"][0]["lead_worktree"]
+        ),
         (&json!("dispatch"), &json!(worktree.display().to_string()))
     );
     assert!(shown["plan"]["locked_at"].is_string());
@@ -2445,12 +2455,12 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let phase = inproc::events(&fx, "plan-phase").last().unwrap().clone();
     assert_eq!(
         phase["data"],
-        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "prs": ["pay"]})
+        json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "workflows": ["pay"]})
     );
-    let started = inproc::events(&fx, "pr-started");
+    let started = inproc::events(&fx, "workflow-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
-        (&started[0]["data"]["pr"], &started[0]["data"]["by"]),
+        (&started[0]["data"]["workflow"], &started[0]["data"]["by"]),
         (&json!("pay"), &json!("lock"))
     );
 
@@ -2492,9 +2502,9 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
     assert_eq!(
         (
-            &out["prs"][0]["base_sha"],
-            &out["prs"][0]["pushed"],
-            &out["prs"][0]["reused"]
+            &out["workflows"][0]["base_sha"],
+            &out["workflows"][0]["pushed"],
+            &out["workflows"][0]["reused"]
         ),
         (&json!(head), &json!(true), &json!(false))
     );
@@ -2535,9 +2545,9 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
         .join("pay.pay.pay");
     assert_eq!(
         (
-            &out["prs"][0]["base_sha"],
-            &out["prs"][0]["reused"],
-            &out["prs"][0]["pushed"]
+            &out["workflows"][0]["base_sha"],
+            &out["workflows"][0]["reused"],
+            &out["workflows"][0]["pushed"]
         ),
         (&json!(remote_tip), &json!(true), &json!(false))
     );
@@ -2593,7 +2603,7 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
     );
 
     assert_eq!(
-        (&error["details"]["branch"], &error["details"]["pr"]),
+        (&error["details"]["branch"], &error["details"]["workflow"]),
         (&json!("pay/pay"), &json!("pay"))
     );
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
@@ -2618,7 +2628,10 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
     let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!(
-        (&out["prs"][0]["reused"], &out["prs"][0]["pushed"]),
+        (
+            &out["workflows"][0]["reused"],
+            &out["workflows"][0]["pushed"]
+        ),
         (&json!(true), &json!(false))
     );
     assert_eq!(
@@ -2802,7 +2815,7 @@ fn lock_refusals_change_nothing() {
             .to_string()
     );
     assert_eq!(
-        (&error["details"]["pr"], &error["details"]["step"]),
+        (&error["details"]["workflow"], &error["details"]["step"]),
         (&json!("pay"), &json!("pre-start"))
     );
     assert!(!path.exists());
@@ -3228,7 +3241,7 @@ fn plan_new_in_an_archived_context_is_refused_before_any_write() {
     fx.cpd(&args).ok();
 }
 
-const JOB: &str = "INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope,
+const JOB: &str = "INSERT INTO jobs (plan, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'pay', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '$STATUS', 0, '$FP', 1, 't');";
 /// Job `api` of `pay`; a locked one (not `draft`) has its fingerprint.
@@ -3324,7 +3337,7 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
     store(&fx.env)
         .write("fixture", |tx| {
             exec(tx, "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay'")?;
-            exec(tx, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay'")?;
+            exec(tx, "UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay'")?;
             exec(
                 tx,
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
@@ -3332,7 +3345,7 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
             )?;
             exec(
                 tx,
-                "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
+                "UPDATE workflows SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
                         pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
             )?;
             exec(tx, "UPDATE plans SET phase = 'deploy' WHERE id = 'pay'")
@@ -3459,7 +3472,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     assert_eq!(shown["counts"]["draft"], 3);
     // The Plan view of the Context holds the stub's registered work too.
     let pending = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
-    let jobs = &pending["plans"][0]["prs"][0]["jobs"];
+    let jobs = &pending["plans"][0]["workflows"][0]["jobs"];
     let pending_stub = jobs
         .as_array()
         .unwrap()
@@ -3638,11 +3651,11 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     // The fingerprint hashes a stub as it is: its missing fields are null.
     let (pr_repo, pr_base): (String, String) = store(&fx.env)
         .read(|c| {
-            Ok(
-                c.query_row("SELECT repo, base FROM prs WHERE plan = 'pay'", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })?,
-            )
+            Ok(c.query_row(
+                "SELECT repo, base FROM workflows WHERE plan = 'pay'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
         })
         .unwrap();
     let null_spec = |key: &str, tier: &str| {

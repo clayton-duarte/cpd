@@ -1,5 +1,5 @@
-//! The cost of a Workflow (`PrNode.cost_usd`, Context record pro-d179): the total of the costs of every Attempt of every
-//! Job of the PR, by the rule of the Plan row. Read by `plan_boxes_at` at a fixed `now`: no wall clock, no sleeps; the
+//! The cost of a Workflow (`WorkflowNode.cost_usd`, Context record pro-d179): the total of the costs of every Attempt of every
+//! Job of the Workflow, by the rule of the Plan row. Read by `plan_boxes_at` at a fixed `now`: no wall clock, no sleeps; the
 //! session files are written into the test's own temporary directory.
 
 use std::fs;
@@ -14,11 +14,11 @@ use crate::read;
 const NOW_MS: i64 = 1_800_000_000_000;
 const NOW: &str = "2026-10-18T15:07:30.000Z";
 
-/// Job `key` of PR `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
+/// Job `key` of Workflow `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
 /// is the stored JSON of an ended Attempt, `None` for a live one (NULL `metrics`, running); `file` the Session's file.
 /// `with_job` adds the Job's own row (once per Job).
 fn attempt(
-    pr: &str,
+    workflow: &str,
     key: &str,
     kind: &str,
     number: u32,
@@ -44,7 +44,7 @@ fn attempt(
          VALUES ('pay', '{id}', '{key}', {number}, 'S3', 'ladder', '{status}', {outcome}, {cause}, 'cpd/pay--{id}', '/w',
                  '2026-01-02T01:00:00.000Z', {ended}, 'w-{id}', {metrics});
          {}",
-        if with_job { job(pr, key, kind, "running") } else { String::new() },
+        if with_job { job(workflow, key, kind, "running") } else { String::new() },
         session(&format!("w-{id}"), "worker", "ctx", Some("pay"), Some(&id), file, "")
     )
 }
@@ -64,7 +64,7 @@ fn write(dir: &tempfile::TempDir, name: &str, costs: &[f64]) -> String {
 
 fn costs(store: &mut Store) -> Vec<Option<f64>> {
     let boxes = read::plan_boxes_at(store, &PlanId::parse("pay").unwrap(), NOW_MS).unwrap();
-    boxes.prs.iter().map(|p| p.cost_usd).collect()
+    boxes.workflows.iter().map(|p| p.cost_usd).collect()
 }
 
 fn stored(c: &str) -> String {

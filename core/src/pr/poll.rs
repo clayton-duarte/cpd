@@ -1,5 +1,5 @@
 //! `pr poll` (commands.md §9.2, contract §7.6): one poll of every open pull
-//! request of the User, stored in `pull_requests`, and the merge of the PRs
+//! request of the User, stored in `pull_requests`, and the merge of the Workflows
 //! the Plans own.
 
 use std::fs::{self, OpenOptions};
@@ -15,26 +15,26 @@ use super::feedback;
 use super::gh::{self, Listed};
 use super::posts;
 use super::pulls::{self, Change, Excused, PostFacts, Reason};
-use super::row::PlanPrs;
+use super::row::PlanWorkflows;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
 use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
-use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{JobKey, OwnerLogin, PlanId, RepoName, WorkflowKey};
 use crate::inbox::model as inbox;
 use crate::job::open::{self, Cause};
 use crate::lock;
 use crate::output::Output;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::policy::Checks;
 use crate::ports::Ports;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
 
-/// The `by` of the `pr-base-changed` Event the poll appends (§5.2).
+/// The `by` of the `workflow-base-changed` Event the poll appends (§5.2).
 const COMMAND_BY: &str = "poll";
 
 /// How long `pr poll` waits for `locks/pr-poll.lock` (`lock_timeout`).
@@ -43,39 +43,39 @@ const LOCK_WAIT: Duration = Duration::from_secs(60);
 /// How often the wait tries the lock again.
 const RETRY: Duration = Duration::from_millis(100);
 
-/// A pull request an `open` PR of a Plan points to.
-type Owned = (PlanId, PrKey, pulls::PullRequest);
+/// A pull request an `open` Workflow of a Plan points to.
+type Owned = (PlanId, WorkflowKey, pulls::PullRequest);
 
-/// An owned PR whose policy did not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`).
+/// An owned Workflow whose policy did not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`).
 struct Unresolved {
     plan: PlanId,
-    pr: PrKey,
+    workflow: WorkflowKey,
     number: i64,
     error: CpdError,
 }
 
-/// A PR whose pull request GitHub repointed: the PR's `base` follows it (§7.6 step 6, hs-d325).
+/// A Workflow whose pull request GitHub repointed: the Workflow's `base` follows it (§7.6 step 6, hs-d325).
 struct Follow {
     plan: PlanId,
-    pr: PrKey,
+    workflow: WorkflowKey,
     from: String,
     to: String,
     number: i64,
     url: String,
-    /// The base PR of `from` (`plan/key`), when `from` is some PR's Lead Branch.
-    from_pr: Option<String>,
-    /// The PR whose Lead Branch is `to`, when some PR's is.
-    to_pr: Option<String>,
+    /// The base Workflow of `from` (`plan/key`), when `from` is some Workflow's Lead Branch.
+    from_workflow: Option<String>,
+    /// The Workflow whose Lead Branch is `to`, when some Workflow's is.
+    to_workflow: Option<String>,
     /// The pull request's repo default branch, from the listing: `to` is the default branch exactly when the base
-    /// PR merged (`None` = GitHub did not say, and a base no default branch is no merge repoint).
+    /// Workflow merged (`None` = GitHub did not say, and a base no default branch is no merge repoint).
     default_branch: Option<String>,
 }
 
-/// What the read phase learned of a [`Follow`] that is a base PR's merge to the default branch (§3.7 E5, hs-d794):
+/// What the read phase learned of a [`Follow`] that is a base Workflow's merge to the default branch (§3.7 E5, hs-d794):
 /// whether that default branch holds commits the Lead Branch lacks without a conflict.
 struct Ahead {
     plan: PlanId,
-    pr: PrKey,
+    workflow: WorkflowKey,
     /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
     ahead: bool,
 }
@@ -85,10 +85,10 @@ struct Ahead {
 struct Outcome {
     changed: Vec<Value>,
     base_changed: Vec<Value>,
-    feedback: Vec<(PlanId, PrKey)>,
+    feedback: Vec<(PlanId, WorkflowKey)>,
     /// The `update` Jobs the poll queued and their cause (§3.7 E5).
-    update_jobs: Vec<(PlanId, PrKey, JobKey, Cause)>,
-    merged: Vec<(PlanId, PrKey)>,
+    update_jobs: Vec<(PlanId, WorkflowKey, JobKey, Cause)>,
+    merged: Vec<(PlanId, WorkflowKey)>,
     done: Vec<PlanId>,
 }
 
@@ -103,12 +103,12 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 
     let search = gh::search_open(&*env.ports.runner, &root, &env.config.inbox.bot_reviewers)?;
     let owned = env.store.read(pulls::owned_open)?;
-    // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
+    // Each owned Workflow's `pr.feedback.checks`, resolved before anything is written (§8.3). A Workflow whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
     let mut checks: Vec<Resolved> = Vec::new();
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
-        match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
+        match super::workflow_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
             Ok(policy) => checks.push(Resolved {
                 plan: plan.clone(),
                 key: key.clone(),
@@ -121,7 +121,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
             }),
             Err(error) => unresolved.push(Unresolved {
                 plan: plan.clone(),
-                pr: key.clone(),
+                workflow: key.clone(),
                 number: row.number,
                 error,
             }),
@@ -200,7 +200,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 
     // The checks of each owned open pull request (§7.6 step 3b) whose `pr.feedback.checks` is `any` and whose rollup says `failed`
     // (GitHub rolls a CANCELLED check up as FAILURE), or whose rollup says `pending` while its `human_gated_contexts` is not
-    // empty, or whose rollup says `passed` or `none` while its `required_checks` is not empty (hs-d743): one call, before anything is written. Each PR's summary is the one rule with its own list.
+    // empty, or whose rollup says `passed` or `none` while its `required_checks` is not empty (hs-d743): one call, before anything is written. Each Workflow's summary is the one rule with its own list.
     let mut confirm: Vec<(String, i64)> = Vec::new();
     let mut lists: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for listed in &seen {
@@ -212,7 +212,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
             .iter()
             .filter(|(_, _, row)| row.repo == *repo && row.number == number)
             .filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
-        // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a PR no Plan resolved a policy for has its repo's `required_checks` alone.
+        // (`checks` is `any`, `human_gated_contexts`, `required_checks`) of each owner; a Workflow no Plan resolved a policy for has its repo's `required_checks` alone.
         let mut policies: Vec<(bool, Vec<String>, Vec<String>)> = mine
             .map(|r| {
                 (
@@ -227,7 +227,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
                 false,
                 Vec::new(),
                 repo_required(&env.home, repo).unwrap_or_default(),
-            )); // an unreadable policy is reported for the owned PRs above
+            )); // an unreadable policy is reported for the owned Workflows above
         }
         let wanted =
             |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
@@ -265,9 +265,9 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         }
     }
 
-    // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
+    // The owned Workflows whose pull request a search lists with a base other than the Workflow's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
-    // The base PR's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
+    // The base Workflow's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
@@ -300,24 +300,24 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let printed_prs = match &selected {
         Some(id) => {
             let plan = env.plan(id)?;
-            Some(plan_prs(&mut env, &plan)?)
+            Some(plan_workflows(&mut env, &plan)?)
         }
         None => None,
     };
 
-    let pair = |(plan, pr): &(PlanId, PrKey)| json!({"plan": plan, "pr": pr});
+    let pair = |(plan, workflow): &(PlanId, WorkflowKey)| json!({"plan": plan, "pr": workflow});
     let mut out = json!({
         "polled": search.prs.len(),
         "changed": outcome.changed,
         "base_changed": outcome.base_changed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
-        "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job, cause)| json!({"plan": plan, "pr": pr, "job": job, "reason": cause.as_str()})).collect::<Vec<_>>(),
+        "update_jobs": outcome.update_jobs.iter().map(|(plan, workflow, job, cause)| json!({"plan": plan, "pr": workflow, "job": job, "reason": cause.as_str()})).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
         "done": outcome.done,
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
     });
-    if let Some(prs) = printed_prs {
-        out["prs"] = Value::Array(prs);
+    if let Some(workflows) = printed_prs {
+        out["workflows"] = Value::Array(workflows);
     }
     Ok(Output::success(out))
 }
@@ -409,7 +409,7 @@ fn apply(
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
-                crate::incident::end_if_until_pr_merged(tx)?;
+                crate::incident::end_if_until_workflow_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
             } else if let Some(resolved) = checks_of(checks, plan, key) {
                 if tell(tx, plan, key, resolved, &change)? {
@@ -425,13 +425,13 @@ fn apply(
     for follow in follows {
         let is_ahead = ahead
             .iter()
-            .any(|a| a.plan == follow.plan && a.pr == follow.pr && a.ahead);
+            .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
         let (base_changed, job) = follow_base(tx, follow, is_ahead, open_tier)?;
         out.base_changed.push(base_changed);
         if let Some(job) = job {
             out.update_jobs.push((
                 follow.plan.clone(),
-                follow.pr.clone(),
+                follow.workflow.clone(),
                 job,
                 Cause::BaseMerged,
             ));
@@ -447,21 +447,22 @@ fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
         .find(|r| r.repo == listed.pr.repo && r.number == listed.pr.number)
 }
 
-/// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
-/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR whose listing has no base is not followed.
-/// The base PR of the old base, the PR of the new one and the repo's default branch are read here, so the write
-/// transaction queues the update Job a base PR's merge needs in the same transaction as the repoint.
+/// Each `open` Workflow of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the Workflow's
+/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A Workflow whose listing has no base is not followed.
+/// The base Workflow of the old base, the Workflow of the new one and the repo's default branch are read here, so the write
+/// transaction queues the update Job a base Workflow's merge needs in the same transaction as the repoint.
 fn follows(
     conn: &rusqlite::Connection,
     owned: &[Owned],
     listed: &[Listed],
 ) -> Result<Vec<Follow>, CpdError> {
-    let mut stored = conn
-        .prepare("SELECT base, repo FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
-    let base_pr = |repo: &str, branch: &str| -> Result<Option<String>, CpdError> {
+    let mut stored = conn.prepare(
+        "SELECT base, repo FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+    )?;
+    let base_workflow = |repo: &str, branch: &str| -> Result<Option<String>, CpdError> {
         Ok(conn
             .query_row(
-                "SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2",
+                "SELECT plan || '/' || key FROM workflows WHERE repo = ?1 AND lead_branch = ?2",
                 [repo, branch],
                 |r| r.get(0),
             )
@@ -486,9 +487,9 @@ fn follows(
         if let Some((from, repo)) = stored.filter(|(from, _)| from != to) {
             found.push(Follow {
                 plan: plan.clone(),
-                pr: key.clone(),
-                from_pr: base_pr(&repo, &from)?,
-                to_pr: base_pr(&repo, to)?,
+                workflow: key.clone(),
+                from_workflow: base_workflow(&repo, &from)?,
+                to_workflow: base_workflow(&repo, to)?,
                 from,
                 to: to.clone(),
                 number: row.number,
@@ -500,10 +501,10 @@ fn follows(
     Ok(found)
 }
 
-/// Sets the PR's `base` to the one GitHub reports and appends `pr-base-changed` for its Plan (§5.2). Nothing else
-/// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready PR stays ready).
-/// When the new base is the default branch of a base PR's merge and `ahead` says the Lead Branch lacks commits of it
-/// without a conflict, the PR's `update` Job is queued in the same transaction (§3.7 E5, hs-d794). Returns the Event's
+/// Sets the Workflow's `base` to the one GitHub reports and appends `workflow-base-changed` for its Plan (§5.2). Nothing else
+/// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready Workflow stays ready).
+/// When the new base is the default branch of a base Workflow's merge and `ahead` says the Lead Branch lacks commits of it
+/// without a conflict, the Workflow's `update` Job is queued in the same transaction (§3.7 E5, hs-d794). Returns the Event's
 /// data and the Job's key when one was queued.
 fn follow_base(
     tx: &WriteTxn<'_>,
@@ -513,77 +514,81 @@ fn follow_base(
 ) -> Result<(Value, Option<JobKey>), CpdError> {
     let Follow {
         plan,
-        pr,
+        workflow,
         from,
         to,
         number,
         url,
-        from_pr,
-        to_pr,
+        from_workflow,
+        to_workflow,
         default_branch,
     } = follow;
     let moved = tx.execute(
-        "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
-        [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
+        "UPDATE workflows SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
+        [plan.as_str(), workflow.as_str(), to.as_str(), from.as_str()],
     )?;
     if moved == 0 {
-        return Err(cas_lost(plan, pr));
+        return Err(cas_lost(plan, workflow));
     }
-    let reason = match (from_pr, to_pr) {
+    let reason = match (from_workflow, to_workflow) {
         (Some(base), None) => {
-            format!("its base PR {base} merged and GitHub repointed the pull request")
+            format!("its base Workflow {base} merged and GitHub repointed the pull request")
         }
         _ => "the base changed on GitHub".to_owned(),
     };
     let text = format!(
-        "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
+        "Workflow {workflow} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
          Read it with cpd plan show --plan {plan}."
     );
-    let event = NewEvent::pr_base_changed(
+    let event = NewEvent::workflow_base_changed(
         text,
-        pr,
+        workflow,
         (from, to),
-        (from_pr.as_deref(), to_pr.as_deref()),
+        (from_workflow.as_deref(), to_workflow.as_deref()),
         COMMAND_BY,
         BasePull::Of(*number, url),
     );
     append(tx, event.plan(plan.clone()))?;
-    // A base PR's merge repoints the pull request to the default branch; with that branch ahead and no conflict, the
-    // PR's update Job is the cause (§3.7 E5, hs-d794). A hand retarget to another branch queues nothing.
-    let base_merged =
-        default_branch.as_deref() == Some(to.as_str()) && from_pr.is_some() && to_pr.is_none();
+    // A base Workflow's merge repoints the pull request to the default branch; with that branch ahead and no conflict, the
+    // Workflow's update Job is the cause (§3.7 E5, hs-d794). A hand retarget to another branch queues nothing.
+    let base_merged = default_branch.as_deref() == Some(to.as_str())
+        && from_workflow.is_some()
+        && to_workflow.is_none();
     let job = if base_merged {
-        queue_update_for(tx, plan, pr, Trigger::BaseMerged, ahead, tier)?
+        queue_update_for(tx, plan, workflow, Trigger::BaseMerged, ahead, tier)?
     } else {
         None
     };
-    Ok((json!({"plan": plan, "pr": pr, "from": from, "to": to}), job))
+    Ok((
+        json!({"plan": plan, "pr": workflow, "from": from, "to": to}),
+        job,
+    ))
 }
 
-/// The default-branch-ahead decision of each base PR's merge repoint (§3.7 E5, hs-d794), from git in the read phase
+/// The default-branch-ahead decision of each base Workflow's merge repoint (§3.7 E5, hs-d794), from git in the read phase
 /// (§7.6): `git fetch origin <base>`, `git merge-tree --write-tree --name-only origin/<base> <lead>` and
-/// `git merge-base --is-ancestor`, in the PR's repo (`prs.repo`). A failed fetch or check is no ahead: the poll queues
-/// nothing for that PR and goes on (A4), with no panic and no unwrap.
+/// `git merge-base --is-ancestor`, in the Workflow's repo (`prs.repo`). A failed fetch or check is no ahead: the poll queues
+/// nothing for that Workflow and goes on (A4), with no panic and no unwrap.
 fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead>, CpdError> {
     let mut out = Vec::new();
     for follow in follows {
         if !(follow.default_branch.as_deref() == Some(follow.to.as_str())
-            && follow.from_pr.is_some()
-            && follow.to_pr.is_none())
+            && follow.from_workflow.is_some()
+            && follow.to_workflow.is_none())
         {
             continue;
         }
         let row: Option<(String, String)> = conn
             .query_row(
-                "SELECT repo, lead_branch FROM prs WHERE plan = ?1 AND key = ?2",
-                [follow.plan.as_str(), follow.pr.as_str()],
+                "SELECT repo, lead_branch FROM workflows WHERE plan = ?1 AND key = ?2",
+                [follow.plan.as_str(), follow.workflow.as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
         let Some((repo, lead)) = row else { continue };
         out.push(Ahead {
             plan: follow.plan.clone(),
-            pr: follow.pr.clone(),
+            workflow: follow.workflow.clone(),
             ahead: base_ahead(Path::new(&repo), &follow.to, &lead),
         });
     }
@@ -604,8 +609,8 @@ fn base_ahead(dir: &Path, base: &str, lead: &str) -> bool {
     matches!(crate::git::run::run(dir, &["merge-base", "--is-ancestor", &remote, lead]), Ok(out) if out.code == 1)
 }
 
-/// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
-fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &PrKey) -> Option<&'a Resolved> {
+/// The Workflow's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
+fn checks_of<'a>(checks: &'a [Resolved], plan: &PlanId, key: &WorkflowKey) -> Option<&'a Resolved> {
     checks.iter().find(|r| &r.plan == plan && &r.key == key)
 }
 
@@ -639,22 +644,22 @@ pub(super) fn repo_required(
     )
 }
 
-/// What the poll resolved of an owned PR's policy: `pr.feedback.checks` and `pr.post.enabled`.
+/// What the poll resolved of an owned Workflow's policy: `pr.feedback.checks` and `pr.post.enabled`.
 struct Resolved {
     plan: PlanId,
-    key: PrKey,
+    key: WorkflowKey,
     checks: Checks,
     post_enabled: bool,
     human_gated: Vec<String>,
     excused_labels: Vec<String>,
-    /// Set once the checks are read: the PR carries one of `excused_labels`. A PR not read is never excused.
+    /// Set once the checks are read: the Workflow carries one of `excused_labels`. A Workflow not read is never excused.
     excused: bool,
     required: Vec<String>,
 }
 
-/// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
+/// One `error` Event for each Workflow whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
 /// `details` the error's with `plan`, `pr` and `number`. Once per episode: not again while the latest such Event of
-/// the PR has the same code, so a poll every `pr_poll_seconds` does not repeat it, and no write transaction opens.
+/// the Workflow has the same code, so a poll every `pr_poll_seconds` does not repeat it, and no write transaction opens.
 fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), CpdError> {
     let fresh: Vec<&Unresolved> = env.store.read(|conn| {
         let mut stmt = conn.prepare(
@@ -670,7 +675,7 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
                     [
                         failed.plan.as_str(),
                         COMMAND,
-                        failed.pr.as_str(),
+                        failed.workflow.as_str(),
                         ErrorCode::CleanupFailed.as_str(),
                     ],
                     |r| r.get(0),
@@ -686,16 +691,16 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
         return Ok(());
     }
     env.store.write(COMMAND, |tx| {
-        for Unresolved { plan, pr, number, error } in &fresh {
-            let message = format!("The policy of PR {pr} (#{number}) of Plan {plan} did not resolve: {}", error.message());
+        for Unresolved { plan, workflow, number, error } in &fresh {
+            let message = format!("The policy of Workflow {workflow} (#{number}) of Plan {plan} did not resolve: {}", error.message());
             let next = match error.details().get("next").and_then(Value::as_str) {
                 Some(next) => next.to_owned(),
-                None => format!("cpd policy show --pr {pr} --plan {plan}"),
+                None => format!("cpd policy show --workflow {workflow} --plan {plan}"),
             };
-            let text = format!("{message} The poll sends this PR no pr-feedback until it does; every other PR is polled. Next: {next}");
+            let text = format!("{message} The poll sends this Workflow no pr-feedback until it does; every other Workflow is polled. Next: {next}");
             let mut details = error.details().clone();
             details.insert("plan".into(), json!(plan));
-            details.insert("pr".into(), json!(pr));
+            details.insert("pr".into(), json!(workflow));
             details.insert("number".into(), json!(number));
             append(tx, NewEvent::error(text, COMMAND, error.code().as_str(), &message, details).plan(plan.clone()))?;
         }
@@ -707,7 +712,7 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 fn tell(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     resolved: &Resolved,
     change: &Change,
 ) -> Result<bool, CpdError> {
@@ -747,12 +752,12 @@ fn tell(
 
 /// The `update` Job of a conflict (§3.7 E5, §7.6 step 6): when `mergeable` became `conflicting` (from anything else, so once per
 /// transition: `unknown` is no conflict and a base that merely moved, `merge_state` `behind`, is no cause), the row's `state` is `open`
-/// and the Plan is not archived, the PR's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
-/// PR's policy. The Job's key when one was inserted.
+/// and the Plan is not archived, the Workflow's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
+/// Workflow's policy. The Job's key when one was inserted.
 fn update_for_conflict(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     change: &Change,
     tier: Tier,
 ) -> Result<Option<JobKey>, CpdError> {
@@ -772,33 +777,33 @@ fn update_for_conflict(
     if archived {
         return Ok(None);
     }
-    let prs = load_prs(tx, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key == *key) else {
+    let workflows = load_workflows(tx, plan)?;
+    let Some(workflow) = workflows.iter().find(|p| p.key == *key) else {
         return Ok(None);
     };
-    open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
+    open::queue_update(tx, plan, workflow, tier, COMMAND_BY, Cause::Conflict)
 }
 
-/// Why the poll queues a PR's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition
-/// ([`update_for_conflict`]), or a base PR's merge that left the default branch ahead of the Lead Branch.
+/// Why the poll queues a Workflow's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition
+/// ([`update_for_conflict`]), or a base Workflow's merge that left the default branch ahead of the Lead Branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Trigger {
-    /// The PR's `mergeable` became `conflicting`.
+    /// The Workflow's `mergeable` became `conflicting`.
     #[cfg(test)]
     Conflict,
-    /// GitHub repointed the PR from a base PR's Lead Branch to the default branch, and the default
+    /// GitHub repointed the Workflow from a base Workflow's Lead Branch to the default branch, and the default
     /// branch holds commits the Lead Branch lacks without a conflict.
     BaseMerged,
 }
 
-/// Queues PR `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the PR already has one `queued`
+/// Queues Workflow `key`'s `update` Job for `trigger` (§3.7 E5, hs-d794, hs-n617), unless the Workflow already has one `queued`
 /// or `running`. `ahead` is read only for [`Trigger::BaseMerged`]: true when the default branch holds commits the
 /// Lead Branch lacks without a conflict; false when it is already contained, which queues nothing. A Plan that is
-/// archived or a PR that is not `open` queues nothing. The Job's key when one was inserted.
+/// archived or a Workflow that is not `open` queues nothing. The Job's key when one was inserted.
 pub(super) fn queue_update_for(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     trigger: Trigger,
     ahead: bool,
     tier: Tier,
@@ -817,28 +822,28 @@ pub(super) fn queue_update_for(
     if archived {
         return Ok(None);
     }
-    let prs = load_prs(tx, plan)?;
-    let Some(pr) = prs
+    let workflows = load_workflows(tx, plan)?;
+    let Some(workflow) = workflows
         .iter()
         .find(|p| p.key == *key)
         .filter(|p| p.status == "open")
     else {
         return Ok(None);
     };
-    open::queue_update(tx, plan, pr, tier, COMMAND_BY, cause)
+    open::queue_update(tx, plan, workflow, tier, COMMAND_BY, cause)
 }
 
-/// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
-/// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
+/// The Workflow `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
+/// `pr-merged`, and, when it was the last Workflow, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
 pub(super) fn merge(
     tx: &WriteTxn<'_>,
     id: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
     pull: &pulls::PullRequest,
 ) -> Result<bool, CpdError> {
     let moved = tx.execute(
-        "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
+        "UPDATE workflows SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND key = ?2 AND status = 'open'",
         [id.as_str(), key.as_str()],
     )?;
@@ -853,15 +858,15 @@ pub(super) fn merge(
         key.as_str(),
         super::jira_sync::Target::Done,
     )?;
-    let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
+    let text = format!("Workflow {key} (#{}) of Plan {id} is merged.", pull.number);
     append(
         tx,
         NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref())
             .plan(id.clone()),
     )?;
-    // The last PR to merge ends the Plan (§3.1).
+    // The last Workflow to merge ends the Plan (§3.1).
     let unmerged: i64 = tx.query_row(
-        "SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
+        "SELECT count(*) FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')",
         [id.as_str()],
         |r| r.get(0),
     )?;
@@ -878,22 +883,23 @@ pub(super) fn merge(
         return Err(cas_lost(id, key));
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
-    let text =
-        format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
+    let text = format!(
+        "Every Workflow of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}"
+    );
     append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
 
-/// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
-/// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
+/// The unstack of the Workflows with no pull request yet that were stacked on the Workflow `key` of `plan`, which this transaction
+/// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` Workflow of any Plan whose `base` is its Lead Branch, told to
 /// its own Plan, so that engine E7 of the same tick already sees the new base.
 pub(super) fn unstack_stacked_on(
     tx: &WriteTxn<'_>,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
 ) -> Result<(), CpdError> {
     let mut stmt = tx.prepare(
-        "SELECT r.plan, r.key FROM prs r, prs m
+        "SELECT r.plan, r.key FROM workflows r, workflows m
           WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
           ORDER BY r.plan, r.key",
     )?;
@@ -903,33 +909,38 @@ pub(super) fn unstack_stacked_on(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (plan, key) in stacked {
-        unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
+        unstack(
+            tx,
+            &PlanId::parse(&plan)?,
+            &WorkflowKey::parse(&key)?,
+            COMMAND_BY,
+        )?;
     }
     Ok(())
 }
 
-/// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
+/// `[{key, status, pull_request}]` of the Plan's Workflows that are not `cancelled`, in key order.
+fn plan_workflows(env: &mut Env, plan: &PlanWorkflows) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
-            .map(|pr| {
-                let row = pr.pull_request.map(|id| pulls::load(conn, id)).transpose()?;
-                Ok(json!({"key": pr.key, "status": pr.status, "pull_request": row.map(|r| r.to_json())}))
+            .map(|workflow| {
+                let row = workflow.pull_request.map(|id| pulls::load(conn, id)).transpose()?;
+                Ok(json!({"key": workflow.key, "status": workflow.status, "pull_request": row.map(|r| r.to_json())}))
             })
             .collect()
     })
 }
 
-/// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key
-/// order: `merged_at` is the moment the PR was seen merged, and for `just`, the
+/// `[{key, number, url, merged_at}]` of every Workflow that is not `cancelled`, in key
+/// order: `merged_at` is the moment the Workflow was seen merged, and for `just`, the
 /// one this poll merged, the time `gh` reports when it does.
 fn merged_prs(
     tx: &WriteTxn<'_>,
     id: &PlanId,
-    just: &PrKey,
+    just: &WorkflowKey,
     reported: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, CpdError> {
-    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
             let key: String = r.get(0)?;
@@ -941,10 +952,12 @@ fn merged_prs(
     Ok(rows)
 }
 
-fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
+fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::CasLost,
-        format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."),
+        format!(
+            "Workflow {key} of Plan {id} changed while it was being polled: rerun the command."
+        ),
     )
     .with("plan", id.as_str())
     .with("pr", key.as_str())
@@ -952,7 +965,10 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 
 /// The pull requests whose comments are read (§7.6 step 3a): an owned pull request listed `open` in `seen` whose `updatedAt` moved, or
 /// whose stored feedback holds an open item (resolving a thread does not move `updatedAt`, pro-d231). No duplicates.
-fn due_reads(owned: &[(PlanId, PrKey, pulls::PullRequest)], seen: &[Listed]) -> Vec<(String, i64)> {
+fn due_reads(
+    owned: &[(PlanId, WorkflowKey, pulls::PullRequest)],
+    seen: &[Listed],
+) -> Vec<(String, i64)> {
     let mut due: Vec<(String, i64)> = Vec::new();
     for (_, _, row) in owned {
         let open_feedback = row.feedback.as_ref().is_some_and(|items| !items.is_empty());
@@ -989,8 +1005,11 @@ mod due_reads_tests {
         }
     }
 
-    fn row(updated: &str, feedback: Option<Vec<Item>>) -> (PlanId, PrKey, pulls::PullRequest) {
-        let pr = pulls::PullRequest {
+    fn row(
+        updated: &str,
+        feedback: Option<Vec<Item>>,
+    ) -> (PlanId, WorkflowKey, pulls::PullRequest) {
+        let workflow = pulls::PullRequest {
             id: 1,
             repo: "o/r".into(),
             number: 7,
@@ -1014,8 +1033,8 @@ mod due_reads_tests {
         };
         (
             PlanId::parse("plan").unwrap(),
-            PrKey::parse("web").unwrap(),
-            pr,
+            WorkflowKey::parse("web").unwrap(),
+            workflow,
         )
     }
 

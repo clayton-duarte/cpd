@@ -61,8 +61,8 @@ pub(super) fn approve(args: ApproveArgs) -> Result<Output, CpdError> {
                     reason
                 );
                 append(tx, NewEvent::job_edited(text, ["test_approved"]).plan(plan.clone()).job(key.clone()))?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &job.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok((job, approved, false))
             }

@@ -8,7 +8,7 @@ use super::display::Display;
 use super::jobs::{Job, JobSpec};
 use super::lint::{Finding, Rule};
 use super::outline::Outline;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::render::{Heading, markdown as plan_markdown};
 use super::row::{Phase, PlanRow};
 use super::summary::{Input, Kind, markdown as summary_markdown};
@@ -16,11 +16,18 @@ use crate::ids::{ContextId, PlanId, SessionId};
 
 const HINT: &str = "(a hint, not a conflict prediction)";
 
-fn job(key: &str, pr: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
-        pr: Some(pr.into()),
+        workflow: Some(workflow.into()),
         title: format!("Title {key}"),
         tier: Some("S2".into()),
         spec: Some(JobSpec {
@@ -51,13 +58,13 @@ fn job(key: &str, pr: &str, kind: &str, status: &str, touches: &[&str], needs: &
     }
 }
 
-/// A draft `work` Job of PR `web`.
+/// A draft `work` Job of Workflow `web`.
 fn draft(key: &str, touches: &[&str], needs: &[&str]) -> Job {
     job(key, "web", "work", "draft", touches, needs)
 }
 
-fn pr(key: &str) -> PrRow {
-    PrRow::fixture(key, "/repo", "main", &[], "waiting")
+fn workflow(key: &str) -> WorkflowRow {
+    WorkflowRow::fixture(key, "/repo", "main", &[], "waiting")
 }
 
 fn plan_row(outline: Option<Outline>) -> PlanRow {
@@ -104,11 +111,11 @@ fn overlap(job: &str, other: &str, paths: &[&str]) -> Finding {
     finding(Some(job), Some(other), paths, "message")
 }
 
-/// The summary of a review of a Plan with one PR and one draft Job, showing `lint`.
+/// The summary of a review of a Plan with one Workflow and one draft Job, showing `lint`.
 fn summary(outline: Option<Outline>, lint: &[Finding]) -> String {
-    let prs = [pr("web")];
+    let workflows = [workflow("web")];
     let jobs = [draft("a", &["src/a.rs"], &[])];
-    let base_prs = BTreeMap::new();
+    let base_workflows = BTreeMap::new();
     let plan = plan_row(outline);
     summary_markdown(
         &Kind::Review {
@@ -117,21 +124,21 @@ fn summary(outline: Option<Outline>, lint: &[Finding]) -> String {
         },
         &Input {
             plan: &plan,
-            prs: &prs,
+            workflows: &workflows,
             jobs: &jobs,
             overlaps: &[],
             lint,
-            base_prs: &base_prs,
+            base_workflows: &base_workflows,
         },
     )
 }
 
-fn plan_md(prs: &[PrRow], lint: &[Finding]) -> String {
+fn plan_md(workflows: &[WorkflowRow], lint: &[Finding]) -> String {
     let jobs = [
         draft("a", &["src/a.rs"], &[]),
         draft("b", &["src/a.rs"], &[]),
     ];
-    let jobs: &[Job] = if prs.is_empty() { &[] } else { &jobs };
+    let jobs: &[Job] = if workflows.is_empty() { &[] } else { &jobs };
     plan_markdown(
         &Heading::Plan {
             title: "T",
@@ -139,11 +146,11 @@ fn plan_md(prs: &[PrRow], lint: &[Finding]) -> String {
         },
         "ctx",
         "plan",
-        prs,
+        workflows,
         jobs,
         &[],
         "S2",
-        &Display::of(prs),
+        &Display::of(workflows),
         lint,
     )
 }
@@ -224,7 +231,7 @@ fn plan_md_lint_section_is_a_table_of_the_warnings() {
         finding(Some("a"), Some("b"), &many, "x | y"),
         finding(None, None, &[], "plain"),
     ];
-    let text = plan_md(&[pr("web")], &findings);
+    let text = plan_md(&[workflow("web")], &findings);
     let section = text
         .split("## Lint\n\n")
         .nth(1)
@@ -232,7 +239,7 @@ fn plan_md_lint_section_is_a_table_of_the_warnings() {
     let section = section.split("\n\n").next().unwrap();
     assert_eq!(
         section,
-        "| Rule | PR | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n\
+        "| Rule | Workflow | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n\
 | `parallel_write_overlap` | `web` | `a` | `b` | `p1`, `p2`, `p3`, `p4`, `p5`, +2 | x \\| y |\n\
 | `parallel_write_overlap` | `web` | — | — |  | plain |",
         "{text}"
@@ -241,22 +248,22 @@ fn plan_md_lint_section_is_a_table_of_the_warnings() {
 
 #[test]
 fn plan_md_lint_section_says_none_without_warnings() {
-    let text = plan_md(&[pr("web")], &[]);
+    let text = plan_md(&[workflow("web")], &[]);
     let overlaps = "## Overlaps\n\nNo other active Plan touches these files.\n\n";
     let lint = "## Lint\n\nNo lint warnings.\n\n";
     assert!(text.contains(&format!("{overlaps}{lint}")), "{text}");
     assert!(
-        text.find("## Lint").unwrap() < text.find("## PR web").unwrap(),
+        text.find("## Lint").unwrap() < text.find("## Workflow web").unwrap(),
         "{text}"
     );
 }
 
 #[test]
-fn plan_md_has_no_lint_section_for_a_plan_without_prs() {
-    // Control: a Plan with a PR has the section.
-    assert!(plan_md(&[pr("web")], &[]).contains("## Lint\n"));
+fn plan_md_has_no_lint_section_for_a_plan_without_workflows() {
+    // Control: a Plan with a Workflow has the section.
+    assert!(plan_md(&[workflow("web")], &[]).contains("## Lint\n"));
     let text = plan_md(&[], &[overlap("a", "b", &["src/a.rs"])]);
-    assert!(text.contains("No PRs yet."), "{text}");
+    assert!(text.contains("No Workflows yet."), "{text}");
     assert!(!text.contains("## Lint"), "{text}");
     assert!(!text.contains("No lint warnings."), "{text}");
 }

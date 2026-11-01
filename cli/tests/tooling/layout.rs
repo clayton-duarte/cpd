@@ -175,7 +175,7 @@ fn the_binaries_are_those_of_the_area_table() {
     assert_eq!(
         table.len(),
         7,
-        "docs/implementing.md's area table: engine, pr, flow, session, store, tui, tooling: {table:?}"
+        "docs/implementing.md's area table: engine, workflow, flow, session, store, tui, tooling: {table:?}"
     );
 
     let binaries = binaries();

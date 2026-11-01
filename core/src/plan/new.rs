@@ -19,7 +19,7 @@ use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 
 /// The Plan as `plan new` reads it back, with its Lead's name and cwd as stored.
-/// No PR is needed (a Plan starts with none, R34 A12).
+/// No Workflow is needed (a Plan starts with none, R34 A12).
 struct Created {
     plan: PlanRow,
     name: String,
@@ -275,9 +275,9 @@ fn already(
                 .read(|conn| lead::last_window(conn, &plan.lead_session))?,
         ),
     };
-    let prs = env.store.read(|conn| listed(conn, &plan.id))?;
+    let workflows = env.store.read(|conn| listed(conn, &plan.id))?;
     Ok(Output::success(json!({
-        "plan": summary(plan, &prs),
+        "plan": summary(plan, &workflows),
         "lead": {"session": plan.lead_session, "name": name, "forked_from": Value::Null, "cwd": created.cwd, "pane": pane, "window": window},
         "record": record,
         "already": true,
@@ -285,15 +285,15 @@ fn already(
 }
 
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
-fn summary(plan: &PlanRow, prs: &[Value]) -> Value {
+fn summary(plan: &PlanRow, workflows: &[Value]) -> Value {
     json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase.as_str(),
-           "lead_session": plan.lead_session, "prs": prs})
+           "lead_session": plan.lead_session, "workflows": workflows})
 }
 
-/// The Plan's PRs, in key order: only an `already` rerun can find any.
+/// The Plan's Workflows, in key order: only an `already` rerun can find any.
 fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
     let mut stmt =
-        conn.prepare("SELECT key, repo, status FROM prs WHERE plan = ?1 ORDER BY key")?;
+        conn.prepare("SELECT key, repo, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt.query_map([id.as_str()], |r| {
         Ok(json!({"key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "status": r.get::<_, String>(2)?}))
     })?;
@@ -368,7 +368,7 @@ fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<
 /// The Lead's first message: the header, the brief when one exists, then the pointer line, no store read
 /// (docs/research/context-retrieval-design.md "First messages"). The one rendering `plan new`, the `already`
 /// rerun and `session first-message` share.
-pub(crate) fn lead_message(plan: &PlanRow, brief: Option<&str>) -> String {
+pub fn lead_message(plan: &PlanRow, brief: Option<&str>) -> String {
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.trim_end().to_owned());

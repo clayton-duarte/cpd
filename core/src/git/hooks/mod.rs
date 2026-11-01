@@ -1,4 +1,4 @@
-//! The hooks of the PR's policy `hooks` domain (contract §7.3): `pre-start` (setup),
+//! The hooks of the Workflow's policy `hooks` domain (contract §7.3): `pre-start` (setup),
 //! `pre-commit` (the quick check) and `pre-merge` (the Gate), given as the
 //! hook's [`Pipeline`], rendered, run, and their output captured.
 //!

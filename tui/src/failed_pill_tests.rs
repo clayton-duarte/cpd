@@ -3,12 +3,12 @@
 //! stays still. Glyphs are codepoints and colours come from the palette's calls, never raw values.
 
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 use ratatui::style::Style;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{JobNode, JobStatus, NeedsUser, PrNode, PrStatus};
+use crate::read::{JobNode, JobStatus, NeedsUser, WorkflowNode, WorkflowStatus};
 use crate::widgets::legend;
 
 const MOONS: [&str; 28] = [
@@ -19,12 +19,12 @@ const MOONS: [&str; 28] = [
 ];
 const CLOSE_CIRCLE: &str = "\u{F0159}";
 
-fn pr() -> PrNode {
-    PrNode {
-        key: PrKey::parse("api").unwrap(),
+fn workflow() -> WorkflowNode {
+    WorkflowNode {
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: None,
         waiting_on: Vec::new(),
@@ -39,7 +39,7 @@ fn job(key: &str, status: JobStatus) -> JobNode {
     JobNode {
         kind: "work".into(),
         key: JobKey::parse(key).unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status,
@@ -71,7 +71,7 @@ fn key(k: &str) -> JobKey {
 
 /// The icon cell's glyph and the pill's colours, for each Job of `jobs`, at `frame`.
 fn pills(jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Vec<(String, Style)> {
-    let b = boxes::layout(&[pr()], jobs, needs, frame);
+    let b = boxes::layout(&[workflow()], jobs, needs, frame);
     b.chart
         .pills
         .iter()

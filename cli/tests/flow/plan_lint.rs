@@ -49,7 +49,7 @@ pub(super) fn outline(fx: &Fx, prs: &[&str]) {
 /// A stub draft: no Tier, no Spec.
 pub(super) fn stub(fx: &Fx, pr: &str, key: &str) {
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('mine', '{pr}', '{key}', 'Title {key}', NULL, NULL, NULL, NULL, NULL, NULL, 'draft', 0, cpd_txn(), 't');"
     ));
 }
@@ -172,9 +172,9 @@ fn pr_empty_is_reported_in_phase_plan_and_not_in_dispatch() {
     assert_eq!(findings.len(), 1, "{error}");
     assert_eq!(
         (&findings[0]["rule"], &findings[0]["severity"]),
-        (&json!("pr_empty"), &json!("error"))
+        (&json!("workflow_empty"), &json!("error"))
     );
-    assert_eq!(findings[0]["details"]["prs"], json!(["api"]));
+    assert_eq!(findings[0]["details"]["workflows"], json!(["api"]));
 
     drop(fx);
     let fx = Fx::new();

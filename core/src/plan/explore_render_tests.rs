@@ -9,12 +9,12 @@ use crate::ids::PlanId;
 
 use super::display::Display;
 use super::jobs::{Job, JobSpec};
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::render::{Heading, markdown};
 
 fn job(
     key: &str,
-    pr: Option<&str>,
+    workflow: Option<&str>,
     kind: &str,
     status: &str,
     tier: &str,
@@ -24,13 +24,13 @@ fn job(
     Job {
         seq: 1,
         key: key.into(),
-        pr: pr.map(Into::into),
+        workflow: workflow.map(Into::into),
         title: format!("Title {key}"),
         tier: Some(tier.into()),
         spec: Some(JobSpec {
             goal: goal.into(),
             context: "c".into(),
-            touches: if pr.is_some() {
+            touches: if workflow.is_some() {
                 json!(["a"])
             } else {
                 json!([format!("run/p1/explore/{key}.md")])
@@ -99,7 +99,7 @@ fn web_jobs() -> Vec<Job> {
 }
 
 fn render(jobs: &[Job]) -> String {
-    let prs = [PrRow::fixture("web", "/r", "main", &[], "dispatch")];
+    let prs = [WorkflowRow::fixture("web", "/r", "main", &[], "dispatch")];
     markdown(
         &Heading::Plan {
             title: "T",
@@ -132,7 +132,7 @@ fn plan_render_has_an_explore_section_with_artefact_and_summary() {
 ### a-scout
 The key is built in `core/src/cache.rs` from the repo path and the schema version.
 
-## PR web
+## Workflow web
 ",
         "q".repeat(100)
     );
@@ -142,7 +142,7 @@ The key is built in `core/src/cache.rs` from the repo path and the schema versio
             .unwrap_or_else(|| panic!("no {needle:?} in\n{md}"))
     };
     assert!(
-        at("## Overlaps") < at("## Explore") && at("## Explore") < at("## PR web"),
+        at("## Overlaps") < at("## Explore") && at("## Explore") < at("## Workflow web"),
         "{md}"
     );
     // explore Jobs are in no other block: not the PR's table, not its graph
@@ -178,7 +178,7 @@ fn plan_render_of_a_plan_with_no_prs_has_the_explore_section_after_no_prs_yet() 
 
 Context: `ctx` · Phase: `grounding`
 
-No PRs yet.
+No Workflows yet.
 
 ## Explore
 
@@ -225,9 +225,9 @@ fn plan_render_marks_a_cancelled_explore_job_and_gives_it_no_summary() {
 fn job_load_reads_the_summary_of_a_merged_explore_job() {
     let spec = "'Goal.', 'c', '[\"a\"]', '[\"b\"]', '[]'";
     let sql = format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('{PLAN}', 'r', '/r', 'main', 'dispatch', 'cpd/{PLAN}/r', '/w', cpd_txn(), 't', 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, summary, kind, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, summary, kind, created_txn, created_at)
            VALUES ('{PLAN}', NULL, 'scout-m', 'T', 'H1', {spec}, 'merged', 0, '{f}', '{f}', 'S', 'scout', cpd_txn(), 't'),
                   ('{PLAN}', NULL, 'scout-q', 'T', 'H1', {spec}, 'queued', 0, '{f}', NULL, NULL, 'scout', cpd_txn(), 't'),
                   ('{PLAN}', 'r', 'work-m', 'T', 'S2', {spec}, 'merged', 0, '{f}', '{f}', NULL, 'work', cpd_txn(), 't');",

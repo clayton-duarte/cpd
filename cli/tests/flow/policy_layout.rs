@@ -269,7 +269,7 @@ fn l6_pr_add_of_a_repo_whose_origin_is_acme_owner_is_repo_unkeyed() {
            VALUES ('pay-1', 'ctx', 'Pay', 'grounding', 'lead1', 't');",
     );
     let run = fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api",
         "--repo",

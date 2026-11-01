@@ -5,7 +5,7 @@
 use crate::home::CpdHome;
 use crate::ids::PlanId;
 use crate::plan::display::Display;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs;
 use crate::plan::render::{Heading, markdown};
 use crate::store::Store;
@@ -31,7 +31,7 @@ fn event(kind: &str, job: &str) -> String {
     )
 }
 
-/// A store holding the Plan `p` with its PR `r` (`dispatch`) and the Job `a` (`status`, `tier`, `retry_tier`), then `extra` SQL.
+/// A store holding the Plan `p` with its Workflow `r` (`dispatch`) and the Job `a` (`status`, `tier`, `retry_tier`), then `extra` SQL.
 fn store_with(
     status: &str,
     tier: Option<&str>,
@@ -54,9 +54,9 @@ fn store_with(
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pl', 'ctx', 'P', 'dispatch', 'lead', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pl', 'r', '/r', 'main', 'dispatch', 'cpd/pl', '/w', cpd_txn(), 't', 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, retry_tier, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, retry_tier, created_txn, created_at)
                    VALUES ('pl', 'r', 'a', 'Retried', {}, {spec}, '{status}', 0, {}, {}, {}, cpd_txn(), 't');
                  {extra}",
                 q(tier),
@@ -166,7 +166,7 @@ fn plan_render_prints_the_shown_tier_in_the_table_and_the_section() {
                 },
                 "ctx",
                 "dispatch",
-                &load_prs(conn, &plan)?,
+                &load_workflows(conn, &plan)?,
                 &jobs::load(conn, &plan)?,
                 &[],
                 "O1",

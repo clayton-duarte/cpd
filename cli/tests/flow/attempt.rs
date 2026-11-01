@@ -17,12 +17,12 @@ use common::fx::Fx as InProcess;
 use common::{Run, refused};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{
-    Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path,
-    prepare_lead_worktree,
+    Setup, create_attempt_worktree, create_lead_worktree, prepare_lead_worktree,
+    workflow_lead_worktree_path,
 };
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
 use cpd_core::merge::{self, End, Failure};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 const PLAN: &str = "pay";
 
 /// A started PR of Plan `pay`: its key, repo and Lead worktree.
-struct Pr {
+struct Workflow {
     key: String,
     repo: PathBuf,
     lead: PathBuf,
@@ -70,7 +70,7 @@ fn rows() -> Rows {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
         repo = repos.join("pay").display(),
         lead = repos.join("pay.pay").display()
@@ -94,7 +94,7 @@ impl Rows {
             .join("repos")
             .join(format!("pay.pay--{key}-a1"));
         self.fx.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                status, appended, fingerprint, created_txn, created_at, kind)
              VALUES ('pay', 'repo', '{key}', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{f}', cpd_txn(), 't', 'work');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
@@ -189,7 +189,7 @@ fn git_fixture_needing(
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
         repo.display(),
         lead.display()
@@ -209,7 +209,7 @@ fn git_fixture_needing(
         answer,
     };
     git.work = git.attempt_needing(
-        &Pr {
+        &Workflow {
             key: "repo".into(),
             repo: git.repo.clone(),
             lead: git.lead.clone(),
@@ -269,11 +269,12 @@ impl Git {
     }
 
     /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>` and its Lead worktree.
-    fn add_pr(&self, key: &str) -> Pr {
+    fn add_pr(&self, key: &str) -> Workflow {
         let repo = self.fx.git_repo(key).canonicalize().unwrap();
         let branch = format!("cpd/pay/{key}");
         let lead =
-            pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+            workflow_lead_worktree_path(&repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)
+                .unwrap();
         in_fakes(&self.fx, || {
             prepare_lead_worktree(
                 &repo,
@@ -288,12 +289,12 @@ impl Git {
         .unwrap();
         self.fx.env.repo_policy("acme", key, "");
         self.fx.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
-        Pr {
+        Workflow {
             key: key.into(),
             repo,
             lead,
@@ -302,7 +303,7 @@ impl Git {
 
     /// A Job of `pr` and of `kind` (`work`, `test` or `impl`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
     /// Lead Branch HEAD. Returns the worktree.
-    fn attempt_in(&self, pr: &Pr, key: &str, status: &str, kind: &str) -> PathBuf {
+    fn attempt_in(&self, pr: &Workflow, key: &str, status: &str, kind: &str) -> PathBuf {
         self.attempt_needing(pr, key, status, kind, None, None)
     }
 
@@ -311,7 +312,7 @@ impl Git {
     /// written in the Job's own transaction, since a Dependency of a Locked Job is refused later (`dependencies_locked`).
     fn attempt_needing(
         &self,
-        pr: &Pr,
+        pr: &Workflow,
         key: &str,
         status: &str,
         kind: &str,
@@ -332,14 +333,14 @@ impl Git {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
                      VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
                     params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
                 )?;
                 if let Some(names) = needs {
                     tx.execute(
-                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                            created_txn, created_at, kind, tests, test_files, merged_sha)
                            VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                                    ?2, 't', 'test', ?3, '[\"tests/\"]', 'c0ffee')",
@@ -361,7 +362,7 @@ impl Git {
     /// [`Git::attempt_in`] for a `work` Job of the first PR.
     fn attempt_as(&self, key: &str, status: &str) -> PathBuf {
         self.attempt_in(
-            &Pr {
+            &Workflow {
                 key: "repo".into(),
                 repo: self.repo.clone(),
                 lead: self.lead.clone(),
@@ -1279,7 +1280,7 @@ fn submit_of_an_open_job_with_no_commit_stores_an_empty_list() {
     let fx = git_fixture_kind(&[], "open");
     fx.fx
         .env
-        .sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+        .sql("UPDATE workflows SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
     fx.fx.fake_gh(Reply::ok("[]"));
     fx.fx
         .env
@@ -1365,7 +1366,7 @@ fn no_gate_takes_a_test_slot_lock_or_sets_cpd_test_slot() {
     // The open Job's Gate needs the PR's stored title and a `gh` that reports no pull request yet.
     fx.fx
         .env
-        .sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+        .sql("UPDATE workflows SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
     fx.fx.fake_gh(Reply::ok("[]"));
     fx.fx.env.repo_policy(
         "acme",
@@ -1990,7 +1991,7 @@ fn list_refuses_what_does_not_exist() {
     );
     refused(&fx.raw(&["attempt", "list"]), "plan_required", 2);
     fx.fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'repo', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );
     assert_eq!(

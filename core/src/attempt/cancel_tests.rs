@@ -13,7 +13,7 @@ use crate::store::Store;
 
 use super::ledger::{self, End, Ladder, Stage};
 
-/// A temporary store with a Plan `pay`, its PR `api`, Job `a` `running` with the Attempt `a-a1`
+/// A temporary store with a Plan `pay`, its Workflow `api`, Job `a` `running` with the Attempt `a-a1`
 /// the engine stopped (`stop_request = 'cancelled'`, its `cancel_requested_at` set by
 /// `job cancel`), and the queued Job `b` that needs `a`.
 fn fixture() -> (tempfile::TempDir, Store) {
@@ -29,11 +29,11 @@ fn fixture() -> (tempfile::TempDir, Store) {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/lead', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', 'Gave up.', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fingerprint}', cpd_txn(), 't');
                  INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, stop_request, started_at)

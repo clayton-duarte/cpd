@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::display::Display;
-use super::fingerprint::{load_prs, plan_fingerprint};
+use super::fingerprint::{load_workflows, plan_fingerprint};
 use super::jobs::{self, Job};
 use super::lint::{self, Severity};
 use super::outline::Outline;
 use super::overlap::{self, Overlap};
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
 use crate::error::{CpdError, ErrorCode};
@@ -112,14 +112,14 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
-    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
+    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a Workflow that has not started will get.
     open_tier: String,
     plan: PlanRow,
-    prs: Vec<PrRow>,
+    workflows: Vec<WorkflowRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
-    /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
-    base_prs: BTreeMap<String, String>,
+    /// The base Workflow (`<plan>/<key>`) of each stacked Workflow, by Workflow key (contract §2.2 "The base Workflow").
+    base_workflows: BTreeMap<String, String>,
     /// What waits and what was superseded (hs-d518, hs-d521): shown, never counted.
     display: Display,
     review: Option<Review>,
@@ -130,22 +130,22 @@ struct Snapshot {
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     let open_tier = env.config.open_tier.to_string();
-    let (prs, jobs, overlaps, plan_row) = env.store.read(|conn| {
-        let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
-        let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
+    let (workflows, jobs, overlaps, plan_row) = env.store.read(|conn| {
+        let (workflows, jobs) = (load_workflows(conn, id)?, jobs::load(conn, id)?);
+        let overlaps = overlap::find(&workflows, &jobs, &overlap::load_others(conn, id)?);
         let plan_row = row::load(conn, id)?;
-        Ok((prs, jobs, overlaps, plan_row))
+        Ok((workflows, jobs, overlaps, plan_row))
     })?;
-    let findings = super::lint_cmd::find(env, &plan_row, &prs, &jobs)?;
+    let findings = super::lint_cmd::find(env, &plan_row, &workflows, &jobs)?;
     env.store.read(|conn| {
         Ok(Snapshot {
             open_tier,
-            base_prs: base_prs(conn, id)?,
+            base_workflows: base_workflows(conn, id)?,
             display: Display::load(conn, id)?,
             plan: plan_row,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
-            prs,
+            workflows,
             jobs,
             overlaps,
             findings,
@@ -153,10 +153,10 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     })
 }
 
-/// The base PR of each stacked PR of `plan`, `<plan>/<key>` by PR key: the PR whose Lead Branch is the PR's `base`. A Lead
-/// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
-fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
+/// The base Workflow of each stacked Workflow of `plan`, `<plan>/<key>` by Workflow key: the Workflow whose Lead Branch is the Workflow's `base`. A Lead
+/// Branch names its Plan, so it names one Workflow (contract §2.2); the same repo is checked when a base is set, not here.
+fn base_workflows(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM workflows p JOIN workflows q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
     let rows = stmt.query_map([plan.as_str()], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })?;
@@ -169,11 +169,11 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
         kind,
         &summary::Input {
             plan: &s.plan,
-            prs: &s.prs,
+            workflows: &s.workflows,
             jobs: &s.jobs,
             overlaps: &s.overlaps,
+            base_workflows: &s.base_workflows,
             lint: &warnings_of(s),
-            base_prs: &s.base_prs,
         },
     )
 }
@@ -183,7 +183,7 @@ fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
         heading,
         s.plan.context.as_str(),
         s.plan.phase.as_str(),
-        &s.prs,
+        &s.workflows,
         &s.jobs,
         &s.overlaps,
         &s.open_tier,
@@ -218,7 +218,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "summary": summary.display().to_string(),
         "fingerprint": s.fingerprint,
         "draft_jobs": s.jobs.iter().filter(|j| j.is_under_review()).count(),
-        "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
+        "workflows": s.workflows.iter().filter(|p| p.status != "cancelled").count(),
         "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
         "warnings": warnings(&s),
     })))
@@ -416,16 +416,16 @@ pub(super) fn outline_missing(id: &PlanId) -> CpdError {
 pub(super) fn outline_incomplete(
     id: &PlanId,
     outline: &Outline,
-    prs: &[PrRow],
+    workflows: &[WorkflowRow],
     jobs: &[Job],
 ) -> Option<CpdError> {
-    let mut without: Vec<&str> = prs
+    let mut without: Vec<&str> = workflows
         .iter()
         .filter(|p| {
             p.status != "cancelled"
                 && jobs
                     .iter()
-                    .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
+                    .any(|j| j.is_draft() && j.workflow_str() == p.key.as_str())
         })
         .map(|p| p.key.as_str())
         .filter(|key| !outline.done_when.contains_key(*key))
@@ -437,10 +437,10 @@ pub(super) fn outline_incomplete(
     Some(
         CpdError::new(
             ErrorCode::OutlineIncomplete,
-            format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+            format!("The outline of Plan {id} has no done_when for the Workflows {}: add them with cpd plan outline, then ask again.", without.join(", ")),
         )
         .with("plan", id.as_str())
-        .with("prs", without),
+        .with("workflows", without),
     )
 }
 

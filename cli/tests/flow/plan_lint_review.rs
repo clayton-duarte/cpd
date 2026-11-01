@@ -1,4 +1,4 @@
-//! `plan review` and `plan render` with the lint (commands.md §4.5, §4.6, §4.15, contract §2.7): the `pr_empty`
+//! `plan review` and `plan render` with the lint (commands.md §4.5, §4.6, §4.15, contract §2.7): the `workflow_empty`
 //! refusal, the `warnings` key, and an error keeping its own code. The built binary against a temporary `$CPD_HOME`.
 
 use super::plan_lint::{base, outline, pair, stub};
@@ -18,8 +18,8 @@ fn review_refuses_pr_empty_in_phase_plan_and_writes_nothing() {
     job(&fx, "mine", "api", "a", "draft", &["src/a.rs"]);
     outline(&fx, &["api"]);
 
-    let error = refused(&review(&fx), "pr_empty", 3);
-    assert_eq!(error["details"]["prs"], json!(["web"]), "{error}");
+    let error = refused(&review(&fx), "workflow_empty", 3);
+    assert_eq!(error["details"]["workflows"], json!(["web"]), "{error}");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plan_reviews"), 0);
     assert_eq!(
         fx.env
@@ -117,7 +117,7 @@ fn the_review_summary_and_plan_md_carry_the_warning() {
         "{summary}"
     );
     let plan_md = std::fs::read_to_string(&plan_md).unwrap();
-    assert!(plan_md.contains("\n## Lint\n\n| Rule | PR | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n| `parallel_write_overlap` | `api` | `a` | `b` | `src/a.rs` | a and b have no dependency path"), "{plan_md}");
+    assert!(plan_md.contains("\n## Lint\n\n| Rule | Workflow | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n| `parallel_write_overlap` | `api` | `a` | `b` | `src/a.rs` | a and b have no dependency path"), "{plan_md}");
 
     drop(fx);
     let fx = base();

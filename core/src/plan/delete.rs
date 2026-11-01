@@ -129,14 +129,14 @@ impl Targets {
     ) -> Result<Targets, CpdError> {
         let mut targets = Targets::default();
         let p = plan.as_str();
-        // The PRs: their repository, Lead worktree and Lead Branch.
+        // The Workflows: their repository, Lead worktree and Lead Branch.
         let mut stmt = conn.prepare(
-            "SELECT repo, lead_worktree, lead_branch FROM prs WHERE plan = ?1
+            "SELECT repo, lead_worktree, lead_branch FROM workflows WHERE plan = ?1
              UNION ALL
              SELECT json_extract(before, '$.repo'), json_extract(before, '$.lead_worktree'), json_extract(before, '$.lead_branch')
-               FROM history WHERE tbl = 'prs' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1",
+               FROM history WHERE tbl = 'workflows' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1",
         )?;
-        let prs = stmt
+        let workflows = stmt
             .query_map([p], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -145,24 +145,24 @@ impl Targets {
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (repo, worktree, branch) in prs {
+        for (repo, worktree, branch) in workflows {
             targets.push_worktree(Some(repo.clone()), worktree);
             targets.push_branch(Some(repo), branch);
         }
-        // The Attempts: their worktree and branch, in the repository of their Job's PR.
+        // The Attempts: their worktree and branch, in the repository of their Job's Workflow.
         let mut stmt = conn.prepare(
             "SELECT p.repo, a.worktree, a.branch FROM attempts a
-               JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs p ON p.plan = j.plan AND p.key = j.pr
+               JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN workflows p ON p.plan = j.plan AND p.key = j.workflow
               WHERE a.plan = ?1
              UNION ALL
              SELECT p.repo, a.worktree, a.branch FROM
                (SELECT json_extract(before, '$.job') AS job, json_extract(before, '$.worktree') AS worktree,
                        json_extract(before, '$.branch') AS branch
                   FROM history WHERE tbl = 'attempts' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1) a
-               JOIN (SELECT json_extract(before, '$.key') AS key, json_extract(before, '$.pr') AS pr
+               JOIN (SELECT json_extract(before, '$.key') AS key, json_extract(before, '$.workflow') AS workflow
                        FROM history WHERE tbl = 'jobs' AND op = 'delete' AND json_extract(before, '$.plan') = ?1) j ON j.key = a.job
                JOIN (SELECT json_extract(before, '$.key') AS key, json_extract(before, '$.repo') AS repo
-                       FROM history WHERE tbl = 'prs' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1) p ON p.key = j.pr",
+                       FROM history WHERE tbl = 'workflows' AND op = 'delete' AND json_extract(pk, '$[0]') = ?1) p ON p.key = j.workflow",
         )?;
         let attempts = stmt
             .query_map([p], |r| {
@@ -359,7 +359,7 @@ impl Inventory {
 }
 
 /// What stops a delete of `plans` (commands.md §4.14; contract §2.2 "Deleted"): a Plan that is neither archived nor
-/// asleep (when `check_asleep`), and what is still live: the archive rule's blockers, an Attempt not `ended` and a PR that
+/// asleep (when `check_asleep`), and what is still live: the archive rule's blockers, an Attempt not `ended` and a Workflow that
 /// is not `merged` or `cancelled`. `sessions` are Sessions of the delete that belong to no Plan (a Manager).
 pub(crate) fn blockers(
     conn: &Connection,
@@ -403,16 +403,16 @@ pub(crate) fn blockers(
                 reason: format!("Attempt {id} of Plan {plan} is not ended."),
             });
         }
-        let mut stmt = conn.prepare("SELECT key, status FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
-        for pr in stmt.query_map([plan.as_str()], |r| {
+        let mut stmt = conn.prepare("SELECT key, status FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
+        for workflow in stmt.query_map([plan.as_str()], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
-            let (key, status) = pr?;
+            let (key, status) = workflow?;
             found.push(Blocker {
                 kind: "pr",
                 id: key.clone(),
                 plan: Some(plan.to_string()),
-                reason: format!("PR {key} of Plan {plan} is {status}."),
+                reason: format!("Workflow {key} of Plan {plan} is {status}."),
             });
         }
     }
@@ -441,10 +441,10 @@ pub(crate) fn delete_rows(tx: &Connection, plan: &PlanId) -> Result<(), CpdError
         "DELETE FROM dependencies WHERE plan = ?1",
         "DELETE FROM job_pools WHERE plan = ?1",
         "DELETE FROM jobs WHERE plan = ?1",
-        "DELETE FROM pr_needs WHERE plan = ?1",
+        "DELETE FROM workflow_needs WHERE plan = ?1",
         "DELETE FROM pr_posts WHERE plan = ?1",
         "DELETE FROM jira_transitions WHERE plan = ?1",
-        "DELETE FROM prs WHERE plan = ?1",
+        "DELETE FROM workflows WHERE plan = ?1",
         "DELETE FROM plan_reviews WHERE plan = ?1",
         "DELETE FROM sessions WHERE plan = ?1 AND id <> (SELECT lead_session FROM plans WHERE id = ?1)",
     ];

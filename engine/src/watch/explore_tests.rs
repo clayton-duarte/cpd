@@ -1,5 +1,5 @@
 //! Red tests of E3, the timeout and the ladder for explore Jobs (`scout`, `research`; Plan explore-roles R1, R2, R6, R7), on the
-//! fake ports: time moves only on the `ManualClock`, no process starts, no tmux. An explore Job has no PR (`jobs.pr` is NULL).
+//! fake ports: time moves only on the `ManualClock`, no process starts, no tmux. An explore Job has no Workflow (`jobs.pr` is NULL).
 
 use std::time::Duration;
 
@@ -12,10 +12,10 @@ use cpd_core::ports::Fakes;
 use super::testkit::Fx;
 use super::{liveness, schedule};
 
-/// An explore Job `key` of Plan `pay` (no PR), `queued` with its fingerprint, then moved by `then` (SQL).
+/// An explore Job `key` of Plan `pay` (no Workflow), `queued` with its fingerprint, then moved by `then` (SQL).
 fn add_explore(fx: &mut Fx, kind: &str, tier: &str, key: &str, needs: &[&str], then: &str) {
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
          VALUES ('pay', NULL, '{key}', 'Title of {key}', '{tier}', 'Find {key}.', 'Because.', '[\"{key}.md\"]', '[\"it is answered\"]', '[]', '{kind}', 'draft', 0, cpd_txn(), 't');"
     );
     for need in needs {

@@ -239,7 +239,7 @@ impl Pay {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{id}', 'ctx', 'Plan {id}', '{phase}', 'lead{id}', 't', 't');
              {pull_request}
-             INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+             INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
                VALUES ('{id}', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', '{lead}', cpd_txn(), 't', 't'{values});",
             repo = self.repo.display(),
             branch = created.branch,
@@ -258,7 +258,7 @@ impl Pay {
     fn submitted(&self, lead: &Lead, key: &str) -> Submitted {
         let plan = lead.plan.as_str();
         self.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('{plan}', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ));
         let all = self

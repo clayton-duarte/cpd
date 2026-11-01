@@ -96,7 +96,7 @@ fn world_ending(fx: &Fx, plan: &str, merged: bool) -> World {
     fx.local_origin(&repo, &bare);
     fx.git(&repo, &["push", "-q", "origin", "main"]);
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api",
         "--repo",
@@ -167,23 +167,23 @@ fn world_ending(fx: &Fx, plan: &str, merged: bool) -> World {
         fx,
         &format!(
             "UPDATE plans SET phase = 'plan' WHERE id = '{plan}';
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
                VALUES ('{plan}', 'api', 'm', 'Job m', 'S2', 'Goal.', 'Context.', '[\"src/m.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');
              UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan}';
              UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE plan = '{plan}' AND key = 'm';
              UPDATE jobs SET status = 'cancelled', cancel_reason = 'a stub of the template', cancel_requested_at = 't' WHERE plan = '{plan}' AND status = 'draft';
-             UPDATE prs SET status = 'dispatch', lead_worktree = '{lead_wt}', started_at = 't' WHERE plan = '{plan}' AND key = 'api';
+             UPDATE workflows SET status = 'dispatch', lead_worktree = '{lead_wt}', started_at = 't' WHERE plan = '{plan}' AND key = 'api';
              UPDATE jobs SET status = 'running' WHERE plan = '{plan}' AND key = 'm';
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, merged_sha, branch, worktree, started_at, ended_at)
                VALUES ('{plan}', 'm-a1', 'm', 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'c0ffee', '{branch}', '{attempt_wt}', 't', 't');
              UPDATE jobs SET status = 'merged', merged_sha = 'c0ffee' WHERE plan = '{plan}' AND key = 'm';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/{plan}', 11, 'https://github.com/acme/{plan}/pull/11', 'T', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
-             UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'https://github.com/acme/{plan}/pull/11', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 11, pr_url = 'https://github.com/acme/{plan}/pull/11', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{plan}' AND number = 11)
               WHERE plan = '{plan}' AND key = 'api';
              {finish}",
-            finish = if merged { format!("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = '{plan}' AND key = 'api';") } else { String::new() },
+            finish = if merged { format!("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = '{plan}' AND key = 'api';") } else { String::new() },
             state = if merged { "merged" } else { "open" },
             merged_at = if merged { "'t'" } else { "NULL" },
             lead_wt = w.lead_worktree.display(),
@@ -210,7 +210,7 @@ pub fn count(fx: &Fx, sql: &str) -> i64 {
 /// The rows the Plan owns, in the tables the delete empties.
 pub fn plan_rows(fx: &Fx, plan: &str) -> i64 {
     // the Lead's row and the `plan-deleted` Event stay (commands.md §4.14): they are not what the delete empties
-    ["jobs", "attempts", "prs"]
+    ["jobs", "attempts", "workflows"]
         .iter()
         .map(|t| {
             count(
@@ -523,7 +523,7 @@ fn deleting_a_plan_deletes_its_pr_posts() {
     world(&fx, "other");
     let post = |plan: &str| {
         format!(
-            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+            "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
              VALUES ('{plan}', 'api', 'C02JU6C2Z1D', '1793040197.490209', 'https://missionlane.slack.com/archives/C02JU6C2Z1D/p1793040197490209', 't', NULL, NULL)"
         )
     };

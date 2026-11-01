@@ -1,13 +1,13 @@
 //! Red tests: `pr_look`, `Dot::working` and the two surfaces that must call them.
 
 use cpd_core::config::Tier;
-use cpd_core::ids::{JobKey, PrKey};
+use cpd_core::ids::{JobKey, WorkflowKey};
 use cpd_core::session::State;
 use ratatui::buffer::CellWidth;
 
 use super::{
-    Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrState, PrStatus, Pull, UpdateState,
-    pr_look,
+    Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrState, Pull, UpdateState, WorkflowNode,
+    WorkflowStatus, pr_look,
 };
 use crate::palette::{self, Meaning};
 use crate::plan::boxes;
@@ -107,7 +107,7 @@ fn a_closed_pr_the_user_asked_to_close_reads_closed_in_its_asked_colour() {
         ..facts(PrState::Closed)
     });
     assert_eq!(asked.state, palette::PR_CLOSED_ASKED);
-    assert_eq!(asked.conflict, None, "only an open PR conflicts");
+    assert_eq!(asked.conflict, None, "only an open Workflow conflicts");
     let plain = pr_look(&facts(PrState::Closed));
     assert_eq!(plain.state, ("closed", palette::pr_state(PrState::Closed)));
 }
@@ -134,12 +134,12 @@ fn pull(state: PrState) -> Pull {
     }
 }
 
-fn pr_node(pull: Pull) -> PrNode {
-    PrNode {
-        key: PrKey::parse("api").unwrap(),
+fn workflow_node(pull: Pull) -> WorkflowNode {
+    WorkflowNode {
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Open,
+        status: WorkflowStatus::Open,
         needs: Vec::new(),
         pull: Some(pull),
         waiting_on: Vec::new(),
@@ -154,7 +154,7 @@ fn failed_job() -> JobNode {
     JobNode {
         kind: "work".into(),
         key: JobKey::parse("api-1").unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,
@@ -171,7 +171,7 @@ fn failed_job() -> JobNode {
     }
 }
 
-/// The plan box's top row (its title) of one PR box, as cells.
+/// The plan box's top row (its title) of one Workflow box, as cells.
 fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
     box_top_dot(pull, None, jobs, frame)
 }
@@ -183,9 +183,9 @@ fn box_top_dot(
     frame: usize,
 ) -> Vec<ratatui::buffer::Cell> {
     let chart = boxes::layout(
-        &[PrNode {
+        &[WorkflowNode {
             lead_dot,
-            ..pr_node(pull)
+            ..workflow_node(pull)
         }],
         jobs,
         &NeedsUser::default(),

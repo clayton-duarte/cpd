@@ -81,7 +81,18 @@ fn store_with_world() -> (tempfile::TempDir, Store) {
         "{:?}",
         store.schema_mismatch()
     );
-    write(&mut store, &world()).unwrap();
+    // The fully migrated store holds the renamed tables: `world()` is written as the pre-rename store held it
+    // and the names follow `workflow-rename`.
+    write(
+        &mut store,
+        &world()
+            .replace("INSERT INTO prs (", "INSERT INTO workflows (")
+            .replace(
+                "INSERT INTO jobs (plan, pr,",
+                "INSERT INTO jobs (plan, workflow,",
+            ),
+    )
+    .unwrap();
     (dir, store)
 }
 
@@ -120,6 +131,26 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
     let kinds_before = count(&mut old, "SELECT count(*) FROM event_kinds");
     drop(old);
 
+    // The migration itself adds exactly its kind: the count at its own prefix, before the later migrations add
+    // theirs.
+    let at = NAMED
+        .iter()
+        .position(|n| n.name.ends_with("-job-addenda"))
+        .expect("the job-addenda migration is declared");
+    let mut prefix = crate::store::tests::open_named(&home, &NAMED[..=at]).unwrap();
+    assert_eq!(
+        count(&mut prefix, "SELECT count(*) FROM event_kinds"),
+        kinds_before + 1
+    );
+    assert_eq!(
+        count(
+            &mut prefix,
+            "SELECT count(*) FROM event_kinds WHERE name = 'job-addendum'"
+        ),
+        1
+    );
+    drop(prefix);
+
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(
         store.schema_mismatch().is_none(),
@@ -134,17 +165,6 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
         1
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM job_addenda"), 0);
-    assert_eq!(
-        count(&mut store, "SELECT count(*) FROM event_kinds"),
-        kinds_before + 1
-    );
-    assert_eq!(
-        count(
-            &mut store,
-            "SELECT count(*) FROM event_kinds WHERE name = 'job-addendum'"
-        ),
-        1
-    );
     write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'job-addendum', 'x', '{\"text\":\"t\"}');")
         .expect("an Event of kind job-addendum is insertable");
     assert_eq!(dump(&mut store, "jobs"), jobs);

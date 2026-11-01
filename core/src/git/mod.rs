@@ -1,5 +1,5 @@
 //! git (contract §7.1–§7.3, §7.5): the git wrapper, worktrees and branches,
-//! the hooks (the PR's policy `hooks` domain), and the tamper check. No commands of its
+//! the hooks (the Workflow's policy `hooks` domain), and the tamper check. No commands of its
 //! own: `plan lock`, `attempt submit`, the driver and the merge call it.
 
 pub mod hooks;
@@ -23,8 +23,8 @@ pub use worktree::{
     Step, attempt_branch, attempt_worktree_path, create_attempt_worktree,
     create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
     discard_worktree, gate_worktree_path, lead_worktree_path, legacy_lead_branch, merge_conflicts,
-    pr_lead_worktree_path, prepare_lead_worktree, prepare_pr_lead_worktree, push_commit,
-    push_commit_with, push_lead_branch, remove_merged_attempt, remove_merged_lead,
+    prepare_lead_worktree, prepare_workflow_lead_worktree, push_commit, push_commit_with,
+    push_lead_branch, remove_merged_attempt, remove_merged_lead, workflow_lead_worktree_path,
 };
 
 /// The last `lines` lines of `text`, joined with `\n` (contract §7.3: results

@@ -94,7 +94,7 @@ test("context updates are stored before the input of a turn when cpd has news", 
 });
 
 test("no context update is stored when cpd has no news", async () => {
-  const f = fake(seat(), { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [] }, "plan-show": { ok: true, jobs: [], prs: [] } });
+  const f = fake(seat(), { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [] }, "plan-show": { ok: true, jobs: [], workflows: [] } });
   await prepareTurn(f.port, newTurnState());
   assert.equal(f.writes.length, 0);
   assert.ok(reads(f, "board", "take").length === 1, "cpd was asked");
@@ -114,7 +114,7 @@ test("the context update cursor is read from the stored entries after a restart"
 });
 
 test("the turn-end reminder continues a Plan Lead's run once when its last answer needs one", async () => {
-  const f = fake(seat(), { "plan-show": { ok: true, jobs: [{ key: "j1" }], prs: [{ key: "pr1" }] } });
+  const f = fake(seat(), { "plan-show": { ok: true, jobs: [{ key: "j1" }], workflows: [{ key: "pr1" }] } });
   const state = newTurnState();
   const messages = [{ role: "assistant", content: [{ type: "text", text: "Merged. The next steps are a cleanup." }] }];
   assert.equal(await reminderFor(messages, f.port, state), REMINDER_TEXT);
@@ -124,7 +124,7 @@ test("the turn-end reminder continues a Plan Lead's run once when its last answe
 });
 
 test("a Session with no Plan gets no reminder", async () => {
-  const f = fake(seat({ plan: null }), { "plan-show": { ok: true, jobs: [], prs: [] } });
+  const f = fake(seat({ plan: null }), { "plan-show": { ok: true, jobs: [], workflows: [] } });
   const messages = [{ role: "assistant", content: "The next steps are a cleanup." }];
   assert.equal(await reminderFor(messages, f.port, newTurnState()), undefined);
   assert.equal(f.calls.length, 0);

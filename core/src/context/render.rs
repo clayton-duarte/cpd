@@ -10,7 +10,7 @@ use crate::ids::RecordKind;
 /// A record and its index position.
 pub type Indexed = (i64, Record);
 
-/// The repos of each Plan record's PRs, by record id.
+/// The repos of each Plan record's Workflows, by record id.
 pub type Repos = HashMap<String, Vec<String>>;
 
 /// The records an approved retirement took out of force (contract §4.6 "Retirement"), by record id: `<reason> <target>`.
@@ -20,7 +20,7 @@ pub type Retired = HashMap<String, String>;
 /// superseded decisions, each naming its successor; open questions; answered
 /// questions with their answers; notes (those in force, then the superseded ones, each naming its successor). Each item shows its id and date.
 ///
-/// A Plan record lists `repos[<record id>]`: the repos of its PRs, from the
+/// A Plan record lists `repos[<record id>]`: the repos of its Workflows, from the
 /// database (commands.md §3.3; the record itself has none).
 ///
 /// Only the records after `since` are listed, but which decision is active and

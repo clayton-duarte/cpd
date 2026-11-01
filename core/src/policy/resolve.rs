@@ -101,7 +101,7 @@ pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error
     }
 }
 
-/// [`resolve`] for a `pull_requests` row no PR owns:
+/// [`resolve`] for a `pull_requests` row no Workflow owns:
 /// an owner without a file is cpd's default, source `default (no owner file)`,
 /// not `owner_unconfirmed`.
 pub fn resolve_unowned_row(

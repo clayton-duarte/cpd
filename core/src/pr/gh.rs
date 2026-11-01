@@ -113,7 +113,7 @@ pub struct View {
     pub review_decision: Option<String>,
 }
 
-/// A PR as `gh` names it.
+/// A Workflow as `gh` names it.
 #[derive(Debug, Deserialize)]
 pub struct PrRef {
     pub number: i64,
@@ -259,7 +259,7 @@ pub struct HeadPr {
 }
 
 /// The newest (highest number) pull request whose head is `head`, in any state, created at or after `since`, if any. A pull
-/// request older than `since` (the row's start) is not the row's and is not seen, whatever its state; `None` (an adopted PR)
+/// request older than `since` (the row's start) is not the row's and is not seen, whatever its state; `None` (an adopted Workflow)
 /// sees every pull request. Both times are compared as instants.
 pub fn head_pr(
     cwd: &Path,
@@ -300,7 +300,7 @@ pub fn head_pr(
     Ok(kept.into_iter().max_by_key(|f| f.number))
 }
 
-/// The pull request `pr add --adopt` reads (`gh pr view <n> --json number,url,state,isCrossRepository,headRefName,baseRefName,author`)
+/// The pull request `workflow add --adopt` reads (`gh pr view <n> --json number,url,state,isCrossRepository,headRefName,baseRefName,author`)
 /// and the login of the User (`gh api user --jq .login`), parsed once.
 #[derive(Debug, Deserialize)]
 struct AdoptView {
@@ -788,7 +788,7 @@ macro_rules! pr_fields {
 /// The poll query, two searches in one call, each the oldest 100 open pull
 /// requests: the User's (`search`) and those that request the User's review
 /// (`reviewRequests`). GitHub ignores an unknown search qualifier and answers 0
-/// PRs, so a test pins this text.
+/// Workflows, so a test pins this text.
 pub const SEARCH_QUERY: &str = concat!(
     "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
@@ -1406,7 +1406,7 @@ pub fn enable_auto_merge(
 }
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
-/// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
+/// `errors`, without `data` or without JSON is `gh_failed`, never "no pull requests".
 pub fn search_open(runner: &dyn Runner, cwd: &Path, bots: &[String]) -> Result<Search, CpdError> {
     let search = || {
         let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
@@ -1782,7 +1782,7 @@ pub struct PrChecks {
 
 /// The checks of the pull requests `(owner/name, number)` (contract §7.6 step 3b): one alias each, in one call, 15 s at
 /// most; each pull request with more than 100 contexts is read again, page by page, with those only. Each result is the
-/// PR's typed checks (a CheckRun has `name`, a StatusContext `context`). Any failure
+/// Workflow's typed checks (a CheckRun has `name`, a StatusContext `context`). Any failure
 /// is `gh_failed` with the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
 pub fn read_checks(
     runner: &dyn Runner,

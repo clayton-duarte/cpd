@@ -86,11 +86,13 @@ fn github_lookup_with_parses_a_scripted_success() {
     let runner = fake(Reply::ok(&answer()));
     let lookup = github_lookup_with(&runner, &home(), &refs()).unwrap();
     assert_eq!(lookup.me, "me");
-    let pr = lookup.prs[&("acme/api".to_owned(), 7)].clone().unwrap();
-    assert_eq!(pr.state, GhState::Open);
-    assert_eq!(pr.author, "bob");
-    assert_eq!(pr.decision.as_deref(), Some("APPROVED"));
-    assert_eq!(pr.reviews.len(), 1);
+    let workflow = lookup.workflows[&("acme/api".to_owned(), 7)]
+        .clone()
+        .unwrap();
+    assert_eq!(workflow.state, GhState::Open);
+    assert_eq!(workflow.author, "bob");
+    assert_eq!(workflow.decision.as_deref(), Some("APPROVED"));
+    assert_eq!(workflow.reviews.len(), 1);
 }
 
 #[test]

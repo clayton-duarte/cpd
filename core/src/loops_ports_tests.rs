@@ -36,7 +36,7 @@ use crate::home::CpdHome;
 use crate::host::pi::Launch as PiLaunch;
 use crate::host::runner::{FakeRunner, Reply};
 use crate::host::spawn::FakeSpawn;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::inbox::cmd::{Until, snooze_until_on};
 use crate::inbox::model::Kind;
 use crate::inbox::rules::conditions_on;
@@ -152,7 +152,7 @@ fn sql(store: &mut Store, sql: &str) {
         .unwrap();
 }
 
-/// Plan `pl` (Lead `lead-pl`), its open PR `repo`, Job `a` running, and Attempt `a-a1` in `status` (`running` or `merging`)
+/// Plan `pl` (Lead `lead-pl`), its open Workflow `repo`, Job `a` running, and Attempt `a-a1` in `status` (`running` or `merging`)
 /// with Worker Session `w1` `working`.
 fn seed(store: &mut Store, status: &str) {
     let submitted = if status == "merging" {
@@ -173,11 +173,11 @@ fn seed(store: &mut Store, status: &str) {
              VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead-pl', 't');
              INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, mergeable, merge_state, authored, review_requested)
              VALUES (7, 'o/r', 7, 'https://example/7', 'Ship', 0, 'open', 'none', 'none', 't', NULL, 't', 'unknown', 'unknown', 0, 0);
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at)
              VALUES ('pl', 'repo', '/repo', 'main', 'open', 'cpd/pl', '/lead', 7, 'https://example/7', 't', 7, cpd_txn(), 't', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
              VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'idle', 't', 't');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
              VALUES ('pl', 'repo', 'a', 'A', 'S2', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = 'a';
              UPDATE jobs SET status = 'running' WHERE key = 'a';
@@ -575,7 +575,7 @@ fn settle(rig: &Rig, h: &Home) -> Result<(), CpdError> {
         &mut env,
         &mut None,
         &plan(),
-        &PrKey::parse("repo").unwrap(),
+        &WorkflowKey::parse("repo").unwrap(),
         &attempt(),
     )
 }

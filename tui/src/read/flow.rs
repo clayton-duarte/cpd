@@ -1,7 +1,7 @@
-//! The `plan` view's snapshot (commands.md §17): a Plan's PRs, each with its
+//! The `plan` view's snapshot (commands.md §17): a Plan's Workflows, each with its
 //! Jobs, their Dependencies, Attempts and Tiers ([`plan_boxes`], what the view
 //! draws); a Plan's Jobs with its open Escalations, its latest Plan review and
-//! its first PR ([`flow`], `plan show`); and which Plan the chat slot holds.
+//! its first Workflow ([`flow`], `plan show`); and which Plan the chat slot holds.
 
 use cpd_core::attempt::ledger::Stored;
 use std::collections::BTreeMap;
@@ -11,13 +11,13 @@ use rusqlite::{Connection, OptionalExtension};
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
-use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, SessionId, WorkflowKey};
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::job::home::JobHome;
 use cpd_core::job::open::shown_needs;
 use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::plan::display::Display;
-use cpd_core::plan::fingerprint::load_prs;
+use cpd_core::plan::fingerprint::load_workflows;
 use cpd_core::plan::{Phase, jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
@@ -44,15 +44,15 @@ pub struct Flow {
     pub events_cursor: i64,
 }
 
-/// A Plan as the plan view draws it (commands.md §13.2, §17): its PRs, each a box, `cancelled` ones too, and the Jobs
-/// inside them. A Plan with no PR yet has none, and no Jobs.
+/// A Plan as the plan view draws it (commands.md §13.2, §17): its Workflows, each a box, `cancelled` ones too, and the Jobs
+/// inside them. A Plan with no Workflow yet has none, and no Jobs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanBoxes {
     pub plan: PlanId,
     pub context: ContextId,
-    /// The PRs, in key order.
-    pub prs: Vec<PrNode>,
-    /// Every Job of the Plan, in creation order; `pr` is `None` exactly for an explore Job (`jobs.pr` NULL).
+    /// The Workflows, in key order.
+    pub workflows: Vec<WorkflowNode>,
+    /// Every Job of the Plan, in creation order; `workflow` is `None` exactly for an explore Job (`jobs.workflow` NULL).
     pub jobs: Vec<JobNode>,
     /// What of the Plan needs the User, from the same transaction.
     pub needs_user: NeedsUser,
@@ -102,9 +102,9 @@ impl NeedsUser {
     }
 }
 
-/// A PR's status (contract §3.8).
+/// A Workflow's status (contract §3.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrStatus {
+pub enum WorkflowStatus {
     Waiting,
     Dispatch,
     Open,
@@ -112,52 +112,52 @@ pub enum PrStatus {
     Cancelled,
 }
 
-impl PrStatus {
+impl WorkflowStatus {
     /// As stored.
     pub fn as_str(self) -> &'static str {
         match self {
-            PrStatus::Waiting => "waiting",
-            PrStatus::Dispatch => "dispatch",
-            PrStatus::Open => "open",
-            PrStatus::Merged => "merged",
-            PrStatus::Cancelled => "cancelled",
+            WorkflowStatus::Waiting => "waiting",
+            WorkflowStatus::Dispatch => "dispatch",
+            WorkflowStatus::Open => "open",
+            WorkflowStatus::Merged => "merged",
+            WorkflowStatus::Cancelled => "cancelled",
         }
     }
 }
 
-/// One PR of a Plan, for its box's title and its place among the boxes.
+/// One Workflow of a Plan, for its box's title and its place among the boxes.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PrNode {
-    pub key: PrKey,
-    /// The repo's directory name: the last component of `prs.repo`.
+pub struct WorkflowNode {
+    pub key: WorkflowKey,
+    /// The repo's directory name: the last component of `workflows.repo`.
     pub repo_name: String,
     pub base: String,
-    pub status: PrStatus,
-    /// The PRs it needs, sorted (none is `cancelled`: `pr cancel` refuses a PR another one needs).
-    pub needs: Vec<PrKey>,
+    pub status: WorkflowStatus,
+    /// The Workflows it needs, sorted (none is `cancelled`: `workflow cancel` refuses a Workflow another one needs).
+    pub needs: Vec<WorkflowKey>,
     /// Its pull request, once it has one.
     pub pull: Option<Pull>,
-    /// What a PR that has not started waits for, sorted (PR references): empty when it can start (hs-d521).
+    /// What a Workflow that has not started waits for, sorted (Workflow references): empty when it can start (hs-d521).
     pub waiting_on: Vec<String>,
-    /// For a `cancelled` PR, the PR that carried its work (a reference), from its `pr-cancelled` Event.
+    /// For a `cancelled` Workflow, the Workflow that carried its work (a reference), from its `workflow-cancelled` Event.
     pub superseded_by: Option<String>,
     /// `None` when no Job of the Workflow has an Attempt, else its active time in whole seconds, see Context record pro-d175.
     pub elapsed_seconds: Option<u64>,
     /// `None` when no Attempt of the Workflow has cost data, else its cost in USD, see Context record pro-d179.
     pub cost_usd: Option<f64>,
-    /// The Lead's dot on this box, see commands.md §13.2: `Some` only while the Plan's Lead works, `working_pr` is this PR and its
-    /// status is neither `merged` nor `cancelled`; the red loader when a Job of this PR failed or an Escalation of one of its Jobs is open.
+    /// The Lead's dot on this box, see commands.md §13.2: `Some` only while the Plan's Lead works, `working_pr` is this Workflow and its
+    /// status is neither `merged` nor `cancelled`; the red loader when a Job of this Workflow failed or an Escalation of one of its Jobs is open.
     pub lead_dot: Option<Dot>,
 }
 
-/// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
+/// The state of a Workflow's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateState {
     Queued,
     Running,
 }
 
-/// A PR's pull request, for its box's title.
+/// A Workflow's pull request, for its box's title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
     pub number: i64,
@@ -166,9 +166,9 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
-    /// The PR is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
+    /// The Workflow is ready to merge (pro-d118: `cpd_core::pr::pulls::ready_to_merge_sql`, not GitHub's CLEAN alone); its `open` is yellow.
     pub clean: bool,
-    /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    /// The Workflow's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
     /// `pull_requests.draft`.
     pub draft: bool,
     pub update: Option<UpdateState>,
@@ -203,8 +203,8 @@ pub struct JobNode {
     pub key: JobKey,
     /// The Job's kind (`jobs.kind`, §2.2 "Job kinds").
     pub kind: String,
-    /// The Job's PR (`jobs.pr`), `None` exactly for an explore Job of the Plan.
-    pub pr: Option<PrKey>,
+    /// The Job's Workflow (`jobs.workflow`), `None` exactly for an explore Job of the Plan.
+    pub workflow: Option<WorkflowKey>,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -212,7 +212,7 @@ pub struct JobNode {
     pub tier: Option<Tier>,
     /// Keys of the Jobs it needs, sorted.
     pub needs: Vec<JobKey>,
-    /// Added after the Plan was locked (PR feedback).
+    /// Added after the Plan was locked (Workflow feedback).
     pub appended: bool,
     pub retry_tier: Option<Tier>,
     /// The Tier the Job is shown at (the pill, `plan render`): one derivation in `Display::job_tier`.
@@ -220,7 +220,7 @@ pub struct JobNode {
     pub failed_cause: Option<String>,
     pub cancel_reason: Option<String>,
     pub merged_sha: Option<String>,
-    /// What a `queued` Job that cannot start yet waits for, sorted (Job keys, PR references): empty when it is Ready (hs-d521).
+    /// What a `queued` Job that cannot start yet waits for, sorted (Job keys, Workflow references): empty when it is Ready (hs-d521).
     pub waiting_on: Vec<String>,
     /// Oldest first.
     pub attempts: Vec<AttemptNode>,
@@ -312,7 +312,7 @@ pub fn plan_boxes_at(store: &mut Store, plan: &PlanId, now_ms: i64) -> Result<Pl
     store.read(|conn| boxes(conn, plan, None, now_ms))
 }
 
-/// The plan view's snapshot of `plan`: `plan_not_found` when it does not exist. Unlike [`flow`], a Plan with no PR yet
+/// The plan view's snapshot of `plan`: `plan_not_found` when it does not exist. Unlike [`flow`], a Plan with no Workflow yet
 /// is read too (R34: `plan new` adds none).
 /// The Workflows' active time is read at the store's clock.
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
@@ -368,7 +368,7 @@ fn boxes(
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(
+            workflows: workflow_nodes(
                 conn,
                 plan,
                 lead_working.then_some(working_pr).flatten().as_deref(),
@@ -384,8 +384,8 @@ fn boxes(
     }
 }
 
-/// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the PR the working Lead's turn concerns, `lead_work` the Plan phase's work.
-fn pr_nodes(
+/// The Workflows of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the Workflow the working Lead's turn concerns, `lead_work` the Plan phase's work.
+fn workflow_nodes(
     conn: &Connection,
     plan: &PlanId,
     working_pr: Option<&str>,
@@ -393,7 +393,7 @@ fn pr_nodes(
     lead: &str,
     jobs: &[JobNode],
     now_ms: i64,
-) -> Result<Vec<PrNode>, CpdError> {
+) -> Result<Vec<WorkflowNode>, CpdError> {
     let mut events = Vec::new();
     let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
     for row in stmt.query_map([lead], |r| {
@@ -415,9 +415,11 @@ fn pr_nodes(
     }
     let blocked = active::blocked_spans(&events, now_ms);
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
-    // An explore Job belongs to the Plan, not to a PR: its Attempts count in no Workflow's active time (pro-d237).
+    // An explore Job belongs to the Plan, not to a Workflow: its Attempts count in no Workflow's active time (pro-d237).
     for job in jobs {
-        let Some(pr) = job.pr.as_ref() else { continue };
+        let Some(workflow) = job.workflow.as_ref() else {
+            continue;
+        };
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
             let start = active::parse_ms(&what, &a.started_at)?;
@@ -428,17 +430,17 @@ fn pr_nodes(
                 .transpose()?
                 .unwrap_or(now_ms);
             spans
-                .entry(pr.as_str())
+                .entry(workflow.as_str())
                 .or_default()
                 .push((start, end.max(start)));
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
-    // An explore Job belongs to the Plan, not to a PR: its Attempts are in the Plan's cost, in no Workflow's (pro-d237).
+    // An explore Job belongs to the Plan, not to a Workflow: its Attempts are in the Plan's cost, in no Workflow's (pro-d237).
     let mut stmt = conn.prepare(
-        "SELECT j.pr, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
+        "SELECT j.workflow, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
            FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job LEFT JOIN sessions s ON s.id = a.worker_session
-          WHERE a.plan = ?1 AND j.pr IS NOT NULL",
+          WHERE a.plan = ?1 AND j.workflow IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| {
         Ok((
@@ -448,13 +450,13 @@ fn pr_nodes(
             r.get::<_, Option<String>>(3)?,
         ))
     })? {
-        let (pr, stored, no_metrics, file) = row?;
-        let JobHome::Pr(pr) = JobHome::of("PR key", pr.as_deref())? else {
-            // An explore Attempt belongs to no PR box (contract §2.2 Totals): only the Plan's cost holds it.
+        let (workflow, stored, no_metrics, file) = row?;
+        let JobHome::Workflow(workflow) = JobHome::of("Workflow key", workflow.as_deref())? else {
+            // An explore Attempt belongs to no Workflow box (contract §2.2 Totals): only the Plan's cost holds it.
             continue;
         };
         costs
-            .entry(pr.to_string())
+            .entry(workflow.to_string())
             .or_default()
             .push(super::cost::attempt_cost(
                 stored,
@@ -462,36 +464,38 @@ fn pr_nodes(
                 file.as_deref(),
             ));
     }
-    let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut failed_workflows: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let mut stmt = conn.prepare(
-        "SELECT pr FROM jobs WHERE plan = ?1 AND status = 'failed' AND pr IS NOT NULL
-         UNION SELECT j.pr FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE e.status = 'open' AND j.plan = ?1 AND j.pr IS NOT NULL",
+        "SELECT workflow FROM jobs WHERE plan = ?1 AND status = 'failed' AND workflow IS NOT NULL
+         UNION SELECT j.workflow FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE e.status = 'open' AND j.plan = ?1 AND j.workflow IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
-        failed_prs.insert(row?);
+        failed_workflows.insert(row?);
     }
     let display = Display::load(conn, plan)?;
-    let pr_rows = load_prs(conn, plan)?;
-    let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
-    let mut stmt =
-        conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    let workflow_rows = load_workflows(conn, plan)?;
+    let mut needs: BTreeMap<String, Vec<WorkflowKey>> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT workflow, needs FROM workflow_needs WHERE plan = ?1 ORDER BY workflow, needs",
+    )?;
     for row in stmt.query_map([plan.as_str()], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })? {
-        let (pr, need) = row?;
+        let (workflow, need) = row?;
         needs
-            .entry(pr)
+            .entry(workflow)
             .or_default()
-            .push(id("PR key", &need, PrKey::parse)?);
+            .push(id("Workflow key", &need, WorkflowKey::parse)?);
     }
     let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
     let mut stmt = conn.prepare(&format!(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
                 {ready}, COALESCE(q.draft, 0),
-                (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
+                (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.workflow = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
-           FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
+           FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 ORDER BY r.key",
     ))?;
     let mut rows = stmt.query([plan.as_str()])?;
@@ -508,13 +512,13 @@ fn pr_nodes(
         let clean: bool = r.get(8)?;
         let draft: bool = r.get(9)?;
         let update: Option<String> = r.get(10)?;
-        let what = format!("PR {plan}/{key}");
+        let what = format!("Workflow {plan}/{key}");
         let status = match status.as_str() {
-            "waiting" => PrStatus::Waiting,
-            "dispatch" => PrStatus::Dispatch,
-            "open" => PrStatus::Open,
-            "merged" => PrStatus::Merged,
-            "cancelled" => PrStatus::Cancelled,
+            "waiting" => WorkflowStatus::Waiting,
+            "dispatch" => WorkflowStatus::Dispatch,
+            "open" => WorkflowStatus::Open,
+            "merged" => WorkflowStatus::Merged,
+            "cancelled" => WorkflowStatus::Cancelled,
             _ => return Err(bad_row(format!("{what} has status {status:?}"))),
         };
         // `pr_number` is set with `pull_request` (contract §2.5), so a pull request has its row's url
@@ -529,7 +533,7 @@ fn pr_nodes(
                     mergeable.ok_or_else(|| bad_row(format!("{what} has no mergeable")))?;
                 Ok::<_, CpdError>(Pull {
                     number,
-                    state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
+                    state: PrState::of(status == WorkflowStatus::Merged, row_state.as_deref()),
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     clean,
@@ -542,32 +546,34 @@ fn pr_nodes(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
-        let row = pr_rows.iter().find(|p| p.key.as_str() == key);
+        let row = workflow_rows.iter().find(|p| p.key.as_str() == key);
         let lead_dot = (working_pr == Some(key.as_str())
-            && !matches!(status, PrStatus::Merged | PrStatus::Cancelled))
-        .then(|| Dot::working(failed_prs.contains(&key), lead_work));
-        out.push(PrNode {
+            && !matches!(status, WorkflowStatus::Merged | WorkflowStatus::Cancelled))
+        .then(|| Dot::working(failed_workflows.contains(&key), lead_work));
+        out.push(WorkflowNode {
             lead_dot,
-            waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
+            waiting_on: row
+                .map(|p| display.workflow_blockers(p))
+                .unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),
             needs: {
                 let mut n = needs.remove(&key).unwrap_or_default();
-                // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
+                // the implied need: the base Workflow of the Plan (a base Workflow of another Plan has no node here)
                 if let Some(base) = row
                     .and_then(|p| {
                         display
-                            .pr_needs(p)
+                            .workflow_needs(p)
                             .into_iter()
                             .find(|b| !p.needs.contains(b))
                     })
                     .filter(|b| !b.contains('/'))
                 {
-                    n.push(id("PR key", &base, PrKey::parse)?);
+                    n.push(id("Workflow key", &base, WorkflowKey::parse)?);
                     n.sort();
                 }
                 n
             },
-            key: id("PR key", &key, PrKey::parse)?,
+            key: id("Workflow key", &key, WorkflowKey::parse)?,
             repo_name,
             base,
             status,
@@ -595,15 +601,15 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
         .zip(waiting_on)
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
-            // An explore Job belongs to the Plan, not to a PR: its node carries no PR (`JobHome::Plan`).
-            let pr = match JobHome::of("PR key", j.pr.as_deref())? {
-                JobHome::Pr(pr) => Some(pr),
+            // An explore Job belongs to the Plan, not to a Workflow: its node carries no Workflow (`JobHome::Plan`).
+            let workflow = match JobHome::of("Workflow key", j.workflow.as_deref())? {
+                JobHome::Workflow(workflow) => Some(workflow),
                 JobHome::Plan => None,
             };
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
+                workflow,
                 kind: j.kind.clone(),
-                pr,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j)

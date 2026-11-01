@@ -307,7 +307,7 @@ impl Opener<'_> {
         }
     }
 
-    /// `Post`: `pr post --pr <key> --plan <plan>`, `<key>` read now from the `prs` row of the item's Plan that points at the item's
+    /// `Post`: `pr post --workflow <key> --plan <plan>`, `<key>` read now from the workflow row of the item's Plan that points at the item's
     /// pull request; no popup, the cockpit waits. A refusal, or no such row, is the failure dialog.
     fn post(&self, item: &Item) {
         const TITLE: &str = "Post Pull Request";
@@ -319,7 +319,7 @@ impl Opener<'_> {
         let key = Store::open(self.home, self.busy_ms).and_then(|mut store| {
             store.read(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT r.key FROM prs r JOIN pull_requests q ON q.id = r.pull_request \
+                    "SELECT r.key FROM workflows r JOIN pull_requests q ON q.id = r.pull_request \
                      WHERE r.plan = ?1 AND q.repo = ?2 AND q.number = ?3 ORDER BY r.key LIMIT 1",
                 )?;
                 let keys = stmt.query_map(
@@ -338,10 +338,10 @@ impl Opener<'_> {
                 self.tmux,
                 self.log,
                 TITLE,
-                format!("No PR of Plan {plan} points at {pull}."),
+                format!("No Workflow of Plan {plan} has the pull request {pull}."),
             ),
             Ok(Some(key)) => {
-                let argv = ["post", "--pr", &key, "--plan", plan.as_str()];
+                let argv = ["post", "--workflow", &key, "--plan", plan.as_str()];
                 let all = std::iter::once(PROGRAM)
                     .chain(["pr"])
                     .chain(argv)

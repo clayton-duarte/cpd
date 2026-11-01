@@ -1,5 +1,5 @@
 //! The Jira transition queue (contract §4.4 `jira_transitions`; migration `jira-transitions`):
-//! one row per PR and target, PENDING, SETTLED or PARKED, never a history table.
+//! one row per Workflow and target, PENDING, SETTLED or PARKED, never a history table.
 
 use super::*;
 use crate::error::CpdError;
@@ -27,15 +27,36 @@ const PLAN: &str =
      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
        VALUES ('pay', 'ctx', 'Pay', 'deploy', 'pay-lead', 't', 't');";
 
-fn pr(key: &str, jira: &str) -> String {
+/// A dispatched object, after `workflow-rename`: the table is `workflows`.
+fn workflow(key: &str, jira: &str) -> String {
+    format!(
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
+           VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
+    )
+}
+
+fn two_prs() -> String {
+    format!(
+        "{PLAN}{}{}",
+        workflow("a", "'ABC-1'"),
+        workflow("b", "NULL")
+    )
+}
+
+/// The same two objects before `workflow-rename`: the table is `prs`.
+fn workflow_before(key: &str, jira: &str) -> String {
     format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, jira)
            VALUES ('pay', '{key}', '/nowhere', 'main', 'dispatch', 'cpd/pay/{key}', '/nowhere/lead', cpd_txn(), 't', 't', {jira});"
     )
 }
 
-fn two_prs() -> String {
-    format!("{PLAN}{}{}", pr("a", "'ABC-1'"), pr("b", "NULL"))
+fn two_prs_before() -> String {
+    format!(
+        "{PLAN}{}{}",
+        workflow_before("a", "'ABC-1'"),
+        workflow_before("b", "NULL")
+    )
 }
 
 fn count(store: &mut Store, sql: &str) -> i64 {
@@ -56,7 +77,7 @@ fn before_jira_transitions() -> (tempfile::TempDir, CpdHome) {
         "jira-transitions is a built-in migration"
     );
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
-    write(&mut store, &two_prs()).unwrap();
+    write(&mut store, &two_prs_before()).unwrap();
     drop(store);
     (dir, home)
 }
@@ -88,20 +109,23 @@ fn a_database_before_jira_transitions_migrates_to_an_empty_queue() {
         0
     );
     assert_eq!(
-        count(&mut store, "SELECT count(*) FROM prs WHERE plan = 'pay'"),
+        count(
+            &mut store,
+            "SELECT count(*) FROM workflows WHERE plan = 'pay'"
+        ),
         2
     );
     assert_eq!(
         count(
             &mut store,
-            "SELECT count(*) FROM prs WHERE key = 'a' AND jira = 'ABC-1'"
+            "SELECT count(*) FROM workflows WHERE key = 'a' AND jira = 'ABC-1'"
         ),
         1
     );
     assert_eq!(
         count(
             &mut store,
-            "SELECT count(*) FROM prs WHERE key = 'b' AND jira IS NULL"
+            "SELECT count(*) FROM workflows WHERE key = 'b' AND jira IS NULL"
         ),
         1
     );
@@ -186,7 +210,7 @@ fn jira_transitions_refuses_an_unknown_target_a_half_settled_row_a_half_parked_r
     );
     bad(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', 'nope', 'done', 'q');".into(),
-        "no such PR",
+        "no such Workflow",
         &mut store,
     );
     assert_eq!(
@@ -224,9 +248,9 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
         store.schema_mismatch()
     );
     write(&mut store, &two_prs()).unwrap();
-    let row = |pr: &str, target: &str| {
+    let row = |workflow: &str, target: &str| {
         format!(
-            "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{pr}', '{target}', 'q');"
+            "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{workflow}', '{target}', 'q');"
         )
     };
     write(&mut store, &row("a", "done")).expect("first row");
@@ -251,8 +275,8 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
         1,
         "the first row is untouched"
     );
-    write(&mut store, &row("b", "done")).expect("same target, another PR");
-    write(&mut store, &row("a", "in_review")).expect("another target, same PR");
+    write(&mut store, &row("b", "done")).expect("same target, another Workflow");
+    write(&mut store, &row("a", "in_review")).expect("another target, same Workflow");
     assert_eq!(
         count(&mut store, "SELECT count(*) FROM jira_transitions"),
         3

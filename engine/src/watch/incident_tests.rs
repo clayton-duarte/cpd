@@ -1,12 +1,12 @@
 //! Red tests for the Plan-scoped engine hold (contract §3.7 E3/E4/E7, Job inc-v2-engine, hs-d643):
 //! while one `incident` row exists, E3 starts only a Job of a Plan in `incident_plans` or an
-//! explicitly urgent Job; E4 and E7 act only on the PRs of Plans in `incident_plans`; E9, E10 and
+//! explicitly urgent Job; E4 and E7 act only on the Workflows of Plans in `incident_plans`; E9, E10 and
 //! E11 still hold machine-wide.
 //!
 //! The inc-v2-engine Job implements the two stubs these tests call
 //! ([`schedule::incident_starts`] and [`engine::incident_holds_plan`]) and wires them into the steps.
 
-use cpd_core::ids::{PlanId, PrKey};
+use cpd_core::ids::{PlanId, WorkflowKey};
 
 use super::engine::{self, Engine};
 use super::report::Step;
@@ -49,9 +49,9 @@ fn incident_includes(engine: &mut Engine, plan: &str) {
         .unwrap();
 }
 
-/// A Plan `pay` in `dispatch`: the `dispatch` PR `api` (E4 has an `open` Job to add) and the
-/// `waiting` PR `ship` (E7 has it to start).
-fn seed_dispatch_pr(engine: &mut Engine) {
+/// A Plan `pay` in `dispatch`: the `dispatch` Workflow `api` (E4 has an `open` Job to add) and the
+/// `waiting` Workflow `ship` (E7 has it to start).
+fn seed_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
         .write("test", |tx| {
@@ -60,9 +60,9 @@ fn seed_dispatch_pr(engine: &mut Engine) {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/lead', 't', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('pay', 'ship', '/r', 'main', 'waiting', 'cpd/pay/ship', cpd_txn(), 't');",
             )?;
             Ok(())
@@ -70,8 +70,8 @@ fn seed_dispatch_pr(engine: &mut Engine) {
         .unwrap();
 }
 
-/// A second Plan `ops` in `dispatch`: the `dispatch` PR `web` and the `waiting` PR `app`.
-fn seed_held_dispatch_pr(engine: &mut Engine) {
+/// A second Plan `ops` in `dispatch`: the `dispatch` Workflow `web` and the `waiting` Workflow `app`.
+fn seed_held_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
         .write("test", |tx| {
@@ -80,9 +80,9 @@ fn seed_held_dispatch_pr(engine: &mut Engine) {
                    VALUES ('lead2', 'lead', 'ctx', 'ops', 'Lead 2', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('ops', 'ctx', 'Ops', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('ops', 'web', '/r', 'main', 'dispatch', 'cpd/ops', '/lead2', 't', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('ops', 'app', '/r', 'main', 'waiting', 'cpd/ops/app', cpd_txn(), 't');",
             )?;
             Ok(())
@@ -95,8 +95,9 @@ fn open_jobs(engine: &mut Engine) -> Vec<(String, String)> {
     engine
         .store
         .read(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT plan, pr FROM jobs WHERE kind = 'open' ORDER BY plan, pr")?;
+            let mut stmt = conn.prepare(
+                "SELECT plan, workflow FROM jobs WHERE kind = 'open' ORDER BY plan, workflow",
+            )?;
             Ok(stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -117,8 +118,8 @@ fn held(engine: &mut Engine, plan: &str) -> bool {
 fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
     let mut fx = engine_fixture();
     let engine = &mut fx.engine;
-    seed_dispatch_pr(engine);
-    seed_held_dispatch_pr(engine);
+    seed_dispatch_workflow(engine);
+    seed_held_dispatch_workflow(engine);
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
@@ -178,8 +179,8 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
 fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     let mut fx = engine_fixture();
     let engine = &mut fx.engine;
-    seed_dispatch_pr(engine);
-    seed_held_dispatch_pr(engine);
+    seed_dispatch_workflow(engine);
+    seed_held_dispatch_workflow(engine);
     incident_on(engine);
     incident_includes(engine, "pay");
 
@@ -187,20 +188,23 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     assert!(!held(engine, "pay"), "a Plan in the incident is not held");
     assert!(held(engine, "ops"), "a Plan outside the incident is held");
 
-    // E4 acts on the incident Plan's `dispatch` PR only: the held Plan's PR gets no `open` Job.
+    // E4 acts on the incident Plan's `dispatch` Workflow only: the held Plan's Workflow gets no `open` Job.
     open::run(engine);
     assert_eq!(
         open_jobs(engine),
         vec![("pay".to_owned(), "api".to_owned())],
-        "E4 adds the open Job only for the incident Plan's PR"
+        "E4 adds the open Job only for the incident Plan's Workflow"
     );
 
-    // E7 selects only the incident Plan's `waiting` PR; the held Plan's PR is left alone.
-    let startable = engine::startable_prs(engine).unwrap();
+    // E7 selects only the incident Plan's `waiting` Workflow; the held Plan's Workflow is left alone.
+    let startable = engine::startable_workflows(engine).unwrap();
     assert_eq!(
         startable,
-        vec![(PlanId::parse("pay").unwrap(), PrKey::parse("ship").unwrap())],
-        "E7 starts only the incident Plan's PR"
+        vec![(
+            PlanId::parse("pay").unwrap(),
+            WorkflowKey::parse("ship").unwrap()
+        )],
+        "E7 starts only the incident Plan's Workflow"
     );
 
     // E9, E10 and E11 still hold machine-wide; the other steps run.

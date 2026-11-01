@@ -287,7 +287,7 @@ fn plan_row(
     bare_plan_row(id, context, phase, lead, created)
         + &format!(
             "{row}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', '/wt', {number}, {url}, {opened}, {pull_request},
                  cpd_txn(), '{created}', '2026-01-02T00:00:00.000Z');"
@@ -369,7 +369,7 @@ fn job_row_in(plan: &str, pr: &str, key: &str, status: &str, tier: &str) -> Stri
         ("NULL", "NULL")
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
          VALUES ('{plan}', '{pr}', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), {reason}, {requested}, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
@@ -532,14 +532,14 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     s += r#"INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
             VALUES ('acme/api-server', 12, 'https://github.com/acme/api-server/pull/12', 'api', 0, 'open', 'none', 'none',
                     '2026-01-05T00:00:00.000Z', NULL, '2026-01-05T00:00:00.000Z');
-            INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+            INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
             VALUES ('ship', 'api', '/src/api-server', 'main', 'open', 'cpd/ship/api', '/wt/api', 12, 'https://github.com/acme/api-server/pull/12',
                     '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 12), cpd_txn(), '2026-01-02T00:00:00.000Z',
                     '2026-01-02T00:00:00.000Z');
-            INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
             VALUES ('ship', 'web', '/src/web', 'develop', 'waiting', 'cpd/ship/web', cpd_txn(), '2026-01-02T00:00:00.000Z');
-            INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'web', 'api');"#;
+            INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('ship', 'web', 'api');"#;
     s += &job_row_in("ship", "api", "a", "merged", "O3");
     s += &job_row_in("ship", "api", "b", "merged", "S3");
     s += &need_row("ship", "b", "a");
@@ -575,7 +575,9 @@ fn a_plan_with_no_pr_yet_says_so() {
     let buf = draw(&fx);
     let screen = rows(&buf);
     assert!(
-        screen.iter().any(|l| l.trim() == "no PR yet: cpd pr add"),
+        screen
+            .iter()
+            .any(|l| l.trim() == "no Workflow yet: cpd workflow add"),
         "{}",
         screen.join("\n")
     );
@@ -587,7 +589,7 @@ fn a_plan_with_no_pr_yet_says_so() {
         screen.join("\n")
     );
     // muted, colour 8
-    let text = cells_of(&buf, "no PR yet: cpd pr add").expect("the message");
+    let text = cells_of(&buf, "no Workflow yet: cpd workflow add").expect("the message");
     assert!(
         text.iter()
             .all(|at| buf[*at].fg == palette::muted_text().fg.unwrap()),

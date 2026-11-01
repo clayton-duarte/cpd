@@ -1392,7 +1392,7 @@ impl TestEnv {
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
                 done_when.insert(
-                    job["pr"].as_str().expect("a Job's PR").to_owned(),
+                    job["pr"].as_str().expect("a Job's Workflow").to_owned(),
                     serde_json::json!(["Done"]),
                 );
             }

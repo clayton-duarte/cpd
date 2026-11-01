@@ -1,4 +1,4 @@
-//! The chain of a Job added to an `open` PR whose `open` Job is merged (commands.md §5.1): it needs the chain leaves.
+//! The chain of a Job added to an `open` Workflow whose `open` Job is merged (commands.md §5.1): it needs the chain leaves.
 
 use std::collections::BTreeSet;
 
@@ -6,23 +6,23 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 use crate::plan::jobs::Job;
 
-/// The leaves of the PR's chain, or `None` when the PR is not chained (not `open`, or its `open` Job is not merged).
+/// The leaves of the Workflow's chain, or `None` when the Workflow is not chained (not `open`, or its `open` Job is not merged).
 /// The chain is the non-cancelled Jobs after the open Job (the open Job and every Job that transitively needs it),
 /// minus `key` and whoever needs `key` (a rerun of the same add); drafts and `update` Jobs are never members. A leaf is a member
 /// no other member needs; a `failed` leaf refuses `needs_unavailable`.
 pub(super) fn leaves(
     all: &[Job],
     plan: &PlanId,
-    pr: &str,
-    pr_status: &str,
+    workflow: &str,
+    workflow_status: &str,
     key: &str,
 ) -> Result<Option<Vec<String>>, CpdError> {
-    if pr_status != "open" {
+    if workflow_status != "open" {
         return Ok(None);
     }
     let Some(open) = all
         .iter()
-        .find(|j| j.pr_str() == pr && j.kind == "open" && j.status == "merged")
+        .find(|j| j.workflow_str() == workflow && j.kind == "open" && j.status == "merged")
     else {
         return Ok(None);
     };
@@ -32,7 +32,9 @@ pub(super) fn leaves(
             let before = seen.len();
             let next: Vec<String> = all
                 .iter()
-                .filter(|j| j.pr_str() == pr && j.needs.iter().any(|n| seen.contains(n)))
+                .filter(|j| {
+                    j.workflow_str() == workflow && j.needs.iter().any(|n| seen.contains(n))
+                })
                 .map(|j| j.key.clone())
                 .collect();
             seen.extend(next);
@@ -61,13 +63,10 @@ pub(super) fn leaves(
     if !failed.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsUnavailable,
-            format!(
-                "A Job added to PR {pr} chains after {}, which failed: retry or cancel it first.",
-                failed.join(", ")
-            ),
+            format!("A Job added to Workflow {workflow} chains after {}, which failed: retry or cancel it first.", failed.join(", ")),
         )
         .with("plan", plan.as_str())
-        .with("pr", pr)
+        .with("pr", workflow)
         .with("jobs", failed));
     }
     let mut keys: Vec<String> = leaves.iter().map(|j| j.key.clone()).collect();

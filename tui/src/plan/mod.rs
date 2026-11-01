@@ -1,7 +1,7 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
 //! `cpd/cpd-ui` (`tui/src/flow.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
-//! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), top to bottom by the PRs'
+//! It shows the Plan of the Lead in the chat slot as one box per Workflow ([`boxes`], R34 A15), top to bottom by the Workflows'
 //! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]). The boxes start at the top of the pane:
 //! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
@@ -13,7 +13,7 @@
 //! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
 //! one file a view writes, its own state.
 //!
-//! Input: the wheel scrolls; clicks open a Lead tab, a Pulse row or a PR link; a Job pill is neither clickable nor selectable. There is no `q`: a layout pane that
+//! Input: the wheel scrolls; clicks open a Lead tab, a Pulse row or a pull request link; a Job pill is neither clickable nor selectable. There is no `q`: a layout pane that
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
@@ -98,7 +98,7 @@ impl Centre {
     pub(crate) fn spins(&self) -> bool {
         false
             || spins(&self.plan.jobs, &self.plan.needs_user) // a running Job's pill icon, or a failed one's while the Lead works
-            || self.plan.prs.iter().any(|p| p.lead_dot.is_some()) // a PR box title's Lead dot
+            || self.plan.workflows.iter().any(|p| p.lead_dot.is_some()) // a Workflow box title's Lead dot
     }
 
     /// Turn the spinners to `frame`, from the layout already done (R2: no layout at a frame change), when a spinner is on
@@ -201,8 +201,8 @@ fn snapshot_timed(
     let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
-    let boxes =
-        boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame)
+        .with_margin(CHART_MARGIN);
     let layout = began.map_or(Duration::ZERO, |b| {
         ports.clock.now().saturating_duration_since(b)
     });
@@ -259,7 +259,7 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
     Watching::of(centre, pulse).concerns(event)
 }
 
-/// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
+/// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no Workflow yet: cpd workflow add` (dim)
 /// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
 fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
     let mut parts: Vec<Span<'static>> = error
@@ -271,9 +271,10 @@ fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>
             " no Lead session in the centre",
             palette::muted_text(),
         )),
-        Some(c) if c.plan.prs.is_empty() => {
-            parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text()))
-        }
+        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled(
+            "no Workflow yet: cpd workflow add",
+            palette::muted_text(),
+        )),
         Some(c) if c.plan.jobs.is_empty() => {
             parts.push(Span::styled("no Plan yet", palette::muted_text()))
         }
@@ -307,7 +308,7 @@ struct Ui {
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
-    /// The links of the last drawn frame (pro-d60): what a click on a PR box title reads.
+    /// The links of the last drawn frame (pro-d60): what a click on a Workflow box title reads.
     links: crate::link::Links,
     /// Where the canvas the `links` were drawn on has its corner in the chart (`Boxes::links_origin`).
     links_origin: (u16, u16),
@@ -853,7 +854,7 @@ pub fn show_with<B: Backend>(
                 }
             }
             Input::Mouse(m) => match ui.click(ports, m) {
-                // a PR box title's link: the pull request is opened and nothing else changes
+                // a Workflow box title's link: the pull request is opened and nothing else changes
                 Ok(true) => {}
                 Err(e) => {
                     let actions = Arc::clone(actions);
@@ -880,14 +881,14 @@ pub fn show_with<B: Backend>(
     }
 }
 
-/// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
+/// The Plan view's fixtures for the tests of its boxes: a Workflow `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
 #[cfg(test)]
-fn sample_pr(key: &str) -> read::PrNode {
-    read::PrNode {
-        key: cpd_core::ids::PrKey::parse(key).unwrap(),
+fn sample_workflow(key: &str) -> read::WorkflowNode {
+    read::WorkflowNode {
+        key: cpd_core::ids::WorkflowKey::parse(key).unwrap(),
         repo_name: format!("{key}-repo"),
         base: "main".into(),
-        status: read::PrStatus::Dispatch,
+        status: read::WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: None,
         waiting_on: Vec::new(),
@@ -898,13 +899,13 @@ fn sample_pr(key: &str) -> read::PrNode {
     }
 }
 
-/// A queued Job `key` of PR `pr`, of Tier S1, with no needs.
+/// A queued Job `key` of Workflow `pr`, of Tier S1, with no needs.
 #[cfg(test)]
-fn sample_job(pr: &str, key: &str) -> read::JobNode {
+fn sample_job(workflow: &str, key: &str) -> read::JobNode {
     read::JobNode {
         kind: "work".into(),
         key: cpd_core::ids::JobKey::parse(key).unwrap(),
-        pr: Some(cpd_core::ids::PrKey::parse(pr).unwrap()),
+        workflow: Some(cpd_core::ids::WorkflowKey::parse(workflow).unwrap()),
         seq: 0,
         title: String::new(),
         status: read::JobStatus::Queued,
@@ -921,15 +922,15 @@ fn sample_job(pr: &str, key: &str) -> read::JobNode {
     }
 }
 
-/// What the view reads for a Plan of `prs` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
+/// What the view reads for a Plan of `workflows` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
 #[cfg(test)]
-fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
+fn sample_centre(workflows: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -> Centre {
     let needs_user = read::NeedsUser::default();
-    let boxes = boxes::layout(&prs, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&workflows, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
     let plan = PlanBoxes {
         plan: PlanId::parse("p1").unwrap(),
         context: cpd_core::ids::ContextId::parse("ctx").unwrap(),
-        prs,
+        workflows,
         jobs,
         needs_user,
         events_cursor: 0,
@@ -949,7 +950,7 @@ fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
 }
 
 /// The layout test's sample (`layout_tests`): the Plan view drawn by [`Ui::draw`] into a `width` x `height` pane at a
-/// scroll offset. Placed is one box per PR, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
+/// scroll offset. Placed is one box per Workflow, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
 /// offset the draw clamped to, kept to the chart's window: the canvas does not expose the boxes' rects, so each is read off
 /// the canvas by its corners (`╭` to the next `╮` on its row, `╭` to the next `╰` down its column). A box the window
 /// clips is `Rule::Clipped`.
@@ -961,11 +962,11 @@ pub(crate) fn layout_sample(
 ) -> crate::layout_tests::Sample {
     use crate::layout_tests::{Exempt, Kind, Placed, PlanCase, Rule, Sample, Scroll};
     use ratatui::backend::TestBackend;
-    let (scroll, prs, jobs) = match case {
-        PlanCase::Empty(scroll) => (scroll, vec![sample_pr("api")], Vec::new()),
+    let (scroll, workflows, jobs) = match case {
+        PlanCase::Empty(scroll) => (scroll, vec![sample_workflow("api")], Vec::new()),
         PlanCase::Three(scroll) => (
             scroll,
-            vec![sample_pr("api"), sample_pr("web")],
+            vec![sample_workflow("api"), sample_workflow("web")],
             vec![
                 sample_job("api", "api-1"),
                 sample_job("api", "api-2"),
@@ -973,8 +974,8 @@ pub(crate) fn layout_sample(
             ],
         ),
     };
-    let expected = prs.len();
-    let centre = sample_centre(prs, jobs);
+    let expected = workflows.len();
+    let centre = sample_centre(workflows, jobs);
     let canvas = &centre.boxes.chart.buf;
     let mut ui = Ui::default();
     if scroll == Scroll::Middle {
@@ -1024,7 +1025,7 @@ pub(crate) fn layout_sample(
     assert_eq!(
         boxes.len(),
         expected,
-        "one box per PR on the canvas\n{}",
+        "one box per Workflow on the canvas\n{}",
         crate::layout_tests::dump(canvas)
     );
     Sample {
@@ -1068,9 +1069,9 @@ mod tests {
 
     use super::*;
     use crate::dialog::scroll::WHEEL_ROWS;
-    use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
+    use crate::read::{JobNode, JobStatus, WorkflowNode, WorkflowStatus};
     use cpd_core::config::Tier;
-    use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
+    use cpd_core::ids::{ContextId, JobKey, SessionId, WorkflowKey};
 
     #[test]
     fn a_read_is_taken_for_a_commit_at_most_once_per_frame_and_for_no_change_only_on_the_safety_time()
@@ -1119,14 +1120,14 @@ mod tests {
         PlanId::parse(id).unwrap()
     }
 
-    /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
+    /// A Plan of one Workflow with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
     fn scroll_centre(plan_id: &str, jobs: usize) -> Centre {
-        let pr = PrKey::parse("web").unwrap();
-        let node = PrNode {
-            key: pr.clone(),
+        let workflow = WorkflowKey::parse("web").unwrap();
+        let node = WorkflowNode {
+            key: workflow.clone(),
             repo_name: "repo".into(),
             base: "main".into(),
-            status: PrStatus::Dispatch,
+            status: WorkflowStatus::Dispatch,
             needs: Vec::new(),
             pull: None,
             waiting_on: Vec::new(),
@@ -1138,7 +1139,7 @@ mod tests {
         let job = |n: usize| JobNode {
             kind: "work".into(),
             key: JobKey::parse(&format!("job-{n}")).unwrap(),
-            pr: Some(pr.clone()),
+            workflow: Some(workflow.clone()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
@@ -1156,13 +1157,13 @@ mod tests {
         let plan = PlanBoxes {
             plan: PlanId::parse(plan_id).unwrap(),
             context: ContextId::parse("ctx").unwrap(),
-            prs: vec![node],
+            workflows: vec![node],
             jobs: (0..jobs).map(job).collect(),
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes =
-            boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+        let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0)
+            .with_margin(CHART_MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),
@@ -1549,7 +1550,7 @@ mod tests {
                  {}{}
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                  VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                  VALUES ('p1', 'repo', '/repo', 'main', 'dispatch', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
                  UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
                  {}",

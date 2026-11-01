@@ -481,7 +481,7 @@ export class Fixture {
   }
 }
 
-export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, ...over });
+export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], workflows: [], escalations: [], review: null, ...over });
 
 export const ev = (id: number, kind: string, over: Record<string, unknown> = {}) => ({
   id, at: "2026-10-14T21:41:02.114Z", kind, context: "ctx", plan: "p1", job: null, attempt: null, session: null, text: `text of ${kind} ${id}`, data: {}, ...over,

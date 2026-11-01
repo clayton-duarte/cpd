@@ -1,7 +1,7 @@
 //! E17, the Slack reaction queue (Plan pr-post, pro-d64 step 7; pro-d107, pro-d110, pro-d124, pro-d125; commands.md §21.9): the
 //! helper `pi/lib/slack-react.ts` adds the queued emoji to the post of the OLDEST `slack_reactions` row that is neither reacted nor
 //! refused, detached on its own thread, one run at a time, and the row's `reacted_at` is set. The emoji of a merge reaction (a row
-//! with its Plan and PR) is resolved from the PR's policy (`pr.post.merged_reaction`) each time it is about to be placed. A
+//! with its Plan and Workflow) is resolved from the Workflow's policy (`pr.post.merged_reaction`) each time it is about to be placed. A
 //! transient failure leaves the row open, is reported once per code and the row is tried again `watch.error_repeat_seconds`
 //! after the failed run's end; the rows behind it go on meanwhile. A permanent refusal (`slack_refused`), or a policy that names
 //! no emoji (`policy_empty`), parks the row (`refused_at`) with one `error` Event, in one transaction; a parked row is never
@@ -131,7 +131,7 @@ pub(super) fn run(engine: &mut Engine) {
         let home = engine.home.clone();
         let resolved = engine
             .store
-            .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr));
+            .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.workflow));
         let resolved = match resolved {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -170,7 +170,7 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// Reopens each parked merge row whose PR's policy now names another, non-empty emoji.
+/// Reopens each parked merge row whose Workflow's policy now names another, non-empty emoji.
 fn reopen_parked(engine: &mut Engine) {
     let parked = match engine.store.read(reactions::parked) {
         Ok(parked) => parked,
@@ -180,14 +180,14 @@ fn reopen_parked(engine: &mut Engine) {
         }
     };
     for row in parked {
-        let Some(MergeOf { plan, pr }) = row.merge.clone() else {
+        let Some(MergeOf { plan, workflow }) = row.merge.clone() else {
             continue;
         };
         let about = About::Plan(PlanId::parse(&plan).expect("a stored Plan id"));
         let home = engine.home.clone();
         match engine
             .store
-            .read(|conn| reactions::policy_emoji(conn, &home, &plan, &pr))
+            .read(|conn| reactions::policy_emoji(conn, &home, &plan, &workflow))
         {
             Err(e) => engine.fail(Step::E17, about, Failure::from(&e)),
             Ok(resolved) => {
@@ -221,7 +221,7 @@ fn park(engine: &mut Engine, due: &Due, reason: &str) -> Result<(), Failure> {
             let home = engine.home.clone();
             let resolved = engine
                 .store
-                .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr))
+                .read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.workflow))
                 .map_err(|e| Failure::from(&e))?;
             Some(resolved.file)
         }

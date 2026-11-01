@@ -391,32 +391,31 @@ pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, Cpd
 /// The resources a Job's Spec lists and the repo they belong to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wanted {
-    /// The Job's PR.
-    pub pr: String,
+    /// The Job's Workflow.
+    pub workflow: String,
     pub owner: OwnerLogin,
     pub repo: RepoName,
     /// The names, sorted.
     pub names: Vec<String>,
 }
 
-/// A Job's PR, resources, owner and repo name as one query returns them.
-type JobResourceRow = (String, Option<String>, Option<String>, Option<String>);
-
-/// The resources Job `key` of `plan` lists in its Spec, with its PR's repo; `None` when it lists none.
+/// The resources Job `key` of `plan` lists in its Spec, with its Workflow's repo; `None` when it lists none.
 pub fn wanted(
     conn: &rusqlite::Connection,
     plan: &PlanId,
     key: &str,
 ) -> Result<Option<Wanted>, CpdError> {
     use rusqlite::OptionalExtension;
-    // An explore Job has no PR (the join finds no row): it lists no resources.
-    let found: Option<JobResourceRow> = conn.query_row(
-        "SELECT j.pr, j.resources, c.owner, r.name FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+    // The row's columns: workflow, the listed resources JSON, owner, repo.
+    type Found = (String, Option<String>, Option<String>, Option<String>);
+    // An explore Job has no Workflow (the join finds no row): it lists no resources.
+    let found: Option<Found> = conn.query_row(
+        "SELECT j.workflow, j.resources, c.owner, r.name FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
            JOIN plans p ON p.id = j.plan JOIN contexts c ON c.id = p.context WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), key],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     ).optional()?;
-    let Some((pr, listed, owner, repo)) = found else {
+    let Some((workflow, listed, owner, repo)) = found else {
         return Ok(None);
     };
     let Some(listed) = listed else {
@@ -428,11 +427,11 @@ pub fn wanted(
     names.sort();
     let (Some(owner), Some(repo)) = (owner, repo) else {
         return Err(CpdError::bad_row(format!(
-            "Job {key} of Plan {plan} lists resources but its PR {pr} has no repo"
+            "Job {key} of Plan {plan} lists resources but its Workflow {workflow} has no repo"
         )));
     };
     Ok(Some(Wanted {
-        pr,
+        workflow,
         owner: OwnerLogin::parse(&owner)?,
         repo: RepoName::parse(&repo)?,
         names,

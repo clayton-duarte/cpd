@@ -4,7 +4,7 @@ import { PREFIXES, simpleCommands } from "./shell.ts";
 
 /** The rule's reason, one line naming it (§15.12). */
 export const reasonText = (matched: string): string =>
-  `φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: ${matched}`;
+  `φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the Workflow's open Job; refused: ${matched}`;
 
 /** Options of `timeout` that take the next word as their value. */
 const TIMEOUT_VALUED = new Set(["-s", "--signal", "-k", "--kill-after"]);

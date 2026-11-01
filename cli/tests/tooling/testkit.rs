@@ -80,7 +80,7 @@ fn open_pr(fx: &Fx) {
            VALUES ('pay', 'ctx', 'Pay the bills', 'deploy', 'lead1', 't', 't');
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pay', 'repo', '/nowhere', 'main', 'open', 'cpd/pay', '{}', cpd_txn(), 't', 't',
                    812, 'https://github.com/acme/pay/pull/812', 'opened', (SELECT id FROM pull_requests));",

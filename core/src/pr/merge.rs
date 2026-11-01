@@ -15,7 +15,7 @@ use super::status::{Required, required_states};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::runner::Runner;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::inbox::model::close_pr_ready;
 use crate::output::Output;
 use crate::ports::Ports;
@@ -196,17 +196,18 @@ fn store_merge_in(
     )?;
     let after = pulls::load(tx, row.id)?;
     let owners: Vec<(String, String)> = {
-        let mut stmt =
-            tx.prepare("SELECT plan, key FROM prs WHERE pull_request = ?1 AND status = 'open'")?;
+        let mut stmt = tx.prepare(
+            "SELECT plan, key FROM workflows WHERE pull_request = ?1 AND status = 'open'",
+        )?;
         stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?
     };
     for (plan, key) in owners {
-        let (plan, key): (PlanId, PrKey) = (plan.parse()?, key.parse()?);
+        let (plan, key): (PlanId, WorkflowKey) = (plan.parse()?, key.parse()?);
         poll::merge(tx, &plan, &key, &after)?;
         poll::unstack_stacked_on(tx, &plan, &key)?;
     }
-    crate::incident::end_if_until_pr_merged(tx)?;
+    crate::incident::end_if_until_workflow_merged(tx)?;
     close_pr_ready(tx, repo, number)
 }
 

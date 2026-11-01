@@ -47,7 +47,7 @@ const GIT: Duration = Duration::from_secs(120);
 const GH: Duration = Duration::from_secs(120);
 /// The store's busy timeout, as the config default.
 const BUSY_MS: u64 = 5000;
-/// How many merged PRs deep a chain of bases may go before it must reach main.
+/// How many merged Workflows deep a chain of bases may go before it must reach main.
 const MAX_LEVELS: usize = 5;
 
 /// Prunes `args.repos` on `ports`, reading the protected set from the store of `home`.
@@ -89,15 +89,15 @@ pub fn command(args: Args) -> Result<Output, CpdError> {
     Ok(Output::Owned)
 }
 
-/// The branches cpd still runs: the Lead Branch of each unmerged PR of a Plan that is not done, and
-/// `cpd/<plan>--<attempt>` for each Attempt of a Job of such a PR.
+/// The branches cpd still runs: the Lead Branch of each unmerged Workflow of a Plan that is not done, and
+/// `cpd/<plan>--<attempt>` for each Attempt of a Job of such a Workflow.
 fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError> {
     let mut store = Store::open_with(&*ports.clock, home, BUSY_MS, None)?;
     store.read(|conn| {
         let mut set = BTreeSet::new();
         let mut leads = conn.prepare(
-            "SELECT prs.lead_branch FROM prs JOIN plans ON plans.id = prs.plan \
-             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+            "SELECT workflows.lead_branch FROM workflows JOIN plans ON plans.id = workflows.plan \
+             WHERE plans.phase != 'done' AND workflows.status != 'merged'",
         )?;
         for row in leads.query_map([], |r| r.get::<_, Option<String>>(0))? {
             set.extend(row?);
@@ -105,9 +105,9 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
         let mut attempts = conn.prepare(
             "SELECT attempts.plan, attempts.id FROM attempts \
              JOIN jobs ON jobs.plan = attempts.plan AND jobs.key = attempts.job \
-             JOIN prs ON prs.plan = jobs.plan AND prs.key = jobs.pr \
-             JOIN plans ON plans.id = prs.plan \
-             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+             JOIN workflows ON workflows.plan = jobs.plan AND workflows.key = jobs.workflow \
+             JOIN plans ON plans.id = workflows.plan \
+             WHERE plans.phase != 'done' AND workflows.status != 'merged'",
         )?;
         for row in
             attempts.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -119,7 +119,7 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
     })
 }
 
-/// A merged PR of `gh pr list`.
+/// A merged pull request of `gh pr list`.
 struct Merged {
     number: u64,
     head: String,
@@ -213,7 +213,9 @@ fn merged_prs(ports: &Ports, slug: &str) -> Result<Vec<Merged>, String> {
             })
         })
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| "cannot read the output of gh pr list: a PR lacks a field".to_owned())
+        .ok_or_else(|| {
+            "cannot read the output of gh pr list: a pull request lacks a field".to_owned()
+        })
 }
 
 fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
@@ -242,20 +244,20 @@ fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
         .collect())
 }
 
-/// True when `base` reaches main through merged PRs.
-fn reached(prs: &[Merged], base: &str, level: usize) -> bool {
+/// True when `base` reaches main through merged Workflows.
+fn reached(workflows: &[Merged], base: &str, level: usize) -> bool {
     base == "main"
         || (level < MAX_LEVELS
-            && prs
+            && workflows
                 .iter()
-                .any(|p| p.head == base && reached(prs, &p.base, level + 1)))
+                .any(|p| p.head == base && reached(workflows, &p.base, level + 1)))
 }
 
-/// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
+/// True when a merged Workflow of the Lead Branch of `branch` contains `head` and reached main.
 fn merged_via_pr(
     ports: &Ports,
     repo: &Path,
-    prs: &[Merged],
+    workflows: &[Merged],
     branch: &str,
     head: &str,
     failed: &mut Vec<String>,
@@ -268,24 +270,24 @@ fn merged_via_pr(
         .map(|(plan, _)| format!("cpd/{plan}"));
     let prefix = format!("{lead}/");
     let plan_prefix = attempt_plan.map(|plan| format!("{plan}/"));
-    for pr in prs {
-        let named = pr.head == lead
-            || pr.head.starts_with(&prefix)
-            || legacy.as_deref() == Some(pr.head.as_str())
+    for workflow in workflows {
+        let named = workflow.head == lead
+            || workflow.head.starts_with(&prefix)
+            || legacy.as_deref() == Some(workflow.head.as_str())
             || plan_prefix
                 .as_deref()
-                .is_some_and(|p| pr.head.starts_with(p));
-        if !named || !reached(prs, &pr.base, 0) {
+                .is_some_and(|p| workflow.head.starts_with(p));
+        if !named || !reached(workflows, &workflow.base, 0) {
             continue;
         }
-        let have = matches!(git(ports, repo, &["cat-file", "-e", &format!("{}^{{commit}}", pr.oid)]), Ok(o) if o.status.success());
+        let have = matches!(git(ports, repo, &["cat-file", "-e", &format!("{}^{{commit}}", workflow.oid)]), Ok(o) if o.status.success());
         if !have
-            && !matches!(git(ports, repo, &["fetch", "-q", "origin", &format!("pull/{}/head", pr.number)]), Ok(o) if o.status.success())
+            && !matches!(git(ports, repo, &["fetch", "-q", "origin", &format!("pull/{}/head", workflow.number)]), Ok(o) if o.status.success())
         {
-            failed.push(format!("cannot fetch pull/{}/head", pr.number));
+            failed.push(format!("cannot fetch pull/{}/head", workflow.number));
             continue;
         }
-        if matches!(git(ports, repo, &["merge-base", "--is-ancestor", head, &pr.oid]), Ok(o) if o.status.success())
+        if matches!(git(ports, repo, &["merge-base", "--is-ancestor", head, &workflow.oid]), Ok(o) if o.status.success())
         {
             return true;
         }
@@ -317,7 +319,7 @@ fn prune_repo(
     let url = git_ok(ports, repo, &["remote", "get-url", "origin"])?;
     let slug = slug(&url);
     git_ok(ports, repo, &["fetch", "-q", "origin"])?;
-    let prs = merged_prs(ports, &slug)?;
+    let workflows = merged_prs(ports, &slug)?;
     let list = worktrees(ports, repo)?;
 
     let mut failed = Vec::new();
@@ -345,14 +347,11 @@ fn prune_repo(
             let lead = wt.branch.as_deref().map(lead_of);
             if lead.is_some_and(|l| args.drop.iter().any(|d| d == l)) {
                 dropped = true;
-            } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success())
-                || wt
-                    .branch
-                    .as_deref()
-                    .is_some_and(|b| merged_via_pr(ports, repo, &prs, b, &wt.head, &mut failed))
+            } else if !matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success())
+                && !wt.branch.as_deref().is_some_and(|b| {
+                    merged_via_pr(ports, repo, &workflows, b, &wt.head, &mut failed)
+                })
             {
-                // Merged into origin/main, or through its PR: kept as merged, `reason` stays unset.
-            } else {
                 reason = Some("not merged");
             }
         }

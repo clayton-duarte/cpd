@@ -39,7 +39,7 @@ fn prune_keeps_a_key_with_a_double_dash_whole() {
         out.stdout
     );
 
-    // A merged PR with head `pay/a--b` matches it.
+    // A merged Workflow with head `pay/a--b` matches it.
     let mut fx = Fixture::new();
     let wt = fx.worktree("lead", "pay/a--b", "main", Some("a.txt"));
     let head = fx.head(&wt);

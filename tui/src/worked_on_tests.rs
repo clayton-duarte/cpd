@@ -1,5 +1,5 @@
 //! Red tests of THE RULE (pro-d88) on the TUI side: a failed Job is being worked on when its Plan's Lead works, or a
-//! queued or running Job of its PR was created after its `job-failed` Event. `plan_boxes` lists those Jobs
+//! queued or running Job of its Workflow was created after its `job-failed` Event. `plan_boxes` lists those Jobs
 //! (`NeedsUser::worked_on`), the failed pill turns for them, and the tree's Lead dot is the red loader for a Plan that
 //! has one. The store is in-process, built with SQL in explicit transactions; no tmux, git or gh.
 
@@ -28,7 +28,7 @@ struct Fixture {
     store: Store,
 }
 
-/// Context `ctx`, Plan `pay` (Lead `l-pay`, in `lead_state`) with PRs `p1`, `p2`, `p3`.
+/// Context `ctx`, Plan `pay` (Lead `l-pay`, in `lead_state`) with Workflows `p1`, `p2`, `p3`.
 fn fixture(lead_state: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -46,10 +46,10 @@ fn fixture(lead_state: &str) -> Fixture {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'P', 'dispatch', 'l-pay', '{T}', '{T}');"
     );
-    for pr in ["p1", "p2", "p3"] {
+    for workflow in ["p1", "p2", "p3"] {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '/r', 'main', 'dispatch', 'cpd/pay/{pr}', '/lw', 1, '{T}', '{T}');"
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{workflow}', '/r', 'main', 'dispatch', 'cpd/pay/{workflow}', '/lw', 1, '{T}', '{T}');"
         ));
     }
     f.sql(&sql);
@@ -67,7 +67,7 @@ impl Fixture {
     }
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
-    fn job(&mut self, pr: &str, key: &str, status: &str) {
+    fn job(&mut self, workflow: &str, key: &str, status: &str) {
         let cause = if status == "failed" {
             "'crashed'"
         } else {
@@ -75,15 +75,15 @@ impl Fixture {
         };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha)
-               VALUES ('pay', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha});"
+               VALUES ('pay', '{workflow}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha});"
         ));
     }
 
     /// A failed Job and its `job-failed` Event, in two transactions.
-    fn failed(&mut self, pr: &str, key: &str) {
-        self.job(pr, key, "failed");
+    fn failed(&mut self, workflow: &str, key: &str) {
+        self.job(workflow, key, "failed");
         self.sql(&format!(
             "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
              VALUES (cpd_txn(), '{T}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');"
@@ -142,7 +142,7 @@ fn plan_boxes_lists_the_failed_jobs_being_worked_on() {
     assert_eq!(
         idle.worked_on(),
         ["j-a", "j-c"],
-        "idle Lead: the failed Jobs with a queued or running fix of their PR, sorted"
+        "idle Lead: the failed Jobs with a queued or running fix of their Workflow, sorted"
     );
 
     let mut working = fixture("working");
@@ -172,7 +172,7 @@ fn a_failed_pill_turns_while_a_fix_job_of_its_pr_is_underway_and_its_lead_is_idl
     let plan = PlanId::parse("pay").unwrap();
     let b = read::plan_boxes(&mut f.store, &plan).unwrap();
     for frame in 0..30 {
-        let chart = boxes::layout(&b.prs, &b.jobs, &b.needs_user, frame).chart;
+        let chart = boxes::layout(&b.workflows, &b.jobs, &b.needs_user, frame).chart;
         let pill = chart
             .pills
             .iter()

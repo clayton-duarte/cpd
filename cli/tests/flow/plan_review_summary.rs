@@ -43,7 +43,7 @@ fn plan_with_one_draft(fx: &Fx) -> PathBuf {
     .ok();
     fx.github_origin(&repo);
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "pay",
         "--repo",
@@ -82,9 +82,9 @@ fn plan_with_one_draft(fx: &Fx) -> PathBuf {
     store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, created_txn, created_at)
-                 VALUES ('pay', (SELECT key FROM prs WHERE plan = 'pay'), 'a', 'Job a', 'S2', 'Goal of a.', 'Context of a.', '[\"src/a.rs\"]',
+                 VALUES ('pay', (SELECT key FROM workflows WHERE plan = 'pay'), 'a', 'Job a', 'S2', 'Goal of a.', 'Context of a.', '[\"src/a.rs\"]',
                          '[\"cargo test\"]', '[]', 'draft', 0, {}, 't');",
                 tx.id()
             ))?;

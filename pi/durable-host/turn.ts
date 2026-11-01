@@ -104,7 +104,7 @@ async function contextMessage(port: TurnPort, state: TurnState, stored: readonly
   const records = events.length === 0 ? [] : parseRecords(await cpd(["context", "show", "--context", context, "--since", String(first - 1)]));
   if (seat.role === "lead") {
     const plan = seat.plan;
-    const prs = plan === null ? [] : parsePrOpened(await cpd(["events", "list", "--context", context, "--kind", "pr-opened", "--since", since])).filter((p) => p.plan === plan);
+    const workflows = plan === null ? [] : parsePrOpened(await cpd(["events", "list", "--context", context, "--kind", "pr-opened", "--since", since])).filter((p) => p.plan === plan);
     let standing: string[] = [];
     if (plan !== null) {
       try {
@@ -112,10 +112,10 @@ async function contextMessage(port: TurnPort, state: TurnState, stored: readonly
       } catch (e) {
         const err = toCpdError(e);
         if (err.code === "usage") throw err;
-        standing = [`could not read the Plan's PRs: ${err.message.split("\n")[0]}`];
+        standing = [`could not read the Plan's Workflows: ${err.message.split("\n")[0]}`];
       }
     }
-    return leadUpdate(context, seat.id, events, records, prs, parseTaken(await cpd(["board", "take", "--session", seat.id])), standing);
+    return leadUpdate(context, seat.id, events, records, workflows, parseTaken(await cpd(["board", "take", "--session", seat.id])), standing);
   }
   const plans = parsePlanEvents(await cpd(["events", "list", "--context", context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", since]));
   const pending = parsePending(await cpd(["context", "pending", "--context", context]));

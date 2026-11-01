@@ -71,7 +71,7 @@ impl Fx {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
                VALUES ('{plan}', '{context}', '{plan}', '{phase}', '{plan}-lead', 't', {locked_at}, {done_at});
              {pull}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
                VALUES ('{plan}', 'repo', '/nowhere', 'main', '{pr}', 'cpd/{plan}', '/nowhere/lead', {number}, {url}, {opened}, {pull_request}, cpd_txn(), 't', 't', {merged});",
             at = ago(self),
             pull = if phase == "done" {
@@ -178,7 +178,7 @@ fn lead_with_a_live_or_draft_job_stays_awake() {
     fx.plan("ctx", "queued", "done");
     let job = |plan: &str, status: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('{plan}', 'repo', 'j', 'Title', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, {fp}, cpd_txn(), 't');",
             fp = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "a".repeat(64)) }
         )

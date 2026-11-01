@@ -355,7 +355,7 @@ fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
             .write("test", |tx| {
                 tx.execute_batch(&format!(
                     "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
-                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                     INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                                       pr_number, pr_url, pr_opened_at, pull_request)
                        VALUES ('pay', 'shop', '/r', 'main', '{name}', 'open', 'cpd/pay/shop', '/w', cpd_txn(), 't', 't',
                                5, 'https://github.com/acme/shop/pull/5', 't', (SELECT id FROM pull_requests WHERE number = 5));"
@@ -394,7 +394,7 @@ fn own_pull_request(env: &TestEnv, n: u32) {
         .unwrap()
         .write("test", |tx| {
             tx.execute(
-                "INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                "INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                                   pr_number, pr_url, pr_opened_at, pull_request)
                    VALUES ('pay', 'shop', '/r', 'main', 'shop', 'open', 'cpd/pay/shop', '/w', cpd_txn(), 't', 't',
                            ?1, 'https://github.com/acme/shop/pull/' || ?1, 't', (SELECT id FROM pull_requests WHERE number = ?1))",

@@ -71,8 +71,8 @@ pub(super) fn addendum(args: AddendumArgs) -> Result<Output, CpdError> {
             event = event.attempt(crate::ids::AttemptId::parse(attempt)?).session(crate::ids::SessionId::parse(session)?);
         }
         append(tx, event)?;
-        if let Some(pr) = &job.pr {
-            crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+        if let Some(workflow) = &job.workflow {
+            crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
         }
         Ok((job, number, address))
     })?;

@@ -140,8 +140,8 @@ fn check_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
         return Ok(());
     }
     Err(refused(format!(
-        "this build carries migration {} that is not on origin/main, and a preview would apply it to {} before the PR merges. \
-         Merge main into this branch, or wait until the PR merges, then install again.",
+        "this build carries migration {} that is not on origin/main, and a preview would apply it to {} before the Workflow merges. \
+         Merge main into this branch, or wait until the Workflow merges, then install again.",
         unmerged.join(", "),
         install.cpd_home.db().display()
     )))
