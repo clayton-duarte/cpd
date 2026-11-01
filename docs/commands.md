@@ -102,7 +102,7 @@ Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`c
 
   Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
 - **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96) and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
-- **The Lead's Workflow** (contract §3.6, pro-d219, pro-d259): the PR of the Plan that the working Lead's current turn concerns, stored as `sessions.working_pr` and drawn as the Lead's dot (§13.2). Its definition is contract §3.6's. Only these commands name it, and only when the Plan's working Lead runs them: `job add`, `job edit`, `job cancel`, `job retry`, `job urgent`, `job approve-tests`, `answer`, `pr add`, `pr edit`, `pr describe` and `pr cancel`.
+- **The Lead's Workflow** (contract §3.6, pro-d219, pro-d259): the PR of the Plan that the working Lead's current turn concerns, stored as `sessions.working_pr` and drawn as the Lead's dot (§13.2). Its definition is contract §3.6's. Only these commands name it, and only when the Plan's working Lead runs them: `job add`, `job edit`, `job cancel`, `job retry`, `job urgent`, `job approve-tests`, `job approve-touches`, `answer`, `pr add`, `pr edit`, `pr describe` and `pr cancel`.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
 
 Common refusals, which apply to every command and are not repeated in the sections below:
@@ -197,6 +197,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `draft_parked` | 3 | a draft that contract §2.2 "A parked draft" calls illegal would be written after the lock: `job add --draft` or `job edit` (§5.1, §5.2) of a stub that waits for nothing, or `pr add --shape` (§9.4) with no `--jobs` for a PR that would start at once (hs-d731); `details` `{plan, job, pr, needs}` (`{plan, pr, jobs}` for `pr add`, `jobs` the stub keys). The message names the legal forms |
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
+| `touches_violation` | 3 | a Job's submit (§6.1) changed a path outside its Spec `touches` (§7.5), unless the repo's `[generated] paths` (§8.3), a base merge, or the Lead approved it (§5.9a); `details.paths`, `details.touches`, `details.generated` |
 | `lead_branch_moved` | 3 | a merge detail, not a code any command returns: the merge of an `open` or `update` Job (contract §7.4 step 5) found the Lead Branch's tip not in HEAD and ends the Attempt `failed` / `merge_conflict` with the detail `lead_branch_moved: <message>` (a ladder cause: the next Attempt starts from the newer tip). Still declared, so it stays in this table; submit never refuses with it |
 | `head_moved` | 3 | `review submit` (§31.1) found the pull request's current head is not `--head`; `details` `{pr, expected, actual}`, both SHAs lowercase; nothing was posted (pro-d169) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the PR's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
@@ -248,6 +249,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
+| `cpd job approve-touches` (§5.9a) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
@@ -1640,6 +1642,34 @@ Effects: **rows**, one transaction: `jobs.test_approved` becomes the union of it
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
 
+### 5.9a `job approve-touches`
+
+```
+cpd job approve-touches <job> --path <p> [--path <p> …] --reason <text> [--plan <id>]
+```
+
+The Lead's approval for a Job to change a path outside its Spec `touches` (hs-n641; contract §2.2 "Job kinds", §7.5). The `touches` guard refuses a submit (§6.1) that changes a path outside the Job's Spec `touches`; a Worker that needs an out-of-touches file changed asks the Lead (`cpd ask`), who decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["touches_approved"]`, with the `--reason`).
+
+| Flag | Meaning |
+|---|---|
+| `<job>` | the Job |
+| `--path <p>` | repeated: a path, or a directory prefix, that the check (§7.5) refuses. The command validates no path against the touches list: what the check refuses is what the Lead approves |
+| `--reason <text>` | why (§1.5); it is in the Event's `text` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Job exists | `job_not_found` | 4 |
+| its status is `queued`, `running` or `failed` (a draft is not checked, an ended one never will be) | `illegal_transition` | 3 |
+
+Effects: **rows**, one transaction: `jobs.touches_approved` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["touches_approved"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `touches_approved` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the PR as the Lead's Workflow (§1.3).
+
+```json
+{"ok": true, "job": {"key": "api-work", "status": "running", "kind": "work"}, "approved": ["cli/src/"], "fields": ["touches_approved"]}
+```
+
+Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
+
 ## 6. `attempt`
 
 ### 6.1 `attempt submit`
@@ -1657,6 +1687,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
+| the touches guard passes (§7.5): a path outside the Job's Spec `touches` is refused, unless a base merge brought it, the repo's `[generated] paths` (§8.3) match it, or the Lead approved it with `job approve-touches` (§5.9a); `details.paths`, `details.touches`, `details.generated` (contract §7.5, §7.7) | `touches_violation` | 3 |
 | (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
 | (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
 | (kinds `test`, `impl`) the PR's repo policy has `[test-commands]` (none when there is no repo file or the file lacks the table) | `tests_unconfigured` | 3 |
@@ -4617,7 +4648,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Resources | only when the Job's Spec lists `resources`: a line naming each resource the Job is the tenant of (contract §3.4 "Tenancy") and that `cpd resource run <name> -- <command>` run in the Attempt takes nothing more and runs the command at once (§29) |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause and what explains it: the conflicting files (`merge_conflict`), the failed Gate's hook and log (`gate_failed`, `gate_error`), pi stopped on a provider error with its message (`provider_error`); the provider was down or unreachable, the Job was retried at the same Tier, or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
-| Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `attempt_not_running` (the Attempt was stopped: stop) |
+| Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `touches_violation` (revert the files outside your touches, or ask), `attempt_not_running` (the Attempt was stopped: stop) |
 
 **The `cpd ask` line** (pro-d274). The template adds, right after the sentence `Ask one real blocker at a time. Do not ask what this Spec or the code already answers.` (two spaces of indent, inside the same list item, for every kind of Job including explore), exactly this sentence: "Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires."
 
@@ -4651,7 +4682,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ### 16.4 Worker latitude
 
-A Worker may change a file outside its `touches` when a test named in its acceptance cannot pass without it (hs-d512, contract §16 "The Worker contract"). The Worker lists each such file and why in its commit message, instead of escalating with `cpd ask`. Examples: a migration that only this Job should create, a helper script the test uses, a stub of a new module. The Lead reads the commit message at the Worker's submit and approves or escalates; the test must pass without editing the guide.
+Removed by hs-n641. The Worker latitude that hs-d512 allowed (a file outside `touches` when a test could not pass without it, listed in the commit message) is gone: the enforced `touches` check (contract §7.5) refuses such a path with `touches_violation`. The escape is the Lead's `job approve-touches` (§5.9a): a Worker that needs a path outside its `touches` asks (`cpd ask`) and the Lead approves it.
 
 ## 17. What the TUI reads
 
