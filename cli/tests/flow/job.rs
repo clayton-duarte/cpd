@@ -311,7 +311,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["context"], "ctx");
     assert_eq!(
         added[1]["data"],
-        json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false})
+        json!({"workflow": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false})
     );
     assert_eq!(
         fx.env
@@ -1531,7 +1531,7 @@ fn add_defaults_to_the_one_pr_and_names_the_pr_it_was_given() {
     assert_eq!(job_row(&fx.env, "pl", "w", "workflow"), "web");
     assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
     assert_eq!(
-        events(&fx, "job-added").last().unwrap()["data"]["pr"],
+        events(&fx, "job-added").last().unwrap()["data"]["workflow"],
         "web"
     );
 
@@ -1569,7 +1569,7 @@ fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
         "workflow_required",
         2,
     );
-    assert_eq!(e["details"]["prs"], json!(["repo", "web"]));
+    assert_eq!(e["details"]["workflows"], json!(["repo", "web"]));
     let e = refused(
         &job_add_in(&fx, "pl", "k", Some("nope"), &[]),
         "workflow_not_found",
@@ -1604,7 +1604,7 @@ fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
         "workflow_required",
         2,
     );
-    assert!(e["message"].as_str().unwrap().contains("cpd pr add"), "{e}");
+    assert!(e["message"].as_str().unwrap().contains("cpd workflow add"), "{e}");
 }
 
 #[test]
@@ -1636,6 +1636,7 @@ fn add_into_a_merged_pr_is_refused_and_into_a_waiting_pr_is_appended() {
     );
     assert_eq!(e["details"]["status"], "merged");
     let out = job_add_in(&fx, "pl", "k", Some("web"), &[]).ok();
+    println!("OUT {out}");
     assert_eq!(out["job"]["pr"], "web");
     assert_eq!(out["job"]["status"], "queued");
     assert_eq!(out["job"]["appended"], true);
@@ -1895,7 +1896,7 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         assert_eq!(job_row(&fx.env, "pl", "d", "fingerprint"), Value::Null);
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false})
+            json!({"workflow": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false})
         );
         // Its needs may be drafts; an identical rerun is `already`, as for any add.
         job_add_draft(&fx, "pl", "e", &["d"], &[]).ok();
@@ -2042,7 +2043,7 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         );
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false})
+            json!({"workflow": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false})
         );
 
         // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
@@ -2315,7 +2316,7 @@ fn a_job_is_not_urgent_unless_added_with_urgent() {
     assert_eq!(job_row(&fx.env, "pl", "hot", "urgent"), 1);
     assert_eq!(
         events(&fx, "job-added")[1]["data"],
-        json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true})
+        json!({"workflow": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true})
     );
 
     // The flag is not a Locked field: the same add with or without it is `already`, as for `--draft`.
@@ -3105,7 +3106,7 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
     assert_eq!(job_row(&fx.env, "pl", "up-p-r1", "tier"), "S1");
     assert_eq!(
         events(&fx, "job-added").last().unwrap()["data"],
-        json!({"pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false})
+        json!({"workflow": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false})
     );
     // E3 does not re-queue an `update` Job on the cancel (hs-d797).
     assert_eq!(
