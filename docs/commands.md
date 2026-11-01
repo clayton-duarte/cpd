@@ -1640,6 +1640,10 @@ Effects: **rows**, one transaction: `jobs.test_approved` becomes the union of it
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
 
+### 5.10 `job addendum`
+
+Skeleton: the section is written in the next commit.
+
 ## 6. `attempt`
 
 ### 6.1 `attempt submit`
