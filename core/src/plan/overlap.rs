@@ -12,20 +12,20 @@ use super::jobs::Job;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
-/// One Job of another active Plan, in a PR that is not `merged` or `cancelled`
+/// One Job of another active Plan, in a Workflow that is not `merged` or `cancelled`
 /// and not itself `cancelled`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Other {
     pub plan: String,
     pub workflow: String,
-    /// The PR's repo as stored (`prs.repo`, a realpath).
+    /// The Workflow's repo as stored (`prs.repo`, a realpath).
     pub repo: String,
     pub job: String,
     pub status: String,
     pub touches: Vec<String>,
 }
 
-/// A Job of another Plan's PR that overlaps a Job of this Plan.
+/// A Job of another Plan's Workflow that overlaps a Job of this Plan.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OtherJob {
     pub key: String,
@@ -57,8 +57,8 @@ fn overlaps(a: &str, b: &str) -> bool {
 }
 
 /// The Jobs of every other active Plan (any Context; not `done`, not
-/// archived), in PRs not `merged` and not `cancelled`, that are not
-/// `cancelled`: ordered by Plan, PR key and Job creation.
+/// archived), in Workflows not `merged` and not `cancelled`, that are not
+/// `cancelled`: ordered by Plan, Workflow key and Job creation.
 pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, p.repo, j.key, j.status, j.touches
@@ -89,17 +89,17 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
         .collect()
 }
 
-/// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
+/// A Workflow of this Plan whose Jobs are not on their base yet: not `merged`, not
 /// `cancelled`.
 fn is_open(workflow: &WorkflowRow) -> bool {
     !matches!(workflow.status.as_str(), "merged" | "cancelled")
 }
 
 /// Every overlap of this Plan's open work with `others`: the Jobs not
-/// `cancelled` of the PRs that are not `merged` and not `cancelled` (a Job of a
-/// `merged` PR is on its base already). One overlap per (Job, other Plan,
-/// other PR) that has a Job overlapping it, ordered by this Job's key, then the
-/// other Plan, then the PR. Pure.
+/// `cancelled` of the Workflows that are not `merged` and not `cancelled` (a Job of a
+/// `merged` Workflow is on its base already). One overlap per (Job, other Plan,
+/// other Workflow) that has a Job overlapping it, ordered by this Job's key, then the
+/// other Plan, then the Workflow. Pure.
 pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     let mut open: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
     open.sort_by(|a, b| a.key.cmp(&b.key));
@@ -114,7 +114,7 @@ pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Ov
                 paths.push(path);
             }
         }
-        // By (other Plan, other PR): the Jobs there that overlap this one, and which of its paths they overlap.
+        // By (other Plan, other Workflow): the Jobs there that overlap this one, and which of its paths they overlap.
         let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
         for other in others.iter().filter(|o| o.repo == workflow.repo) {
             let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();

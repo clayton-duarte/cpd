@@ -1,4 +1,4 @@
-//! `pr reply` (Plan fb-path): answers an item of the PR's stored feedback list with a reply ending in the
+//! `pr reply` (Plan fb-path): answers an item of the Workflow's stored feedback list with a reply ending in the
 //! marker, as the User. It never resolves a thread, writes nothing in the store and appends no Event.
 
 use std::path::PathBuf;
@@ -51,20 +51,20 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("PR {} of Plan {id} is {}: pr reply needs an open PR.", workflow.key, workflow.status),
+            format!("Workflow {} of Plan {id} is {}: pr reply needs an open Workflow.", workflow.key, workflow.status),
         )
         .with("plan", id.as_str())
         .with("pr", workflow.key.as_str())
         .with("status", workflow.status.as_str()));
     }
-    let row = workflow.pull_request.expect("an open PR has its pull_request row (prs CHECK)");
+    let row = workflow.pull_request.expect("an open Workflow has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     let list = pull.feedback.unwrap_or_default();
     let Some(item) = list.iter().find(|i| i.id == args.to) else {
         let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
         return Err(CpdError::new(
             ErrorCode::FeedbackNotFound,
-            format!("PR {} has no open feedback item {:?}.", workflow.key, args.to),
+            format!("Workflow {} has no open feedback item {:?}.", workflow.key, args.to),
         )
         .with("pr", workflow.key.as_str())
         .with("to", args.to.as_str())

@@ -320,7 +320,7 @@ const POST_MAX_CHARS: usize = 2000;
 /// The one board post that sends `sent` (id, short form, paths) to the Manager: a record whose line does not fit
 /// goes by id alone, and the text is cut at the limit, so that it is always written.
 fn docs_post(context: &ContextId, sent: &[(String, String, Vec<String>)]) -> String {
-    let mut text = format!("Documentation candidates of Context {context}, sent by the User: plan a docs PR that documents these records.\n");
+    let mut text = format!("Documentation candidates of Context {context}, sent by the User: plan a docs Workflow that documents these records.\n");
     let mut room = POST_MAX_CHARS.saturating_sub(text.chars().count());
     for (id, short, paths) in sent {
         let full = format!("- {id}: {short} ({})\n", paths.join(", "));

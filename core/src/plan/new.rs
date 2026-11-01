@@ -18,7 +18,7 @@ use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 
 /// The Plan as `plan new` reads it back, with its Lead's name and cwd as stored.
-/// No PR is needed (a Plan starts with none, R34 A12).
+/// No Workflow is needed (a Plan starts with none, R34 A12).
 struct Created {
     plan: PlanRow,
     name: String,
@@ -199,7 +199,7 @@ fn summary(plan: &PlanRow, workflows: &[Value]) -> Value {
            "lead_session": plan.lead_session, "workflows": workflows})
 }
 
-/// The Plan's PRs, in key order: only an `already` rerun can find any.
+/// The Plan's Workflows, in key order: only an `already` rerun can find any.
 fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare("SELECT key, repo, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt.query_map([id.as_str()], |r| {

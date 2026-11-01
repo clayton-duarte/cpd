@@ -137,8 +137,8 @@ simple_id!(
 );
 
 simple_id!(
-    /// PR key (R34): `^[a-z][a-z0-9-]{0,23}$`, unique in its Plan.
-    WorkflowKey, InvalidWorkflowId, "PR key", "^[a-z][a-z0-9-]{0,23}$",
+    /// Workflow key (R34): `^[a-z][a-z0-9-]{0,23}$`, unique in its Plan.
+    WorkflowKey, InvalidWorkflowId, "Workflow key", "^[a-z][a-z0-9-]{0,23}$",
     |s| matches(s, lower, lower_digit_dash, 0, 23)
 );
 

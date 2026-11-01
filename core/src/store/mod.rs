@@ -384,7 +384,7 @@ impl Store {
         };
         // The migration's `txns` row is inserted as soon as `txns` exists
         // (migration 1 creates it), so later migrations can name it: migration
-        // 4's PRs record it as their `created_txn` and in their history.
+        // 4's Workflows record it as their `created_txn` and in their history.
         let mut txn = None;
         let mut seq = 0_i64;
         let mut imported_old_stores = false;
@@ -1012,7 +1012,7 @@ mod tests {
             let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
             let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
             // `review_pending` guards a code path that forgot to close the Plan's reviews: a bug, so untyped by design.
-            // `working_pr_invalid` is the same: the writer checks the Lead and the PR first, so it never fires in practice.
+            // `working_pr_invalid` is the same: the writer checks the Lead and the Workflow first, so it never fires in practice.
             let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending" || message == "working_pr_invalid";
             let typed_legacy = SUPERSEDED.iter().any(|(name, _)| *name == message);
             assert!(!untyped || !typed_legacy, "{message} is both typed and untyped");

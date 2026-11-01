@@ -1,5 +1,5 @@
 //! The pro-d88 rule: a `failed` Job is *being worked on* when its Plan's Lead is `working`, or a `queued` or `running`
-//! Job of the same Plan and PR was created after the Job's latest `job-failed` Event.
+//! Job of the same Plan and Workflow was created after the Job's latest `job-failed` Event.
 
 use std::collections::BTreeSet;
 
@@ -16,7 +16,7 @@ pub(crate) fn created_after_failure(newer: &str, failed: &str) -> String {
     )
 }
 
-/// SQL, clause (b): a `queued` or `running` Job of the PR of Job `failed` (a `jobs` alias) was created after its failure.
+/// SQL, clause (b): a `queued` or `running` Job of the Workflow of Job `failed` (a `jobs` alias) was created after its failure.
 pub(crate) fn queued_or_running_after_failure(failed: &str) -> String {
     format!(
         "EXISTS (SELECT 1 FROM jobs f

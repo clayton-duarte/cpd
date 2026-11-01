@@ -161,7 +161,7 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
 fn rest_of_a9(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     // Best effort per item: a window that cannot be killed does not keep the worktree.
     let killed = kill_worker(store, ctx, attempt);
-    // A linear Attempt is the workflow worktree and the Lead Branch: keep both (hs-d680).
+    // A linear Attempt is the Lead worktree and the Lead Branch: keep both (hs-d680).
     if git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) {
         return killed;
     }

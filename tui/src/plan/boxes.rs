@@ -1,10 +1,10 @@
-//! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR (a `cancelled` one muted, below
+//! The plan view's Workflow boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per Workflow (a `cancelled` one muted, below
 //! the others, hs-d518),
-//! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
-//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need a plain box-drawing line from the needed box's bottom border to the needing
+//! holding the chart of that Workflow's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
+//! the Workflows' needs (the Workflows not merged below the merged ones, [`levels`]), one row of boxes per level, each need a plain box-drawing line from the needed box's bottom border to the needing
 //! box's top border, where it ends in a `┴` (no arrowhead; hs-d638; R3, R4 of plan-lines).
 //!
-//! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling
+//! In: the Workflows and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling
 //! works on it as on one chart (the pills' rectangles are on the whole buffer), and the row of boxes of each of its
 //! columns. The arrows are
 //! routed as the chart's lines are, turned a quarter: one horizontal run per gap between rows of boxes, a need that
@@ -30,12 +30,12 @@ use crate::read::{JobNode, NeedsUser, PrFacts, WorkflowNode, WorkflowStatus, Pul
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
-/// What the box of a PR with no Jobs says (the widget's padding is the space around it).
+/// What the box of a Workflow with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
 /// The title of the one Plan-level box holding the explore Jobs (D1-A): leading and trailing space, no state word.
 const EXPLORE_TITLE: &str = " explore Jobs ";
 
-/// The body of a PR box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the PR has none.
+/// The body of a Workflow box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the Workflow has none.
 struct ChartBody<'a> {
     chart: &'a Chart,
 }
@@ -65,11 +65,11 @@ pub struct Boxes {
     pub links_origin: (u16, u16),
 }
 
-/// The level of each PR (indices into `prs`). A merged PR's is 0 with no needs, else one more than the highest level
-/// among its needs. A PR that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
-/// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
+/// The level of each Workflow (indices into `prs`). A merged Workflow's is 0 with no needs, else one more than the highest level
+/// among its needs. A Workflow that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
+/// of any merged Workflow (no floor when none is merged): every box that is not merged is below every merged box, so the work
 /// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
-/// The `cancelled` PRs are all one level below the last of the others (the first when there is none); their needs count for nothing.
+/// The `cancelled` Workflows are all one level below the last of the others (the first when there is none); their needs count for nothing.
 pub fn levels(workflows: &[WorkflowNode]) -> Vec<usize> {
     fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
@@ -103,7 +103,7 @@ pub fn levels(workflows: &[WorkflowNode]) -> Vec<usize> {
     (0..workflows.len()).map(|i| if workflows[i].status == WorkflowStatus::Cancelled { below } else { by_needs[i] }).collect()
 }
 
-/// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` PR, and none on one.
+/// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` Workflow, and none on one.
 fn live_needs(workflows: &[WorkflowNode], i: usize) -> Vec<usize> {
     if workflows[i].status == WorkflowStatus::Cancelled {
         return Vec::new();
@@ -145,9 +145,9 @@ fn footer_text(workflow: &WorkflowNode) -> Option<String> {
     (!parts.is_empty()).then(|| format!(" {} ", parts.join(" · ")))
 }
 
-/// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
-/// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. The Lead's dot
+/// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the Workflow has
+/// a pull request, the state in the palette's Workflow state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
+/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the Workflow's status, muted. The Lead's dot
 /// (`WorkflowNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
 #[cfg(test)]
 pub fn title(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
@@ -188,7 +188,7 @@ fn title_of(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static>
     }
     spans.push(" ".into());
     if workflow.status == WorkflowStatus::Cancelled {
-        // the whole title is muted: the PR is shown, counted nowhere
+        // the whole title is muted: the Workflow is shown, counted nowhere
         spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::muted_text()));
     }
     Line::from(spans)
@@ -211,13 +211,13 @@ impl Drop for LayoutGuard {
     }
 }
 
-/// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
-/// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
-/// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
+/// The whole canvas of boxes: one per Workflow of `prs`, each holding the chart of its
+/// `jobs`. The pills are in the order of `prs`, then of each Workflow's Jobs. A running Job's icon is the spinner's `frame`.
+/// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a Workflow.
 pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     #[cfg(test)]
     LAYOUTS.with(|n| n.set(n.get() + 1));
-    // The explore Jobs (no PR) draw in one Plan-level box above the PR boxes (D1-A); every other Job is its PR's.
+    // The explore Jobs (no Workflow) draw in one Plan-level box above the Workflow boxes (D1-A); every other Job is its Workflow's.
     let explore: Vec<&JobNode> = jobs.iter().filter(|j| j.workflow.is_none()).collect();
     let charts: Vec<Chart> = workflows
         .iter()
@@ -258,7 +258,7 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
         r.sort_by(|a, b| workflows[*a].key.cmp(&workflows[*b].key));
     }
     let row_h: Vec<u16> = rows.iter().map(|r| r.iter().map(|&i| size[i].1).max().unwrap_or(0)).collect();
-    // the explore box takes its own row at the top, `GAP` above the first row of PR boxes
+    // the explore box takes its own row at the top, `GAP` above the first row of Workflow boxes
     let top0 = explore_size.map_or(0, |(_, h)| h + GAP);
     let ys: Vec<u16> = row_h.iter().scan(top0, |y, h| Some(std::mem::replace(y, *y + h + GAP))).collect();
     let mut at = vec![(0u16, 0u16); workflows.len()];
@@ -316,7 +316,7 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
     let lines = palette::muted_text();
     let mut links = Links::default();
-    // the one explore Jobs box, above every PR box, no footer and no need-line to a PR
+    // the one explore Jobs box, above every Workflow box, no footer and no need-line to a Workflow
     if let (Some(chart), Some((w, h))) = (explore_chart.as_ref(), explore_size) {
         let rect = Rect::new(0, 0, w, h);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart })
@@ -481,7 +481,7 @@ mod tests {
             workflow("status", &["cleanup"]),
         ];
         assert_eq!(levels(&workflows), [0, 0, 1, 2, 2, 3]);
-        // laid out: every pill of a PR not merged is below every pill of a merged one
+        // laid out: every pill of a Workflow not merged is below every pill of a merged one
         let jobs: Vec<JobNode> = workflows.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
         let c = layout(&workflows, &jobs, &NeedsUser::default(), 0).chart;
         let y = |key: &str| c.pills.iter().find(|p| p.key == format!("j-{key}")).unwrap().rect.y;
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn a_pr_not_merged_with_no_needs_is_floored_below_the_merged_ones() {
-        // the merged chain is two rows deep: the independent open PR goes to the third, not the first
+        // the merged chain is two rows deep: the independent open Workflow goes to the third, not the first
         let workflows = [merged("a", &[]), merged("b", &["a"]), workflow("c", &[])];
         assert_eq!(levels(&workflows), [0, 1, 2]);
         // needs still win over the floor
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn an_open_pull_request_that_conflicts_reads_conflict_in_the_waiting_colour() {
-        // every box is a PR a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
+        // every box is a Workflow a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
         let failed = palette::fg_clickable(Meaning::Waiting).fg;
         let mut p = workflow("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!((b.chart.buf[(r.x, r.y)].symbol(), b.chart.buf[(r.right() - 1, r.y)].symbol()), ("\u{e0b6}", "\u{e0b4}"), "the caps are on the whole pill's rectangle");
     }
 
-    /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
+    /// The pane's body of `w`×`h` cells showing the margined chart of one empty Workflow at `scroll`, one row per string.
     fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
         let c = layout(&[workflow("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));

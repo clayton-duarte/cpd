@@ -42,7 +42,7 @@ pub(super) fn pending(args: PendingArgs) -> Result<Output, CpdError> {
 }
 
 /// Every Plan of the Context not `done` and not archived, in creation order,
-/// each with its plan-level explore Jobs and its unmerged PRs with their Jobs.
+/// each with its plan-level explore Jobs and its unmerged Workflows with their Jobs.
 fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, phase, lead_session FROM plans
@@ -69,7 +69,7 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
 
 /// The Plan's explore Jobs (`jobs.pr` NULL, commands.md §3.12) not `cancelled`, in `seq` order: beside `prs`, each
 /// `{key, kind, status, tier, title, touches}` with `waiting_on` only when it cannot start (`status` is then `waiting`,
-/// the same display rule as a PR Job). `tier` is the displayed Tier, `touches` the parsed JSON (`[]` when null).
+/// the same display rule as a Workflow Job). `tier` is the displayed Tier, `touches` the parsed JSON (`[]` when null).
 fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
     all.iter()
         .filter(|job| job.workflow.is_none() && job.status != "cancelled")
@@ -90,7 +90,7 @@ fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
         .collect()
 }
 
-/// The Plan's PRs not `merged` and not `cancelled`, in key order. A PR that cannot start yet has `waiting_on`: the keys of
+/// The Plan's Workflows not `merged` and not `cancelled`, in key order. A Workflow that cannot start yet has `waiting_on`: the keys of
 /// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
 /// hs-d523: a display status, the stored one is `queued`); see [`Display`].
 fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
@@ -124,7 +124,7 @@ fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job])
         .collect()
 }
 
-/// The PR's Jobs not `cancelled`, in `seq` order. The PR is not merged, so a
+/// The Workflow's Jobs not `cancelled`, in `seq` order. The Workflow is not merged, so a
 /// `merged` Job is on the Lead Branch and not yet on the base.
 fn jobs(conn: &Connection, plan: &str, workflow: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
@@ -160,14 +160,14 @@ fn jobs(conn: &Connection, plan: &str, workflow: &str, display: &Display, all: &
         .collect()
 }
 
-/// `waiting_on` of a Job or PR, only when it waits for something.
+/// `waiting_on` of a Job or Workflow, only when it waits for something.
 fn add_waiting_on(item: &mut Value, blockers: Vec<String>) {
     if !blockers.is_empty() {
         item["waiting_on"] = json!(blockers);
     }
 }
 
-/// What `waiting_on` of a Job or PR says, joined: none for work that waits for nothing.
+/// What `waiting_on` of a Job or Workflow says, joined: none for work that waits for nothing.
 fn waiting_on(item: &Value) -> Option<String> {
     let keys: Vec<&str> = item["waiting_on"].as_array()?.iter().filter_map(Value::as_str).collect();
     Some(keys.join(", "))
@@ -185,7 +185,7 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
         for workflow in plan["workflows"].as_array().expect("workflows") {
             let _ = write!(
                 out,
-                "\n### PR {} ({}, base {}): {}\n\n",
+                "\n### Workflow {} ({}, base {}): {}\n\n",
                 text(&workflow["key"]),
                 text(&workflow["repo"]),
                 text(&workflow["base"]),

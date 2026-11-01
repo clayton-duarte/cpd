@@ -1,6 +1,6 @@
 //! What every read shares: the typed enums of the rows (parsed once, at the
 //! boundary: a value the schema forbids is `store_failed`, never defaulted),
-//! Job counts, PR state, Sessions and Plan heads.
+//! Job counts, Workflow state, Sessions and Plan heads.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -154,7 +154,7 @@ impl JobCounts {
     }
 }
 
-/// The state of a PR as cpd knows it (it never asks GitHub: the engine polls).
+/// The state of a Workflow as cpd knows it (it never asks GitHub: the engine polls).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrState {
     Open,
@@ -164,8 +164,8 @@ pub enum PrState {
 }
 
 impl PrState {
-    /// The state of a PR that is `merged` or not, whose pull request row says `row_state`
-    /// (`pull_requests.state`; none before `pr open`): merged once the PR is, closed while the pull
+    /// The state of a Workflow that is `merged` or not, whose pull request row says `row_state`
+    /// (`pull_requests.state`; none before `pr open`): merged once the Workflow is, closed while the pull
     /// request is closed without a merge (A11).
     pub(super) fn of(merged: bool, row_state: Option<&str>) -> PrState {
         match row_state {
@@ -176,7 +176,7 @@ impl PrState {
     }
 }
 
-/// The summary of a PR's checks, cpd-ui's `pr.rs`: any failure wins over pending, pending over passed.
+/// The summary of a Workflow's checks, cpd-ui's `pr.rs`: any failure wins over pending, pending over passed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Checks {
     None,
@@ -332,7 +332,7 @@ pub struct PlanHead {
     pub archived_at: Option<String>,
     /// The Plan has a failed Job being worked on (pro-d88): its Lead's dot is the red loader.
     pub fixing: bool,
-    /// Git/PR work of the Plan (pro-d200): any PR is open or conflicting, or an open/update Job is queued or running.
+    /// Git/Workflow work of the Plan (pro-d200): any Workflow is open or conflicting, or an open/update Job is queued or running.
     pub git_active: bool,
 }
 
@@ -431,14 +431,14 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
         let workflow = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
             (Some(number), Some(url), Some(opened_at)) => {
-                // A PR with a number has its pull request (`prs` CHECK).
-                let checks = row_checks.ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
+                // A Workflow with a number has its pull request (`prs` CHECK).
+                let checks = row_checks.ok_or_else(|| bad_row(format!("Workflow of Plan {plan} has no pull request row")))?;
                 Some(Pr {
                     number,
                     url,
                     opened_at,
                     state: PrState::of(phase == Phase::Done, row_state.as_deref()),
-                    checks: Checks::parse(&format!("PR of Plan {plan}"), &checks)?,
+                    checks: Checks::parse(&format!("Workflow of Plan {plan}"), &checks)?,
                 })
             }
             _ => None,

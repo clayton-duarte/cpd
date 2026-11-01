@@ -197,7 +197,7 @@ mod tests {
              -- queued, not ready: a Dependency that is not merged
              INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'busy', 'a', 'running', 4), ('pay', 'blocked', 'a', 'queued', 5);
              INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'blocked', 'busy');
-             -- queued, not ready: its PR has not started
+             -- queued, not ready: its Workflow has not started
              INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'later', 'w', 'queued', 6);",
         )
         .unwrap();

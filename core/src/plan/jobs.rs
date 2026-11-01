@@ -16,7 +16,7 @@ pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
 pub const KINDS: [&str; 9] = ["work", "docs", "test", "impl", "verify", "open", "update", "scout", "research"];
 
-/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a PR.
+/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a Workflow.
 pub fn is_explore(kind: &str) -> bool {
     matches!(kind, "scout" | "research")
 }
@@ -39,7 +39,7 @@ pub struct JobSpec {
 pub struct Job {
     pub seq: i64,
     pub key: String,
-    /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
+    /// The key of the Workflow the Job belongs to (`jobs.pr`, §2.2).
     pub workflow: Option<String>,
     pub title: String,
     pub tier: Option<String>,
@@ -70,7 +70,7 @@ pub struct Job {
 }
 
 impl Job {
-    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
+    /// The key of the Job's Workflow; empty for a Job with none (an explore Job), which no Workflow key equals.
     pub fn workflow_str(&self) -> &str {
         self.workflow.as_deref().unwrap_or_default()
     }

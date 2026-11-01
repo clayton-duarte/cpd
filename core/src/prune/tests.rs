@@ -19,7 +19,7 @@ use crate::ports::Fakes;
 use crate::store::Store;
 
 /// A repo `work` on `main` whose `origin` is the GitHub repo `acme/work` (a bare repo of the Universe behind
-/// an `insteadOf`), both at the same commit; an empty store; a `gh` that lists no merged PR.
+/// an `insteadOf`), both at the same commit; an empty store; a `gh` that lists no merged Workflow.
 pub(super) struct Fixture {
     pub(super) tmp: TempDir,
     pub(super) fakes: Fakes,
@@ -167,8 +167,8 @@ pub(super) fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| (*s).to_owned()).collect()
 }
 
-/// Plan `qq` (dispatch): PR `followups` in dispatch (Job `j`, Attempt `j-a1`) and PR `cpd` merged (Job `old`,
-/// Attempt `old-a1`); Plan `rr` is done, with one PR that is not merged.
+/// Plan `qq` (dispatch): Workflow `followups` in dispatch (Job `j`, Attempt `j-a1`) and Workflow `cpd` merged (Job `old`,
+/// Attempt `old-a1`); Plan `rr` is done, with one Workflow that is not merged.
 const STORE_Q: &str = "
 INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -208,7 +208,7 @@ fn a_failed_command_is_reported_and_exits_non_zero() {
 #[test]
 fn keeps_what_cpd_still_runs() {
     let mut fx = Fixture::new();
-    // Plan `rr` is done: its PR is not protected.
+    // Plan `rr` is done: its Workflow is not protected.
     fx.store(STORE_Q);
     fx.merged_prs(NO_PRS);
     // All at origin/main's commit, so every one of them was removable before.
@@ -242,7 +242,7 @@ fn keeps_what_cpd_still_runs() {
 #[test]
 fn matches_a_legacy_lead_branch_renamed_locally() {
     let mut fx = Fixture::new();
-    // Local `cpd/p/k`, whose PR #1 had head `cpd/p` and was squash-merged into main.
+    // Local `cpd/p/k`, whose Workflow #1 had head `cpd/p` and was squash-merged into main.
     let renamed = fx.worktree("renamed", "cpd/p/k", "main", Some("k.txt"));
     let head = fx.head(&renamed);
     let other = fx.worktree("other", "cpd/o/k", "main", Some("o.txt"));

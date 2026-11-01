@@ -57,7 +57,7 @@ pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, 
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
-        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a PR with no behaviour is made with --shape docs or --shape config.",
+        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a Workflow with no behaviour is made with --shape docs or --shape config.",
     )
     .with("job", job)
 }
@@ -95,7 +95,7 @@ pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, pol
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,
-            format!("The impl Job {} needs no test Job of its PR, so it names no test to run.", job.key),
+            format!("The impl Job {} needs no test Job of its Workflow, so it names no test to run.", job.key),
         )
         .with("job", job.key.as_str())
         .with("jobs", json!(Vec::<String>::new())));

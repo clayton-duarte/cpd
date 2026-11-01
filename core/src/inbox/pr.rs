@@ -86,7 +86,7 @@ impl Status {
 /// What the table reads of a pull request besides its row.
 struct Facts<'a> {
     row: &'a PullRequest,
-    /// The owner's Lead works, or the owner's PR has a live `update` or `work` Job.
+    /// The owner's Lead works, or the owner's Workflow has a live `update` or `work` Job.
     handled: bool,
     owned: bool,
     posted: bool,
@@ -95,8 +95,8 @@ struct Facts<'a> {
 }
 
 /// The STATUS table, first match wins: draft; broken; checks running; ready for user review (also when stacked); ready to
-/// merge; then a stacked PR is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
-/// else a posted PR is waiting for peer review, else waiting. `post_enabled` is asked at most once, and only when needed.
+/// merge; then a stacked Workflow is `Stacked` when approved or not posted (pro-d152: stacking blocks only ready to merge),
+/// else a posted Workflow is waiting for peer review, else waiting. `post_enabled` is asked at most once, and only when needed.
 fn classify(f: &Facts<'_>, mut post_enabled: impl FnMut() -> bool) -> Status {
     let r = f.row;
     if r.draft {
@@ -166,7 +166,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
         let (plan, key, context, lead) = (get(1)?, get(2)?, get(3)?, get(4)?);
         let (handled, posted): (bool, bool) = (row.get(width + 5)?, row.get(width + 6)?);
         let plan = plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?;
-        let key = key.as_deref().map(|k| id("PR key", k, WorkflowKey::parse)).transpose()?;
+        let key = key.as_deref().map(|k| id("Workflow key", k, WorkflowKey::parse)).transpose()?;
         let owner = plan.as_ref().zip(key.as_ref());
         let facts = Facts { row: &pull, handled, owned: owner.is_some(), posted, clean };
         let status = classify(&facts, || {
@@ -191,7 +191,7 @@ pub fn conditions(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, C
     Ok(out)
 }
 
-/// The `pr-closed` conditions: one red item per closed-unmerged PR (`crate::pr::closed::closed_unmerged`).
+/// The `pr-closed` conditions: one red item per closed-unmerged Workflow (`crate::pr::closed::closed_unmerged`).
 pub fn closed_conditions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(crate::pr::closed::closed_unmerged(conn, None)?
         .into_iter()

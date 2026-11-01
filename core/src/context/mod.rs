@@ -102,7 +102,7 @@ pub enum Command {
     Docs(curation::DocsArgs),
 }
 
-/// A Jira key (a Context's Epic, a PR's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
+/// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Jira(String);
 

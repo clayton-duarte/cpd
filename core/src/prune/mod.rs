@@ -47,7 +47,7 @@ const GIT: Duration = Duration::from_secs(120);
 const GH: Duration = Duration::from_secs(120);
 /// The store's busy timeout, as the config default.
 const BUSY_MS: u64 = 5000;
-/// How many merged PRs deep a chain of bases may go before it must reach main.
+/// How many merged Workflows deep a chain of bases may go before it must reach main.
 const MAX_LEVELS: usize = 5;
 
 /// Prunes `args.repos` on `ports`, reading the protected set from the store of `home`.
@@ -78,8 +78,8 @@ pub fn command(args: Args) -> Result<Output, CpdError> {
     Ok(Output::Owned)
 }
 
-/// The branches cpd still runs: the Lead Branch of each unmerged PR of a Plan that is not done, and
-/// `cpd/<plan>--<attempt>` for each Attempt of a Job of such a PR.
+/// The branches cpd still runs: the Lead Branch of each unmerged Workflow of a Plan that is not done, and
+/// `cpd/<plan>--<attempt>` for each Attempt of a Job of such a Workflow.
 fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError> {
     let mut store = Store::open_with(&*ports.clock, home, BUSY_MS, None)?;
     store.read(|conn| {
@@ -106,7 +106,7 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
     })
 }
 
-/// A merged PR of `gh pr list`.
+/// A merged pull request of `gh pr list`.
 struct Merged {
     number: u64,
     head: String,
@@ -179,7 +179,7 @@ fn merged_prs(ports: &Ports, slug: &str) -> Result<Vec<Merged>, String> {
             })
         })
         .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| "cannot read the output of gh pr list: a PR lacks a field".to_owned())
+        .ok_or_else(|| "cannot read the output of gh pr list: a pull request lacks a field".to_owned())
 }
 
 fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
@@ -204,12 +204,12 @@ fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
         .collect())
 }
 
-/// True when `base` reaches main through merged PRs.
+/// True when `base` reaches main through merged Workflows.
 fn reached(workflows: &[Merged], base: &str, level: usize) -> bool {
     base == "main" || (level < MAX_LEVELS && workflows.iter().any(|p| p.head == base && reached(workflows, &p.base, level + 1)))
 }
 
-/// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
+/// True when a merged Workflow of the Lead Branch of `branch` contains `head` and reached main.
 fn merged_via_pr(ports: &Ports, repo: &Path, workflows: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
     let lead = lead_of(branch);
     let attempt_plan = attempt_plan(branch);

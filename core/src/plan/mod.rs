@@ -2,7 +2,7 @@
 //!
 //! - [`jobs`]: a Plan's Jobs as read, the Locked-Job fingerprint of §2.3, the cycle check;
 //! - [`display`]: what the views show of cancelled work and of work that waits (one derivation for all of them);
-//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
+//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the Workflows;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;

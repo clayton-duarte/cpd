@@ -1,4 +1,4 @@
-//! `plan list` (commands.md §4.2): every Plan with its PRs, a read-only
+//! `plan list` (commands.md §4.2): every Plan with its Workflows, a read-only
 //! snapshot in one read transaction with its `events_cursor` (§17).
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 
 /// The Plans and the cursor, read through `conn` with four statements whatever
 /// the size of the Ledger (as `tui/src/read` does): the Plans, the Jobs counted
-/// by Plan and status, the PRs with their pull request, the cursor.
+/// by Plan and status, the Workflows with their pull request, the cursor.
 fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), CpdError> {
     let context = args.context.as_ref().map(|c| c.as_str().to_owned());
     let phase = args.phase.map(|p| p.as_str());
@@ -59,7 +59,7 @@ fn counts_value(by_status: &BTreeMap<String, i64>) -> Value {
     Value::Object(STATUSES.iter().map(|s| ((*s).to_owned(), json!(by_status.get(*s).copied().unwrap_or(0)))).collect())
 }
 
-/// What the Dispatch column shows of every PR (§13.2, §17), by Plan, in key order:
+/// What the Dispatch column shows of every Workflow (§13.2, §17), by Plan, in key order:
 /// `key`, `repo`, `status`, `pr` and `pull_request`.
 fn workflows(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
     let mut stmt = conn.prepare(

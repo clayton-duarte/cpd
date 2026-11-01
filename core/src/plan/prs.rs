@@ -1,4 +1,4 @@
-//! The `prs` row as read (contract §2.2 PR, R34 A6): one struct for every
+//! The `prs` row as read (contract §2.2 Workflow, R34 A6): one struct for every
 //! reader, parsed once, so what follows holds valid values.
 
 use std::collections::BTreeMap;
@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use crate::error::CpdError;
 use crate::ids::{PlanId, WorkflowKey};
 
-/// The pull request of a PR that is `open` or `merged` (contract §2.2 PR `pr`).
+/// The pull request of a Workflow that is `open` or `merged` (contract §2.2 Workflow `pr`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pull {
     pub number: i64,
@@ -17,11 +17,11 @@ pub struct Pull {
     pub opened_at: String,
 }
 
-/// One PR of a Plan.
+/// One Workflow of a Plan.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowRow {
     pub key: WorkflowKey,
-    /// As stored: the fingerprint and `pr add` compare it as text.
+    /// As stored: the fingerprint and `workflow add` compare it as text.
     pub repo: String,
     pub base: String,
     pub lead_branch: String,
@@ -29,47 +29,47 @@ pub struct WorkflowRow {
     pub lead_worktree: Option<PathBuf>,
     /// `waiting`, `dispatch`, `open`, `merged` or `cancelled` (§3.8).
     pub status: String,
-    /// The PRs it needs, sorted, as PR references (contract §2.2): the bare key of a PR of its Plan,
-    /// `<plan>/<key>` of a PR of another.
+    /// The Workflows it needs, sorted, as Workflow references (contract §2.2): the bare key of a Workflow of its Plan,
+    /// `<plan>/<key>` of a Workflow of another.
     pub needs: Vec<String>,
     pub pull: Option<Pull>,
-    /// The id of the PR's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
+    /// The id of the Workflow's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
     pub pull_request: Option<i64>,
-    /// The repo's GitHub name (`prs.name`); null for a PR added before it existed.
+    /// The repo's GitHub name (`prs.name`); null for a Workflow added before it existed.
     pub name: Option<String>,
-    /// The PR's title (`prs.title`, hs-d285): what the summary says of it; null until set.
+    /// The Workflow's title (`prs.title`, hs-d285): what the summary says of it; null until set.
     pub title: Option<String>,
-    /// The PR's own Jira ticket (`prs.jira`): null until set.
+    /// The Workflow's own Jira ticket (`prs.jira`): null until set.
     pub jira: Option<String>,
-    /// The PR's stored shape (`prs.shape`, hs-d497): `tdd`, `docs`, `config`, or `free` for a PR that existed before
+    /// The Workflow's stored shape (`prs.shape`, hs-d497): `tdd`, `docs`, `config`, or `free` for a Workflow that existed before
     /// migration `job-kinds`.
     pub shape: String,
-    /// The head branch of the pull request cpd adopted (`prs.head_ref`, pro-n8); null for a cpd PR.
+    /// The head branch of the pull request cpd adopted (`prs.head_ref`, pro-n8); null for a cpd Workflow.
     pub head_ref: Option<String>,
     /// When the Lead Branch started (`prs.started_at`, ISO with milliseconds); null before `dispatch`.
     pub started_at: Option<String>,
 }
 
 impl WorkflowRow {
-    /// The branch every push, fetch, `gh pr list --head` and merged check names: `head_ref` of an adopted PR, else the Lead Branch.
+    /// The branch every push, fetch, `gh pr list --head` and merged check names: `head_ref` of an adopted Workflow, else the Lead Branch.
     pub fn remote_branch(&self) -> &str {
         self.head_ref.as_deref().unwrap_or(&self.lead_branch)
     }
 
-    /// The instant a GitHub pull request of the head must not predate to be this PR's: the row's start. An adopted PR
-    /// (`head_ref` set) pre-exists its row by design, so it has none. A cpd PR with no `started_at` is a bad row.
+    /// The instant a GitHub pull request of the head must not predate to be this Workflow's: the row's start. An adopted Workflow
+    /// (`head_ref` set) pre-exists its row by design, so it has none. A cpd Workflow with no `started_at` is a bad row.
     pub fn bound_since(&self) -> Result<Option<jiff::Timestamp>, CpdError> {
         if self.head_ref.is_some() {
             return Ok(None);
         }
-        let started = self.started_at.as_deref().ok_or_else(|| CpdError::bad_row(format!("PR {} has no started_at", self.key)))?;
-        started.parse().map(Some).map_err(|e| CpdError::bad_row(format!("PR {} has the started_at {started:?}: {e}", self.key)))
+        let started = self.started_at.as_deref().ok_or_else(|| CpdError::bad_row(format!("Workflow {} has no started_at", self.key)))?;
+        started.parse().map(Some).map_err(|e| CpdError::bad_row(format!("Workflow {} has the started_at {started:?}: {e}", self.key)))
     }
 }
 
 #[cfg(test)]
 impl WorkflowRow {
-    /// A PR of the fields the fingerprint, `plan render` and `--pr` selection read.
+    /// A Workflow of the fields the fingerprint, `plan render` and `--workflow` selection read.
     pub fn fixture(key: &str, repo: &str, base: &str, needs: &[&str], status: &str) -> WorkflowRow {
         WorkflowRow {
             key: WorkflowKey::parse(key).unwrap(),
@@ -93,7 +93,7 @@ impl WorkflowRow {
 
 type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>, Option<String>, Option<String>));
 
-/// The needs of every PR of `plan` by PR key, each list sorted, as keys of the Plan (contract §2.2).
+/// The needs of every Workflow of `plan` by Workflow key, each list sorted, as keys of the Plan (contract §2.2).
 pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT workflow, needs FROM workflow_needs WHERE plan = ?1")?;
@@ -105,7 +105,7 @@ pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, V
     Ok(needs)
 }
 
-/// Every PR of `plan` in key order, `cancelled` ones included.
+/// Every Workflow of `plan` in key order, `cancelled` ones included.
 pub fn load_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRow>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
@@ -120,7 +120,7 @@ pub fn load_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRo
     raw.into_iter()
         .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref, started_at, jira))| {
             let needs = needs.remove(&key).unwrap_or_default();
-            let key = WorkflowKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
+            let key = WorkflowKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a Workflow key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
@@ -138,7 +138,7 @@ mod tests {
     use crate::home::CpdHome;
     use crate::store::Store;
 
-    /// commands-G3: one PR row, read once, with every column the three
+    /// commands-G3: one Workflow row, read once, with every column the three
     /// readers (`WorkflowSpec`, `start::Workflow`, `row::WorkflowRow`) had between them.
     #[test]
     fn a_pr_row_carries_the_columns_every_reader_needs() {

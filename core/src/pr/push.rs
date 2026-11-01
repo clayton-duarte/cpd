@@ -30,18 +30,18 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let lead = workflow.lead(&id)?.clone();
     let policy = workflow_policy(&mut env, &id, &key)?;
 
-    // 1. G, read once; 2. when the PR's gate is local, the Lead worktree brought to G and the Gate on it there.
+    // 1. G, read once; 2. when the Workflow's gate is local, the Lead worktree brought to G and the Gate on it there.
     let sha = git::run::rev_parse(std::path::Path::new(&workflow.repo), &format!("refs/heads/{branch}"))?;
     if policy.gate.workflow == Gate::Local {
         require_clean_lead(&lead, &id, workflow)?;
         git::sync_lead(&lead, &branch)?;
         let hidden = hide_untracked(&lead)?;
-        let gated = gate(&env, &policy, &id, workflow, &lead, &sha, &format!("pr push --pr {key}"));
+        let gated = gate(&env, &policy, &id, workflow, &lead, &sha, &format!("pr push --workflow {key}"));
         hidden.restore()?;
         gated?;
     }
 
-    // The PR is read again: merged during the Gate, nothing is pushed.
+    // The Workflow is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(&id)?;
     require_open(&plan, &args)?;
 
@@ -53,7 +53,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
             let next = if adopted { "It gained commits cpd lacks: catch up" } else { "Rebase" };
             return Err(CpdError::new(
                 ErrorCode::PushRejected,
-                format!("The remote {remote_branch} does not contain the gated commit, so it moved: nothing was pushed. {next} with cpd pr rebase --pr {key}."),
+                format!("The remote {remote_branch} does not contain the gated commit, so it moved: nothing was pushed. {next} with cpd pr rebase --workflow {key}."),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str())
@@ -65,7 +65,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"plan": id, "pr": key, "pushed": pushed, "sha": sha, "remote": remote})))
 }
 
-/// The selected PR must be `open` (`illegal_transition`); a Plan that has not
+/// The selected Workflow must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
 fn require_open<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {

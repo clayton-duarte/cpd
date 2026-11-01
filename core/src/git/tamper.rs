@@ -8,10 +8,10 @@ use serde_json::json;
 use super::run::{has_origin, ok, run};
 use crate::error::{CpdError, ErrorCode};
 
-/// Always protected, whatever the PR's policy says; the PR's `protected.paths` (§7.5) come on top of it.
+/// Always protected, whatever the Workflow's policy says; the Workflow's `protected.paths` (§7.5) come on top of it.
 const ALWAYS_PREFIX: &str = ".cpd/";
 
-/// The ref a PR's base is compared at: `origin/<base>`, or `<base>` in a repo with no `origin`.
+/// The ref a Workflow's base is compared at: `origin/<base>`, or `<base>` in a repo with no `origin`.
 pub fn base_ref(dir: &Path, base: &str) -> Result<String, CpdError> {
     Ok(if has_origin(dir)? { format!("origin/{base}") } else { base.to_owned() })
 }
@@ -34,7 +34,7 @@ fn blob(dir: &Path, rev: &str, path: &str) -> Result<Option<String>, CpdError> {
 ///
 /// The diff is `git diff --name-only --no-renames <diff_base>...<branch>`, so renaming a
 /// protected file away still shows its old path. The protected paths are
-/// anything under `.cpd/` and the PR's `protected` list (an entry ending in `/` is a directory prefix, any
+/// anything under `.cpd/` and the Workflow's `protected` list (an entry ending in `/` is a directory prefix, any
 /// other an exact path). `lead` is the Lead tip; `base_ref` is [`base_ref`]'s.
 pub fn touched_protected(
     dir: &Path,
@@ -48,9 +48,9 @@ pub fn touched_protected(
 }
 
 /// [`touched_protected`] with several base revisions: a protected path is not touched when its version on `branch`
-/// is the one on `lead` or on **any** of `base_refs`. A **stacked** PR passes two (§7.5): `origin/<base>`, its base
-/// PR's Lead Branch, and `origin/<root>`, the root base the stack lands on, so a Job that merges the newest root
-/// base brings protected files the base PR's branch does not have yet without tampering.
+/// is the one on `lead` or on **any** of `base_refs`. A **stacked** Workflow passes two (§7.5): `origin/<base>`, its base
+/// Workflow's Lead Branch, and `origin/<root>`, the root base the stack lands on, so a Job that merges the newest root
+/// base brings protected files the base Workflow's branch does not have yet without tampering.
 pub fn touched_protected_over(
     dir: &Path,
     lead: &str,

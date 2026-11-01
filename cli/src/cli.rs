@@ -117,7 +117,7 @@ pub enum Command {
     Resource(resource::Command),
     /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
     Prune(prune::Args),
-    /// Remove the worktrees and branches of merged and cancelled PRs (commands.md §29)
+    /// Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29)
     Janitor,
     /// Tag the commit that set the workspace version (commands.md §26.1)
     Tag,

@@ -1,4 +1,4 @@
-//! `context owner` (commands.md §3.13): sets or changes the owner of a Context while no PR row exists.
+//! `context owner` (commands.md §3.13): sets or changes the owner of a Context while no Workflow row exists.
 //! Sessions already started keep the policy text of the old owner until they restart (contract §8.3).
 
 use clap::Args;

@@ -75,7 +75,7 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. No view draws it; `cli/tests/pr.rs` reads it.
+/// A Plan: its head (counts), its label and the rows of its Workflows that have a pull request. No view draws it; `cli/tests/pr.rs` reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
@@ -83,21 +83,21 @@ pub struct PlanCard {
     pub label: String,
     /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any).
     pub lead_place: Place,
-    /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
+    /// Its Workflows that have a pull request, in key order (R34), as the column draws them; empty when none has one.
     pub workflows: Vec<WorkflowRow>,
 }
 
-/// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
+/// A Workflow's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkflowRow {
     pub key: WorkflowKey,
     pub number: i64,
     pub state: PrState,
-    /// Always set: a PR with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
+    /// Always set: a Workflow with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
     pub polled: Option<PolledPr>,
 }
 
-/// What a poll read from the PR.
+/// What a poll read from the Workflow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolledPr {
     pub title: String,
@@ -105,7 +105,7 @@ pub struct PolledPr {
     pub checks: Checks,
 }
 
-/// The PR's review decision, from `pull_requests.review_decision`.
+/// The Workflow's review decision, from `pull_requests.review_decision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDecision {
     None,
@@ -189,7 +189,7 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
     Ok(out)
 }
 
-/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored in its `pull_requests` row.
+/// Plan id → its Workflows that have a pull request, in key order, each with what `pr poll` stored in its `pull_requests` row.
 fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT r.plan, r.key, r.pr_number, r.status, q.state, q.title, q.review_decision, q.checks
@@ -200,7 +200,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdErr
     while let Some(r) = rows.next()? {
         let (plan, key, number, status, row_state): (String, String, i64, String, String) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
-        let what = format!("PR {plan}/{key}");
+        let what = format!("Workflow {plan}/{key}");
         let state = PrState::of(status == "merged", Some(&row_state));
         let (title, decision, checks): (String, String, String) = (r.get(5)?, r.get(6)?, r.get(7)?);
         let decision = match decision.as_str() {
@@ -210,7 +210,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdErr
             _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
         };
         let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
-        let key = id("PR key", &key, WorkflowKey::parse)?;
+        let key = id("Workflow key", &key, WorkflowKey::parse)?;
         out.entry(plan).or_default().push(WorkflowRow { key, number, state, polled: Some(polled) });
     }
     Ok(out)

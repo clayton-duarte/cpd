@@ -83,7 +83,7 @@ fn context_owner(conn: &Connection, context: &str) -> Result<OwnerLogin, CpdErro
     }
 }
 
-/// `Repo(owner, name)`, or `Owner(owner)` for a PR whose `name` is null.
+/// `Repo(owner, name)`, or `Owner(owner)` for a Workflow whose `name` is null.
 fn workflow_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, CpdError> {
     Ok(match name {
         Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
@@ -91,7 +91,7 @@ fn workflow_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, Cp
     })
 }
 
-/// The key of PR `pr` of Plan `plan`, and of the Context of the Plan.
+/// The key of Workflow `pr` of Plan `plan`, and of the Context of the Plan.
 fn key_of_workflow(conn: &Connection, plan: &str, workflow: &str) -> Result<PolicyKey, CpdError> {
     let context: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?;
@@ -100,12 +100,12 @@ fn key_of_workflow(conn: &Connection, plan: &str, workflow: &str) -> Result<Poli
         .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, workflow], |r| r.get(0))
         .optional()?;
     let name = name.ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {workflow} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {workflow} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
     })?;
     workflow_key(context_owner(conn, &context)?, name)
 }
 
-/// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's PR (an explore Job has none: its Context's owner, as a Lead's).
+/// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's Workflow (an explore Job has none: its Context's owner, as a Lead's).
 pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
     let row: Option<(String, String, Option<String>, Option<String>)> = conn
         .query_row("SELECT role, context, plan, attempt FROM sessions WHERE id = ?1", [session.as_str()], |r| {

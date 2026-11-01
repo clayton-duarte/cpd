@@ -1,6 +1,6 @@
-//! The `open` Job (contract §2.2 "Job kinds", §3.7 E4, hs-d340): the last Job of a started PR, which cpd adds and the Lead never does.
-//! Its Spec is fixed text compiled into the binary and rendered from the PR's repo, base and Lead Branch, so nothing in a repo changes
-//! it; the stored copy is written at the insert (its fingerprint with it) and the Worker's Spec is rendered again at A3 from the live PR row;
+//! The `open` Job (contract §2.2 "Job kinds", §3.7 E4, hs-d340): the last Job of a started Workflow, which cpd adds and the Lead never does.
+//! Its Spec is fixed text compiled into the binary and rendered from the Workflow's repo, base and Lead Branch, so nothing in a repo changes
+//! it; the stored copy is written at the insert (its fingerprint with it) and the Worker's Spec is rendered again at A3 from the live Workflow row;
 //! it has no Dependency rows (its Ready rule is derived, [`waiting_for`]).
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -17,22 +17,22 @@ use crate::store::WriteTxn;
 /// `job-added`'s `by` of an `open` Job: engine E4.
 pub const BY_ENGINE: &str = "engine";
 
-/// `job-added`'s `by` of the opener stub `pr add` lays out (commands.md §9.4, hs-d573).
-pub const BY_TEMPLATE: &str = "pr add";
+/// `job-added`'s `by` of the opener stub `workflow add` lays out (commands.md §9.4, hs-d573).
+pub const BY_TEMPLATE: &str = "workflow add";
 
-/// The title of a Job cpd adds to a PR: the PR's own title, else its key (a PR that existed before migration `pr-title` has none).
+/// The title of a Job cpd adds to a Workflow: the Workflow's own title, else its key (a Workflow that existed before migration `pr-title` has none).
 fn pr_title(workflow: &WorkflowRow) -> &str {
     workflow.title.as_deref().unwrap_or(workflow.key.as_str())
 }
 
-/// The key of a PR's `open` or `update` Job: the first free of `<prefix>-<pr>`, `<prefix>-<pr>-2`, … (`open` or `up`; at most 32
-/// characters, the PR key having at most 24).
+/// The key of a Workflow's `open` or `update` Job: the first free of `<prefix>-<pr>`, `<prefix>-<pr>-2`, … (`open` or `up`; at most 32
+/// characters, the Workflow key having at most 24).
 fn free_key(taken: &[String], prefix: &str, workflow: &WorkflowRow) -> Result<JobKey, CpdError> {
     let stem = format!("{prefix}-{}", workflow.key);
     (1u32..)
         .map(|n| if n == 1 { stem.clone() } else { format!("{stem}-{n}") })
         .find(|key| !taken.contains(key))
-        .ok_or_else(|| CpdError::bad_row(format!("PR {} has no free {prefix} Job key", workflow.key)))
+        .ok_or_else(|| CpdError::bad_row(format!("Workflow {} has no free {prefix} Job key", workflow.key)))
         .and_then(|key| JobKey::parse(&key))
 }
 
@@ -45,11 +45,11 @@ pub(crate) fn spec(workflow: &WorkflowRow) -> JobSpec {
     }
     JobSpec {
         goal: format!(
-            "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it, push it and open the pull request: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
+            "Make the Lead Branch {lead} of Workflow {key} fit its base {base}, so that cpd can gate it, push it and open the pull request: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
             key = workflow.key
         ),
         context: format!(
-            "Every other Job of PR {key} is merged or cancelled: its work is on {lead}, in the repo {repo}, and you work in a worktree cut from it. \
+            "Every other Job of Workflow {key} is merged or cancelled: its work is on {lead}, in the repo {repo}, and you work in a worktree cut from it. \
              You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot, pushes {lead} and opens the pull request, ready, never a draft.\n\n\
              1. `git fetch origin {base}`.\n\
              2. Test for a conflict with `git merge-tree --write-tree --name-only {remote} HEAD`: exit 0 means none, and a base that merely moved ahead is no reason to merge it; exit 1 lists the conflicted files.\n\
@@ -72,17 +72,17 @@ pub(crate) fn spec(workflow: &WorkflowRow) -> JobSpec {
     }
 }
 
-/// The fixed Spec of an `open` Job of an adopted PR: the pull request exists, and cpd updates it by pushing to its head branch.
+/// The fixed Spec of an `open` Job of an adopted Workflow: the pull request exists, and cpd updates it by pushing to its head branch.
 fn adopted_spec(workflow: &WorkflowRow, head_ref: &str) -> JobSpec {
     let mut spec = update_spec(workflow, Cause::Conflict);
     spec.goal = format!(
-        "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it and push it to {head_ref}, the head of the pull request that exists already: merge origin/{base} into it only if the two conflict, resolve the conflicts, and submit.",
+        "Make the Lead Branch {lead} of Workflow {key} fit its base {base}, so that cpd can gate it and push it to {head_ref}, the head of the pull request that exists already: merge origin/{base} into it only if the two conflict, resolve the conflicts, and submit.",
         lead = workflow.lead_branch,
         key = workflow.key,
         base = workflow.base,
     );
     spec.context = format!(
-        "The pull request of PR {key} exists already and is adopted: it is updated, never created. Its head is {head_ref} on origin; {lead}, in the repo {repo}, is the local branch cpd pushes to it, and you work in a worktree cut from it.\n\n{rest}",
+        "The pull request of Workflow {key} exists already and is adopted: it is updated, never created. Its head is {head_ref} on origin; {lead}, in the repo {repo}, is the local branch cpd pushes to it, and you work in a worktree cut from it.\n\n{rest}",
         key = workflow.key,
         lead = workflow.lead_branch,
         repo = workflow.repo,
@@ -99,7 +99,7 @@ pub(crate) fn fixed_spec(workflow: &WorkflowRow, update: bool, cause: Option<Cau
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
-/// cause says what the Worker merges: a conflict merges the base only on a conflict, a base PR's merge merges the new base even
+/// cause says what the Worker merges: a conflict merges the base only on a conflict, a base Workflow's merge merges the new base even
 /// without one (§3.7 E5, hs-d794).
 fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
     let (base, lead) = (&workflow.base, &workflow.lead_branch);
@@ -107,11 +107,11 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
     let (goal, context, touches, out_of_scope) = match cause {
         Cause::Conflict => (
             format!(
-                "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
+                "Bring the pull request of Workflow {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
                 key = workflow.key
             ),
             format!(
-                "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Either GitHub reports a conflict between it and {base}, or fix Jobs of the PR have merged into {lead} and only have to reach the pull request (then there may be nothing to merge). \
+                "The pull request of Workflow {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Either GitHub reports a conflict between it and {base}, or fix Jobs of the Workflow have merged into {lead} and only have to reach the pull request (then there may be nothing to merge). \
                  You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
                  1. `git fetch origin {base}`.\n\
                  2. Test for a conflict with `git merge-tree --write-tree --name-only {remote} HEAD`: exit 0 means none, and a base that merely moved ahead is no reason to merge it; exit 1 lists the conflicted files.\n\
@@ -130,11 +130,11 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
         ),
         Cause::BaseMerged => (
             format!(
-                "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it, resolve any conflicts, and submit.",
+                "Bring the pull request of Workflow {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it, resolve any conflicts, and submit.",
                 key = workflow.key
             ),
             format!(
-                "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Its base PR merged and GitHub repointed the pull request to {base}, which holds commits {lead} lacks: merge them in, even though the two do not conflict. \
+                "The pull request of Workflow {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Its base Workflow merged and GitHub repointed the pull request to {base}, which holds commits {lead} lacks: merge them in, even though the two do not conflict. \
                  You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
                  1. `git fetch origin {base}`.\n\
                  2. `git merge --no-edit {remote}`: resolve every conflict keeping both sides' intent, and commit the merge with what it needs to build and pass the Gate (recomputed hashes, tests adapted to the base's new rules, a renumbered migration).\n\
@@ -163,7 +163,7 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
     }
 }
 
-/// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
+/// Inserts Workflow `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` the caller's) in the same transaction. Returns its key.
 pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
     insert(tx, plan, workflow, tier, "open", by, None, draft)
@@ -174,7 +174,7 @@ pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier,
 pub enum Cause {
     /// The poll saw the pull request conflict with its base.
     Conflict,
-    /// GitHub repointed the pull request from a base PR's Lead Branch to the default branch, which holds commits
+    /// GitHub repointed the pull request from a base Workflow's Lead Branch to the default branch, which holds commits
     /// the Lead Branch lacks without a conflict: the Worker merges that base even without one (§3.7 E5, hs-d794).
     BaseMerged,
 }
@@ -206,7 +206,7 @@ pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, Cp
     Ok(reason.as_deref().and_then(Cause::parse).unwrap_or(Cause::Conflict))
 }
 
-/// Queues PR `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the PR has one `queued` or `running`: one transaction writes the
+/// Queues Workflow `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the Workflow has one `queued` or `running`: one transaction writes the
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
 pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
@@ -285,22 +285,22 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
     )?;
     let text = if draft {
         format!(
-            "Job {key} added to Plan {plan} by {by} as a draft: PR {workflow} has a draft Job, so it is queued with the PR's drafts, or when none remains. \
-             It merges the base only on a conflict, and cpd gates, pushes and opens PR {workflow}'s pull request when it is done. Next: cpd job show {key} --plan {plan}",
+            "Job {key} added to Plan {plan} by {by} as a draft: Workflow {workflow} has a draft Job, so it is queued with the Workflow's drafts, or when none remains. \
+             It merges the base only on a conflict, and cpd gates, pushes and opens Workflow {workflow}'s pull request when it is done. Next: cpd job show {key} --plan {plan}",
             workflow = workflow.key
         )
     } else if update {
-        let merges = if cause == Some(Cause::BaseMerged) { "its base PR merged, so it merges the new base" } else { "it merges the base only on a conflict" };
+        let merges = if cause == Some(Cause::BaseMerged) { "its base Workflow merged, so it merges the new base" } else { "it merges the base only on a conflict" };
         format!(
-            "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes PR {workflow}'s Lead Branch when it is done. \
-             It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
+            "Job {key} added to Plan {plan} by {by} ({why}): {merges}, and cpd gates and pushes Workflow {workflow}'s Lead Branch when it is done. \
+             It waits for every other Job of the Workflow. Next: cpd job show {key} --plan {plan}",
             why = cause.map_or("update", Cause::as_str),
             workflow = workflow.key
         )
     } else {
         format!(
-            "Job {key} added to Plan {plan} by {by}: it merges the base only on a conflict, and cpd gates, pushes and opens PR {workflow}'s pull request when it is done. \
-             It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
+            "Job {key} added to Plan {plan} by {by}: it merges the base only on a conflict, and cpd gates, pushes and opens Workflow {workflow}'s pull request when it is done. \
+             It waits for every other Job of the Workflow. Next: cpd job show {key} --plan {plan}",
             workflow = workflow.key
         )
     };
@@ -308,13 +308,13 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
     Ok(key)
 }
 
-/// The other Jobs of `job`'s PR that its Ready rule counts (§3.2): every Job but the `open` and `update` ones, which do not count each other.
+/// The other Jobs of `job`'s Workflow that its Ready rule counts (§3.2): every Job but the `open` and `update` ones, which do not count each other.
 fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
     all.iter().filter(move |j| j.workflow == job.workflow && j.key != job.key && !matches!(j.kind.as_str(), "open" | "update"))
 }
 
 /// What an `open` or `update` Job waits for (§3.2: they have no Dependency rows, so this is their needs, derived each time it is read):
-/// for an `open` Job the keys of the PR's other Jobs that are neither `merged` nor `cancelled`; for an `update` Job those that are `queued`
+/// for an `open` Job the keys of the Workflow's other Jobs that are neither `merged` nor `cancelled`; for an `update` Job those that are `queued`
 /// or `running` (a `draft` or `failed` Job does not hold it back). `None` for a Job of another kind, whose Dependency rows are its needs.
 pub fn unfinished(all: &[Job], job: &Job) -> Option<Vec<String>> {
     match job.kind.as_str() {
@@ -324,7 +324,7 @@ pub fn unfinished(all: &[Job], job: &Job) -> Option<Vec<String>> {
     }
 }
 
-/// The `needs` `job list` and `job show` print for an `open` or `update` Job (§3.2): the PR's other Jobs that are not `cancelled`, by key
+/// The `needs` `job list` and `job show` print for an `open` or `update` Job (§3.2): the Workflow's other Jobs that are not `cancelled`, by key
 /// (their Ready rule's list, derived each time it is read). The Job's own `needs` for every other kind.
 pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
     if !matches!(job.kind.as_str(), "open" | "update") {
@@ -340,7 +340,7 @@ pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
     keys
 }
 
-/// Whether none of the PR's other Jobs is `merged`: an `open` Job is not Ready then, as a PR whose Jobs are all cancelled has nothing to open.
+/// Whether none of the Workflow's other Jobs is `merged`: an `open` Job is not Ready then, as a Workflow whose Jobs are all cancelled has nothing to open.
 pub fn nothing_merged(all: &[Job], job: &Job) -> bool {
     others(all, job).all(|j| j.status != "merged")
 }
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(key(&[]).as_str(), "open-api");
         assert_eq!(key(&["open-api"]).as_str(), "open-api-2");
         assert_eq!(key(&["open-api", "open-api-2", "open-web"]).as_str(), "open-api-3");
-        // A PR key of 24 characters leaves room for a suffix of up to two digits (32 characters).
+        // A Workflow key of 24 characters leaves room for a suffix of up to two digits (32 characters).
         let long = WorkflowKey::parse(&"a".repeat(24)).unwrap().to_string();
         let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
         assert_eq!(free_key(&taken, "open", &workflow(&long)).unwrap().as_str().len(), 32);
@@ -427,7 +427,7 @@ mod tests {
         ];
         let mut waiting = unfinished(&all, &open).unwrap();
         waiting.sort();
-        assert_eq!(waiting, ["broken", "busy", "later", "queued"], "the open and update Jobs of a PR do not count each other");
+        assert_eq!(waiting, ["broken", "busy", "later", "queued"], "the open and update Jobs of a Workflow do not count each other");
         assert_eq!(unfinished(&all, &all[0]), None, "a Job of another kind has Dependency rows");
         assert!(!nothing_merged(&all, &open));
         assert!(nothing_merged(&[job("gone", "a", "work", "cancelled"), job("merged-open", "a", "open", "merged"), open.clone()], &open));

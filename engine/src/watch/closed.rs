@@ -1,5 +1,5 @@
-//! The closed-pull-request wake: the Lead of a Plan with a cpd PR `open` whose pull request is `closed` is told once per
-//! (PR, pull request number), by a message from null with `wake` true. The message is the record that it was sent.
+//! The closed-pull-request wake: the Lead of a Plan with a cpd Workflow `open` whose pull request is `closed` is told once per
+//! (Workflow, pull request number), by a message from null with `wake` true. The message is the record that it was sent.
 //! The step never cancels, reopens or edits anything.
 
 use rusqlite::{Connection, params};
@@ -28,7 +28,7 @@ pub(super) fn run(engine: &mut Engine) {
             continue;
         }
         match wake(engine, &row, &lead) {
-            Ok(true) => engine.log.line(&format!("E20: woke the Lead of Plan {}: PR {} has a closed pull request", row.plan, row.workflow)),
+            Ok(true) => engine.log.line(&format!("E20: woke the Lead of Plan {}: Workflow {} has a closed pull request", row.plan, row.workflow)),
             Ok(false) => {}
             Err(e) => engine.fail(Step::E20, About::Plan(row.plan.clone()), &e),
         }
@@ -36,16 +36,16 @@ pub(super) fn run(engine: &mut Engine) {
     engine.clear(Step::E20, &About::Machine);
 }
 
-/// What the message begins with: identifies (PR key, pull request number).
+/// What the message begins with: identifies (Workflow key, pull request number).
 fn prefix(plan: &PlanId, row: &ClosedUnmerged) -> String {
-    format!("PR {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.", row.workflow, row.number)
+    format!("Workflow {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.", row.workflow, row.number)
 }
 
 fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
     format!(
         "{} {} A person or GitHub closed it (for example GitHub does when a stacked pull request's base branch is deleted). \
-         cpd has not cancelled the PR and will not. Decide: ask the User, reopen the pull request on GitHub, or give the PR up \
-         with `cpd pr cancel --pr {}`.",
+         cpd has not cancelled the Workflow and will not. Decide: ask the User, reopen the pull request on GitHub, or give the Workflow up \
+         with `cpd workflow cancel --workflow {}`.",
         prefix(plan, row),
         row.url,
         row.workflow

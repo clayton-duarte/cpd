@@ -1,5 +1,5 @@
 //! git (contract §7.1–§7.3, §7.5): the git wrapper, worktrees and branches,
-//! the hooks (the PR's policy `hooks` domain), and the tamper check. No commands of its
+//! the hooks (the Workflow's policy `hooks` domain), and the tamper check. No commands of its
 //! own: `plan lock`, `attempt submit`, the driver and the merge call it.
 
 pub mod hooks;

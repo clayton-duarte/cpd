@@ -1,11 +1,11 @@
-//! The closed-unmerged predicate: an `open` PR of cpd whose stored pull request is `closed` (never merged).
+//! The closed-unmerged predicate: an `open` Workflow of cpd whose stored pull request is `closed` (never merged).
 
 use rusqlite::Connection;
 
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
 
-/// One closed-unmerged PR.
+/// One closed-unmerged Workflow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClosedUnmerged {
     pub plan: PlanId,
@@ -19,7 +19,7 @@ pub struct ClosedUnmerged {
     pub title: String,
 }
 
-/// Every closed-unmerged PR of `plan` (every Plan when `None`), ordered by plan id then PR key.
+/// Every closed-unmerged Workflow of `plan` (every Plan when `None`), ordered by plan id then Workflow key.
 pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<ClosedUnmerged>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT p.plan, p.key, l.context, l.lead_session, g.repo, g.number, g.url, g.title

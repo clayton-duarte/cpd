@@ -1,6 +1,6 @@
 //! E8, the Inbox (contract §3.7, §2.2 "Inbox item"): after E7, the conditions of the Inbox kinds from the
 //! store, and the one transaction that opens and closes the items; then the stuck Jobs (the clock and
-//! `inbox.stuck_job_minutes`), grouped by their PR, are sent once per PR to the Context's Manager, not opened as an item
+//! `inbox.stuck_job_minutes`), grouped by their Workflow, are sent once per Workflow to the Context's Manager, not opened as an item
 //! (hs-d318, hs-d647).
 //! A quiet tick writes nothing.
 
@@ -22,7 +22,7 @@ pub(super) fn run(engine: &mut Engine) {
                 engine.log.line(&format!("E8: opened {} Inbox item(s), closed {}", changes.opened.len(), changes.closed.len()));
             }
             if told > 0 {
-                engine.log.line(&format!("E8: told the Manager of {told} stuck Job PR(s)"));
+                engine.log.line(&format!("E8: told the Manager of {told} stuck Job Workflow(s)"));
             }
             if asked > 0 {
                 engine.log.line(&format!("E8: told the Manager of {asked} repeated ask(s)"));

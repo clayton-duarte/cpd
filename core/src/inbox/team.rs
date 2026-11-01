@@ -26,7 +26,7 @@ pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
 /// 30-minute cadence; five minutes keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
 pub const GITHUB_TTL: Duration = Duration::from_secs(300);
 
-/// The deadline of the GitHub call (the PR poll's, `pr::gh::POLL_TIMEOUT`).
+/// The deadline of the GitHub call (the pull request poll's, `pr::gh::POLL_TIMEOUT`).
 const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
 
 /// `run/team-review.json` as E11 wrote it (commands.md §21.5).

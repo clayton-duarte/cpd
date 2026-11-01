@@ -1,7 +1,7 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
 //! `cpd/cpd-ui` (`tui/src/flow.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
-//! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), top to bottom by the PRs'
+//! It shows the Plan of the Lead in the chat slot as one box per Workflow ([`boxes`], R34 A15), top to bottom by the Workflows'
 //! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]). The boxes start at the top of the pane:
 //! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
@@ -13,7 +13,7 @@
 //! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
 //! one file a view writes, its own state.
 //!
-//! Input: the wheel scrolls; clicks open a Lead tab, a Pulse row or a PR link; a Job pill is neither clickable nor selectable. There is no `q`: a layout pane that
+//! Input: the wheel scrolls; clicks open a Lead tab, a Pulse row or a pull request link; a Job pill is neither clickable nor selectable. There is no `q`: a layout pane that
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
@@ -90,7 +90,7 @@ impl Centre {
     pub(crate) fn spins(&self) -> bool {
         false
             || spins(&self.plan.jobs, &self.plan.needs_user) // a running Job's pill icon, or a failed one's while the Lead works
-            || self.plan.workflows.iter().any(|p| p.lead_dot.is_some()) // a PR box title's Lead dot
+            || self.plan.workflows.iter().any(|p| p.lead_dot.is_some()) // a Workflow box title's Lead dot
     }
 
     /// Turn the spinners to `frame`, from the layout already done (R2: no layout at a frame change), when a spinner is on
@@ -210,13 +210,13 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
     Watching::of(centre, pulse).concerns(event)
 }
 
-/// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
+/// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no Workflow yet: cpd workflow add` (dim)
 /// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
 fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
     let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::error())).collect();
     match centre {
         None => parts.push(Span::styled(" no Lead session in the centre", palette::muted_text())),
-        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text())),
+        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled("no Workflow yet: cpd workflow add", palette::muted_text())),
         Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::muted_text())),
         Some(_) => {}
     }
@@ -248,7 +248,7 @@ struct Ui {
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
-    /// The links of the last drawn frame (pro-d60): what a click on a PR box title reads.
+    /// The links of the last drawn frame (pro-d60): what a click on a Workflow box title reads.
     links: crate::link::Links,
     /// Where the canvas the `links` were drawn on has its corner in the chart (`Boxes::links_origin`).
     links_origin: (u16, u16),
@@ -665,7 +665,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                 }
             }
             Input::Mouse(m) => match ui.click(ports, m) {
-                // a PR box title's link: the pull request is opened and nothing else changes
+                // a Workflow box title's link: the pull request is opened and nothing else changes
                 Ok(true) => {}
                 Err(e) => {
                     let actions = Arc::clone(actions);
@@ -692,7 +692,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
     }
 }
 
-/// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
+/// The Plan view's fixtures for the tests of its boxes: a Workflow `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
 #[cfg(test)]
 fn sample_workflow(key: &str) -> read::WorkflowNode {
     read::WorkflowNode {
@@ -710,7 +710,7 @@ fn sample_workflow(key: &str) -> read::WorkflowNode {
     }
 }
 
-/// A queued Job `key` of PR `pr`, of Tier S1, with no needs.
+/// A queued Job `key` of Workflow `pr`, of Tier S1, with no needs.
 #[cfg(test)]
 fn sample_job(workflow: &str, key: &str) -> read::JobNode {
     read::JobNode {
@@ -750,7 +750,7 @@ fn sample_centre(workflows: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -
 }
 
 /// The layout test's sample (`layout_tests`): the Plan view drawn by [`Ui::draw`] into a `width` x `height` pane at a
-/// scroll offset. Placed is one box per PR, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
+/// scroll offset. Placed is one box per Workflow, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
 /// offset the draw clamped to, kept to the chart's window: the canvas does not expose the boxes' rects, so each is read off
 /// the canvas by its corners (`╭` to the next `╮` on its row, `╭` to the next `╰` down its column). A box the window
 /// clips is `Rule::Clipped`.
@@ -798,7 +798,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
             boxes.push(Placed { name: "pr box", kind: Kind::FullText, rect, exempt });
         }
     }
-    assert_eq!(boxes.len(), expected, "one box per PR on the canvas\n{}", crate::layout_tests::dump(canvas));
+    assert_eq!(boxes.len(), expected, "one box per Workflow on the canvas\n{}", crate::layout_tests::dump(canvas));
     Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
 }
 
@@ -880,7 +880,7 @@ mod tests {
         PlanId::parse(id).unwrap()
     }
 
-    /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
+    /// A Plan of one Workflow with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
     fn scroll_centre(plan_id: &str, jobs: usize) -> Centre {
         let workflow = WorkflowKey::parse("web").unwrap();
         let node = WorkflowNode {

@@ -1,5 +1,5 @@
 //! E19, the Jira transition queue (Plan jira-sync; pro-d126, pro-d128; contract §3.7 E19; commands.md §21.11, §21.12): the helper
-//! `pi/lib/jira-transition.ts` moves the ticket of the OLDEST PENDING `jira_transitions` row whose PR has a ticket and is not
+//! `pi/lib/jira-transition.ts` moves the ticket of the OLDEST PENDING `jira_transitions` row whose Workflow has a ticket and is not
 //! cancelled, detached on its own thread, one run at a time, 120 s deadline, as E17 does. The ticket, the target and the three
 //! status names are read when the row runs. A target whose name is empty settles the row `skipped` without a call. An `ok`
 //! answer settles it (`moved`, `unchanged`); a `jira_refused` answer parks it with one `error` Event, and each tick a parked row
@@ -60,7 +60,7 @@ fn about(plan: &str) -> About {
     About::Plan(PlanId::parse(plan).expect("a stored Plan id"))
 }
 
-/// The policy of the PR of `plan`/`pr`, resolved now.
+/// The policy of the Workflow of `plan`/`pr`, resolved now.
 fn policy_of(engine: &mut Engine, plan: &str, workflow: &str) -> Result<Policy, CpdError> {
     let home = engine.home.clone();
     let plan = PlanId::parse(plan)?;
@@ -69,7 +69,7 @@ fn policy_of(engine: &mut Engine, plan: &str, workflow: &str) -> Result<Policy, 
 }
 
 fn move_about(due: &Due) -> About {
-    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), WorkflowKey::parse(&due.workflow).expect("a stored PR key"), due.target)
+    About::Move(PlanId::parse(&due.plan).expect("a stored Plan id"), WorkflowKey::parse(&due.workflow).expect("a stored Workflow key"), due.target)
 }
 
 /// Reports a failure of the row `due`: machine-wide for a missing sign-in or server, else one Event of the row's Plan.

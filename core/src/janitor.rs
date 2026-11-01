@@ -1,5 +1,5 @@
-//! `cpd janitor` (commands.md §29, contract §7.2): one pass over the merged and cancelled PRs that still have a
-//! worktree on disk, and the ended Attempts of merged Jobs on live PRs (contract §7.2), then exit. The poll cleans nothing: a PR in status `merged` or `cancelled` is the queue.
+//! `cpd janitor` (commands.md §29, contract §7.2): one pass over the merged and cancelled Workflows that still have a
+//! worktree on disk, and the ended Attempts of merged Jobs on live Workflows (contract §7.2), then exit. The poll cleans nothing: a Workflow in status `merged` or `cancelled` is the queue.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -38,7 +38,7 @@ fn take(home: &CpdHome) -> Result<Option<File>, CpdError> {
 }
 
 /// One pass: takes `locks/janitor.lock` without waiting (held by another pass: `{"ok":true,"skipped":"running"}`,
-/// nothing touched) and cleans every pending PR. Output `{"ok":true,"outcomes":[{plan, pr, status, path, outcome,
+/// nothing touched) and cleans every pending Workflow. Output `{"ok":true,"outcomes":[{plan, pr, status, path, outcome,
 /// reason?}]}` (commands.md §29). Appends the `cleanup_failed` Events (source `janitor`).
 pub fn pass(env: &mut Env) -> Result<Output, CpdError> {
     let Some(_lock) = take(&env.home)? else {
@@ -137,37 +137,37 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
     let reason = e.reason.clone().unwrap_or_default();
     let (status, workflow, plan, path) = (&e.status, &e.workflow, &e.plan, &e.path);
     let (message, text) = if e.outcome == "kept" {
-        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} kept {path} untouched: {reason}");
+        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} kept {path} untouched: {reason}");
         (m.clone(), m)
     } else if e.renamed {
-        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} removed {path}, but not everything: {reason}");
+        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} removed {path}, but not everything: {reason}");
         (m.clone(), format!("{m}. The next janitor pass retries."))
     } else {
-        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} did not remove {path}: {reason}");
+        let m = format!("The clean-up of the {status} Workflow {workflow} of Plan {plan} did not remove {path}: {reason}");
         (m.clone(), format!("{m}. The next janitor pass retries."))
     };
     let details = json!({"plan": plan, "pr": workflow, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
     (plan.clone(), NewEvent::error(text, SOURCE, ErrorCode::CleanupFailed.as_str(), &message, details))
 }
 
-/// A merged or cancelled PR with what its clean-up removes; also a live (`dispatch` or `open`) PR with only its ended
-/// Attempts of merged Jobs, never its Lead worktree (contract §7.2 "Ended Attempts of merged Jobs on a live PR").
+/// A merged or cancelled Workflow with what its clean-up removes; also a live (`dispatch` or `open`) Workflow with only its ended
+/// Attempts of merged Jobs, never its Lead worktree (contract §7.2 "Ended Attempts of merged Jobs on a live Workflow").
 pub(crate) struct Merged {
     pub(crate) plan: PlanId,
     pub(crate) workflow: WorkflowKey,
-    /// The PR's status in the store: `merged`, `cancelled`, or (for the swept Attempts only) `dispatch` or `open`.
+    /// The Workflow's status in the store: `merged`, `cancelled`, or (for the swept Attempts only) `dispatch` or `open`.
     pub(crate) status: String,
     pub(crate) repo: String,
     pub(crate) lead_branch: String,
     pub(crate) lead_worktree: Option<String>,
-    /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
+    /// The Workflow's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
     pub(crate) pull_request: Option<(String, i64)>,
     pub(crate) attempts: Vec<Attempt>,
-    /// Whether no `cleanup_failed` Event of the PR exists yet: this pass reports its failures.
+    /// Whether no `cleanup_failed` Event of the Workflow exists yet: this pass reports its failures.
     pub(crate) fresh: bool,
 }
 
-/// An Attempt of one of the PR's Jobs.
+/// An Attempt of one of the Workflow's Jobs.
 pub(crate) struct Attempt {
     pub(crate) id: AttemptId,
     pub(crate) branch: String,
@@ -198,7 +198,7 @@ impl Merged {
         self.attempt_paths().next().is_some() || self.lead_path().is_some()
     }
 
-    /// Contract §7.2 (hs-d243, hs-n124): every Attempt of the PR's Jobs is `ended` and its driver lock is free, probed
+    /// Contract §7.2 (hs-d243, hs-n124): every Attempt of the Workflow's Jobs is `ended` and its driver lock is free, probed
     /// without creating the file. An unprobeable lock is the error.
     fn idle(&self, home: &CpdHome) -> Result<bool, CpdError> {
         for attempt in &self.attempts {
@@ -210,10 +210,10 @@ impl Merged {
     }
 }
 
-/// Every PR in status `merged` or `cancelled`, with its Attempts, and every live PR (`dispatch` or `open`) with only its
-/// ended Attempts that merged or whose Job merged (contract §7.2 "Ended Attempts of merged Jobs on a live PR"). A cancelled PR's row has no `lead_worktree`
-/// (`pr cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that is a worktree of the repo
-/// on the PR's Lead Branch (or its aside leftover is on disk).
+/// Every Workflow in status `merged` or `cancelled`, with its Attempts, and every live Workflow (`dispatch` or `open`) with only its
+/// ended Attempts that merged or whose Job merged (contract §7.2 "Ended Attempts of merged Jobs on a live Workflow"). A cancelled Workflow's row has no `lead_worktree`
+/// (`workflow cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that is a worktree of the repo
+/// on the Workflow's Lead Branch (or its aside leftover is on disk).
 pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
     let mut workflows = conn.prepare(
         "SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status
@@ -267,7 +267,7 @@ pub(crate) fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Mer
     Ok(found)
 }
 
-/// [`clean`] once the PR is idle; while it is not, every path on disk is `pending` and nothing is touched. A driver
+/// [`clean`] once the Workflow is idle; while it is not, every path on disk is `pending` and nothing is touched. A driver
 /// lock that cannot be probed is a failed removal.
 fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, panes: Option<&Result<Vec<crate::host::tmux::Pane>, CpdError>>) -> Vec<Entry> {
     let mut paths: Vec<String> = merged.attempt_paths().map(|a| a.worktree.clone()).collect();
@@ -310,7 +310,7 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, pan
 /// `(path, outcome, reason, renamed)`.
 type Cleaned = (String, &'static str, Option<String>, bool);
 
-/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree, first brought up to date by
+/// Removes the Attempt worktrees of the Workflow that are on disk, then its Lead worktree, first brought up to date by
 /// rule S. A failure does not stop the others.
 fn clean(merged: &Merged) -> Vec<Cleaned> {
     let repo = Path::new(&merged.repo);
@@ -335,7 +335,7 @@ fn clean(merged: &Merged) -> Vec<Cleaned> {
         }
     }
     // The pull request's head commit, asked of GitHub only when `HEAD` has commits outside every `origin/*` ref:
-    // a squash merge deletes the head branch, so the PR's own commits look unpushed (contract §7.2).
+    // a squash merge deletes the head branch, so the Workflow's own commits look unpushed (contract §7.2).
     let recorded_head = || {
         let (gh_repo, number) = merged.pull_request.as_ref()?;
         crate::pr::head_ref_oid(repo, gh_repo, *number).ok()

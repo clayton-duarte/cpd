@@ -1,5 +1,5 @@
 //! What the driver and the merge read from and write to the Ledger (contract
-//! §3.2, §3.4, §5.2): the Attempt, with its Job's PR and its Plan, and the
+//! §3.2, §3.4, §5.2): the Attempt, with its Job's Workflow and its Plan, and the
 //! transactions that end it. The driver ends an Attempt before it is
 //! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
@@ -14,18 +14,18 @@ use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
 
-/// An Attempt with what the driver and the merge need of its Job, PR and Plan.
+/// An Attempt with what the driver and the merge need of its Job, Workflow and Plan.
 #[derive(Clone, Debug)]
 pub struct Attempt {
     pub plan: PlanId,
     pub context: ContextId,
-    /// The repo of the Job's PR: the realpath of its main worktree.
+    /// The repo of the Job's Workflow: the realpath of its main worktree.
     pub repo: PathBuf,
-    /// The Lead Branch of the Job's PR (R34 A5).
+    /// The Lead Branch of the Job's Workflow (R34 A5).
     pub lead_branch: String,
-    /// The branch every push and `gh pr list --head` of the PR names: the pull request's head of an adopted PR, else the Lead Branch.
+    /// The branch every push and `gh pr list --head` of the Workflow names: the pull request's head of an adopted Workflow, else the Lead Branch.
     pub remote_branch: String,
-    /// Whether the PR is an adopted pull request (`prs.head_ref` is set) that has not opened: only its `open` and `update` Jobs publish.
+    /// Whether the Workflow is an adopted pull request (`prs.head_ref` is set) that has not opened: only its `open` and `update` Jobs publish.
     pub adopted: bool,
     pub lead_worktree: PathBuf,
     pub id: AttemptId,
@@ -42,12 +42,12 @@ pub struct Attempt {
     pub submitted_sha: Option<String>,
     /// The Job's kind (§2.2 "Job kinds"): `open` and `update` Jobs are merged without a rebase and with a push (§7.4).
     pub kind: String,
-    /// The Job's PR (R34 A7).
+    /// The Job's Workflow (R34 A7).
     pub workflow: Option<String>,
 }
 
 impl Attempt {
-    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
+    /// The key of the Job's Workflow; empty for a Job with none (an explore Job), which no Workflow key equals.
     pub fn workflow_str(&self) -> &str {
         self.workflow.as_deref().unwrap_or_default()
     }
@@ -62,7 +62,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let found: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let context = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
-    // The repo and Lead worktree are those of the Job's PR (R34 A7).
+    // The repo and Lead worktree are those of the Job's Workflow (R34 A7).
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
@@ -94,7 +94,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("attempt", id.to_string())
         })?;
     let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, workflow, head_ref, workflow_status)) = row;
-    // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
+    // An explore Attempt has no Workflow: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
     let (repo, lead_worktree, lead_branch) = match (workflow.is_some(), repo, lead_worktree, lead_branch) {
         (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => (repo, lead_worktree, lead_branch),
         (true, ..) => return Err(corrupt(format!("Plan {plan} has an Attempt but no Lead worktree"))),
@@ -462,7 +462,7 @@ pub fn end_opened(
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             if let Some(pull) = pull {
-                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.workflow_str(), pull.url));
+                text.push_str(&format!(" Pull request #{} of Workflow {} is open: {}.", pull.number, attempt.workflow_str(), pull.url));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
@@ -474,7 +474,7 @@ pub fn end_opened(
                 )?;
                 if open > 0 {
                     let key = attempt.workflow_str();
-                    text.push_str(&format!(" PR {key} still has {open} open review comments: cpd pr view --pr {key}, then cpd pr reply."));
+                    text.push_str(&format!(" Workflow {key} still has {open} open review comments: cpd pr view --workflow {key}, then cpd pr reply."));
                 }
             }
             let pull = pull.map(|p| (attempt.workflow_str(), p.number, p.url));
@@ -554,7 +554,7 @@ pub fn end_opened(
         return Err(cas_lost("The Job's status"));
     }
     events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
-    // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its PR that it fixes.
+    // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its Workflow that it fixes.
     if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
     }

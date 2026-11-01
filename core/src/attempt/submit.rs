@@ -216,7 +216,7 @@ fn run_checks(
     base: &str,
     sha: &str,
 ) -> Result<(), CpdError> {
-    // A stacked PR's check reads the root base too (§7.5), so one more ref than an unstacked PR's.
+    // A stacked Workflow's check reads the root base too (§7.5), so one more ref than an unstacked Workflow's.
     let (lead, base_refs) = env.store.read(|conn| {
         let (lead, repo, workflow_base) = lead_branch(conn, plan, key)?;
         Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &workflow_base)?))
@@ -236,7 +236,7 @@ fn run_checks(
     Ok(())
 }
 
-/// The Lead Branch and the base of the PR that holds Job `job` of `plan`.
+/// The Lead Branch and the base of the Workflow that holds Job `job` of `plan`.
 fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String, String), CpdError> {
     Ok(conn.query_row(
         "SELECT r.lead_branch, r.repo, r.base FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",

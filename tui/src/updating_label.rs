@@ -1,5 +1,5 @@
-//! Red tests (hs-d532): a PR whose pull request conflicts reads `updating`, not `conflict`, while it has a not-ended update
-//! Job: in the running colour while that Job runs, in the waiting colour while it is queued. In the Plan view's PR box
+//! Red tests (hs-d532): a Workflow whose pull request conflicts reads `updating`, not `conflict`, while it has a not-ended update
+//! Job: in the running colour while that Job runs, in the waiting colour while it is queued. In the Plan view's Workflow box
 //! title and the legend. (`Meaning::InProgress` is the running colour of `palette`.)
 
 use cpd_core::error::CpdError;
@@ -78,7 +78,7 @@ fn a_box_with_no_update_job_still_reads_conflict() {
 #[test]
 fn the_legend_lists_updating_in_both_colours() {
     let sections = legend::sections();
-    let workflows = sections.iter().find(|s| s.title == "PRs (Dispatch)").expect("the PRs section");
+    let workflows = sections.iter().find(|s| s.title == "Workflows (Dispatch)").expect("the Workflows section");
     let cell = |row: &Vec<Line<'static>>| row.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(" | ");
     let row = |word: &str, says: &str| {
         let r = workflows
@@ -134,7 +134,7 @@ fn the_plan_read_reports_the_update_job_state() {
     let update = |store: &mut Store| {
         let boxes = crate::read::plan_boxes(store, &plan).unwrap();
         assert_eq!(boxes.context, ContextId::parse("ctx").unwrap());
-        let pull = boxes.workflows[0].pull.clone().expect("the PR has a pull request");
+        let pull = boxes.workflows[0].pull.clone().expect("the Workflow has a pull request");
         assert!(pull.conflicting);
         pull.update
     };

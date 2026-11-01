@@ -1,5 +1,5 @@
 //! `review submit` (commands.md §31.1; pro-d107, pro-d108, pro-d110): posts a GitHub review through `gh`, then, with
-//! `--slack`, queues the verdict's reaction (§21.9). It needs no Plan, Context or PR key and checks nothing of the
+//! `--slack`, queues the verdict's reaction (§21.9). It needs no Plan, Context or Workflow key and checks nothing of the
 //! review, and of the pull request only its head (`--head`, pro-d169): GitHub's own refusal is relayed.
 
 use std::path::PathBuf;

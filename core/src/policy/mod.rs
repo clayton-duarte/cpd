@@ -176,12 +176,12 @@ pub fn owner_unset(context: &ContextId) -> CpdError {
         .with("context", context.as_str())
 }
 
-/// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have PR rows.
+/// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have Workflow rows.
 pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, workflows: &[String]) -> CpdError {
     CpdError::new(
         ErrorCode::OwnerInUse,
         format!(
-            "The Context {context} has the owner {owner} and its Plans have PR rows ({}): the owner of a Context cannot change once a PR row exists.",
+            "The Context {context} has the owner {owner} and its Plans have Workflow rows ({}): the owner of a Context cannot change once a Workflow row exists.",
             workflows.join(", ")
         ),
     )

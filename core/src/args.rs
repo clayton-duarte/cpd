@@ -51,7 +51,7 @@ impl WorkflowArg {
     pub fn select<'a>(&self, plan: &PlanId, workflows: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
         if let Some(key) = &self.workflow {
             return workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
-                CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
+                CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
                     .with("plan", plan.as_str())
                     .with("pr", key.as_str())
             });
@@ -61,7 +61,7 @@ impl WorkflowArg {
             [only] => Ok(only),
             [] => Err(CpdError::new(
                 ErrorCode::WorkflowRequired,
-                format!("Plan {plan} has no PR: add one with cpd workflow add, then pass --workflow <key>."),
+                format!("Plan {plan} has no Workflow: add one with cpd workflow add, then pass --workflow <key>."),
             )
             .with("plan", plan.as_str())
             .with("prs", Vec::<String>::new())),
@@ -69,7 +69,7 @@ impl WorkflowArg {
                 let keys: Vec<&str> = many.iter().map(|p| p.key.as_str()).collect();
                 Err(CpdError::new(
                     ErrorCode::WorkflowRequired,
-                    format!("Plan {plan} has {} PRs ({}): pass --workflow <key>.", keys.len(), keys.join(", ")),
+                    format!("Plan {plan} has {} Workflows ({}): pass --workflow <key>.", keys.len(), keys.join(", ")),
                 )
                 .with("plan", plan.as_str())
                 .with("prs", keys))
@@ -207,7 +207,7 @@ impl From<Title> for Text {
     }
 }
 
-/// A PR's own title (`pr add`/`pr edit` `--title`, contract §2.2 PR, hs-d285): 1 to 72
+/// A Workflow's own title (`workflow add`/`workflow edit` `--title`, contract §2.2 Workflow, hs-d285): 1 to 72
 /// characters on one line, no control characters; else `usage` (commands.md §9.4). The
 /// squash merge makes it the commit subject on `main`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,7 +228,7 @@ impl FromStr for WorkflowTitle {
         if chars == 0 || chars > WorkflowTitle::MAX_CHARS || s.chars().any(char::is_control) {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A PR title must be 1 to {} characters on one line, with no control characters.", WorkflowTitle::MAX_CHARS),
+                format!("A Workflow title must be 1 to {} characters on one line, with no control characters.", WorkflowTitle::MAX_CHARS),
             )
             .with("chars", chars));
         }

@@ -1,5 +1,5 @@
 //! Stale Events (contract §5.4): which Events `events follow --session` skips because a later Event, or the
-//! PR's row, proves the condition they report is over. A missing object or field fails open (not stale).
+//! Workflow's row, proves the condition they report is over. A missing object or field fails open (not stale).
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -8,7 +8,7 @@ use super::kind::Kind;
 use super::select::Event;
 use crate::error::CpdError;
 
-/// Whether `event` is stale: a later Event (an id above its own, anywhere in the store) or the PR's row proves it.
+/// Whether `event` is stale: a later Event (an id above its own, anywhere in the store) or the Workflow's row proves it.
 pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
     let Some(kind) = Kind::ALL.iter().copied().find(|k| k.as_str() == event.kind) else {
         return Ok(false);

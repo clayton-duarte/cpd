@@ -1,4 +1,4 @@
-//! The PR status enums (contract §7.6): what `pr poll` stores and prints for a
+//! The Workflow status enums (contract §7.6): what `pr poll` stores and prints for a
 //! pull request's checks, review and state, and how GitHub's values map to them.
 
 use super::gh::Check;
@@ -52,7 +52,7 @@ pub(super) fn failing(conclusion: &str) -> bool {
 /// Check conclusions that are not final yet (upper-cased; an empty one is pending too).
 const PENDING: [&str; 5] = ["", "PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED"];
 
-/// The summary of a PR's current checks.
+/// The summary of a Workflow's current checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChecksSummary {
     None,
@@ -175,7 +175,7 @@ pub(super) fn is_bot(login: &str, bots: &[String]) -> bool {
     login.ends_with("[bot]") || bots.iter().any(|b| b == login)
 }
 
-/// The PR's review decision, from gh's `reviewDecision`.
+/// The Workflow's review decision, from gh's `reviewDecision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReviewDecision {
     None,
@@ -204,7 +204,7 @@ impl ReviewDecision {
     }
 }
 
-/// The PR's state.
+/// The Workflow's state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PrState {
     Open,

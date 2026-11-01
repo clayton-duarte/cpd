@@ -1,4 +1,4 @@
-//! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117): a posted PR whose request is `pending`
+//! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117): a posted Workflow whose request is `pending`
 //! (deferred because it was stacked, or its `gh` call failed) is retried through the core function `pr post` runs, detached
 //! on its own thread, its answer collected at a later tick. `enabled` sets the row `enabled`; `not_allowed` (the repo lacks
 //! auto-merge) sets it `none` with no Event; `refused` (GitHub's refusal, or no merge method) sets it `refused` with one
@@ -101,7 +101,7 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         if let Some(why) = &refused {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
-                format!("Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.", post.plan, post.workflow, post.number, post.repo),
+                format!("Auto-merge for Workflow {}/{} (#{} of {}) was refused: {why}.", post.plan, post.workflow, post.number, post.repo),
             ));
             let text = format!("{} See: cpd plan show --plan {}", failure.message, post.plan);
             let plan = PlanId::parse(&post.plan).expect("a stored Plan id");
@@ -114,9 +114,9 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             engine.auto_merge.last_end = None;
             engine.clear(Step::E18, &about);
             if not_allowed {
-                engine.log.line(&format!("E18: the repo of PR {}/{} does not allow auto-merge: row set to none", post.plan, post.workflow));
+                engine.log.line(&format!("E18: the repo of Workflow {}/{} does not allow auto-merge: row set to none", post.plan, post.workflow));
             } else if refused.is_none() {
-                engine.log.line(&format!("E18: enabled auto-merge for PR {}/{}", post.plan, post.workflow));
+                engine.log.line(&format!("E18: enabled auto-merge for Workflow {}/{}", post.plan, post.workflow));
             }
         }
         Err(e) => {

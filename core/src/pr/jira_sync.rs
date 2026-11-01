@@ -10,7 +10,7 @@ use crate::events::{append, NewEvent};
 use crate::ids::PlanId;
 use crate::store::WriteTxn;
 
-/// The status a row moves its PR's ticket to (the policy key `pr.jira.<target>` names it).
+/// The status a row moves its Workflow's ticket to (the policy key `pr.jira.<target>` names it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     InProgress,
@@ -95,7 +95,7 @@ fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Due, Option<String>)> {
     Ok((row, r.get(5)?))
 }
 
-/// Queues `target` for PR `pr` of `plan`; `true` when newly queued, `false` when the row exists.
+/// Queues `target` for Workflow `pr` of `plan`; `true` when newly queued, `false` when the row exists.
 pub fn queue(tx: &WriteTxn<'_>, plan: &str, workflow: &str, target: Target) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES (?1, ?2, ?3, (SELECT at FROM txns WHERE id = cpd_txn()))
@@ -105,7 +105,7 @@ pub fn queue(tx: &WriteTxn<'_>, plan: &str, workflow: &str, target: Target) -> R
     Ok(rows == 1)
 }
 
-/// The oldest PENDING row whose id is not in `skip`, whose PR has a ticket and is not `cancelled`.
+/// The oldest PENDING row whose id is not in `skip`, whose Workflow has a ticket and is not `cancelled`.
 pub fn next_due(conn: &Connection, skip: &[i64]) -> Result<Option<Due>, CpdError> {
     let skip = serde_json::to_string(skip).expect("integers serialize");
     let sql = format!(
@@ -142,7 +142,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, refusal: &Refusal) -> Re
         "id": id, "plan": plan, "pr": workflow, "ticket": refusal.ticket, "target": target, "status": refusal.status, "reason": refusal.reason,
     });
     let text = format!(
-        "Jira refused to move ticket {} of PR {workflow} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the PR's ticket (cpd pr edit {workflow} --jira <KEY>) or the policy key pr.jira.{target} changes.",
+        "Jira refused to move ticket {} of Workflow {workflow} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the Workflow's ticket (cpd workflow edit {workflow} --jira <KEY>) or the policy key pr.jira.{target} changes.",
         refusal.ticket, refusal.status, refusal.reason, refusal.message
     );
     let event = NewEvent::error(text.clone(), source, ErrorCode::JiraRefused.as_str(), &text, details).plan(PlanId::parse(&plan)?);

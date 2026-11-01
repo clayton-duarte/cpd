@@ -3,7 +3,7 @@
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::WorkflowKey;
 
-/// Where a Job belongs (`jobs.pr`, contract §2.2): to a PR, or, for an explore Job, to the Plan.
+/// Where a Job belongs (`jobs.pr`, contract §2.2): to a Workflow, or, for an explore Job, to the Plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobHome {
     Workflow(WorkflowKey),

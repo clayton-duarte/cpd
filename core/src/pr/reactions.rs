@@ -20,18 +20,18 @@ pub struct Due {
     pub channel: String,
     pub ts: String,
     pub emoji: String,
-    /// The PR whose merge this reaction is; `None` for any other reaction.
+    /// The Workflow whose merge this reaction is; `None` for any other reaction.
     pub merge: Option<MergeOf>,
 }
 
-/// The PR whose merge a queued reaction is.
+/// The Workflow whose merge a queued reaction is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeOf {
     pub plan: String,
     pub workflow: String,
 }
 
-/// The emoji the PR's policy names (`""` when none) and the policy file that sets, or should set, `pr.post.merged_reaction`.
+/// The emoji the Workflow's policy names (`""` when none) and the policy file that sets, or should set, `pr.post.merged_reaction`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicyEmoji {
     pub emoji: String,
@@ -56,7 +56,7 @@ pub fn queue(tx: &WriteTxn<'_>, channel: &str, ts: &str, emoji: &str) -> Result<
     Ok(rows == 1)
 }
 
-/// Queues the reaction of PR `pr` of Plan `plan`'s post when its `pr_posts.reaction` is not NULL; `true` when newly queued.
+/// Queues the reaction of Workflow `pr` of Plan `plan`'s post when its `pr_posts.reaction` is not NULL; `true` when newly queued.
 pub fn queue_merge(tx: &WriteTxn<'_>, plan: &str, workflow: &str) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, workflow)
@@ -143,7 +143,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
             details["pr"] = json!(merge.workflow);
             details["file"] = json!(file.display().to_string());
             format!(
-                "The merge reaction of PR {} of Plan {} on Slack message {} of {} was not placed. {what}. Set pr.post.merged_reaction in {} to an emoji of the workspace; the engine tries again when the policy names another emoji.",
+                "The merge reaction of Workflow {} of Plan {} on Slack message {} of {} was not placed. {what}. Set pr.post.merged_reaction in {} to an emoji of the workspace; the engine tries again when the policy names another emoji.",
                 merge.workflow, merge.plan, row.ts, row.channel, file.display()
             )
         }
@@ -160,7 +160,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
     Ok(true)
 }
 
-/// The emoji PR `pr` of `plan` names for its merge (`pr.post.merged_reaction`, `""` when none), resolved with the PR's repo and
+/// The emoji Workflow `pr` of `plan` names for its merge (`pr.post.merged_reaction`, `""` when none), resolved with the Workflow's repo and
 /// owner policy, and the file to edit: the repo's file when it sets the key, else the owner's `owner.toml`.
 /// A policy that does not resolve is its error, unchanged.
 pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, workflow: &str) -> Result<PolicyEmoji, CpdError> {

@@ -23,7 +23,7 @@ pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason], comme
     let why: Vec<&str> = reasons.iter().map(|r| phrase(*r)).collect();
     let counts = if reasons.contains(&Reason::Comments) { format!(" {} new and {} open review comments.", comments.0, comments.1) } else { String::new() };
     format!(
-        "PR {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --pr {key}.",
+        "Workflow {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --workflow {key}.",
         why.join(", ")
     )
 }
@@ -95,8 +95,8 @@ mod tests {
         let all = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed];
         assert_eq!(
             text("pay", "api", 7, &all, (0, 0)),
-            "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
-             Read the details with cpd pr view --plan pay --pr api."
+            "Workflow api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
+             Read the details with cpd pr view --plan pay --workflow api."
         );
         assert!(text("pay", "api", 7, &all[..1], (0, 0)).contains("needs attention: checks failed. Read"));
         assert!(text("pay", "api", 7, &all[2..], (0, 0)).contains("needs attention: closed without a merge. Read"));

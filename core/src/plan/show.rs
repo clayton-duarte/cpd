@@ -1,6 +1,6 @@
 //! `plan show` (commands.md §4.3): a read-only snapshot in one read
 //! transaction with its `events_cursor` (§17), and the readers it shares with
-//! `plan list` and `plan render`: the Plan row alone and its PRs.
+//! `plan list` and `plan render`: the Plan row alone and its Workflows.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,11 +20,11 @@ use crate::output::Output;
 use crate::pr::closed::closed_unmerged;
 use crate::pr::pulls;
 
-/// Every PR of `plan` in key order, `cancelled` ones included, with every
-/// field of §2.2 PR (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
+/// Every Workflow of `plan` in key order, `cancelled` ones included, with every
+/// field of §2.2 Workflow (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
 pub(super) fn workflow_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
-    // The base PR is derived from `base` (contract §2.2 "The base PR"): the PR of the same repo whose Lead Branch it is.
+    // The base Workflow is derived from `base` (contract §2.2 "The base Workflow"): the Workflow of the same repo whose Lead Branch it is.
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                 all_merged_at, start_failed_at, created_at, started_at, merged_at, title,
@@ -80,7 +80,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for workflow in &mut workflows {
-        let key = workflow["key"].as_str().expect("a PR key").to_owned();
+        let key = workflow["key"].as_str().expect("a Workflow key").to_owned();
         workflow["jobs"] = json!(jobs.iter().filter(|j| j.workflow_str() == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
     }
     let job_values: Vec<Value> = jobs
@@ -116,16 +116,16 @@ fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
     Ok((plan, workflows, jobs, attempts, escalations, review, highest_id(conn)?))
 }
 
-/// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
+/// `plan_fingerprint` from rows already read: the Workflows are the `pr_values` ones, as the
 /// [`WorkflowRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
 /// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
 fn current_fingerprint(plan: &PlanRow, jobs: &[Job], workflows: &[Value]) -> String {
     let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
-    let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
+    let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a Workflow {field}")).to_owned();
     let rows: Vec<WorkflowRow> = if reviews_prs(Some(plan.phase.as_str())) {
         workflows.iter()
             .map(|p| WorkflowRow {
-                key: WorkflowKey::parse(&text(p, "key")).expect("a PR key"),
+                key: WorkflowKey::parse(&text(p, "key")).expect("a Workflow key"),
                 repo: text(p, "repo"),
                 base: text(p, "base"),
                 lead_branch: text(p, "lead_branch"),
@@ -255,6 +255,6 @@ mod tests {
         let current = |store: &mut crate::store::Store| store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone();
         assert_eq!(current(&mut store), true);
         store.write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
-        assert_eq!(current(&mut store), false, "a PR's base is in the fingerprint");
+        assert_eq!(current(&mut store), false, "a Workflow's base is in the fingerprint");
     }
 }

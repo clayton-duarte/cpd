@@ -15,7 +15,7 @@ use crate::host::runner::Runner;
 use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
 
-/// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a PR made before R34 keeps it; a new PR's is `<plan>/<key>`).
+/// The LEGACY Lead Branch of a Plan: `cpd/<plan>` (a Workflow made before R34 keeps it; a new Workflow's is `<plan>/<key>`).
 pub fn legacy_lead_branch(plan: &PlanId) -> String {
     format!("cpd/{plan}")
 }
@@ -25,8 +25,8 @@ pub fn attempt_branch(plan: &PlanId, attempt: &AttemptId) -> String {
     format!("cpd/{plan}--{attempt}")
 }
 
-/// Whether an Attempt is **linear** (hs-d680, hs-d682): it runs in its PR's one workflow worktree, on the Lead
-/// Branch, so its branch is the Lead Branch. It is its PR's only live Attempt for its whole life; a parallel
+/// Whether an Attempt is **linear** (hs-d680, hs-d682): it runs in its Workflow's one Lead worktree, on the Lead
+/// Branch, so its branch is the Lead Branch. It is its Workflow's only live Attempt for its whole life; a parallel
 /// Attempt has its own `cpd/<plan>--<attempt>` worktree and branch.
 pub fn is_linear(attempt_branch: &str, lead_branch: &str) -> bool {
     attempt_branch == lead_branch
@@ -51,8 +51,8 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
     sibling(repo, plan.as_str())
 }
 
-/// The Lead worktree of a PR (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
-/// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
+/// The Lead worktree of a Workflow (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
+/// A Workflow made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
 pub fn workflow_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
     if lead_branch_name == legacy_lead_branch(plan) {
@@ -67,7 +67,7 @@ pub fn attempt_worktree_path(repo: &Path, plan: &PlanId, attempt: &AttemptId) ->
     sibling(repo, &format!("{plan}--{attempt}"))
 }
 
-/// The Gate worktree for a PR's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
+/// The Gate worktree for a Workflow's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
 pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey, pid: u32) -> Result<PathBuf, CpdError> {
     sibling(repo, &format!("{plan}--{key}-gate-{pid}"))
 }
@@ -317,7 +317,7 @@ pub enum Remote {
     Absent,
     /// `origin/<branch>` exists and does not conflict with `origin/<base>`.
     Reusable,
-    /// An adopted PR's Lead Branch: cut from `origin/<head_ref>`, which is the pull request's own branch; nothing is pushed.
+    /// An adopted Workflow's Lead Branch: cut from `origin/<head_ref>`, which is the pull request's own branch; nothing is pushed.
     Adopted,
 }
 
@@ -387,9 +387,9 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
     Ok(Remote::Reusable)
 }
 
-/// The remote check and the start point of a **stacked** PR's Lead Branch (contract §7.2 "A stacked PR"): `base`
-/// is its base PR's Lead Branch, and the branch starts from that branch's head `S`, the local `refs/heads/<base>`
-/// (which the base PR's merges move), else `origin/<base>` when the local branch is gone, else `setup_failed`
+/// The remote check and the start point of a **stacked** Workflow's Lead Branch (contract §7.2 "A stacked Workflow"): `base`
+/// is its base Workflow's Lead Branch, and the branch starts from that branch's head `S`, the local `refs/heads/<base>`
+/// (which the base Workflow's merges move), else `origin/<base>` when the local branch is gone, else `setup_failed`
 /// (`step` `base_pr_branch`). `origin/<base>` is fetched only when `origin` has it; a Lead Branch on the remote is
 /// reused when it does not conflict with `origin/<base>`, or at once when `origin` has no `base` (nothing to be behind).
 fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, String), StartFailure> {
@@ -412,7 +412,7 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
     } else {
         let error = CpdError::new(
             ErrorCode::SetupFailed,
-            format!("The base PR's Lead Branch {base} is neither a local branch of this repo nor on origin: the stacked PR has nothing to start from."),
+            format!("The base Workflow's Lead Branch {base} is neither a local branch of this repo nor on origin: the stacked Workflow has nothing to start from."),
         )
         .with("base", base);
         return Err(StartFailure { step: Step::BasePrBranch, error });
@@ -439,7 +439,7 @@ pub enum Step {
     Worktree,
     /// `fetch origin`, `ls-remote`, the ancestor check.
     Remote,
-    /// A stacked PR's start point: its base PR's Lead Branch, local or on `origin` (§7.2).
+    /// A stacked Workflow's start point: its base Workflow's Lead Branch, local or on `origin` (§7.2).
     BasePrBranch,
     /// The `pre-start` hook.
     PreStart,
@@ -464,7 +464,7 @@ pub struct StartFailure {
 }
 
 /// The temporary worktree `pr rebase` rewrites the Lead Branch in (contract §7.6): detached at the
-/// snapshot it rebases, so the Lead worktree itself is never rewritten and two rebases of one PR do
+/// snapshot it rebases, so the Lead worktree itself is never rewritten and two rebases of one Workflow do
 /// not race on its index. It belongs to one rebase run: no test slot, no clean-up sweep, and the
 /// run that adds it removes it.
 #[derive(Debug)]
@@ -531,8 +531,8 @@ impl Prepared {
 }
 
 /// Creates a Lead worktree at `path` on `branch` and runs `pre-start` in it,
-/// without pushing (contract §7.2; `plan lock`, engine E7 and `pr start` all
-/// start a PR this way).
+/// without pushing (contract §7.2; `plan lock`, engine E7 and `workflow start` all
+/// start a Workflow this way).
 ///
 /// `repo` is the main checkout. A leftover of an interrupted start (a worktree
 /// of this repo at `path`, on `branch`) is removed first; any other thing at
@@ -553,8 +553,8 @@ pub fn prepare_lead_worktree(
     prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Base, setup, &Pipeline::default())
 }
 
-/// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
-/// that branch's head, not from `origin/<base>` (contract §7.2 "A stacked PR", [`check_stacked`]); everything else
+/// [`prepare_lead_worktree`] of a **stacked** Workflow: `base` is its base Workflow's Lead Branch, and the branch is cut from
+/// that branch's head, not from `origin/<base>` (contract §7.2 "A stacked Workflow", [`check_stacked`]); everything else
 /// is the same.
 pub fn prepare_stacked_lead_worktree(
     repo: &Path,
@@ -567,8 +567,8 @@ pub fn prepare_stacked_lead_worktree(
     prepare_workflow_lead_worktree(repo, plan, path, branch, base, Cut::Stacked, setup, &Pipeline::default())
 }
 
-/// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked PR's base PR's
-/// Lead Branch, or, for an **adopted** PR (contract §7.2), `origin/<head_ref>`: `origin <head_ref>` is fetched (a failure
+/// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked Workflow's base Workflow's
+/// Lead Branch, or, for an **adopted** Workflow (contract §7.2), `origin/<head_ref>`: `origin <head_ref>` is fetched (a failure
 /// is step `remote`), no conflict check against `base` runs, nothing is pushed, and the User's own local branch of the
 /// head's name is never read.
 #[derive(Clone, Copy)]
@@ -578,7 +578,7 @@ pub enum Cut<'a> {
     Adopted(&'a str),
 }
 
-/// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], for `Cut::Stacked`; `Cut::Adopted` for an adopted PR) running `pre_start`, the PR's policy
+/// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], for `Cut::Stacked`; `Cut::Adopted` for an adopted Workflow) running `pre_start`, the Workflow's policy
 /// `hooks.pre-start` (§7.3), after the worktree is created. The two above run no hook: they are for a caller with none.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_workflow_lead_worktree(
@@ -649,7 +649,7 @@ pub fn prepare_workflow_lead_worktree(
 }
 
 /// Creates the Lead worktree of a Plan's legacy Lead Branch `cpd/<plan>` and runs
-/// `pre-start` in it (contract §7.2 for a PR made by migration 4), then pushes
+/// `pre-start` in it (contract §7.2 for a Workflow made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
     create_lead_worktree_with(repo, plan, base, setup, &Pipeline::default())
@@ -664,7 +664,7 @@ pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: 
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
 }
 
-/// The Lead Branch of the PR whose Lead worktree is `lead_worktree`: the branch checked out there, whatever its
+/// The Lead Branch of the Workflow whose Lead worktree is `lead_worktree`: the branch checked out there, whatever its
 /// name (the stored lead_branch is the caller's). A detached HEAD is `setup_failed`.
 fn checked_out_lead_branch(lead_worktree: &Path, plan: &PlanId) -> Result<String, CpdError> {
     let fail = |why: String| {
@@ -690,7 +690,7 @@ pub fn create_attempt_worktree(
     create_attempt_worktree_with(repo, lead_worktree, plan, attempt, setup, &Pipeline::default())
 }
 
-/// [`create_attempt_worktree`] running `pre_start`, the PR's policy `hooks.pre-start`; the one above runs no hook.
+/// [`create_attempt_worktree`] running `pre_start`, the Workflow's policy `hooks.pre-start`; the one above runs no hook.
 pub fn create_attempt_worktree_with(
     repo: &Path,
     lead_worktree: &Path,
@@ -724,7 +724,7 @@ pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) ->
     remove(lead_worktree, path, branch, false, false)
 }
 
-/// Why a merged PR's Lead worktree was left alone.
+/// Why a merged Workflow's Lead worktree was left alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Kept {
     /// `git status --porcelain` is not empty (untracked files included).
@@ -756,11 +756,11 @@ pub enum LeadRemoval {
     Kept(Kept),
 }
 
-/// Removes the Lead worktree of a merged or cancelled PR and its local Lead Branch, whole or not at all (DESIGN 4). A
+/// Removes the Lead worktree of a merged or cancelled Workflow and its local Lead Branch, whole or not at all (DESIGN 4). A
 /// worktree with uncommitted changes or commits not on `origin` is kept untouched, unless `HEAD` is the pull request's
 /// head commit or an ancestor of it (`recorded_head`, called only when `rev-list` is not empty (merge commits do not
 /// count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the head branch is
-/// deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is
+/// deleted and `origin/<branch>` pruned, so the Workflow's own commits look unpushed); the check is
 /// `git --no-optional-locks status`, which takes no `index.lock` (hs-d243). Otherwise, in this order: (a) rename
 /// `<path>` to `<path>.removing` (atomic; a failing rename leaves everything untouched and is `Kept(Rename)`), (b)
 /// `git worktree prune`, (c) `git branch -D` when the branch exists, (d) delete `<path>.removing`. A stop leaves the
@@ -797,7 +797,7 @@ pub fn remove_merged_lead(
 /// Whether `HEAD` of `worktree` holds work that is nowhere else: non-merge commits outside `origin/*` and outside the
 /// pull request's recorded head `oid` (contract §7.2 "The recorded head"; no `oid`, or an object this repo does not
 /// have, excludes nothing). A merge commit is not work: a lone local merge of the base (rule S) is no reason to keep a
-/// merged PR's worktree (hygiene.md 8a).
+/// merged Workflow's worktree (hygiene.md 8a).
 fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
     let list = |extra: Option<&str>| -> Result<bool, CpdError> {
         let mut args = vec!["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"];

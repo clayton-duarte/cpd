@@ -1,5 +1,5 @@
 //! `plan lock` (commands.md §4.8, contract §3.1, §7.2): `plan → dispatch`.
-//! Starts the PRs that need no other PR (all or nothing, `pr::start`), queues
+//! Starts the Workflows that need no other Workflow (all or nothing, `pr::start`), queues
 //! every draft Job with its Locked-Job fingerprint, and starts the engine with
 //! `cpd watch --ensure`.
 
@@ -80,13 +80,13 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         live.iter().filter(|p| !drafts.iter().any(|j| j.workflow_str() == p.key.as_str())).map(|p| p.key.as_str()).collect();
     if live.is_empty() || !empty.is_empty() {
         let message = if live.is_empty() {
-            format!("Plan {id} has no PR: add one with cpd pr add.")
+            format!("Plan {id} has no Workflow: add one with cpd workflow add.")
         } else {
-            format!("Plan {id} has PRs without a draft Job: {}.", empty.join(", "))
+            format!("Plan {id} has Workflows without a draft Job: {}.", empty.join(", "))
         };
         let mut error = CpdError::new(ErrorCode::WorkflowEmpty, message).with("plan", id.as_str()).with("prs", empty);
         if live.is_empty() {
-            error = error.with("next", format!("cpd pr add <key> --repo <path> --plan {id}"));
+            error = error.with("next", format!("cpd workflow add <key> --repo <path> --plan {id}"));
         }
         return Err(error);
     }
@@ -96,7 +96,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             .with("cycle", cycle));
     }
 
-    // git, outside any transaction (§7.2): every PR with no needs is prepared first,
+    // git, outside any transaction (§7.2): every Workflow with no needs is prepared first,
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
     for workflow in workflows.iter().filter(|p| p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)) {
@@ -152,8 +152,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&workflows, &started, &held), "watch": watch})))
 }
 
-/// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
-/// key order. A PR started by this lock has its worktree and R35's outcome;
+/// `prs` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in
+/// key order. A Workflow started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
 fn listed(workflows: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
     workflows.iter()

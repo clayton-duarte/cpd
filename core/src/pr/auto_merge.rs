@@ -1,4 +1,4 @@
-//! Auto-merge of a posted PR (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
+//! Auto-merge of a posted Workflow (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
 //! `enablePullRequestAutoMerge` with the first method the repo allows, never `gh pr merge`. `pr post` reads once before
 //! its send and runs [`after_read`]; the engine's E18 runs [`attempt`] (read, then [`after_read`]).
 
@@ -23,7 +23,7 @@ pub enum Outcome {
     Failed(CpdError),
 }
 
-/// Whether PR `pr` of `plan` is stacked: its stored `base` is the `lead_branch` of any `prs` row (any Plan, any status).
+/// Whether Workflow `pr` of `plan` is stacked: its stored `base` is the `lead_branch` of any `prs` row (any Plan, any status).
 pub fn stacked(conn: &Connection, plan: &str, workflow: &str) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = (SELECT base FROM workflows WHERE plan = ?1 AND key = ?2))",

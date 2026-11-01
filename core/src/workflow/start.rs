@@ -1,9 +1,9 @@
-//! Starting a PR (contract §3.8 "The start", §7.2; commands.md §9.7): one
-//! routine for `plan lock`, engine E7 and `pr start`. It creates the PR's Lead
+//! Starting a Workflow (contract §3.8 "The start", §7.2; commands.md §9.7): one
+//! routine for `plan lock`, engine E7 and `workflow start`. It creates the Workflow's Lead
 //! worktree on its Lead Branch (R35's remote rules), runs `pre-start`, pushes a
 //! new branch, then writes `status = dispatch` and `pr-started` in one
 //! transaction. `plan lock` uses the steps one by one (all or nothing across
-//! PRs); E7 and `pr start` use [`start`].
+//! Workflows); E7 and `workflow start` use [`start`].
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,13 +22,13 @@ use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::{Phase, WorkflowRow};
 
-/// Every PR of a Plan in key order (`plan::fingerprint::load_prs`), as E7 and `pr start` read them.
+/// Every Workflow of a Plan in key order (`plan::fingerprint::load_prs`), as E7 and `workflow start` read them.
 pub use crate::plan::fingerprint::load_workflows as load;
 use crate::store::{Store, WriteTxn};
 
-const COMMAND: &str = "pr start";
+const COMMAND: &str = "workflow start";
 
-/// Who started the PR: the `by` of `pr-started`, and the `source` of the `error`
+/// Who started the Workflow: the `by` of `pr-started`, and the `source` of the `error`
 /// Events the start appends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum By {
@@ -55,15 +55,15 @@ impl By {
     }
 }
 
-/// What holds a `waiting` PR `r` back (§3.7 E7, §3.8), as the `WHERE` conditions over the aliases `r` (the PR),
-/// `n` and `q` (a need and the PR it names) and `b` (the PR's base PR): the one definition of "not ready",
-/// which engine E7's query, `pr start`'s refusal and its details are all built from.
+/// What holds a `waiting` Workflow `r` back (§3.7 E7, §3.8), as the `WHERE` conditions over the aliases `r` (the Workflow),
+/// `n` and `q` (a need and the Workflow it names) and `b` (the Workflow's base Workflow): the one definition of "not ready",
+/// which engine E7's query, `workflow start`'s refusal and its details are all built from.
 macro_rules! needs_unmerged {
     () => {
         "n.plan = r.plan AND n.workflow = r.key AND q.plan = n.plan AND q.key = n.needs AND q.status <> 'merged'"
     };
 }
-/// The base PR of `r` (§2.2 "The base PR": the PR of its repo whose Lead Branch is its base) has not opened: it is
+/// The base Workflow of `r` (§2.2 "The base Workflow": the Workflow of its repo whose Lead Branch is its base) has not opened: it is
 /// `waiting` or `dispatch` (the implied need; a `merged` one is unstacked first).
 macro_rules! base_pr_not_open {
     () => {
@@ -71,8 +71,8 @@ macro_rules! base_pr_not_open {
     };
 }
 
-/// E7's condition over `prs r`: every need `merged` and the base PR, when the PR is
-/// stacked, its base PR `open` (the implied need; a `merged` one is not waited for).
+/// E7's condition over `prs r`: every need `merged` and the base Workflow, when the Workflow is
+/// stacked, its base Workflow `open` (the implied need; a `merged` one is not waited for).
 pub const READY: &str = concat!(
     "NOT EXISTS (SELECT 1 FROM workflow_needs n, workflows q WHERE ",
     needs_unmerged!(),
@@ -81,12 +81,12 @@ pub const READY: &str = concat!(
     ")"
 );
 
-/// What holds PR `key` of `plan` back, read in the database (the same conditions as [`READY`]).
+/// What holds Workflow `key` of `plan` back, read in the database (the same conditions as [`READY`]).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct NotReady {
     /// The needs that are not `merged`, as keys.
     pub needs: Vec<String>,
-    /// The base PR as `<plan>/<key>` when it has not opened.
+    /// The base Workflow as `<plan>/<key>` when it has not opened.
     pub base_workflow: Option<String>,
 }
 
@@ -113,7 +113,7 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &Workfl
     Ok(NotReady { needs, base_workflow })
 }
 
-/// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
+/// The Workflow's base Workflow as `<plan>/<key>` (§2.2 "The base Workflow": derived, the Workflow of its repo whose Lead Branch is its
 /// `base`), `None` when it is not stacked.
 pub(crate) fn base_workflow(conn: &rusqlite::Connection, plan: &PlanId, workflow: &WorkflowRow) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
@@ -122,14 +122,14 @@ pub(crate) fn base_workflow(conn: &rusqlite::Connection, plan: &PlanId, workflow
         .optional()?)
 }
 
-/// A merged base PR a `waiting` or `dispatch` PR is still stacked on (§3.8 "Stacked PRs" step 7, hs-d301).
+/// A merged base Workflow a `waiting` or `dispatch` Workflow is still stacked on (§3.8 "Stacked Workflows" step 7, hs-d301).
 struct MergedBase {
     repo: String,
-    /// The PR's `base`: the merged base PR's Lead Branch.
+    /// The Workflow's `base`: the merged base Workflow's Lead Branch.
     from: String,
-    /// The merged base PR as `<plan>/<key>`.
+    /// The merged base Workflow as `<plan>/<key>`.
     from_workflow: String,
-    /// The merged base PR's own `base`.
+    /// The merged base Workflow's own `base`.
     to: String,
 }
 
@@ -146,24 +146,24 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) ->
         .optional()?)
 }
 
-/// The unstack of a PR whose base PR merged (contract §3.8 "Stacked PRs" step 7, hs-d301): while PR `key` of `plan` is
-/// `waiting` or `dispatch` and its base PR (§2.2, derived from `base`) is `merged`, its `base` becomes that PR's own
-/// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base PRs. GitHub deleted
-/// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `pr start`, `pr open`); the
+/// The unstack of a Workflow whose base Workflow merged (contract §3.8 "Stacked Workflows" step 7, hs-d301): while Workflow `key` of `plan` is
+/// `waiting` or `dispatch` and its base Workflow (§2.2, derived from `base`) is `merged`, its `base` becomes that Workflow's own
+/// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base Workflows. GitHub deleted
+/// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `workflow start`, `pr open`); the
 /// poll's Event has `number` and `url` null. Whether anything changed.
 pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<bool, CpdError> {
     use rusqlite::OptionalExtension;
     let mut seen = Vec::new();
     while let Some(MergedBase { repo, from, from_workflow, to }) = merged_base(tx, plan, key)? {
         if seen.contains(&from) {
-            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {from}")));
+            return Err(CpdError::bad_row(format!("The base Workflows of {repo} form a cycle at {from}")));
         }
         let moved = tx.execute(
             "UPDATE workflows SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status IN ('waiting', 'dispatch') AND base = ?4",
             [plan.as_str(), key.as_str(), to.as_str(), from.as_str()],
         )?;
         if moved == 0 {
-            return Err(CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {plan} changed while it was unstacked: rerun the command."))
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Workflow {key} of Plan {plan} changed while it was unstacked: rerun the command."))
                 .with("plan", plan.as_str())
                 .with("pr", key.as_str()));
         }
@@ -171,7 +171,7 @@ pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &
             .query_row("SELECT plan || '/' || key FROM workflows WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
             .optional()?;
         let text = format!(
-            "PR {key} of Plan {plan} now targets {to} (was {from}): its base PR {from_workflow} merged before its pull request existed. \
+            "Workflow {key} of Plan {plan} now targets {to} (was {from}): its base Workflow {from_workflow} merged before its pull request existed. \
              Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan {plan}."
         );
         let pull = if by == "poll" { BasePull::Null } else { BasePull::Absent };
@@ -182,7 +182,7 @@ pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &
     Ok(!seen.is_empty())
 }
 
-/// [`unstack`] in a transaction of its own when the PR needs it (a PR already unstacked writes nothing), then the PR as
+/// [`unstack`] in a transaction of its own when the Workflow needs it (a Workflow already unstacked writes nothing), then the Workflow as
 /// it is stored.
 pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<WorkflowRow, CpdError> {
     if store.read(|conn| Ok(merged_base(conn, plan, key)?.is_some()))? {
@@ -190,17 +190,17 @@ pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key
     }
     store
         .read(|conn| Ok(load(conn, plan)?.into_iter().find(|p| &p.key == key)))?
-        .ok_or_else(|| CpdError::bad_row(format!("PR {key} of Plan {plan} vanished while it was unstacked")))
+        .ok_or_else(|| CpdError::bad_row(format!("Workflow {key} of Plan {plan} vanished while it was unstacked")))
 }
 
-/// A2 of an `open` Job (contract §3.4, hs-d340): a PR stacked on a base PR that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
-/// so the Worker is told a base that exists: GitHub deleted the merged base PR's branch.
+/// A2 of an `open` Job (contract §3.4, hs-d340): a Workflow stacked on a base Workflow that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
+/// so the Worker is told a base that exists: GitHub deleted the merged base Workflow's branch.
 pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     unstack_stored(store, source, plan, key, "open job").map(|_| ())
 }
 
-/// The root base of a PR of `repo` whose `base` is `base` (§2.2, §7.5): the `base` of the first PR down the chain
-/// of base PRs that is not stacked, the branch the stack lands on; `base` itself when the PR is not stacked.
+/// The root base of a Workflow of `repo` whose `base` is `base` (§2.2, §7.5): the `base` of the first Workflow down the chain
+/// of base Workflows that is not stacked, the branch the stack lands on; `base` itself when the Workflow is not stacked.
 pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<String, CpdError> {
     use rusqlite::OptionalExtension;
     let mut base = base.to_owned();
@@ -210,7 +210,7 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
         .optional()?
     {
         if seen.contains(&base) {
-            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {base}")));
+            return Err(CpdError::bad_row(format!("The base Workflows of {repo} form a cycle at {base}")));
         }
         seen.push(base);
         base = next;
@@ -219,7 +219,7 @@ pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<
 }
 
 /// The refs a protected path may be brought from by a base merge (§7.5), besides the Lead tip: `origin/<base>` (`<base>`
-/// without `origin`), and for a stacked PR `origin/<root>` too, `<root>` the [`root_base`].
+/// without `origin`), and for a stacked Workflow `origin/<root>` too, `<root>` the [`root_base`].
 pub fn tamper_bases(conn: &rusqlite::Connection, dir: &Path, repo: &str, base: &str) -> Result<Vec<String>, CpdError> {
     let root = root_base(conn, repo, base)?;
     let mut refs = vec![git::tamper::base_ref(dir, base)?];
@@ -229,7 +229,7 @@ pub fn tamper_bases(conn: &rusqlite::Connection, dir: &Path, repo: &str, base: &
     Ok(refs)
 }
 
-/// A PR whose Lead worktree exists on its Lead Branch with `pre-start` passed.
+/// A Workflow whose Lead worktree exists on its Lead Branch with `pre-start` passed.
 /// Nothing is pushed and nothing is in the database.
 #[derive(Debug)]
 pub struct Prepared {
@@ -255,7 +255,7 @@ impl Prepared {
     }
 }
 
-/// A [`Prepared`] PR after the push.
+/// A [`Prepared`] Workflow after the push.
 #[derive(Debug)]
 pub struct Pushed {
     prepared: Prepared,
@@ -264,7 +264,7 @@ pub struct Pushed {
 }
 
 impl Pushed {
-    /// The PR's key.
+    /// The Workflow's key.
     pub fn key(&self) -> &str {
         self.prepared.workflow.key.as_str()
     }
@@ -274,7 +274,7 @@ impl Pushed {
     }
 
     /// The key, the Lead Branch and worktree and R35's outcome, as the results
-    /// list a started PR (commands.md §4.8 `prs`, §9.7).
+    /// list a started Workflow (commands.md §4.8 `prs`, §9.7).
     pub fn to_json(&self) -> Value {
         let (workflow, lead) = (&self.prepared.workflow, &self.prepared.lead);
         json!({
@@ -290,7 +290,7 @@ impl Pushed {
 pub enum Failed {
     /// The worktree, the remote check or `pre-start`: the error has `details.pr`.
     Setup { step: Step, error: CpdError },
-    /// The database, or the PR changed meanwhile.
+    /// The database, or the Workflow changed meanwhile.
     Other(CpdError),
 }
 
@@ -307,14 +307,14 @@ fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("lead-{key}.{}.log", Hook::PreStart.as_str()))
 }
 
-/// Creates the PR's Lead worktree and runs `pre-start` in it (§7.2), in the PR's repo, for a PR that is not
-/// stacked: the one `plan lock` starts (§3.1: it starts only PRs with no base PR).
+/// Creates the Workflow's Lead worktree and runs `pre-start` in it (§7.2), in the Workflow's repo, for a Workflow that is not
+/// stacked: the one `plan lock` starts (§3.1: it starts only Workflows with no base Workflow).
 pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, workflow: &WorkflowRow) -> Result<Prepared, Failed> {
     prepare_as(home, config, store, plan, workflow, false)
 }
 
-/// [`prepare`], `stacked` being whether the PR is stacked on a base PR: its Lead Branch is then cut from that
-/// PR's Lead Branch head (§7.2).
+/// [`prepare`], `stacked` being whether the Workflow is stacked on a base Workflow: its Lead Branch is then cut from that
+/// Workflow's Lead Branch head (§7.2).
 fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, workflow: &WorkflowRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &workflow.key;
     let policy = store.read(|conn| crate::pr::policy_of_workflow(conn, home, plan, key)).map_err(Failed::Other)?;
@@ -340,7 +340,7 @@ fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId,
     }
 }
 
-/// Inside the transaction: the PR `waiting → dispatch` with its worktree, then
+/// Inside the transaction: the Workflow `waiting → dispatch` with its worktree, then
 /// `pr-started`, and the `error` `push_failed` of a push that failed (R35).
 /// Compare-and-swap on `status = 'waiting'`, else `cas_lost`.
 pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Result<(), CpdError> {
@@ -352,19 +352,19 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
         [worktree.as_str(), plan.as_str(), workflow.key.as_str()],
     )?;
     if moved == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("PR {} of Plan {plan} changed while it was started: rerun the command.", workflow.key))
+        return Err(CpdError::new(ErrorCode::CasLost, format!("Workflow {} of Plan {plan} changed while it was started: rerun the command.", workflow.key))
             .with("plan", plan.as_str())
             .with("pr", workflow.key.as_str()));
     }
     let text = format!(
-        "PR {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
+        "Workflow {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
         workflow.key, lead.branch
     );
     let event = NewEvent::workflow_started(text, &workflow.key, &workflow.repo, &workflow.base, &lead.branch, &worktree, &lead.base_sha, lead.reused(), pushed.pushed, by.as_str());
     append(tx, event.plan(plan.clone()))?;
     if let Some(error) = &pushed.failed {
         let text = format!(
-            "The Lead Branch {} of PR {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
+            "The Lead Branch {} of Workflow {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
             lead.branch,
             workflow.key,
             error.message()
@@ -375,11 +375,11 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
     Ok(())
 }
 
-/// Starts one PR of a Plan in `dispatch` (E7, `pr start`): [`prepare`], push,
+/// Starts one Workflow of a Plan in `dispatch` (E7, `workflow start`): [`prepare`], push,
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
 pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, workflow: &WorkflowRow, by: By) -> Result<Pushed, Failed> {
-    // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
+    // A base Workflow that merged unstacks the Workflow first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
     let workflow = &unstack_stored(store, by.source(), plan, &workflow.key, by.as_str()).map_err(Failed::Other)?;
     let stacked = store.read(|conn| base_workflow(conn, plan, workflow)).map_err(Failed::Other)?.is_some();
     let pushed = prepare_as(home, config, store, plan, workflow, stacked)?.push();
@@ -392,10 +392,10 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
     }
 }
 
-/// Engine E7 failed to start a `waiting` PR (§3.8 "A failed start"): in one
+/// Engine E7 failed to start a `waiting` Workflow (§3.8 "A failed start"): in one
 /// transaction `start_failed_at` is set and one `error` Event `pr_start_failed`
 /// is appended for the Plan's Lead, `source` being the engine's. False when the
-/// PR is no longer `waiting` or was already marked: nothing is written.
+/// Workflow is no longer `waiting` or was already marked: nothing is written.
 pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
     store.write(source, |tx| {
         let marked = tx.execute(
@@ -412,15 +412,15 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &Work
                 details[field] = value.clone();
             }
         }
-        let message = format!("PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message());
-        let text = format!("{message} The engine does not try again. Fix the cause, then: cpd pr start {key} --plan {plan}");
+        let message = format!("Workflow {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message());
+        let text = format!("{message} The engine does not try again. Fix the cause, then: cpd workflow start {key} --plan {plan}");
         let event = NewEvent::error(text, source, ErrorCode::WorkflowStartFailed.as_str(), &message, details);
         append(tx, event.plan(plan.clone()))?;
         Ok(true)
     })
 }
 
-/// `pr start` (commands.md §9.7).
+/// `workflow start` (commands.md §9.7).
 pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
@@ -430,14 +430,14 @@ pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
         return Err(wrong_phase(&plan, phase, COMMAND, "dispatch"));
     }
     let Some(workflow) = workflows.iter().find(|p| p.key == key) else {
-        return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
+        return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str()));
     };
     match workflow.status.as_str() {
         "waiting" => {}
         "cancelled" => {
-            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} of Plan {plan} is cancelled: it cannot be started."))
+            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("Workflow {key} of Plan {plan} is cancelled: it cannot be started."))
                 .with("plan", plan.as_str())
                 .with("pr", key.as_str())
                 .with("from", "cancelled")
@@ -458,7 +458,7 @@ pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
         if let Some(base_workflow) = &held.base_workflow {
             why.push(format!("is stacked on {base_workflow}, which has not opened yet"));
         }
-        let mut error = CpdError::new(ErrorCode::WorkflowNotReady, format!("PR {key} of Plan {plan} {}.", why.join(" and ")))
+        let mut error = CpdError::new(ErrorCode::WorkflowNotReady, format!("Workflow {key} of Plan {plan} {}.", why.join(" and ")))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("needs", held.needs);

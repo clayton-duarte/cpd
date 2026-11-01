@@ -1,5 +1,5 @@
 //! Test support: the statements a closure runs on a connection, and a Ledger
-//! of `n` Plans with a PR, a pull request, Jobs and a review each, to count
+//! of `n` Plans with a Workflow, a pull request, Jobs and a review each, to count
 //! them against (the read model's "a fixed number of queries", `tui/src/read`).
 
 use std::ffi::{CStr, c_int, c_uint, c_void};
@@ -38,7 +38,7 @@ pub(super) fn statements<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, Vec
     (value, seen.into_inner().unwrap())
 }
 
-/// A Store in `dir` holding `plans` Plans (`plan-1`…), each in `phase` `plan` with one PR with a
+/// A Store in `dir` holding `plans` Plans (`plan-1`…), each in `phase` `plan` with one Workflow with a
 /// pull request, two draft Jobs (the second needed by the first) and a pending review.
 pub(super) fn ledger(dir: &std::path::Path, plans: usize) -> Store {
     let home = CpdHome::resolve(Some(dir.into()), None).unwrap();

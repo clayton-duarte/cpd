@@ -195,7 +195,7 @@ pub(crate) fn sections() -> Vec<Section> {
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
     pr_rows.push(vec![sample(palette::PR_UPDATING_RUNNING), plain("its update Job is fixing the conflict")]);
     pr_rows.push(vec![sample(palette::PR_UPDATING_QUEUED), plain("its update Job is queued")]);
-    let workflows = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
+    let workflows = Section { title: "Workflows (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
         title: "PR Checks",
         header: None,
@@ -379,9 +379,9 @@ mod tests {
                 "▂▄▆", "activity per 5 min, first colour wins",
                 "▄", "an error, or a Job failed",
                 "▄", "a Plan or ask Event",
-                "▄", "a PR opened",
+                "▄", "a pull request opened",
                 "▄", "an escalation",
-                "▄", "a Job or a PR merged",
+                "▄", "a Job or a Workflow merged",
                 "▄", "any other activity",
                 "▁", "no activity",
                 "quiet 41m", "queued or running work with no activity for 30 min",

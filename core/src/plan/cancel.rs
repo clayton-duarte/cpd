@@ -152,8 +152,8 @@ fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<
     })
 }
 
-/// Step 5: `gh pr close` for each PR of `plan` in status `open` whose pull request is not `merged`
-/// or `closed` as the poller last read it. The PR rows keep their status. `{pr, number}` of each. An adopted PR's pull
+/// Step 5: `gh pr close` for each Workflow of `plan` in status `open` whose pull request is not `merged`
+/// or `closed` as the poller last read it. The Workflow rows keep their status. `{pr, number}` of each. An adopted Workflow's pull
 /// request is never closed: it is listed apart, as `{pr, number}`, in the second vector.
 fn close_prs(env: &mut Env, plan: &PlanId) -> Result<(Vec<Value>, Vec<Value>), CpdError> {
     let open = env.store.read(|conn| {

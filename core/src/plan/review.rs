@@ -84,13 +84,13 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
-    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
+    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a Workflow that has not started will get.
     open_tier: String,
     plan: PlanRow,
     workflows: Vec<WorkflowRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
-    /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
+    /// The base Workflow (`<plan>/<key>`) of each stacked Workflow, by Workflow key (contract §2.2 "The base Workflow").
     base_workflows: BTreeMap<String, String>,
     /// What waits and what was superseded (hs-d518, hs-d521): shown, never counted.
     display: Display,
@@ -117,8 +117,8 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     })
 }
 
-/// The base PR of each stacked PR of `plan`, `<plan>/<key>` by PR key: the PR whose Lead Branch is the PR's `base`. A Lead
-/// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
+/// The base Workflow of each stacked Workflow of `plan`, `<plan>/<key>` by Workflow key: the Workflow whose Lead Branch is the Workflow's `base`. A Lead
+/// Branch names its Plan, so it names one Workflow (contract §2.2); the same repo is checked when a base is set, not here.
 fn base_workflows(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
     let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM workflows p JOIN workflows q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
     let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -265,7 +265,7 @@ pub fn close_reviews(tx: &WriteTxn<'_>, plan: &PlanId, why: &Closing) -> Result<
     Ok(closed)
 }
 
-/// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
+/// The Plan has an outline, and it says when each Workflow with a draft Job is done (§4.6, D3): else `outline_missing` or
 /// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
 fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     let Some(outline) = &s.plan.outline else {
@@ -289,7 +289,7 @@ fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
     without.sort();
     Err(CpdError::new(
         ErrorCode::OutlineIncomplete,
-        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+        format!("The outline of Plan {id} has no done_when for the Workflows {}: add them with cpd plan outline, then ask again.", without.join(", ")),
     )
     .with("plan", id.as_str())
     .with("workflows", without))

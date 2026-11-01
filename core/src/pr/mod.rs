@@ -1,19 +1,19 @@
 //! Pull requests (contract §7.6; commands.md §9), through `gh`:
 //!
 //! - `add`, `edit`, `describe`, `cancel`, `start`: the Plan's Workflows before and after they start (`workflow add`, `workflow edit`, `workflow describe`, `workflow cancel`, `workflow start`);
-//! - `open`: the Gate, the push and the PR (`pr open`);
+//! - `open`: the Gate, the push and the Workflow (`pr open`);
 //! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
-//! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
+//! - `view`: a Workflow's checks, reviews and comments, read-only (`pr view`);
 //! - `reply`: a marked reply to an open feedback item, never a resolve (`pr reply`);
-//! - `rerun`: the failed GitHub Actions workflow runs of the PR's head commit, re-run (`pr rerun`);
+//! - `rerun`: the failed GitHub Actions workflow runs of the Workflow's head commit, re-run (`pr rerun`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
 //! - `merge`: a clean pull request merged on GitHub with a method the repo allows (`pr merge`);
-//! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
+//! - `gh`: the one gateway to `gh`; `status`: the Workflow status enums; `row`: the Plan as these commands read it.
 //!
 //! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate and pushes
-//! by rule P (§7.4, §7.6); each works on one PR of the Plan, `poll` on every open one. A
-//! repair's Gate runs in the PR's Lead worktree at the gated commit (hs-d679).
+//! by rule P (§7.4, §7.6); each works on one Workflow of the Plan, `poll` on every open one. A
+//! repair's Gate runs in the Workflow's Lead worktree at the gated commit (hs-d679).
 
 #[cfg(test)]
 mod closed_tests;
@@ -86,7 +86,7 @@ pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 /// The `pr` group (commands.md §9): what a command does to a Workflow's pull request, through `gh`.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1)
+    /// Push the Lead Branch and open the Workflow, refused only when it conflicts with its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
@@ -94,13 +94,13 @@ pub enum Command {
     Rebase(RebaseArgs),
     /// Gate, then push the Lead Branch as it is, without a rebase (§9.9)
     Push(Args),
-    /// Show the PR's checks, reviews and comments (§9.8)
+    /// Show the Workflow's checks, reviews and comments (§9.8)
     View(Args),
-    /// Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread
+    /// Reply to an open feedback item of the Workflow's pull request as the User, with the cpd marker; never resolves a thread
     Reply(reply::ReplyArgs),
-    /// Re-run the failed GitHub Actions workflow runs of the PR's head commit (§9.8c)
+    /// Re-run the failed GitHub Actions workflow runs of the Workflow's head commit (§9.8c)
     Rerun(Args),
-    /// Post the PR's pull request to Slack for review (§9.8b)
+    /// Post the Workflow's pull request to Slack for review (§9.8b)
     Post(post::PostArgs),
     /// Merge a clean pull request on GitHub with a method the repo allows (§9.10)
     Merge(merge::MergeArgs),
@@ -154,8 +154,8 @@ impl Env {
     }
 }
 
-/// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
-/// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
+/// The resolved policy of Workflow `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
+/// `Owner` when the Workflow has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
 fn workflow_policy(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
     workflow_policy_resolved(env, plan, key, resolve)?
 }
@@ -189,16 +189,16 @@ fn workflow_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId
     Ok(resolve(home, &policy_key).map(|resolved| resolved.policy))
 }
 
-/// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
-/// Worker Spec) reads, through its Job's PR.
+/// The policy of Workflow `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
+/// Worker Spec) reads, through its Job's Workflow.
 pub fn policy_of_workflow(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> Result<Policy, CpdError> {
     workflow_policy_in(conn, home, plan, key, resolve)?
 }
 
-/// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
+/// [`policy_of_pr`] of the Workflow that holds Job `job` of `plan`.
 pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
     let workflow: String = conn.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
-    let key = WorkflowKey::parse(&workflow).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {workflow:?}")))?;
+    let key = WorkflowKey::parse(&workflow).map_err(|_| CpdError::bad_row(format!("Job {job} has the Workflow key {workflow:?}")))?;
     policy_of_workflow(conn, home, plan, &key)
 }
 
@@ -207,7 +207,7 @@ fn illegal_phase(plan: &PlanWorkflows, command: &str, needs: &str) -> CpdError {
     wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
-/// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
+/// A per-Workflow Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
 /// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
 fn workflow_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey, hook: Hook) -> PathBuf {
@@ -221,11 +221,11 @@ pub(crate) fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &st
         .with("needs", needs)
 }
 
-/// `pr_locked` (exit 3): the Plan is past the phases where its PRs change (§3.8).
+/// `pr_locked` (exit 3): the Plan is past the phases where its Workflows change (§3.8).
 pub(crate) fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
     CpdError::new(
         ErrorCode::WorkflowLocked,
-        format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its PRs are Locked.", phase.as_str()),
+        format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its Workflows are Locked.", phase.as_str()),
     )
     .with("plan", plan.as_str())
     .with("phase", phase.as_str())
@@ -242,22 +242,22 @@ pub(crate) fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<P
         .ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has phase {phase:?}")))
 }
 
-/// The PR `key` among `prs`, else `pr_not_found` (exit 4).
+/// The Workflow `key` among `prs`, else `pr_not_found` (exit 4).
 pub(crate) fn find_workflow<'a>(workflows: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
     workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
     })
 }
 
-/// How a repair's Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
+/// How a repair's Gate runs for Workflow `pr` (contract §7.3, §7.6): `pre-start` with
 /// `setup_minutes` and `pre-merge` with `gate_minutes`, in a worktree the Gate's caller
 /// has brought to the gated commit. No test slot is taken (hs-d679).
 struct GateHooks<'a> {
-    /// The PR's Lead Branch: the template variable `branch`, which a detached worktree cannot read.
+    /// The Workflow's Lead Branch: the template variable `branch`, which a detached worktree cannot read.
     lead_branch: &'a str,
-    /// The PR's base: `base` of `pre-start` and `target` of `pre-merge`.
+    /// The Workflow's base: `base` of `pre-start` and `target` of `pre-merge`.
     base: &'a str,
     pre_start: Setup,
     pre_merge: Setup,
@@ -274,7 +274,7 @@ struct Refused {
     log: PathBuf,
 }
 
-/// How the Gate runs for PR `pr` (contract §7.3, §7.6): the two hook pipelines and their logs.
+/// How the Gate runs for Workflow `pr` (contract §7.3, §7.6): the two hook pipelines and their logs.
 fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, workflow: &'a WorkflowRow) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
@@ -294,7 +294,7 @@ fn gate(env: &Env, policy: &Policy, plan: &PlanId, workflow: &WorkflowRow, workt
 
 /// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
 /// when `pre_start` is set (a temporary rebase worktree), then `pre-merge`. `again` is the command
-/// the Lead runs after fixing it. Nothing runs when the PR's policy says `gate.pr` is not `local` (§8.3).
+/// the Lead runs after fixing it. Nothing runs when the Workflow's policy says `gate.pr` is not `local` (§8.3).
 fn gate_in(
     env: &Env,
     policy: &Policy,

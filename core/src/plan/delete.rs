@@ -122,7 +122,7 @@ impl Targets {
     pub(crate) fn of_plan(conn: &Connection, home: &CpdHome, plan: &PlanId) -> Result<Targets, CpdError> {
         let mut targets = Targets::default();
         let p = plan.as_str();
-        // The PRs: their repository, Lead worktree and Lead Branch.
+        // The Workflows: their repository, Lead worktree and Lead Branch.
         let mut stmt = conn.prepare(
             "SELECT repo, lead_worktree, lead_branch FROM workflows WHERE plan = ?1
              UNION ALL
@@ -136,7 +136,7 @@ impl Targets {
             targets.push_worktree(Some(repo.clone()), worktree);
             targets.push_branch(Some(repo), branch);
         }
-        // The Attempts: their worktree and branch, in the repository of their Job's PR.
+        // The Attempts: their worktree and branch, in the repository of their Job's Workflow.
         let mut stmt = conn.prepare(
             "SELECT p.repo, a.worktree, a.branch FROM attempts a
                JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN workflows p ON p.plan = j.plan AND p.key = j.workflow
@@ -296,7 +296,7 @@ impl Inventory {
 }
 
 /// What stops a delete of `plans` (commands.md §4.14; contract §2.2 "Deleted"): a Plan that is neither archived nor
-/// asleep (when `check_asleep`), and what is still live: the archive rule's blockers, an Attempt not `ended` and a PR that
+/// asleep (when `check_asleep`), and what is still live: the archive rule's blockers, an Attempt not `ended` and a Workflow that
 /// is not `merged` or `cancelled`. `sessions` are Sessions of the delete that belong to no Plan (a Manager).
 pub(crate) fn blockers(conn: &Connection, plans: &[PlanId], sessions: &[SessionId], check_asleep: bool) -> Result<Vec<Blocker>, CpdError> {
     let mut found = Vec::new();
@@ -337,7 +337,7 @@ pub(crate) fn blockers(conn: &Connection, plans: &[PlanId], sessions: &[SessionI
         let mut stmt = conn.prepare("SELECT key, status FROM workflows WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled') ORDER BY key")?;
         for workflow in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
             let (key, status) = workflow?;
-            found.push(Blocker { kind: "pr", id: key.clone(), plan: Some(plan.to_string()), reason: format!("PR {key} of Plan {plan} is {status}.") });
+            found.push(Blocker { kind: "pr", id: key.clone(), plan: Some(plan.to_string()), reason: format!("Workflow {key} of Plan {plan} is {status}.") });
         }
     }
     Ok(found)

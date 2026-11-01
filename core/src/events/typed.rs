@@ -16,7 +16,7 @@ use super::NewEvent;
 use super::kind::Kind;
 
 /// The `number` and `url` of a `workflow-base-changed` Event (§5.2): the pull request's, for the poll's follow of GitHub's
-/// repoint; explicit nulls for the poll's unstack of a PR with no pull request (hs-d301); absent for every other `by`.
+/// repoint; explicit nulls for the poll's unstack of a Workflow with no pull request (hs-d301); absent for every other `by`.
 #[derive(Clone, Copy, Debug)]
 pub enum BasePull<'a> {
     Absent,
@@ -73,12 +73,12 @@ impl NewEvent {
         make(Kind::PlanPhase, text, json!({"from": from, "to": to}))
     }
 
-    /// `plan lock`: the Jobs it queued and the PRs it started.
+    /// `plan lock`: the Jobs it queued and the Workflows it started.
     pub fn plan_phase_locked(text: impl Into<String>, jobs: impl Serialize, workflows: impl Serialize) -> NewEvent {
         make(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": jobs, "workflows": workflows}))
     }
 
-    /// The last PR opened: the PRs that are open.
+    /// The last Workflow opened: the Workflows that are open.
     pub fn plan_phase_deployed(text: impl Into<String>, workflows: impl Serialize) -> NewEvent {
         make(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "workflows": workflows}))
     }
@@ -135,7 +135,7 @@ impl NewEvent {
         )
     }
 
-    /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its PR remains) and `appended`, and its
+    /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its Workflow remains) and `appended`, and its
     /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
     pub fn job_added_by_cpd(text: impl Into<String>, workflow: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
@@ -483,7 +483,7 @@ impl NewEvent {
     }
 
     /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
-    /// the incident; `until_pr` (the `<plan>/<key>` auto-end PR) is in `data` only when set.
+    /// the incident; `until_pr` (the `<plan>/<key>` auto-end Workflow) is in `data` only when set.
     pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "reason": reason, "started_at": started_at, "plans": plans});
         if let Some(until_workflow) = until_workflow {
@@ -494,7 +494,7 @@ impl NewEvent {
 
     /// `incident-plans` (contract §5.2, hs-d664): a `cpd incident start --plan` on a live incident
     /// that changed the Plan set or `until_pr`. `plans` is the new set; `until_pr` (the
-    /// `<plan>/<key>` auto-end PR) is in `data` only when set, mirroring `incident-started`.
+    /// `<plan>/<key>` auto-end Workflow) is in `data` only when set, mirroring `incident-started`.
     pub fn incident_plans(text: impl Into<String>, by: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "plans": plans});
         if let Some(until_workflow) = until_workflow {

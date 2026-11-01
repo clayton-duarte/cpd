@@ -1,5 +1,5 @@
 //! `pr rerun` (decision pro-d155; commands.md §9.8c): re-runs the failed GitHub Actions workflow runs of the
-//! head commit of the PR's pull request. It writes nothing in the store and appends no Event.
+//! head commit of the Workflow's pull request. It writes nothing in the store and appends no Event.
 
 use serde_json::{Value, json};
 
@@ -18,12 +18,12 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     if workflow.status != "open" {
         return Err(CpdError::new(
             ErrorCode::WorkflowNotOpen,
-            format!("PR {} of Plan {id} is {}: pr rerun needs an open PR.", workflow.key, workflow.status),
+            format!("Workflow {} of Plan {id} is {}: pr rerun needs an open Workflow.", workflow.key, workflow.status),
         )
         .with("pr", workflow.key.as_str())
         .with("status", workflow.status.as_str()));
     }
-    let number = workflow.pull.as_ref().expect("an open PR has its pull request (prs CHECK)").number;
+    let number = workflow.pull.as_ref().expect("an open Workflow has its pull request (prs CHECK)").number;
     let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
 
@@ -37,7 +37,7 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
             .collect();
         return Err(CpdError::new(
             ErrorCode::NoFailedRun,
-            format!("No GitHub Actions workflow run of commit {head_sha} of PR {} has failed: nothing was re-run.", workflow.key),
+            format!("No GitHub Actions workflow run of commit {head_sha} of Workflow {} has failed: nothing was re-run.", workflow.key),
         )
         .with("pr", workflow.key.as_str())
         .with("head_sha", head_sha.as_str())

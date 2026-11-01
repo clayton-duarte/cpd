@@ -1,11 +1,11 @@
 //! E4, open Jobs (contract §3.7, hs-d340, hs-d573; it replaces the completion step and its `all-merged` steer, and the escalation to the
-//! Manager): the **fallback** for a PR whose opener is missing. `pr add` lays an opener stub out for every shape, and `pr open` adds one to a
-//! PR that has none; E4 covers the PRs those did not, each PR in status `dispatch`, of a Plan that is not archived, with no `open` Job `draft`, `queued`, `running`, `failed` or `cancelled`, gets one
-//! ([`cpd_core::job::open::add`]), a `draft` one while a draft of the PR (any kind but `open` and `update`) remains, else `queued`. Each tick
-//! it also queues a `draft` `open` Job of such a PR when none of the PR's other Jobs is `draft` any more, with its fingerprint, in one transaction. A `merged` one on a PR still `dispatch` is a merge that died before it opened the pull request, so it
-//! counts for nothing and a fresh Job follows; a `cancelled` one is the Lead's and stands (the way on is `pr open --pr` or `pr cancel`);
+//! Manager): the **fallback** for a Workflow whose opener is missing. `workflow add` lays an opener stub out for every shape, and `pr open` adds one to a
+//! Workflow that has none; E4 covers the Workflows those did not, each Workflow in status `dispatch`, of a Plan that is not archived, with no `open` Job `draft`, `queued`, `running`, `failed` or `cancelled`, gets one
+//! ([`cpd_core::job::open::add`]), a `draft` one while a draft of the Workflow (any kind but `open` and `update`) remains, else `queued`. Each tick
+//! it also queues a `draft` `open` Job of such a Workflow when none of the Workflow's other Jobs is `draft` any more, with its fingerprint, in one transaction. A `merged` one on a Workflow still `dispatch` is a merge that died before it opened the pull request, so it
+//! counts for nothing and a fresh Job follows; a `cancelled` one is the Lead's and stands (the way on is `pr open --workflow` or `workflow cancel`);
 //! a `failed` one waits for the Lead.
-//! One transaction for every PR missing one; nothing is written when none is, so the step is idempotent.
+//! One transaction for every Workflow missing one; nothing is written when none is, so the step is idempotent.
 
 use super::SOURCE;
 use super::engine::{Engine, incident_holds_plan};
@@ -16,7 +16,7 @@ use cpd_core::job::open;
 use cpd_core::plan::fingerprint::load_workflows;
 use cpd_core::store::WriteTxn;
 
-/// The PRs E4 is for; `?1` and `?2` are one PR's Plan and key, or NULL for every PR.
+/// The Workflows E4 is for; `?1` and `?2` are one Workflow's Plan and key, or NULL for every Workflow.
 const MISSING: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
   WHERE (?1 IS NULL OR r.plan = ?1) AND (?2 IS NULL OR r.key = ?2)
     AND r.status = 'dispatch' AND p.archived_at IS NULL
@@ -33,7 +33,7 @@ pub(super) fn run(engine: &mut Engine) {
         for (plan, key) in rows {
             let plan = PlanId::parse(&plan)?;
             let key = WorkflowKey::parse(&key)?;
-            // Incident mode on: a held Plan's PR gets no open Job (contract §3.7 E4).
+            // Incident mode on: a held Plan's Workflow gets no open Job (contract §3.7 E4).
             if !incident_holds_plan(conn, &plan) {
                 missing.push((plan, key));
             }
@@ -64,10 +64,10 @@ pub(super) fn run(engine: &mut Engine) {
     match engine.store.write(SOURCE, |tx| Ok((add_all(tx, &missing, tier)?, promote_all(tx)?))) {
         Ok((added, promoted)) => {
             for (plan, workflow, key) in added {
-                engine.log.line(&format!("E4: added the open Job {key} to PR {workflow} of Plan {plan}"));
+                engine.log.line(&format!("E4: added the open Job {key} to Workflow {workflow} of Plan {plan}"));
             }
             for (plan, key) in promoted {
-                engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its PR remains"));
+                engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its Workflow remains"));
             }
             engine.clear(Step::E4, &About::Machine);
         }
@@ -75,8 +75,8 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// The draft `open` Jobs E4 queues: of a `dispatch` PR of a Plan that is not archived, with no other Job (as in [`others`]: not `open`
-/// or `update`) of the PR `draft`. `?1` is a Plan, or NULL for every Plan.
+/// The draft `open` Jobs E4 queues: of a `dispatch` Workflow of a Plan that is not archived, with no other Job (as in [`others`]: not `open`
+/// or `update`) of the Workflow `draft`. `?1` is a Plan, or NULL for every Plan.
 const PROMOTABLE: &str = "SELECT o.plan, o.key FROM jobs o JOIN prs r ON r.plan = o.plan AND r.key = o.pr JOIN plans p ON p.id = o.plan
   WHERE (?1 IS NULL OR o.plan = ?1) AND o.kind = 'open' AND o.status = 'draft'
     AND r.status = 'dispatch' AND p.archived_at IS NULL
@@ -102,7 +102,7 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
     Ok(found)
 }
 
-/// Decides again inside the transaction (a hand `pr open` or `job cancel` may have changed a PR), then adds each missing Job.
+/// Decides again inside the transaction (a hand `pr open` or `job cancel` may have changed a Workflow), then adds each missing Job.
 fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, WorkflowKey)], tier: cpd_core::config::Tier) -> Result<Vec<(PlanId, WorkflowKey, cpd_core::ids::JobKey)>, CpdError> {
     let mut added = Vec::new();
     for (plan, key) in missing {

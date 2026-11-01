@@ -9,7 +9,7 @@
 //! `error` Event of the same step, scope and code appended less than `error_repeat_seconds` ago.
 //! With each `error` Event goes one message to the Context's Manager, or to
 //! every live Manager for a machine error (hs-d314). A stuck Job goes to its
-//! Context's Manager the same way, once (hs-d318), grouped by PR (hs-d647,
+//! Context's Manager the same way, once (hs-d318), grouped by Workflow (hs-d647,
 //! [`tell_stuck_jobs`]).
 
 use std::collections::HashMap;
@@ -63,8 +63,8 @@ impl fmt::Display for Step {
             Step::E2 => "E2 (liveness)",
             Step::E3 => "E3 (scheduling)",
             Step::E4 => "E4 (open Jobs)",
-            Step::E5 => "E5 (PR)",
-            Step::E7 => "E7 (PR start)",
+            Step::E5 => "E5 (Workflow)",
+            Step::E7 => "E7 (Workflow start)",
             Step::Workers => "the @cpd_workers step",
             Step::HostAlert => "the @cpd_host_alert step",
             Step::E8 => "E8 (Inbox)",
@@ -97,7 +97,7 @@ pub(super) enum About {
     /// A Session's retitle run (E10): the Inbox scope and the command are the Session's, but the
     /// `error` Event sets no Session, so no Lead gets a turn for it (contract §3.7 E10).
     TitleRun(SessionId),
-    /// One E19 queue row (Plan, PR, target): scoped to the Plan, deduped per row (contract §3.7 E19).
+    /// One E19 queue row (Plan, Workflow, target): scoped to the Plan, deduped per row (contract §3.7 E19).
     Move(PlanId, WorkflowKey, Target),
 }
 
@@ -109,7 +109,7 @@ impl About {
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
-            About::Move(p, workflow, t) => format!("the {} move of PR {workflow} of Plan {p}", t.as_str()),
+            About::Move(p, workflow, t) => format!("the {} move of Workflow {workflow} of Plan {p}", t.as_str()),
         }
     }
 
@@ -158,12 +158,12 @@ impl From<&CpdError> for Failure {
 /// What every message about a group's stuck Jobs begins with: the record that it was sent ([`tell_stuck_jobs`]).
 fn stuck_prefix(group: &StuckGroup) -> String {
     match &group.home {
-        JobHome::Workflow(workflow) => format!("Jobs of PR {}/{workflow} failed ", group.plan),
+        JobHome::Workflow(workflow) => format!("Jobs of Workflow {}/{workflow} failed ", group.plan),
         JobHome::Plan => format!("Explore Jobs of Plan {} failed ", group.plan),
     }
 }
 
-/// The one message of a PR's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
+/// The one message of a Workflow's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
 /// own minutes and `failed_cause`, oldest first. `<key>` and `<T>` stay as written for the Manager to choose.
 fn stuck_text(group: &StuckGroup) -> String {
     let entries =
@@ -177,8 +177,8 @@ fn stuck_text(group: &StuckGroup) -> String {
 }
 
 /// Whether the Context's live Manager is yet to be told of `group`: there is one (role `manager`, not archived) and no
-/// message of this PR's failure reached it, that is one from the User's side (`from` null) newer than the group's newest
-/// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the PR is a newer Event, so the group
+/// message of this Workflow's failure reached it, that is one from the User's side (`from` null) newer than the group's newest
+/// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the Workflow is a newer Event, so the group
 /// is told again.
 fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
     let Some(manager) = live_manager(conn, &group.context)? else { return Ok(false) };
@@ -206,7 +206,7 @@ pub(super) fn message_exists(conn: &Connection, manager: &str, after: Option<i64
     )?)
 }
 
-/// Tells the live Manager of each group's Context one message per PR, by the path of a step's failure (one waking message
+/// Tells the live Manager of each group's Context one message per Workflow, by the path of a step's failure (one waking message
 /// from the User's side, [`tell_managers`]), once until a Job of the group fails again (contract §3.7 "A stuck Job",
 /// hs-d318, hs-d647): the record that it was told is the message itself ([`untold`]), so a later tick or a restarted
 /// engine sends nothing. With no live Manager nothing is sent and nothing is written (the next tick looks again). Returns
@@ -373,13 +373,13 @@ mod tests {
         assert_eq!(format!("{event:?}").matches("session: None").count(), 1, "{event:?}");
     }
 
-    /// An E19 row failure is keyed per row: its lead names the PR and the target; the Event is scoped to the Plan.
+    /// An E19 row failure is keyed per row: its lead names the Workflow and the target; the Event is scoped to the Plan.
     #[test]
     fn a_move_failure_is_per_row_and_plan_scoped() {
         let plan = PlanId::parse("plan-a").unwrap();
         let about = About::Move(plan.clone(), WorkflowKey::parse("pr1").unwrap(), Target::InReview);
         assert_eq!(about.see(), "cpd plan show --plan plan-a");
-        assert!(about.lead(Step::E19).contains(&format!("the {} move of PR pr1 of Plan plan-a", Target::InReview.as_str())));
+        assert!(about.lead(Step::E19).contains(&format!("the {} move of Workflow pr1 of Plan plan-a", Target::InReview.as_str())));
         assert_ne!(about, About::Move(plan, WorkflowKey::parse("pr2").unwrap(), Target::InReview));
         let event = about.event("x".to_owned(), &failure("jira_failed"));
         assert_eq!(format!("{event:?}").matches("plan: Some").count(), 1, "{event:?}");
@@ -527,7 +527,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("; ");
         format!(
-            "Jobs of PR {plan}/{workflow} failed and their Lead has not retried or cancelled them: {entries}. \
+            "Jobs of Workflow {plan}/{workflow} failed and their Lead has not retried or cancelled them: {entries}. \
              Retry each (cpd job retry <key> --plan {plan} --tier <T>), nudge the Lead, or ask the User."
         )
     }
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(messages(&mut store).len(), 1);
     }
 
-    /// hs-d647: the stuck Jobs of one PR are one message, oldest `job-failed` Event first, each with its own minutes.
+    /// hs-d647: the stuck Jobs of one Workflow are one message, oldest `job-failed` Event first, each with its own minutes.
     #[test]
     fn two_stuck_jobs_of_one_pr_are_one_message_oldest_first() {
         let (_dir, mut store) = store_with_managers();
@@ -563,7 +563,7 @@ mod tests {
         let fresh = job_failed(&mut store, "ctx-a", "plan-a", "fresh");
 
         let jobs = [stuck("ctx-a", "plan-a", "repo", "old", old, 30), stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12)];
-        assert_eq!(tell_stuck_jobs(&mut store, &jobs).unwrap(), 1, "one PR, one message");
+        assert_eq!(tell_stuck_jobs(&mut store, &jobs).unwrap(), 1, "one Workflow, one message");
         assert_eq!(
             messages(&mut store),
             [("mgr-a".to_owned(), None, true, text_of("plan-a", "repo", &[("old", 30), ("fresh", 12)]))]
@@ -628,7 +628,7 @@ mod tests {
         assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c", "mgr-c2"]);
     }
 
-    /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this PR
+    /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this Workflow
     /// (`plan-a/repo` is not `plan-a/other`) and from the User's side (a Lead's own words are not the engine's).
     #[test]
     fn only_a_message_about_this_pr_from_the_users_side_counts() {
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(
             tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "other", "b", other, 10)]).unwrap(),
             1,
-            "another PR of the same plan is its own record"
+            "another Workflow of the same plan is its own record"
         );
         assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-b", "plan-b", "repo", "a", b, 10)]).unwrap(), 1, "another Context's Manager");
         let to: Vec<String> = messages(&mut store).into_iter().map(|m| m.0).collect();
@@ -654,7 +654,7 @@ mod tests {
                 tx.execute(
                     "INSERT INTO events (txn, at, kind, context, session, text, data)
                      VALUES (cpd_txn(), '2026-01-01T00:00:00.000Z', 'session-message', 'ctx-a', 'mgr-a', 'x',
-                             '{\"from\":\"lead-a\",\"text\":\"Jobs of PR plan-a/repo failed by hand\",\"wake\":false}')",
+                             '{\"from\":\"lead-a\",\"text\":\"Jobs of Workflow plan-a/repo failed by hand\",\"wake\":false}')",
                     [],
                 )?;
                 Ok(())

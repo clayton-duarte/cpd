@@ -1,5 +1,5 @@
 //! `job edit` (commands.md §5.2): the Locked fields and Dependencies of a
-//! `draft` Job, and its PR; a Locked Job is refused with `job_locked` (§3.2).
+//! `draft` Job, and its Workflow; a Locked Job is refused with `job_locked` (§3.2).
 //! It is how a stub draft gets its Tier and Spec (R1).
 
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.workflow.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
-            "Nothing to edit: pass --title, --tier, --spec, --pr, --kind, --needs or --no-needs.",
+            "Nothing to edit: pass --title, --tier, --spec, --workflow, --kind, --needs or --no-needs.",
         ));
     }
     let needs = match (&args.needs, args.no_needs) {
@@ -135,7 +135,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         let spec_only = edits.title.is_none() && edits.tier.is_none() && edits.workflow.is_none() && edits.kind.is_none() && edits.needs.is_none();
         if !editable || !spec_only {
             let why = if editable {
-                "only its Spec (--spec) can change; title, Tier, PR, kind and Dependencies are Locked".to_owned()
+                "only its Spec (--spec) can change; title, Tier, Workflow, kind and Dependencies are Locked".to_owned()
             } else if matches!(before.kind.as_str(), "open" | "update") {
                 format!("it is an {} Job: its Spec is cpd's, and cannot be edited", before.kind)
             } else {
@@ -165,7 +165,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         if explore {
             spec.touches = vec![spec::explore_artefact(plan.as_str(), key.as_str())];
         } else {
-            // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+            // The Spec names no primary checkout of a Workflow of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
             let user_home = std::env::home_dir().unwrap_or_default();
             spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&super::add::primary_roots(&load_workflows(conn, plan)?), &user_home)?;
             spec.check_files_relative()?;
@@ -192,7 +192,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(workflow) = &edits.workflow {
         let workflows = load_workflows(conn, plan)?;
         if !workflows.iter().any(|p| p.key.as_str() == workflow.as_str()) {
-            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {workflow} in Plan {plan}."))
+            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {workflow} in Plan {plan}."))
                 .with("plan", plan.as_str())
                 .with("pr", workflow.as_str()));
         }
@@ -203,7 +203,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let (false, Some(spec)) = (explore, &edits.spec) {
         let workflows = load_workflows(conn, plan)?;
         if let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == after.workflow_str()) {
-            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
+            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the Workflow's base.
             let mut workflow = workflow.clone();
             let lead_exists = crate::git::run::run(std::path::Path::new(&workflow.repo), &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", workflow.lead_branch)])
                 .is_ok_and(|o| o.code == 0);
@@ -220,7 +220,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if !explore && (moved || after.kind != before.kind) {
         check_shape_allows(&load_workflows(conn, plan)?, plan, after.workflow_str(), &after.kind)?;
     }
-    // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
+    // A Job that changes Workflow keeps none of its old needs: they are checked against the new Workflow.
     if let Some(needs) = &edits.needs {
         check_needs_known(&all, plan, needs)?;
         check_needs_available(&all, plan, needs)?;
@@ -235,7 +235,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         if !needing.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::NeedsOtherWorkflow,
-                format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
+                format!("Job {key} cannot change Workflow: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
             )
             .with("plan", plan.as_str())
             .with("pr", after.workflow_str())

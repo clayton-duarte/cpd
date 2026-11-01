@@ -64,7 +64,7 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     if explore {
         // An explore Job belongs to the Plan, and is never a draft (R2, R3).
         if let Some(workflow) = &args.workflow.workflow {
-            return Err(CpdError::new(ErrorCode::ExploreWorkflowForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {workflow}."))
+            return Err(CpdError::new(ErrorCode::ExploreWorkflowForbidden, format!("A {kind} Job belongs to the Plan, not to a Workflow: drop --workflow {workflow}."))
                 .with("kind", kind.as_str())
                 .with("pr", workflow.as_str()));
         }
@@ -172,7 +172,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     check_workflow_live(&workflows, plan, &workflow)?;
     check_shape_allows(&workflows, plan, &workflow, &wanted.kind)?;
     let all = jobs::load(conn, plan)?;
-    let workflow_status = &workflows.iter().find(|p| p.key.as_str() == workflow).expect("check_pr_live found the PR").status;
+    let workflow_status = &workflows.iter().find(|p| p.key.as_str() == workflow).expect("check_pr_live found the Workflow").status;
     let mut needs = wanted.needs.clone();
     needs.extend(super::chain::leaves(&all, plan, &workflow, workflow_status, wanted.key.as_str())?.unwrap_or_default());
     needs.sort();
@@ -215,7 +215,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         .with("plan", plan.as_str())
         .with("job", job.key.as_str()));
     }
-    // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+    // The Spec names no primary checkout of a Workflow of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
     if let Some(spec) = &wanted.spec {
         let user_home = std::env::home_dir().unwrap_or_default();
         spec.without_artefacts(home.root(), plan.as_str(), &user_home).check_primary_roots(&primary_roots(&workflows), &user_home)?;
@@ -223,7 +223,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         check_resources_declared(conn, home, plan, job.workflow_str(), &job.key, spec.resources.as_deref())?;
     }
     if let Some(spec) = &wanted.spec {
-        let workflow = workflows.iter().find(|p| p.key.as_str() == job.workflow_str()).expect("check_pr_live found the PR");
+        let workflow = workflows.iter().find(|p| p.key.as_str() == job.workflow_str()).expect("check_pr_live found the Workflow");
         check_touches(workflow, &workflows, &spec.touches)?;
     }
     check_needs_known(&all, plan, &job.needs)?;
@@ -245,7 +245,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     Ok(Decision::Insert(job))
 }
 
-/// An explore Job (R2-R5): of the Plan, no PR, queued at once with its fingerprint, in every phase but `done`.
+/// An explore Job (R2-R5): of the Plan, no Workflow, queued at once with its fingerprint, in every phase but `done`.
 fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str) -> Result<Decision, CpdError> {
     if phase == "done" {
         return Err(CpdError::new(
@@ -318,7 +318,7 @@ pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, ex
     .with("jobs", others))
 }
 
-/// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):
+/// Every resource of a Spec is declared by the policy of the Workflow's repo (`resource_undeclared`, commands.md §5.1):
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
 pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, workflow: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
     let Some(resources) = resources else { return Ok(()) };
@@ -338,7 +338,7 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
     Err(CpdError::new(
         ErrorCode::ResourceUndeclared,
         format!(
-            "Job {job} takes the resource {missing}, which the policy of PR {workflow} does not declare ({}). Declare it as [resources.{missing}] in {}, or take one of the declared names.",
+            "Job {job} takes the resource {missing}, which the policy of Workflow {workflow} does not declare ({}). Declare it as [resources.{missing}] in {}, or take one of the declared names.",
             if declared.is_empty() { "none are declared".to_owned() } else { declared.join(", ") },
             file.display()
         ),
@@ -411,21 +411,21 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// The `(PR key, root)` pairs the primary-check searches: each PR of the Plan and its stored repo path.
+/// The `(Workflow key, root)` pairs the primary-check searches: each Workflow of the Plan and its stored repo path.
 pub(super) fn primary_roots(workflows: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
     workflows.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
 }
 
-/// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the PR's Lead Branch head once
-/// the PR started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
-/// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a PR that has not started and
-/// is stacked on a base PR that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
+/// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the Workflow's Lead Branch head once
+/// the Workflow started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
+/// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a Workflow that has not started and
+/// is stacked on a base Workflow that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
 pub(super) fn check_touches(workflow: &WorkflowRow, workflows: &[WorkflowRow], touches: &[String]) -> Result<(), CpdError> {
-    // A PR whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
+    // A Workflow whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
     if touches.is_empty() || !std::path::Path::new(&workflow.repo).is_dir() {
         return Ok(());
     }
-    // A PR that has not started, stacked on a base PR (same Plan and repo, Lead Branch == its base) that is `waiting` or
+    // A Workflow that has not started, stacked on a base Workflow (same Plan and repo, Lead Branch == its base) that is `waiting` or
     // `dispatch`, has no tree to read yet: the base's Lead Branch does not exist.
     let base_unopened = workflow.lead_worktree.is_none()
         && workflows.iter().any(|q| q.repo == workflow.repo && q.lead_branch == workflow.base && matches!(q.status.as_str(), "waiting" | "dispatch"));

@@ -290,7 +290,7 @@ pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, Cpd
 /// The resources a Job's Spec lists and the repo they belong to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wanted {
-    /// The Job's PR.
+    /// The Job's Workflow.
     pub workflow: String,
     pub owner: OwnerLogin,
     pub repo: RepoName,
@@ -298,10 +298,10 @@ pub struct Wanted {
     pub names: Vec<String>,
 }
 
-/// The resources Job `key` of `plan` lists in its Spec, with its PR's repo; `None` when it lists none.
+/// The resources Job `key` of `plan` lists in its Spec, with its Workflow's repo; `None` when it lists none.
 pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<Option<Wanted>, CpdError> {
     use rusqlite::OptionalExtension;
-    // An explore Job has no PR (the join finds no row): it lists no resources.
+    // An explore Job has no Workflow (the join finds no row): it lists no resources.
     let found: Option<(String, Option<String>, Option<String>, Option<String>)> = conn.query_row(
         "SELECT j.workflow, j.resources, c.owner, r.name FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
            JOIN plans p ON p.id = j.plan JOIN contexts c ON c.id = p.context WHERE j.plan = ?1 AND j.key = ?2",
@@ -314,7 +314,7 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
         serde_json::from_str(&listed).map_err(|_| CpdError::bad_row(format!("Job {key} of Plan {plan} has resources {listed:?}")))?;
     names.sort();
     let (Some(owner), Some(repo)) = (owner, repo) else {
-        return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its PR {workflow} has no repo")));
+        return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its Workflow {workflow} has no repo")));
     };
     Ok(Some(Wanted { workflow, owner: OwnerLogin::parse(&owner)?, repo: RepoName::parse(&repo)?, names }))
 }

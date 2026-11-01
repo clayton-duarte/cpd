@@ -100,7 +100,7 @@ fn decisions(fields: &Map<String, Value>) -> Result<Vec<Decision>, CpdError> {
 
 fn done_when(fields: &Map<String, Value>) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let Some(value) = fields.get("done_when") else { return Ok(BTreeMap::new()) };
-    let Value::Object(by_workflow) = value else { return Err(invalid("done_when", "expected an object of PR key to lines")) };
+    let Value::Object(by_workflow) = value else { return Err(invalid("done_when", "expected an object of Workflow key to lines")) };
     by_workflow
         .iter()
         .map(|(key, value)| {
@@ -127,7 +127,7 @@ fn done_when(fields: &Map<String, Value>) -> Result<BTreeMap<String, Vec<String>
 
 impl Outline {
     /// The outline file's text, checked in the order of §4.13: not JSON or not an object (`$`), an unknown field (the
-    /// first in byte order), then the seven fields and each element in order. What it says of the Plan (the PRs of
+    /// first in byte order), then the seven fields and each element in order. What it says of the Plan (the Workflows of
     /// `done_when`, the records of `decided`) is checked against the Plan by [`check_against_plan`].
     pub fn parse(text: &str) -> Result<Outline, CpdError> {
         let value: Value = serde_json::from_str(text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
@@ -163,7 +163,7 @@ impl Outline {
     }
 }
 
-/// What the outline says of the Plan, checked against it (§4.13): every `done_when` key is a PR of the Plan that is not
+/// What the outline says of the Plan, checked against it (§4.13): every `done_when` key is a Workflow of the Plan that is not
 /// `cancelled`, every `decided` id is a record of the Plan's Context.
 fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> Result<(), CpdError> {
     let counts: Vec<String> = {
@@ -173,7 +173,7 @@ fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> R
     if let Some(key) = outline.done_when.keys().find(|k| !counts.contains(k)) {
         return Err(CpdError::new(
             ErrorCode::OutlineInvalid,
-            format!("The outline's done_when names {key}, which is not a PR of Plan {} that is not cancelled.", plan.id),
+            format!("The outline's done_when names {key}, which is not a Workflow of Plan {} that is not cancelled.", plan.id),
         )
         .with("field", format!("done_when.{key}"))
         .with("key", key.as_str()));

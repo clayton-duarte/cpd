@@ -118,7 +118,7 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
-    // An explore Job has no PR, no quick check and no protected path of a policy: its Worker works in no repository.
+    // An explore Job has no Workflow, no quick check and no protected path of a policy: its Worker works in no repository.
     let explore = crate::plan::jobs::is_explore(&job.kind);
     let (quick_check, protected) = if explore {
         (Vec::new(), Vec::new())
@@ -132,7 +132,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
         let workflow = workflows
             .iter()
             .find(|p| p.key.as_str() == job.workflow_str())
-            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no PR row {} in Plan {}", job.key, job.workflow_str(), target.plan)))?;
+            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no Workflow row {} in Plan {}", job.key, job.workflow_str(), target.plan)))?;
         // The stored text keeps the base of the insert; A3 tells the Worker the live one. The cause is the Job's
         // own (`base-merged` merges the base even without a conflict), read from its `job-added` Event.
         let cause = (job.kind == "update").then(|| crate::job::open::cause_of(conn, &target.plan, &job.key)).transpose()?;

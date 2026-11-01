@@ -66,7 +66,7 @@ pub struct Feedback {
     pub checks: Checks,
 }
 
-/// `[pr.post]`: posting a PR for review (contract §8.3).
+/// `[pr.post]`: posting a Workflow for review (contract §8.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Post {
@@ -76,7 +76,7 @@ pub struct Post {
     pub merged_reaction: String,
 }
 
-/// `[pr.jira]`: the Jira status names cpd moves a PR's ticket to; empty means no transition.
+/// `[pr.jira]`: the Jira status names cpd moves a Workflow's ticket to; empty means no transition.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Jira {
@@ -216,7 +216,7 @@ impl HasText for Option<RepoTests> {
     }
 }
 
-/// The `protected` domain (repo scope only, no `text`): the PR's protected paths of §7.5.
+/// The `protected` domain (repo scope only, no `text`): the Workflow's protected paths of §7.5.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Protected {
@@ -646,7 +646,7 @@ pub enum Source {
     Owner(PathBuf),
     /// The repo file, by realpath.
     Repo(PathBuf),
-    /// cpd's default for a row no PR owns whose owner has no file.
+    /// cpd's default for a row no Workflow owns whose owner has no file.
     DefaultNoOwnerFile,
 }
 

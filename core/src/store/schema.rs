@@ -174,14 +174,14 @@ fn migration_3(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The line of `0004.sql` that splits it into the part before the PRs are
+/// The line of `0004.sql` that splits it into the part before the Workflows are
 /// filled and the part after.
 const FILL_PRS: &str = "\n-- @fill-prs\n";
 
 /// Plans across repos (§4.5, R34 A6, B2), steps 2 to 4; step 1 (foreign keys
 /// off, `legacy_alter_table` on) and step 5 (`foreign_key_check`) are the
 /// caller's, around the migrating transaction. Needs the migration's `txns`
-/// row: each migrated PR's `created_txn` and history row name it.
+/// row: each migrated Workflow's `created_txn` and history row name it.
 fn migration_4(conn: &Connection) -> Result<()> {
     let (tables, rebuild) = LEGACY[3].sql
         .split_once(FILL_PRS)
@@ -198,7 +198,7 @@ fn migration_4(conn: &Connection) -> Result<()> {
 }
 
 /// Reopening a Plan (§4.5, hs-d118): `plans_phase` allows `pr>dispatch` and
-/// `done>dispatch`, `prs_locked` allows the legacy Lead Branch of a merged PR to
+/// `done>dispatch`, `prs_locked` allows the legacy Lead Branch of a merged Workflow to
 /// move to `cpd/<plan>/<key>`. No table changes.
 fn migration_5(conn: &Connection) -> Result<()> {
     conn.execute_batch(LEGACY[4].sql)
@@ -208,7 +208,7 @@ fn migration_5(conn: &Connection) -> Result<()> {
 /// `pull_requests` and the part that fills it and rebuilds `prs`.
 const HISTORY: &str = "\n-- @history\n";
 
-/// The PR poller (§4.5 migration 6, D5, D6), steps 2 to 5; step 1 and step 6
+/// The pull request poller (§4.5 migration 6, D5, D6), steps 2 to 5; step 1 and step 6
 /// are the caller's, as for migration 4. `pull_requests` gets its history
 /// triggers before the back-fill, so each back-filled row has an `insert`
 /// history row in the migration's `txns` row; the rebuild of `prs` writes
@@ -327,7 +327,7 @@ pub(super) fn import_old_stores(conn: &Connection, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The PR poll's mergeable state (§4.5 migration 0011, hs-d188): two columns of
+/// The pull request poll's mergeable state (§4.5 migration 0011, hs-d188): two columns of
 /// `pull_requests`, whose history triggers are dropped and written again to
 /// list every column (`0011.sql` drops them and writes `_hist_del`; the other
 /// two are generated).
@@ -343,7 +343,7 @@ fn migration_12(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "inbox_items", true)
 }
 
-/// The PR poll's Inbox kinds (§4.5 legacy migration 0013, hs-d165): `authored` and
+/// The pull request poll's Inbox kinds (§4.5 legacy migration 0013, hs-d165): `authored` and
 /// `review_requested` on `pull_requests`, whose history triggers are written again
 /// to list every column, and `inbox_items` rebuilt with the four pull request kinds
 /// (`0013-pr-inbox.sql` drops and writes `pull_requests_hist_del`; the other history
@@ -363,8 +363,8 @@ fn migration_14(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "jobs", true)
 }
 
-/// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
-/// status from the Plan's phase. No `pr_needs`: one PR has no needs.
+/// §4.5 step 2: one Workflow per Plan, its per-repo columns kept as stored, its
+/// status from the Plan's phase. No `pr_needs`: one Workflow has no needs.
 fn fill_prs(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT id, repo FROM plans ORDER BY id")?;
     let plans: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_>>()?;
@@ -386,7 +386,7 @@ fn fill_prs(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The key of the PR migration 4 makes from a Plan (§4.5): the base name of
+/// The key of the Workflow migration 4 makes from a Plan (§4.5): the base name of
 /// its repo, lower-cased, each character outside `[a-z0-9-]` replaced by `-`,
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
@@ -398,7 +398,7 @@ fn migrated_workflow_key(repo: &str) -> WorkflowKey {
         key.insert_str(0, "pr-");
     }
     key.truncate(24);
-    WorkflowKey::parse(&key).expect("the rule above always makes a valid PR key")
+    WorkflowKey::parse(&key).expect("the rule above always makes a valid Workflow key")
 }
 
 /// What a generated `_hist_upd` trigger writes in `before` and `after`.

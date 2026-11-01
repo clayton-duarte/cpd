@@ -3,8 +3,8 @@
 //! binary, so nothing in a repo or worktree can change what Workers are told.
 //!
 //! The driver gathers the facts (the Job, the earlier Attempts, the answered
-//! Escalations, the PR policy's `protected.paths`) and calls
-//! [`render`] or [`write`]; [`quick_check`] lists the commands of the PR's policy `hooks.pre-commit`.
+//! Escalations, the Workflow policy's `protected.paths`) and calls
+//! [`render`] or [`write`]; [`quick_check`] lists the commands of the Workflow's policy `hooks.pre-commit`.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,7 @@ pub const SUMMARY_CAP: usize = 1500;
 
 const TEMPLATE: &str = include_str!("worker.md");
 
-/// What no Attempt may touch, whatever the PR's `protected.paths` say (§7.5).
+/// What no Attempt may touch, whatever the Workflow's `protected.paths` say (§7.5).
 const ALWAYS_PROTECTED: [&str; 1] = [".cpd/"];
 
 /// The cause an `attempts` row holds, read for a Spec. A value outside the table's CHECK is a corrupt row: `store_failed`.
@@ -175,10 +175,10 @@ pub struct Input<'a> {
     pub out_of_scope: &'a [String],
     /// The names of the exclusive resources the Attempt holds (its Job's Spec `resources`); empty when none.
     pub resources: &'a [String],
-    /// The commands of the PR's `hooks.pre-commit`, as [`quick_check`] lists them;
+    /// The commands of the Workflow's `hooks.pre-commit`, as [`quick_check`] lists them;
     /// empty when the repo defines none.
     pub quick_check: &'a [String],
-    /// The PR policy's `protected.paths` (§7.5); the always-protected paths are added here.
+    /// The Workflow policy's `protected.paths` (§7.5); the always-protected paths are added here.
     pub protected: &'a [String],
     /// Earlier ended Attempts of this Job, oldest first.
     pub previous: &'a [Previous],

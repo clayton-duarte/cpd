@@ -187,7 +187,7 @@ impl Engine {
         self.report.clear(step, about);
     }
 
-    /// pi's catalog (§9) of the models of the Job `job` of `plan` (its PR's repo key), for the ladder and E3.
+    /// pi's catalog (§9) of the models of the Job `job` of `plan` (its Workflow's repo key), for the ladder and E3.
     pub(super) fn catalog_of_job(&mut self, plan: &PlanId, job: &str) -> Result<Catalog, CpdError> {
         let home = self.home.clone();
         self.catalog_of(|store| store.read(|conn| models_of_job(conn, &home, plan, job)))
@@ -253,7 +253,7 @@ impl Engine {
 /// Whether incident mode holds `step` machine-wide (contract §3.7): E9 (Context curation), E10 (Session
 /// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1, E2, E5,
 /// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
-/// E4 and E7 act per PR ([`incident_holds_plan`]).
+/// E4 and E7 act per Workflow ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
     if !matches!(step, Step::E9 | Step::E10 | Step::E11 | Step::E16 | Step::E17 | Step::E18 | Step::E19) {
         return false;
@@ -262,14 +262,14 @@ pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
 }
 
 /// Whether incident mode holds `plan` for E4 and E7 (contract §3.7, hs-d643): the incident is on and
-/// the Plan is not in `incident_plans` (`cpd_core::incident::is_held`). A held Plan's PRs get no
+/// the Plan is not in `incident_plans` (`cpd_core::incident::is_held`). A held Plan's Workflows get no
 /// `open` Job and are not started.
 pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) -> bool {
     cpd_core::incident::is_held(conn, plan)
 }
 
-/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
-/// another Plan too, and the base PR, if any, `open`), and not marked `start_failed_at` (§3.7). Oldest Plan first,
+/// The Workflows E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
+/// another Plan too, and the base Workflow, if any, `open`), and not marked `start_failed_at` (§3.7). Oldest Plan first,
 /// then by key.
 fn startable() -> String {
     format!(
@@ -280,7 +280,7 @@ fn startable() -> String {
     )
 }
 
-/// The ready `waiting` PRs E7 starts, the Plan-scoped incident hold applied (contract §3.7): a PR of
+/// The ready `waiting` Workflows E7 starts, the Plan-scoped incident hold applied (contract §3.7): a Workflow of
 /// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
 pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
     engine.store.read(|conn| {
@@ -290,7 +290,7 @@ pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, Wo
         for (plan, key) in rows {
             let plan = PlanId::parse(&plan)?;
             let key = WorkflowKey::parse(&key)?;
-            // Incident mode on: a held Plan's PR is not started (§3.7 E7).
+            // Incident mode on: a held Plan's Workflow is not started (§3.7 E7).
             if !incident_holds_plan(conn, &plan) {
                 waiting.push((plan, key));
             }
@@ -299,10 +299,10 @@ pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, Wo
     })
 }
 
-/// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
-/// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
-/// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
-/// the Lead retries with `cpd pr start`.
+/// E7, Workflow start (§3.7, §3.8): starts each startable Workflow. A failed setup (worktree,
+/// remote check or `pre-start`) marks the Workflow `start_failed_at` and appends one
+/// `error` `pr_start_failed` for the Lead; the engine does not try that Workflow again,
+/// the Lead retries with `cpd workflow start`.
 fn start_prs(engine: &mut Engine) {
     let waiting = match startable_workflows(engine) {
         Ok(waiting) => {
@@ -327,22 +327,22 @@ fn start_prs(engine: &mut Engine) {
         };
         match start_workflow::start(&engine.home, &engine.config, &mut engine.store, &plan, &workflow, By::Engine) {
             Ok(started) => {
-                engine.log.line(&format!("E7: started PR {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
+                engine.log.line(&format!("E7: started Workflow {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
                 engine.clear(Step::E7, &about);
             }
             Err(Failed::Setup { step, error }) => {
                 match start_workflow::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
                     Ok(true) => {
-                        engine.log.line(&format!("E7: PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
+                        engine.log.line(&format!("E7: Workflow {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
                         engine.clear(Step::E7, &about);
                     }
                     Ok(false) => {}
                     Err(e) => engine.fail(Step::E7, about, &e),
                 }
             }
-            // The PR changed since it was read (`pr start` got there first): decided again next tick.
+            // The Workflow changed since it was read (`workflow start` got there first): decided again next tick.
             Err(Failed::Other(e)) if e.code() == ErrorCode::CasLost => {
-                engine.log.line(&format!("E7: skipped PR {key} of Plan {plan}: {}", e.message()));
+                engine.log.line(&format!("E7: skipped Workflow {key} of Plan {plan}: {}", e.message()));
             }
             Err(Failed::Other(e)) => engine.fail(Step::E7, about, &e),
         }

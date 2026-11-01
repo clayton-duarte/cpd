@@ -36,28 +36,28 @@ pub enum WorkflowCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct AddArgs {
-    /// The PR key, chosen by the Lead
+    /// The Workflow key, chosen by the Lead
     #[arg(value_name = "key")]
     key: WorkflowKey,
-    /// The PR's repo: a path inside it
+    /// The Workflow's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
-    /// The PR's own title: names its change; 1-72 characters on one line
+    /// The Workflow's own title: names its change; 1-72 characters on one line
     #[arg(long, value_name = "text")]
     title: WorkflowTitle,
-    /// The PR's own Jira ticket key, e.g. ABC-123 (optional)
+    /// The Workflow's own Jira ticket key, e.g. ABC-123 (optional)
     #[arg(long, value_name = "KEY")]
     jira: Option<crate::context::Jira>,
-    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <key> (or <plan>/<key>) to stack on that PR
+    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <key> (or <plan>/<key>) to stack on that Workflow
     #[arg(long, value_name = "branch")]
     base: Option<String>,
-    /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
+    /// Workflows that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
     #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
     needs: Vec<add::WorkflowRef>,
-    /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
+    /// No needs, even on a reopened Plan (default there: every merged Workflow of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
-    /// The template of stub drafts the PR starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
+    /// The template of stub drafts the Workflow starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
     #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
     shape: String,
     /// After the lock: the template's Jobs as decided work, a JSON object keyed by the template suffix, each `{"tier", "spec"}` (§9.4)
@@ -75,13 +75,13 @@ pub struct AddArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct EditArgs {
-    /// The PR key
+    /// The Workflow key
     #[arg(value_name = "key")]
     key: WorkflowKey,
     /// The new repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: Option<PathBuf>,
-    /// The new base branch, or <key> (or <plan>/<key>) to stack on that PR
+    /// The new base branch, or <key> (or <plan>/<key>) to stack on that Workflow
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
@@ -90,10 +90,10 @@ pub struct EditArgs {
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
-    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
+    /// The new title, in any phase while the Workflow is not merged or cancelled; 1-72 characters on one line
     #[arg(long, value_name = "text")]
     title: Option<WorkflowTitle>,
-    /// The PR's Jira ticket key, e.g. ABC-123: sets or replaces it, in any phase while the PR is not merged or cancelled
+    /// The Workflow's Jira ticket key, e.g. ABC-123: sets or replaces it, in any phase while the Workflow is not merged or cancelled
     #[arg(long, value_name = "KEY")]
     jira: Option<crate::context::Jira>,
     #[command(flatten)]
@@ -114,10 +114,10 @@ pub struct DescribeArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CancelArgs {
-    /// The PR key
+    /// The Workflow key
     #[arg(value_name = "key")]
     key: WorkflowKey,
-    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
+    /// Cancel a dispatch Workflow whose merged work another Workflow carried: that Workflow, as <plan>/<key> (a bare <key> is of the Plan)
     #[arg(long = "superseded-by", value_name = "ref")]
     superseded_by: Option<add::WorkflowRef>,
     #[command(flatten)]
@@ -126,7 +126,7 @@ pub struct CancelArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct StartArgs {
-    /// The PR key
+    /// The Workflow key
     #[arg(value_name = "key")]
     key: WorkflowKey,
     #[command(flatten)]

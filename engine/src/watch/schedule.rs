@@ -69,13 +69,13 @@ pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, c
     backing_off(conn, plan, key, clock.utc())
 }
 
-/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
-/// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no PR) is Ready in a live Plan (not archived)
+/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose Workflow is `dispatch`
+/// or `open`, every Dependency `merged`. An explore Job (`scout`, `research`; no Workflow) is Ready in a live Plan (not archived)
 /// in `grounding`, `plan`, `dispatch` or `deploy`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
-/// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),
+/// An `open` or `update` Job has no Dependency rows: its rule is derived from the Workflow's other Jobs (§3.2),
 /// which are the Jobs that are neither `open` nor `update` (those do not count each other). An `open` Job is
-/// Ready when its PR is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
-/// an `update` Job when its PR is `open` and none of them is `queued` or `running`.
+/// Ready when its Workflow is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
+/// an `update` Job when its Workflow is `open` and none of them is `queued` or `running`.
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
   LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
@@ -95,9 +95,9 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
-/// The allocation E3 derives for each Ready Job it is about to start (pro-d52), per PR, from the Ledger: a PR with a
-/// live linear Attempt starts nothing (`None`: its Jobs are held); a PR with live parallel Attempts starts all
-/// `Parallel`; a PR with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
+/// The allocation E3 derives for each Ready Job it is about to start (pro-d52), per Workflow, from the Ledger: a Workflow with a
+/// live linear Attempt starts nothing (`None`: its Jobs are held); a Workflow with live parallel Attempts starts all
+/// `Parallel`; a Workflow with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
 /// `ready`, in its order.
 fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Option<Allocation>>, CpdError> {
     let mut workflows = Vec::with_capacity(ready.len());
@@ -111,7 +111,7 @@ fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Opti
     }
     let mut out = Vec::with_capacity(ready.len());
     for (plan, workflow) in &workflows {
-        // An explore Job belongs to the Plan, no PR: it never holds or is held by a PR's Attempts.
+        // An explore Job belongs to the Plan, no Workflow: it never holds or is held by a Workflow's Attempts.
         let Some(workflow) = workflow else {
             out.push(Some(Allocation::Parallel));
             continue;
@@ -264,7 +264,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(allocations) => allocations,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    // A Job held by a live linear Attempt of its PR stays queued, no Event, and is not walked.
+    // A Job held by a live linear Attempt of its Workflow stays queued, no Event, and is not walked.
     let ready: Vec<Entry> = ready
         .into_iter()
         .zip(allocations)
@@ -297,7 +297,7 @@ pub(super) fn run(engine: &mut Engine) {
             tried.push(i);
             let Entry { plan, key, allocation, .. } = remaining[i].clone();
             let about = About::Job(plan.clone(), key.clone());
-            // The Job's PR repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
+            // The Job's Workflow repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
             let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
                 Ok(catalog) => catalog,
                 Err(e) => {

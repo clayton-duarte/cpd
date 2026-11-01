@@ -1,5 +1,5 @@
 //! The plan fingerprint (contract §2.3): what a Plan review approves, so that
-//! it covers the `draft` Jobs and the PRs.
+//! it covers the `draft` Jobs and the Workflows.
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
@@ -14,7 +14,7 @@ pub use super::prs::load_workflows;
 
 /// The plan fingerprint of `plan` as it is now: `sha256` of the canonical JSON
 /// `{jobs, prs}` of [`of`], plus `outline` when the Plan's outline is set (hs-d502, D2). In a phase after `plan` the review covers the
-/// drafts only, so `prs` is the empty array there: a PR appended after the
+/// drafts only, so `prs` is the empty array there: a Workflow appended after the
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
@@ -22,16 +22,16 @@ pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdE
     Ok(of_with(&jobs::load(conn, plan)?, &workflows, super::outline::load(conn, plan)?.as_ref()))
 }
 
-/// Whether the review of a Plan in `phase` (none: not found) covers its PRs: before the lock only.
+/// Whether the review of a Plan in `phase` (none: not found) covers its Workflows: before the lock only.
 pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
     matches!(phase, None | Some("grounding" | "plan"))
 }
 
 /// `sha256` of `{jobs, prs}` (§2.3): `jobs` is the Locked fields of every
-/// `draft` Job (title, Tier, Spec, needs and PR, with the key, as cpd 1 §11
+/// `draft` Job (title, Tier, Spec, needs and Workflow, with the key, as cpd 1 §11
 /// `plan render`), ordered by key, a stub with its missing fields as JSON
 /// `null` (hs-d241), with `kind` only when it is not `work` and `tests` and `test_files` only when set (hs-d341);
-/// `prs` is `{key, repo, base, needs}` of every PR in `prs` that is not `cancelled`, with `shape` only when it is
+/// `prs` is `{key, repo, base, needs}` of every Workflow in `prs` that is not `cancelled`, with `shape` only when it is
 /// not `free` (hs-d497), ordered by key, `needs` sorted.
 pub fn of(jobs: &[Job], workflows: &[WorkflowRow]) -> String {
     of_with(jobs, workflows, None)
@@ -126,7 +126,7 @@ mod tests {
         assert_ne!(of(&[a.clone(), retiered], &workflows), base);
         let mut moved = b;
         moved.workflow = Some("api".into());
-        assert_ne!(of(&[a, moved], &workflows), base, "a Job's PR counts");
+        assert_ne!(of(&[a, moved], &workflows), base, "a Job's Workflow counts");
         assert_eq!(of(&[], &[]), format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#)));
     }
 
@@ -166,7 +166,7 @@ mod tests {
         cancelled.status = "cancelled".into();
         let mut with_cancelled = vec![workflow("api", &[]), workflow("web", &["api"])];
         with_cancelled.push(cancelled);
-        assert_eq!(of(&jobs, &with_cancelled), base, "a cancelled PR does not count");
+        assert_eq!(of(&jobs, &with_cancelled), base, "a cancelled Workflow does not count");
         for changed in [vec![workflow("api", &[]), other_repo], vec![workflow("api", &[]), other_base], vec![workflow("api", &[]), workflow("web", &[])], vec![workflow("api", &[])]] {
             assert_ne!(of(&jobs, &changed), base);
         }
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free() {
-        // A `work` Job with no tests and a `free` PR hash as they did before migration `job-kinds` (no stored review is voided).
+        // A `work` Job with no tests and a `free` Workflow hash as they did before migration `job-kinds` (no stored review is voided).
         let before = format!(
             "{:x}",
             Sha256::digest(

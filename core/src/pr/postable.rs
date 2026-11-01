@@ -1,4 +1,4 @@
-//! Readiness to post a PR for review (pro-d64): the one definition, for `pr post` and the poll. Pure: no I/O, no policy.
+//! Readiness to post a Workflow for review (pro-d64): the one definition, for `pr post` and the poll. Pure: no I/O, no policy.
 
 use super::pulls::PullRequest;
 

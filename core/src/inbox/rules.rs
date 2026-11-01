@@ -88,7 +88,7 @@ pub fn conditions_with(
     Ok(all)
 }
 
-/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the PR poll.
+/// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
 /// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
 /// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
@@ -428,7 +428,7 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckJob {
     pub plan: PlanId,
-    /// Where the Job belongs: E8 groups the stuck Jobs of one PR, or of the Plan's explore Jobs, into one message (hs-d647).
+    /// Where the Job belongs: E8 groups the stuck Jobs of one Workflow, or of the Plan's explore Jobs, into one message (hs-d647).
     pub home: JobHome,
     pub job: JobKey,
     /// The Plan's Context.
@@ -470,7 +470,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
             }
             out.push(StuckJob {
                 plan,
-                home: JobHome::of("PR key", workflow.as_deref())?,
+                home: JobHome::of("Workflow key", workflow.as_deref())?,
                 job,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
@@ -482,7 +482,7 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
     })
 }
 
-/// The stuck Jobs of one PR (hs-d647): the manager is told once per pull request, not once per Job.
+/// The stuck Jobs of one Workflow (hs-d647): the manager is told once per pull request, not once per Job.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckGroup {
     pub plan: PlanId,
@@ -495,7 +495,7 @@ pub struct StuckGroup {
     pub jobs: Vec<StuckJob>,
 }
 
-/// Groups the stuck Jobs by their Plan and PR, keeping `jobs`' oldest-first order inside a group and ordering the groups
+/// Groups the stuck Jobs by their Plan and Workflow, keeping `jobs`' oldest-first order inside a group and ordering the groups
 /// by their first Job's `job-failed` Event id (hs-d647). `jobs` is the oldest-first result of [`stuck_jobs`].
 #[must_use]
 pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
@@ -1069,7 +1069,7 @@ mod tests {
         let a = f.event("job-failed", None, Some("a"), "2026-01-01T23:00:00.000Z", r#"{}"#);
         let b = f.event("job-failed", None, Some("b"), "2026-01-01T23:50:00.000Z", r#"{}"#);
         let groups = stuck_groups(f.stuck());
-        assert_eq!(groups.len(), 1, "one PR, one group");
+        assert_eq!(groups.len(), 1, "one Workflow, one group");
         let group = &groups[0];
         assert_eq!((&group.plan, &group.home, group.event), (&PlanId::parse("pay").unwrap(), &JobHome::Workflow(WorkflowKey::parse("p1").unwrap()), b));
         assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
@@ -1321,7 +1321,7 @@ mod tests {
         assert!(pr_kinds(&mut f).is_empty());
     }
 
-    /// Makes the Plan's PR `p1` own the pull request numbered `n`. Its Context's owner keys the PR's policy (an unset
+    /// Makes the Plan's Workflow `p1` own the pull request numbered `n`. Its Context's owner keys the Workflow's policy (an unset
     /// one is `owner_unset`, not these tests' subject), with an empty owner policy file.
     fn own(f: &mut Fixture, n: i64) {
         f.job("a", "queued");
@@ -1350,7 +1350,7 @@ mod tests {
             );
         }
         let c = one(f.of(Kind::PrReady).into_iter().filter(|c| c.subject == "pr:acme/shop#7").collect());
-        assert_eq!((c.plan, c.session), (None, None), "a pull request no PR owns");
+        assert_eq!((c.plan, c.session), (None, None), "a pull request no Workflow owns");
     }
 
     #[test]
@@ -1489,7 +1489,7 @@ mod tests {
             ("AI review only", post("acme/pay", 1), reviewed_by("github-actions"), true),
             ("a human is reviewing", post("acme/pay", 1), reviewed_by("wes"), false),
             ("draft", post("acme/pay", 1), GhPr { draft: true, ..open_pr() }, false),
-            ("the User's own PR", post("acme/pay", 1), GhPr { author: ME_LOGIN.to_owned(), ..open_pr() }, false),
+            ("the User's own Workflow", post("acme/pay", 1), GhPr { author: ME_LOGIN.to_owned(), ..open_pr() }, false),
             ("merged", post("acme/pay", 1), GhPr { state: GhState::Merged, ..open_pr() }, false),
             ("closed", post("acme/pay", 1), GhPr { state: GhState::Closed, ..open_pr() }, false),
             ("approved", post("acme/pay", 1), approved, false),
@@ -1503,8 +1503,8 @@ mod tests {
             }, open_pr(), false),
             ("the User's own :eyes: alone", claimed(post("acme/pay", 1), json!(true)), open_pr(), true),
             ("tagged in the thread of a claimed post", tagged(claimed(post("acme/pay", 1), json!(false))), open_pr(), true),
-            ("tagged in the thread of a reviewed PR", tagged(post("acme/pay", 1)), reviewed_by("wes"), true),
-            ("tagged under a merged PR", tagged(post("acme/pay", 1)), GhPr { state: GhState::Merged, ..open_pr() }, false),
+            ("tagged in the thread of a reviewed Workflow", tagged(post("acme/pay", 1)), reviewed_by("wes"), true),
+            ("tagged under a merged Workflow", tagged(post("acme/pay", 1)), GhPr { state: GhState::Merged, ..open_pr() }, false),
             ("tagged under changes requested", tagged(post("acme/pay", 1)), GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..open_pr() }, false),
             ("tagged under a draft", tagged(post("acme/pay", 1)), GhPr { draft: true, ..open_pr() }, false),
         ];
@@ -1520,7 +1520,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "none", "unknown", "none");
         set(&mut f, 5, "authored = 0, review_requested = 1");
-        assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other PRs");
+        assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other Workflows");
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
         let none = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
@@ -1631,7 +1631,7 @@ mod tests {
         reconcile(&mut f.store, &opened, T).unwrap();
         let blind = Lookup { me: ME_LOGIN.to_owned(), workflows: [(("acme/pay".to_owned(), 1), None)].into() };
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
-        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every PR unreadable: the queue stays");
+        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every Workflow unreadable: the queue stays");
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }
 

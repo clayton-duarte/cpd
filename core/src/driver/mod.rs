@@ -70,7 +70,7 @@ pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let catalog = load_catalog(&config, &models)?;
     let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
     // A manual dispatch asks for the linear Attempt; the starter refuses it (CasLost) when a sibling
-    // of the PR is live, so two Attempts never share the workflow worktree (hs-d680/hs-d682/hs-d683).
+    // of the Workflow is live, so two Attempts never share the Lead worktree (hs-d680/hs-d682/hs-d683).
     let started = start_with_allocation(&Ports::current(), &mut store, &ctx, &plan, &args.key, Some(Allocation::Linear))?;
     Ok(Output::success(json!({
         "attempt": started.attempt,

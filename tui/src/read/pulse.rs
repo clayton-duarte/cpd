@@ -138,8 +138,8 @@ impl Bucket {
 /// The Events that count as a Plan's activity: these kinds, and the Lead turns (`session-state` to `working` of a `lead` Session).
 const ACTIVITY: &str = "(e.kind IN ('plan-phase', 'plan-review', 'plan-done', 'job-added', 'job-edited', 'job-merged',
         'job-failed', 'job-retried', 'job-cancel-requested', 'job-cancelled', 'attempt-started', 'attempt-status',
-        'attempt-retry', 'attempt-nudge', 'all-merged', 'pr-feedback', 'pr-added', 'pr-edited', 'pr-cancelled',
-        'pr-started', 'pr-opened', 'pr-merged', 'escalation', 'escalation-answered', 'escalation-expired', 'error')
+        'attempt-retry', 'attempt-nudge', 'all-merged', 'pr-feedback', 'workflow-added', 'workflow-edited', 'workflow-cancelled',
+        'workflow-started', 'pr-opened', 'pr-merged', 'escalation', 'escalation-answered', 'escalation-expired', 'error')
     OR (e.kind = 'session-state' AND json_extract(e.data, '$.to') = 'working' AND s.role = 'lead'))";
 
 /// Unix ms of an RFC 3339 UTC timestamp with milliseconds (`2026-10-18T14:57:18.848Z`), as SQL over `col`.

@@ -210,7 +210,7 @@ fn every_activity_kind_counts_and_the_others_do_not() {
     let counted = [
         "plan-phase", "plan-review", "plan-done", "job-added", "job-edited", "job-merged", "job-failed", "job-retried",
         "job-cancel-requested", "job-cancelled", "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
-        "all-merged", "pr-feedback", "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
+        "all-merged", "pr-feedback", "workflow-added", "workflow-edited", "workflow-cancelled", "workflow-started", "pr-opened", "pr-merged",
         "escalation", "escalation-answered", "escalation-expired", "error",
     ];
     let ignored = [

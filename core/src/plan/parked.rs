@@ -12,7 +12,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::start::not_ready;
 
-/// What decides whether a draft waits: the Plan's Jobs and the PRs that wait for another PR (only after the lock).
+/// What decides whether a draft waits: the Plan's Jobs and the Workflows that wait for another Workflow (only after the lock).
 struct Waits<'a> {
     all: &'a [Job],
     workflow_waits: BTreeSet<String>,
@@ -20,7 +20,7 @@ struct Waits<'a> {
 
 impl Waits<'_> {
     /// `job` needs, directly or through drafts that wait themselves, a Job that is `queued`, `running` or `failed`;
-    /// or its PR waits for another PR.
+    /// or its Workflow waits for another Workflow.
     fn waiting(&self, job: &Job, seen: &mut BTreeSet<String>) -> bool {
         if self.workflow_waits.contains(job.workflow_str()) {
             return true;
@@ -40,7 +40,7 @@ fn locked(phase: &str) -> bool {
     matches!(phase, "dispatch" | "deploy" | "done")
 }
 
-/// The PRs of `plan` that wait for another PR, when the Plan is locked: the condition engine E7 starts a PR by.
+/// The Workflows of `plan` that wait for another Workflow, when the Plan is locked: the condition engine E7 starts a Workflow by.
 fn waiting_prs(conn: &Connection, plan: &PlanId, phase: &str) -> Result<BTreeSet<String>, CpdError> {
     let mut waits = BTreeSet::new();
     if locked(phase) {
@@ -89,7 +89,7 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
 }
 
 /// The keys of the Plan's `draft` Jobs that wait, in Job order: a need chains, directly or through other drafts, to a
-/// `queued`, `running` or `failed` Job, or (after the lock) the Job's PR waits for another PR. Never applies the
+/// `queued`, `running` or `failed` Job, or (after the lock) the Job's Workflow waits for another Workflow. Never applies the
 /// `covered` check `parked_drafts` applies: a draft is exempt from review completeness because it waits, even while a
 /// review covers it.
 pub fn waiting_set(conn: &Connection, plan: &PlanId, all: &[Job]) -> Result<BTreeSet<String>, CpdError> {
@@ -123,7 +123,7 @@ pub fn door(conn: &Connection, plan: &PlanId, phase: &str, others: &[Job], job: 
         ErrorCode::DraftParked,
         format!(
             "Job {} would be a parked draft: a stub (no Tier or no Spec) that waits for nothing, and no one can review a stub. The legal forms: \
-             give it a need on a queued or running Job of its PR (--needs); put it in a PR that waits for another PR; \
+             give it a need on a queued or running Job of its Workflow (--needs); put it in a Workflow that waits for another Workflow; \
              give it Tier and Spec and ask for the Plan review in the same turn (cpd_plan_review); or, when it only carries out a \
              recorded decision, add it queued (no --draft).",
             job.key

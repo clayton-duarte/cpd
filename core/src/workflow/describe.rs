@@ -1,5 +1,5 @@
-//! `pr describe` (commands.md §9.5a): stores a PR's description, the body of its pull request. In any phase and any PR status
-//! but `merged` and `cancelled`; on an adopted PR it is refused; with an open pull request GitHub is updated first.
+//! `workflow describe` (commands.md §9.5a): stores a Workflow's description, the body of its pull request. In any phase and any Workflow status
+//! but `merged` and `cancelled`; on an adopted Workflow it is refused; with an open pull request GitHub is updated first.
 
 use std::io::Read;
 use std::path::Path;
@@ -16,14 +16,14 @@ use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::fingerprint::load_workflows;
 
-const COMMAND: &str = "pr describe";
+const COMMAND: &str = "workflow describe";
 
 /// The most characters a description holds.
 const MAX_CHARS: usize = 65536;
 
 enum Decision {
     Already(String),
-    /// `open` is the `(repo, number)` of the PR's open pull request, if any.
+    /// `open` is the `(repo, number)` of the Workflow's open pull request, if any.
     Update { status: String, open: Option<(String, i64)> },
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;
-    // The PR first (`pr_adopted`, `pr_ended`), then the text.
+    // The Workflow first (`pr_adopted`, `pr_ended`), then the text.
     env.store.read(|conn| decide(conn, &plan, &key, None).map(drop))?;
     let text = read_text(&args.file)?;
     if text.trim().is_empty() || text.chars().count() > MAX_CHARS {
@@ -53,7 +53,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
                 Decision::Already(status) => Ok(status),
                 Decision::Update { status, .. } => {
                     tx.execute("UPDATE workflows SET description = ?1 WHERE plan = ?2 AND key = ?3", [text.as_str(), plan.as_str(), key.as_str()])?;
-                    let message = format!("PR {key} of Plan {plan} described. Next: cpd plan render --plan {plan}");
+                    let message = format!("Workflow {key} of Plan {plan} described. Next: cpd plan render --plan {plan}");
                     append(tx, NewEvent::workflow_described(message, &key).plan(plan.clone()))?;
                     crate::session::working_pr::name(tx, &plan, &key)?;
                     Ok(status)
@@ -79,17 +79,17 @@ fn read_text(file: &Path) -> Result<String, CpdError> {
     std::fs::read_to_string(file).map_err(|e| CpdError::file_unreadable(file, e))
 }
 
-/// The PR's status when it may be described, and with `text` whether that changes it; the open pull request's repo and number, if any.
+/// The Workflow's status when it may be described, and with `text` whether that changes it; the open pull request's repo and number, if any.
 fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str>) -> Result<Decision, CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
     if workflow.head_ref.is_some() {
-        return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("PR {key} is an adopted pull request: its own body is kept, so it is not described."))
+        return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("Workflow {key} is an adopted pull request: its own body is kept, so it is not described."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str()));
     }
     if matches!(workflow.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its description is history.", workflow.status))
+        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("Workflow {key} of Plan {plan} is {}: its description is history.", workflow.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("status", workflow.status.as_str()));

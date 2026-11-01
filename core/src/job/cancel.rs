@@ -30,7 +30,7 @@ enum Decision {
     Request(Job, AttemptId),
 }
 
-/// Whether the cancel keeps the shape of a `tdd` PR (`shape_incomplete`). Only `plan cancel` skips it, by calling
+/// Whether the cancel keeps the shape of a `tdd` Workflow (`shape_incomplete`). Only `plan cancel` skips it, by calling
 /// [`cancel_without_shape`]: it is a parameter of the function, never a flag or an option of the command.
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
@@ -208,13 +208,13 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Resul
     }
 }
 
-/// The last `test` or the last `impl` Job of a `tdd` PR that has not opened is not cancelled: add the replacement first
+/// The last `test` or the last `impl` Job of a `tdd` Workflow that has not opened is not cancelled: add the replacement first
 /// (`shape_incomplete`, §5.3, hs-d497).
 fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> Result<(), CpdError> {
     let workflows = crate::plan::fingerprint::load_workflows(conn, plan)?;
     let Some(workflow) = workflows.iter().find(|p| p.key.as_str() == job.workflow_str()) else { return Ok(()) };
     let lacks = crate::plan::shape::missing(workflow, all, Some(job.key.as_str()));
-    // Only what this cancel would take away: a PR that already lacked a kind is not this Job's doing.
+    // Only what this cancel would take away: a Workflow that already lacked a kind is not this Job's doing.
     let kept = crate::plan::shape::missing(workflow, all, None);
     let taken: Vec<&str> = lacks.into_iter().filter(|k| !kept.contains(k)).collect();
     if taken.is_empty() {

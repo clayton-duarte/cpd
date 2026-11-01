@@ -1,4 +1,4 @@
-//! E5, PR poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
+//! E5, pull request poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
 //! end of the previous poll, at its due time (the engine wakes for it between ticks),
 //! whether or not any Plan is in `deploy`: one poll covers every open pull request of the User. `cpd` is the executable the engine started
@@ -253,7 +253,7 @@ pub(super) fn rate_guard(clock: &dyn Clock, out: &Value, zone: &cpd_core::clock:
     let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
         code: ErrorCode::GhRateLimited.as_str().to_owned(),
-        message: format!("GitHub's rate limit has {remaining} requests left: PR polling pauses until {}.", cpd_core::clock::prose(reset, zone)),
+        message: format!("GitHub's rate limit has {remaining} requests left: pull request polling pauses until {}.", cpd_core::clock::prose(reset, zone)),
         details: json!({"remaining": remaining, "reset_at": reset_at}),
     };
     Ok(Some((until, failure)))

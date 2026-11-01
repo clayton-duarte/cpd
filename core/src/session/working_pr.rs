@@ -1,5 +1,5 @@
 //! The Lead's current Workflow: `sessions.working_pr` (decisions pro-d217, pro-d219, pro-d259).
-//! cpd names it in the write transaction of the commands that act on a PR;
+//! cpd names it in the write transaction of the commands that act on a Workflow;
 //! nothing matches (the User, a Worker, a Lead not `working`) is not an error.
 
 use rusqlite::Connection;

@@ -36,7 +36,7 @@ pub struct StartArgs {
     /// The explanation of the incident (1 or more characters; required only on a fresh start)
     #[arg(long, value_name = "text")]
     pub reason: Option<Text>,
-    /// The `<plan>/<key>` PR that ends the incident when it merges
+    /// The `<plan>/<key>` Workflow that ends the incident when it merges
     #[arg(long, value_name = "<plan>/<key>")]
     pub until_workflow: Option<String>,
 }
@@ -156,7 +156,7 @@ pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
 fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
     let usage = || {
-        CpdError::new(ErrorCode::Usage, "An --until-pr is `<plan>/<key>` with a non-empty Plan and key.")
+        CpdError::new(ErrorCode::Usage, "An --until-workflow is `<plan>/<key>` with a non-empty Plan and key.")
             .with("until_pr", value)
     };
     let (plan, key) = value.split_once('/').ok_or_else(usage)?;
@@ -173,7 +173,7 @@ fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
 /// `reason` must be non-empty. A start while `incident` is live replaces `incident_plans` with
 /// exactly the named Plans, keeps `started_at`, `started_by` and `reason`, runs no stop-request
 /// sweep, and appends one `incident-plans` Event only when the set or `until_pr` changed. `until_pr`
-/// is the optional `<plan>/<key>` auto-end PR; when it is absent the stored `until_plan`/`until_pr`
+/// is the optional `<plan>/<key>` auto-end Workflow; when it is absent the stored `until_plan`/`until_pr`
 /// are cleared.
 pub fn start(
     store: &mut Store,
@@ -199,7 +199,7 @@ pub fn start(
             if !plans.contains(until_plan) {
                 return Err(CpdError::new(
                     ErrorCode::UntilWorkflowNotIncident,
-                    format!("The --until-pr Plan {until_plan} is not one of the incident's Plans."),
+                    format!("The --until-workflow Plan {until_plan} is not one of the incident's Plans."),
                 )
                 .with("plan", until_plan.as_str())
                 .with("until_pr", until_workflow.unwrap_or_default()));
@@ -212,7 +212,7 @@ pub fn start(
             if !known {
                 return Err(CpdError::new(
                     ErrorCode::WorkflowNotFound,
-                    format!("No PR {until_plan}/{key}."),
+                    format!("No Workflow {until_plan}/{key}."),
                 )
                 .with("plan", until_plan.as_str())
                 .with("pr", key.as_str()));
@@ -307,10 +307,10 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
 }
 
 /// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
-/// recorded. When the stored `until_pr` PR is merged, deletes the `incident` row and every
+/// recorded. When the stored `until_pr` Workflow is merged, deletes the `incident` row and every
 /// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-pr"`, `by`
 /// `"engine"`), returning true; false when incident mode is off, no `until_pr` is stored, or the
-/// PR is not merged.
+/// Workflow is not merged.
 pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let stored = tx
         .query_row(

@@ -1,4 +1,4 @@
-//! The chain of a Job added to an `open` PR whose `open` Job is merged (commands.md §5.1): it needs the chain leaves.
+//! The chain of a Job added to an `open` Workflow whose `open` Job is merged (commands.md §5.1): it needs the chain leaves.
 
 use std::collections::BTreeSet;
 
@@ -6,7 +6,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 use crate::plan::jobs::Job;
 
-/// The leaves of the PR's chain, or `None` when the PR is not chained (not `open`, or its `open` Job is not merged).
+/// The leaves of the Workflow's chain, or `None` when the Workflow is not chained (not `open`, or its `open` Job is not merged).
 /// The chain is the non-cancelled Jobs after the open Job (the open Job and every Job that transitively needs it),
 /// minus `key` and whoever needs `key` (a rerun of the same add); drafts and `update` Jobs are never members. A leaf is a member
 /// no other member needs; a `failed` leaf refuses `needs_unavailable`.
@@ -38,7 +38,7 @@ pub(super) fn leaves(all: &[Job], plan: &PlanId, workflow: &str, workflow_status
     if !failed.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsUnavailable,
-            format!("A Job added to PR {workflow} chains after {}, which failed: retry or cancel it first.", failed.join(", ")),
+            format!("A Job added to Workflow {workflow} chains after {}, which failed: retry or cancel it first.", failed.join(", ")),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)

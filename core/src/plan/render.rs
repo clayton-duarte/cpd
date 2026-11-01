@@ -1,7 +1,7 @@
 //! The plan markdown the User reviews in the chat (commands.md §4.5, kept
-//! from cpd 1 §11 `plan render`, grouped by PR): title, Context and phase; a
-//! table of the PRs not `cancelled` and, from two, a Mermaid graph of their
-//! needs; then a section per PR with its Jobs' table, their Dependencies graph
+//! from cpd 1 §11 `plan render`, grouped by Workflow): title, Context and phase; a
+//! table of the Workflows not `cancelled` and, from two, a Mermaid graph of their
+//! needs; then a section per Workflow with its Jobs' table, their Dependencies graph
 //! and one subsection per Job with its Spec; between them the `## Overlaps`
 //! section. GitHub-flavoured Markdown only:
 //! tables, code and Mermaid, no footnotes, no raw HTML (t4).
@@ -20,12 +20,12 @@ const MISSING_TIER: &str = "—";
 const MISSING_SPEC: &str = "Spec: not written yet";
 
 /// What the render says in place of the Spec of an `open` Job's placeholder (commands.md §4.5, hs-d497).
-const OPEN_PLACEHOLDER: &str = "Added by cpd when the PR starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.";
+const OPEN_PLACEHOLDER: &str = "Added by cpd when the Workflow starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.";
 /// The placeholder's `Needs` (the Job's Ready rule, contract §3.2): not Dependencies, so no row and no graph edge.
-const OPEN_NEEDS: &str = "every other Job of the PR";
+const OPEN_NEEDS: &str = "every other Job of the Workflow";
 
-/// The `open` Job a PR that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
-/// Only for a PR whose Plan holds no `open` Job (an older PR): a template's opener stub is a real Job and is shown as its own row.
+/// The `open` Job a Workflow that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
+/// Only for a Workflow whose Plan holds no `open` Job (an older Workflow): a template's opener stub is a real Job and is shown as its own row.
 struct OpenPlaceholder<'a> {
     workflow: &'a WorkflowRow,
     tier: &'a str,
@@ -153,9 +153,9 @@ fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
     lines.join("\n")
 }
 
-/// The PRs in the order of the needs graph: a PR comes after every PR it
+/// The Workflows in the order of the needs graph: a Workflow comes after every Workflow it
 /// needs, ties by key. Needs outside `prs` are ignored; a cycle (the schema
-/// forbids none, `pr add` does) ends the order with the rest by key.
+/// forbids none, `workflow add` does) ends the order with the rest by key.
 fn ordered<'a>(workflows: &[&'a WorkflowRow], display: &Display) -> Vec<&'a WorkflowRow> {
     let mut rest: Vec<&WorkflowRow> = workflows.to_vec();
     rest.sort_by(|a, b| a.key.cmp(&b.key));
@@ -175,7 +175,7 @@ fn anchor(heading: &str) -> String {
     heading.to_lowercase().chars().filter_map(|c| if c == ' ' { Some('-') } else { (c.is_alphanumeric() || c == '-' || c == '_').then_some(c) }).collect()
 }
 
-/// Where each blocker is shown: a Job's section, a PR's section. A reference of another Plan has none.
+/// Where each blocker is shown: a Job's section, a Workflow's section. A reference of another Plan has none.
 struct Anchors {
     jobs: BTreeMap<String, String>,
 }
@@ -185,11 +185,11 @@ impl Anchors {
         Anchors { jobs: jobs.iter().map(|j| (j.key.clone(), anchor(&format!("{}: {}", j.key, inline(&j.title))))).collect() }
     }
 
-    /// `key` as a link to its section, or as it is when it has none (a PR of another Plan).
+    /// `key` as a link to its section, or as it is when it has none (a Workflow of another Plan).
     fn link(&self, key: &str) -> String {
         let target = match self.jobs.get(key) {
             Some(a) => Some(a.clone()),
-            None if !key.contains('/') => Some(anchor(&format!("PR {key}"))),
+            None if !key.contains('/') => Some(anchor(&format!("Workflow {key}"))),
             None => None,
         };
         target.map_or_else(|| format!("`{key}`"), |a| format!("[`{key}`](#{a})"))
@@ -223,14 +223,14 @@ struct Shown<'a> {
     anchors: Anchors,
 }
 
-/// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
+/// One Workflow's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked. `jobs` include the cancelled ones: they are
 /// in the table, in no graph and with no Spec.
 fn workflow_section(out: &mut Vec<String>, workflow: &WorkflowRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
-    // A PR that has not started, and whose Plan holds no `open` Job (an older PR), has no opener stub: its placeholder is the last row and the last section.
+    // A Workflow that has not started, and whose Plan holds no `open` Job (an older Workflow), has no opener stub: its placeholder is the last row and the last section.
     let placeholder = (workflow.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(OpenPlaceholder { workflow, tier: open_tier });
     out.extend([
-        format!("## PR {}", workflow.key),
+        format!("## Workflow {}", workflow.key),
         String::new(),
         format!("Repo: {} · Base: `{}` · Needs: {}", code(&workflow.repo), workflow.base, joined(&shown.display.workflow_needs(workflow), code)),
         String::new(),
@@ -362,7 +362,7 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     if overlaps.is_empty() {
         out.push("No other active Plan touches these files.".to_owned());
     } else {
-        out.extend(["| Job | Other Plan | PR | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
+        out.extend(["| Job | Other Plan | Workflow | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
         for o in overlaps {
             let other_jobs: Vec<String> = o.other_jobs.iter().map(|j| format!("{} ({})", tcode(&j.key), j.status)).collect();
             out.push(format!("| {} | {} | {} | {} | {} |", tcode(&o.job), tcode(&o.plan), tcode(&o.workflow), other_jobs.join(", "), paths_cell(&o.paths)));
@@ -378,9 +378,9 @@ pub enum Heading<'a> {
 }
 
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
-/// PRs and Jobs are shown, after the live ones, and counted nowhere. `display` says what waits and what was superseded.
+/// Workflows and Jobs are shown, after the live ones, and counted nowhere. `display` says what waits and what was superseded.
 /// `overlaps` are those of [`super::overlap::find`]; `open_tier` is the config key of that name, the Tier of the
-/// placeholder `open` Job of a PR that has not started (§4.5, hs-d497). Pure: the same PRs, Jobs
+/// placeholder `open` Job of a Workflow that has not started (§4.5, hs-d497). Pure: the same Workflows, Jobs
 /// and overlaps give the same text.
 pub fn markdown(heading: &Heading, context: &str, phase: &str, workflows: &[WorkflowRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
     let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
@@ -397,12 +397,12 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, workflows: &[Work
         ]);
     }
     if workflows.is_empty() && cancelled.is_empty() {
-        out.extend(["No PRs yet.".to_owned(), String::new()]);
+        out.extend(["No Workflows yet.".to_owned(), String::new()]);
         return out.join("\n");
     }
     let order = ordered(&workflows, display);
     out.extend([
-        "## PRs".to_owned(),
+        "## Workflows".to_owned(),
         String::new(),
         "| Key | Repo | Base | Needs | Status |".to_owned(),
         "|---|---|---|---|---|".to_owned(),
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2", &Display::default()), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo Workflows yet.\n");
     }
 
     fn workflow(key: &str, needs: &[&str]) -> WorkflowRow {
@@ -534,9 +534,9 @@ mod tests {
         assert!(md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"), "{md}");
         // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
         let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
-        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the PR | — |");
+        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the Workflow | — |");
         // The last section, with the text in place of a Spec; a `test` Job lists its tests and files.
-        assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the PR\n\n{OPEN_PLACEHOLDER}")), "{md}");
+        assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the Workflow\n\n{OPEN_PLACEHOLDER}")), "{md}");
         assert!(md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"), "{md}");
         assert!(md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"), "{md}");
         // It is no Job: no node in the graph.
@@ -548,8 +548,8 @@ mod tests {
         let started = plain("dispatch", &[titled_workflow("web", "dispatch")], &[job("web-docs", "web", "docs")], "S2");
         assert!(!started.contains("open-web"), "{started}");
         let waiting = plain("dispatch", &[titled_workflow("web", "waiting")], &[], "S2");
-        assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the PR | — | — |"), "{waiting}");
-        // A PR with no Jobs yet is not "No Jobs yet": it has the Job cpd adds.
+        assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the Workflow | — | — |"), "{waiting}");
+        // A Workflow with no Jobs yet is not "No Jobs yet": it has the Job cpd adds.
         assert!(!waiting.contains("No Jobs yet."), "{waiting}");
         let cancelled = plain("plan", &[titled_workflow("web", "cancelled")], &[], "S2");
         assert!(!cancelled.contains("open-web"), "{cancelled}");

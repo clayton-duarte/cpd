@@ -15,7 +15,7 @@ use crate::lock;
 use crate::store::Store;
 
 /// What an item is about (§2.2's kinds). `EngineDown` is never stored, and the
-/// `pr-*` and `review-requested` kinds are stored once the PR poll's migration
+/// `pr-*` and `review-requested` kinds are stored once the pull request poll's migration
 /// lets `inbox_items.kind` hold them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
@@ -44,7 +44,7 @@ pub enum Kind {
     Deploy,
     /// A Plan has parked drafts its Lead did not resolve (hs-d731, hs-d733); always magenta, linked to the Plan and its Lead.
     DraftsParked,
-    /// An open PR of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
+    /// An open Workflow of cpd whose pull request was closed without a merge; always red, linked to the Plan and its Lead.
     PrClosed,
 }
 

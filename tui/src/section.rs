@@ -134,8 +134,8 @@ mod tests {
         let got = text(title("Logs", None, 20));
         assert_eq!(got, format!(" ──{OPEN_CAP}Logs{CLOSE_CAP}{} ", "─".repeat(20 - 2 - 2 - 6)));
         assert_eq!(got.chars().count(), 20);
-        let got = text(title("PRs", Some(3), 26));
-        assert_eq!(got, format!(" ──{OPEN_CAP}PRs{CLOSE_CAP}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
+        let got = text(title("Workflows", Some(3), 26));
+        assert_eq!(got, format!(" ──{OPEN_CAP}Workflows{CLOSE_CAP}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
         assert_eq!(got.chars().count(), 26);
     }
 
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn a_narrow_width_drops_the_count_then_cuts_the_title_then_the_pill() {
-        assert_eq!(text(title("PRs", Some(3), 9)), format!(" ──{OPEN_CAP}PRs{CLOSE_CAP} "), "the non-collapsible title drops its count the same way");
+        assert_eq!(text(title("Workflows", Some(3), 9)), format!(" ──{OPEN_CAP}Workflows{CLOSE_CAP} "), "the non-collapsible title drops its count the same way");
     }
 
     // ---- section look v4 (commands.md §17, "Section titles"; hs-d475 to hs-d480) ----
@@ -200,7 +200,7 @@ mod tests {
             assert_eq!(buf[(21, 0)].symbol(), " ", "the right padding, {name}");
             assert_eq!(buf[(16, 0)].symbol(), "─", "a muted line before the count pill, {name}");
         }
-        let buf = buffer_of(title("PRs", Some(3), 26), 26);
+        let buf = buffer_of(title("Workflows", Some(3), 26), 26);
         check::grey_pill(&buf, 22, 0, "3");
     }
 

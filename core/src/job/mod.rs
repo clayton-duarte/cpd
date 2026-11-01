@@ -224,8 +224,8 @@ impl Env {
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
     /// unless a Worker may have it: H0-H3 or S0-S3 (pro-d82, hs-d554).
     ///
-    /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
-    /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
+    /// The models are those of the Job's Workflow repo key (contract §8.3 "Models" (5)): `pr` is the Workflow the Job is
+    /// (or is about to be) on, `None` for the Workflow the existing Job `job` is on.
     fn check_tier(&mut self, plan: &PlanId, job: &JobKey, workflow: Option<&WorkflowKey>, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
@@ -246,7 +246,7 @@ impl Env {
         self.check_tier_models(&models, tier)
     }
 
-    /// [`Env::check_tier`] for an explore Job, which has no PR: the models are the Context owner's.
+    /// [`Env::check_tier`] for an explore Job, which has no Workflow: the models are the Context owner's.
     fn check_explore_tier(&mut self, plan: &PlanId, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
@@ -266,7 +266,7 @@ impl Env {
     }
 }
 
-/// The models of an explore Job (it has no PR): its Context owner's.
+/// The models of an explore Job (it has no Workflow): its Context owner's.
 fn explore_models(conn: &Connection, home: &crate::home::CpdHome, plan: &PlanId) -> Result<crate::policy::model::Models, CpdError> {
     let context: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
     crate::policy::model::models_of_context(conn, home, &context)
@@ -331,15 +331,15 @@ fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
     if matches!(kind, "open" | "update") {
         return Err(CpdError::new(
             ErrorCode::KindReserved,
-            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl, verify or work."),
+            format!("The kind {kind} is cpd's: it adds the open Job when a Workflow starts and the update Job for a Workflow that needs one. Use docs, test, impl, verify or work."),
         )
         .with("kind", kind));
     }
     Ok(())
 }
 
-/// The kinds a PR of `shape` may have while it is `waiting` or `dispatch` (§2.2 "Job kinds"): `tdd` the steps of the
-/// template, `docs` and `config` their one, `free` (a PR before migration `job-kinds`) every kind the Lead adds.
+/// The kinds a Workflow of `shape` may have while it is `waiting` or `dispatch` (§2.2 "Job kinds"): `tdd` the steps of the
+/// template, `docs` and `config` their one, `free` (a Workflow before migration `job-kinds`) every kind the Lead adds.
 fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     match shape {
         "tdd" => &["docs", "test", "impl", "verify"],
@@ -349,8 +349,8 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
     }
 }
 
-/// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
-/// (§5.1). An `open` PR allows only `work`.
+/// The Workflow's stored shape allows a Job of `kind` while the Workflow is `waiting` or `dispatch`, else `shape_violation`
+/// (§5.1). An `open` Workflow allows only `work`.
 fn check_shape_allows(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str, kind: &str) -> Result<(), CpdError> {
     let Some(row) = workflows.iter().find(|p| p.key.as_str() == workflow) else { return Ok(()) };
     let allowed = kinds_allowed(&row.shape);
@@ -360,7 +360,7 @@ fn check_shape_allows(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str, 
         }
         return Err(CpdError::new(
             ErrorCode::ShapeViolation,
-            format!("PR {workflow} has opened: a feedback fix is one work Job, not {kind}."),
+            format!("Workflow {workflow} has opened: a feedback fix is one work Job, not {kind}."),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)
@@ -374,7 +374,7 @@ fn check_shape_allows(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str, 
     }
     Err(CpdError::new(
         ErrorCode::ShapeViolation,
-        format!("PR {workflow} has the shape {}: it allows the kinds {}, not {kind}. The shape is fixed; cancel the PR and add another to change it.", row.shape, allowed.join(", ")),
+        format!("Workflow {workflow} has the shape {}: it allows the kinds {}, not {kind}. The shape is fixed; cancel the Workflow and add another to change it.", row.shape, allowed.join(", ")),
     )
     .with("plan", plan.as_str())
     .with("pr", workflow)
@@ -383,7 +383,7 @@ fn check_shape_allows(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str, 
     .with("allowed", allowed))
 }
 
-/// An `impl` Job that is not a draft needs at least one `test` Job of its PR (`test_job_required`, §5.1).
+/// An `impl` Job that is not a draft needs at least one `test` Job of its Workflow (`test_job_required`, §5.1).
 fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let tests: Vec<&str> = jobs.iter().filter(|j| j.workflow == job.workflow && j.kind == "test" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
     if job.kind != "impl" || job.needs.iter().any(|n| tests.contains(&n.as_str())) {
@@ -391,14 +391,14 @@ fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::TestJobRequired,
-        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.workflow_str()),
+        format!("The impl Job {} must need a test Job of its Workflow {}: its tests are the ones its test Jobs name.", job.key, job.workflow_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
     .with("jobs", tests))
 }
 
-/// A `verify` Job that is not a draft needs at least one `impl` Job of its PR (`impl_job_required`, §5.1).
+/// A `verify` Job that is not a draft needs at least one `impl` Job of its Workflow (`impl_job_required`, §5.1).
 fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let impls: Vec<&str> = jobs.iter().filter(|j| j.workflow == job.workflow && j.kind == "impl" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
     if job.kind != "verify" || job.needs.iter().any(|n| impls.contains(&n.as_str())) {
@@ -406,7 +406,7 @@ fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
     }
     Err(CpdError::new(
         ErrorCode::ImplJobRequired,
-        format!("The verify Job {} must need an impl Job of its PR {}: it checks the code those Jobs build.", job.key, job.workflow_str()),
+        format!("The verify Job {} must need an impl Job of its Workflow {}: it checks the code those Jobs build.", job.key, job.workflow_str()),
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
@@ -454,13 +454,13 @@ pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[St
     Ok(())
 }
 
-/// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
+/// Every Job of `needs` is in Workflow `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
 fn check_needs_same_workflow(jobs: &[Job], plan: &PlanId, workflow: &str, needs: &[String]) -> Result<(), CpdError> {
     let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.workflow_str() != workflow).map(|j| j.key.as_str()).collect();
     if !others.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsOtherWorkflow,
-            format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {workflow}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
+            format!("A Dependency can only link Jobs of the same Workflow: {} {} not in Workflow {workflow}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)
@@ -469,12 +469,12 @@ fn check_needs_same_workflow(jobs: &[Job], plan: &PlanId, workflow: &str, needs:
     Ok(())
 }
 
-/// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
+/// The Workflow `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
 fn check_workflow_live(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str) -> Result<(), CpdError> {
     match workflows.iter().find(|p| p.key.as_str() == workflow) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
             ErrorCode::WorkflowEnded,
-            format!("PR {workflow} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
+            format!("Workflow {workflow} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)

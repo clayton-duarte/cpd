@@ -1,6 +1,6 @@
 //! Rule S (contract §7.4, hs-d243): the Lead worktree follows its Lead Branch,
 //! in any order. Whoever moves a Lead Branch (merge step 9, R2, `pr rebase`)
-//! and the PR's clean-up call [`sync_lead`]; it takes no lock of cpd's.
+//! and the Workflow's clean-up call [`sync_lead`]; it takes no lock of cpd's.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};

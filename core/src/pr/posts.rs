@@ -1,4 +1,4 @@
-//! The table `pr_posts` (contract §4.4; PR post, pro-d64, pro-d65): the one post of a PR for review in Slack.
+//! The table `pr_posts` (contract §4.4; Workflow post, pro-d64, pro-d65): the one post of a Workflow for review in Slack.
 //! Written once by `pr post`; no later write (the reaction is queued in `slack_reactions`).
 //! `reaction` only records that a reaction was wanted at post time (NULL = none); it is never the emoji used. A data row: it appends no Event.
 
@@ -15,7 +15,7 @@ pub struct PostRecord {
     pub link: String,
     pub posted_at: String,
     /// Whether a reaction was wanted at post time (`None` = none): the emoji name the policy had then, never the emoji that will be
-    /// used (the engine resolves that from the PR's policy when it places the reaction).
+    /// used (the engine resolves that from the Workflow's policy when it places the reaction).
     pub reaction: Option<String>,
     /// When the reaction was added; `None` until then.
     pub reacted_at: Option<String>,
@@ -25,7 +25,7 @@ pub struct PostRecord {
     pub auto_merge_at: Option<String>,
 }
 
-/// The post of PR `pr` of `plan`, if it has one.
+/// The post of Workflow `pr` of `plan`, if it has one.
 pub fn find(conn: &Connection, plan: &str, workflow: &str) -> Result<Option<PostRecord>, CpdError> {
     Ok(conn
         .query_row(
@@ -38,7 +38,7 @@ pub fn find(conn: &Connection, plan: &str, workflow: &str) -> Result<Option<Post
         .optional()?)
 }
 
-/// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
+/// Writes the post of Workflow `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the Workflow already has one (nothing is written).
 pub fn insert(tx: &WriteTxn<'_>, plan: &str, workflow: &str, post: &PostRecord) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
@@ -60,7 +60,7 @@ pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, workflow: &str, state: &str
     Ok(rows == 1)
 }
 
-/// A post whose auto-merge request waits (`pending`) for a PR that can take it now.
+/// A post whose auto-merge request waits (`pending`) for a Workflow that can take it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
     pub plan: String,
@@ -70,7 +70,7 @@ pub struct Pending {
     pub number: i64,
 }
 
-/// The oldest-posted `pending` request whose PR is `open`, whose Plan is not archived and not held by incident mode, and
+/// The oldest-posted `pending` request whose Workflow is `open`, whose Plan is not archived and not held by incident mode, and
 /// which is not stacked (its `base` is no `prs.lead_branch`; the rule of `auto_merge::stacked`), if any.
 pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
     Ok(conn
@@ -113,7 +113,7 @@ mod tests {
         (dir, store)
     }
 
-    /// A PR `key` with `status`, merged at `merged_at`, and a post with `reaction`.
+    /// A Workflow `key` with `status`, merged at `merged_at`, and a post with `reaction`.
     fn add(store: &mut Store, key: &str, status: &str, merged_at: &str, reaction: Option<&str>) {
         store
             .write("fixture", |tx| {

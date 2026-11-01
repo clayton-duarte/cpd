@@ -2,14 +2,14 @@
 //! machine, running E1–E5, E7–E11 and E13 (E6 was removed) every `tick_seconds` under `locks/watch.lock`.
 //!
 //! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`, and E7
-//!   (the PR start, which calls `pr::start`);
+//!   (the Workflow start, which calls `pr::start`);
 //! - [`distill`] E9: starts `cpd context distill` for a Context whose digest is behind;
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`sleep`] E13: puts finished Lead and Manager Sessions to sleep;
 //! - [`archive_leads`] E14: archives the done Plan of a Lead asleep past `timeouts.archive_sleep_seconds`;
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`models`] E15: lists the models pi can offer into `run/models-<provider>.json` (7 days);
-//! - [`auto_merge`] E18: turns on squash auto-merge for posted PRs whose request is pending (deferred while stacked);
+//! - [`auto_merge`] E18: turns on squash auto-merge for posted Workflows whose request is pending (deferred while stacked);
 //! - [`jira`] E19: moves the Jira ticket of the oldest queued transition through the helper `pi/lib/jira-transition.ts`;
 //! - [`parked`] E20: wakes the Lead of a Plan with parked drafts once, and cancels the drafts of an archived Plan;
 //! - [`janitor`] E16: starts `cpd janitor` detached every `watch.janitor_minutes`;

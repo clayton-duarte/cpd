@@ -419,7 +419,7 @@ impl Run<'_> {
     }
 
     /// For each batch record, the `<repo>:<path>` hits of `git grep -l -w <id> -- docs '*.md'` on each repo of the
-    /// Context's Plans' PRs.
+    /// Context's Plans' Workflows.
     fn grep_hits(&mut self, batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
         let repos: Vec<String> = self.store.read(|conn| {
             let mut stmt = conn.prepare(

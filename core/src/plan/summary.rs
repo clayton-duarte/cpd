@@ -12,7 +12,7 @@ use super::prs::WorkflowRow;
 use super::render::{cell, inline};
 use super::row::PlanRow;
 
-/// What stands for a missing goal, PR title or need.
+/// What stands for a missing goal, Workflow title or need.
 const NONE: &str = "—";
 /// The overlap rows shown before the rest are counted.
 const OVERLAPS_SHOWN: usize = 5;
@@ -30,7 +30,7 @@ pub struct Input<'a> {
     pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
-    /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
+    /// The base Workflow (`<plan>/<key>`) of each stacked Workflow, by Workflow key (contract §2.2 "The base Workflow").
     pub base_workflows: &'a BTreeMap<String, String>,
 }
 
@@ -48,7 +48,7 @@ fn repo_name(workflow: &WorkflowRow) -> String {
     workflow.name.clone().or_else(|| Path::new(&workflow.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| workflow.repo.clone())
 }
 
-/// `Order:` and `Stacked on:` (block 7): empty when no PR counts.
+/// `Order:` and `Stacked on:` (block 7): empty when no Workflow counts.
 fn order(i: &Input, counting: &[&WorkflowRow]) -> Vec<String> {
     if counting.is_empty() {
         return Vec::new();
@@ -115,7 +115,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     });
     blocks.push(vec![format!("Goal: {}", outline.map_or(NONE.to_owned(), |o| inline(&o.goal)))]);
 
-    let mut workflows = vec!["## PRs".to_owned()];
+    let mut workflows = vec!["## Workflows".to_owned()];
     for workflow in counting.iter().filter(|p| has_review(p)) {
         let title = workflow.title.as_deref().map_or(NONE.to_owned(), inline);
         workflows.push(format!("- {} ({}, base {}): {title}", workflow.key, inline(&repo_name(workflow)), inline(&workflow.base)));
@@ -151,7 +151,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     let mut stubs: Vec<&Job> = i.jobs.iter().filter(|j| j.is_draft() && !j.missing().is_empty()).collect();
     stubs.sort_by(|a, b| a.key.cmp(&b.key));
     let later: Vec<String> =
-        stubs.iter().map(|j| j.key.clone()).chain(counting.iter().filter(|p| !has_review(p)).map(|p| format!("PR {}", p.key))).collect();
+        stubs.iter().map(|j| j.key.clone()).chain(counting.iter().filter(|p| !has_review(p)).map(|p| format!("Workflow {}", p.key))).collect();
     if !later.is_empty() {
         blocks.push(vec![format!("Later: {}", later.join(", "))]);
     }
