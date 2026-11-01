@@ -523,3 +523,77 @@ test("the live Chat sends a typed message through the live api", async () => {
 
   expect(sent).toEqual([{ id: "s1", text: "hello there" }]);
 });
+
+/** One real cpd `custom_message` line: pi's fields, the content and the Event under `details`. */
+function cpdRecordLine(record: {
+  id: string;
+  customType: string;
+  content: string;
+  details: Record<string, unknown>;
+}): string {
+  return JSON.stringify({
+    type: "custom_message",
+    id: record.id,
+    parentId: "p0",
+    timestamp: "2026-11-01T18:02:00.000Z",
+    customType: record.customType,
+    display: true,
+    content: record.content,
+    details: record.details,
+  });
+}
+
+test("a delivered message renders as the person's Bubble with its delivery line, not as a notice", async () => {
+  const sessionId = "14bd6551-0000-4000-8000-000000000002";
+  const delivered = cpdRecordLine({
+    id: "c1",
+    customType: "cpd",
+    content: `Message from web-chat-live (${sessionId}) (13:02 EST): ship it`,
+    details: {
+      id: 41,
+      at: "2026-11-01T18:02:00.000Z",
+      kind: "session-message",
+      context: "web-chat-live",
+      plan: null,
+      job: null,
+      attempt: null,
+      session: "s1",
+      text: `Message from web-chat-live (${sessionId}) (13:02 EST): ship it`,
+      data: {
+        from: sessionId,
+        text: "ship it",
+        unblocks: "sent from the cpd web chat",
+        wake: true,
+      },
+      delivered_to: "s1",
+    },
+  });
+  const notice = cpdRecordLine({
+    id: "n1",
+    customType: "cpd-plan-summary",
+    content: "NOTICE: plan review r3 was APPROVED",
+    details: { plan: "web-chat-live", review: "r3" },
+  });
+
+  await renderJsonl([delivered, notice].join("\n"));
+
+  const text = container.textContent ?? "";
+  // The person's words are the one Bubble's words — cpd's wrapper is not repeated as the turn.
+  const bubbles = [...container.querySelectorAll('[data-slot="bubble"]')];
+  expect(bubbles).toHaveLength(1);
+  expect(bubbles[0]!.textContent).toContain("ship it");
+  expect(bubbles[0]!.textContent).not.toContain("Message from");
+
+  // The delivery line carries the time cpd stamped and the recorded reason.
+  expect(text).toContain("13:02 EST");
+  expect(text).toContain("sent from the cpd web chat");
+  // The full `Message from <sender> (<time>)` header is the line's title.
+  const titled = container.querySelector('[title*="Message from"]');
+  expect(titled?.getAttribute("title")).toContain(
+    `Message from web-chat-live (${sessionId}) (13:02 EST)`,
+  );
+
+  // The same frame's engine record is a notice: its words show, but never inside a Bubble.
+  expect(text).toContain("NOTICE: plan review r3 was APPROVED");
+  expect(bubbles[0]!.textContent).not.toContain("NOTICE: plan review");
+});

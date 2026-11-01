@@ -307,3 +307,189 @@ test("toSnapshotFrame maps messages to a fold snapshot", () => {
     snapshot: { messages },
   });
 });
+
+// The cpd record shapes (web/README.md "A message delivered into a Session is the person's turn").
+// A cpd record is a `custom_message` line: pi's `sendMessage({customType, content, display, details})`
+// with the Event itself under `details` (commands.md §15.3). The delivered kind is the `"cpd"` record
+// whose `details.kind` is `"session-message"`; the other types and kinds are engine notices.
+const CPD_TIME = "13:02 EST";
+const CPD_AT = "2026-11-01T18:02:00.000Z";
+
+/** One real `custom_message` JSONL line: pi's fields, the content and the Event under `details`. */
+function cpdRecordLine(record: {
+  id: string;
+  customType: string;
+  content: string;
+  details: Record<string, unknown>;
+  display?: boolean;
+}): string {
+  return JSON.stringify({
+    type: "custom_message",
+    id: record.id,
+    parentId: "p0",
+    timestamp: CPD_AT,
+    customType: record.customType,
+    display: record.display ?? true,
+    content: record.content,
+    details: record.details,
+  });
+}
+
+/** One delivered `session-message` record: the wrapper in `content`, the person's words in `data.text`. */
+function deliveredLine(options: {
+  id: string;
+  content: string;
+  text?: string;
+  from: string | null;
+  unblocks: string;
+}): string {
+  const details: Record<string, unknown> = {
+    id: 41,
+    at: CPD_AT,
+    kind: "session-message",
+    context: "web-chat-live",
+    plan: null,
+    job: null,
+    attempt: null,
+    session: "s1",
+    text: options.content,
+    data: { from: options.from, text: options.text, unblocks: options.unblocks, wake: true },
+    delivered_to: "s1",
+  };
+  return cpdRecordLine({
+    id: options.id,
+    customType: "cpd",
+    content: options.content,
+    details,
+  });
+}
+
+/** One engine-notice record: a `customType`, or a `"cpd"` record with its `details.kind`. */
+function noticeLine(options: {
+  id: string;
+  kind: string;
+  customType?: string;
+  content: string;
+  display?: boolean;
+}): string {
+  const details: Record<string, unknown> =
+    (options.customType ?? "cpd") === "cpd"
+      ? { id: 90, at: CPD_AT, kind: options.kind, context: "ctx", plan: "p", session: "s1", text: options.content, data: {} }
+      : { plan: "p", review: "r3" };
+  return cpdRecordLine({
+    id: options.id,
+    customType: options.customType ?? "cpd",
+    content: options.content,
+    details,
+    display: options.display,
+  });
+}
+
+/** Every string a parsed message carries, at any depth: the reader-visible text, whatever field holds it. */
+function allStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((entry) => allStrings(entry));
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).flatMap((entry) => allStrings(entry));
+  }
+  return [];
+}
+
+test("a cpd session-message is a user turn carrying data.text, not a notice", () => {
+  const jsonl = deliveredLine({
+    id: "c1",
+    from: null,
+    content: `Message from the User (${CPD_TIME}): ship it`,
+    text: "ship it",
+    unblocks: "sent from the cpd web chat",
+  });
+
+  const messages = parsePiSession(jsonl);
+  expect(messages).toHaveLength(1);
+  const delivered = messages[0]!;
+  // The delivered record is the person's turn, not an engine notice.
+  expect(delivered.role).toBe("user");
+  // Its text is the person's own words — unwrapped, never cpd's `Message from …` line.
+  expect(delivered.text).toBe("ship it");
+  expect(delivered.text).not.toContain("Message from");
+});
+
+test("a cpd context, plan, job, escalation or plan-done record is an engine notice", () => {
+  const notices = [
+    { id: "n1", kind: "context", customType: "cpd-context", content: "NOTICE: context update" },
+    { id: "n2", kind: "plan-summary", customType: "cpd-plan-summary", content: "NOTICE: plan summary" },
+    { id: "n3", kind: "plan-decision", customType: "cpd-plan-decision", content: "NOTICE: plan decision" },
+    { id: "n4", kind: "skills", customType: "cpd-skills", content: "NOTICE: skills changed" },
+    { id: "n5", kind: "escalation", content: "NOTICE: escalation" },
+    { id: "n6", kind: "error", content: "NOTICE: error" },
+    { id: "n7", kind: "pr-feedback", content: "NOTICE: pr feedback" },
+    { id: "n8", kind: "job-merged", content: "NOTICE: job merged" },
+    { id: "n9", kind: "job-failed", content: "NOTICE: job failed" },
+    { id: "n10", kind: "plan-done", content: "NOTICE: plan done" },
+  ];
+  const hidden = { id: "n11", kind: "job-failed", content: "HIDDEN: a hidden notice", display: false };
+  const jsonl = [...notices, hidden]
+    .map((notice) => noticeLine(notice))
+    .join("\n");
+
+  const messages = parsePiSession(jsonl);
+  // A `display: false` record is skipped, whichever kind it carries (the last fixture line).
+  expect(messages).toHaveLength(10);
+  // Every other record is an engine notice, never a person's turn.
+  expect(messages.map((message) => message.role)).toEqual(notices.map(() => "system"));
+  notices.forEach((notice, index) => {
+    expect(messages[index]!.text).toContain(notice.content);
+  });
+  expect(allStrings(messages).join("\n")).not.toContain("HIDDEN:");
+});
+
+test("a delivered turn keeps cpd's header, time and reason, whether the sender is the User or a Session", () => {
+  const sessionId = "14bd6551-0000-4000-8000-000000000002";
+  const jsonl = [
+    deliveredLine({
+      id: "u1",
+      from: null,
+      content: `Message from the User (${CPD_TIME}): ship it`,
+      text: "ship it",
+      unblocks: "sent from the cpd web chat",
+    }),
+    deliveredLine({
+      id: "s1",
+      from: sessionId,
+      content: `Message from web-chat-live (${sessionId}) (${CPD_TIME}): merge it`,
+      text: "merge it",
+      unblocks: "PR #210 opened",
+    }),
+  ].join("\n");
+
+  const messages = parsePiSession(jsonl);
+  expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
+  expect(messages.map((message) => message.text)).toEqual(["ship it", "merge it"]);
+
+  const fromUser = allStrings(messages[0]).join("\n");
+  // The full header cpd stamped, its time, and the reason recorded on the delivery.
+  expect(fromUser).toContain(`Message from the User (${CPD_TIME})`);
+  expect(fromUser).toContain(CPD_TIME);
+  expect(fromUser).toContain("sent from the cpd web chat");
+
+  const fromSession = allStrings(messages[1]).join("\n");
+  // A sender that carries parentheses in its name: the time is the last parenthesised group.
+  expect(fromSession).toContain(`Message from web-chat-live (${sessionId}) (${CPD_TIME})`);
+  expect(fromSession).toContain(CPD_TIME);
+  expect(fromSession).toContain("PR #210 opened");
+});
+
+test("a session-message without cpd's wrapper falls back to its body and carries no delivery line", () => {
+  const jsonl = deliveredLine({ id: "b1", from: null, content: "a bare body", unblocks: "unused reason" });
+
+  const messages = parsePiSession(jsonl);
+  expect(messages).toHaveLength(1);
+  const bare = messages[0]!;
+  // With no `data.text`, the body of the record is the fallback.
+  expect(bare.role).toBe("user");
+  expect(bare.text).toBe("a bare body");
+  // No wrapper means no `Message from …` header and no time line to show.
+  const carried = allStrings(bare).join("\n");
+  expect(carried).not.toContain("Message from");
+  expect(carried).not.toMatch(/\d{2}:\d{2} [A-Z]{2,4}/);
+});
