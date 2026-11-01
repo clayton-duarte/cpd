@@ -76,6 +76,7 @@ mod policy_excused_labels;
 mod policy_jira;
 mod policy_jira_status;
 mod policy_scopes;
+mod workflow_policy;
 mod preset;
 mod retire_review;
 mod review;
