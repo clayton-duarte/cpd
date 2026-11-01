@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 const MESSAGE: &str = "a and b have no dependency path and both name src/a.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit a --needs b, or narrow touches.";
 
 /// Context `ctx` and Plan `mine` in phase `plan` with one waiting PR `api`.
-fn base() -> Fx {
+pub(super) fn base() -> Fx {
     let fx = Fx::new();
     fs::write(home(&fx).config(), "version = 1\nmachine = \"t\"\n").unwrap();
     fx.env.sql(
@@ -27,7 +27,7 @@ fn base() -> Fx {
 }
 
 /// [`base`] with the overlap pair `a` and `b`, both touching `src/a.rs`.
-fn pair() -> Fx {
+pub(super) fn pair() -> Fx {
     let fx = base();
     job(&fx, "mine", "api", "a", "draft", &["src/a.rs"]);
     job(&fx, "mine", "api", "b", "draft", &["src/a.rs"]);
@@ -35,7 +35,7 @@ fn pair() -> Fx {
 }
 
 /// The outline of the Plan, set by SQL, its `done_when` covering `prs`.
-fn outline(fx: &Fx, prs: &[&str]) {
+pub(super) fn outline(fx: &Fx, prs: &[&str]) {
     let done: serde_json::Map<String, Value> = prs
         .iter()
         .map(|k| ((*k).to_owned(), json!(["Done"])))
@@ -47,7 +47,7 @@ fn outline(fx: &Fx, prs: &[&str]) {
 }
 
 /// A stub draft: no Tier, no Spec.
-fn stub(fx: &Fx, pr: &str, key: &str) {
+pub(super) fn stub(fx: &Fx, pr: &str, key: &str) {
     fx.env.sql(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('mine', '{pr}', '{key}', 'Title {key}', NULL, NULL, NULL, NULL, NULL, NULL, 'draft', 0, cpd_txn(), 't');"

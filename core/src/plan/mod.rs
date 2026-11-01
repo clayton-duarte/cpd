@@ -27,9 +27,13 @@ pub mod fingerprint;
 pub mod jobs;
 mod lead;
 pub mod lint;
+#[cfg(test)]
+mod lint_advice_tests;
 mod lint_cmd;
 #[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod lint_text_tests;
 mod list;
 pub(crate) mod lock;
 mod new;

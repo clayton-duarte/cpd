@@ -673,7 +673,10 @@ fn a_review_with_a_pr_that_has_a_draft_and_no_done_when_is_refused_and_writes_no
     assert_eq!(error["details"]["prs"], json!(["ui"]));
     assert_eq!(state(&fx), before);
 
-    // Every PR with a draft covered: the review goes through.
+    // Every PR with a draft covered: the review goes through. `idle` is ended first: a live PR with no draft Job
+    // is refused `pr_empty` (after the outline check above), and an ended PR needs no entry either.
+    fx.env
+        .sql("UPDATE prs SET status = 'cancelled' WHERE plan = 'mine' AND key = 'idle';");
     outline(
         &fx,
         &json!({"goal": "G", "done_when": {"api": ["Done"], "ui": ["Done too"]}}),
@@ -879,6 +882,8 @@ Stacked on: ui on mine/api
 Overlaps: 1
 - web/a.rs: busy/svc/y (queued) +2
 
+Lint: none
+
 Decided: t-d1, t-d2
 
 Later: PR api
@@ -984,6 +989,8 @@ Order: api · next
 Stacked on: none
 
 Overlaps: none
+
+Lint: none
 
 Later: later-one, PR next
 
