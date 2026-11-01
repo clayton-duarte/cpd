@@ -8,7 +8,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
 /// `pi` (pi in a tmux pane, the default) or `durable` (the durable runner, `pi/durable-worker/`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkerRunner {
     Pi,
