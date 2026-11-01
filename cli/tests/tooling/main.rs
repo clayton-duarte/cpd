@@ -21,6 +21,7 @@ mod pill_parity;
 mod pill_sites;
 mod pnpm_fresh;
 mod preview_script;
+mod retired_terms;
 mod run_with;
 mod smoke;
 mod slot;

@@ -107,7 +107,9 @@ for (const { skill } of skills) test(`${skill}: nothing of cpd 1, of the removed
   for (const { name, text } of skillFiles(skill)) {
     assert.doesNotMatch(text, /\bgrounded\b|forked_from/i, `${name}: the grounded Lead is retired (hs-d129); a Lead starts fresh`);
     assert.doesNotMatch(text, /--wf\b|\bCPD_WF\b/, `${name}: --wf is cpd 1`);
-    assert.doesNotMatch(text, /\bworkflows?\b/i, `${name}: the term Workflow is retired`);
+    // The object is a Workflow (pro-d136): the skill text may say `workflow`, but the cpd-1 forms the word replaced
+    // (its command group, its flag and the phrases the glossary retires) stay forbidden.
+    assert.doesNotMatch(text, /`cpd workflow (init|show|phase)\b|workflow_required|workflow worktree|`sync Job`|dispatch or pr|phase pr\b|`pr\.gate`/, `${name}: a retired form of the object is left`);
     assert.doesNotMatch(text, /herdr|\bbd\b|queue message|reviewMode|review-tier|review-needed|review decide|outOfScope/i, `${name}: cpd 1 or removed Reviewer text`);
   }
 });
