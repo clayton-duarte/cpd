@@ -95,6 +95,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Send a message to a Lead or Manager (§10.13)
     Send(SendArgs),
+    /// Stream a durable Session's transcript, read-only (§10.19)
+    Tail(TailArgs),
     /// Resume a Lead or Manager blocked by the loop guard (§10.17)
     Resume(ResumeArgs),
     /// Move live Leads and Managers to the Tier the config names now (§10.15)
@@ -225,6 +227,13 @@ pub struct SendArgs {
     /// What the message unblocks (1–200 characters, one line)
     #[arg(long, value_name = "reason")]
     unblocks: Unblocks,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct TailArgs {
+    /// The durable Session to tail
+    #[arg(value_name = "id")]
+    id: SessionId,
 }
 
 /// What a `session send` unblocks (commands.md §10.13): 1 to 200 characters on one line; else `usage`.
@@ -377,6 +386,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Send(args) => send::send(args),
+        Command::Tail(args) => tail::command(args),
         Command::Resume(args) => resume::resume(args),
         Command::Retier(args) => retier::retier(args),
         Command::Rename(args) => state::rename(args),
