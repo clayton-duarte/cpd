@@ -6,6 +6,8 @@ mod common;
 
 mod ask;
 mod attempt;
+mod attempt_abort;
+mod attempt_abort_teardown;
 mod config;
 mod context;
 mod context_curation;

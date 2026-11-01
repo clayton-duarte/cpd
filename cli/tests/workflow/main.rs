@@ -16,6 +16,7 @@ mod pr_excused;
 mod pr_human_approval;
 mod pr_human_gated;
 mod pr_merge;
+mod pr_newest_run;
 mod pr_open;
 mod pr_open_jira;
 mod pr_post;
