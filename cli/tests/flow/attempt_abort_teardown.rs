@@ -12,7 +12,6 @@
 use crate::common;
 
 use std::fs::OpenOptions;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use common::Run;
