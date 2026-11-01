@@ -7,10 +7,13 @@ use super::lint::{Finding, Input, Severity, run};
 use super::parked;
 use super::prs::{PrRow, load_prs};
 use super::row::{self, Phase, PlanRow};
+use super::tier_advice::{self, Advice, FLOOR, recommend};
 use crate::args::PlanArg;
+use crate::config;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
+use crate::policy::model::models_of_context;
 
 #[derive(clap::Args, Debug)]
 pub struct LintArgs {
@@ -20,12 +23,15 @@ pub struct LintArgs {
 
 /// The one place that lints a Plan that is already loaded.
 pub(super) fn find(
-    conn: &rusqlite::Connection,
+    env: &mut Env,
     plan: &PlanRow,
     prs: &[PrRow],
     jobs: &[Job],
 ) -> Result<Vec<Finding>, CpdError> {
-    let waiting = parked::waiting_set(conn, &plan.id, jobs)?;
+    let waiting = env
+        .store
+        .read(|conn| parked::waiting_set(conn, &plan.id, jobs))?;
+    let advice = advice(env, plan.context.as_str())?;
     Ok(run(&Input::new(
         &plan.id,
         plan.phase,
@@ -33,23 +39,43 @@ pub(super) fn find(
         jobs,
         plan.outline.as_ref(),
         &waiting,
-    )))
+    )
+    .with_advice(&advice)))
 }
 
-/// The Tier advice the `tier_advice` rule reads (contract §2.7).
-#[allow(dead_code)] // stub: its caller `find` reads it once the rule is implemented
-pub(super) fn advice(
-    _env: &mut Env,
-    _context: &str,
-) -> Result<Vec<super::tier_advice::Advice>, CpdError> {
-    Ok(Vec::new())
+/// The Tier advice the `tier_advice` rule reads (contract §2.7). The catalog is read only when a cell can advise.
+pub(super) fn advice(env: &mut Env, context: &str) -> Result<Vec<Advice>, CpdError> {
+    let rows = env.store.read(tier_advice::first_attempts)?;
+    if !rows
+        .iter()
+        .any(|r| r.n >= FLOOR && r.tier.is_worker_allowed())
+    {
+        return Ok(Vec::new());
+    }
+    let catalog = match env.catalog.clone() {
+        Some(c) => c,
+        None => {
+            let home = env.home.clone();
+            let models = env
+                .store
+                .read(|conn| models_of_context(conn, &home, context))?;
+            config::catalog::load_with(&models, &mut env.store)?
+        }
+    };
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|r| catalog.is_valid(r.tier))
+        .collect();
+    Ok(recommend(&rows, FLOOR, |t| {
+        catalog.next(t).expect("the Tier is valid")
+    }))
 }
 
 /// `plan lint` (§4.15).
 pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, findings) = env.store.read(|conn| {
+    let (plan, prs, jobs) = env.store.read(|conn| {
         let plan = row::load(conn, &id)?;
         if plan.phase == Phase::Grounding {
             return Err(CpdError::new(
@@ -63,9 +89,9 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
             .with("phase", plan.phase.as_str()));
         }
         let (prs, jobs) = (load_prs(conn, &id)?, jobs::load(conn, &id)?);
-        let findings = find(conn, &plan, &prs, &jobs)?;
-        Ok((plan, findings))
+        Ok((plan, prs, jobs))
     })?;
+    let findings = find(&mut env, &plan, &prs, &jobs)?;
     let errors: Vec<&Finding> = findings
         .iter()
         .filter(|f| f.severity() == Severity::Error)
