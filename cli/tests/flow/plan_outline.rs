@@ -882,6 +882,8 @@ Stacked on: ui on mine/api
 Overlaps: 1
 - web/a.rs: busy/svc/y (queued) +2
 
+Lint: none
+
 Decided: t-d1, t-d2
 
 Later: PR api
@@ -987,6 +989,8 @@ Order: api · next
 Stacked on: none
 
 Overlaps: none
+
+Lint: none
 
 Later: later-one, PR next
 

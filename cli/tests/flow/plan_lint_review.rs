@@ -98,3 +98,33 @@ fn review_refuses_an_error_with_its_own_code_never_lint_failed() {
         "{error}"
     );
 }
+
+#[test]
+fn the_review_summary_and_plan_md_carry_the_warning() {
+    let fx = pair();
+    outline(&fx, &["api"]);
+    let out = review(&fx).ok();
+    assert_eq!(out["review"]["status"], "pending", "{out}");
+    let home = super::plan_overlap::home(&fx);
+    let plan_md = home.plan_md(&cpd_core::ids::PlanId::parse("mine").unwrap());
+    let summary = std::fs::read_to_string(plan_md.with_file_name("summary-r1.md")).unwrap();
+    let lines: Vec<&str> = summary.lines().collect();
+    assert!(lines.contains(&"Lint: 1"), "{summary}");
+    assert!(
+        lines.contains(
+            &"- parallel_write_overlap: a and b both name src/a.rs (a hint, not a conflict prediction)"
+        ),
+        "{summary}"
+    );
+    let plan_md = std::fs::read_to_string(&plan_md).unwrap();
+    assert!(plan_md.contains("\n## Lint\n\n| Rule | PR | Job | Other | Paths | Message |\n|---|---|---|---|---|---|\n| `parallel_write_overlap` | `api` | `a` | `b` | `src/a.rs` | a and b have no dependency path"), "{plan_md}");
+
+    drop(fx);
+    let fx = base();
+    stub(&fx, "api", "s");
+    fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
+    let plan_md =
+        super::plan_overlap::home(&fx).plan_md(&cpd_core::ids::PlanId::parse("mine").unwrap());
+    let summary = std::fs::read_to_string(plan_md.with_file_name("summary.md")).unwrap();
+    assert!(summary.lines().any(|l| l == "Lint: none"), "{summary}");
+}

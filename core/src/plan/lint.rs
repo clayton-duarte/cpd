@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::jobs::{self, Job};
-use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
-use super::shape;
-use super::shared::is_shared;
 use super::outline::Outline;
 use super::prs::PrRow;
+use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
 use super::row::Phase;
+use super::shape;
+use super::shared::is_shared;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 
@@ -129,7 +129,14 @@ impl<'a> Input<'a> {
         outline: Option<&'a Outline>,
         waiting: &'a BTreeSet<String>,
     ) -> Self {
-        Input { plan, phase, prs, jobs, outline, waiting }
+        Input {
+            plan,
+            phase,
+            prs,
+            jobs,
+            outline,
+            waiting,
+        }
     }
 }
 
@@ -179,35 +186,55 @@ fn error_finding(rule: Rule, pr: Option<String>, e: CpdError) -> Finding {
 }
 
 fn one(rule: Rule, e: Option<CpdError>) -> Vec<Finding> {
-    e.map(|e| error_finding(rule, None, e)).into_iter().collect()
+    e.map(|e| error_finding(rule, None, e))
+        .into_iter()
+        .collect()
 }
 
 fn draft_incomplete_rule(i: &Input) -> Vec<Finding> {
-    one(Rule::DraftIncomplete, drafts_incomplete(i.plan, i.jobs, i.waiting))
+    one(
+        Rule::DraftIncomplete,
+        drafts_incomplete(i.plan, i.jobs, i.waiting),
+    )
 }
 
 fn outline_missing_rule(i: &Input) -> Vec<Finding> {
-    one(Rule::OutlineMissing, i.outline.is_none().then(|| outline_missing(i.plan)))
+    one(
+        Rule::OutlineMissing,
+        i.outline.is_none().then(|| outline_missing(i.plan)),
+    )
 }
 
 fn outline_incomplete_rule(i: &Input) -> Vec<Finding> {
-    let e = i.outline.and_then(|o| outline_incomplete(i.plan, o, i.prs, i.jobs));
+    let e = i
+        .outline
+        .and_then(|o| outline_incomplete(i.plan, o, i.prs, i.jobs));
     one(Rule::OutlineIncomplete, e)
 }
 
 fn test_job_required_rule(i: &Input) -> Vec<Finding> {
-    one(Rule::TestJobRequired, shape::test_job_required(i.plan, i.jobs))
+    one(
+        Rule::TestJobRequired,
+        shape::test_job_required(i.plan, i.jobs),
+    )
 }
 
 fn impl_job_required_rule(i: &Input) -> Vec<Finding> {
-    one(Rule::ImplJobRequired, shape::impl_job_required(i.plan, i.jobs))
+    one(
+        Rule::ImplJobRequired,
+        shape::impl_job_required(i.plan, i.jobs),
+    )
 }
 
 fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
     shape::shape_incomplete(i.plan, i.prs, i.jobs)
         .into_iter()
         .map(|e| {
-            let pr = e.details().get("pr").and_then(|v| v.as_str()).map(str::to_owned);
+            let pr = e
+                .details()
+                .get("pr")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
             error_finding(Rule::ShapeIncomplete, pr, e)
         })
         .collect()
@@ -229,7 +256,11 @@ pub(super) fn pr_empty(id: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Option<CpdEr
     let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> = live
         .iter()
-        .filter(|p| !jobs.iter().any(|j| j.is_draft() && j.pr_str() == p.key.as_str()))
+        .filter(|p| {
+            !jobs
+                .iter()
+                .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
+        })
         .map(|p| p.key.as_str())
         .collect();
     if !live.is_empty() && empty.is_empty() {
@@ -238,13 +269,19 @@ pub(super) fn pr_empty(id: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Option<CpdEr
     let message = if live.is_empty() {
         format!("Plan {id} has no PR: add one with cpd pr add.")
     } else {
-        format!("Plan {id} has PRs without a draft Job: {}.", empty.join(", "))
+        format!(
+            "Plan {id} has PRs without a draft Job: {}.",
+            empty.join(", ")
+        )
     };
     let mut error = CpdError::new(ErrorCode::PrEmpty, message)
         .with("plan", id.as_str())
         .with("prs", empty);
     if live.is_empty() {
-        error = error.with("next", format!("cpd pr add <key> --repo <path> --plan {id}"));
+        error = error.with(
+            "next",
+            format!("cpd pr add <key> --repo <path> --plan {id}"),
+        );
     }
     Some(error)
 }
@@ -255,7 +292,10 @@ pub(super) fn dependency_cycle(id: &PlanId, jobs: &[Job]) -> Option<CpdError> {
     Some(
         CpdError::new(
             ErrorCode::DependencyCycle,
-            format!("The draft Jobs of {id} depend on each other in a cycle: {}.", cycle.join(" → ")),
+            format!(
+                "The draft Jobs of {id} depend on each other in a cycle: {}.",
+                cycle.join(" → ")
+            ),
         )
         .with("plan", id.as_str())
         .with("cycle", cycle),
@@ -295,20 +335,33 @@ fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
     for pr in prs {
         let jobs: Vec<&Job> = i.jobs.iter().filter(|j| j.pr_str() == pr).collect();
         let by_key: BTreeMap<&str, &Job> = jobs.iter().map(|j| (j.key.as_str(), *j)).collect();
-        let closure: BTreeMap<&str, BTreeSet<&str>> =
-            jobs.iter().map(|j| (j.key.as_str(), reach(j, &by_key))).collect();
+        let closure: BTreeMap<&str, BTreeSet<&str>> = jobs
+            .iter()
+            .map(|j| (j.key.as_str(), reach(j, &by_key)))
+            .collect();
         let comparable = |j: &Job| {
-            !matches!(j.status.as_str(), "cancelled" | "merged") && !matches!(j.kind.as_str(), "open" | "update")
+            !matches!(j.status.as_str(), "cancelled" | "merged")
+                && !matches!(j.kind.as_str(), "open" | "update")
         };
-        let mut drafts: Vec<&Job> = jobs.iter().copied().filter(|j| j.is_under_review() && comparable(j)).collect();
+        let mut drafts: Vec<&Job> = jobs
+            .iter()
+            .copied()
+            .filter(|j| j.is_under_review() && comparable(j))
+            .collect();
         drafts.sort_by(|a, b| a.key.cmp(&b.key));
         for d in drafts {
             let mine = files(d);
-            for o in jobs.iter().copied().filter(|o| o.key != d.key && comparable(o)) {
+            for o in jobs
+                .iter()
+                .copied()
+                .filter(|o| o.key != d.key && comparable(o))
+            {
                 if o.is_under_review() && o.key < d.key {
                     continue;
                 }
-                if closure[d.key.as_str()].contains(o.key.as_str()) || closure[o.key.as_str()].contains(d.key.as_str()) {
+                if closure[d.key.as_str()].contains(o.key.as_str())
+                    || closure[o.key.as_str()].contains(d.key.as_str())
+                {
                     continue;
                 }
                 let paths: Vec<String> = mine.intersection(&files(o)).cloned().collect();
@@ -336,14 +389,16 @@ fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
 /// Every finding, sorted by catalogue position, then by pr, job, other (None first).
 pub fn run(input: &Input) -> Vec<Finding> {
     let mut findings: Vec<Finding> = RULES.iter().flat_map(|rule| rule(input)).collect();
-    findings.sort_by(|a, b| {
-        (a.rule, &a.pr, &a.job, &a.other).cmp(&(b.rule, &b.pr, &b.job, &b.other))
-    });
+    findings
+        .sort_by(|a, b| (a.rule, &a.pr, &a.job, &a.other).cmp(&(b.rule, &b.pr, &b.job, &b.other)));
     findings
 }
 
 /// The refusal of the first error finding; None when there is none.
 pub fn first_error(findings: &[Finding]) -> Option<CpdError> {
     let f = findings.iter().find(|f| f.severity() == Severity::Error)?;
-    Some(f.details.iter().fold(CpdError::new(f.rule.code(), f.message.clone()), |e, (k, v)| e.with(k, v.clone())))
+    Some(f.details.iter().fold(
+        CpdError::new(f.rule.code(), f.message.clone()),
+        |e, (k, v)| e.with(k, v.clone()),
+    ))
 }
