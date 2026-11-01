@@ -1,5 +1,5 @@
-//! The doctor's tool probes (`tools_with`, `gh_auth_with`, `pi_node_with`) on a [`FakeRunner`]: the call each makes and
-//! how it maps a scripted success, failure and timeout.
+//! The doctor's tool probes (`tools_with`, `gh_auth_with`, `pi_node_with`) on a [`FakeRunner`]: the call each
+//! makes and how it maps a scripted success, failure and timeout.
 
 use std::io::ErrorKind;
 use std::time::Duration;

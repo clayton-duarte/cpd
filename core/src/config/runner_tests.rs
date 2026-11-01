@@ -11,6 +11,7 @@ use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::runner::{FakeRunner, Reply};
 
+/// The deadline the catalog module runs under.
 const DEADLINE: Duration = Duration::from_secs(30);
 
 fn pi() -> PiInstall {

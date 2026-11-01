@@ -1,12 +1,12 @@
-//! `run_with` runs the whole command on the ports it is given, also the areas that read them through `Ports::current()`
-//! (docs/implementing.md, "Ports, Spawn and run_with"): `secret list` runs the 1Password CLI and `host repair` runs
-//! `git`, and both must reach the `FakeRunner` of the test, not a real process.
+//! `run_with` runs the whole command on the ports it is given, also the areas that read them through
+//! `Ports::current()` (docs/implementing.md, "Ports, Spawn and run_with"): `secret list` runs the 1Password CLI and
+//! `host repair` runs `git`, and both must reach the `FakeRunner` of the test, not a real process.
 //!
-//! The commands read the process's environment (`CPD_HOME`, `HOME`, `PATH`, `CPD_SESSION`): a test takes `LOCK`, sets them to
-//! a temporary home and `Drop` puts them back (nextest gives a test a process of its own; under `cargo test` the lock
-//! keeps two of these apart). While red, the real ports run the 1Password CLI (not on a test machine: `NotFound`, at
-//! once) and `git` in a directory that does not exist (it fails at once): nothing real is needed or changed.
-//! `PATH` is the empty temporary home for the same reason: a machine that has the real `op` must never prompt.
+//! The commands read the process's environment (`CPD_HOME`, `HOME`, `PATH`, `CPD_SESSION`): a test takes `LOCK`, sets
+//! them to a temporary home and `Drop` puts them back (nextest gives a test a process of its own; under `cargo test`
+//! the lock keeps two of these apart). While red, the real ports run the 1Password CLI (not on a test machine:
+//! `NotFound`, at once) and `git` in a directory that does not exist (it fails at once): nothing real is needed or
+//! changed. `PATH` is the empty temporary home for the same reason: a machine that has the real `op` must never prompt.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard, PoisonError};

@@ -1,6 +1,6 @@
-//! The durable host supervisor (contract §6.19, P1.10): the engine starts one host per live durable Session, restarts a
-//! dead one within a bound and stops it when the Session sleeps or is archived. On the fake ports: time only through
-//! `clock.advance`, no process, no socket, no tmux.
+//! The durable host supervisor (contract §6.19, P1.10): the engine starts one host per live durable Session,
+//! restarts a dead one within a bound and stops it when the Session sleeps or is archived. On the fake ports:
+//! time only through `clock.advance`, no process, no socket, no tmux.
 
 use std::sync::Arc;
 use std::time::Duration;
