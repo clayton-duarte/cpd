@@ -35,7 +35,7 @@ fn pair() -> Fx {
 /// The outline of the Plan, set by SQL, its `done_when` covering `prs`.
 fn outline(fx: &Fx, prs: &[&str]) {
     let done: serde_json::Map<String, Value> = prs.iter().map(|k| ((*k).to_owned(), json!(["Done"]))).collect();
-    let text = json!({"goal": "Goal", "done_when": done}).to_string();
+    let text = json!({"goal": "Goal", "assumptions": [], "decided": [], "decisions": [], "risks": [], "out_of_scope": [], "done_when": done}).to_string();
     fx.env.sql(&format!("UPDATE plans SET outline = '{text}' WHERE id = 'mine';"));
 }
 
