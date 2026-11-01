@@ -392,9 +392,10 @@ The shadcn registry ships two styles whose files differ by Tailwind version; ver
 the registry JSON (fetched 2026-11-01):
 
 - **`new-york-v4`** — Tailwind v4 syntax (`w-(--sidebar-width)`); use it.
-- **`new-york`** — Tailwind v3; its `w-[--sidebar-width]` does not compile to a working width
-  under this repo’s Tailwind v4 (4.3.3) — the rail collapses to its content width and the
-  panel gains a scrollbar (seen and fixed on 2026-11-01).
+- **`new-york`** — Tailwind v3; its `w-[--sidebar-width]` has no effect under this repo’s
+  Tailwind v4 (4.3.3): Tailwind emits `width: --sidebar-width`, an invalid declaration the
+  browser drops, so the rule has no effect and the rail collapses to its content width, with
+  the panel gaining a scrollbar (seen and fixed on 2026-11-01).
 
 The `new-york-v4` items already import the unified `radix-ui` package (`Slot.Root`, matching
 `web/src/components/ui/button.tsx`) and lucide icons, so the only rewrites when vendoring are
