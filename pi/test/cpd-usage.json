@@ -1503,6 +1503,16 @@
     },
     "required": []
   },
+  "session tail": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "session unarchive": {
     "flags": {
       "--help": false
