@@ -103,7 +103,7 @@ fn plan_pay(fx: &Fx) {
 
 /// `cpd pr add web` on `repo`, in Plan `pay-1`, in this process.
 fn pr_add(fx: &Fx, repo: &Path) -> crate::common::Run {
-    fx.cpd(&["pr", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Change web", "--shape", "config", "--plan", "pay-1"])
+    fx.cpd(&["workflow", "add", "web", "--repo", repo.to_str().unwrap(), "--title", "Change web", "--shape", "config", "--plan", "pay-1"])
 }
 
 // ---- git_repo
@@ -244,7 +244,7 @@ fn pr_add_through_fx_cpd_keys_a_keyed_repo_of_the_route() {
 
     let out = pr_add(&fx, &repo).ok();
 
-    assert_eq!(out["pr"]["base"], "main", "{out}");
+    assert_eq!(out["workflow"]["base"], "main", "{out}");
     no_child();
 }
 

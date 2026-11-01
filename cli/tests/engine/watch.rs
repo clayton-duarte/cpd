@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): the lock
-//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the PR start, is in pr_start.rs) on a
+//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the Workflow start, is in workflow_start.rs) on a
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 use crate::common;
@@ -1898,7 +1898,7 @@ fn engine_cancelled_open_job() -> Ip {
     fx
 }
 
-/// The ways on after that cancel (§3.8, §7.6): `pr open --pr repo` is the repair and is not refused `open_job_live` (no `open` Job is
+/// The ways on after that cancel (§3.8, §7.6): `pr open --workflow repo` is the repair and is not refused `open_job_live` (no `open` Job is
 /// live); E4 still adds nothing, before or after it.
 #[test]
 fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_job_live() {
@@ -1909,7 +1909,7 @@ fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_j
     let keys = |fx: &Ip| -> Vec<String> { fx.jobs_of_kind("open").into_iter().map(|(key, _)| key).collect() };
     assert_eq!(keys(&fx), ["open-repo", "open-web"], "E4 added no fresh open Job for PR repo");
 
-    let run = fx.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"]);
+    let run = fx.cpd(&["pr", "open", "--workflow", "repo", "--plan", "pay"]);
     fx.watch_ticks(2).unwrap();
 
     let json = run.json();
@@ -1919,7 +1919,7 @@ fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_j
     assert_eq!(keys(&fx), ["open-repo", "open-repo-2", "open-web"], "no open Job for PR repo but the one `pr open` queued");
 }
 
-/// The other way on is `pr cancel`: it cancels the PR's own queued `open` Job with the PR, and E4 re-adds nothing (the PR is no longer
+/// The other way on is `workflow cancel`: it cancels the Workflow's own queued `open` Job with the Workflow, and E4 re-adds nothing (the Workflow is no longer
 /// `dispatch`), over several ticks. PR `repo` is the one the engine is seen to look at.
 #[test]
 fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
@@ -1928,7 +1928,7 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
     fx.add_merged_api();
     fx.add_pr("web", "Show the receipt");
     fx.add_cpd_job_in("web", "open-web", "open", "");
-    fx.cpd(&["pr", "cancel", "web", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "cancel", "web", "--plan", "pay"]).ok();
 
     fx.watch_first_tick().unwrap();
     assert!(fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-repo"), "the open Job of PR repo: {:?}", fx.jobs_of_kind("open"));
@@ -2038,7 +2038,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["pr"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
+    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["workflow"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
     assert_eq!(fx.events("pr-feedback").len(), 0, "a conflict is no pr-feedback reason any more");
     assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE plan = 'pay'"), "open", "the PR's status does not change");
 }
@@ -2654,8 +2654,8 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
 
     assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'repo'"), "merged");
     assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'web'"), "dispatch");
-    assert_eq!(fx.count("pr-started"), 1);
-    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert_eq!(fx.count("workflow-started"), 1);
+    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'workflow-started'"));
     assert!(lead.exists(), "the poll that saw the merge leaves the Lead worktree to the janitor");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }

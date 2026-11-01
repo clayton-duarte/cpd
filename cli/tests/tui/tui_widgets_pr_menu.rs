@@ -320,7 +320,7 @@ fn picking_post_runs_cpd_pr_post_with_the_pr_key_and_plan_and_opens_no_popup() {
     cockpit(&fx);
     let screen = first_rows(&fx);
     run(&fx, pick(&screen, "shop#4 ready for user review", 0));
-    assert_eq!(cpd_calls(&fx), [words(&["pr", "post", "--pr", PR_KEY, "--plan", "ship"])]);
+    assert_eq!(cpd_calls(&fx), [words(&["pr", "post", "--workflow", PR_KEY, "--plan", "ship"])]);
     assert!(popups(&fx).is_empty(), "{:?}", popups(&fx));
 }
 

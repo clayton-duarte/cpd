@@ -165,7 +165,7 @@ fn cancelled_pr_box_is_drawn_muted_after_live_ones() {
     let fx = env();
     // `aaa` sorts first by key: it is drawn after `web` only because it is cancelled
     plan(&fx, &[("aaa", "aaa-repo"), ("web", "web-repo")], &[("aaa", "o1", "cancelled", "work", &[]), ("web", "w", "queued", "work", &[])]);
-    fx.cpd(&["pr", "cancel", "aaa", "--plan", "ship"]).ok();
+    fx.cpd(&["workflow", "cancel", "aaa", "--plan", "ship"]).ok();
     let buf = draw(&fx);
     let screen = rows(&buf);
     let text = screen.join("\n");
