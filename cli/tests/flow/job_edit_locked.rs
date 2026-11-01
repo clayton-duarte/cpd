@@ -3,8 +3,8 @@
 use serde_json::json;
 
 use super::job::{
-    add_touching, count, drafted, engine, events, fixture, job, job_add, job_row, lock, locked_fingerprint_of, locked_tdd, spec_file,
-    test_spec_file, touches_fx, write_spec,
+    add_touching, count, drafted, engine, events, fixture, job, job_add, job_row, lock,
+    locked_fingerprint_of, locked_tdd, spec_file, test_spec_file, touches_fx, write_spec,
 };
 use crate::common::fx::Fx;
 use crate::common::refused;
@@ -23,7 +23,11 @@ fn locked() -> Fx {
 }
 
 fn writes(fx: &Fx) -> (i64, i64, i64) {
-    (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "history"))
+    (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "history"),
+    )
 }
 
 #[test]
@@ -35,19 +39,29 @@ fn a_queued_job_with_no_attempt_takes_a_new_spec_and_its_fingerprint_follows() {
     assert_eq!(out["job"], json!({"key": "a", "status": "queued"}), "{out}");
     assert_eq!(out["fields"], json!(["goal", "acceptance"]), "{out}");
     assert_eq!(job_row(&fx.env, "pl", "a", "goal"), "New goal.");
-    assert_eq!(job_row(&fx.env, "pl", "a", "acceptance"), "[\"cargo test\",\"more\"]");
+    assert_eq!(
+        job_row(&fx.env, "pl", "a", "acceptance"),
+        "[\"cargo test\",\"more\"]"
+    );
     // What is Locked is as it was.
     assert_eq!(job_row(&fx.env, "pl", "a", "title"), "Title of a");
     assert_eq!(job_row(&fx.env, "pl", "a", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "kind"), "work");
     assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
-    assert_eq!(fx.env.query::<String>("SELECT group_concat(needs) FROM dependencies WHERE job = 'b'"), "a");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT group_concat(needs) FROM dependencies WHERE job = 'b'"),
+        "a"
+    );
     // The fingerprint follows the new Spec.
     let new = job_row(&fx.env, "pl", "a", "fingerprint");
     assert_ne!(new, old);
     assert_eq!(new, json!(locked_fingerprint_of(&fx.env, "a")));
-    assert_eq!(fx.cpd(&["plan", "show", "--plan", "pl"]).ok()["tamper"], json!([]));
+    assert_eq!(
+        fx.cpd(&["plan", "show", "--plan", "pl"]).ok()["tamper"],
+        json!([])
+    );
 }
 
 #[test]
@@ -60,7 +74,10 @@ fn the_edit_is_one_job_edited_event_and_history_keeps_the_old_text() {
     let edited = events(&fx, "job-edited");
     let last = edited.last().unwrap();
     assert_eq!(edited.len(), 1, "the drafts were only added, never edited");
-    assert_eq!((&last["job"], &last["data"]), (&json!("a"), &json!({"fields": ["goal", "acceptance"]})));
+    assert_eq!(
+        (&last["job"], &last["data"]),
+        (&json!("a"), &json!({"fields": ["goal", "acceptance"]}))
+    );
     assert!(last["text"].as_str().unwrap().contains("Locked"), "{last}");
     assert!(count(&fx.env, "history") > history_before);
     let (before, after): (String, String) = fx.env.read(|c| {
@@ -87,7 +104,10 @@ fn an_edit_that_changes_nothing_writes_nothing() {
     // The same Spec as the Job was locked with, on a Job never edited.
     let same = spec_file(&fx.env);
     let before = writes(&fx);
-    assert_eq!(job(&fx, &["edit", "b", "--spec", &same], "pl").ok()["already"], true);
+    assert_eq!(
+        job(&fx, &["edit", "b", "--spec", &same], "pl").ok()["already"],
+        true
+    );
     assert_eq!(writes(&fx), before);
 }
 
@@ -126,8 +146,18 @@ fn a_job_that_has_an_attempt_or_is_not_queued_stays_locked() {
     // `f`, never started, is the one that can be edited: first, so the refusals below are of the Jobs that started.
     job(&fx, &["edit", "f", "--spec", &spec], "pl").ok();
     let before = writes(&fx);
-    for (key, status) in [("a", "running"), ("b", "failed"), ("c", "merged"), ("d", "cancelled"), ("e", "queued")] {
-        let e = refused(&job(&fx, &["edit", key, "--spec", &spec], "pl"), "job_locked", 3);
+    for (key, status) in [
+        ("a", "running"),
+        ("b", "failed"),
+        ("c", "merged"),
+        ("d", "cancelled"),
+        ("e", "queued"),
+    ] {
+        let e = refused(
+            &job(&fx, &["edit", key, "--spec", &spec], "pl"),
+            "job_locked",
+            3,
+        );
         assert_eq!(e["details"]["status"], status, "{key}");
         assert!(!e["details"]["attempts"].is_null(), "{key}: {e}");
         assert_eq!(job_row(&fx.env, "pl", key, "goal"), "Do it.", "{key}");
@@ -150,7 +180,11 @@ fn an_open_or_update_job_is_never_edited() {
     let spec = new_spec(&fx, "new.json");
     let before = writes(&fx);
     for key in ["open-x", "update-x"] {
-        refused(&job(&fx, &["edit", key, "--spec", &spec], "pl"), "job_locked", 3);
+        refused(
+            &job(&fx, &["edit", key, "--spec", &spec], "pl"),
+            "job_locked",
+            3,
+        );
         assert_eq!(job_row(&fx.env, "pl", key, "goal"), "g", "{key}");
     }
     assert_eq!(writes(&fx), before);
@@ -162,9 +196,18 @@ fn a_worker_cannot_edit_a_locked_job() {
     let spec = new_spec(&fx, "new.json");
     let args = ["job", "edit", "a", "--spec", spec.as_str(), "--plan", "pl"];
     // The Lead's edit works (and is the one that moves the Spec).
-    fx.cpd_with(fx.env.root(), &["job", "edit", "b", "--spec", spec.as_str(), "--plan", "pl"], &[]).ok();
+    fx.cpd_with(
+        fx.env.root(),
+        &["job", "edit", "b", "--spec", spec.as_str(), "--plan", "pl"],
+        &[],
+    )
+    .ok();
     let before = writes(&fx);
-    refused(&fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "a-a1")]), "not_a_lead", 3);
+    refused(
+        &fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "a-a1")]),
+        "not_a_lead",
+        3,
+    );
     assert_eq!(writes(&fx), before);
     assert_eq!(job_row(&fx.env, "pl", "a", "goal"), "Do it.");
     fx.cpd_with(fx.env.root(), &args, &[]).ok();
@@ -181,9 +224,17 @@ fn the_new_spec_is_checked_as_a_drafts_is() {
     job(&fx, &["edit", "a", "--spec", &good], "pl").ok();
     let before = writes(&fx);
     let unknown = write_spec(&fx.env, "unknown.json", &json!({"goal": "g", "context": "c", "touches": ["src/a.rs"], "acceptance": ["t"], "out_of_scope": [], "bogus": 1}).to_string());
-    refused(&job(&fx, &["edit", "a", "--spec", &unknown], "pl"), "spec_invalid", 2);
+    refused(
+        &job(&fx, &["edit", "a", "--spec", &unknown], "pl"),
+        "spec_invalid",
+        2,
+    );
     let missing = write_spec(&fx.env, "missing.json", &json!({"goal": "g2", "context": "c", "touches": ["nope/x.rs"], "acceptance": ["t"], "out_of_scope": []}).to_string());
-    let e = refused(&job(&fx, &["edit", "a", "--spec", &missing], "pl"), "touches_missing", 3);
+    let e = refused(
+        &job(&fx, &["edit", "a", "--spec", &missing], "pl"),
+        "touches_missing",
+        3,
+    );
     assert_eq!(e["details"]["missing"], json!(["nope/x.rs"]), "{e}");
     assert_eq!(writes(&fx), before);
     assert_eq!(job_row(&fx.env, "pl", "a", "goal"), "New goal.");
@@ -194,9 +245,21 @@ fn the_new_spec_is_checked_as_a_drafts_is() {
     locked_tdd(&fx);
     lock(&fx.env, "pl");
     let plain = new_spec(&fx, "plain.json");
-    refused(&job(&fx, &["edit", "t", "--spec", &plain], "pl"), "spec_invalid", 2);
-    let tests = test_spec_file(&fx.env, "t2.json", json!(["t::two"]), json!(["tests/t2.rs"]));
+    refused(
+        &job(&fx, &["edit", "t", "--spec", &plain], "pl"),
+        "spec_invalid",
+        2,
+    );
+    let tests = test_spec_file(
+        &fx.env,
+        "t2.json",
+        json!(["t::two"]),
+        json!(["tests/t2.rs"]),
+    );
     job(&fx, &["edit", "t", "--spec", &tests], "pl").ok();
     assert_eq!(job_row(&fx.env, "pl", "t", "tests"), "[\"t::two\"]");
-    assert_eq!(job_row(&fx.env, "pl", "t", "test_files"), "[\"tests/t2.rs\"]");
+    assert_eq!(
+        job_row(&fx.env, "pl", "t", "test_files"),
+        "[\"tests/t2.rs\"]"
+    );
 }

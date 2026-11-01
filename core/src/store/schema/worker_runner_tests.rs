@@ -49,15 +49,36 @@ fn attempt(n: u32, columns: &str, values: &str) -> String {
 fn attempts_gain_runner_defaulting_to_pi_and_a_null_worker_pid() {
     let (_dir, mut store) = fresh();
     write(&mut store, &attempt(1, "", "")).expect("an Attempt that names neither column");
-    let (runner, pid): (String, Option<i64>) =
-        store.read(|c| Ok(c.query_row("SELECT runner, worker_pid FROM attempts", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let (runner, pid): (String, Option<i64>) = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT runner, worker_pid FROM attempts", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?,
+            )
+        })
+        .unwrap();
     assert_eq!((runner.as_str(), pid), ("pi", None));
 
-    write(&mut store, "UPDATE attempts SET runner = 'durable', worker_pid = 4242;").expect("a durable Worker with its pid");
-    let (runner, pid): (String, Option<i64>) =
-        store.read(|c| Ok(c.query_row("SELECT runner, worker_pid FROM attempts", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    write(
+        &mut store,
+        "UPDATE attempts SET runner = 'durable', worker_pid = 4242;",
+    )
+    .expect("a durable Worker with its pid");
+    let (runner, pid): (String, Option<i64>) = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT runner, worker_pid FROM attempts", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?,
+            )
+        })
+        .unwrap();
     assert_eq!((runner.as_str(), pid), ("durable", Some(4242)));
-    assert!(NAMED.iter().any(|m| m.name.ends_with("-worker-runner")), "the migration worker-runner is declared");
+    assert!(
+        NAMED.iter().any(|m| m.name.ends_with("-worker-runner")),
+        "the migration worker-runner is declared"
+    );
 }
 
 #[test]

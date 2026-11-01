@@ -84,7 +84,12 @@ fn stacked_ready_inbox_opens_no_pr_ready_when_the_base_is_unknown() {
     for _ in 0..2 {
         tick(&mut fx);
     }
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM pull_requests WHERE base_ref IS NULL OR default_branch IS NULL"), 3);
+    assert_eq!(
+        fx.query::<i64>(
+            "SELECT count(*) FROM pull_requests WHERE base_ref IS NULL OR default_branch IS NULL"
+        ),
+        3
+    );
     assert_eq!(fx.query::<i64>(PR_READY_OPEN), 0);
 }
 

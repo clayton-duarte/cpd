@@ -35,7 +35,15 @@ fn attempt(fx: &mut Fx, plan: &str, job: &str, number: u32) {
 }
 
 /// Escalation `<attempt>-q<number>` of `plan`, asked `minutes` ago, in `status`.
-fn ask(fx: &mut Fx, plan: &str, attempt: &str, number: u32, question: &str, status: &str, minutes: i64) {
+fn ask(
+    fx: &mut Fx,
+    plan: &str,
+    attempt: &str,
+    number: u32,
+    question: &str,
+    status: &str,
+    minutes: i64,
+) {
     let (cols, vals) = match status {
         "expired" => (", expired_at", format!(", '{}'", ago(0))),
         "answered" => (", answer, answered_at", format!(", 'No.', '{}'", ago(0))),
@@ -53,7 +61,15 @@ fn ask(fx: &mut Fx, plan: &str, attempt: &str, number: u32, question: &str, stat
 fn expired(fx: &mut Fx, key: &str, questions: &[&str], minutes: i64) {
     attempt(fx, "pay", key, 1);
     for (i, q) in questions.iter().enumerate() {
-        ask(fx, "pay", &format!("{key}-a1"), i as u32 + 1, q, "expired", minutes - i as i64);
+        ask(
+            fx,
+            "pay",
+            &format!("{key}-a1"),
+            i as u32 + 1,
+            q,
+            "expired",
+            minutes - i as i64,
+        );
     }
 }
 
@@ -65,7 +81,10 @@ fn text(plan: &str, job: &str, n: usize, a: usize, m: i64, q: &str) -> String {
 }
 
 fn only(fx: &mut Fx, plan: &str, job: &str, n: usize, a: usize, m: i64, q: &str) {
-    assert_eq!(messages(fx), [("mgr1".to_owned(), None, true, text(plan, job, n, a, m, q))]);
+    assert_eq!(
+        messages(fx),
+        [("mgr1".to_owned(), None, true, text(plan, job, n, a, m, q))]
+    );
 }
 
 /// `prefix` padded with `k` to `n` characters, then `tail`.
@@ -79,7 +98,10 @@ fn pad(prefix: &str, n: usize, tail: &str) -> String {
 
 fn told(fx: &mut Fx, job: &str) -> usize {
     let head = format!("Job pay/{job} asked ");
-    messages(fx).iter().filter(|m| m.3.starts_with(&head)).count()
+    messages(fx)
+        .iter()
+        .filter(|m| m.3.starts_with(&head))
+        .count()
 }
 
 #[test]
@@ -147,13 +169,36 @@ fn the_key_is_the_first_sixty_characters_with_digits_masked() {
     for j in ["tail", "digit", "count", "char", "bytes", "uni"] {
         job(&mut fx, j);
     }
-    expired(&mut fx, "tail", &[&format!("{long}aaa"), &format!("{long}bbb"), &format!("{long}ccc")], 30);
+    expired(
+        &mut fx,
+        "tail",
+        &[
+            &format!("{long}aaa"),
+            &format!("{long}bbb"),
+            &format!("{long}ccc"),
+        ],
+        30,
+    );
     expired(&mut fx, "digit", &["round 1", "round 2", "round 3"], 30);
     expired(&mut fx, "count", &["round 9", "round 10", "round 11"], 30);
     expired(&mut fx, "char", &["round x", "round y", "round z"], 30);
     // The 60th character differs: a cut of 60 bytes would drop it (the é takes two) and make the keys equal.
-    expired(&mut fx, "bytes", &[&format!("{uni}x"), &format!("{uni}y"), &format!("{uni}z")], 30);
-    expired(&mut fx, "uni", &[&format!("{uni}x{uni}"), &format!("{uni}x{uni}"), &format!("{uni}x")], 30);
+    expired(
+        &mut fx,
+        "bytes",
+        &[&format!("{uni}x"), &format!("{uni}y"), &format!("{uni}z")],
+        30,
+    );
+    expired(
+        &mut fx,
+        "uni",
+        &[
+            &format!("{uni}x{uni}"),
+            &format!("{uni}x{uni}"),
+            &format!("{uni}x"),
+        ],
+        30,
+    );
 
     tick(&mut fx);
     let all = messages(&mut fx);
@@ -164,7 +209,10 @@ fn the_key_is_the_first_sixty_characters_with_digits_masked() {
     assert_eq!(told(&mut fx, "bytes"), 0, "{all:?}");
     assert_eq!(told(&mut fx, "uni"), 1, "{all:?}");
     let q: String = format!("{uni}x{uni}").chars().take(60).collect();
-    assert!(all.iter().any(|m| m.3 == text("pay", "uni", 3, 1, 30, &q)), "{all:?}");
+    assert!(
+        all.iter().any(|m| m.3 == text("pay", "uni", 3, 1, 30, &q)),
+        "{all:?}"
+    );
     assert_eq!(all.len(), 3, "{all:?}");
 }
 
@@ -259,10 +307,26 @@ fn a_job_with_two_repeated_questions_is_one_message_naming_the_larger_group() {
     job(&mut fx, "api");
     attempt(&mut fx, "pay", "api", 1);
     for i in 1..=4 {
-        ask(&mut fx, "pay", "api-a1", i, "Which schema?", "expired", 30 - i as i64);
+        ask(
+            &mut fx,
+            "pay",
+            "api-a1",
+            i,
+            "Which schema?",
+            "expired",
+            30 - i as i64,
+        );
     }
     for i in 5..=7 {
-        ask(&mut fx, "pay", "api-a1", i, "Which port?", "expired", 40 - i as i64);
+        ask(
+            &mut fx,
+            "pay",
+            "api-a1",
+            i,
+            "Which port?",
+            "expired",
+            40 - i as i64,
+        );
     }
     tick(&mut fx);
     only(&mut fx, "pay", "api", 4, 1, 29, "Which schema?");
@@ -273,10 +337,26 @@ fn a_job_with_two_repeated_questions_is_one_message_naming_the_larger_group() {
     job(&mut fx, "api");
     attempt(&mut fx, "pay", "api", 1);
     for i in 1..=3 {
-        ask(&mut fx, "pay", "api-a1", i, "Which schema?", "expired", 30 - i as i64);
+        ask(
+            &mut fx,
+            "pay",
+            "api-a1",
+            i,
+            "Which schema?",
+            "expired",
+            30 - i as i64,
+        );
     }
     for i in 4..=6 {
-        ask(&mut fx, "pay", "api-a1", i, "Which port?", "expired", 50 - i as i64);
+        ask(
+            &mut fx,
+            "pay",
+            "api-a1",
+            i,
+            "Which port?",
+            "expired",
+            50 - i as i64,
+        );
     }
     tick(&mut fx);
     only(&mut fx, "pay", "api", 3, 1, 46, "Which port?");

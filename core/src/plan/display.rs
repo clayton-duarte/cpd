@@ -35,7 +35,11 @@ pub struct Display {
 
 /// A Workflow of the Plan as the reference its own Plan uses, or `<plan>/<key>`.
 fn reference(own: &str, plan: &str, key: &str) -> String {
-    if own == plan { key.to_owned() } else { format!("{plan}/{key}") }
+    if own == plan {
+        key.to_owned()
+    } else {
+        format!("{plan}/{key}")
+    }
 }
 
 impl Display {
@@ -58,14 +62,29 @@ impl Display {
             "SELECT json_extract(data, '$.workflow'), json_extract(data, '$.superseded_by') FROM events
               WHERE kind = 'workflow-cancelled' AND plan = ?1 AND json_extract(data, '$.superseded_by') IS NOT NULL ORDER BY id",
         )?;
-        for row in stmt.query_map([own], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        for row in stmt.query_map([own], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
             let (key, by) = row?;
             display.superseded.insert(key, by);
         }
-        let mut stmt = conn.prepare("SELECT job, number, tier, status FROM attempts WHERE plan = ?1 ORDER BY job, number")?;
-        for row in stmt.query_map([own], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+        let mut stmt = conn.prepare(
+            "SELECT job, number, tier, status FROM attempts WHERE plan = ?1 ORDER BY job, number",
+        )?;
+        for row in stmt.query_map([own], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u32>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })? {
             let (job, number, tier, status) = row?;
-            display.attempts.entry(job).or_default().push((number, tier, status));
+            display
+                .attempts
+                .entry(job)
+                .or_default()
+                .push((number, tier, status));
         }
         display.retrying = crate::job::retries_pending(conn, plan)?;
         Ok(display)
@@ -87,10 +106,25 @@ impl Display {
     /// The Tier the Job `job` is shown at (the Plan view pill, `plan render`): the Tier of its active Attempt, else its
     /// `retry_tier` while a retry has no Attempt since, else the latest Attempt's Tier, else its `tier`.
     pub fn job_tier(&self, job: &Job) -> Option<String> {
-        let attempts = self.attempts.get(job.key.as_str()).map(Vec::as_slice).unwrap_or_default();
-        let active = attempts.iter().find(|(_, _, status)| status != "ended").map(|(_, tier, _)| tier.clone());
-        let retry = || self.retrying.contains(job.key.as_str()).then(|| job.retry_tier.clone()).flatten();
-        active.or_else(retry).or_else(|| attempts.last().map(|(_, tier, _)| tier.clone())).or_else(|| job.tier.clone())
+        let attempts = self
+            .attempts
+            .get(job.key.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let active = attempts
+            .iter()
+            .find(|(_, _, status)| status != "ended")
+            .map(|(_, tier, _)| tier.clone());
+        let retry = || {
+            self.retrying
+                .contains(job.key.as_str())
+                .then(|| job.retry_tier.clone())
+                .flatten()
+        };
+        active
+            .or_else(retry)
+            .or_else(|| attempts.last().map(|(_, tier, _)| tier.clone()))
+            .or_else(|| job.tier.clone())
     }
 
     /// The Workflow that superseded the cancelled Workflow `key`, as a reference.
@@ -108,7 +142,14 @@ impl Display {
         match unfinished(jobs, job) {
             Some(keys) => blockers.extend(keys),
             None => blockers.extend(
-                job.needs.iter().filter(|n| jobs.iter().any(|j| &j.key == *n && !matches!(j.status.as_str(), "merged" | "cancelled"))).cloned(),
+                job.needs
+                    .iter()
+                    .filter(|n| {
+                        jobs.iter().any(|j| {
+                            &j.key == *n && !matches!(j.status.as_str(), "merged" | "cancelled")
+                        })
+                    })
+                    .cloned(),
             ),
         }
         blockers.sort();

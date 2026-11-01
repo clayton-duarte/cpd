@@ -40,7 +40,10 @@ fn incident_includes(engine: &mut Engine, plan: &str) {
     engine
         .store
         .write("test", move |tx| {
-            tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES (?1, cpd_txn())", [plan.as_str()])?;
+            tx.execute(
+                "INSERT INTO incident_plans (plan, started_txn) VALUES (?1, cpd_txn())",
+                [plan.as_str()],
+            )?;
             Ok(())
         })
         .unwrap();
@@ -92,7 +95,8 @@ fn open_jobs(engine: &mut Engine) -> Vec<(String, String)> {
     engine
         .store
         .read(|conn| {
-            let mut stmt = conn.prepare("SELECT plan, pr FROM jobs WHERE kind = 'open' ORDER BY plan, pr")?;
+            let mut stmt =
+                conn.prepare("SELECT plan, pr FROM jobs WHERE kind = 'open' ORDER BY plan, pr")?;
             Ok(stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -103,7 +107,10 @@ fn open_jobs(engine: &mut Engine) -> Vec<(String, String)> {
 /// Whether incident mode holds Plan `plan` for E4 and E7 (the scoping seam).
 fn held(engine: &mut Engine, plan: &str) -> bool {
     let plan = PlanId::parse(plan).unwrap();
-    engine.store.read(|conn| Ok(engine::incident_holds_plan(conn, &plan))).unwrap()
+    engine
+        .store
+        .read(|conn| Ok(engine::incident_holds_plan(conn, &plan)))
+        .unwrap()
 }
 
 #[test]
@@ -119,10 +126,22 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
     engine
         .store
         .write("test", |tx| {
-            assert!(schedule::incident_starts(tx, &pay, false), "off: a non-urgent Job starts");
-            assert!(schedule::incident_starts(tx, &ops, false), "off: a non-urgent Job of any Plan starts");
-            assert!(schedule::incident_starts(tx, &pay, true), "off: an urgent Job starts");
-            assert!(schedule::incident_starts(tx, &ops, true), "off: an urgent Job of any Plan starts");
+            assert!(
+                schedule::incident_starts(tx, &pay, false),
+                "off: a non-urgent Job starts"
+            );
+            assert!(
+                schedule::incident_starts(tx, &ops, false),
+                "off: a non-urgent Job of any Plan starts"
+            );
+            assert!(
+                schedule::incident_starts(tx, &pay, true),
+                "off: an urgent Job starts"
+            );
+            assert!(
+                schedule::incident_starts(tx, &ops, true),
+                "off: an urgent Job of any Plan starts"
+            );
             Ok(())
         })
         .unwrap();
@@ -134,10 +153,22 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
     engine
         .store
         .write("test", |tx| {
-            assert!(schedule::incident_starts(tx, &pay, false), "on: a non-urgent Job of an incident Plan starts");
-            assert!(schedule::incident_starts(tx, &pay, true), "on: an urgent Job of an incident Plan starts");
-            assert!(!schedule::incident_starts(tx, &ops, false), "on: a non-urgent Job of a held Plan waits");
-            assert!(schedule::incident_starts(tx, &ops, true), "on: an explicit urgent Job still starts");
+            assert!(
+                schedule::incident_starts(tx, &pay, false),
+                "on: a non-urgent Job of an incident Plan starts"
+            );
+            assert!(
+                schedule::incident_starts(tx, &pay, true),
+                "on: an urgent Job of an incident Plan starts"
+            );
+            assert!(
+                !schedule::incident_starts(tx, &ops, false),
+                "on: a non-urgent Job of a held Plan waits"
+            );
+            assert!(
+                schedule::incident_starts(tx, &ops, true),
+                "on: an explicit urgent Job still starts"
+            );
             Ok(())
         })
         .unwrap();
@@ -172,7 +203,19 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     assert!(engine::incident_holds(engine, Step::E9), "E9 holds");
     assert!(engine::incident_holds(engine, Step::E10), "E10 holds");
     assert!(engine::incident_holds(engine, Step::E11), "E11 holds");
-    for step in [Step::E1, Step::E2, Step::E4, Step::E5, Step::E7, Step::E8, Step::E12, Step::E13] {
-        assert!(!engine::incident_holds(engine, step), "{step} is not held machine-wide");
+    for step in [
+        Step::E1,
+        Step::E2,
+        Step::E4,
+        Step::E5,
+        Step::E7,
+        Step::E8,
+        Step::E12,
+        Step::E13,
+    ] {
+        assert!(
+            !engine::incident_holds(engine, step),
+            "{step} is not held machine-wide"
+        );
     }
 }

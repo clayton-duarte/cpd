@@ -39,7 +39,10 @@ fn pr_add_refuses_a_malformed_jira_key() {
     let fx = crud("plan");
     let repo = fx.pay.to_str().unwrap().to_owned();
 
-    fx.pr(&["add", "good", "--repo", &repo, "--title", "T", "--jira", "ABC-1"]).ok();
+    fx.pr(&[
+        "add", "good", "--repo", &repo, "--title", "T", "--jira", "ABC-1",
+    ])
+    .ok();
     for bad in ["abc-1", "A-1", "ABC", "ABC-", "ABC-x"] {
         let run = fx.pr(&["add", "k", "--repo", &repo, "--title", "T", "--jira", bad]);
         assert_eq!(code(&run), ("usage".into(), 2), "{bad}");
@@ -107,7 +110,11 @@ fn pr_edit_with_no_flag_names_jira_among_the_flags() {
     let run = fx.cpd(&["workflow", "edit", "repo", "--plan", "pay"]);
 
     assert_eq!(code(&run), ("nothing_to_edit".into(), 2));
-    assert!(run.error()["message"].as_str().unwrap().contains("--jira"), "{}", run.error()["message"]);
+    assert!(
+        run.error()["message"].as_str().unwrap().contains("--jira"),
+        "{}",
+        run.error()["message"]
+    );
 }
 
 #[test]
@@ -125,7 +132,11 @@ fn plan_show_and_pr_view_print_the_prs_jira_key() {
 #[test]
 fn a_plans_jira_key_is_never_its_prs_ticket() {
     let fx = poll_fx("plan");
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE plans SET jira = 'PLAN-1' WHERE id = 'pay'")?)).unwrap();
+    fx.store()
+        .write("fixture", |tx| {
+            Ok(tx.execute_batch("UPDATE plans SET jira = 'PLAN-1' WHERE id = 'pay'")?)
+        })
+        .unwrap();
 
     let shown = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
 

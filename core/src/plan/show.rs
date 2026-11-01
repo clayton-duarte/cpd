@@ -103,7 +103,15 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     })))
 }
 
-type Snapshot = (PlanRow, Vec<Value>, Vec<Job>, BTreeMap<String, Vec<Value>>, Vec<Value>, Value, i64);
+type Snapshot = (
+    PlanRow,
+    Vec<Value>,
+    Vec<Job>,
+    BTreeMap<String, Vec<Value>>,
+    Vec<Value>,
+    Value,
+    i64,
+);
 
 /// Everything `plan show` prints that is read from the database, each row read once.
 fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
@@ -185,8 +193,10 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok(json!({"id": r.get::<_, String>(0)?, "attempt": r.get::<_, String>(1)?,
-                      "question": r.get::<_, String>(2)?, "asked_at": r.get::<_, String>(3)?}))
+            Ok(
+                json!({"id": r.get::<_, String>(0)?, "attempt": r.get::<_, String>(1)?,
+                      "question": r.get::<_, String>(2)?, "asked_at": r.get::<_, String>(3)?}),
+            )
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -235,11 +245,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ledger(dir.path(), 1);
         let id = PlanId::parse("plan-1").unwrap();
-        let (shown, seen) = store.read(|conn| Ok(statements(conn, || snapshot(conn, &id)))).unwrap();
-        assert_eq!(shown.unwrap().5["current"], false, "the fixture's review is of another fingerprint");
+        let (shown, seen) = store
+            .read(|conn| Ok(statements(conn, || snapshot(conn, &id))))
+            .unwrap();
+        assert_eq!(
+            shown.unwrap().5["current"],
+            false,
+            "the fixture's review is of another fingerprint"
+        );
         let mut once = BTreeSet::new();
         for sql in &seen {
-            assert!(once.insert(sql), "read twice: {sql}\nall:\n{}", seen.join("\n"));
+            assert!(
+                once.insert(sql),
+                "read twice: {sql}\nall:\n{}",
+                seen.join("\n")
+            );
         }
     }
 
@@ -248,11 +268,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ledger(dir.path(), 1);
         let id = PlanId::parse("plan-1").unwrap();
-        let fingerprint = store.read(|conn| super::super::plan_fingerprint(conn, &id)).unwrap();
-        store
-            .write("fixture", |tx| Ok(tx.execute("UPDATE plan_reviews SET fingerprint = ?1", [&fingerprint]).map(|_| ())?))
+        let fingerprint = store
+            .read(|conn| super::super::plan_fingerprint(conn, &id))
             .unwrap();
-        let current = |store: &mut crate::store::Store| store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone();
+        store
+            .write("fixture", |tx| {
+                Ok(tx
+                    .execute("UPDATE plan_reviews SET fingerprint = ?1", [&fingerprint])
+                    .map(|_| ())?)
+            })
+            .unwrap();
+        let current = |store: &mut crate::store::Store| {
+            store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone()
+        };
         assert_eq!(current(&mut store), true);
         store.write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
         assert_eq!(current(&mut store), false, "a Workflow's base is in the fingerprint");

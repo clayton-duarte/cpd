@@ -10,11 +10,12 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::{ContextRow, Select};
+use crate::config::WorkerRunner;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::host::layout::context_window;
 use crate::host::Tmux;
+use crate::host::layout::context_window;
 use crate::ids::{ContextId, SessionId};
 use crate::output::Output;
 use crate::session::{lead_spawn, no_cockpit};
@@ -27,6 +28,9 @@ pub struct ManagerArgs {
     /// The User creates the Manager: it starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
+    /// The Manager's runner; default the config key `manager_runner`
+    #[arg(long, value_name = "pi|durable")]
+    runner: Option<WorkerRunner>,
 }
 
 /// The Context's live Manager, as `context manager` needs it.
@@ -36,25 +40,44 @@ struct Live {
     cwd: String,
     state: String,
     pane: Option<String>,
+    runner: String,
 }
 
 fn live(conn: &rusqlite::Connection, context: &ContextId) -> Result<Option<Live>, CpdError> {
-    Ok(conn
-        .query_row(
-            "SELECT id, name, cwd, state, tmux_pane FROM sessions
+    conn.query_row(
+        "SELECT id, name, cwd, state, tmux_pane, runner FROM sessions
               WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
-            [context.as_str()],
-            |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )
-        .optional()?
-        .map(|(id, name, cwd, state, pane)| {
-            Ok::<_, CpdError>(Live { id: SessionId::parse(&id)?, name, cwd, state, pane })
+        [context.as_str()],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(id, name, cwd, state, pane, runner)| {
+        Ok::<_, CpdError>(Live {
+            id: SessionId::parse(&id)?,
+            name,
+            cwd,
+            state,
+            pane,
+            runner,
         })
-        .transpose()?)
+    })
+    .transpose()
 }
 
 /// The window of the Session's latest `session-moved` Event, if any.
-fn last_window(conn: &rusqlite::Connection, session: &SessionId) -> Result<Option<String>, CpdError> {
+fn last_window(
+    conn: &rusqlite::Connection,
+    session: &SessionId,
+) -> Result<Option<String>, CpdError> {
     Ok(conn
         .query_row(
             "SELECT json_extract(data, '$.window') FROM events
@@ -68,18 +91,31 @@ fn last_window(conn: &rusqlite::Connection, session: &SessionId) -> Result<Optio
 
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
-    std::fs::create_dir_all(path.parent().expect("a file under $CPD_HOME has a directory")).map_err(failed)?;
+    std::fs::create_dir_all(
+        path.parent()
+            .expect("a file under $CPD_HOME has a directory"),
+    )
+    .map_err(failed)?;
     std::fs::write(path, text).map_err(failed)
 }
 
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
-    let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
+    let (row, found) =
+        store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
     if row.archived_at.is_some() {
         return Err(CpdError::new(
             ErrorCode::Archived,
@@ -88,7 +124,36 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         .with("context", context.as_str())
         .with("next", format!("cpd context unarchive {context}")));
     }
-    let needs_pane = found.as_ref().is_none_or(|m| m.pane.is_none() && m.state == "stopped");
+    // The runner of the Manager (contract §6.19, Q10): the stored one, or the config key for a fresh one. A durable
+    // Manager has no pane; the engine's `hosts` step starts its host at the next tick. An existing Manager's runner
+    // wins: a `--runner` that differs is refused before any write.
+    let runner = match &found {
+        Some(m) => {
+            let stored = WorkerRunner::parse(&m.runner).unwrap_or(config.manager_runner);
+            if let Some(wanted) = args.runner {
+                if wanted != stored {
+                    return Err(CpdError::new(
+                        ErrorCode::Usage,
+                        format!(
+                            "Manager {} of Context {context} runs on the {} runner; --runner {} differs.",
+                            m.name,
+                            stored.as_str(),
+                            wanted.as_str()
+                        ),
+                    )
+                    .with("context", context.as_str())
+                    .with("runner", stored.as_str()));
+                }
+            }
+            stored
+        }
+        None => args.runner.unwrap_or(config.manager_runner),
+    };
+    let durable = runner == WorkerRunner::Durable;
+    let needs_pane = !durable
+        && found
+            .as_ref()
+            .is_none_or(|m| m.pane.is_none() && m.state == "stopped");
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.clone();
     if needs_pane && !tmux.has_session(&cockpit)? {
@@ -97,20 +162,39 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
 
     let (manager, registered) = match found {
         Some(manager) => (manager, false),
-        None => (register(&home, &config, &mut store, &context, &row, args.by_user)?, true),
+        None => (
+            register(&home, &config, &mut store, &context, &row, args.by_user, runner)?,
+            true,
+        ),
     };
     let mut started = registered;
     let mut pane = manager.pane.clone();
     let mut window = None;
     if needs_pane {
         let spawn = lead_spawn(&home, &manager.id, None, Path::new(&manager.cwd));
-        let (new_window, new_pane) = tmux.new_window(&cockpit, &context_window(&context), &spawn)?;
+        let (new_window, new_pane) =
+            tmux.new_window(&cockpit, &context_window(&context), &spawn)?;
         tmux.set_pane_session(&new_pane, &manager.id)?;
         store.write("context manager", |tx| {
-            tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [new_pane.as_str(), manager.id.as_str()])?;
-            let text = format!("Manager {} is parked in window {}.", manager.name, new_window.as_str());
-            let event = NewEvent::session_moved(text, Some(new_pane.as_str()), Some(new_window.as_str()), "parked");
-            append(tx, event.session(manager.id.clone()).context(context.clone()))?;
+            tx.execute(
+                "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+                [new_pane.as_str(), manager.id.as_str()],
+            )?;
+            let text = format!(
+                "Manager {} is parked in window {}.",
+                manager.name,
+                new_window.as_str()
+            );
+            let event = NewEvent::session_moved(
+                text,
+                Some(new_pane.as_str()),
+                Some(new_window.as_str()),
+                "parked",
+            );
+            append(
+                tx,
+                event.session(manager.id.clone()).context(context.clone()),
+            )?;
             Ok(())
         })?;
         started = true;
@@ -118,7 +202,11 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         window = Some(new_window.as_str().to_owned());
     }
     let (state, window) = store.read(|conn| {
-        let state: String = conn.query_row("SELECT state FROM sessions WHERE id = ?1", [manager.id.as_str()], |r| r.get(0))?;
+        let state: String = conn.query_row(
+            "SELECT state FROM sessions WHERE id = ?1",
+            [manager.id.as_str()],
+            |r| r.get(0),
+        )?;
         let window = match window {
             Some(window) => Some(window),
             None => last_window(conn, &manager.id)?,
@@ -140,14 +228,23 @@ fn register(
     context: &ContextId,
     row: &ContextRow,
     by_user: bool,
+    runner: WorkerRunner,
 ) -> Result<Live, CpdError> {
     let cwd = std::env::current_dir()
         .and_then(|d| d.canonicalize())
-        .map_err(|e| CpdError::new(ErrorCode::SetupFailed, format!("Cannot resolve the current directory: {e}.")))?
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("Cannot resolve the current directory: {e}."),
+            )
+        })?
         .display()
         .to_string();
     if !by_user {
-        write_file(&home.manager_message(context), &manager_message(context, &row.title))?;
+        write_file(
+            &home.manager_message(context),
+            &manager_message(context, &row.title),
+        )?;
     }
 
     let id = SessionId::new_v4();
@@ -156,17 +253,24 @@ fn register(
     store.write("context manager", |tx| {
         tx.execute(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at, by_user)
-             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6
+                                   state, state_label, state_at, created_at, by_user, runner)
+             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6, ?7
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user],
+            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, runner.as_str()],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
         let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
         append(tx, event.session(id.clone()).context(context.clone()))?;
         Ok(())
     })?;
-    Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None })
+    Ok(Live {
+        id,
+        name,
+        cwd,
+        state: "stopped".to_owned(),
+        pane: None,
+        runner: runner.as_str().to_owned(),
+    })
 }
 
 /// A Manager's first message (commands.md §3.10): the header, then the pointer line. Nothing Context-wide is

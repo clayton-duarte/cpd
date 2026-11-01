@@ -77,7 +77,12 @@ impl Dot {
             Dot::Yellow => 1,
             Dot::Magenta => 2,
             Dot::Cyan => 3,
-            Dot::White | Dot::Working(_) | Dot::Fixing | Dot::Waiting | Dot::Idle | Dot::Stopped => 4,
+            Dot::White
+            | Dot::Working(_)
+            | Dot::Fixing
+            | Dot::Waiting
+            | Dot::Idle
+            | Dot::Stopped => 4,
         }
     }
 
@@ -90,7 +95,11 @@ impl Dot {
     /// The dot of a working Lead: the red loader when its Plan has a failed Job being worked on (pro-d88), else its
     /// Plan's phase (`None`: no Plan, cyan).
     pub fn working(failed: bool, work: Option<Work>) -> Dot {
-        if failed { Dot::Fixing } else { Dot::Working(work) }
+        if failed {
+            Dot::Fixing
+        } else {
+            Dot::Working(work)
+        }
     }
 
     /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
@@ -112,12 +121,17 @@ impl Dot {
     /// working Session uses it.
     pub fn of(state: State, item: Option<Urgency>, failed: bool, work: Option<Work>) -> Dot {
         if failed {
-            return if item == Some(Urgency::Red) { Dot::Red } else { Dot::Fixing };
+            return if item == Some(Urgency::Red) {
+                Dot::Red
+            } else {
+                Dot::Fixing
+            };
         }
         if state == State::Working {
             return Dot::working(false, work);
         }
-        item.and_then(Dot::from_urgency).unwrap_or_else(|| Dot::glyph(state))
+        item.and_then(Dot::from_urgency)
+            .unwrap_or_else(|| Dot::glyph(state))
     }
 }
 
@@ -147,7 +161,11 @@ pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) 
         .filter(|i| match i.kind {
             Kind::Dialog | Kind::Unread | Kind::LoopGuard => i.session.as_ref() == Some(session),
             // a cyan or white `pr-ready` item fills no dot (pro-d130)
-            Kind::PrReady => lead_of.is_some() && i.plan.as_ref() == lead_of && matches!(i.urgency, Urgency::Yellow | Urgency::Red),
+            Kind::PrReady => {
+                lead_of.is_some()
+                    && i.plan.as_ref() == lead_of
+                    && matches!(i.urgency, Urgency::Yellow | Urgency::Red)
+            }
             k => lead_of.is_some() && i.plan.as_ref() == lead_of && PLAN_KINDS.contains(&k),
         })
         .map(|i| i.urgency)
@@ -190,26 +208,64 @@ mod tests {
 
     #[test]
     fn the_glyphs_without_an_item() {
-        assert_eq!(Dot::of(State::Working, None, false, None), Dot::Working(None));
+        assert_eq!(
+            Dot::of(State::Working, None, false, None),
+            Dot::Working(None)
+        );
         assert_eq!(Dot::of(State::Idle, None, false, None), Dot::Idle);
         assert_eq!(Dot::of(State::Stopped, None, false, None), Dot::Stopped);
-        assert_eq!(Dot::of(State::Blocked, None, false, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
-        assert_eq!(Dot::of(State::Waiting, None, false, None), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
-        for state in [State::Working, State::Idle, State::Waiting, State::Blocked, State::Stopped] {
-            assert!(!Dot::of(state, None, false, None).needs_you(), "no item, never a filled dot: {state:?}");
+        assert_eq!(
+            Dot::of(State::Blocked, None, false, None),
+            Dot::Idle,
+            "blocked is no dot of its own: its dialog item is"
+        );
+        assert_eq!(
+            Dot::of(State::Waiting, None, false, None),
+            Dot::Waiting,
+            "a Session waiting for an agent shows the waiting dot, not idle"
+        );
+        for state in [
+            State::Working,
+            State::Idle,
+            State::Waiting,
+            State::Blocked,
+            State::Stopped,
+        ] {
+            assert!(
+                !Dot::of(state, None, false, None).needs_you(),
+                "no item, never a filled dot: {state:?}"
+            );
         }
     }
 
     #[test]
     fn an_item_gives_its_urgency_colour_unless_the_session_is_working() {
-        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
-            assert_eq!(Dot::of(State::Working, Some(urgency), false, None), Dot::Working(None), "own state first (hs-d183): {urgency:?}");
+        for urgency in [
+            Urgency::Red,
+            Urgency::Yellow,
+            Urgency::Magenta,
+            Urgency::Cyan,
+            Urgency::White,
+        ] {
+            assert_eq!(
+                Dot::of(State::Working, Some(urgency), false, None),
+                Dot::Working(None),
+                "own state first (hs-d183): {urgency:?}"
+            );
         }
         for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
-            for (urgency, dot) in
-                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Cyan, Dot::Cyan), (Urgency::White, Dot::White)]
-            {
-                assert_eq!(Dot::of(state, Some(urgency), false, None), dot, "{state:?} {urgency:?}");
+            for (urgency, dot) in [
+                (Urgency::Red, Dot::Red),
+                (Urgency::Yellow, Dot::Yellow),
+                (Urgency::Magenta, Dot::Magenta),
+                (Urgency::Cyan, Dot::Cyan),
+                (Urgency::White, Dot::White),
+            ] {
+                assert_eq!(
+                    Dot::of(state, Some(urgency), false, None),
+                    dot,
+                    "{state:?} {urgency:?}"
+                );
                 assert!(dot.needs_you());
             }
         }
@@ -223,8 +279,15 @@ mod tests {
             item(Kind::Dialog, Urgency::Magenta, Some("s-b"), Some("pp")),
         ];
         assert_eq!(urgency(&items, &a, None), Some(Urgency::White));
-        assert_eq!(urgency(&items, &id("s-b"), Some(&plan("pp"))), Some(Urgency::Magenta));
-        assert_eq!(urgency(&items, &id("s-c"), None), None, "an item linked to another Session");
+        assert_eq!(
+            urgency(&items, &id("s-b"), Some(&plan("pp"))),
+            Some(Urgency::Magenta)
+        );
+        assert_eq!(
+            urgency(&items, &id("s-c"), None),
+            None,
+            "an item linked to another Session"
+        );
         assert_eq!(urgency(&[], &a, Some(&plan("pp"))), None, "no item, no dot");
     }
 
@@ -247,9 +310,21 @@ mod tests {
         ];
         for (kind, u) in kinds {
             let items = [item(kind, u, None, Some("pp"))];
-            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), Some(u), "the Lead of pp: {kind:?}");
-            assert_eq!(urgency(&items, &id("s-fork"), None), None, "a fork: {kind:?}");
-            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("qq"))), None, "the Lead of another Plan: {kind:?}");
+            assert_eq!(
+                urgency(&items, &id("s-lead"), Some(&plan("pp"))),
+                Some(u),
+                "the Lead of pp: {kind:?}"
+            );
+            assert_eq!(
+                urgency(&items, &id("s-fork"), None),
+                None,
+                "a fork: {kind:?}"
+            );
+            assert_eq!(
+                urgency(&items, &id("s-lead"), Some(&plan("qq"))),
+                None,
+                "the Lead of another Plan: {kind:?}"
+            );
         }
     }
 
@@ -259,7 +334,11 @@ mod tests {
     fn pr_failing_and_pr_changes_never_fill_a_plans_lead() {
         for kind in [Kind::PrFailing, Kind::PrChanges] {
             let items = [item(kind, Urgency::Red, None, Some("pp"))];
-            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None, "{kind:?}");
+            assert_eq!(
+                urgency(&items, &id("s-lead"), Some(&plan("pp"))),
+                None,
+                "{kind:?}"
+            );
         }
     }
 
@@ -267,10 +346,19 @@ mod tests {
     #[test]
     fn pr_failing_and_pr_changes_rows_fill_no_dot_at_all() {
         for kind in [Kind::PrFailing, Kind::PrChanges] {
-            for (session, plan) in [(None, None), (None, Some("pp")), (Some("s-lead"), None), (Some("s-lead"), Some("pp"))] {
+            for (session, plan) in [
+                (None, None),
+                (None, Some("pp")),
+                (Some("s-lead"), None),
+                (Some("s-lead"), Some("pp")),
+            ] {
                 let items = [item(kind, Urgency::Red, session, plan)];
                 let p = plan.map(self::plan);
-                assert_eq!(urgency(&items, &id("s-lead"), p.as_ref()), None, "{kind:?} {session:?} {plan:?}");
+                assert_eq!(
+                    urgency(&items, &id("s-lead"), p.as_ref()),
+                    None,
+                    "{kind:?} {session:?} {plan:?}"
+                );
             }
         }
     }
@@ -290,14 +378,25 @@ mod tests {
     fn a_cyan_item_gives_its_session_a_cyan_dot_between_magenta_and_white() {
         assert_eq!(Dot::from_urgency(Urgency::Cyan), Some(Dot::Cyan));
         assert_eq!(Dot::from_urgency(Urgency::Blue), None, "blue fills no dot");
-        assert_eq!(Dot::of(State::Idle, Some(Urgency::Cyan), false, None), Dot::Cyan);
+        assert_eq!(
+            Dot::of(State::Idle, Some(Urgency::Cyan), false, None),
+            Dot::Cyan
+        );
         assert!(Dot::Cyan.needs_you());
         assert!(Dot::Magenta > Dot::Cyan && Dot::Cyan > Dot::White);
         let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
         let dialog = item(Kind::Dialog, Urgency::Magenta, Some("s-lead"), None);
         let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
-        assert_eq!(urgency(&[unread.clone(), cyan_dialog.clone()], &id("s-lead"), None), Some(Urgency::Cyan), "cyan beats white");
-        assert_eq!(urgency(&[dialog, cyan_dialog], &id("s-lead"), None), Some(Urgency::Magenta), "magenta beats cyan");
+        assert_eq!(
+            urgency(&[unread.clone(), cyan_dialog.clone()], &id("s-lead"), None),
+            Some(Urgency::Cyan),
+            "cyan beats white"
+        );
+        assert_eq!(
+            urgency(&[dialog, cyan_dialog], &id("s-lead"), None),
+            Some(Urgency::Magenta),
+            "magenta beats cyan"
+        );
     }
 
     /// hs-d581: a working Lead of a Plan with a failed Job shows the red loader; its own red item keeps the red dot;
@@ -305,22 +404,56 @@ mod tests {
     #[test]
     fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_unless_its_item_is_red() {
         assert_eq!(Dot::of(State::Working, None, true, None), Dot::Fixing);
-        for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
-            assert_eq!(Dot::of(State::Working, Some(urgency), true, None), Dot::Fixing, "{urgency:?}");
+        for urgency in [
+            Urgency::Yellow,
+            Urgency::Magenta,
+            Urgency::Cyan,
+            Urgency::White,
+        ] {
+            assert_eq!(
+                Dot::of(State::Working, Some(urgency), true, None),
+                Dot::Fixing,
+                "{urgency:?}"
+            );
         }
-        assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, None), Dot::Red);
+        assert_eq!(
+            Dot::of(State::Working, Some(Urgency::Red), true, None),
+            Dot::Red
+        );
         for state in [State::Idle, State::Waiting, State::Stopped] {
-            assert_eq!(Dot::of(state, None, true, None), Dot::Fixing, "pro-d88: whatever the state, {state:?}");
+            assert_eq!(
+                Dot::of(state, None, true, None),
+                Dot::Fixing,
+                "pro-d88: whatever the state, {state:?}"
+            );
         }
     }
 
     #[test]
     fn the_order_is_the_precedence() {
-        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White, Dot::Fixing, Dot::Working(None), Dot::Waiting, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > cyan > white > fixing > working > waiting > idle > stopped");
+        let order = [
+            Dot::Red,
+            Dot::Yellow,
+            Dot::Magenta,
+            Dot::Cyan,
+            Dot::White,
+            Dot::Fixing,
+            Dot::Working(None),
+            Dot::Waiting,
+            Dot::Idle,
+            Dot::Stopped,
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] > w[1]),
+            "red > yellow > magenta > cyan > white > fixing > working > waiting > idle > stopped"
+        );
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert!(!Dot::Fixing.needs_you());
-        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 5, "the needs-you dots are the five colours");
+        assert_eq!(
+            order.iter().filter(|d| d.needs_you()).count(),
+            5,
+            "the needs-you dots are the five colours"
+        );
     }
 
     const PHASES: [Phase; 4] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Done];
@@ -335,7 +468,11 @@ mod tests {
     fn dots_work_of_drafts_beat_every_phase_and_git() {
         for phase in all_phases() {
             for git in [false, true] {
-                assert_eq!(Work::of(phase, true, git), Work::Planning, "{phase:?} git={git}");
+                assert_eq!(
+                    Work::of(phase, true, git),
+                    Work::Planning,
+                    "{phase:?} git={git}"
+                );
             }
         }
     }
@@ -343,9 +480,17 @@ mod tests {
     #[test]
     fn dots_work_of_git_or_deploy_is_review() {
         for phase in all_phases() {
-            assert_eq!(Work::of(phase, false, true), Work::Review, "{phase:?} with git");
+            assert_eq!(
+                Work::of(phase, false, true),
+                Work::Review,
+                "{phase:?} with git"
+            );
         }
-        assert_eq!(Work::of(Phase::Deploy, false, false), Work::Review, "deploy alone");
+        assert_eq!(
+            Work::of(Phase::Deploy, false, false),
+            Work::Review,
+            "deploy alone"
+        );
     }
 
     #[test]
@@ -358,17 +503,42 @@ mod tests {
 
     #[test]
     fn dots_rule_failed_is_red_loader_and_no_plan_is_white() {
-        for work in [None, Some(Work::Planning), Some(Work::Dispatch), Some(Work::Review)] {
+        for work in [
+            None,
+            Some(Work::Planning),
+            Some(Work::Dispatch),
+            Some(Work::Review),
+        ] {
             assert_eq!(Dot::working(true, work), Dot::Fixing, "{work:?}");
             assert_eq!(Dot::working(false, work), Dot::Working(work), "{work:?}");
-            assert_eq!(Dot::of(State::Working, None, true, work), Dot::Fixing, "{work:?}");
-            assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, work), Dot::Red, "own red item: {work:?}");
-            assert_eq!(Dot::of(State::Working, Some(Urgency::Yellow), false, work), Dot::Working(work), "{work:?}");
+            assert_eq!(
+                Dot::of(State::Working, None, true, work),
+                Dot::Fixing,
+                "{work:?}"
+            );
+            assert_eq!(
+                Dot::of(State::Working, Some(Urgency::Red), true, work),
+                Dot::Red,
+                "own red item: {work:?}"
+            );
+            assert_eq!(
+                Dot::of(State::Working, Some(Urgency::Yellow), false, work),
+                Dot::Working(work),
+                "{work:?}"
+            );
             for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
-                assert_eq!(Dot::of(state, None, false, work), Dot::glyph(state), "a non-working state ignores work: {state:?}");
+                assert_eq!(
+                    Dot::of(state, None, false, work),
+                    Dot::glyph(state),
+                    "a non-working state ignores work: {state:?}"
+                );
             }
         }
-        assert_eq!(Dot::of(State::Working, None, false, None), Dot::Working(None), "no Plan: white");
+        assert_eq!(
+            Dot::of(State::Working, None, false, None),
+            Dot::Working(None),
+            "no Plan: white"
+        );
         for work in [Work::Planning, Work::Dispatch, Work::Review] {
             assert!(!Dot::Working(Some(work)).needs_you());
         }

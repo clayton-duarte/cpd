@@ -55,6 +55,8 @@ pub const TABLE: &[Entry] = &[
     ("job retry", &[Lead], false),
     ("job urgent", &[Lead, Manager], false),
     ("job approve-tests", &[Lead], false),
+    ("job approve-touches", &[Lead], false),
+    ("job addendum", &[Lead], false),
     ("job dispatch", &[], false),
     ("job list", &[Lead], false),
     ("job show", &[Lead], false),
@@ -62,6 +64,7 @@ pub const TABLE: &[Entry] = &[
     ("attempt read", &[Lead], false),
     ("attempt show", &[Lead], false),
     ("attempt list", &[Lead], false),
+    ("attempt abort", &[Lead], false),
     ("ask", &[Worker], false),
     ("answer", &[Lead], false),
     ("board post", &[Lead, Manager], false),
@@ -93,6 +96,7 @@ pub const TABLE: &[Entry] = &[
     ("session archive", &[], true),
     ("session unarchive", &[], true),
     ("session send", &[Lead, Manager], false),
+    ("session tail", &[Lead, Manager, Worker], false),
     ("session resume", &[], true),
     ("session retier", &[Manager], false),
     ("session rename", &[Lead], true),
@@ -117,6 +121,7 @@ pub const TABLE: &[Entry] = &[
     ("preset list", &[Manager, Lead], false),
     ("preset show", &[Manager, Lead], false),
     ("preset apply", &[Manager], false),
+    ("metrics", &[Lead, Manager], false),
     ("install", &[], false),
     ("secret get", &[Lead, Manager, Worker], false),
     ("secret list", &[Lead, Manager], false),
@@ -153,7 +158,11 @@ fn nodes(parent: &clap::Command, prefix: &str, parent_internal: bool) -> Vec<Val
 }
 
 fn node(c: &clap::Command, prefix: &str, parent_internal: bool) -> Value {
-    let path = if prefix.is_empty() { c.get_name().to_owned() } else { format!("{prefix} {}", c.get_name()) };
+    let path = if prefix.is_empty() {
+        c.get_name().to_owned()
+    } else {
+        format!("{prefix} {}", c.get_name())
+    };
     let internal = parent_internal || c.is_hide_set();
     let about = c.get_about().map(|a| a.to_string()).unwrap_or_default();
     let children = nodes(c, &path, internal);

@@ -12,8 +12,18 @@ fn item(id: &str, kind: &str, path: Value) -> Value {
 #[test]
 fn pr_view_lists_the_stored_feedback_items() {
     let fx = fx("open");
-    let list = json!([item("PRRT_1", "thread", json!("src/payout.rs")), item("IC_1", "comment", Value::Null)]);
-    fx.store().write("fixture", |tx| tx.execute_batch(&format!("UPDATE pull_requests SET feedback = '{list}' WHERE number = 812;")).map_err(Into::into)).unwrap();
+    let list = json!([
+        item("PRRT_1", "thread", json!("src/payout.rs")),
+        item("IC_1", "comment", Value::Null)
+    ]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "UPDATE pull_requests SET feedback = '{list}' WHERE number = 812;"
+            ))
+            .map_err(Into::into)
+        })
+        .unwrap();
 
     let out = fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
 

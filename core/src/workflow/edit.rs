@@ -5,7 +5,6 @@
 //! in any phase and any status but `merged` and `cancelled` (hs-d285): the title is
 //! not a Locked field and not in the fingerprint.
 
-
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
@@ -51,6 +50,8 @@ impl Edits {
     }
 }
 
+// One variant holds a PrRow, the other two; boxing would change the code that builds and matches them.
+#[allow(clippy::large_enum_variant)]
 enum Decision {
     /// No value changes.
     Already(WorkflowRow),
@@ -59,8 +60,17 @@ enum Decision {
 
 pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs && args.title.is_none() && args.jira.is_none() {
-        return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs, --no-needs, --title or --jira."));
+    if args.repo.is_none()
+        && args.base.is_none()
+        && args.needs.is_none()
+        && !args.no_needs
+        && args.title.is_none()
+        && args.jira.is_none()
+    {
+        return Err(CpdError::new(
+            ErrorCode::NothingToEdit,
+            "Nothing to edit: pass --repo, --base, --needs, --no-needs, --title or --jira.",
+        ));
     }
     let needs = match (&args.needs, args.no_needs) {
         (Some(refs), _) => Some(needs_refs(&plan, refs)?),
@@ -76,29 +86,55 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let restack_shape = args.repo.is_none() && args.base.is_some() && needs.is_some();
     let stored = env.store.read(|conn| editable_workflow(conn, &plan, &key, wants_title, wants_others, restack_shape))?.0;
     if stored.head_ref.is_some()
-        && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
+        && let Some(flag) = [
+            (args.repo.is_some(), "--repo"),
+            (args.base.is_some(), "--base"),
+        ]
+        .iter()
+        .find_map(|(given, flag)| given.then_some(*flag))
     {
         return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("Workflow {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
             .with("workflow", key.as_str())
             .with("flag", flag));
     }
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
-    let name = repo.as_deref().map(|r| key_repo(&mut env, &plan, r)).transpose()?;
+    let name = repo
+        .as_deref()
+        .map(|r| key_repo(&mut env, &plan, r))
+        .transpose()?;
     let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
     let base = match args.base.as_deref() {
-        Some(_) => Some(wanted_base(&in_repo, env.store.read(|conn| classify_base(conn, &plan, &in_repo, args.base.as_deref()))?)?),
+        Some(_) => Some(wanted_base(
+            &in_repo,
+            env.store
+                .read(|conn| classify_base(conn, &plan, &in_repo, args.base.as_deref()))?,
+        )?),
         // A new repo keeps the stored base, which must exist there.
-        None if repo.is_some() => Some(wanted_base(&in_repo, BaseArg::Branch(Some(stored.base.clone())))?),
+        None if repo.is_some() => Some(wanted_base(
+            &in_repo,
+            BaseArg::Branch(Some(stored.base.clone())),
+        )?),
         None => None,
     };
-    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base, needs, title: args.title.map(|t| t.to_string()), jira: args.jira.map(|j| j.to_string()) };
+    let edits = Edits {
+        repo: repo.as_ref().map(|r| r.display().to_string()),
+        name,
+        base,
+        needs,
+        title: args.title.map(|t| t.to_string()),
+        jira: args.jira.map(|j| j.to_string()),
+    };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (workflow, fields, already) = match decision {
         Decision::Already(workflow) => (workflow, Vec::new(), true),
         Decision::Update { before, after, fields } => {
             if after.repo != before.repo {
-                no_branch_clash(repo.as_deref().expect("the repo changed, so it was given"), &plan, &before.lead_branch)?;
+                no_branch_clash(
+                    repo.as_deref().expect("the repo changed, so it was given"),
+                    &plan,
+                    &before.lead_branch,
+                )?;
             }
             if let Some(title) = edits.title.as_deref().filter(|_| fields.contains(&"title")) {
                 retitle_open_pull_request(&mut env, &plan, &key, title)?;
@@ -129,7 +165,11 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
             "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
         )?;
-        Ok(stmt.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+        Ok(stmt
+            .query_row([plan.as_str(), key.as_str()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?)
     })?;
     match open {
         Some((repo, number)) => retitle_pr(env.home.root(), &repo, number, title),
@@ -185,7 +225,16 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
             Some(BaseWanted::Branch(b)) => BaseWanted::Branch(b.clone()),
             None => BaseWanted::Branch(before.base.clone()),
         };
-        let resolved = resolve_refs(conn, &Subject { plan, key, repo: &after.repo }, &base, &after.needs)?;
+        let resolved = resolve_refs(
+            conn,
+            &Subject {
+                plan,
+                key,
+                repo: &after.repo,
+            },
+            &base,
+            &after.needs,
+        )?;
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
         if !matches!(phase, Phase::Grounding | Phase::Plan) {
@@ -204,8 +253,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
             .with("workflows", in_use));
         }
     }
-    let title_changed = edits.title.as_ref().is_some_and(|t| stored_title.as_ref() != Some(t));
-    let jira_changed = edits.jira.as_ref().is_some_and(|j| before.jira.as_ref() != Some(j));
+    let title_changed = edits
+        .title
+        .as_ref()
+        .is_some_and(|t| stored_title.as_ref() != Some(t));
+    let jira_changed = edits
+        .jira
+        .as_ref()
+        .is_some_and(|j| before.jira.as_ref() != Some(j));
     let fields: Vec<&'static str> = [
         ("repo", before.repo != after.repo),
         ("base", before.base != after.base),
@@ -214,12 +269,16 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
         ("jira", jira_changed),
     ]
     .into_iter()
-        .filter_map(|(name, changed)| changed.then_some(name))
-        .collect();
+    .filter_map(|(name, changed)| changed.then_some(name))
+    .collect();
     if fields.is_empty() {
         return Ok(Decision::Already(before));
     }
-    Ok(Decision::Update { before, after, fields })
+    Ok(Decision::Update {
+        before,
+        after,
+        fields,
+    })
 }
 
 /// After the lock, a restack is allowed only onto `A`, the base Workflow the edit resolves to, when `A` is a current need or
@@ -263,6 +322,11 @@ fn update(tx: &Connection, plan: &PlanId, before: &WorkflowRow, after: &Workflow
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute("DELETE FROM workflow_needs WHERE plan = ?1 AND workflow = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
     }
-    let added: Vec<String> = after.needs.iter().filter(|n| !before.needs.contains(n)).cloned().collect();
+    let added: Vec<String> = after
+        .needs
+        .iter()
+        .filter(|n| !before.needs.contains(n))
+        .cloned()
+        .collect();
     insert_needs(tx, plan, &after.key, &added)
 }

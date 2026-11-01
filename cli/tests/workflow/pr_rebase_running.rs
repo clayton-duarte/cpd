@@ -17,7 +17,7 @@ impl Poll {
                 tx.execute(
                     "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, ?2, ?3, ?4, 't')",
+                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 1, ?2, ?3, ?4, 't')",
                     params![key, kind, "e".repeat(64), tx.id()],
                 )?;
                 tx.execute(
@@ -31,7 +31,13 @@ impl Poll {
     }
 
     /// The refused run of `pr rebase` changed nothing: the Lead Branch and the remote as they were, no `git`, `gh` or Gate call.
-    fn assert_untouched_since(&self, tip: &str, remote: Option<String>, git_calls: usize, after: usize) {
+    fn assert_untouched_since(
+        &self,
+        tip: &str,
+        remote: Option<String>,
+        git_calls: usize,
+        after: usize,
+    ) {
         assert_eq!(self.lead_sha(), tip);
         assert_eq!(self.remote_branch("cpd/pay"), remote);
         assert_eq!(after, git_calls, "checked before the fetch");
@@ -53,8 +59,15 @@ fn refused(fx: &Poll, flag: Option<&str>, jobs: serde_json::Value, attempts: ser
     let after = fx.calls("git").len();
     assert_eq!(code(&run), ("attempt_running".into(), 3));
     let error = run.error();
-    assert_eq!(error["details"], json!({"pr": "repo", "jobs": jobs, "attempts": attempts}));
-    assert!(error["message"].as_str().unwrap().contains("steer"), "{}", error["message"]);
+    assert_eq!(
+        error["details"],
+        json!({"pr": "repo", "jobs": jobs, "attempts": attempts})
+    );
+    assert!(
+        error["message"].as_str().unwrap().contains("steer"),
+        "{}",
+        error["message"]
+    );
     fx.assert_untouched_since(&tip, remote, git_calls, after);
 }
 
@@ -98,7 +111,10 @@ fn refused_continue(fx: &Poll) {
     let after = fx.calls("git").len();
 
     assert_eq!(code(&run), ("attempt_running".into(), 3));
-    assert_eq!(run.error()["details"], json!({"pr": "repo", "jobs": ["fix"], "attempts": ["fix-a1"]}));
+    assert_eq!(
+        run.error()["details"],
+        json!({"pr": "repo", "jobs": ["fix"], "attempts": ["fix-a1"]})
+    );
     // The rebase still waits, resolved but not continued.
     assert!(fx.rebasing());
     fx.assert_untouched_since(&tip, remote, git_calls, after);

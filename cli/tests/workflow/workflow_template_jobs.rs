@@ -79,7 +79,11 @@ fn assert_parked(shape: &str, stubs: &[&str]) {
     let before = fx.rows();
     let run = fx.add_k(shape, &["--no-needs"]);
     let error = refused(&run, "draft_parked", 3);
-    assert_eq!(error["details"], json!({"plan": "pay-1", "pr": "k", "jobs": stubs}), "{shape}");
+    assert_eq!(
+        error["details"],
+        json!({"plan": "pay-1", "pr": "k", "jobs": stubs}),
+        "{shape}"
+    );
     assert_eq!(fx.rows(), before, "{shape}: a refusal wrote something");
 }
 
@@ -121,10 +125,46 @@ fn jobs_queue_the_template_after_lock() {
     assert_eq!(
         fx.rows_of_k(),
         json!([
-            ["k-docs", "docs", "Docs: Add retries", "queued", 1, true, true, ""],
-            ["k-tests", "test", "Red tests: Add retries", "queued", 1, true, true, "k-docs"],
-            ["k-impl", "impl", "Implement: Add retries", "queued", 1, true, true, "k-tests"],
-            ["open-k", "open", "Open the pull request: Add retries", "draft", 1, true, false, ""],
+            [
+                "k-docs",
+                "docs",
+                "Docs: Add retries",
+                "queued",
+                1,
+                true,
+                true,
+                ""
+            ],
+            [
+                "k-tests",
+                "test",
+                "Red tests: Add retries",
+                "queued",
+                1,
+                true,
+                true,
+                "k-docs"
+            ],
+            [
+                "k-impl",
+                "impl",
+                "Implement: Add retries",
+                "queued",
+                1,
+                true,
+                true,
+                "k-tests"
+            ],
+            [
+                "open-k",
+                "open",
+                "Open the pull request: Add retries",
+                "draft",
+                1,
+                true,
+                false,
+                ""
+            ],
         ])
     );
     assert_eq!(fx.env.query::<String>("SELECT tests FROM jobs WHERE key = 'k-tests'"), "[\"workflow_x::it_works\"]");
@@ -132,10 +172,20 @@ fn jobs_queue_the_template_after_lock() {
     assert_eq!(fx.env.query::<String>("SELECT goal FROM jobs WHERE key = 'k-impl'"), "Do it.");
     // One `job-added` Event per Job, the three queued, the opener a draft.
     let added = fx.cpd(&["events", "list", "--kind", "job-added"]).ok();
-    let statuses: Vec<(Value, Value)> = added["events"].as_array().unwrap().iter().map(|e| (e["job"].clone(), e["data"]["status"].clone())).collect();
+    let statuses: Vec<(Value, Value)> = added["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["job"].clone(), e["data"]["status"].clone()))
+        .collect();
     assert_eq!(
         statuses,
-        [(json!("k-docs"), json!("queued")), (json!("k-tests"), json!("queued")), (json!("k-impl"), json!("queued")), (json!("open-k"), json!("draft"))]
+        [
+            (json!("k-docs"), json!("queued")),
+            (json!("k-tests"), json!("queued")),
+            (json!("k-impl"), json!("queued")),
+            (json!("open-k"), json!("draft"))
+        ]
     );
 }
 
@@ -176,7 +226,11 @@ fn jobs_with_a_bad_tier_is_refused_tier_invalid() {
     let mut object = jobs_object("docs");
     object["docs"]["tier"] = json!("Z9");
     let file = fx.jobs_file("jobs.json", &object);
-    refused(&fx.add_k("docs", &["--no-needs", "--jobs", &file]), "tier_invalid", 2);
+    refused(
+        &fx.add_k("docs", &["--no-needs", "--jobs", &file]),
+        "tier_invalid",
+        2,
+    );
     assert_eq!(fx.rows(), before);
 }
 
@@ -187,7 +241,11 @@ fn jobs_with_a_bad_spec_is_refused_spec_invalid() {
     let mut object = jobs_object("docs");
     object["docs"]["spec"] = json!({"goal": "Do it."});
     let file = fx.jobs_file("jobs.json", &object);
-    refused(&fx.add_k("docs", &["--no-needs", "--jobs", &file]), "spec_invalid", 2);
+    refused(
+        &fx.add_k("docs", &["--no-needs", "--jobs", &file]),
+        "spec_invalid",
+        2,
+    );
     assert_eq!(fx.rows(), before);
 }
 
@@ -197,10 +255,17 @@ fn jobs_before_lock_is_refused() {
         let fx = crud(phase);
         let before = fx.rows();
         let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
-        let error = refused(&fx.add_k("tdd", &["--no-needs", "--jobs", &file]), "usage", 2);
+        let error = refused(
+            &fx.add_k("tdd", &["--no-needs", "--jobs", &file]),
+            "usage",
+            2,
+        );
         // The flag exists: the refusal is the phase's, not the parser's `unexpected argument`.
         let message = error["message"].as_str().unwrap();
-        assert!(message.contains("--jobs") && !message.contains("unexpected argument"), "{phase}: {message}");
+        assert!(
+            message.contains("--jobs") && !message.contains("unexpected argument"),
+            "{phase}: {message}"
+        );
         assert_eq!(fx.rows(), before, "{phase}: the template is unchanged");
     }
 }
@@ -225,10 +290,46 @@ fn a_workflow_that_waits_for_another_workflow_still_lays_out_the_stubs() {
     assert_eq!(
         fx.rows_of_k(),
         json!([
-            ["k-docs", "docs", "Docs: Add retries", "draft", 1, false, false, ""],
-            ["k-tests", "test", "Red tests: Add retries", "draft", 1, false, false, "k-docs"],
-            ["k-impl", "impl", "Implement: Add retries", "draft", 1, false, false, "k-tests"],
-            ["open-k", "open", "Open the pull request: Add retries", "draft", 1, true, false, ""],
+            [
+                "k-docs",
+                "docs",
+                "Docs: Add retries",
+                "draft",
+                1,
+                false,
+                false,
+                ""
+            ],
+            [
+                "k-tests",
+                "test",
+                "Red tests: Add retries",
+                "draft",
+                1,
+                false,
+                false,
+                "k-docs"
+            ],
+            [
+                "k-impl",
+                "impl",
+                "Implement: Add retries",
+                "draft",
+                1,
+                false,
+                false,
+                "k-tests"
+            ],
+            [
+                "open-k",
+                "open",
+                "Open the pull request: Add retries",
+                "draft",
+                1,
+                true,
+                false,
+                ""
+            ],
         ])
     );
 }
@@ -240,10 +341,46 @@ fn in_phase_plan_the_template_is_unchanged() {
     assert_eq!(
         fx.rows_of_k(),
         json!([
-            ["k-docs", "docs", "Docs: Add retries", "draft", 0, false, false, ""],
-            ["k-tests", "test", "Red tests: Add retries", "draft", 0, false, false, "k-docs"],
-            ["k-impl", "impl", "Implement: Add retries", "draft", 0, false, false, "k-tests"],
-            ["open-k", "open", "Open the pull request: Add retries", "draft", 0, true, false, ""],
+            [
+                "k-docs",
+                "docs",
+                "Docs: Add retries",
+                "draft",
+                0,
+                false,
+                false,
+                ""
+            ],
+            [
+                "k-tests",
+                "test",
+                "Red tests: Add retries",
+                "draft",
+                0,
+                false,
+                false,
+                "k-docs"
+            ],
+            [
+                "k-impl",
+                "impl",
+                "Implement: Add retries",
+                "draft",
+                0,
+                false,
+                false,
+                "k-tests"
+            ],
+            [
+                "open-k",
+                "open",
+                "Open the pull request: Add retries",
+                "draft",
+                0,
+                true,
+                false,
+                ""
+            ],
         ])
     );
 }

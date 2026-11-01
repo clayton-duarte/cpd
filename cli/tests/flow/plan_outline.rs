@@ -22,20 +22,37 @@ fn home(fx: &Fx) -> CpdHome {
 
 /// `run/<plan>/<name>`, beside `plan.md`.
 fn run_file(fx: &Fx, plan: &str, name: &str) -> PathBuf {
-    home(fx).plan_md(&PlanId::parse(plan).unwrap()).with_file_name(name)
+    home(fx)
+        .plan_md(&PlanId::parse(plan).unwrap())
+        .with_file_name(name)
 }
 
 fn sha256(text: &str) -> String {
-    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 // ---------- fixtures ----------
 
 /// A Plan in `phase` of Context `ctx`, its Lead Session beside it.
 fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
-    let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
-    let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
-    let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
+    let locked = if matches!(phase, "grounding" | "plan") {
+        "NULL"
+    } else {
+        "'2000-01-01T00:00:00.000Z'"
+    };
+    let done = if phase == "done" {
+        "'2000-01-02T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
+    let archived = if archived {
+        "'2000-01-03T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     fx.env.sql(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/', 'O3', 'idle', 't', 't');
@@ -45,8 +62,23 @@ fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
 }
 
 /// A PR of `plan`: `status` is `waiting`, `dispatch` or `cancelled`; `name` and `title` as stored (null when `None`).
-fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, base: &str, status: &str, name: Option<&str>, title: Option<&str>, needs: &[&str]) {
-    let (worktree, started) = if status == "dispatch" { ("'/w'", "'t'") } else { ("NULL", "NULL") };
+#[allow(clippy::too_many_arguments)] // one SQL row per call, each column a plain argument of the test helper
+fn pr(
+    fx: &Fx,
+    plan: &str,
+    key: &str,
+    repo: &str,
+    base: &str,
+    status: &str,
+    name: Option<&str>,
+    title: Option<&str>,
+    needs: &[&str],
+) {
+    let (worktree, started) = if status == "dispatch" {
+        ("'/w'", "'t'")
+    } else {
+        ("NULL", "NULL")
+    };
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     fx.env.sql(&format!(
         "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, name, title)
@@ -60,21 +92,40 @@ fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, base: &str, status: &str, name
 }
 
 /// A Job of PR `pr`. `tier` `None` makes a stub draft (no Tier, no Spec). A non-draft Job is locked.
-fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, tier: Option<&str>, touches: &[&str], needs: &[&str]) {
+#[allow(clippy::too_many_arguments)] // one SQL row per call, each column a plain argument of the test helper
+fn job(
+    fx: &Fx,
+    plan: &str,
+    pr: &str,
+    key: &str,
+    status: &str,
+    tier: Option<&str>,
+    touches: &[&str],
+    needs: &[&str],
+) {
     let (tier, spec) = match tier {
         Some(t) => (
             format!("'{t}'"),
-            format!("'Goal.', 'Context.', '{}', '[\"cargo test\"]', '[]'", json!(touches)),
+            format!(
+                "'Goal.', 'Context.', '{}', '[\"cargo test\"]', '[]'",
+                json!(touches)
+            ),
         ),
         None => ("NULL".to_owned(), "NULL, NULL, NULL, NULL, NULL".to_owned()),
     };
-    let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
+    let fingerprint = if status == "draft" {
+        "NULL".to_owned()
+    } else {
+        format!("'{FP}'")
+    };
     fx.env.sql(&format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
          VALUES ('{plan}', '{pr}', '{key}', 'Title {key}', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't');"
     ));
     for need in needs {
-        fx.env.sql(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"));
+        fx.env.sql(&format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{need}');"
+        ));
     }
 }
 
@@ -91,8 +142,27 @@ fn fixture() -> Fx {
            ('other', 't-x1', 'decision', '2026-10-20T00:00:02.000Z', 't', 'Elsewhere');",
     );
     plan(&fx, "mine", "plan", false);
-    pr(&fx, "mine", "api", "/r/api", "main", "waiting", Some("api-name"), Some("API work"), &[]);
-    job(&fx, "mine", "api", "x", "draft", Some("S2"), &["src/x.rs"], &[]);
+    pr(
+        &fx,
+        "mine",
+        "api",
+        "/r/api",
+        "main",
+        "waiting",
+        Some("api-name"),
+        Some("API work"),
+        &[],
+    );
+    job(
+        &fx,
+        "mine",
+        "api",
+        "x",
+        "draft",
+        Some("S2"),
+        &["src/x.rs"],
+        &[],
+    );
     fx
 }
 
@@ -118,7 +188,10 @@ fn count(fx: &Fx, sql: &str) -> i64 {
 }
 
 fn outlined_events(fx: &Fx) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", "plan-outlined"]).ok()["events"].as_array().unwrap().clone()
+    fx.cpd(&["events", "list", "--kind", "plan-outlined"]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 /// The outline of the summary test: every field set.
@@ -144,12 +217,17 @@ fn a_valid_outline_is_stored_canonically_and_plan_show_returns_it() {
     let path = file(&fx, "outline.json", text);
     assert_eq!(show(&fx)["outline"], Value::Null);
 
-    let out = fx.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]).ok();
+    let out = fx
+        .cpd(&["plan", "outline", "--file", &path, "--plan", "mine"])
+        .ok();
     let expected = json!({
         "assumptions": [], "decided": ["t-d1"], "decisions": [], "done_when": {"api": ["It works"]},
         "goal": "Show the review", "out_of_scope": [], "risks": ["Slow"]
     });
-    assert_eq!((&out["plan"], &out["replaced"], &out["outline"]), (&json!("mine"), &json!(false), &expected));
+    assert_eq!(
+        (&out["plan"], &out["replaced"], &out["outline"]),
+        (&json!("mine"), &json!(false), &expected)
+    );
     assert_eq!(show(&fx)["outline"], expected);
     // `plans.outline` holds the canonical JSON: keys sorted, no whitespace.
     let stored: String = fx.env.query("SELECT outline FROM plans WHERE id = 'mine'");
@@ -159,7 +237,10 @@ fn a_valid_outline_is_stored_canonically_and_plan_show_returns_it() {
     );
     let events = outlined_events(&fx);
     assert_eq!(events.len(), 1);
-    assert_eq!((&events[0]["plan"], &events[0]["data"]), (&json!("mine"), &json!({"replaced": false})));
+    assert_eq!(
+        (&events[0]["plan"], &events[0]["data"]),
+        (&json!("mine"), &json!({"replaced": false}))
+    );
 }
 
 fn show(fx: &Fx) -> Value {
@@ -170,16 +251,26 @@ fn show(fx: &Fx) -> Value {
 fn the_same_file_twice_writes_one_event_and_the_same_content_in_another_key_order_too() {
     let fx = fixture();
     let path = file(&fx, "a.json", r#"{"goal": "G", "risks": ["R"]}"#);
-    let first = fx.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]).ok();
+    let first = fx
+        .cpd(&["plan", "outline", "--file", &path, "--plan", "mine"])
+        .ok();
     assert_eq!(first["replaced"], false);
     assert!(first.get("already").is_none(), "{first}");
-    let again = fx.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]).ok();
+    let again = fx
+        .cpd(&["plan", "outline", "--file", &path, "--plan", "mine"])
+        .ok();
     assert_eq!(again["already"], true);
     assert!(again.get("replaced").is_none(), "{again}");
     assert_eq!(again["outline"], first["outline"]);
     // The same content, spelled differently: the same canonical JSON.
-    let reordered = file(&fx, "b.json", "{\"risks\":[\"R\"],\n\"goal\":\"G\",\"assumptions\":[]}");
-    let third = fx.cpd(&["plan", "outline", "--file", &reordered, "--plan", "mine"]).ok();
+    let reordered = file(
+        &fx,
+        "b.json",
+        "{\"risks\":[\"R\"],\n\"goal\":\"G\",\"assumptions\":[]}",
+    );
+    let third = fx
+        .cpd(&["plan", "outline", "--file", &reordered, "--plan", "mine"])
+        .ok();
     assert_eq!(third["already"], true);
     assert_eq!(outlined_events(&fx).len(), 1);
 }
@@ -187,7 +278,11 @@ fn the_same_file_twice_writes_one_event_and_the_same_content_in_another_key_orde
 #[test]
 fn a_different_outline_replaces_the_whole_outline_with_replaced_true() {
     let fx = fixture();
-    outline(&fx, &json!({"goal": "One", "risks": ["R"], "assumptions": ["A"]})).ok();
+    outline(
+        &fx,
+        &json!({"goal": "One", "risks": ["R"], "assumptions": ["A"]}),
+    )
+    .ok();
     let out = outline(&fx, &json!({"goal": "Two"})).ok();
     assert_eq!(out["replaced"], true);
     // No merge: what the second file leaves out is empty.
@@ -205,7 +300,16 @@ fn the_outline_works_in_every_phase() {
     for phase in ["grounding", "dispatch", "deploy", "done"] {
         plan(&fx, &format!("p-{phase}"), phase, false);
         let path = file(&fx, "o.json", &minimal().to_string());
-        let out = fx.cpd(&["plan", "outline", "--file", &path, "--plan", &format!("p-{phase}")]).ok();
+        let out = fx
+            .cpd(&[
+                "plan",
+                "outline",
+                "--file",
+                &path,
+                "--plan",
+                &format!("p-{phase}"),
+            ])
+            .ok();
         assert_eq!(out["replaced"], false, "{phase}");
     }
 }
@@ -215,11 +319,26 @@ fn the_outline_refusals_that_are_not_about_its_content() {
     let fx = fixture();
     plan(&fx, "old", "plan", true);
     let path = file(&fx, "o.json", &minimal().to_string());
-    refused(&fx.cpd(&["plan", "outline", "--file", &path, "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.cpd(&["plan", "outline", "--file", &path, "--plan", "old"]), "archived", 3);
+    refused(
+        &fx.cpd(&["plan", "outline", "--file", &path, "--plan", "nope"]),
+        "plan_not_found",
+        4,
+    );
+    refused(
+        &fx.cpd(&["plan", "outline", "--file", &path, "--plan", "old"]),
+        "archived",
+        3,
+    );
     let missing = fx.env.root().join("missing.json").display().to_string();
-    refused(&fx.cpd(&["plan", "outline", "--file", &missing, "--plan", "mine"]), "file_unreadable", 2);
-    assert_eq!(count(&fx, "SELECT count(*) FROM plans WHERE outline IS NOT NULL"), 0);
+    refused(
+        &fx.cpd(&["plan", "outline", "--file", &missing, "--plan", "mine"]),
+        "file_unreadable",
+        2,
+    );
+    assert_eq!(
+        count(&fx, "SELECT count(*) FROM plans WHERE outline IS NOT NULL"),
+        0
+    );
     assert!(outlined_events(&fx).is_empty());
 }
 
@@ -227,9 +346,17 @@ fn the_outline_refusals_that_are_not_about_its_content() {
 fn invalid(fx: &Fx, text: &str, field: &str) -> Value {
     let events = outlined_events(fx).len();
     let path = file(fx, "bad.json", text);
-    let error = refused(&fx.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]), "outline_invalid", 2);
+    let error = refused(
+        &fx.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]),
+        "outline_invalid",
+        2,
+    );
     assert_eq!(error["details"]["field"], field, "{text}");
-    assert_eq!(count(fx, "SELECT count(*) FROM plans WHERE outline IS NOT NULL"), 0, "{text}");
+    assert_eq!(
+        count(fx, "SELECT count(*) FROM plans WHERE outline IS NOT NULL"),
+        0,
+        "{text}"
+    );
     assert_eq!(outlined_events(fx).len(), events, "{text}");
     error
 }
@@ -248,10 +375,26 @@ fn an_outline_with_a_bad_shape_is_invalid_at_the_path_of_the_failure() {
     invalid(&fx, &json!({"goal": long}).to_string(), "goal");
     invalid(&fx, "{\"goal\": \"two\\nlines\"}", "goal");
     invalid(&fx, "{\"goal\": \"a\\ttab\"}", "goal");
-    invalid(&fx, r#"{"goal": "G", "decisions": [{"question": "Q", "answer": "A"}, {"question": "Q", "answer": ""}]}"#, "decisions[1].answer");
-    invalid(&fx, &json!({"goal": "G", "assumptions": ["ok", long]}).to_string(), "assumptions[1]");
-    invalid(&fx, &json!({"goal": "G", "done_when": {"api": [long]}}).to_string(), "done_when.api[0]");
-    invalid(&fx, r#"{"goal": "G", "out_of_scope": ["1", "2", "3", "4", "5", "6"]}"#, "out_of_scope[5]");
+    invalid(
+        &fx,
+        r#"{"goal": "G", "decisions": [{"question": "Q", "answer": "A"}, {"question": "Q", "answer": ""}]}"#,
+        "decisions[1].answer",
+    );
+    invalid(
+        &fx,
+        &json!({"goal": "G", "assumptions": ["ok", long]}).to_string(),
+        "assumptions[1]",
+    );
+    invalid(
+        &fx,
+        &json!({"goal": "G", "done_when": {"api": [long]}}).to_string(),
+        "done_when.api[0]",
+    );
+    invalid(
+        &fx,
+        r#"{"goal": "G", "out_of_scope": ["1", "2", "3", "4", "5", "6"]}"#,
+        "out_of_scope[5]",
+    );
 }
 
 #[test]
@@ -260,21 +403,57 @@ fn an_outline_with_more_than_three_risks_is_invalid() {
     // Three are allowed; the fourth is the failure, as the contract's `risks[3]`.
     outline(&fx, &json!({"goal": "G", "risks": ["1", "2", "3"]})).ok();
     fx.env.sql("UPDATE plans SET outline = NULL;");
-    invalid(&fx, r#"{"goal": "G", "risks": ["1", "2", "3", "4"]}"#, "risks[3]");
+    invalid(
+        &fx,
+        r#"{"goal": "G", "risks": ["1", "2", "3", "4"]}"#,
+        "risks[3]",
+    );
 }
 
 #[test]
 fn a_done_when_key_must_be_a_pr_of_the_plan_that_is_not_cancelled() {
     let fx = fixture();
-    pr(&fx, "mine", "gone", "/r/gone", "main", "cancelled", None, None, &[]);
-    let error = invalid(&fx, r#"{"goal": "G", "done_when": {"nope": ["Done"]}}"#, "done_when.nope");
+    pr(
+        &fx,
+        "mine",
+        "gone",
+        "/r/gone",
+        "main",
+        "cancelled",
+        None,
+        None,
+        &[],
+    );
+    let error = invalid(
+        &fx,
+        r#"{"goal": "G", "done_when": {"nope": ["Done"]}}"#,
+        "done_when.nope",
+    );
     assert_eq!(error["details"]["key"], "nope");
-    let error = invalid(&fx, r#"{"goal": "G", "done_when": {"api": ["Done"], "gone": ["Done"]}}"#, "done_when.gone");
+    let error = invalid(
+        &fx,
+        r#"{"goal": "G", "done_when": {"api": ["Done"], "gone": ["Done"]}}"#,
+        "done_when.gone",
+    );
     assert_eq!(error["details"]["key"], "gone");
     // A PR of another Plan is no PR of this one.
     plan(&fx, "busy", "plan", false);
-    pr(&fx, "busy", "svc", "/r/svc", "main", "waiting", None, None, &[]);
-    invalid(&fx, r#"{"goal": "G", "done_when": {"svc": ["Done"]}}"#, "done_when.svc");
+    pr(
+        &fx,
+        "busy",
+        "svc",
+        "/r/svc",
+        "main",
+        "waiting",
+        None,
+        None,
+        &[],
+    );
+    invalid(
+        &fx,
+        r#"{"goal": "G", "done_when": {"svc": ["Done"]}}"#,
+        "done_when.svc",
+    );
 }
 
 #[test]
@@ -282,7 +461,11 @@ fn a_decided_id_must_be_a_record_of_the_plans_context() {
     let fx = fixture();
     let error = invalid(&fx, r#"{"goal": "G", "decided": ["t-d999"]}"#, "decided[0]");
     assert_eq!(error["details"]["record"], "t-d999");
-    let error = invalid(&fx, r#"{"goal": "G", "decided": ["t-d1", "t-d999"]}"#, "decided[1]");
+    let error = invalid(
+        &fx,
+        r#"{"goal": "G", "decided": ["t-d1", "t-d999"]}"#,
+        "decided[1]",
+    );
     assert_eq!(error["details"]["record"], "t-d999");
     // A record of another Context does not count.
     let error = invalid(&fx, r#"{"goal": "G", "decided": ["t-x1"]}"#, "decided[0]");
@@ -303,7 +486,9 @@ fn fingerprint_of_fixture(outline: Option<&str>) -> String {
     let prs = "[{\"base\":\"main\",\"key\":\"api\",\"needs\":[],\"repo\":\"/r/api\"}]";
     match outline {
         None => sha256(&format!("{{\"jobs\":[{job}],\"prs\":{prs}}}")),
-        Some(o) => sha256(&format!("{{\"jobs\":[{job}],\"outline\":{o},\"prs\":{prs}}}")),
+        Some(o) => sha256(&format!(
+            "{{\"jobs\":[{job}],\"outline\":{o},\"prs\":{prs}}}"
+        )),
     }
 }
 
@@ -328,14 +513,34 @@ fn a_plan_with_an_outline_has_the_member_outline_in_its_fingerprint() {
 fn changing_the_outline_after_a_review_makes_the_review_not_current() {
     let fx = fixture();
     outline(&fx, &json!({"goal": "One", "done_when": {"api": ["Done"]}})).ok();
-    let r1 = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    let r1 = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
     assert_eq!(r1["review"]["id"], "r1");
     outline(&fx, &json!({"goal": "Two", "done_when": {"api": ["Done"]}})).ok();
 
-    let decided = fx.cpd(&["plan", "decide", "r1", "--approve", "--plan", "mine"]).ok();
+    let decided = fx
+        .cpd(&["plan", "decide", "r1", "--approve", "--plan", "mine"])
+        .ok();
     assert_eq!(decided["current"], false);
     // The review of the changed Plan is a new one, not the pending one.
-    let r2 = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    let r2 = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
     assert_eq!(r2["review"]["id"], "r2");
     assert_ne!(r2["review"]["fingerprint"], r1["review"]["fingerprint"]);
 }
@@ -357,8 +562,22 @@ fn state(fx: &Fx) -> (i64, i64, bool, bool, bool) {
 fn a_review_of_a_plan_without_an_outline_is_refused_and_writes_nothing() {
     let fx = fixture();
     let before = state(&fx);
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]), "outline_missing", 3);
-    assert_eq!(error["details"]["next"], "cpd plan outline --file <outline.json>");
+    let error = refused(
+        &fx.cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ]),
+        "outline_missing",
+        3,
+    );
+    assert_eq!(
+        error["details"]["next"],
+        "cpd plan outline --file <outline.json>"
+    );
     assert_eq!(state(&fx), before);
     assert_eq!(before, (0, before.1, false, false, false));
 }
@@ -366,41 +585,146 @@ fn a_review_of_a_plan_without_an_outline_is_refused_and_writes_nothing() {
 #[test]
 fn a_pending_review_made_before_the_outline_does_not_let_a_plan_without_one_through() {
     let fx = fixture();
-    let fingerprint = fx.cpd(&["plan", "render", "--plan", "mine"]).ok()["fingerprint"].as_str().unwrap().to_owned();
+    let fingerprint = fx.cpd(&["plan", "render", "--plan", "mine"]).ok()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     fx.env.sql(&format!(
         "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('mine', 'r1', 1, '{fingerprint}', 'pending', 't');"
     ));
-    refused(&fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]), "outline_missing", 3);
+    refused(
+        &fx.cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ]),
+        "outline_missing",
+        3,
+    );
     assert_eq!(count(&fx, "SELECT count(*) FROM plan_reviews"), 1);
 }
 
 #[test]
 fn a_review_with_a_pr_that_has_a_draft_and_no_done_when_is_refused_and_writes_nothing() {
     let fx = fixture();
-    pr(&fx, "mine", "ui", "/r/ui", "main", "waiting", None, None, &[]);
-    job(&fx, "mine", "ui", "y", "draft", Some("S2"), &["src/y.rs"], &[]);
-    pr(&fx, "mine", "idle", "/r/idle", "main", "waiting", None, None, &[]);
-    pr(&fx, "mine", "gone", "/r/gone", "main", "cancelled", None, None, &[]);
+    pr(
+        &fx,
+        "mine",
+        "ui",
+        "/r/ui",
+        "main",
+        "waiting",
+        None,
+        None,
+        &[],
+    );
+    job(
+        &fx,
+        "mine",
+        "ui",
+        "y",
+        "draft",
+        Some("S2"),
+        &["src/y.rs"],
+        &[],
+    );
+    pr(
+        &fx,
+        "mine",
+        "idle",
+        "/r/idle",
+        "main",
+        "waiting",
+        None,
+        None,
+        &[],
+    );
+    pr(
+        &fx,
+        "mine",
+        "gone",
+        "/r/gone",
+        "main",
+        "cancelled",
+        None,
+        None,
+        &[],
+    );
     // `idle` has no draft and `gone` is cancelled: neither needs an entry. `api` has one, `ui` has none.
     outline(&fx, &json!({"goal": "G", "done_when": {"api": ["Done"]}})).ok();
     let before = state(&fx);
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]), "outline_incomplete", 3);
+    let error = refused(
+        &fx.cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ]),
+        "outline_incomplete",
+        3,
+    );
     assert_eq!(error["details"]["prs"], json!(["ui"]));
     assert_eq!(state(&fx), before);
 
     // Every PR with a draft covered: the review goes through.
-    outline(&fx, &json!({"goal": "G", "done_when": {"api": ["Done"], "ui": ["Done too"]}})).ok();
-    fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    outline(
+        &fx,
+        &json!({"goal": "G", "done_when": {"api": ["Done"], "ui": ["Done too"]}}),
+    )
+    .ok();
+    fx.cpd(&[
+        "plan",
+        "review",
+        "--plan",
+        "mine",
+        "--title",
+        "Review title",
+    ])
+    .ok();
 }
 
 #[test]
 fn a_pr_with_only_locked_jobs_needs_no_done_when() {
     let fx = fixture();
-    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'mine';");
-    pr(&fx, "mine", "old", "/r/old", "main", "dispatch", None, None, &[]);
-    job(&fx, "mine", "old", "z", "queued", Some("S2"), &["src/z.rs"], &[]);
+    fx.env
+        .sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'mine';");
+    pr(
+        &fx,
+        "mine",
+        "old",
+        "/r/old",
+        "main",
+        "dispatch",
+        None,
+        None,
+        &[],
+    );
+    job(
+        &fx,
+        "mine",
+        "old",
+        "z",
+        "queued",
+        Some("S2"),
+        &["src/z.rs"],
+        &[],
+    );
     outline(&fx, &json!({"goal": "G", "done_when": {"api": ["Done"]}})).ok();
-    let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    let out = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
     assert_eq!(out["review"]["id"], "r1");
 }
 
@@ -419,16 +743,91 @@ fn two_pr_plan() -> Fx {
     );
     // Built in phase `plan` (the PR triggers refuse a needs row after the lock), then locked.
     plan(&fx, "mine", "plan", false);
-    pr(&fx, "mine", "api", "/r/api", "main", "dispatch", None, None, &[]);
-    job(&fx, "mine", "api", "a-locked", "queued", Some("S2"), &["core/x.rs"], &[]);
-    pr(&fx, "mine", "ui", "/r/ui", "cpd/mine/api", "waiting", None, Some("Build the UI"), &["api"]);
-    job(&fx, "mine", "ui", "u-one", "draft", Some("S3"), &["web/a.rs", "web/b.rs"], &[]);
-    job(&fx, "mine", "ui", "u-two", "draft", Some("O3"), &["web/c.rs"], &["u-one"]);
+    pr(
+        &fx,
+        "mine",
+        "api",
+        "/r/api",
+        "main",
+        "dispatch",
+        None,
+        None,
+        &[],
+    );
+    job(
+        &fx,
+        "mine",
+        "api",
+        "a-locked",
+        "queued",
+        Some("S2"),
+        &["core/x.rs"],
+        &[],
+    );
+    pr(
+        &fx,
+        "mine",
+        "ui",
+        "/r/ui",
+        "cpd/mine/api",
+        "waiting",
+        None,
+        Some("Build the UI"),
+        &["api"],
+    );
+    job(
+        &fx,
+        "mine",
+        "ui",
+        "u-one",
+        "draft",
+        Some("S3"),
+        &["web/a.rs", "web/b.rs"],
+        &[],
+    );
+    job(
+        &fx,
+        "mine",
+        "ui",
+        "u-two",
+        "draft",
+        Some("O3"),
+        &["web/c.rs"],
+        &["u-one"],
+    );
     fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z' WHERE id = 'mine';");
     plan(&fx, "busy", "dispatch", false);
-    pr(&fx, "busy", "svc", "/r/ui", "main", "dispatch", None, None, &[]);
-    job(&fx, "busy", "svc", "y", "queued", Some("S2"), &["web/a.rs"], &[]);
-    job(&fx, "busy", "svc", "z", "draft", Some("S2"), &["web/b.rs"], &[]);
+    pr(
+        &fx,
+        "busy",
+        "svc",
+        "/r/ui",
+        "main",
+        "dispatch",
+        None,
+        None,
+        &[],
+    );
+    job(
+        &fx,
+        "busy",
+        "svc",
+        "y",
+        "queued",
+        Some("S2"),
+        &["web/a.rs"],
+        &[],
+    );
+    job(
+        &fx,
+        "busy",
+        "svc",
+        "z",
+        "draft",
+        Some("S2"),
+        &["web/b.rs"],
+        &[],
+    );
     fx
 }
 
@@ -436,7 +835,16 @@ fn two_pr_plan() -> Fx {
 fn a_review_writes_summary_r1_with_every_row_in_order_and_returns_no_path() {
     let fx = two_pr_plan();
     outline(&fx, &full_outline()).ok();
-    let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    let out = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
     let summary = run_file(&fx, "mine", "summary-r1.md");
     assert_eq!(out["summary"], summary.display().to_string());
     assert!(out.get("path").is_none(), "{out}");
@@ -485,8 +893,20 @@ Approve | Change
     assert_eq!(fs::read_to_string(&summary).unwrap(), expected);
 
     // Asking again returns the pending review and its paths, and changes nothing.
-    let again = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
-    assert_eq!((&again["already"], &again["summary"]), (&json!(true), &out["summary"]));
+    let again = fx
+        .cpd(&[
+            "plan",
+            "review",
+            "--plan",
+            "mine",
+            "--title",
+            "Review title",
+        ])
+        .ok();
+    assert_eq!(
+        (&again["already"], &again["summary"]),
+        (&json!(true), &out["summary"])
+    );
     assert_eq!(fs::read_to_string(&summary).unwrap(), expected);
 }
 
@@ -494,23 +914,51 @@ Approve | Change
 fn the_summary_of_a_review_is_a_copy_that_a_later_render_cannot_change() {
     let fx = two_pr_plan();
     outline(&fx, &full_outline()).ok();
-    fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    fx.cpd(&[
+        "plan",
+        "review",
+        "--plan",
+        "mine",
+        "--title",
+        "Review title",
+    ])
+    .ok();
     let reviewed = fs::read_to_string(run_file(&fx, "mine", "summary-r1.md")).unwrap();
 
     let mut changed = full_outline();
     changed["goal"] = json!("Another goal");
     outline(&fx, &changed).ok();
     let out = fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
-    assert_eq!(out["summary"], run_file(&fx, "mine", "summary.md").display().to_string());
-    assert_eq!(fs::read_to_string(run_file(&fx, "mine", "summary-r1.md")).unwrap(), reviewed);
-    assert!(fs::read_to_string(run_file(&fx, "mine", "summary.md")).unwrap().contains("Goal: Another goal\n"));
+    assert_eq!(
+        out["summary"],
+        run_file(&fx, "mine", "summary.md").display().to_string()
+    );
+    assert_eq!(
+        fs::read_to_string(run_file(&fx, "mine", "summary-r1.md")).unwrap(),
+        reviewed
+    );
+    assert!(
+        fs::read_to_string(run_file(&fx, "mine", "summary.md"))
+            .unwrap()
+            .contains("Goal: Another goal\n")
+    );
 }
 
 #[test]
 fn a_render_without_an_outline_writes_summary_md_with_an_empty_goal_and_the_stubs_as_later() {
     let fx = fixture();
     job(&fx, "mine", "api", "later-one", "draft", None, &[], &[]);
-    pr(&fx, "mine", "next", "/r/next", "main", "waiting", None, None, &[]);
+    pr(
+        &fx,
+        "mine",
+        "next",
+        "/r/next",
+        "main",
+        "waiting",
+        None,
+        None,
+        &[],
+    );
 
     let out = fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
     let path = run_file(&fx, "mine", "summary.md");
@@ -551,10 +999,21 @@ Full plan ({})
 fn the_summary_has_no_spec_no_mermaid_and_no_row_for_a_locked_job() {
     let fx = two_pr_plan();
     outline(&fx, &full_outline()).ok();
-    fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    fx.cpd(&[
+        "plan",
+        "review",
+        "--plan",
+        "mine",
+        "--title",
+        "Review title",
+    ])
+    .ok();
     for name in ["summary-r1.md", "summary.md"] {
         fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
         let text = fs::read_to_string(run_file(&fx, "mine", name)).unwrap();
-        assert!(!text.contains("mermaid") && !text.contains("#### Goal") && !text.contains("a-locked"), "{name}: {text}");
+        assert!(
+            !text.contains("mermaid") && !text.contains("#### Goal") && !text.contains("a-locked"),
+            "{name}: {text}"
+        );
     }
 }

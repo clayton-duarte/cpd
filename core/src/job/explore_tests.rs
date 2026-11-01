@@ -2,7 +2,7 @@
 //! (Plan `explore-roles`, R2-R6; contract §2.2 "Job kinds", commands.md §5). Every command runs in process on a temp
 //! `$CPD_HOME` with a fixed Catalog: no pi, no git, no process.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde_json::{Value, json};
@@ -48,20 +48,42 @@ fn fixture_with(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>,
     std::fs::create_dir_all(&owner).unwrap();
     std::fs::write(owner.join("owner.toml"), "").unwrap();
     let mut env = Env::open_home(home).unwrap();
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![0, 1, 2, 3, 4, 5],
+    };
     env.catalog = Some(Catalog {
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),
         h: model("h/m"),
-        g: TierModel { model: "g/m".to_owned(), efforts: vec![] },
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
     });
-    let locked = if matches!(phase, "grounding" | "plan") { "NULL".to_owned() } else { format!("'{T}'") };
-    let done = if phase == "done" { format!("'{T}'") } else { "NULL".to_owned() };
-    let repo = if repo_is_temp_dir { dir_path.display().to_string() } else { repo.map_or("/r".to_owned(), |p| p.display().to_string()) };
+    let locked = if matches!(phase, "grounding" | "plan") {
+        "NULL".to_owned()
+    } else {
+        format!("'{T}'")
+    };
+    let done = if phase == "done" {
+        format!("'{T}'")
+    } else {
+        "NULL".to_owned()
+    };
+    let repo = if repo_is_temp_dir {
+        dir_path.display().to_string()
+    } else {
+        repo.map_or("/r".to_owned(), |p| p.display().to_string())
+    };
     let waiting = matches!(phase, "grounding" | "plan");
     let status = if waiting { "waiting" } else { "dispatch" };
-    let (worktree, started) = if waiting { ("NULL".to_owned(), "NULL".to_owned()) } else { ("'/lw'".to_owned(), format!("'{T}'")) };
+    let (worktree, started) = if waiting {
+        ("NULL".to_owned(), "NULL".to_owned())
+    } else {
+        ("'/lw'".to_owned(), format!("'{T}'"))
+    };
     let mut sql = format!(
         "INSERT INTO contexts (id, title, created_at, created_on, owner) VALUES ('ctx', 'Ctx', '{T}', 'm1', 'acme');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -126,22 +148,36 @@ impl Fixture {
         });
         // Without needs: inserted `queued`, then moved to `status`. With needs: inserted as a draft, so that its needs can be
         // written, then Locked as `plan lock` does.
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
         let first = if needs.is_empty() { "queued" } else { "draft" };
-        let first_fingerprint = if needs.is_empty() { format!("'{fingerprint}'") } else { "NULL".to_owned() };
+        let first_fingerprint = if needs.is_empty() {
+            format!("'{fingerprint}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', {workflow}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
         ));
         for need in needs {
-            self.sql(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"));
+            self.sql(&format!(
+                "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"
+            ));
         }
         self.sql(&format!("UPDATE jobs SET status = '{status}', fingerprint = '{fingerprint}', failed_cause = {cause} WHERE plan = 'pay' AND key = '{key}';"));
     }
 
     /// An ended failed Attempt of Job `key`.
     fn attempt(&mut self, key: &str, status: &str) {
-        let (end, outcome, cause) = if status == "ended" { (format!("'{T}'"), "'failed'", "'crashed'") } else { ("NULL".to_owned(), "NULL", "NULL") };
+        let (end, outcome, cause) = if status == "ended" {
+            (format!("'{T}'"), "'failed'", "'crashed'")
+        } else {
+            ("NULL".to_owned(), "NULL", "NULL")
+        };
         self.sql(&format!(
             "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, driver_pid, started_at, ended_at)
                VALUES ('pay', '{key}-a1', '{key}', 1, 'H2', 'ladder', '{status}', {outcome}, {cause}, 'cpd/pay--{key}-a1', '/w', 4242, '{T}', {end});"
@@ -153,7 +189,7 @@ impl Fixture {
             key: JobKey::parse(key).unwrap(),
             title: Text::from_str("T").unwrap(),
             tier: Some(Tier::parse(tier).unwrap()),
-            spec: Some(spec.clone()),
+            spec: Some(spec.to_path_buf()),
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             draft,
             urgent: false,
@@ -168,12 +204,21 @@ impl Fixture {
     fn column(&mut self, key: &str, column: &str) -> Option<String> {
         self.env
             .store
-            .read(|c| Ok(c.query_row(&format!("SELECT {column} FROM jobs WHERE plan = 'pay' AND key = ?1"), [key], |r| r.get(0))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    &format!("SELECT {column} FROM jobs WHERE plan = 'pay' AND key = ?1"),
+                    [key],
+                    |r| r.get(0),
+                )?)
+            })
             .unwrap()
     }
 
     fn count(&mut self, sql: &str) -> i64 {
-        self.env.store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        self.env
+            .store
+            .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     }
 
     fn jobs(&mut self) -> i64 {
@@ -181,7 +226,9 @@ impl Fixture {
     }
 
     fn events(&mut self, kind: &str) -> i64 {
-        self.count(&format!("SELECT count(*) FROM events WHERE kind = '{kind}'"))
+        self.count(&format!(
+            "SELECT count(*) FROM events WHERE kind = '{kind}'"
+        ))
     }
 }
 
@@ -231,7 +278,10 @@ fn explore_add_scout_in_grounding_is_queued_with_derived_touches() {
     assert_eq!(f.events("job-added"), 1);
 
     let work = f.spec_file("w.json", &work_spec());
-    let e = refused(f.add("w1", "work", "S2", &work, Some("api"), false, &[]), ErrorCode::IllegalPhase);
+    let e = refused(
+        f.add("w1", "work", "S2", &work, Some("api"), false, &[]),
+        ErrorCode::IllegalPhase,
+    );
     assert_eq!(e.exit().code(), 3);
     assert_eq!(f.jobs(), 1);
 }
@@ -243,8 +293,15 @@ fn explore_add_is_queued_in_plan_dispatch_and_deploy_phases() {
         let spec = f.explore_spec("s.json");
         let out = fields(f.add("s1", "scout", "H2", &spec, None, false, &[]));
         assert_eq!(out["job"]["status"], "queued", "phase {phase}");
-        assert_eq!(out["job"]["appended"], true, "phase {phase}: appended as a Job added after the lock");
-        assert_eq!(f.column("s1", "status").as_deref(), Some("queued"), "phase {phase}");
+        assert_eq!(
+            out["job"]["appended"], true,
+            "phase {phase}: appended as a Job added after the lock"
+        );
+        assert_eq!(
+            f.column("s1", "status").as_deref(),
+            Some("queued"),
+            "phase {phase}"
+        );
         assert!(f.column("s1", "fingerprint").is_some(), "phase {phase}");
         let research = f.explore_spec("r.json");
         let out = fields(f.add("r1", "research", "S2", &research, None, false, &[]));
@@ -284,7 +341,10 @@ fn explore_add_refuses_draft() {
     for phase in ["plan", "dispatch"] {
         let mut f = fixture(phase);
         let spec = f.explore_spec("s.json");
-        let e = refused(f.add("s1", "scout", "H2", &spec, None, true, &[]), ErrorCode::ExploreNoDraft);
+        let e = refused(
+            f.add("s1", "scout", "H2", &spec, None, true, &[]),
+            ErrorCode::ExploreNoDraft,
+        );
         assert_eq!(e.exit().code(), 3, "phase {phase}");
         assert_eq!(f.jobs(), 0, "nothing written");
     }
@@ -294,9 +354,16 @@ fn explore_add_refuses_draft() {
 fn explore_add_is_refused_in_a_done_plan() {
     let mut f = fixture("done");
     let spec = f.explore_spec("s.json");
-    let e = refused(f.add("s1", "scout", "H2", &spec, None, false, &[]), ErrorCode::IllegalPhase);
+    let e = refused(
+        f.add("s1", "scout", "H2", &spec, None, false, &[]),
+        ErrorCode::IllegalPhase,
+    );
     assert_eq!(e.exit().code(), 3);
-    assert!(e.message().to_lowercase().contains("explore"), "a message of its own that names explore Jobs: {}", e.message());
+    assert!(
+        e.message().to_lowercase().contains("explore"),
+        "a message of its own that names explore Jobs: {}",
+        e.message()
+    );
     assert_eq!(f.jobs(), 0);
     assert_eq!(f.events("job-added"), 0);
 }
@@ -306,13 +373,21 @@ fn assert_out_of_range(e: CpdError, kind: &str, range: &str) {
     assert_eq!(e.code(), ErrorCode::TierNotAllowed, "{e}");
     assert_eq!(e.exit().code(), 2);
     let details = Value::Object(e.details().clone()).to_string();
-    assert!(details.contains(kind) && details.contains(range), "details name {kind} and {range}: {details}");
+    assert!(
+        details.contains(kind) && details.contains(range),
+        "details name {kind} and {range}: {details}"
+    );
 }
 
 #[test]
 fn scout_tier_is_limited_to_h1_to_h3() {
     for t in ["H0", "S1"] {
-        assert_out_of_range(check_kind_tier("scout", tier(t)).expect_err(&format!("{t} is outside the scout range")), "scout", "H1-H3");
+        assert_out_of_range(
+            check_kind_tier("scout", tier(t))
+                .expect_err(&format!("{t} is outside the scout range")),
+            "scout",
+            "H1-H3",
+        );
     }
     for t in ["H1", "H2", "H3"] {
         check_kind_tier("scout", tier(t)).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -320,7 +395,12 @@ fn scout_tier_is_limited_to_h1_to_h3() {
     let mut f = fixture("dispatch");
     let spec = f.explore_spec("s.json");
     for (i, t) in ["H0", "S1"].into_iter().enumerate() {
-        assert_out_of_range(f.add(&format!("o{i}"), "scout", t, &spec, None, false, &[]).expect_err("outside the range"), "scout", "H1-H3");
+        assert_out_of_range(
+            f.add(&format!("o{i}"), "scout", t, &spec, None, false, &[])
+                .expect_err("outside the range"),
+            "scout",
+            "H1-H3",
+        );
     }
     assert_eq!(f.jobs(), 0);
     for (i, t) in ["H1", "H2", "H3"].into_iter().enumerate() {
@@ -331,7 +411,12 @@ fn scout_tier_is_limited_to_h1_to_h3() {
 #[test]
 fn research_tier_is_limited_to_s1_to_s3() {
     for t in ["S0", "H3"] {
-        assert_out_of_range(check_kind_tier("research", tier(t)).expect_err(&format!("{t} is outside the research range")), "research", "S1-S3");
+        assert_out_of_range(
+            check_kind_tier("research", tier(t))
+                .expect_err(&format!("{t} is outside the research range")),
+            "research",
+            "S1-S3",
+        );
     }
     for t in ["S1", "S2", "S3"] {
         check_kind_tier("research", tier(t)).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -339,7 +424,12 @@ fn research_tier_is_limited_to_s1_to_s3() {
     let mut f = fixture("dispatch");
     let spec = f.explore_spec("s.json");
     for (i, t) in ["S0", "H3"].into_iter().enumerate() {
-        assert_out_of_range(f.add(&format!("o{i}"), "research", t, &spec, None, false, &[]).expect_err("outside the range"), "research", "S1-S3");
+        assert_out_of_range(
+            f.add(&format!("o{i}"), "research", t, &spec, None, false, &[])
+                .expect_err("outside the range"),
+            "research",
+            "S1-S3",
+        );
     }
     assert_eq!(f.jobs(), 0);
     for (i, t) in ["S1", "S2", "S3"].into_iter().enumerate() {
@@ -350,19 +440,34 @@ fn research_tier_is_limited_to_s1_to_s3() {
 #[test]
 fn explore_spec_has_exactly_four_fields() {
     let mut f = fixture("dispatch");
-    for (field, value) in [("touches", json!(["x"])), ("tests", json!(["t"])), ("test_files", json!(["f"])), ("resources", json!(["r"]))] {
+    for (field, value) in [
+        ("touches", json!(["x"])),
+        ("tests", json!(["t"])),
+        ("test_files", json!(["f"])),
+        ("resources", json!(["r"])),
+    ] {
         let mut spec = explore_spec();
         spec[field] = value;
         let path = f.spec_file("s.json", &spec);
-        let e = refused(f.add("s1", "scout", "H2", &path, None, false, &[]), ErrorCode::SpecInvalid);
+        let e = refused(
+            f.add("s1", "scout", "H2", &path, None, false, &[]),
+            ErrorCode::SpecInvalid,
+        );
         assert_eq!(e.exit().code(), 2);
-        assert_eq!(e.details()["path"], format!("$.{field}"), "the JSON path of the forbidden field");
+        assert_eq!(
+            e.details()["path"],
+            format!("$.{field}"),
+            "the JSON path of the forbidden field"
+        );
     }
     for field in ["goal", "context", "acceptance", "out_of_scope"] {
         let mut spec = explore_spec();
         spec.as_object_mut().unwrap().remove(field);
         let path = f.spec_file("s.json", &spec);
-        let e = refused(f.add("s1", "research", "S2", &path, None, false, &[]), ErrorCode::SpecInvalid);
+        let e = refused(
+            f.add("s1", "research", "S2", &path, None, false, &[]),
+            ErrorCode::SpecInvalid,
+        );
         assert_eq!(e.details()["path"], format!("$.{field}"), "a missing field");
     }
     assert_eq!(f.jobs(), 0);
@@ -372,7 +477,9 @@ fn explore_spec_has_exactly_four_fields() {
 fn explore_spec_context_may_name_machine_paths() {
     let mut f = fixture("dispatch");
     let mut spec = explore_spec();
-    spec["context"] = json!("Read /Users/someone/projects/other/src and ~/notes/ideas.md, and /opt/tools/README.");
+    spec["context"] = json!(
+        "Read /Users/someone/projects/other/src and ~/notes/ideas.md, and /opt/tools/README."
+    );
     spec["acceptance"] = json!(["cites a line of /Users/someone/projects/other/src/main.rs"]);
     let path = f.spec_file("s.json", &spec);
     fields(f.add("s1", "scout", "H2", &path, None, false, &[]));
@@ -392,7 +499,11 @@ fn explore_spec_skips_the_touches_tree_check() {
     }
     fields(out);
     let touches: Value = serde_json::from_str(&f.column("s1", "touches").unwrap()).unwrap();
-    assert_eq!(touches, json!(["run/pay/explore/s1.md"]), "the artefact, in no tree");
+    assert_eq!(
+        touches,
+        json!(["run/pay/explore/s1.md"]),
+        "the artefact, in no tree"
+    );
 }
 
 #[test]
@@ -404,14 +515,28 @@ fn explore_needs_only_explore_jobs() {
     fields(f.add("b", "scout", "H2", &spec, None, false, &["a"]));
     fields(f.add("c", "research", "S2", &spec, None, false, &["a", "b"]));
 
-    let e = refused(f.add("d", "scout", "H2", &spec, None, false, &["w1"]), ErrorCode::ExploreNeedsMixed);
+    let e = refused(
+        f.add("d", "scout", "H2", &spec, None, false, &["w1"]),
+        ErrorCode::ExploreNeedsMixed,
+    );
     assert_eq!(e.exit().code(), 3);
-    assert!(Value::Object(e.details().clone()).to_string().contains("w1"), "details.jobs lists the Jobs on the other side");
+    assert!(
+        Value::Object(e.details().clone())
+            .to_string()
+            .contains("w1"),
+        "details.jobs lists the Jobs on the other side"
+    );
     let work = f.spec_file("w.json", &work_spec());
-    refused(f.add("w2", "work", "S2", &work, Some("api"), false, &["a"]), ErrorCode::ExploreNeedsMixed);
+    refused(
+        f.add("w2", "work", "S2", &work, Some("api"), false, &["a"]),
+        ErrorCode::ExploreNeedsMixed,
+    );
     assert_eq!(f.jobs(), 4, "w1, a, b, c: the refused ones wrote nothing");
 
-    refused(f.add("loop", "scout", "H2", &spec, None, false, &["loop"]), ErrorCode::DependencyCycle);
+    refused(
+        f.add("loop", "scout", "H2", &spec, None, false, &["loop"]),
+        ErrorCode::DependencyCycle,
+    );
     assert_eq!(f.jobs(), 4);
 }
 
@@ -422,18 +547,27 @@ fn work_spec_may_cite_an_explore_artefact_path() {
     let root = f.dir.path().display().to_string();
     let artefact = format!("{}/run/pay/explore/s1.md", f.env.home.root().display());
     let mut spec = work_spec();
-    spec["context"] = json!(format!("Read $CPD_HOME/run/pay/explore/s1.md first, or {artefact}."));
+    spec["context"] = json!(format!(
+        "Read $CPD_HOME/run/pay/explore/s1.md first, or {artefact}."
+    ));
     let path = f.spec_file("w.json", &spec);
     // Past the Spec checks the add may meet the (absent) git tree of the repo: only the Spec's verdict is pinned.
     if let Err(e) = f.add("w1", "work", "S2", &path, Some("api"), false, &[]) {
-        assert_ne!(e.code(), ErrorCode::SpecInvalid, "the artefact of an explore Job is no primary checkout: {e}");
+        assert_ne!(
+            e.code(),
+            ErrorCode::SpecInvalid,
+            "the artefact of an explore Job is no primary checkout: {e}"
+        );
     }
 
     // A primary-checkout path of the Plan's Workflow is still refused.
     let mut spec = work_spec();
     spec["context"] = json!(format!("Read {root}/src/lib.rs."));
     let path = f.spec_file("w2.json", &spec);
-    let e = refused(f.add("w2", "work", "S2", &path, Some("api"), false, &[]), ErrorCode::SpecInvalid);
+    let e = refused(
+        f.add("w2", "work", "S2", &path, Some("api"), false, &[]),
+        ErrorCode::SpecInvalid,
+    );
     assert_eq!(e.details()["path"], "$.context");
 }
 
@@ -454,21 +588,43 @@ fn explore_spec_edit_while_queued_without_attempt() {
         no_needs: false,
         workflow: None,
         kind: None,
-        plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
+        plan: PlanArg {
+            plan: Some(PlanId::parse("pay").unwrap()),
+        },
     };
     let out = fields(edit_in(&mut f.env, edit(Some(path), None, None)));
     assert_eq!(out["job"]["status"], "queued");
-    assert_eq!(f.column("e1", "goal").as_deref(), Some("A sharper question?"));
+    assert_eq!(
+        f.column("e1", "goal").as_deref(),
+        Some("A sharper question?")
+    );
     let after = f.column("e1", "fingerprint").unwrap();
     assert_ne!(after, before, "the fingerprint is recomputed");
     let plan = PlanId::parse("pay").unwrap();
-    let job = f.env.store.read(|c| jobs::load(c, &plan)).unwrap().into_iter().find(|j| j.key == "e1").unwrap();
+    let job = f
+        .env
+        .store
+        .read(|c| jobs::load(c, &plan))
+        .unwrap()
+        .into_iter()
+        .find(|j| j.key == "e1")
+        .unwrap();
     assert_eq!(after, locked_fingerprint(&job));
     let touches: Value = serde_json::from_str(&f.column("e1", "touches").unwrap()).unwrap();
-    assert_eq!(touches, json!(["run/pay/explore/e1.md"]), "touches stays the derived artefact");
+    assert_eq!(
+        touches,
+        json!(["run/pay/explore/e1.md"]),
+        "touches stays the derived artefact"
+    );
 
-    refused(edit_in(&mut f.env, edit(None, Some("New title"), None)), ErrorCode::JobLocked);
-    refused(edit_in(&mut f.env, edit(None, None, Some("H3"))), ErrorCode::JobLocked);
+    refused(
+        edit_in(&mut f.env, edit(None, Some("New title"), None)),
+        ErrorCode::JobLocked,
+    );
+    refused(
+        edit_in(&mut f.env, edit(None, None, Some("H3"))),
+        ErrorCode::JobLocked,
+    );
     assert_eq!(f.column("e1", "title").as_deref(), Some("J"));
     assert_eq!(f.column("e1", "tier").as_deref(), Some("H2"));
 }
@@ -483,13 +639,28 @@ fn explore_cancel_ends_a_queued_job_and_flags_a_running_one() {
     f.sql("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'run';");
     f.attempt("run", "running");
     let plan = PlanId::parse("pay").unwrap();
-    let cancel = |f: &mut Fixture, key: &str, reason: &str| cancel_in(&mut f.env, &plan, JobKey::parse(key).unwrap(), reason, Shape::Keep);
+    let cancel = |f: &mut Fixture, key: &str, reason: &str| {
+        cancel_in(
+            &mut f.env,
+            &plan,
+            JobKey::parse(key).unwrap(),
+            reason,
+            Shape::Keep,
+        )
+    };
 
     let out = fields(cancel(&mut f, "q", "not needed"));
     assert_eq!(out["status"], "cancelled");
     assert_eq!(f.column("q", "status").as_deref(), Some("cancelled"));
-    assert_eq!(f.column("q", "cancel_reason").as_deref(), Some("not needed"));
-    assert_eq!(f.column("dep", "status").as_deref(), Some("failed"), "an explore Job that needs it fails as any dependent does");
+    assert_eq!(
+        f.column("q", "cancel_reason").as_deref(),
+        Some("not needed")
+    );
+    assert_eq!(
+        f.column("dep", "status").as_deref(),
+        Some("failed"),
+        "an explore Job that needs it fails as any dependent does"
+    );
 
     let out = fields(cancel(&mut f, "run", "stop"));
     assert_eq!(out["cancel_requested"], true);
@@ -505,9 +676,22 @@ fn explore_retry_refuses_a_tier_outside_the_range() {
     f.job("s1", "scout", "failed", "H2", &[]);
     f.attempt("s1", "ended");
     let retry = |f: &mut Fixture, t: &str| {
-        retry_in(&mut f.env, RetryArgs { key: JobKey::parse("s1").unwrap(), tier: tier(t), plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) } })
+        retry_in(
+            &mut f.env,
+            RetryArgs {
+                key: JobKey::parse("s1").unwrap(),
+                tier: tier(t),
+                plan: PlanArg {
+                    plan: Some(PlanId::parse("pay").unwrap()),
+                },
+            },
+        )
     };
-    assert_out_of_range(retry(&mut f, "S1").expect_err("S1 is outside the scout range"), "scout", "H1-H3");
+    assert_out_of_range(
+        retry(&mut f, "S1").expect_err("S1 is outside the scout range"),
+        "scout",
+        "H1-H3",
+    );
     assert_eq!(f.column("s1", "status").as_deref(), Some("failed"));
     let out = fields(retry(&mut f, "H3"));
     assert_eq!(out["status"], "queued");

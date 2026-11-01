@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::wake::{next_tick, EARLY_GAP};
+use super::wake::{EARLY_GAP, next_tick};
 
 const TICK: Duration = Duration::from_secs(5);
 
@@ -20,7 +20,10 @@ fn with_no_commit_the_next_tick_is_a_tick_after_the_last_one_began() {
 fn a_commit_brings_the_next_tick_to_half_a_second_after_the_last_one_began() {
     let t0 = Instant::now();
     assert_eq!(EARLY_GAP, ms(500));
-    assert_eq!(next_tick(t0, t0 + ms(100), TICK, None, true), t0 + EARLY_GAP);
+    assert_eq!(
+        next_tick(t0, t0 + ms(100), TICK, None, true),
+        t0 + EARLY_GAP
+    );
 }
 
 #[test]
@@ -35,7 +38,10 @@ fn a_poll_due_before_the_tick_brings_the_tick_to_its_due_time() {
     let t0 = Instant::now();
     let due = t0 + ms(2000);
     assert_eq!(next_tick(t0, t0 + ms(100), TICK, Some(due), false), due);
-    assert_eq!(next_tick(t0, t0 + ms(100), TICK, Some(t0 + TICK + ms(1)), false), t0 + TICK);
+    assert_eq!(
+        next_tick(t0, t0 + ms(100), TICK, Some(t0 + TICK + ms(1)), false),
+        t0 + TICK
+    );
 }
 
 #[test]

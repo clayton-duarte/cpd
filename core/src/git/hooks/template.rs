@@ -15,13 +15,19 @@ pub fn render(template: &str, vars: &Map<String, Json>) -> Result<String, String
     env.set_formatter(format_value);
     env.add_filter("dirname", dirname);
     env.add_filter("basename", basename);
-    env.render_str(template, Value::from_pairs(vars.iter().map(|(k, v)| (k.as_str(), to_value(v))))).map_err(|e| format!("Cannot render `{template}`: {e}"))
+    env.render_str(
+        template,
+        Value::from_pairs(vars.iter().map(|(k, v)| (k.as_str(), to_value(v)))),
+    )
+    .map_err(|e| format!("Cannot render `{template}`: {e}"))
 }
 
 /// Whether `template` uses the variable `name`; `Err` (a sentence) when it does not parse.
 pub fn uses(template: &str, name: &str) -> Result<bool, String> {
     let env = Environment::new();
-    let compiled = env.template_from_str(template).map_err(|e| format!("Cannot parse `{template}`: {e}"))?;
+    let compiled = env
+        .template_from_str(template)
+        .map_err(|e| format!("Cannot parse `{template}`: {e}"))?;
     Ok(compiled.undeclared_variables(false).contains(name))
 }
 
@@ -36,22 +42,34 @@ fn to_value(json: &Json) -> Value {
 }
 
 fn dirname(path: String) -> String {
-    Path::new(&path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+    Path::new(&path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn basename(path: String) -> String {
-    Path::new(&path).file_name().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+    Path::new(&path)
+        .file_name()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Writes `value` shell-escaped; a list is its elements, space-joined.
-fn format_value(out: &mut minijinja::Output, _state: &mut minijinja::State, value: &Value) -> Result<(), Error> {
+fn format_value(
+    out: &mut minijinja::Output,
+    _state: &mut minijinja::State,
+    value: &Value,
+) -> Result<(), Error> {
     let text = match value.try_iter() {
-        Ok(items) if value.kind() == minijinja::value::ValueKind::Seq => {
-            items.map(|v| shell_escape(&v.to_string())).collect::<Vec<_>>().join(" ")
-        }
+        Ok(items) if value.kind() == minijinja::value::ValueKind::Seq => items
+            .map(|v| shell_escape(&v.to_string()))
+            .collect::<Vec<_>>()
+            .join(" "),
         _ => shell_escape(&value.to_string()),
     };
-    std::fmt::Write::write_str(out, &text).map_err(|_| Error::new(minijinja::ErrorKind::WriteFailure, "write failed"))
+    std::fmt::Write::write_str(out, &text)
+        .map_err(|_| Error::new(minijinja::ErrorKind::WriteFailure, "write failed"))
 }
 
 /// `s` as one shell word: unchanged when it only has safe characters, else in single quotes.
@@ -70,23 +88,39 @@ mod tests {
     use serde_json::json;
 
     fn vars() -> Map<String, Json> {
-        json!({"branch": "feat/x y", "args": [], "path": "/a/b/c", "empty": ""}).as_object().unwrap().clone()
+        json!({"branch": "feat/x y", "args": [], "path": "/a/b/c", "empty": ""})
+            .as_object()
+            .unwrap()
+            .clone()
     }
 
     #[test]
     fn renders_and_shell_escapes() {
-        assert_eq!(render("echo {{ branch }}", &vars()).unwrap(), "echo 'feat/x y'");
+        assert_eq!(
+            render("echo {{ branch }}", &vars()).unwrap(),
+            "echo 'feat/x y'"
+        );
         assert_eq!(render("{{ path }}", &vars()).unwrap(), "/a/b/c");
         assert_eq!(render("[{{ empty }}]", &vars()).unwrap(), "['']");
         assert_eq!(render("[{{ args }}]", &vars()).unwrap(), "[]");
-        assert_eq!(render("{{ path | dirname }} {{ path | basename }}", &vars()).unwrap(), "/a/b c");
+        assert_eq!(
+            render("{{ path | dirname }} {{ path | basename }}", &vars()).unwrap(),
+            "/a/b c"
+        );
         assert_eq!(render("a'b", &vars()).unwrap(), "a'b");
         assert_eq!(render("{{ \"it's\" }}", &vars()).unwrap(), "'it'\\''s'");
     }
 
     #[test]
     fn undefined_names_and_worktrunk_filters_fail() {
-        for t in ["{{ nope }}", "{{ branch | sanitize }}", "{{ vars.x }}", "{{ branch | hash_port }}", "{{ worktree_path_of_branch('main') }}", "{% if %}"] {
+        for t in [
+            "{{ nope }}",
+            "{{ branch | sanitize }}",
+            "{{ vars.x }}",
+            "{{ branch | hash_port }}",
+            "{{ worktree_path_of_branch('main') }}",
+            "{% if %}",
+        ] {
             assert!(render(t, &vars()).is_err(), "{t}");
         }
     }

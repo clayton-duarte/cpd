@@ -91,7 +91,24 @@ impl WorkflowRow {
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>, Option<String>, Option<String>));
+type Raw = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    (Option<i64>, Option<String>, Option<String>),
+    Option<i64>,
+    (
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+);
 
 /// The needs of every Workflow of `plan` by Workflow key, each list sorted, as keys of the Plan (contract §2.2).
 pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
@@ -114,7 +131,24 @@ pub fn load_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRo
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?, r.get(15)?)))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                (r.get(6)?, r.get(7)?, r.get(8)?),
+                r.get(9)?,
+                (
+                    r.get(10)?,
+                    r.get(11)?,
+                    r.get(12)?,
+                    r.get(13)?,
+                    r.get(14)?,
+                    r.get(15)?,
+                ),
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     raw.into_iter()
@@ -171,9 +205,20 @@ mod tests {
         assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
         assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
         let pull = api.pull.as_ref().unwrap();
-        assert_eq!((pull.number, pull.url.as_str(), pull.opened_at.as_str()), (7, "https://x/7", "o"));
+        assert_eq!(
+            (pull.number, pull.url.as_str(), pull.opened_at.as_str()),
+            (7, "https://x/7", "o")
+        );
         assert!(api.pull_request.is_some());
-        assert_eq!((web.key.as_str(), web.status.as_str(), web.lead_worktree.as_ref(), web.needs.as_slice()), ("web", "waiting", None, &["api".to_owned()][..]));
+        assert_eq!(
+            (
+                web.key.as_str(),
+                web.status.as_str(),
+                web.lead_worktree.as_ref(),
+                web.needs.as_slice()
+            ),
+            ("web", "waiting", None, &["api".to_owned()][..])
+        );
         assert!(web.pull.is_none() && web.pull_request.is_none());
     }
 }

@@ -8,9 +8,9 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
+use super::Env;
 use super::row::{self, State};
 use super::run::{existing_file, patiently_with};
-use super::Env;
 use crate::clock::Clock;
 use crate::error::CpdError;
 use crate::host::limit::limit;
@@ -38,7 +38,9 @@ pub(super) fn wait_for_source_with(
     let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
     let mut shown = false;
     loop {
-        let src = patiently_with(&*ports.clock, "reading the source Lead", || env.store.read(|conn| row::load(conn, source)))?;
+        let src = patiently_with(&*ports.clock, "reading the source Lead", || {
+            env.store.read(|conn| row::load(conn, source))
+        })?;
         if let Some(file) = existing_file(dirs, &src)
             && matches!(src.state, State::Idle | State::Stopped)
             && quiet_since_with(&*ports.clock, &file, quiet)
@@ -47,7 +49,9 @@ pub(super) fn wait_for_source_with(
             return Ok(Some(file));
         }
         if src.state == State::Stopped && existing_file(dirs, &src).is_none() {
-            print!("\n  The source Lead {source} is stopped and has no session file, so it will never finish a turn.\n  Press Enter to retry.\n");
+            print!(
+                "\n  The source Lead {source} is stopped and has no session file, so it will never finish a turn.\n  Press Enter to retry.\n"
+            );
             let _ = std::io::stdout().flush();
             let mut line = String::new();
             match crate::host::input::read_line(&mut line) {
@@ -58,7 +62,9 @@ pub(super) fn wait_for_source_with(
             continue;
         }
         if !shown {
-            print!("\n  Waiting for the source Lead to finish its turn, then forking it as \"{name}\"…\n");
+            print!(
+                "\n  Waiting for the source Lead to finish its turn, then forking it as \"{name}\"…\n"
+            );
             let _ = std::io::stdout().flush();
             shown = true;
         }
@@ -70,7 +76,11 @@ pub(super) fn wait_for_source_with(
 pub(crate) fn quiet_since_with(clock: &dyn Clock, file: &Path, quiet: Duration) -> bool {
     std::fs::metadata(file)
         .and_then(|m| m.modified())
-        .is_ok_and(|modified| SystemTime::from(clock.utc()).duration_since(modified).is_ok_and(|age| age >= quiet))
+        .is_ok_and(|modified| {
+            SystemTime::from(clock.utc())
+                .duration_since(modified)
+                .is_ok_and(|age| age >= quiet)
+        })
 }
 
 /// The last `message` entry of a pi session file is a finished assistant
@@ -78,7 +88,9 @@ pub(crate) fn quiet_since_with(clock: &dyn Clock, file: &Path, quiet: Duration) 
 /// writing: not finished.
 pub(crate) fn turn_finished(text: &str) -> bool {
     for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else { return false };
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
         if entry["type"] == "message" {
             let message = &entry["message"];
             return message["role"] == "assistant" && message["stopReason"] == "stop";
@@ -92,17 +104,25 @@ mod tests {
     use super::*;
 
     const USER: &str = r#"{"type":"message","id":"a","message":{"role":"user","content":"hi"}}"#;
-    const DONE: &str = r#"{"type":"message","id":"b","message":{"role":"assistant","stopReason":"stop"}}"#;
-    const TOOL: &str = r#"{"type":"message","id":"c","message":{"role":"assistant","stopReason":"toolUse"}}"#;
+    const DONE: &str =
+        r#"{"type":"message","id":"b","message":{"role":"assistant","stopReason":"stop"}}"#;
+    const TOOL: &str =
+        r#"{"type":"message","id":"c","message":{"role":"assistant","stopReason":"toolUse"}}"#;
     const NAME: &str = r#"{"type":"session_info","name":"x"}"#;
 
     #[test]
     fn a_turn_is_finished_when_the_last_message_is_an_assistant_stop() {
         assert!(turn_finished(&[USER, DONE].join("\n")));
-        assert!(turn_finished(&[USER, DONE, NAME, ""].join("\n")), "other entries after it do not count");
+        assert!(
+            turn_finished(&[USER, DONE, NAME, ""].join("\n")),
+            "other entries after it do not count"
+        );
         assert!(!turn_finished(&[USER, TOOL].join("\n")));
         assert!(!turn_finished(&[DONE, USER].join("\n")));
-        assert!(!turn_finished(&[USER, DONE, "{\"type\":\"mess"].join("\n")), "a half-written line is not finished");
+        assert!(
+            !turn_finished(&[USER, DONE, "{\"type\":\"mess"].join("\n")),
+            "a half-written line is not finished"
+        );
         assert!(!turn_finished(NAME));
         assert!(!turn_finished(""));
     }

@@ -5,7 +5,10 @@
 
 use serde_json::{Value, json};
 
-use super::job::{add_kind, add_needing, count, engine, fixture, lock, plan, setup, shaped_pr, spec_file, write_spec};
+use super::job::{
+    add_kind, add_needing, count, engine, fixture, lock, plan, setup, shaped_pr, spec_file,
+    write_spec,
+};
 use crate::common::fx::Fx;
 use crate::common::{Run, refused};
 
@@ -23,15 +26,23 @@ fn world_shaped(before: Option<&str>, shape: &str) -> Fx {
     plan(&fx.env, "pl", "plan");
     shaped_pr(&fx.env, "pl", "a", "config");
     shaped_pr(&fx.env, "pl", "b", shape);
-    fixture(&fx.env, &format!("UPDATE sessions SET state = 'working' WHERE id = '{LEAD}';"));
+    fixture(
+        &fx.env,
+        &format!("UPDATE sessions SET state = 'working' WHERE id = '{LEAD}';"),
+    );
     if let Some(pr) = before {
-        fixture(&fx.env, &format!("UPDATE sessions SET working_pr = '{pr}' WHERE id = '{LEAD}';"));
+        fixture(
+            &fx.env,
+            &format!("UPDATE sessions SET working_pr = '{pr}' WHERE id = '{LEAD}';"),
+        );
     }
     fx
 }
 
 fn named(fx: &Fx) -> Option<String> {
-    fx.env.query(&format!("SELECT working_pr FROM sessions WHERE id = '{LEAD}'"))
+    fx.env.query(&format!(
+        "SELECT working_pr FROM sessions WHERE id = '{LEAD}'"
+    ))
 }
 
 /// `cpd <args>` run as the session `session` (`None`: the User at a terminal).
@@ -66,7 +77,11 @@ fn working_pr_cmd_job_add_names_the_leads_workflow() {
 fn working_pr_cmd_job_edit_names_the_leads_workflow() {
     let fx = world(Some("a"));
     seed(&fx, "k", "b");
-    as_lead(&fx, &["job", "edit", "k", "--title", "Other", "--plan", "pl"]).ok();
+    as_lead(
+        &fx,
+        &["job", "edit", "k", "--title", "Other", "--plan", "pl"],
+    )
+    .ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -84,7 +99,11 @@ fn working_pr_cmd_job_retry_names_the_leads_workflow() {
 fn working_pr_cmd_job_cancel_names_the_leads_workflow() {
     let fx = world(Some("a"));
     seed(&fx, "k", "b");
-    as_lead(&fx, &["job", "cancel", "k", "--reason", "No.", "--plan", "pl"]).ok();
+    as_lead(
+        &fx,
+        &["job", "cancel", "k", "--reason", "No.", "--plan", "pl"],
+    )
+    .ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -102,7 +121,30 @@ fn working_pr_cmd_job_approve_tests_names_the_leads_workflow() {
     add_needing(&fx, "pl", "t", "test", &[], "b").ok();
     add_needing(&fx, "pl", "i", "impl", &["t"], "b").ok();
     lock(&fx.env, "pl");
-    as_lead(&fx, &["job", "approve-tests", "i", "--path", "tests/t.rs", "--reason", "Wrong.", "--plan", "pl"]).ok();
+    as_lead(
+        &fx,
+        &[
+            "job",
+            "approve-tests",
+            "i",
+            "--path",
+            "tests/t.rs",
+            "--reason",
+            "Wrong.",
+            "--plan",
+            "pl",
+        ],
+    )
+    .ok();
+    assert_eq!(named(&fx).as_deref(), Some("b"));
+}
+
+#[test]
+fn working_pr_cmd_job_addendum_names_the_leads_workflow() {
+    let fx = world(Some("a"));
+    seed(&fx, "k", "b");
+    lock(&fx.env, "pl");
+    as_lead(&fx, &["job", "addendum", "k", "A note.", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -171,11 +213,23 @@ fn working_pr_cmd_naming_the_named_workflow_again_writes_no_history() {
     seed(&fx, "k2", "b");
     as_lead(&fx, &["job", "urgent", "k1", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
-    let rows = || fx.env.query::<i64>(&format!("SELECT count(*) FROM history WHERE tbl = 'sessions' AND pk LIKE '%{LEAD}%'"));
+    let rows = || {
+        fx.env.query::<i64>(&format!(
+            "SELECT count(*) FROM history WHERE tbl = 'sessions' AND pk LIKE '%{LEAD}%'"
+        ))
+    };
     let before = (rows(), count(&fx.env, "events"));
     as_lead(&fx, &["job", "urgent", "k2", "--plan", "pl"]).ok();
-    assert_eq!(count(&fx.env, "events"), before.1 + 1, "the second command wrote its own Event");
-    assert_eq!(rows(), before.0, "naming the named PR writes no history row");
+    assert_eq!(
+        count(&fx.env, "events"),
+        before.1 + 1,
+        "the second command wrote its own Event"
+    );
+    assert_eq!(
+        rows(),
+        before.0,
+        "naming the named PR writes no history row"
+    );
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -205,10 +259,17 @@ fn working_pr_cmd_a_worker_or_the_user_names_nothing() {
 fn working_pr_cmd_a_lead_that_is_not_working_names_nothing_and_the_command_succeeds() {
     let fx = world(None);
     seed(&fx, "k", "b");
-    fixture(&fx.env, &format!("UPDATE sessions SET state = 'idle' WHERE id = '{LEAD}';"));
+    fixture(
+        &fx.env,
+        &format!("UPDATE sessions SET state = 'idle' WHERE id = '{LEAD}';"),
+    );
     as_lead(&fx, &["job", "urgent", "k", "--plan", "pl"]).ok();
     assert_eq!(named(&fx), None);
-    assert_eq!(fx.env.query::<i64>("SELECT urgent FROM jobs WHERE key = 'k'"), 1);
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT urgent FROM jobs WHERE key = 'k'"),
+        1
+    );
 }
 
 #[test]
@@ -219,9 +280,19 @@ fn working_pr_cmd_a_scout_job_names_no_workflow() {
         "scout.json",
         &json!({"goal": "Where is it?", "context": "Look.", "acceptance": ["names the file"], "out_of_scope": []}).to_string(),
     );
-    let run = as_lead(&fx, &["job", "add", "s1", "--title", "Scout", "--tier", "H2", "--spec", &spec, "--kind", "scout", "--plan", "pl"]);
+    let run = as_lead(
+        &fx,
+        &[
+            "job", "add", "s1", "--title", "Scout", "--tier", "H2", "--spec", &spec, "--kind",
+            "scout", "--plan", "pl",
+        ],
+    );
     assert_eq!(run.ok()["job"]["pr"], Value::Null);
-    assert_eq!(named(&fx).as_deref(), Some("a"), "an explore Job has no PR: the name is untouched");
+    assert_eq!(
+        named(&fx).as_deref(),
+        Some("a"),
+        "an explore Job has no PR: the name is untouched"
+    );
 }
 
 #[test]
@@ -230,7 +301,11 @@ fn working_pr_cmd_a_refused_command_names_nothing() {
     seed(&fx, "m", "b");
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "m", "merged");
-    refused(&as_lead(&fx, &["job", "urgent", "m", "--plan", "pl"]), "illegal_transition", 3);
+    refused(
+        &as_lead(&fx, &["job", "urgent", "m", "--plan", "pl"]),
+        "illegal_transition",
+        3,
+    );
     assert_eq!(named(&fx).as_deref(), Some("a"));
 }
 

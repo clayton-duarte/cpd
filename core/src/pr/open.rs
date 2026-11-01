@@ -16,12 +16,12 @@ use super::{Args, Env, illegal_phase, workflow_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
-use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::job;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::{Phase, jobs};
+use crate::ports::Ports;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr open";
@@ -57,12 +57,14 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Already(done) => return Ok(done),
         Step::Go(key) => key,
     };
-    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    env.store
+        .read(|conn| hold_refused(conn, &id, &key, agent()))?;
     require_no_open_job_live(&mut env, &id, &key)?;
     require_jobs_done(&mut env, &plan, &key)?;
     stored_title(&mut env, &id, &key)?;
     stored_description(&mut env, &id, &key)?;
-    env.store.read(|conn| jira_required_of(conn, &env.home, &id, &key))?;
+    env.store
+        .read(|conn| jira_required_of(conn, &env.home, &id, &key))?;
 
     // `pr open` no longer opens the pull request itself: it adds and queues the Workflow's opener, whose submit runs the
     // Gate, pushes and opens the pull request (contract §7.6, §7.7). The write transaction decides again so two
@@ -77,7 +79,9 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         })?;
         job::open::add(tx, &id, &workflow, tier, false, COMMAND)
     })?;
-    Ok(Output::success(json!({"plan": id, "pr": key, "job": job, "status": "queued"})))
+    Ok(Output::success(
+        json!({"plan": id, "pr": key, "job": job, "status": "queued"}),
+    ))
 }
 
 /// A stacked Workflow's base branch, its base Workflow's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
@@ -175,7 +179,10 @@ fn find_or_create(lead: &Path, workflow: &WorkflowRow, existing: Option<PrRef>, 
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
-            .map(|h| PrRef { number: h.number, url: h.url })
+            .map(|h| PrRef {
+                number: h.number,
+                url: h.url,
+            })
             .ok_or(failed),
     }
 }
@@ -247,11 +254,31 @@ fn opened_row(lead: &Path, workflow: &WorkflowRow, existing: Option<PrRef>, stor
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)], bots)?.into_iter().next().flatten() {
-        Some(looked_up) => (looked_up.created_at, looked_up.updated_at, looked_up.base_ref, looked_up.default_branch),
+    let (created_at, updated_at, base_ref, default_branch) = match gh::lookup(
+        &*Ports::current().runner,
+        lead,
+        &[(repo.clone(), found.number)],
+        bots,
+    )?
+    .into_iter()
+    .next()
+    .flatten()
+    {
+        Some(looked_up) => (
+            looked_up.created_at,
+            looked_up.updated_at,
+            looked_up.base_ref,
+            looked_up.default_branch,
+        ),
         None => {
-            return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
-                .with("url", found.url.as_str()));
+            return Err(CpdError::new(
+                ErrorCode::GhFailed,
+                format!(
+                    "gh cannot find pull request {repo}#{}, which it just opened.",
+                    found.number
+                ),
+            )
+            .with("url", found.url.as_str()));
         }
     };
     Ok(PolledPr {
@@ -279,15 +306,34 @@ fn merged_row(lead: &Path, head: &gh::HeadPr, bots: &[String]) -> Result<PolledP
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", head.url))
             .with("url", head.url.as_str())
     })?;
-    match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), head.number)], bots)?.into_iter().next().flatten() {
+    match gh::lookup(
+        &*Ports::current().runner,
+        lead,
+        &[(repo.clone(), head.number)],
+        bots,
+    )?
+    .into_iter()
+    .next()
+    .flatten()
+    {
         Some(looked_up) if looked_up.state == PrState::Merged => Ok(looked_up),
         Some(other) => Err(CpdError::new(
             ErrorCode::GhFailed,
-            format!("gh lists pull request {repo}#{} as merged but reads it {}.", head.number, other.state.as_str()),
+            format!(
+                "gh lists pull request {repo}#{} as merged but reads it {}.",
+                head.number,
+                other.state.as_str()
+            ),
         )
         .with("url", head.url.as_str())),
-        None => Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it lists.", head.number))
-            .with("url", head.url.as_str())),
+        None => Err(CpdError::new(
+            ErrorCode::GhFailed,
+            format!(
+                "gh cannot find pull request {repo}#{}, which it lists.",
+                head.number
+            ),
+        )
+        .with("url", head.url.as_str())),
     }
 }
 
@@ -313,12 +359,26 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
             polled.merged_at = Some(pulls::txn_time(tx)?);
         }
         // The row as this lookup reads it, with the searches that listed it as the poll left them (the User's own when new).
-        let membership = pulls::find(tx, &polled.repo, polled.number)?
-            .map_or(Membership { authored: true, review_requested: false }, |row| row.membership());
+        let membership = pulls::find(tx, &polled.repo, polled.number)?.map_or(
+            Membership {
+                authored: true,
+                review_requested: false,
+            },
+            |row| row.membership(),
+        );
         merged_at = polled.merged_at.clone();
-        pulls::upsert(tx, &Listed { pr: polled, membership }, None)?;
+        pulls::upsert(
+            tx,
+            &Listed {
+                pr: polled,
+                membership,
+            },
+            None,
+        )?;
         crate::inbox::model::close_pr_ready(tx, &pulled.row.repo, pulled.row.number)?;
-        pulls::find(tx, &pulled.row.repo, pulled.row.number)?.expect("the row was just written").id
+        pulls::find(tx, &pulled.row.repo, pulled.row.number)?
+            .expect("the row was just written")
+            .id
     } else {
         pulls::ensure(tx, &pulled.row)?
     };
@@ -356,7 +416,10 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
     if waiting > 0 {
         return Ok(Some(Phase::Dispatch));
     }
-    let moved = tx.execute("UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
+    let moved = tx.execute(
+        "UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'",
+        [id.as_str()],
+    )?;
     if moved == 0 {
         return Err(cas_lost(id, key));
     }
@@ -366,7 +429,10 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
     } else {
         format!("Every Workflow of Plan {id} is open. The engine polls them; to follow them by hand: cpd pr poll --plan {id}")
     };
-    append(tx, NewEvent::plan_phase_deployed(text, opened).plan(id.clone()))?;
+    append(
+        tx,
+        NewEvent::plan_phase_deployed(text, opened).plan(id.clone()),
+    )?;
     if !pulled.is_merged() {
         return Ok(Some(Phase::Deploy));
     }
@@ -446,9 +512,12 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
             .with("next", format!("git -C {} merge --no-edit {}", root.display(), workflow.lead_branch)));
         }
         code => {
-            return Err(CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
-                .with("exit", code)
-                .with("stderr", git::tail(&contained.stderr, git::TAIL_LINES)));
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "git merge-base --is-ancestor failed.",
+            )
+            .with("exit", code)
+            .with("stderr", git::tail(&contained.stderr, git::TAIL_LINES)));
         }
     }
     // The base check and the Gate run at the merge (§7.4 step 6, hs-d679), not at submit.
@@ -707,8 +776,11 @@ mod tests {
     fn kinds(store: &mut Store) -> Vec<String> {
         store
             .read(|conn| {
-                let mut stmt = conn.prepare("SELECT kind FROM events WHERE plan = 'pay' ORDER BY id")?;
-                Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+                let mut stmt =
+                    conn.prepare("SELECT kind FROM events WHERE plan = 'pay' ORDER BY id")?;
+                Ok(stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?)
             })
             .unwrap()
     }
@@ -716,12 +788,15 @@ mod tests {
     /// An `open` Job's merge writes `pr open`'s rows (§7.7): the Workflow `open` with its pull request, `pr-opened`, and the Plan `deploy` when it was the
     /// last Workflow to open. The same call once the Workflow has left `dispatch` (a hand `pr open`, or the poll, got there first) writes nothing.
     #[test]
-    fn recording_an_opened_pull_request_moves_the_pr_and_the_plan_and_is_refused_by_a_pr_that_left_dispatch() {
+    fn recording_an_opened_pull_request_moves_the_pr_and_the_plan_and_is_refused_by_a_pr_that_left_dispatch()
+     {
         let (_dir, mut store) = fixture(false);
         let (plan, key) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
         let pulled = Pulled { row: pull(PrState::Open, None), merged: false };
 
-        let phase = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();
+        let phase = store
+            .write("test", |tx| record(tx, &plan, &key, &pulled))
+            .unwrap();
 
         assert_eq!(phase, Some(Phase::Deploy));
         let (status, number, linked, plan_phase): (String, i64, bool, String) = store
@@ -733,12 +808,21 @@ mod tests {
                 )?)
             })
             .unwrap();
-        assert_eq!((status.as_str(), number, linked, plan_phase.as_str()), ("open", 7, true, "deploy"));
+        assert_eq!(
+            (status.as_str(), number, linked, plan_phase.as_str()),
+            ("open", 7, true, "deploy")
+        );
         assert_eq!(kinds(&mut store), ["pr-opened", "plan-phase"]);
 
-        let again = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();
+        let again = store
+            .write("test", |tx| record(tx, &plan, &key, &pulled))
+            .unwrap();
         assert_eq!(again, None);
-        assert_eq!(kinds(&mut store), ["pr-opened", "plan-phase"], "nothing more was written");
+        assert_eq!(
+            kinds(&mut store),
+            ["pr-opened", "plan-phase"],
+            "nothing more was written"
+        );
     }
 
     /// A pull request of the Lead Branch already merged on GitHub (§7.6 `pr open` step 0): the Workflow goes `dispatch → open → merged` with no `pr-opened`, and
@@ -749,7 +833,9 @@ mod tests {
         let (plan, key) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
         let pulled = Pulled { row: pull(PrState::Merged, Some("2026-10-20T11:00:00Z")), merged: true };
 
-        let phase = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();
+        let phase = store
+            .write("test", |tx| record(tx, &plan, &key, &pulled))
+            .unwrap();
 
         assert_eq!(phase, Some(Phase::Done));
         let (status, merged_at): (String, String) =
@@ -758,7 +844,9 @@ mod tests {
         assert_eq!(kinds(&mut store), ["pr-merged", "plan-phase", "plan-done"]);
 
         let (_dir, mut store) = fixture(true);
-        let phase = store.write("test", |tx| record(tx, &plan, &key, &pulled)).unwrap();
+        let phase = store
+            .write("test", |tx| record(tx, &plan, &key, &pulled))
+            .unwrap();
         assert_eq!(phase, Some(Phase::Dispatch));
         assert_eq!(kinds(&mut store), ["pr-merged"]);
     }

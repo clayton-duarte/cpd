@@ -15,14 +15,21 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 }
 
 fn message(result: Result<(), CpdError>, what: &str) -> String {
-    result.expect_err(what).details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    result.expect_err(what).details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A fully migrated store with Plan `pay` (in `phase`) and its Lead.
 fn fresh(phase: &str) -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let (locked, done) = match phase {
         "plan" => ("NULL", "NULL"),
         "dispatch" => ("'t'", "NULL"),

@@ -105,14 +105,20 @@ fn elapsed(store: &mut Store, now: &str) -> Vec<Option<u64>> {
 #[test]
 fn only_a_workflow_with_an_attempt_has_an_elapsed_time() {
     let (_dir, mut store) = store_with(&["api", "web"]);
-    run(&mut store, &(worked("api", "a", "10:00:00", Some("10:01:30")) + &job("web", "w", "work", "queued")));
+    run(
+        &mut store,
+        &(worked("api", "a", "10:00:00", Some("10:01:30")) + &job("web", "w", "work", "queued")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90), None]); // api: 90 s; web: no Attempt
 }
 
 #[test]
 fn a_finished_attempt_counts_from_its_start_to_its_end() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &worked("api", "a", "10:00:00", Some("10:01:30")));
+    run(
+        &mut store,
+        &worked("api", "a", "10:00:00", Some("10:01:30")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90)]); // 10:00:00 to 10:01:30
 }
 
@@ -127,7 +133,11 @@ fn a_running_attempt_counts_up_to_the_given_now() {
 #[test]
 fn sequential_attempts_add_up_and_the_gap_between_them_is_not_counted() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(worked("api", "a", "10:00:00", Some("10:01:00")) + &worked("api", "b", "10:05:00", Some("10:05:30"))));
+    run(
+        &mut store,
+        &(worked("api", "a", "10:00:00", Some("10:01:00"))
+            + &worked("api", "b", "10:05:00", Some("10:05:30"))),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90)]); // 60 s + 30 s
 }
 
@@ -146,11 +156,22 @@ fn parallel_and_overlapping_attempts_count_once() {
 #[test]
 fn the_leads_blocked_time_is_subtracted_from_the_attempts() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(worked("api", "a", "10:00:00", Some("10:02:00")) + &state("lead1", "10:00:30", "blocked") + &state("lead1", "10:00:50", "working")));
+    run(
+        &mut store,
+        &(worked("api", "a", "10:00:00", Some("10:02:00"))
+            + &state("lead1", "10:00:30", "blocked")
+            + &state("lead1", "10:00:50", "working")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(100)]); // 120 s minus 20 s blocked
-    run(&mut store, &(state("lead1", "10:01:50", "blocked") + &state("lead1", "10:03:00", "working")));
+    run(
+        &mut store,
+        &(state("lead1", "10:01:50", "blocked") + &state("lead1", "10:03:00", "working")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90)]); // minus 10 s more: the interval is clipped to the Attempt's end
-    run(&mut store, &(state("lead1", "09:00:00", "blocked") + &state("lead1", "09:30:00", "working")));
+    run(
+        &mut store,
+        &(state("lead1", "09:00:00", "blocked") + &state("lead1", "09:30:00", "working")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90)]); // before the Attempt: nothing changes
     // a label change while blocked is ONE interval; waiting, idle and working subtract nothing
     run(
@@ -168,7 +189,10 @@ fn the_leads_blocked_time_is_subtracted_from_the_attempts() {
 #[test]
 fn a_lead_still_blocked_is_subtracted_up_to_now() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(worked("api", "a", "10:00:00", None) + &state("lead1", "10:01:00", "blocked")));
+    run(
+        &mut store,
+        &(worked("api", "a", "10:00:00", None) + &state("lead1", "10:01:00", "blocked")),
+    );
     assert_eq!(elapsed(&mut store, "10:03:00"), vec![Some(60)]); // 180 s minus 120 s blocked
 }
 
@@ -187,17 +211,30 @@ fn attempts_of_a_follow_up_job_after_the_pull_request_opens_add_to_the_total() {
 #[test]
 fn only_the_workflows_own_attempts_and_the_leads_own_blocked_state_count() {
     let (_dir, mut store) = store_with(&["api", "web"]);
-    run(&mut store, &(worked("api", "a", "10:00:00", Some("10:01:00")) + &worked("web", "w", "10:00:30", Some("10:01:30"))));
+    run(
+        &mut store,
+        &(worked("api", "a", "10:00:00", Some("10:01:00"))
+            + &worked("web", "w", "10:00:30", Some("10:01:30"))),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(60), Some(60)]); // each its own 60 s
-    run(&mut store, &(state("other", "10:00:10", "blocked") + &state("other", "10:00:20", "working")));
+    run(
+        &mut store,
+        &(state("other", "10:00:10", "blocked") + &state("other", "10:00:20", "working")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(60), Some(60)]); // another Session's blocked time subtracts nothing
-    run(&mut store, &(state("lead1", "10:00:40", "blocked") + &state("lead1", "10:00:50", "working")));
+    run(
+        &mut store,
+        &(state("lead1", "10:00:40", "blocked") + &state("lead1", "10:00:50", "working")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(50), Some(50)]); // the Lead's 10 s is inside both
 }
 
 #[test]
 fn the_elapsed_time_is_whole_seconds_rounded_down() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &worked("api", "a", "10:00:00.000", Some("10:01:30.999")));
+    run(
+        &mut store,
+        &worked("api", "a", "10:00:00.000", Some("10:01:30.999")),
+    );
     assert_eq!(elapsed(&mut store, "11:00:00"), vec![Some(90)]); // 90.999 s
 }

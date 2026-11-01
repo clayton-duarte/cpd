@@ -9,11 +9,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::attempt::ledger::Attempt as Target;
-use crate::config::{Catalog, Config, Tier};
-use crate::error::{CpdError, ErrorCode};
+use crate::attempt::ledger::{Cause, Stored};
 use crate::clock::Clock;
 #[cfg(test)]
 use crate::clock::SystemClock;
+use crate::config::{Catalog, Config, Tier};
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
@@ -22,7 +23,6 @@ use crate::host::{PaneId, Tmux, WindowId};
 use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::plan::jobs::Job;
 use crate::ports::Ports;
-use crate::attempt::ledger::{Cause, Stored};
 use crate::spec::{self, Answer, Evidence, Input, JobKind, Previous};
 
 /// How the merge words a conflict's detail (`crate::merge`, §7.4 step 5):
@@ -31,13 +31,21 @@ const CONFLICT_PREFIX: &str = "The rebase onto the Lead Branch conflicted in: ";
 
 /// The files of a `merge_conflict` detail, as the merge wrote them.
 fn conflict_files(detail: &str) -> Vec<String> {
-    let Some(list) = detail.strip_prefix(CONFLICT_PREFIX) else { return Vec::new() };
+    let Some(list) = detail.strip_prefix(CONFLICT_PREFIX) else {
+        return Vec::new();
+    };
     let list = list.strip_suffix('.').unwrap_or(list);
-    list.split(", ").filter(|f| !f.is_empty()).map(str::to_owned).collect()
+    list.split(", ")
+        .filter(|f| !f.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn bad(what: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."))
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("The Ledger holds an invalid value: {what}."),
+    )
 }
 
 /// The ended earlier Attempts of `target`'s Job, oldest first, each with what
@@ -48,24 +56,41 @@ fn previous(conn: &Connection, target: &Target) -> Result<Vec<Previous>, CpdErro
           WHERE plan = ?1 AND job = ?2 AND status = 'ended' AND number < ?3 ORDER BY number",
     )?;
     let rows = stmt
-        .query_map(params![target.plan.as_str(), target.job.as_str(), target.id.number().get()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
-        })?
+        .query_map(
+            params![
+                target.plan.as_str(),
+                target.job.as_str(),
+                target.id.number().get()
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, u32>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, number, tier, cause)| {
             let cause = spec::parse_cause(&cause)?;
             let evidence = match cause {
-                Stored::Failed(Cause::MergeConflict) => Evidence::Files(conflict_files(&end_detail(conn, target, &id)?)),
-                Stored::Failed(Cause::GateFailed | Cause::GateError) => {
-                    Evidence::Gate(crate::merge::parse_gate_detail(&end_detail(conn, target, &id)?))
+                Stored::Failed(Cause::MergeConflict) => {
+                    Evidence::Files(conflict_files(&end_detail(conn, target, &id)?))
                 }
-                Stored::Failed(Cause::ProviderError) => Evidence::Message(end_detail(conn, target, &id)?),
+                Stored::Failed(Cause::GateFailed | Cause::GateError) => Evidence::Gate(
+                    crate::merge::parse_gate_detail(&end_detail(conn, target, &id)?),
+                ),
+                Stored::Failed(Cause::ProviderError) => {
+                    Evidence::Message(end_detail(conn, target, &id)?)
+                }
                 _ => Evidence::None,
             };
             Ok(Previous {
                 number,
-                tier: Tier::parse(&tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {id}")))?,
+                tier: Tier::parse(&tier)
+                    .map_err(|_| bad(format!("tier {tier:?} of Attempt {id}")))?,
                 cause,
                 evidence,
             })
@@ -83,8 +108,15 @@ fn end_detail(conn: &Connection, target: &Target, id: &str) -> Result<String, Cp
             |r| r.get(0),
         )
         .optional()?;
-    let data: Value = data.map_or(Value::Null, |d| serde_json::from_str(&d).unwrap_or(Value::Null));
-    Ok(data.get("feedback").or_else(|| data.get("detail")).and_then(Value::as_str).unwrap_or("").to_owned())
+    let data: Value = data.map_or(Value::Null, |d| {
+        serde_json::from_str(&d).unwrap_or(Value::Null)
+    });
+    Ok(data
+        .get("feedback")
+        .or_else(|| data.get("detail"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned())
 }
 
 /// The `answered` Escalations of earlier Attempts of `target`'s Job, oldest first.
@@ -96,36 +128,83 @@ fn answers(conn: &Connection, target: &Target) -> Result<Vec<Answer>, CpdError> 
           ORDER BY a.number, e.number",
     )?;
     let rows = stmt
-        .query_map(params![target.plan.as_str(), target.job.as_str(), target.id.number().get()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-        })?
+        .query_map(
+            params![
+                target.plan.as_str(),
+                target.job.as_str(),
+                target.id.number().get()
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, question, answer)| {
-            Ok(Answer { id: EscalationId::parse(&id).map_err(|_| bad(format!("escalation id {id:?}")))?, question, answer })
+            Ok(Answer {
+                id: EscalationId::parse(&id).map_err(|_| bad(format!("escalation id {id:?}")))?,
+                question,
+                answer,
+            })
         })
         .collect()
+}
+
+/// The Job's addenda, oldest first (§5.10).
+fn addenda(conn: &Connection, target: &Target) -> Result<Vec<spec::Addendum>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT number, text FROM job_addenda WHERE plan = ?1 AND job = ?2 ORDER BY number",
+    )?;
+    let rows = stmt
+        .query_map(params![target.plan.as_str(), target.job.as_str()], |r| {
+            Ok(spec::Addendum {
+                number: r.get(0)?,
+                text: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
     value
         .as_array()
-        .and_then(|a| a.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>())
+        .and_then(|a| {
+            a.iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
         .ok_or_else(|| bad(format!("{what} {value}")))
 }
 
 /// A3: renders the Worker Spec to `run/<plan>/specs/<attempt>.md` and returns its path.
-pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
+pub fn render_spec(
+    conn: &Connection,
+    home: &CpdHome,
+    target: &Target,
+    job: &Job,
+) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
+    let addenda = addenda(conn, target)?;
     // An explore Job has no Workflow, no quick check and no protected path of a policy: its Worker works in no repository.
     let explore = crate::plan::jobs::is_explore(&job.kind);
-    let (quick_check, protected) = if explore {
-        (Vec::new(), Vec::new())
+    let (quick_check, protected, generated) = if explore {
+        (Vec::new(), Vec::new(), Vec::new())
     } else {
         let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
-        (spec::quick_check(&policy.hooks.pre_commit), policy.protected.paths.clone())
+        (
+            spec::quick_check(&policy.hooks.pre_commit),
+            policy.protected.paths.clone(),
+            policy.generated.paths.clone(),
+        )
     };
+    // The paths the Lead approved for the Job (`job approve-touches`), read as stored now (§7.7).
+    let approved_touches = crate::job::guard::approved_touches(job);
     let artefact = super::explore::artefact_in(&target.worktree, &job.key);
     let job_spec = if matches!(job.kind.as_str(), "open" | "update") {
         let workflows = crate::plan::fingerprint::load_workflows(conn, &target.plan)?;
@@ -153,12 +232,23 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let kind = match job.kind.as_str() {
         "work" => JobKind::Work,
         "docs" => JobKind::Docs,
-        "test" => JobKind::Test { tests: &own_tests, test_files: &own_files },
-        "impl" => JobKind::Impl { test_jobs: &guard.jobs, tests: &guard.tests, guarded: &guard.files, approved: &guard.approved },
+        "test" => JobKind::Test {
+            tests: &own_tests,
+            test_files: &own_files,
+        },
+        "impl" => JobKind::Impl {
+            test_jobs: &guard.jobs,
+            tests: &guard.tests,
+            guarded: &guard.files,
+            approved: &guard.approved,
+        },
         "verify" => JobKind::Verify,
         "open" => JobKind::Open,
         "update" => JobKind::Update,
-        "scout" | "research" => JobKind::Explore { kind: &job.kind, artefact: &artefact },
+        "scout" | "research" => JobKind::Explore {
+            kind: &job.kind,
+            artefact: &artefact,
+        },
         other => return Err(bad(format!("kind {other:?} of Job {}", job.key))),
     };
     let path = spec::write(
@@ -178,8 +268,11 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             resources: &resources,
             quick_check: &quick_check,
             protected: &protected,
+            generated: &generated,
+            approved_touches: &approved_touches,
             previous: &previous,
             answers: &answers,
+            addenda: &addenda,
         },
     )?;
     Ok(path)
@@ -206,7 +299,12 @@ pub fn start(
 ) -> Result<Pane, CpdError> {
     let model = catalog.model_arg(target.tier)?;
     let adapter = config.pi_adapter_dir()?;
-    let extensions = extensions_to_pass(&worker_candidates(&adapter), &target.worktree, dirs, &mut std::io::stderr());
+    let extensions = extensions_to_pass(
+        &worker_candidates(&adapter),
+        &target.worktree,
+        dirs,
+        &mut std::io::stderr(),
+    );
     git_guard::install(home)?;
     let mut launch = pi::worker(&WorkerLaunch {
         home,
@@ -274,7 +372,12 @@ pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), 
 
 /// [`kill_window`] for Attempt `id` of `plan`: the one A9 kill, shared by the
 /// driver, E2 and R.
-pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+pub fn kill_attempt_window(
+    config: &Config,
+    tmux: &Tmux,
+    plan: &PlanId,
+    id: &AttemptId,
+) -> Result<(), CpdError> {
     kill_attempt_window_with(&Ports::current(), config, tmux, plan, id)
 }
 
@@ -294,8 +397,17 @@ pub fn kill_attempt_window_with(
         .map(|p| p.window)
         .collect();
     for window in windows {
-        let gone = || tmux.list_panes().is_ok_and(|panes| panes.iter().all(|p| p.window != window));
-        retry_kill_with(&*ports.clock, KILL_TRIES, KILL_PAUSE, || tmux.kill_window(&window), gone)?;
+        let gone = || {
+            tmux.list_panes()
+                .is_ok_and(|panes| panes.iter().all(|p| p.window != window))
+        };
+        retry_kill_with(
+            &*ports.clock,
+            KILL_TRIES,
+            KILL_PAUSE,
+            || tmux.kill_window(&window),
+            gone,
+        )?;
     }
     Ok(())
 }
@@ -325,7 +437,15 @@ mod tests {
     #[test]
     fn a_kill_that_fails_three_times_reports_the_error() {
         let mut calls = 0;
-        let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || false);
+        let result = retry_kill(
+            3,
+            Duration::ZERO,
+            || {
+                calls += 1;
+                Err(failure())
+            },
+            || false,
+        );
         assert_eq!(calls, 3);
         assert_eq!(result.unwrap_err().code(), ErrorCode::TmuxFailed);
     }
@@ -333,7 +453,15 @@ mod tests {
     #[test]
     fn a_kill_that_fails_twice_then_works_is_ok() {
         let mut calls = 0;
-        let result = retry_kill(3, Duration::ZERO, || { calls += 1; if calls < 3 { Err(failure()) } else { Ok(()) } }, || false);
+        let result = retry_kill(
+            3,
+            Duration::ZERO,
+            || {
+                calls += 1;
+                if calls < 3 { Err(failure()) } else { Ok(()) }
+            },
+            || false,
+        );
         assert_eq!(calls, 3);
         assert!(result.is_ok());
     }
@@ -341,14 +469,25 @@ mod tests {
     #[test]
     fn a_window_already_gone_is_success_without_a_retry() {
         let mut calls = 0;
-        let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || true);
+        let result = retry_kill(
+            3,
+            Duration::ZERO,
+            || {
+                calls += 1;
+                Err(failure())
+            },
+            || true,
+        );
         assert_eq!(calls, 1);
         assert!(result.is_ok());
     }
 
     #[test]
     fn conflict_files_come_from_the_merges_detail() {
-        assert_eq!(conflict_files("The rebase onto the Lead Branch conflicted in: a.txt, src/b.rs."), ["a.txt", "src/b.rs"]);
+        assert_eq!(
+            conflict_files("The rebase onto the Lead Branch conflicted in: a.txt, src/b.rs."),
+            ["a.txt", "src/b.rs"]
+        );
         assert!(conflict_files("Something else.").is_empty());
     }
 }

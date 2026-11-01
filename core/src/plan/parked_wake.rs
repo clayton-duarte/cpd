@@ -33,7 +33,9 @@ pub fn prefix(plan: &PlanId) -> String {
 pub fn wake_state(conn: &Connection, plan: &PlanId, lead: &str) -> Result<Wake, CpdError> {
     let parked = parked_drafts(conn, plan)?;
     let t: i64 = conn.query_row(
-        &format!("SELECT coalesce(max(id), 0) FROM events WHERE plan = ?1 AND kind IN ({CHANGING})"),
+        &format!(
+            "SELECT coalesce(max(id), 0) FROM events WHERE plan = ?1 AND kind IN ({CHANGING})"
+        ),
         [plan.as_str()],
         |r| r.get(0),
     )?;
@@ -52,5 +54,10 @@ pub fn wake_state(conn: &Connection, plan: &PlanId, lead: &str) -> Result<Wake, 
             |r| r.get(0),
         )?,
     };
-    Ok(Wake { parked, t, wake, finished_turn_after_wake })
+    Ok(Wake {
+        parked,
+        t,
+        wake,
+        finished_turn_after_wake,
+    })
 }

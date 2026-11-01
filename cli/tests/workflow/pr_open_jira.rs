@@ -29,9 +29,15 @@ fn pr_open_refuses_jira_required_without_a_ticket() {
     let error = run.error();
     assert!(error["message"].as_str().unwrap().contains("cpd workflow edit repo --jira"), "{error}");
     assert_eq!(error["details"], json!({"plan": "pay", "pr": "repo"}));
-    assert_eq!((fx.plan_row().0, fx.txns(), open_jobs(&fx)), ("dispatch".to_owned(), txns, Vec::<(String, String)>::new()));
+    assert_eq!(
+        (fx.plan_row().0, fx.txns(), open_jobs(&fx)),
+        ("dispatch".to_owned(), txns, Vec::<(String, String)>::new())
+    );
     assert_eq!(fx.remote_branch("cpd/pay"), remote, "nothing pushed");
-    assert!(fx.gh_calls().is_empty(), "no pull request created, no gh call");
+    assert!(
+        fx.gh_calls().is_empty(),
+        "no pull request created, no gh call"
+    );
 }
 
 #[test]

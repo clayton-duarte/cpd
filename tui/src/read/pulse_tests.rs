@@ -14,7 +14,11 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 /// A store in a temporary home, which lives as long as the returned directory.
 fn open(dir: &tempfile::TempDir) -> Store {
-    Store::open(&CpdHome::resolve(Some(dir.path().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(dir.path().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 /// Runs `text` as the store's own write.
@@ -62,7 +66,15 @@ fn plan_done(id: &str, context: &str, created: &str, done_at: &str) -> String {
     )
 }
 
-fn session(id: &str, role: &str, context: &str, plan: Option<&str>, attempt: Option<&str>, state: &str, label: Option<&str>) -> String {
+fn session(
+    id: &str,
+    role: &str,
+    context: &str,
+    plan: Option<&str>,
+    attempt: Option<&str>,
+    state: &str,
+    label: Option<&str>,
+) -> String {
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
@@ -75,8 +87,16 @@ fn session(id: &str, role: &str, context: &str, plan: Option<&str>, attempt: Opt
 }
 
 fn job(plan: &str, key: &str, status: &str) -> String {
-    let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
-    let sha = if status == "merged" { "'abc123'" } else { "NULL" };
+    let fp = if status == "draft" {
+        "NULL".to_owned()
+    } else {
+        format!("'{FP}'")
+    };
+    let sha = if status == "merged" {
+        "'abc123'"
+    } else {
+        "NULL"
+    };
     format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, merged_sha, created_at)
@@ -98,7 +118,14 @@ fn attempt(plan: &str, job: &str, started: &str, ended: Option<&str>) -> String 
     )
 }
 
-fn event(at: &str, kind: &str, context: &str, plan: Option<&str>, session: Option<&str>, data: &str) -> String {
+fn event(
+    at: &str,
+    kind: &str,
+    context: &str,
+    plan: Option<&str>,
+    session: Option<&str>,
+    data: &str,
+) -> String {
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     format!(
         "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
@@ -110,11 +137,25 @@ fn event(at: &str, kind: &str, context: &str, plan: Option<&str>, session: Optio
 
 /// A plain Event of the Plan at `at` on 2026-10-18, `hhmmss` like `15:04:59.999`.
 fn ev(hhmmss: &str, kind: &str, plan: &str) -> String {
-    event(&format!("2026-10-18T{hhmmss}Z"), kind, "ctx", Some(plan), None, "{}")
+    event(
+        &format!("2026-10-18T{hhmmss}Z"),
+        kind,
+        "ctx",
+        Some(plan),
+        None,
+        "{}",
+    )
 }
 
 fn moved(at: &str, context: &str, session: &str, place: &str) -> String {
-    event(at, "session-moved", context, None, Some(session), &format!(r#"{{"pane":"%1","window":"@1","place":"{place}"}}"#))
+    event(
+        at,
+        "session-moved",
+        context,
+        None,
+        Some(session),
+        &format!(r#"{{"pane":"%1","window":"@1","place":"{place}"}}"#),
+    )
 }
 
 /// `ctx` with Plans `p1` (first) and `p2`, and Context `other` with `o1`.
@@ -135,7 +176,10 @@ fn read(store: &mut Store, buckets: usize) -> read::Pulse {
 }
 
 fn row<'a>(p: &'a read::Pulse, plan: &str) -> &'a PulseRow {
-    p.rows.iter().find(|r| r.plan == PlanId::parse(plan).unwrap()).unwrap()
+    p.rows
+        .iter()
+        .find(|r| r.plan == PlanId::parse(plan).unwrap())
+        .unwrap()
 }
 
 fn counts(r: &PulseRow) -> Vec<u32> {
@@ -147,28 +191,50 @@ fn counts(r: &PulseRow) -> Vec<u32> {
 #[test]
 fn the_manager_slot_is_the_newest_chat_move_when_a_manager_made_it() {
     let (_dir, mut store) = base();
-    assert_eq!(read::manager_slot(&mut store).unwrap(), None, "nobody was ever in the chat slot");
+    assert_eq!(
+        read::manager_slot(&mut store).unwrap(),
+        None,
+        "nobody was ever in the chat slot"
+    );
 
     let mut s = session("m-ctx", "manager", "ctx", None, None, "idle", None);
     s += &moved("2026-10-18T15:00:00.000Z", "ctx", "l-p1", "chat");
     s += &moved("2026-10-18T15:01:00.000Z", "ctx", "m-ctx", "chat");
     sql(&mut store, &s);
     let slot = read::manager_slot(&mut store).unwrap().unwrap();
-    assert_eq!((slot.session.as_str(), slot.context.as_str()), ("m-ctx", "ctx"));
-    let newest: i64 = store.read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(
+        (slot.session.as_str(), slot.context.as_str()),
+        ("m-ctx", "ctx")
+    );
+    let newest: i64 = store
+        .read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(slot.moved_event, newest);
 
     // A parked move of another Session does not take the slot; a Lead's chat move does.
-    sql(&mut store, &moved("2026-10-18T15:02:00.000Z", "ctx", "l-p2", "parked"));
+    sql(
+        &mut store,
+        &moved("2026-10-18T15:02:00.000Z", "ctx", "l-p2", "parked"),
+    );
     assert!(read::manager_slot(&mut store).unwrap().is_some());
-    sql(&mut store, &moved("2026-10-18T15:03:00.000Z", "ctx", "l-p2", "chat"));
-    assert_eq!(read::manager_slot(&mut store).unwrap(), None, "a Lead moved to chat after the Manager");
+    sql(
+        &mut store,
+        &moved("2026-10-18T15:03:00.000Z", "ctx", "l-p2", "chat"),
+    );
+    assert_eq!(
+        read::manager_slot(&mut store).unwrap(),
+        None,
+        "a Lead moved to chat after the Manager"
+    );
 }
 
 #[test]
 fn a_lead_in_the_slot_alone_is_no_manager() {
     let (_dir, mut store) = base();
-    sql(&mut store, &moved("2026-10-18T15:00:00.000Z", "ctx", "l-p1", "chat"));
+    sql(
+        &mut store,
+        &moved("2026-10-18T15:00:00.000Z", "ctx", "l-p1", "chat"),
+    );
     assert_eq!(read::manager_slot(&mut store).unwrap(), None);
 }
 
@@ -183,15 +249,28 @@ fn the_pulse_rows_are_in_tree_order_by_lead_dot_tier_then_newest_first() {
     s += &plan("t1", "ctx", "2026-01-02T00:00:03.000Z", "idle");
     s += &plan("t2", "ctx", "2026-01-02T00:00:03.000Z", "idle");
     s += &plan("arch", "ctx", "2026-01-02T00:00:02.000Z", "idle");
-    s += &plan_done("old", "ctx", "2026-01-02T00:00:03.500Z", "2026-10-18T14:09:59.999Z");
-    s += &plan_done("new", "ctx", "2026-01-02T00:00:04.000Z", "2026-10-18T14:10:00.000Z");
+    s += &plan_done(
+        "old",
+        "ctx",
+        "2026-01-02T00:00:03.500Z",
+        "2026-10-18T14:09:59.999Z",
+    );
+    s += &plan_done(
+        "new",
+        "ctx",
+        "2026-01-02T00:00:04.000Z",
+        "2026-10-18T14:10:00.000Z",
+    );
     s += "INSERT INTO inbox_items (kind, urgency, subject, context, plan, session, label, opened_at)
           VALUES ('dialog', 'magenta', 'session:l-p0', 'ctx', 'p0', 'l-p0', 'p0 asks you', '2026-10-18T15:00:00.000Z');";
     // The newest Event names the oldest-created tied Plan: Events never reorder.
     s += &ev("15:06:00.000", "job-merged", "p1");
     s += &ev("15:01:00.000", "job-merged", "p3");
     sql(&mut store, &s);
-    sql(&mut store, "UPDATE plans SET archived_at = '2026-10-18T15:00:00.000Z' WHERE id = 'arch';");
+    sql(
+        &mut store,
+        "UPDATE plans SET archived_at = '2026-10-18T15:00:00.000Z' WHERE id = 'arch';",
+    );
     let p = read(&mut store, 12);
     let ids: Vec<&str> = p.rows.iter().map(|r| r.plan.as_str()).collect();
     assert_eq!(ids, ["p0", "p3", "new", "t1", "t2", "p2", "p1"]);
@@ -214,9 +293,22 @@ fn every_activity_kind_counts_and_the_others_do_not() {
         "escalation", "escalation-answered", "escalation-expired", "error",
     ];
     let ignored = [
-        "session-moved", "session-registered", "session-renamed", "session-archived", "session-message", "context-created",
-        "context-record", "context-grounded", "context-renamed", "context-owner", "context-archived", "plan-created", "plan-renamed",
-        "plan-archived", "watch-started", "watch-stopped",
+        "session-moved",
+        "session-registered",
+        "session-renamed",
+        "session-archived",
+        "session-message",
+        "context-created",
+        "context-record",
+        "context-grounded",
+        "context-renamed",
+        "context-owner",
+        "context-archived",
+        "plan-created",
+        "plan-renamed",
+        "plan-archived",
+        "watch-started",
+        "watch-stopped",
     ];
     let mut s = String::new();
     for kind in counted {
@@ -234,12 +326,33 @@ fn every_activity_kind_counts_and_the_others_do_not() {
 #[test]
 fn only_a_leads_turns_count_and_so_does_a_side_fork() {
     let (_dir, mut store) = base();
-    let mut s = job("p1", "a", "running") + &attempt("p1", "a", "2026-10-18T13:00:00.000Z", Some("2026-10-18T13:01:00.000Z"));
+    let mut s = job("p1", "a", "running")
+        + &attempt(
+            "p1",
+            "a",
+            "2026-10-18T13:00:00.000Z",
+            Some("2026-10-18T13:01:00.000Z"),
+        );
     s += &session("f-p1", "lead", "ctx", Some("p1"), None, "idle", None);
-    s += &session("w-1", "worker", "ctx", Some("p1"), Some("a-a1"), "idle", None);
+    s += &session(
+        "w-1",
+        "worker",
+        "ctx",
+        Some("p1"),
+        Some("a-a1"),
+        "idle",
+        None,
+    );
     sql(&mut store, &s);
     let turn = |at: &str, session: &str, to: &str| {
-        event(&format!("2026-10-18T{at}Z"), "session-state", "ctx", Some("p1"), Some(session), &format!(r#"{{"from":"idle","to":"{to}"}}"#))
+        event(
+            &format!("2026-10-18T{at}Z"),
+            "session-state",
+            "ctx",
+            Some("p1"),
+            Some(session),
+            &format!(r#"{{"from":"idle","to":"{to}"}}"#),
+        )
     };
     let mut s = turn("15:06:00.000", "l-p1", "working");
     s += &turn("15:06:01.000", "f-p1", "working");
@@ -280,8 +393,26 @@ fn merges_set_their_flags_and_are_counted_in_the_window() {
     let p = read(&mut store, 12);
     let r = row(&p, "p1");
     assert_eq!(r.merges, 3);
-    assert_eq!(r.buckets[10], Bucket { count: 2, kind: Some(Kind::Merged), job_merged: true, pr_merged: false, worker_ran: false });
-    assert_eq!(r.buckets[11], Bucket { count: 1, kind: Some(Kind::Merged), job_merged: false, pr_merged: true, worker_ran: false });
+    assert_eq!(
+        r.buckets[10],
+        Bucket {
+            count: 2,
+            kind: Some(Kind::Merged),
+            job_merged: true,
+            pr_merged: false,
+            worker_ran: false
+        }
+    );
+    assert_eq!(
+        r.buckets[11],
+        Bucket {
+            count: 1,
+            kind: Some(Kind::Merged),
+            job_merged: false,
+            pr_merged: true,
+            worker_ran: false
+        }
+    );
 }
 
 #[test]
@@ -289,13 +420,34 @@ fn an_attempt_marks_every_bucket_it_overlaps_through_now_while_not_ended() {
     let (_dir, mut store) = base();
     let mut s = job("p1", "a", "running") + &job("p1", "b", "merged") + &job("p2", "c", "running");
     s += &attempt("p1", "a", "2026-10-18T14:22:00.000Z", None); // from bucket 2 through the current one
-    s += &attempt("p1", "b", "2026-10-18T13:00:00.000Z", Some("2026-10-18T14:10:00.000Z")); // ends on the first instant
-    s += &attempt("p2", "c", "2026-10-18T14:31:00.000Z", Some("2026-10-18T14:34:00.000Z")); // inside bucket 4
+    s += &attempt(
+        "p1",
+        "b",
+        "2026-10-18T13:00:00.000Z",
+        Some("2026-10-18T14:10:00.000Z"),
+    ); // ends on the first instant
+    s += &attempt(
+        "p2",
+        "c",
+        "2026-10-18T14:31:00.000Z",
+        Some("2026-10-18T14:34:00.000Z"),
+    ); // inside bucket 4
     sql(&mut store, &s);
     let p = read(&mut store, 12);
-    let ran = |plan: &str| -> Vec<bool> { row(&p, plan).buckets.iter().map(|b| b.worker_ran).collect() };
-    assert_eq!(ran("p1"), [true, false, true, true, true, true, true, true, true, true, true, true]);
-    assert_eq!(ran("p2"), [false, false, false, false, true, false, false, false, false, false, false, false]);
+    let ran =
+        |plan: &str| -> Vec<bool> { row(&p, plan).buckets.iter().map(|b| b.worker_ran).collect() };
+    assert_eq!(
+        ran("p1"),
+        [
+            true, false, true, true, true, true, true, true, true, true, true, true
+        ]
+    );
+    assert_eq!(
+        ran("p2"),
+        [
+            false, false, false, false, true, false, false, false, false, false, false, false
+        ]
+    );
 }
 
 // ---------- max, merges, age ----------
@@ -314,9 +466,17 @@ fn max_is_the_largest_bucket_over_all_rows_and_age_counts_whole_minutes() {
     assert_eq!(p.max, 3);
     assert_eq!(row(&p, "p1").age_minutes, Some(1), "15:06:00 to 15:07:30");
 
-    sql(&mut store, &ev("12:00:00.000", "job-added", "p2").replace("2026-10-18T12:00:00.000Z", "2026-10-17T12:07:30.001Z"));
+    sql(
+        &mut store,
+        &ev("12:00:00.000", "job-added", "p2")
+            .replace("2026-10-18T12:00:00.000Z", "2026-10-17T12:07:30.001Z"),
+    );
     let q = read::pulse(&mut store, &ctx("ctx"), NOW, 12).unwrap();
-    assert_eq!(row(&q, "p2").age_minutes, Some(1), "the latest, not the oldest");
+    assert_eq!(
+        row(&q, "p2").age_minutes,
+        Some(1),
+        "the latest, not the oldest"
+    );
 }
 
 #[test]
@@ -328,7 +488,10 @@ fn age_reads_an_event_older_than_the_window_zero_while_an_attempt_runs_and_none_
     sql(&mut store, &ev("12:07:30.001", "job-added", "p1"));
     assert_eq!(row(&read(&mut store, 12), "p1").age_minutes, Some(179));
 
-    sql(&mut store, &(job("p1", "a", "running") + &attempt("p1", "a", "2026-10-18T14:00:00.000Z", None)));
+    sql(
+        &mut store,
+        &(job("p1", "a", "running") + &attempt("p1", "a", "2026-10-18T14:00:00.000Z", None)),
+    );
     let p = read(&mut store, 12);
     assert_eq!(row(&p, "p1").age_minutes, Some(0));
     assert_eq!(row(&p, "p2").age_minutes, None);
@@ -372,7 +535,10 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
          UPDATE inbox_items SET closed_at = '2026-10-18T15:01:00.000Z' WHERE subject = 'session:l-p2';",
     );
     assert!(quiet(&mut store, "p2"));
-    sql(&mut store, &attempt("p2", "q", "2026-10-18T12:00:00.000Z", None));
+    sql(
+        &mut store,
+        &attempt("p2", "q", "2026-10-18T12:00:00.000Z", None),
+    );
     assert!(!quiet(&mut store, "p2"), "an Attempt is not ended");
 }
 
@@ -382,6 +548,8 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
 fn the_cursor_is_the_highest_event_id_of_the_read() {
     let (_dir, mut store) = base();
     sql(&mut store, &ev("15:06:00.000", "job-added", "p1"));
-    let newest: i64 = store.read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap();
+    let newest: i64 = store
+        .read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(read(&mut store, 12).events_cursor, newest);
 }

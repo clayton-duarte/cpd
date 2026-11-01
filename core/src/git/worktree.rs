@@ -6,7 +6,10 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_add, worktree_list_with};
+use super::run::{
+    branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_add,
+    worktree_list_with,
+};
 use super::{TAIL_LINES, tail};
 use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
@@ -63,7 +66,11 @@ pub fn workflow_lead_worktree_path(repo: &Path, plan: &PlanId, key: &WorkflowKey
 }
 
 /// The Attempt worktree: `<repo-parent>/<repo-name>.<plan>--<attempt>`.
-pub fn attempt_worktree_path(repo: &Path, plan: &PlanId, attempt: &AttemptId) -> Result<PathBuf, CpdError> {
+pub fn attempt_worktree_path(
+    repo: &Path,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<PathBuf, CpdError> {
     sibling(repo, &format!("{plan}--{attempt}"))
 }
 
@@ -87,7 +94,11 @@ pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
 }
 
 /// [`list`] on `runner`, the naps of its re-reads on `clock`.
-pub fn list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<Vec<Worktree>, CpdError> {
+pub fn list_with(
+    runner: &dyn Runner,
+    clock: &dyn Clock,
+    dir: &Path,
+) -> Result<Vec<Worktree>, CpdError> {
     let text = worktree_list_with(runner, clock, dir)?;
     let mut found = Vec::new();
     for block in text.split("\n\n") {
@@ -114,8 +125,16 @@ pub fn worktree_of_branch(dir: &Path, branch: &str) -> Result<Option<PathBuf>, C
 }
 
 /// [`worktree_of_branch`] on `runner`, its naps on `clock`.
-pub fn worktree_of_branch_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
-    Ok(list_with(runner, clock, dir)?.into_iter().find(|w| w.branch.as_deref() == Some(branch)).map(|w| w.path))
+pub fn worktree_of_branch_with(
+    runner: &dyn Runner,
+    clock: &dyn Clock,
+    dir: &Path,
+    branch: &str,
+) -> Result<Option<PathBuf>, CpdError> {
+    Ok(list_with(runner, clock, dir)?
+        .into_iter()
+        .find(|w| w.branch.as_deref() == Some(branch))
+        .map(|w| w.path))
 }
 
 /// `path` with symlinks resolved, also when the last component does not exist yet.
@@ -123,7 +142,10 @@ fn real(path: &Path) -> PathBuf {
     if let Ok(p) = path.canonicalize() {
         return p;
     }
-    match (path.parent().and_then(|p| p.canonicalize().ok()), path.file_name()) {
+    match (
+        path.parent().and_then(|p| p.canonicalize().ok()),
+        path.file_name(),
+    ) {
         (Some(parent), Some(name)) => parent.join(name),
         _ => path.to_path_buf(),
     }
@@ -172,8 +194,17 @@ fn run_setup(
     base_branch: &str,
     setup: &Setup,
 ) -> Result<(), CpdError> {
-    let op = Operation { branch: base_branch };
-    let result = run_hook(Hook::PreStart, pre_start, path, Some(&op), setup.timeout, &setup.log);
+    let op = Operation {
+        branch: base_branch,
+    };
+    let result = run_hook(
+        Hook::PreStart,
+        pre_start,
+        path,
+        Some(&op),
+        setup.timeout,
+        &setup.log,
+    );
     let failure = match result {
         Ok(r) if r.outcome == HookOutcome::Passed => return Ok(()),
         Ok(r) => {
@@ -202,15 +233,23 @@ fn run_setup(
 /// rejected or failed push is the returned `push_failed` error with git's
 /// stderr; it never fails the caller's operation.
 pub fn push_lead_branch(lead_worktree: &Path, branch: &str) -> Result<(), CpdError> {
-    let pushed = has_origin(lead_worktree)
-        .and_then(|origin| if origin { run(lead_worktree, &["push", "origin", branch]).map(Some) } else { Ok(None) });
+    let pushed = has_origin(lead_worktree).and_then(|origin| {
+        if origin {
+            run(lead_worktree, &["push", "origin", branch]).map(Some)
+        } else {
+            Ok(None)
+        }
+    });
     match pushed {
         Ok(None) => Ok(()),
         Ok(Some(out)) if out.code == 0 => Ok(()),
         Ok(Some(out)) => Err(CpdError::new(
             ErrorCode::PushFailed,
             match push_reason("", &out.stderr) {
-                Some(reason) => format!("git push of {branch} to origin exited {}: {reason}.", out.code),
+                Some(reason) => format!(
+                    "git push of {branch} to origin exited {}: {reason}.",
+                    out.code
+                ),
                 None => format!("git push of {branch} to origin exited {}.", out.code),
             },
         )
@@ -219,7 +258,10 @@ pub fn push_lead_branch(lead_worktree: &Path, branch: &str) -> Result<(), CpdErr
         .with("stderr", tail(&out.stderr, TAIL_LINES))),
         Err(e) => Err(CpdError::new(
             ErrorCode::PushFailed,
-            format!("git push of {branch} to origin could not run: {}", e.message()),
+            format!(
+                "git push of {branch} to origin could not run: {}",
+                e.message()
+            ),
         )
         .with("branch", branch)
         .with("git", e.to_json())),
@@ -251,15 +293,25 @@ pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push
 }
 
 /// [`push_commit`] on `runner` (a test passes a `FakeRunner`); rule P of contract §7.4 checks every `!` ref line for a contained commit.
-pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
-    let (run, ok) = (|dir: &Path, args: &[&str]| run_with(runner, dir, args), |dir: &Path, args: &[&str]| ok_with(runner, dir, args));
+pub fn push_commit_with(
+    runner: &dyn Runner,
+    lead_worktree: &Path,
+    branch: &str,
+    sha: &str,
+) -> Result<Push, CpdError> {
+    let (run, ok) = (
+        |dir: &Path, args: &[&str]| run_with(runner, dir, args),
+        |dir: &Path, args: &[&str]| ok_with(runner, dir, args),
+    );
     let reference = format!("refs/heads/{branch}");
     let refspec = format!("{sha}:{reference}");
     let args = ["push", "--porcelain", "origin", refspec.as_str()];
     let out = run(lead_worktree, &args)?;
     let line = ref_line(&out.stdout);
     if out.code == 0 {
-        return Ok(Push::Pushed { new: line.and_then(|l| l.chars().next()) != Some('=') });
+        return Ok(Push::Pushed {
+            new: line.and_then(|l| l.chars().next()) != Some('='),
+        });
     }
     let fail = || {
         let message = match push_reason(&out.stdout, &out.stderr) {
@@ -268,7 +320,9 @@ pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str,
         };
         super::run::failed(lead_worktree, &args, message, Some(out.code), &out.stderr)
     };
-    let Some(line) = line.filter(|l| l.starts_with('!')) else { return Err(fail()) };
+    let Some(line) = line.filter(|l| l.starts_with('!')) else {
+        return Err(fail());
+    };
     let rejected = line.contains("(non-fast-forward)") || line.contains("(fetch first)");
     let listed = if rejected {
         ok(lead_worktree, &["ls-remote", "origin", &reference])?
@@ -278,15 +332,27 @@ pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str,
             _ => return Err(fail()),
         }
     };
-    let remote = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference.as_str())).and_then(|l| l.split_whitespace().next());
+    let remote = listed
+        .lines()
+        .find(|l| l.split_whitespace().nth(1) == Some(reference.as_str()))
+        .and_then(|l| l.split_whitespace().next());
     if let Some(remote) = remote {
-        let known = run(lead_worktree, &["cat-file", "-e", &format!("{remote}^{{commit}}")])?.code == 0;
+        let known = run(
+            lead_worktree,
+            &["cat-file", "-e", &format!("{remote}^{{commit}}")],
+        )?
+        .code
+            == 0;
         if known && run(lead_worktree, &["merge-base", "--is-ancestor", sha, remote])?.code == 0 {
-            return Ok(Push::Contained { remote: remote.to_owned() });
+            return Ok(Push::Contained {
+                remote: remote.to_owned(),
+            });
         }
     }
     if rejected {
-        Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
+        Ok(Push::Rejected {
+            stderr: tail(&out.stderr, TAIL_LINES),
+        })
     } else {
         Err(fail())
     }
@@ -295,10 +361,18 @@ pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str,
 /// Git's reason for a failed push: the summary of the `!` line (the text after its second tab), else the first
 /// non-empty stderr line that does not start with `To ` or `hint:`; trimmed, cut at 200 characters.
 fn push_reason(stdout: &str, stderr: &str) -> Option<String> {
-    let summary = ref_line(stdout).filter(|l| l.starts_with('!')).and_then(|l| l.splitn(3, '\t').nth(2));
-    let text = summary.map(str::trim).filter(|s| !s.is_empty()).or_else(|| {
-        stderr.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("To ") && !l.starts_with("hint:"))
-    })?;
+    let summary = ref_line(stdout)
+        .filter(|l| l.starts_with('!'))
+        .and_then(|l| l.splitn(3, '\t').nth(2));
+    let text = summary
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            stderr
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("To ") && !l.starts_with("hint:"))
+        })?;
     Some(text.chars().take(200).collect())
 }
 
@@ -324,33 +398,63 @@ pub enum Remote {
 /// Whether `origin` has branch `name`: `ls-remote --exit-code --heads` exits 0 (it has) or 2 (it has not);
 /// any other result is `setup_failed`.
 fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
-    let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", name])?;
+    let listed = run(
+        repo,
+        &["ls-remote", "--exit-code", "--heads", "origin", name],
+    )?;
     match listed.code {
         0 => Ok(true),
         2 => Ok(false),
-        code => Err(CpdError::new(ErrorCode::SetupFailed, format!("Cannot tell whether {name} is on origin: git ls-remote exited {code}."))
-            .with("exit", code)
-            .with("stderr", tail(&listed.stderr, TAIL_LINES))),
+        code => Err(CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("Cannot tell whether {name} is on origin: git ls-remote exited {code}."),
+        )
+        .with("exit", code)
+        .with("stderr", tail(&listed.stderr, TAIL_LINES))),
     }
 }
 
 /// `git merge-tree --write-tree --name-only <onto> <sha>` (contract §7.6 `pr open` step 1, `pr rebase` step 3, §7.2):
 /// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
 /// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
-pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+pub fn merge_conflicts(
+    repo: &Path,
+    onto: &str,
+    sha: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
     merge_conflicts_with(&*Ports::current().runner, repo, onto, sha)
 }
 
 /// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`).
-pub fn merge_conflicts_with(runner: &dyn Runner, repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let merge = run_with(runner, repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
+pub fn merge_conflicts_with(
+    runner: &dyn Runner,
+    repo: &Path,
+    onto: &str,
+    sha: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
+    let merge = run_with(
+        runner,
+        repo,
+        &["merge-tree", "--write-tree", "--name-only", onto, sha],
+    )?;
     match merge.code {
         0 => Ok(None),
         // The tree's id, the conflicted files, a blank line, then git's messages.
-        1 => Ok(Some(merge.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect())),
-        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-tree exited {code}."))
-            .with("exit", code)
-            .with("stderr", tail(&merge.stderr, TAIL_LINES))),
+        1 => Ok(Some(
+            merge
+                .stdout
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )),
+        code => Err(CpdError::new(
+            ErrorCode::GitFailed,
+            format!("git merge-tree exited {code}."),
+        )
+        .with("exit", code)
+        .with("stderr", tail(&merge.stderr, TAIL_LINES))),
     }
 }
 
@@ -405,7 +509,11 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
         false
     };
     let local = format!("refs/heads/{base}");
-    let start = if run(repo, &["rev-parse", "--verify", "--quiet", &local]).map_err(at(Step::BasePrBranch))?.code == 0 {
+    let start = if run(repo, &["rev-parse", "--verify", "--quiet", &local])
+        .map_err(at(Step::BasePrBranch))?
+        .code
+        == 0
+    {
         rev_parse(repo, &local).map_err(at(Step::BasePrBranch))?
     } else if base_on_remote {
         rev_parse(repo, &format!("origin/{base}")).map_err(at(Step::BasePrBranch))?
@@ -415,7 +523,10 @@ fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, Strin
             format!("The base Workflow's Lead Branch {base} is neither a local branch of this repo nor on origin: the stacked Workflow has nothing to start from."),
         )
         .with("base", base);
-        return Err(StartFailure { step: Step::BasePrBranch, error });
+        return Err(StartFailure {
+            step: Step::BasePrBranch,
+            error,
+        });
     };
     if !origin {
         return Ok((Remote::None, start));
@@ -481,8 +592,15 @@ impl RebaseWorktree {
         let path = sibling(repo, &format!("{plan}.{key}.rebase-{pid}"))?;
         let reason = format!("cpd rebase {pid}");
         let target = path.to_string_lossy().into_owned();
-        worktree_add(repo, &["--detach", "--lock", "--reason", &reason, &target, sha], &path)?;
-        Ok(RebaseWorktree { repo: repo.to_path_buf(), path })
+        worktree_add(
+            repo,
+            &["--detach", "--lock", "--reason", &reason, &target, sha],
+            &path,
+        )?;
+        Ok(RebaseWorktree {
+            repo: repo.to_path_buf(),
+            path,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -492,7 +610,11 @@ impl RebaseWorktree {
     /// `git -C <repo> worktree remove --force --force W`.
     pub fn remove(self) -> Result<(), CpdError> {
         let path = self.path.to_string_lossy();
-        ok(&self.repo, &["worktree", "remove", "--force", "--force", &path]).map(|_| ())
+        ok(
+            &self.repo,
+            &["worktree", "remove", "--force", "--force", &path],
+        )
+        .map(|_| ())
     }
 }
 
@@ -594,13 +716,19 @@ pub fn prepare_workflow_lead_worktree(
     let at = |step| move |error| StartFailure { step, error };
     let in_worktree = at(Step::Worktree);
 
-    let leftover = list(repo).map_err(in_worktree)?.iter().any(|w| real(&w.path) == real(path) && w.branch.as_deref() == Some(branch));
+    let leftover = list(repo)
+        .map_err(in_worktree)?
+        .iter()
+        .any(|w| real(&w.path) == real(path) && w.branch.as_deref() == Some(branch));
     if leftover {
         discard_worktree(repo, path, branch).map_err(in_worktree)?;
     }
     if path.exists() {
-        let error = CpdError::new(ErrorCode::WorktreeExists, format!("{} already exists.", path.display()))
-            .with("path", path.to_string_lossy().into_owned());
+        let error = CpdError::new(
+            ErrorCode::WorktreeExists,
+            format!("{} already exists.", path.display()),
+        )
+        .with("path", path.to_string_lossy().into_owned());
         return Err(in_worktree(error));
     }
     let mut clashes = vec![branch.to_owned()];
@@ -611,7 +739,11 @@ pub fn prepare_workflow_lead_worktree(
     }
     for clash in clashes {
         if branch_exists(repo, &clash).map_err(in_worktree)? {
-            let error = CpdError::new(ErrorCode::BranchExists, format!("Branch {clash} already exists.")).with("branch", clash);
+            let error = CpdError::new(
+                ErrorCode::BranchExists,
+                format!("Branch {clash} already exists."),
+            )
+            .with("branch", clash);
             return Err(in_worktree(error));
         }
     }
@@ -634,7 +766,18 @@ pub fn prepare_workflow_lead_worktree(
 
     let created = (|| {
         // `--no-track`: no upstream, so nothing writes the shared `.git/config` (hs-d243 G1).
-        ok(repo, &["worktree", "add", "--no-track", "-b", branch, path_str(path)?, &start])?;
+        ok(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                branch,
+                path_str(path)?,
+                &start,
+            ],
+        )?;
         rev_parse(path, "HEAD")
     })();
     let base_sha = match created {
@@ -645,31 +788,61 @@ pub fn prepare_workflow_lead_worktree(
         }
     };
     run_setup(pre_start, repo, path, branch, base, setup).map_err(at(Step::PreStart))?;
-    Ok(Prepared { path: path.to_path_buf(), branch: branch.to_owned(), base_sha, remote })
+    Ok(Prepared {
+        path: path.to_path_buf(),
+        branch: branch.to_owned(),
+        base_sha,
+        remote,
+    })
 }
 
 /// Creates the Lead worktree of a Plan's legacy Lead Branch `cpd/<plan>` and runs
 /// `pre-start` in it (contract §7.2 for a Workflow made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
-pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
+pub fn create_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    base: &str,
+    setup: &Setup,
+) -> Result<Created, CpdError> {
     create_lead_worktree_with(repo, plan, base, setup, &Pipeline::default())
 }
 
 /// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
-pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
+pub fn create_lead_worktree_with(
+    repo: &Path,
+    plan: &PlanId,
+    base: &str,
+    setup: &Setup,
+    pre_start: &Pipeline,
+) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
     let prepared = prepare_workflow_lead_worktree(repo, plan, &path, &legacy_lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
-    Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
+    Ok(Created {
+        path: prepared.path,
+        branch: prepared.branch,
+        base_sha: prepared.base_sha,
+        push_failed,
+    })
 }
 
 /// The Lead Branch of the Workflow whose Lead worktree is `lead_worktree`: the branch checked out there, whatever its
 /// name (the stored lead_branch is the caller's). A detached HEAD is `setup_failed`.
 fn checked_out_lead_branch(lead_worktree: &Path, plan: &PlanId) -> Result<String, CpdError> {
     let fail = |why: String| {
-        CpdError::new(ErrorCode::SetupFailed, format!("The Lead worktree {} has no Lead Branch of Plan {plan}: {why}.", lead_worktree.display()))
-            .with("lead_worktree", lead_worktree.to_string_lossy().into_owned())
+        CpdError::new(
+            ErrorCode::SetupFailed,
+            format!(
+                "The Lead worktree {} has no Lead Branch of Plan {plan}: {why}.",
+                lead_worktree.display()
+            ),
+        )
+        .with(
+            "lead_worktree",
+            lead_worktree.to_string_lossy().into_owned(),
+        )
     };
     match super::run::current_branch(lead_worktree)? {
         Some(branch) => Ok(branch),
@@ -687,7 +860,14 @@ pub fn create_attempt_worktree(
     attempt: &AttemptId,
     setup: &Setup,
 ) -> Result<Created, CpdError> {
-    create_attempt_worktree_with(repo, lead_worktree, plan, attempt, setup, &Pipeline::default())
+    create_attempt_worktree_with(
+        repo,
+        lead_worktree,
+        plan,
+        attempt,
+        setup,
+        &Pipeline::default(),
+    )
 }
 
 /// [`create_attempt_worktree`] running `pre_start`, the Workflow's policy `hooks.pre-start`; the one above runs no hook.
@@ -704,9 +884,24 @@ pub fn create_attempt_worktree_with(
     let branch = attempt_branch(plan, attempt);
 
     let base_sha = rev_parse(lead_worktree, &format!("refs/heads/{lead}"))?;
-    ok(lead_worktree, &["worktree", "add", "-b", &branch, path_str(&path)?, &base_sha])?;
+    ok(
+        lead_worktree,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            path_str(&path)?,
+            &base_sha,
+        ],
+    )?;
     run_setup(pre_start, lead_worktree, &path, &branch, &lead, setup)?;
-    Ok(Created { path, branch, base_sha, push_failed: None })
+    Ok(Created {
+        path,
+        branch,
+        base_sha,
+        push_failed: None,
+    })
 }
 
 /// Removes a worktree and its branch whatever state they are in:
@@ -720,7 +915,11 @@ pub fn discard_worktree(dir: &Path, path: &Path, branch: &str) -> Result<(), Cpd
 /// Removes the worktree and branch of a Merged Attempt (contract §7.2, A9):
 /// renames the worktree aside, `git worktree prune`, `git branch -d`, then deletes the aside in-process; git refuses the `-d` unless the
 /// branch is merged into HEAD of `lead_worktree`. Idempotent for what is already gone.
-pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) -> Result<(), CpdError> {
+pub fn remove_merged_attempt(
+    lead_worktree: &Path,
+    path: &Path,
+    branch: &str,
+) -> Result<(), CpdError> {
     remove(lead_worktree, path, branch, false, false)
 }
 
@@ -774,7 +973,10 @@ pub fn remove_merged_lead(
 ) -> Result<LeadRemoval, CpdError> {
     let aside = removing_aside(path)?;
     if path.exists() {
-        if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
+        if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?
+            .trim()
+            .is_empty()
+        {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
         }
         if has_unpushed_work(path, recorded_head)? {
@@ -789,7 +991,12 @@ pub fn remove_merged_lead(
         ok(repo, &["branch", "-D", branch])?;
     }
     if aside.exists() {
-        std::fs::remove_dir_all(&aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("remove {}: {e}", aside.display())))?;
+        std::fs::remove_dir_all(&aside).map_err(|e| {
+            CpdError::new(
+                ErrorCode::GitFailed,
+                format!("remove {}: {e}", aside.display()),
+            )
+        })?;
     }
     Ok(LeadRemoval::Removed)
 }
@@ -800,14 +1007,22 @@ pub fn remove_merged_lead(
 /// merged Workflow's worktree (hygiene.md 8a).
 fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
     let list = |extra: Option<&str>| -> Result<bool, CpdError> {
-        let mut args = vec!["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"];
+        let mut args = vec![
+            "rev-list",
+            "--no-merges",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ];
         args.extend(extra);
         Ok(!ok(worktree, &args)?.trim().is_empty())
     };
     if !list(None)? {
         return Ok(false);
     }
-    let Some(oid) = recorded_head() else { return Ok(true) };
+    let Some(oid) = recorded_head() else {
+        return Ok(true);
+    };
     if run(worktree, &["cat-file", "-e", &format!("{oid}^{{commit}}")])?.code != 0 {
         return Ok(true);
     }
@@ -816,27 +1031,59 @@ fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<Str
 
 /// `<path>.removing`: the file name plus `.removing`.
 fn removing_aside(path: &Path) -> Result<PathBuf, CpdError> {
-    let mut name = path.file_name().ok_or_else(|| CpdError::new(ErrorCode::GitFailed, format!("{} has no file name", path.display())))?.to_os_string();
+    let mut name = path
+        .file_name()
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::GitFailed,
+                format!("{} has no file name", path.display()),
+            )
+        })?
+        .to_os_string();
     name.push(".removing");
     Ok(path.with_file_name(name))
 }
 
 fn delete_aside(aside: &Path) -> Result<(), CpdError> {
-    std::fs::remove_dir_all(aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("remove {}: {e}", aside.display())))
+    std::fs::remove_dir_all(aside).map_err(|e| {
+        CpdError::new(
+            ErrorCode::GitFailed,
+            format!("remove {}: {e}", aside.display()),
+        )
+    })
 }
 
 /// Contract §7.2 "Removal": rename aside, prune, delete the branch, delete the aside in this process.
 /// `force` skips the clean-status check; `delete` is `branch -D` rather than `-d`.
-fn remove(dir: &Path, path: &Path, branch: &str, force: bool, delete: bool) -> Result<(), CpdError> {
+fn remove(
+    dir: &Path,
+    path: &Path,
+    branch: &str,
+    force: bool,
+    delete: bool,
+) -> Result<(), CpdError> {
     let aside = removing_aside(path)?;
     if list(dir)?.iter().any(|w| real(&w.path) == real(path)) && path.exists() {
-        if !force && !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
-            return Err(CpdError::new(ErrorCode::GitFailed, format!("{} contains modified or untracked files", path.display())).with("path", path.display().to_string()));
+        if !force
+            && !ok(path, &["--no-optional-locks", "status", "--porcelain"])?
+                .trim()
+                .is_empty()
+        {
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                format!("{} contains modified or untracked files", path.display()),
+            )
+            .with("path", path.display().to_string()));
         }
         if aside.exists() {
             delete_aside(&aside)?;
         }
-        std::fs::rename(path, &aside).map_err(|e| CpdError::new(ErrorCode::GitFailed, format!("rename {} to {}: {e}", path.display(), aside.display())))?;
+        std::fs::rename(path, &aside).map_err(|e| {
+            CpdError::new(
+                ErrorCode::GitFailed,
+                format!("rename {} to {}: {e}", path.display(), aside.display()),
+            )
+        })?;
     }
     ok(dir, &["worktree", "prune"])?;
     if branch_exists(dir, branch)? {

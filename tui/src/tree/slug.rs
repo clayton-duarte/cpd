@@ -45,7 +45,9 @@ pub fn derive(title: &str, max: usize, taken: impl Fn(&str) -> bool) -> Option<S
     if !taken(base) {
         return Some(base.to_owned());
     }
-    (2..).map(|n| format!("{}-{n}", cut(&slug, max - 1 - n.to_string().len()))).find(|id| !taken(id))
+    (2..)
+        .map(|n| format!("{}-{n}", cut(&slug, max - 1 - n.to_string().len())))
+        .find(|id| !taken(id))
 }
 
 #[cfg(test)]
@@ -60,9 +62,19 @@ mod tests {
 
     #[test]
     fn a_title_becomes_a_lowercase_ascii_slug() {
-        assert_eq!(free("Building cpd!", CONTEXT_MAX).as_deref(), Some("building-cpd"));
-        assert_eq!(free("  Pay   4521 -- the API  ", CONTEXT_MAX).as_deref(), Some("pay-4521-the-api"));
-        assert_eq!(free("Café über", CONTEXT_MAX).as_deref(), Some("caf-ber"), "other characters are runs of `-`");
+        assert_eq!(
+            free("Building cpd!", CONTEXT_MAX).as_deref(),
+            Some("building-cpd")
+        );
+        assert_eq!(
+            free("  Pay   4521 -- the API  ", CONTEXT_MAX).as_deref(),
+            Some("pay-4521-the-api")
+        );
+        assert_eq!(
+            free("Café über", CONTEXT_MAX).as_deref(),
+            Some("caf-ber"),
+            "other characters are runs of `-`"
+        );
         assert_eq!(free("a_b.c/d", CONTEXT_MAX).as_deref(), Some("a-b-c-d"));
     }
 
@@ -84,38 +96,79 @@ mod tests {
     #[test]
     fn the_id_is_cut_to_the_pattern_and_never_ends_in_a_dash() {
         let long = "abcdefghij klmnopqrstuvwxyz and more words after it";
-        assert_eq!(free(long, PLAN_MAX).as_deref(), Some("abcdefghij-klmnopqrstuvw"));
+        assert_eq!(
+            free(long, PLAN_MAX).as_deref(),
+            Some("abcdefghij-klmnopqrstuvw")
+        );
         assert_eq!(free(long, PLAN_MAX).unwrap().len(), PLAN_MAX);
-        assert_eq!(free("abcdefghijklmnopqrstuvw xyz", PLAN_MAX).as_deref(), Some("abcdefghijklmnopqrstuvw"), "the cut dash goes");
-        assert_eq!(free(&long.repeat(3), CONTEXT_MAX).unwrap().len(), CONTEXT_MAX);
+        assert_eq!(
+            free("abcdefghijklmnopqrstuvw xyz", PLAN_MAX).as_deref(),
+            Some("abcdefghijklmnopqrstuvw"),
+            "the cut dash goes"
+        );
+        assert_eq!(
+            free(&long.repeat(3), CONTEXT_MAX).unwrap().len(),
+            CONTEXT_MAX
+        );
     }
 
     #[test]
     fn what_is_derived_is_an_id() {
-        for title in ["Building cpd!", "2024 plan", &"x".repeat(300), "ab", &"word ".repeat(40)] {
-            assert!(ContextId::parse(&free(title, CONTEXT_MAX).unwrap()).is_ok(), "{title:?}");
-            assert!(PlanId::parse(&free(title, PLAN_MAX).unwrap()).is_ok(), "{title:?}");
+        for title in [
+            "Building cpd!",
+            "2024 plan",
+            &"x".repeat(300),
+            "ab",
+            &"word ".repeat(40),
+        ] {
+            assert!(
+                ContextId::parse(&free(title, CONTEXT_MAX).unwrap()).is_ok(),
+                "{title:?}"
+            );
+            assert!(
+                PlanId::parse(&free(title, PLAN_MAX).unwrap()).is_ok(),
+                "{title:?}"
+            );
         }
     }
 
     #[test]
     fn a_taken_id_gets_2_3_and_so_on() {
         let taken = |ids: &'static [&'static str]| move |id: &str| ids.contains(&id);
-        assert_eq!(derive("Ship it", PLAN_MAX, taken(&["ship-it"])).as_deref(), Some("ship-it-2"));
-        assert_eq!(derive("Ship it", PLAN_MAX, taken(&["ship-it", "ship-it-2"])).as_deref(), Some("ship-it-3"));
-        assert_eq!(derive("Ship it", PLAN_MAX, taken(&["ship-it", "ship-it-3"])).as_deref(), Some("ship-it-2"), "the first free one");
-        assert_eq!(derive("Ship it", PLAN_MAX, taken(&["other"])).as_deref(), Some("ship-it"));
+        assert_eq!(
+            derive("Ship it", PLAN_MAX, taken(&["ship-it"])).as_deref(),
+            Some("ship-it-2")
+        );
+        assert_eq!(
+            derive("Ship it", PLAN_MAX, taken(&["ship-it", "ship-it-2"])).as_deref(),
+            Some("ship-it-3")
+        );
+        assert_eq!(
+            derive("Ship it", PLAN_MAX, taken(&["ship-it", "ship-it-3"])).as_deref(),
+            Some("ship-it-2"),
+            "the first free one"
+        );
+        assert_eq!(
+            derive("Ship it", PLAN_MAX, taken(&["other"])).as_deref(),
+            Some("ship-it")
+        );
     }
 
     #[test]
     fn the_suffix_fits_in_the_pattern() {
         let title = "abcdefghij klmnopqrstuvwxyz";
         let taken = |id: &str| id == "abcdefghij-klmnopqrstuvw";
-        assert_eq!(derive(title, PLAN_MAX, taken).as_deref(), Some("abcdefghij-klmnopqrstu-2"));
+        assert_eq!(
+            derive(title, PLAN_MAX, taken).as_deref(),
+            Some("abcdefghij-klmnopqrstu-2")
+        );
         let ten = |id: &str| id.len() > 2 && !id.ends_with("-10");
         let id = derive(title, PLAN_MAX, ten).unwrap();
         assert_eq!((id.len(), id.ends_with("-10")), (PLAN_MAX, true), "{id}");
         assert!(PlanId::parse(&id).is_ok());
-        assert_eq!(derive("ab", PLAN_MAX, |id| id == "ab").as_deref(), Some("ab-2"));
+        assert_eq!(
+            derive("ab", PLAN_MAX, |id| id == "ab").as_deref(),
+            Some("ab-2")
+        );
     }
 }

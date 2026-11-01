@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::error::{CpdError, ErrorCode};
-use crate::ports::Ports;
 use super::deadline::Failed;
 use super::runner::Runner;
+use crate::error::{CpdError, ErrorCode};
+use crate::ports::Ports;
 
 /// What tells one installed file from another: device, inode and modification time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +28,12 @@ struct Identity {
 impl Identity {
     fn of(path: &Path) -> std::io::Result<Identity> {
         let meta = std::fs::metadata(path)?;
-        Ok(Identity { dev: meta.dev(), ino: meta.ino(), mtime: meta.mtime(), mtime_nsec: meta.mtime_nsec() })
+        Ok(Identity {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            mtime: meta.mtime(),
+            mtime_nsec: meta.mtime_nsec(),
+        })
     }
 }
 
@@ -97,17 +102,27 @@ impl Exe {
     /// Records the path (`std::env::current_exe`) and its identity. Read once, at start.
     pub fn current() -> Result<Exe, CpdError> {
         let path = std::env::current_exe().map_err(|e| {
-            CpdError::new(ErrorCode::SpawnFailed, format!("Cannot find cpd's own executable: {e}."))
+            CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Cannot find cpd's own executable: {e}."),
+            )
         })?;
         Exe::at(path)
     }
 
     pub(crate) fn at(path: PathBuf) -> Result<Exe, CpdError> {
         let identity = Identity::of(&path).map_err(|e| {
-            CpdError::new(ErrorCode::SpawnFailed, format!("Cannot stat cpd's own executable {}: {e}.", path.display()))
-                .with("path", path.display().to_string())
+            CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Cannot stat cpd's own executable {}: {e}.", path.display()),
+            )
+            .with("path", path.display().to_string())
         })?;
-        Ok(Exe { path, identity, refused: Cell::new(None) })
+        Ok(Exe {
+            path,
+            identity,
+            refused: Cell::new(None),
+        })
     }
 
     /// The path holds another file than at start: a new install. A path that
@@ -130,7 +145,8 @@ impl Exe {
     }
 
     fn check_store_within(&self, timeout: Duration) -> Result<(), Refusal> {
-        let now = Identity::of(&self.path).map_err(|e| Refusal::New(format!("cannot be read: {e}")))?;
+        let now =
+            Identity::of(&self.path).map_err(|e| Refusal::New(format!("cannot be read: {e}")))?;
         if self.refused.get() == Some(now) {
             return Err(Refusal::Known);
         }
@@ -149,12 +165,18 @@ impl Exe {
     {
         let launch = super::spawn::Launch {
             program: self.path.display().to_string(),
-            args: args.into_iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect(),
+            args: args
+                .into_iter()
+                .map(|a| a.as_ref().to_string_lossy().into_owned())
+                .collect(),
             ..super::spawn::Launch::default()
         };
         let e = spawn.exec(&launch);
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", self.path.display()))
-            .with("path", self.path.display().to_string())
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot restart cpd from {}: {e}.", self.path.display()),
+        )
+        .with("path", self.path.display().to_string())
     }
 
     /// Replaces this process with the executable at the same path, `args` as its
@@ -172,13 +194,22 @@ impl Exe {
 /// and decides from the `store` verdict in its JSON whether that cpd can open the
 /// store: the database does not exist (`store` null) or `store.opens` is true.
 /// `Err` is the reason it cannot, or why it could not be asked.
-pub(crate) fn asks_to_open_store_with(runner: &dyn Runner, program: &Path, timeout: Duration) -> Result<(), String> {
+pub(crate) fn asks_to_open_store_with(
+    runner: &dyn Runner,
+    program: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
     let mut command = Command::new(program);
     command.arg("--version").stdin(Stdio::null());
     let out = match runner.output(&mut command, "cpd", timeout) {
         Ok(out) => out,
         Err(Failed::Io(e)) => return Err(format!("cannot run --version: {e}")),
-        Err(Failed::Timeout(_)) => return Err(format!("--version did not answer in {}s", timeout.as_secs_f32())),
+        Err(Failed::Timeout(_)) => {
+            return Err(format!(
+                "--version did not answer in {}s",
+                timeout.as_secs_f32()
+            ));
+        }
     };
     if !out.status.success() {
         return Err(format!("--version failed: {}", out.status));
@@ -192,7 +223,10 @@ pub(crate) fn asks_to_open_store_with(runner: &dyn Runner, program: &Path, timeo
             Some(true) => Ok(()),
             Some(false) => {
                 let message = store.pointer("/refusal/message").and_then(|v| v.as_str());
-                Err(format!("cannot open the store: {}", message.ok_or("--version reports no refusal message")?))
+                Err(format!(
+                    "cannot open the store: {}",
+                    message.ok_or("--version reports no refusal message")?
+                ))
             }
             None => Err("--version reports a store verdict without a boolean opens".to_owned()),
         },
@@ -247,7 +281,12 @@ mod tests {
         write_script(&path, "#!/bin/sh\nexit 0\n");
         let exe = Exe::at(path.clone()).unwrap();
         let then = fs::metadata(&path).unwrap().modified().unwrap();
-        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(then + std::time::Duration::from_secs(2))
+            .unwrap();
         assert!(exe.replaced());
     }
 
@@ -278,7 +317,12 @@ mod tests {
         let rewritten = Watched::at(path.clone()).unwrap();
         assert!(!rewritten.changed());
         let then = fs::metadata(&path).unwrap().modified().unwrap();
-        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(then + std::time::Duration::from_secs(2))
+            .unwrap();
         assert!(rewritten.changed());
     }
 
@@ -293,7 +337,12 @@ mod tests {
         // The inode may be reused and the clock coarse: give the new file its own mtime.
         fs::write(&path, "1.3.0\n").unwrap();
         let then = fs::metadata(&path).unwrap().modified().unwrap();
-        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(then + std::time::Duration::from_secs(2))
+            .unwrap();
         assert!(watched.changed());
     }
 
@@ -304,12 +353,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cpd");
         let calls = dir.path().join("calls");
-        let old = format!("#!/bin/sh\necho x >> '{}'\necho '{REFUSES}'\n", calls.display());
+        let old = format!(
+            "#!/bin/sh\necho x >> '{}'\necho '{REFUSES}'\n",
+            calls.display()
+        );
         write_script(&path, &old);
         let exe = Exe::at(path.clone()).unwrap();
         // The check runs the script by path; the pre-existing file is the one the
         // identity belongs to. A `sh` script that was just written can hit ETXTBSY.
-        let ran = || fs::read_to_string(&calls).map(|t| t.lines().count()).unwrap_or(0);
+        let ran = || {
+            fs::read_to_string(&calls)
+                .map(|t| t.lines().count())
+                .unwrap_or(0)
+        };
         let asked = |exe: &Exe| loop {
             match exe.check_store() {
                 Err(Refusal::New(r)) if r.contains("Text file busy") => {
@@ -319,7 +375,9 @@ mod tests {
                 other => break other,
             }
         };
-        assert!(matches!(asked(&exe), Err(Refusal::New(r)) if r == "cannot open the store: too new"));
+        assert!(
+            matches!(asked(&exe), Err(Refusal::New(r)) if r == "cannot open the store: too new")
+        );
         assert_eq!(ran(), 1);
         assert_eq!(exe.check_store(), Err(Refusal::Known));
         assert_eq!(exe.check_store(), Err(Refusal::Known));
@@ -328,7 +386,10 @@ mod tests {
         let new = dir.path().join("cpd.new");
         write_script(&new, &old);
         fs::rename(&new, &path).unwrap();
-        assert!(matches!(asked(&exe), Err(Refusal::New(_))), "another file is asked");
+        assert!(
+            matches!(asked(&exe), Err(Refusal::New(_))),
+            "another file is asked"
+        );
         assert_eq!(ran(), 2);
         assert_eq!(exe.check_store(), Err(Refusal::Known));
     }
@@ -340,7 +401,10 @@ mod tests {
         write_script(&path, "#!/bin/sh\nexit 0\n");
         let exe = Exe::at(path.clone()).unwrap();
         fs::remove_file(&path).unwrap();
-        assert_eq!(exe.exec(["session", "run", "x"]).code(), ErrorCode::SpawnFailed);
+        assert_eq!(
+            exe.exec(["session", "run", "x"]).code(),
+            ErrorCode::SpawnFailed
+        );
     }
 
     #[test]
@@ -350,7 +414,12 @@ mod tests {
         // /bin/sh, not a script written here: executing a file this process just
         // wrote can fail with ETXTBSY while another test thread forks.
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "host::exe::tests::exec_child", "--nocapture", "--ignored"])
+            .args([
+                "--exact",
+                "host::exe::tests::exec_child",
+                "--nocapture",
+                "--ignored",
+            ])
             .env("CPD_EXE_TEST_OUT", &out)
             .status()
             .unwrap();
@@ -364,6 +433,9 @@ mod tests {
     fn exec_child() {
         let out = std::env::var("CPD_EXE_TEST_OUT").expect("run by its parent test");
         let exe = Exe::at(PathBuf::from("/bin/sh")).unwrap();
-        panic!("{}", exe.exec(["-c".to_owned(), format!("echo x > '{out}'")]));
+        panic!(
+            "{}",
+            exe.exec(["-c".to_owned(), format!("echo x > '{out}'")])
+        );
     }
 }

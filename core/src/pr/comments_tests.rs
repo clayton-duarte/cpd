@@ -41,7 +41,11 @@ fn answer(pull_requests: Vec<Value>) -> String {
 }
 
 fn read(threads: Vec<Value>, comments: Vec<Value>, reviews: Vec<Value>) -> Read {
-    let p = pull_request(connection(threads), connection(comments), connection(reviews));
+    let p = pull_request(
+        connection(threads),
+        connection(comments),
+        connection(reviews),
+    );
     let mut reads = parse(&PRS, &answer(vec![p]), &[]).unwrap();
     assert_eq!(reads.len(), 1);
     reads.remove(0)
@@ -56,7 +60,10 @@ fn marked(text: &str) -> String {
 }
 
 fn find<'a>(items: &'a [Item], id: &str) -> &'a Item {
-    items.iter().find(|i| i.id == id).unwrap_or_else(|| panic!("no item {id} in {items:?}"))
+    items
+        .iter()
+        .find(|i| i.id == id)
+        .unwrap_or_else(|| panic!("no item {id} in {items:?}"))
 }
 
 fn ids(items: &[Item]) -> Vec<&str> {
@@ -69,11 +76,23 @@ fn ids(items: &[Item]) -> Vec<&str> {
 fn a_thread_is_open_until_it_is_resolved() {
     let comments = vec![
         comment("C1", "rev", "Please   rename\nthis", "2026-10-20T09:00:00Z"),
-        comment("C2", "rev", "  Or  keep it,\n\n  I do not mind. ", "2026-10-20T09:05:00Z"),
+        comment(
+            "C2",
+            "rev",
+            "  Or  keep it,\n\n  I do not mind. ",
+            "2026-10-20T09:05:00Z",
+        ),
     ];
-    let read = read(vec![thread("T1", false, false, comments.clone())], vec![], vec![]);
+    let read = read(
+        vec![thread("T1", false, false, comments.clone())],
+        vec![],
+        vec![],
+    );
 
-    assert_eq!((read.repo.as_str(), read.number, read.updated_at.as_str()), ("acme/pay", 7, "2026-10-20T10:00:00Z"));
+    assert_eq!(
+        (read.repo.as_str(), read.number, read.updated_at.as_str()),
+        ("acme/pay", 7, "2026-10-20T10:00:00Z")
+    );
     assert_eq!(
         read.items,
         [Item {
@@ -88,14 +107,20 @@ fn a_thread_is_open_until_it_is_resolved() {
             excerpt: "Or keep it, I do not mind.".into(),
         }]
     );
-    assert_eq!(serde_json::to_value(&read.items[0]).unwrap()["kind"], "thread");
+    assert_eq!(
+        serde_json::to_value(&read.items[0]).unwrap()["kind"],
+        "thread"
+    );
 
     assert_eq!(threads_only(vec![thread("T1", true, false, comments)]), []);
 }
 
 #[test]
 fn a_thread_whose_last_comment_carries_the_marker_is_addressed() {
-    let comments = vec![comment("C1", "rev", "Rename this", "t1"), comment("C2", "me", &marked("Done, renamed."), "t2")];
+    let comments = vec![
+        comment("C1", "rev", "Rename this", "t1"),
+        comment("C2", "me", &marked("Done, renamed."), "t2"),
+    ];
 
     assert_eq!(threads_only(vec![thread("T1", false, false, comments)]), []);
 }
@@ -111,7 +136,14 @@ fn a_reviewer_replying_after_the_marker_opens_the_thread_again() {
     let items = threads_only(vec![thread("T1", false, false, comments)]);
 
     assert_eq!(ids(&items), ["T1"]);
-    assert_eq!((items[0].last.as_str(), items[0].author.as_str(), items[0].excerpt.as_str()), ("C3", "rev", "Not that name"));
+    assert_eq!(
+        (
+            items[0].last.as_str(),
+            items[0].author.as_str(),
+            items[0].excerpt.as_str()
+        ),
+        ("C3", "rev", "Not that name")
+    );
 }
 
 #[test]
@@ -122,19 +154,42 @@ fn an_outdated_thread_is_open_and_flagged() {
     assert_eq!(ids(&items), ["T1"]);
     assert!(items[0].outdated);
 
-    assert_eq!(threads_only(vec![thread("T1", true, true, comments)]), [], "resolved wins");
+    assert_eq!(
+        threads_only(vec![thread("T1", true, true, comments)]),
+        [],
+        "resolved wins"
+    );
 }
 
 #[test]
 fn a_thread_started_by_a_bot_is_a_bot_item_even_when_a_human_spoke_last() {
-    let comments = |first: &str| vec![comment("C1", first, "Possible bug", "t1"), comment("C2", "rev", "Agreed, fix it", "t2")];
+    let comments = |first: &str| {
+        vec![
+            comment("C1", first, "Possible bug", "t1"),
+            comment("C2", "rev", "Agreed, fix it", "t2"),
+        ]
+    };
 
     let items = threads_only(vec![thread("T1", false, false, comments("copilot[bot]"))]);
-    assert_eq!((items[0].author.as_str(), items[0].bot, items[0].last.as_str()), ("copilot[bot]", true, "C2"));
+    assert_eq!(
+        (
+            items[0].author.as_str(),
+            items[0].bot,
+            items[0].last.as_str()
+        ),
+        ("copilot[bot]", true, "C2")
+    );
 
     // A login listed in `inbox.bot_reviewers` is a bot too.
-    let p = pull_request(connection(vec![thread("T1", false, false, comments("sonar"))]), connection(vec![]), connection(vec![]));
-    let items = parse(&PRS, &answer(vec![p]), &["sonar".to_owned()]).unwrap().remove(0).items;
+    let p = pull_request(
+        connection(vec![thread("T1", false, false, comments("sonar"))]),
+        connection(vec![]),
+        connection(vec![]),
+    );
+    let items = parse(&PRS, &answer(vec![p]), &["sonar".to_owned()])
+        .unwrap()
+        .remove(0)
+        .items;
     assert_eq!((items[0].author.as_str(), items[0].bot), ("sonar", true));
 
     // A human's thread is no bot item.
@@ -144,7 +199,12 @@ fn a_thread_started_by_a_bot_is_a_bot_item_even_when_a_human_spoke_last() {
 
 #[test]
 fn an_issue_comment_is_open_until_a_later_marked_comment() {
-    let before = vec![comment("I1", "rev", "Why this approach?", "2026-10-20T09:00:00Z")];
+    let before = vec![comment(
+        "I1",
+        "rev",
+        "Why this approach?",
+        "2026-10-20T09:00:00Z",
+    )];
     let items = read(vec![], before.clone(), vec![]).items;
     assert_eq!(
         items,
@@ -164,17 +224,28 @@ fn an_issue_comment_is_open_until_a_later_marked_comment() {
 
     // A later marked comment answers every comment before it, and only those.
     let mut comments = before;
-    comments.push(comment("I2", "me", &marked("Because of X."), "2026-10-20T09:30:00Z"));
+    comments.push(comment(
+        "I2",
+        "me",
+        &marked("Because of X."),
+        "2026-10-20T09:30:00Z",
+    ));
     assert_eq!(read(vec![], comments.clone(), vec![]).items, []);
     comments.push(comment("I3", "rev", "And Y?", "2026-10-20T09:45:00Z"));
     assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I3"]);
 
     // A marked comment made earlier answers nothing.
-    let comments = vec![comment("I0", "me", &marked("Hello."), "2026-10-20T08:00:00Z"), comment("I1", "rev", "Why?", "2026-10-20T09:00:00Z")];
+    let comments = vec![
+        comment("I0", "me", &marked("Hello."), "2026-10-20T08:00:00Z"),
+        comment("I1", "rev", "Why?", "2026-10-20T09:00:00Z"),
+    ];
     assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I1"]);
 
     // Ties by `createdAt` go by the answer's order: the marked comment listed after is later.
-    let comments = vec![comment("I1", "rev", "Why?", "t"), comment("I2", "me", &marked("Because."), "t")];
+    let comments = vec![
+        comment("I1", "rev", "Why?", "t"),
+        comment("I2", "me", &marked("Because."), "t"),
+    ];
     assert_eq!(read(vec![], comments, vec![]).items, []);
 }
 
@@ -186,19 +257,37 @@ fn the_users_own_and_bots_top_level_comments_are_never_items() {
         comment("I3", "sonar", "Quality gate failed", "t3"),
         comment("I4", "rev", "A human says something", "t4"),
     ];
-    let reviews = vec![review("R1", "COMMENTED", "me", "My own review", "t5"), review("R2", "COMMENTED", "copilot[bot]", "Overview", "t6"), review("R3", "CHANGES_REQUESTED", "sonar", "No", "t7")];
-    let p = pull_request(connection(vec![]), connection(comments), connection(reviews));
+    let reviews = vec![
+        review("R1", "COMMENTED", "me", "My own review", "t5"),
+        review("R2", "COMMENTED", "copilot[bot]", "Overview", "t6"),
+        review("R3", "CHANGES_REQUESTED", "sonar", "No", "t7"),
+    ];
+    let p = pull_request(
+        connection(vec![]),
+        connection(comments),
+        connection(reviews),
+    );
 
-    let items = parse(&PRS, &answer(vec![p]), &["sonar".to_owned()]).unwrap().remove(0).items;
+    let items = parse(&PRS, &answer(vec![p]), &["sonar".to_owned()])
+        .unwrap()
+        .remove(0)
+        .items;
 
     assert_eq!(ids(&items), ["I4"]);
 }
 
 #[test]
-fn a_commented_or_changes_requested_review_with_a_body_is_an_item_and_an_empty_or_approved_one_is_not() {
+fn a_commented_or_changes_requested_review_with_a_body_is_an_item_and_an_empty_or_approved_one_is_not()
+ {
     let reviews = vec![
         review("R1", "COMMENTED", "rev", "Some thoughts", "t1"),
-        review("R2", "CHANGES_REQUESTED", "rev", "  Needs work\n here ", "t2"),
+        review(
+            "R2",
+            "CHANGES_REQUESTED",
+            "rev",
+            "  Needs work\n here ",
+            "t2",
+        ),
         review("R3", "APPROVED", "rev", "LGTM", "t3"),
         review("R4", "COMMENTED", "rev", "", "t4"),
         review("R5", "COMMENTED", "rev", "  \n ", "t5"),
@@ -223,14 +312,28 @@ fn a_commented_or_changes_requested_review_with_a_body_is_an_item_and_an_empty_o
             excerpt: "Needs work here".into(),
         }
     );
-    assert_eq!(serde_json::to_value(find(&items, "R1")).unwrap()["kind"], "review");
+    assert_eq!(
+        serde_json::to_value(find(&items, "R1")).unwrap()["kind"],
+        "review"
+    );
 
     // A later marked issue comment answers the review; an earlier one does not.
     let timed = vec![
         review("R1", "COMMENTED", "rev", "First", "2026-10-20T09:01:00Z"),
-        review("R2", "CHANGES_REQUESTED", "rev", "Second", "2026-10-20T09:03:00Z"),
+        review(
+            "R2",
+            "CHANGES_REQUESTED",
+            "rev",
+            "Second",
+            "2026-10-20T09:03:00Z",
+        ),
     ];
-    let answered = vec![comment("I1", "me", &marked("Done."), "2026-10-20T09:02:00Z")];
+    let answered = vec![comment(
+        "I1",
+        "me",
+        &marked("Done."),
+        "2026-10-20T09:02:00Z",
+    )];
     assert_eq!(ids(&read(vec![], answered, timed).items), ["R2"]);
 }
 
@@ -241,9 +344,15 @@ fn more_than_100_threads_comments_or_reviews_is_gh_failed() {
     let cases = [
         pull_request(over(vec![t()]), connection(vec![]), connection(vec![])),
         pull_request(connection(vec![t()]), over(vec![one()]), connection(vec![])),
-        pull_request(connection(vec![t()]), connection(vec![]), over(vec![review("R1", "COMMENTED", "rev", "x", "t1")])),
         pull_request(
-            connection(vec![json!({"id": "T1", "isResolved": false, "isOutdated": false, "path": "a", "comments": over(vec![one()])})]),
+            connection(vec![t()]),
+            connection(vec![]),
+            over(vec![review("R1", "COMMENTED", "rev", "x", "t1")]),
+        ),
+        pull_request(
+            connection(vec![
+                json!({"id": "T1", "isResolved": false, "isOutdated": false, "path": "a", "comments": over(vec![one()])}),
+            ]),
             connection(vec![]),
             connection(vec![]),
         ),
@@ -252,7 +361,11 @@ fn more_than_100_threads_comments_or_reviews_is_gh_failed() {
     for (i, case) in cases.into_iter().enumerate() {
         let err = parse(&PRS, &answer(vec![case]), &[]).expect_err(&format!("case {i}"));
         assert_eq!(err.code(), ErrorCode::GhFailed, "case {i}");
-        assert!(err.message().contains("acme/pay") && err.message().contains('7'), "case {i}: {}", err.message());
+        assert!(
+            err.message().contains("acme/pay") && err.message().contains('7'),
+            "case {i}: {}",
+            err.message()
+        );
     }
 }
 
@@ -264,24 +377,39 @@ fn a_missing_pull_request_or_an_errors_array_is_gh_failed() {
     let mut missing: Value = serde_json::from_str(&answer(vec![good()])).unwrap();
     missing["data"]["p0"]["pullRequest"] = Value::Null;
     missing["errors"] = json!([{"type": "NOT_FOUND", "path": ["p0", "pullRequest"], "message": "Could not resolve to a PullRequest"}]);
-    assert_eq!(parse(&PRS, &missing.to_string(), &[]).unwrap_err().code(), ErrorCode::GhFailed);
+    assert_eq!(
+        parse(&PRS, &missing.to_string(), &[]).unwrap_err().code(),
+        ErrorCode::GhFailed
+    );
 
     // Null with no `errors` is as missing.
     let mut null: Value = serde_json::from_str(&answer(vec![good()])).unwrap();
     null["data"]["p0"]["pullRequest"] = Value::Null;
-    assert_eq!(parse(&PRS, &null.to_string(), &[]).unwrap_err().code(), ErrorCode::GhFailed);
+    assert_eq!(
+        parse(&PRS, &null.to_string(), &[]).unwrap_err().code(),
+        ErrorCode::GhFailed
+    );
 
     // An alias is absent: two pairs, one answer.
     let two = [("acme/pay", 7), ("acme/web", 9)];
-    assert_eq!(parse(&two, &answer(vec![good()]), &[]).unwrap_err().code(), ErrorCode::GhFailed);
+    assert_eq!(
+        parse(&two, &answer(vec![good()]), &[]).unwrap_err().code(),
+        ErrorCode::GhFailed
+    );
 
     // Good data with an `errors` array is no answer.
     let mut errors: Value = serde_json::from_str(&answer(vec![good()])).unwrap();
     errors["errors"] = json!([{"message": "Something went wrong"}]);
-    assert_eq!(parse(&PRS, &errors.to_string(), &[]).unwrap_err().code(), ErrorCode::GhFailed);
+    assert_eq!(
+        parse(&PRS, &errors.to_string(), &[]).unwrap_err().code(),
+        ErrorCode::GhFailed
+    );
 
     // Not JSON.
-    assert_eq!(parse(&PRS, "not json", &[]).unwrap_err().code(), ErrorCode::GhFailed);
+    assert_eq!(
+        parse(&PRS, "not json", &[]).unwrap_err().code(),
+        ErrorCode::GhFailed
+    );
 
     // The good answer parses, so that the failures above are the answers' and not the helpers'.
     assert_eq!(parse(&PRS, &answer(vec![good()]), &[]).unwrap().len(), 1);
@@ -306,12 +434,25 @@ fn new_items_are_those_whose_last_comment_is_unknown() {
     let before = [item("T1", "C1"), item("T2", "C2")];
     let after = [item("T1", "C1"), item("T2", "C5"), item("T3", "C6")];
 
-    let new: Vec<&str> = new_items(Some(&before), &after).iter().map(|i| i.id.as_str()).collect();
-    assert_eq!(new, ["T2", "T3"], "a thread whose last comment changed is new again");
+    let new: Vec<&str> = new_items(Some(&before), &after)
+        .iter()
+        .map(|i| i.id.as_str())
+        .collect();
+    assert_eq!(
+        new,
+        ["T2", "T3"],
+        "a thread whose last comment changed is new again"
+    );
 
     assert!(new_items(Some(&after), &after).is_empty());
-    assert!(new_items(Some(&after), &before[..1]).is_empty(), "an item that closed tells nothing");
-    let first: Vec<&str> = new_items(None, &after).iter().map(|i| i.id.as_str()).collect();
+    assert!(
+        new_items(Some(&after), &before[..1]).is_empty(),
+        "an item that closed tells nothing"
+    );
+    let first: Vec<&str> = new_items(None, &after)
+        .iter()
+        .map(|i| i.id.as_str())
+        .collect();
     assert_eq!(first, ["T1", "T2", "T3"], "None counts as empty");
     assert!(new_items(None, &[]).is_empty());
     assert!(new_items(Some(&[]), &[]).is_empty());
@@ -357,11 +498,23 @@ fn typed_review(id: &str, typename: Option<&str>, login: &str, at: &str) -> Valu
 
 #[test]
 fn a_bot_typed_author_without_a_bot_suffix_is_a_bot_thread() {
-    let comments = |typename: &str| vec![typed_comment("C1", Some(typename), "kodem-security", "t1"), comment("C2", "rev", "Agreed", "t2")];
+    let comments = |typename: &str| {
+        vec![
+            typed_comment("C1", Some(typename), "kodem-security", "t1"),
+            comment("C2", "rev", "Agreed", "t2"),
+        ]
+    };
 
     let items = threads_only(vec![thread("T1", false, false, comments("Bot"))]);
     assert_eq!(items.len(), 1);
-    assert_eq!((items[0].author.as_str(), items[0].bot, items[0].last.as_str()), ("kodem-security", true, "C2"));
+    assert_eq!(
+        (
+            items[0].author.as_str(),
+            items[0].bot,
+            items[0].last.as_str()
+        ),
+        ("kodem-security", true, "C2")
+    );
 
     let items = threads_only(vec![thread("T1", false, false, comments("User"))]);
     assert!(!items[0].bot);
@@ -369,28 +522,51 @@ fn a_bot_typed_author_without_a_bot_suffix_is_a_bot_thread() {
 
 #[test]
 fn a_bot_typed_issue_comment_is_never_an_item() {
-    let comments = vec![typed_comment("I1", Some("Bot"), "kodem-security", "t1"), typed_comment("I2", Some("User"), "rev", "t2")];
+    let comments = vec![
+        typed_comment("I1", Some("Bot"), "kodem-security", "t1"),
+        typed_comment("I2", Some("User"), "rev", "t2"),
+    ];
 
     assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I2"]);
 }
 
 #[test]
 fn a_bot_typed_review_is_never_an_item() {
-    let bot = read(vec![], vec![], vec![typed_review("R1", Some("Bot"), "kodem-security", "t1")]).items;
+    let bot = read(
+        vec![],
+        vec![],
+        vec![typed_review("R1", Some("Bot"), "kodem-security", "t1")],
+    )
+    .items;
     assert_eq!(bot, []);
 
-    let user = read(vec![], vec![], vec![typed_review("R1", Some("User"), "kodem-security", "t1")]).items;
+    let user = read(
+        vec![],
+        vec![],
+        vec![typed_review("R1", Some("User"), "kodem-security", "t1")],
+    )
+    .items;
     assert_eq!(ids(&user), ["R1"]);
 }
 
 #[test]
 fn an_author_without_a_typename_is_a_bot_only_by_its_login() {
-    let threads = |login: &str| vec![thread("T1", false, false, vec![typed_comment("C1", None, login, "t1")])];
+    let threads = |login: &str| {
+        vec![thread(
+            "T1",
+            false,
+            false,
+            vec![typed_comment("C1", None, login, "t1")],
+        )]
+    };
 
     assert!(!threads_only(threads("kodem-security"))[0].bot);
     assert!(threads_only(threads("copilot[bot]"))[0].bot);
 
-    let comments = vec![typed_comment("I1", None, "kodem-security", "t1"), typed_comment("I2", None, "copilot[bot]", "t2")];
+    let comments = vec![
+        typed_comment("I1", None, "kodem-security", "t1"),
+        typed_comment("I2", None, "copilot[bot]", "t2"),
+    ];
     assert_eq!(ids(&read(vec![], comments, vec![]).items), ["I1"]);
 }
 
@@ -398,7 +574,11 @@ fn an_author_without_a_typename_is_a_bot_only_by_its_login() {
 fn the_query_selects_the_author_typename_of_every_comment_and_review() {
     let text = query(&[("acme/pay", 7)]);
 
-    assert_eq!(text.matches("author { __typename login }").count(), 3, "{text}");
+    assert_eq!(
+        text.matches("author { __typename login }").count(),
+        3,
+        "{text}"
+    );
     assert!(!text.contains("author { login }"), "{text}");
     assert!(text.contains("viewer { login }"), "{text}");
 }

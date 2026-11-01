@@ -57,7 +57,10 @@ impl Pay {
     }
 
     fn writes(&self) -> (i64, i64) {
-        (self.fx.env.query("SELECT count(*) FROM txns"), self.fx.env.query("SELECT count(*) FROM events"))
+        (
+            self.fx.env.query("SELECT count(*) FROM txns"),
+            self.fx.env.query("SELECT count(*) FROM events"),
+        )
     }
 
     /// `run` is refused `workflow_other_plan`, exit 3, with these details, and wrote nothing.

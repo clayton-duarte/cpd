@@ -51,7 +51,10 @@ fn binaries() -> BTreeMap<String, PathBuf> {
     for entry in fs::read_dir(tests_dir()).unwrap() {
         let dir = entry.unwrap().path();
         if dir.join("main.rs").is_file() {
-            out.insert(dir.file_name().unwrap().to_string_lossy().into_owned(), dir.join("main.rs"));
+            out.insert(
+                dir.file_name().unwrap().to_string_lossy().into_owned(),
+                dir.join("main.rs"),
+            );
         }
     }
     out
@@ -72,14 +75,22 @@ fn every_test_file_is_a_module_of_exactly_one_area_main() {
     let mut declared_in: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (area, main) in &binaries {
         let mods = declared(main);
-        if !mods.iter().any(|(n, p)| n == "common" && p.as_deref() == Some("../common/mod.rs")) {
-            problems.push(format!("{area}/main.rs lacks `#[path = \"../common/mod.rs\"] mod common;`"));
+        if !mods
+            .iter()
+            .any(|(n, p)| n == "common" && p.as_deref() == Some("../common/mod.rs"))
+        {
+            problems.push(format!(
+                "{area}/main.rs lacks `#[path = \"../common/mod.rs\"] mod common;`"
+            ));
         }
         for (name, path) in mods.into_iter().filter(|(n, _)| n != "common") {
             if path.is_some() {
                 problems.push(format!("{area}/main.rs declares `mod {name};` with a #[path]: a module is a file of its own area"));
             }
-            declared_in.entry(format!("{area}/{name}.rs")).or_default().push(area.clone());
+            declared_in
+                .entry(format!("{area}/{name}.rs"))
+                .or_default()
+                .push(area.clone());
         }
     }
 
@@ -91,7 +102,9 @@ fn every_test_file_is_a_module_of_exactly_one_area_main() {
             continue;
         }
         if components.len() != 2 {
-            problems.push(format!("{rel}: a test file is `cli/tests/<area>/<module>.rs`, directly under its area"));
+            problems.push(format!(
+                "{rel}: a test file is `cli/tests/<area>/<module>.rs`, directly under its area"
+            ));
             continue;
         }
         match declared_in.remove(&rel) {
@@ -101,11 +114,20 @@ fn every_test_file_is_a_module_of_exactly_one_area_main() {
         }
     }
     for (declared_file, _) in declared_in {
-        problems.push(format!("{declared_file}: declared by a main.rs but the file does not exist"));
+        problems.push(format!(
+            "{declared_file}: declared by a main.rs but the file does not exist"
+        ));
     }
     // No main.rs of an area that is not under cli/tests/<area>/, and no file outside any binary.
-    assert!(!binaries.is_empty(), "cli/tests/<area>/main.rs: no area binary exists");
-    assert!(problems.is_empty(), "the per-area layout is broken:\n{}", problems.join("\n"));
+    assert!(
+        !binaries.is_empty(),
+        "cli/tests/<area>/main.rs: no area binary exists"
+    );
+    assert!(
+        problems.is_empty(),
+        "the per-area layout is broken:\n{}",
+        problems.join("\n")
+    );
 }
 
 /// The area table of docs/implementing.md, Tests: binary name to the patterns of its modules.
@@ -113,7 +135,11 @@ fn area_table() -> BTreeMap<String, Vec<String>> {
     let doc = fs::read_to_string(root().join("docs/implementing.md")).unwrap();
     let mut lines = doc.lines().skip_while(|l| !l.contains("The area table"));
     let mut table = BTreeMap::new();
-    for line in lines.by_ref().skip(1).skip_while(|l| !l.trim_start().starts_with('|')) {
+    for line in lines
+        .by_ref()
+        .skip(1)
+        .skip_while(|l| !l.trim_start().starts_with('|'))
+    {
         let line = line.trim();
         if !line.starts_with('|') {
             break;
@@ -123,7 +149,10 @@ fn area_table() -> BTreeMap<String, Vec<String>> {
             continue; // the header and the separator
         }
         let area = cells[0].trim_matches('`').to_owned();
-        let patterns = cells[1].split(',').map(|p| p.trim().trim_matches('`').to_owned()).collect();
+        let patterns = cells[1]
+            .split(',')
+            .map(|p| p.trim().trim_matches('`').to_owned())
+            .collect();
         table.insert(area, patterns);
     }
     table
@@ -143,7 +172,11 @@ fn matches(pattern: &str, module: &str) -> bool {
 #[test]
 fn the_binaries_are_those_of_the_area_table() {
     let table = area_table();
-    assert_eq!(table.len(), 7, "docs/implementing.md's area table: engine, pr, flow, session, store, tui, tooling: {table:?}");
+    assert_eq!(
+        table.len(),
+        7,
+        "docs/implementing.md's area table: engine, pr, flow, session, store, tui, tooling: {table:?}"
+    );
 
     let binaries = binaries();
     assert_eq!(
@@ -155,9 +188,17 @@ fn the_binaries_are_those_of_the_area_table() {
     // Each module is in the binary whose row matches it, and in only that one.
     let mut problems = Vec::new();
     for (area, main) in &binaries {
-        let modules: Vec<_> = declared(main).into_iter().map(|(n, _)| n).filter(|n| n != "common").collect();
+        let modules: Vec<_> = declared(main)
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n != "common")
+            .collect();
         for module in &modules {
-            let rows: Vec<_> = table.iter().filter(|(_, ps)| ps.iter().any(|p| matches(p, module))).map(|(a, _)| a.as_str()).collect();
+            let rows: Vec<_> = table
+                .iter()
+                .filter(|(_, ps)| ps.iter().any(|p| matches(p, module)))
+                .map(|(a, _)| a.as_str())
+                .collect();
             if rows != [area.as_str()] {
                 problems.push(format!("{area}/{module}: the table gives {rows:?}"));
             }
@@ -165,18 +206,25 @@ fn the_binaries_are_those_of_the_area_table() {
         // Every row's pattern matches something in its own binary: the table does not describe a binary that is not there.
         for pattern in &table[area] {
             if !modules.iter().any(|m| matches(pattern, m)) {
-                problems.push(format!("{area}: the pattern `{pattern}` matches no module of the binary"));
+                problems.push(format!(
+                    "{area}: the pattern `{pattern}` matches no module of the binary"
+                ));
             }
         }
     }
-    assert!(problems.is_empty(), "the modules do not follow the area table:\n{}", problems.join("\n"));
+    assert!(
+        problems.is_empty(),
+        "the modules do not follow the area table:\n{}",
+        problems.join("\n")
+    );
 }
 
 /// A Cargo.toml read as text: the repo's own manifests and `Cargo.lock` are the subject, not cargo's resolver, so no
 /// cargo runs here (`cargo metadata` and `cargo tree` are cargo's, not ours).
 fn read_toml(path: &Path) -> toml::Table {
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    text.parse().unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    text.parse()
+        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 /// The `[dependencies]`-like tables of a manifest: `(kind, table)` for the plain ones and those under `[target.*]`.
@@ -184,7 +232,13 @@ fn read_toml(path: &Path) -> toml::Table {
 fn dependency_tables(manifest: &toml::Table) -> Vec<(&'static str, &toml::Table)> {
     let mut tables = Vec::new();
     let scopes: Vec<&toml::Table> = std::iter::once(manifest)
-        .chain(manifest.get("target").and_then(toml::Value::as_table).into_iter().flat_map(|t| t.values().filter_map(toml::Value::as_table)))
+        .chain(
+            manifest
+                .get("target")
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flat_map(|t| t.values().filter_map(toml::Value::as_table)),
+        )
         .collect();
     for scope in scopes {
         for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
@@ -198,22 +252,33 @@ fn dependency_tables(manifest: &toml::Table) -> Vec<(&'static str, &toml::Table)
 
 /// The package a dependency entry `key = spec` names: `package = "x"` renames it.
 fn dependency_package<'a>(key: &'a str, spec: &'a toml::Value) -> &'a str {
-    spec.get("package").and_then(toml::Value::as_str).unwrap_or(key)
+    spec.get("package")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(key)
 }
 
 /// The workspace's packages from the manifests: package name to (its directory, the names it depends on).
 fn packages() -> BTreeMap<String, (PathBuf, Vec<String>)> {
     let workspace = read_toml(&root().join("Cargo.toml"));
-    let members = workspace["workspace"]["members"].as_array().expect("[workspace] members");
+    let members = workspace["workspace"]["members"]
+        .as_array()
+        .expect("[workspace] members");
     members
         .iter()
         .map(|member| {
             let dir = root().join(member.as_str().expect("a member is a path"));
             let manifest = read_toml(&dir.join("Cargo.toml"));
-            let name = manifest["package"]["name"].as_str().expect("[package] name").to_owned();
+            let name = manifest["package"]["name"]
+                .as_str()
+                .expect("[package] name")
+                .to_owned();
             let deps = dependency_tables(&manifest)
                 .into_iter()
-                .flat_map(|(_, table)| table.iter().map(|(key, spec)| dependency_package(key, spec).to_owned()))
+                .flat_map(|(_, table)| {
+                    table
+                        .iter()
+                        .map(|(key, spec)| dependency_package(key, spec).to_owned())
+                })
                 .collect();
             (name, (dir.canonicalize().expect("member dir"), deps))
         })
@@ -234,7 +299,9 @@ fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend
 
     let names: Vec<_> = packages.keys().map(String::as_str).collect();
     if names != ["cpd", "cpd-core", "cpd-engine", "cpd-tui"] {
-        problems.push(format!("the workspace members are {names:?}, not cpd, cpd-core, cpd-engine and cpd-tui"));
+        problems.push(format!(
+            "the workspace members are {names:?}, not cpd, cpd-core, cpd-engine and cpd-tui"
+        ));
     }
 
     match packages.get("cpd-engine") {
@@ -268,13 +335,19 @@ fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend
         Some((dir, _)) => {
             for module in ["watch", "doctor"] {
                 if has_module(&dir.join("src"), module) {
-                    problems.push(format!("core/src/{module} exists: it belongs to cpd-engine"));
+                    problems.push(format!(
+                        "core/src/{module} exists: it belongs to cpd-engine"
+                    ));
                 }
             }
         }
     }
 
-    assert!(problems.is_empty(), "the crates are not those of docs/implementing.md's Layout:\n{}", problems.join("\n"));
+    assert!(
+        problems.is_empty(),
+        "the crates are not those of docs/implementing.md's Layout:\n{}",
+        problems.join("\n")
+    );
 }
 
 /// The dependencies that decide the features other crates resolve, which every member must have (as a dependency or a
@@ -293,7 +366,9 @@ const UNIFIERS: [&str; 1] = ["ratatui"];
 #[test]
 fn every_member_resolves_the_features_of_the_workspace_build() {
     let workspace = read_toml(&root().join("Cargo.toml"));
-    let shared = workspace["workspace"]["dependencies"].as_table().expect("[workspace.dependencies]");
+    let shared = workspace["workspace"]["dependencies"]
+        .as_table()
+        .expect("[workspace.dependencies]");
     let mut problems = Vec::new();
     for unifier in UNIFIERS {
         if !shared.contains_key(unifier) {
@@ -308,10 +383,12 @@ fn every_member_resolves_the_features_of_the_workspace_build() {
         for (member, (dir, _)) in packages() {
             let manifest = read_toml(&dir.join("Cargo.toml"));
             for (kind, table) in dependency_tables(&manifest) {
-                if let Some(spec) = table.get(unifier) {
-                    if spec.get("workspace").and_then(toml::Value::as_bool) != Some(true) {
-                        problems.push(format!("{member}: [{kind}] {unifier} is not `workspace = true`"));
-                    }
+                if let Some(spec) = table.get(unifier)
+                    && spec.get("workspace").and_then(toml::Value::as_bool) != Some(true)
+                {
+                    problems.push(format!(
+                        "{member}: [{kind}] {unifier} is not `workspace = true`"
+                    ));
                 }
             }
         }

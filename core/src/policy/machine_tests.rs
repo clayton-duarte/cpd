@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::error::ErrorCode;
-use crate::policy::{parse_scope, Domain};
+use crate::policy::{Domain, parse_scope};
 
 const SLACK: &str = r#"
 [mcp.servers.slack]
@@ -52,9 +52,15 @@ fn refused(text: &str, key: Option<&str>) {
     let err = parse(text).expect_err(text);
     assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{text:?}: {err:?}");
     assert_eq!(err.exit().code(), 1);
-    assert_eq!(err.details()["file"], file().display().to_string(), "{text:?}");
+    assert_eq!(
+        err.details()["file"],
+        file().display().to_string(),
+        "{text:?}"
+    );
     if let Some(key) = key {
-        let got = err.details()["key"].as_str().unwrap_or_else(|| panic!("no key detail for {text:?}: {err:?}"));
+        let got = err.details()["key"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no key detail for {text:?}: {err:?}"));
         assert!(got.contains(key), "{text:?}: key {got:?} lacks {key:?}");
     }
 }
@@ -98,16 +104,28 @@ fn the_slack_entry_loads_with_every_field_typed() {
     assert_eq!(servers.keys().collect::<Vec<_>>(), ["slack"]);
     let s = &servers["slack"];
     assert_eq!(s.url, "https://mcp.slack.com/mcp");
-    assert_eq!(s.description.as_deref(), Some("Slack: read channels and threads, post messages, and manage reactions."));
+    assert_eq!(
+        s.description.as_deref(),
+        Some("Slack: read channels and threads, post messages, and manage reactions.")
+    );
     assert_eq!(s.exposure, Some(Exposure::Hidden));
     let tools = s.tool_exposure.as_ref().unwrap();
     assert_eq!(tools.len(), 7);
     assert!(tools.values().all(|e| *e == Exposure::Direct));
     assert_eq!(tools["slack_send_message"], Exposure::Direct);
     let oauth = s.oauth.as_ref().unwrap();
-    assert_eq!(oauth.client_id.as_deref(), Some("1601185624273.8899143856786"));
-    assert_eq!(oauth.callback_url.as_deref(), Some("http://localhost:3118/callback"));
-    assert_eq!(oauth.scope.as_deref(), Some("channels:history chat:write reactions:write"));
+    assert_eq!(
+        oauth.client_id.as_deref(),
+        Some("1601185624273.8899143856786")
+    );
+    assert_eq!(
+        oauth.callback_url.as_deref(),
+        Some("http://localhost:3118/callback")
+    );
+    assert_eq!(
+        oauth.scope.as_deref(),
+        Some("channels:history chat:write reactions:write")
+    );
 }
 
 #[test]
@@ -123,7 +141,10 @@ fn the_slack_file_loads_from_host_toml_with_its_realpath() {
 #[test]
 fn a_key_left_out_stays_out() {
     let s = &parse(&named("a")).unwrap()["a"];
-    assert_eq!((&s.description, &s.exposure, &s.tool_exposure, &s.oauth), (&None, &None, &None, &None));
+    assert_eq!(
+        (&s.description, &s.exposure, &s.tool_exposure, &s.oauth),
+        (&None, &None, &None, &None)
+    );
 }
 
 // c. refused keys and tables
@@ -155,7 +176,10 @@ fn an_auth_key_is_refused() {
 
 #[test]
 fn an_unknown_key_inside_oauth_is_refused() {
-    refused(&entry("[mcp.servers.slack.oauth]\nclientSecret = \"x\""), Some("clientSecret"));
+    refused(
+        &entry("[mcp.servers.slack.oauth]\nclientSecret = \"x\""),
+        Some("clientSecret"),
+    );
 }
 
 #[test]
@@ -205,7 +229,10 @@ fn a_one_character_name_is_accepted() {
 
 #[test]
 fn a_32_character_name_is_accepted() {
-    accepted(&named(&format!("s{}", "a0-".repeat(11).chars().take(31).collect::<String>())));
+    accepted(&named(&format!(
+        "s{}",
+        "a0-".repeat(11).chars().take(31).collect::<String>()
+    )));
 }
 
 // e. url and callbackUrl
@@ -215,7 +242,10 @@ fn url(u: &str) -> String {
 }
 
 fn callback(u: &str) -> String {
-    format!("{}[mcp.servers.a.oauth]\ncallbackUrl = \"{u}\"\n", url("https://h/mcp"))
+    format!(
+        "{}[mcp.servers.a.oauth]\ncallbackUrl = \"{u}\"\n",
+        url("https://h/mcp")
+    )
 }
 
 #[test]
@@ -290,7 +320,9 @@ fn the_four_exposures_are_accepted_for_exposure() {
 #[test]
 fn the_four_exposures_are_accepted_for_a_tool() {
     for e in ["codemode", "deferred", "direct", "hidden"] {
-        accepted(&entry(&format!("[mcp.servers.slack.toolExposure]\nt = \"{e}\"")));
+        accepted(&entry(&format!(
+            "[mcp.servers.slack.toolExposure]\nt = \"{e}\""
+        )));
     }
 }
 
@@ -304,23 +336,34 @@ fn a_bad_exposure_is_refused() {
 #[test]
 fn a_bad_tool_exposure_value_is_refused() {
     for e in ["Direct", "bogus", "codemode-deferred"] {
-        refused(&entry(&format!("[mcp.servers.slack.toolExposure]\nt = \"{e}\"")), Some("toolExposure"));
+        refused(
+            &entry(&format!("[mcp.servers.slack.toolExposure]\nt = \"{e}\"")),
+            Some("toolExposure"),
+        );
     }
 }
 
 #[test]
 fn an_empty_tool_exposure_table_is_refused() {
-    refused(&entry("[mcp.servers.slack.toolExposure]"), Some("toolExposure"));
+    refused(
+        &entry("[mcp.servers.slack.toolExposure]"),
+        Some("toolExposure"),
+    );
 }
 
 #[test]
 fn an_empty_tool_name_is_refused() {
-    refused(&entry("[mcp.servers.slack.toolExposure]\n\"\" = \"direct\""), Some("toolExposure"));
+    refused(
+        &entry("[mcp.servers.slack.toolExposure]\n\"\" = \"direct\""),
+        Some("toolExposure"),
+    );
 }
 
 #[test]
 fn a_tool_pattern_with_a_star_is_accepted() {
-    accepted(&entry("[mcp.servers.slack.toolExposure]\n\"slack_*\" = \"hidden\""));
+    accepted(&entry(
+        "[mcp.servers.slack.toolExposure]\n\"slack_*\" = \"hidden\"",
+    ));
 }
 
 #[test]
@@ -330,7 +373,10 @@ fn an_empty_string_is_refused() {
 
 #[test]
 fn a_501_character_string_is_refused() {
-    refused(&entry(&format!("description = \"{}\"", "a".repeat(501))), Some("description"));
+    refused(
+        &entry(&format!("description = \"{}\"", "a".repeat(501))),
+        Some("description"),
+    );
 }
 
 #[test]
@@ -349,7 +395,11 @@ fn a_500_character_string_is_accepted() {
 fn an_owner_file_with_mcp_is_refused_and_points_to_host_toml() {
     let err = parse_scope(Path::new("/h/policy/acme/owner.toml"), "[mcp]\n").unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-    assert!(err.message().contains("policy/host.toml"), "{}", err.message());
+    assert!(
+        err.message().contains("policy/host.toml"),
+        "{}",
+        err.message()
+    );
     // `mcp` is no domain of the policy.
     assert!(Domain::from_name("mcp").is_none());
 }
@@ -359,7 +409,11 @@ fn a_repo_file_with_mcp_servers_is_refused_and_points_to_host_toml() {
     let text = "[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\n";
     let err = parse_scope(Path::new("/h/policy/acme/web.toml"), text).unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-    assert!(err.message().contains("policy/host.toml"), "{}", err.message());
+    assert!(
+        err.message().contains("policy/host.toml"),
+        "{}",
+        err.message()
+    );
 }
 
 // h. only host.toml is read
@@ -401,14 +455,22 @@ fn headers_the_fullstory_entry_is_accepted_and_kept() {
     let text = "[mcp.servers.fullstory]\nurl = \"https://mcp.fullstory.com/mcp\"\n\n[mcp.servers.fullstory.headers]\nMCP-Protocol-Version = \"2025-06-18\"\n";
     let servers = parse(text).unwrap();
     let h = servers["fullstory"].headers.as_ref().expect("headers kept");
-    assert_eq!(h.iter().collect::<Vec<_>>(), [(&"MCP-Protocol-Version".to_owned(), &"2025-06-18".to_owned())]);
+    assert_eq!(
+        h.iter().collect::<Vec<_>>(),
+        [(&"MCP-Protocol-Version".to_owned(), &"2025-06-18".to_owned())]
+    );
     let json = serde_json::to_value(&servers["fullstory"]).unwrap();
-    assert_eq!(json["headers"], serde_json::json!({"MCP-Protocol-Version": "2025-06-18"}));
+    assert_eq!(
+        json["headers"],
+        serde_json::json!({"MCP-Protocol-Version": "2025-06-18"})
+    );
 }
 
 #[test]
 fn headers_several_pairs_and_a_name_with_digits_and_dashes_are_accepted() {
-    let text = headers("MCP-Protocol-Version = \"2025-06-18\"\nX-Api-2-Version = \"7\"\nAccept = \"text/plain\"\n");
+    let text = headers(
+        "MCP-Protocol-Version = \"2025-06-18\"\nX-Api-2-Version = \"7\"\nAccept = \"text/plain\"\n",
+    );
     let servers = parse(&text).unwrap();
     let h = servers["slack"].headers.as_ref().expect("headers kept");
     assert_eq!(h.len(), 3);
@@ -420,7 +482,12 @@ fn headers_several_pairs_and_a_name_with_digits_and_dashes_are_accepted() {
 fn headers_a_left_out_table_stays_out_of_the_json() {
     let servers = parse(&entry("")).unwrap();
     assert!(servers["slack"].headers.is_none());
-    assert!(serde_json::to_value(&servers["slack"]).unwrap().get("headers").is_none());
+    assert!(
+        serde_json::to_value(&servers["slack"])
+            .unwrap()
+            .get("headers")
+            .is_none()
+    );
     // Red until `headers` is read: the same entry with a table keeps it.
     assert!(json(&headers("A = \"b\"\n")).get("headers").is_some());
 }
@@ -479,7 +546,13 @@ fn headers_refuse_a_value_starting_with_a_bang() {
 #[test]
 fn headers_refuse_the_credential_names() {
     accepted(&with_name("X-Authorization"));
-    for n in ["Authorization", "authorization", "AUTHORIZATION", "Proxy-Authorization", "Cookie"] {
+    for n in [
+        "Authorization",
+        "authorization",
+        "AUTHORIZATION",
+        "Proxy-Authorization",
+        "Cookie",
+    ] {
         refused(&with_name(n), Some("headers"));
     }
 }
@@ -497,13 +570,20 @@ fn headers_refuse_a_name_that_is_not_a_token() {
 fn contract_mcp_keys() -> std::collections::BTreeSet<String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md");
     let doc = std::fs::read_to_string(path).unwrap();
-    let start = doc.find("**Machine domains.**").expect("Machine domains paragraph");
+    let start = doc
+        .find("**Machine domains.**")
+        .expect("Machine domains paragraph");
     let mut row = None;
     let mut in_table = false;
     for line in doc[start..].lines() {
         if line.starts_with('|') {
             in_table = true;
-            let cells: Vec<&str> = line.trim().trim_matches('|').split('|').map(str::trim).collect();
+            let cells: Vec<&str> = line
+                .trim()
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
             if cells[0] == "`mcp`" {
                 row = Some(cells[1].to_owned());
             }
@@ -538,23 +618,55 @@ fn headers_the_contract_table_lists_exactly_the_keys_the_parser_accepts() {
         ("url", ("", "url = \"https://mcp.fullstory.com/mcp\"")),
         ("description", ("", "description = \"d\"")),
         ("exposure", ("", "exposure = \"direct\"")),
-        ("toolExposure", ("", "toolExposure = { a_tool = \"hidden\" }")),
-        ("headers", ("", "headers = { MCP-Protocol-Version = \"2025-06-18\" }")),
+        (
+            "toolExposure",
+            ("", "toolExposure = { a_tool = \"hidden\" }"),
+        ),
+        (
+            "headers",
+            ("", "headers = { MCP-Protocol-Version = \"2025-06-18\" }"),
+        ),
         ("oauth", ("", "")),
         ("clientId", ("oauth", "clientId = \"c\"")),
         ("scope", ("oauth", "scope = \"s\"")),
-        ("callbackUrl", ("oauth", "callbackUrl = \"http://localhost:3118/callback\"")),
+        (
+            "callbackUrl",
+            ("oauth", "callbackUrl = \"http://localhost:3118/callback\""),
+        ),
         ("clientName", ("oauth", "clientName = \"Claude Code\"")),
     ]);
     let documented = contract_mcp_keys();
-    let sampled: std::collections::BTreeSet<String> = sample.keys().map(|k| (*k).to_owned()).collect();
-    assert_eq!(documented, sampled, "the contract row and the sample keys differ");
+    let sampled: std::collections::BTreeSet<String> =
+        sample.keys().map(|k| (*k).to_owned()).collect();
+    assert_eq!(
+        documented, sampled,
+        "the contract row and the sample keys differ"
+    );
 
-    let lines = |parent: &str| sample.values().filter(|(p, l)| *p == parent && !l.is_empty()).map(|(_, l)| *l).collect::<Vec<_>>().join("\n");
-    let text = format!("[mcp.servers.x]\n{}\n\n[mcp.servers.x.oauth]\n{}\n", lines(""), lines("oauth"));
-    let servers = parse(&text).unwrap_or_else(|e| panic!("an entry with every documented key is refused: {e:?}\n{text}"));
+    let lines = |parent: &str| {
+        sample
+            .values()
+            .filter(|(p, l)| *p == parent && !l.is_empty())
+            .map(|(_, l)| *l)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let text = format!(
+        "[mcp.servers.x]\n{}\n\n[mcp.servers.x.oauth]\n{}\n",
+        lines(""),
+        lines("oauth")
+    );
+    let servers = parse(&text)
+        .unwrap_or_else(|e| panic!("an entry with every documented key is refused: {e:?}\n{text}"));
     let json = serde_json::to_value(&servers["x"]).unwrap();
-    for key in ["url", "description", "exposure", "toolExposure", "oauth", "headers"] {
+    for key in [
+        "url",
+        "description",
+        "exposure",
+        "toolExposure",
+        "oauth",
+        "headers",
+    ] {
         assert!(json.get(key).is_some(), "{key} not kept: {json}");
     }
 }
@@ -580,14 +692,19 @@ fn control() {
 fn client_name_the_figma_entry_is_accepted_and_kept() {
     let servers = parse(FIGMA).unwrap_or_else(|e| panic!("refused: {e:?}"));
     let json = serde_json::to_value(&servers["figma"]).unwrap();
-    assert_eq!(json["oauth"], serde_json::json!({"clientName": "Claude Code"}));
+    assert_eq!(
+        json["oauth"],
+        serde_json::json!({"clientName": "Claude Code"})
+    );
     assert_eq!(json["url"], "https://mcp.figma.com/mcp");
     assert_eq!(json["exposure"], "deferred");
 }
 
 #[test]
 fn client_name_is_kept_beside_the_other_oauth_keys() {
-    let text = oauth("clientId = \"c\"\ncallbackUrl = \"http://localhost:3118/callback\"\nscope = \"s\"\nclientName = \"Claude Code\"\n");
+    let text = oauth(
+        "clientId = \"c\"\ncallbackUrl = \"http://localhost:3118/callback\"\nscope = \"s\"\nclientName = \"Claude Code\"\n",
+    );
     assert_eq!(
         json(&text)["oauth"],
         serde_json::json!({"clientId": "c", "callbackUrl": "http://localhost:3118/callback", "scope": "s", "clientName": "Claude Code"})
@@ -596,9 +713,16 @@ fn client_name_is_kept_beside_the_other_oauth_keys() {
 
 #[test]
 fn client_name_a_left_out_key_stays_out_of_the_json() {
-    assert!(json(&oauth("clientId = \"c\"\n"))["oauth"].get("clientName").is_none());
+    assert!(
+        json(&oauth("clientId = \"c\"\n"))["oauth"]
+            .get("clientName")
+            .is_none()
+    );
     // Control, red until the key is read.
-    assert_eq!(json(&oauth("clientId = \"c\"\nclientName = \"n\"\n"))["oauth"]["clientName"], "n");
+    assert_eq!(
+        json(&oauth("clientId = \"c\"\nclientName = \"n\"\n"))["oauth"]["clientName"],
+        "n"
+    );
 }
 
 #[test]
@@ -646,6 +770,12 @@ fn client_name_refuse_a_value_that_is_not_a_string() {
 #[test]
 fn client_name_the_client_secret_and_client_registration_stay_refused() {
     accepted(&oauth("clientName = \"Claude Code\"\n"));
-    refused(&oauth("clientName = \"Claude Code\"\nclientSecret = \"x\"\n"), Some("clientSecret"));
-    refused(&oauth("clientName = \"Claude Code\"\nclientRegistration = \"cimd\"\n"), Some("clientRegistration"));
+    refused(
+        &oauth("clientName = \"Claude Code\"\nclientSecret = \"x\"\n"),
+        Some("clientSecret"),
+    );
+    refused(
+        &oauth("clientName = \"Claude Code\"\nclientRegistration = \"cimd\"\n"),
+        Some("clientRegistration"),
+    );
 }

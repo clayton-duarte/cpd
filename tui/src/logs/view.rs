@@ -7,10 +7,10 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use cpd_core::events::Event;
+use crate::box_widget::SectionTitle;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
-use crate::box_widget::SectionTitle;
+use cpd_core::events::Event;
 
 /// The rows above the Events: the title, drawn as a section header (hs-d124, hs-d297).
 /// The title's rows: an empty row, the title and an empty row (hs-d308).
@@ -36,7 +36,15 @@ pub struct Log {
 
 impl Log {
     pub fn new(events: Vec<Event>, zone: cpd_core::clock::TimeZone) -> Log {
-        Log { events, zone, scroll: Scroll::default(), follow: true, selected: None, reveal: false, error: None }
+        Log {
+            events,
+            zone,
+            scroll: Scroll::default(),
+            follow: true,
+            selected: None,
+            reveal: false,
+            error: None,
+        }
     }
 
     /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
@@ -44,7 +52,11 @@ impl Log {
     /// `events` selects nothing and the view opens at the bottom.
     pub fn at(events: Vec<Event>, id: i64, zone: cpd_core::clock::TimeZone) -> Log {
         let found = events.iter().any(|e| e.id == id);
-        Log { selected: found.then_some(id), reveal: found, ..Log::new(events, zone) }
+        Log {
+            selected: found.then_some(id),
+            reveal: found,
+            ..Log::new(events, zone)
+        }
     }
 
     /// Whether the view shows the bottom, and so follows new Events.
@@ -52,8 +64,9 @@ impl Log {
         self.follow
     }
 
-    fn to_bottom(&mut self) {
-        self.scroll.by(isize::try_from(self.scroll.max_offset()).unwrap_or(isize::MAX));
+    fn scroll_to_bottom(&mut self) {
+        self.scroll
+            .by(isize::try_from(self.scroll.max_offset()).unwrap_or(isize::MAX));
     }
 
     /// Appends Events (newest last). A view that was scrolled up stays on the same lines; one at the bottom follows.
@@ -61,26 +74,28 @@ impl Log {
         self.events.extend(events);
         self.scroll.resize(self.events.len(), self.scroll.page());
         if self.follow {
-            self.to_bottom();
+            self.scroll_to_bottom();
         }
     }
 
     /// The area is `height` rows tall, the title's row included, and its last row for the error while there is one.
     pub fn fit(&mut self, height: u16) {
-        let page = usize::from(height.saturating_sub(HEADER_ROWS + u16::from(self.error.is_some())));
+        let page =
+            usize::from(height.saturating_sub(HEADER_ROWS + u16::from(self.error.is_some())));
         self.scroll.resize(self.events.len(), page);
-        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
-            if let Some(i) = self.events.iter().position(|e| e.id == id) {
-                // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
-                // line shown
-                let end = (i + 1 + page.saturating_sub(1) / 2).max(page);
-                let top = isize::try_from(end - page).unwrap_or(isize::MAX);
-                self.scroll.by(top - isize::try_from(self.scroll.offset()).unwrap_or(isize::MAX));
-                self.follow = false;
-            }
+        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected)
+            && let Some(i) = self.events.iter().position(|e| e.id == id)
+        {
+            // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
+            // line shown
+            let end = (i + 1 + page.saturating_sub(1) / 2).max(page);
+            let top = isize::try_from(end - page).unwrap_or(isize::MAX);
+            self.scroll
+                .by(top - isize::try_from(self.scroll.offset()).unwrap_or(isize::MAX));
+            self.follow = false;
         }
         if self.follow {
-            self.to_bottom();
+            self.scroll_to_bottom();
         }
         self.settle();
     }
@@ -91,7 +106,8 @@ impl Log {
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
-        self.scroll.by(-isize::try_from(lines).unwrap_or(isize::MAX));
+        self.scroll
+            .by(-isize::try_from(lines).unwrap_or(isize::MAX));
         self.settle();
     }
 
@@ -148,7 +164,9 @@ const LEAD_CODES: [&str; 2] = ["workflow_start_failed", "push_failed"];
 /// engine's own step errors (`source` `watch`, contract §5.2) and those that name no Plan are the User's.
 fn addressed_to_lead(e: &Event) -> bool {
     let field = |name: &str| e.data.get(name).and_then(|v| v.as_str());
-    e.plan.is_some() && (field("source") != Some("watch") || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
+    e.plan.is_some()
+        && (field("source") != Some("watch")
+            || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
 }
 
 /// The zone the tests draw in: `ManualClock`'s (EST5EDT rule), never the machine's.
@@ -169,20 +187,29 @@ pub(crate) fn line(e: &Event, width: usize, zone: &cpd_core::clock::TimeZone) ->
     };
     let room = width.saturating_sub("00:00:00 ".len());
     let text = crate::cells::truncate(text, room);
-    Line::from(vec![muted(clock(&e.at, zone)), " ".into(), Span::styled(text, style)])
+    Line::from(vec![
+        muted(clock(&e.at, zone)),
+        " ".into(),
+        Span::styled(text, style),
+    ])
 }
 
 /// Draws the title, then the visible Events, in `area`, and the error in its last row. Call [`Log::fit`] with its
 /// height first.
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
-    let [head, area] = Layout::vertical([Constraint::Length(SectionTitle::ROWS), Constraint::Min(0)]).areas(area);
+    let [head, area] =
+        Layout::vertical([Constraint::Length(SectionTitle::ROWS), Constraint::Min(0)]).areas(area);
     f.render_widget(SectionTitle::new("Logs", None), head);
     let outer = area;
     let area = area.inner(Margin::new(1, 0)); // the rows keep one blank column on each side
     let area = match &log.error {
         Some(error) => {
-            let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-            f.render_widget(Paragraph::new(Span::styled(error.clone(), palette::error())), foot);
+            let [events, foot] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            f.render_widget(
+                Paragraph::new(Span::styled(error.clone(), palette::error())),
+                foot,
+            );
             events
         }
         None => area,
@@ -190,20 +217,32 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(muted("none yet"))]
     } else {
-        log.visible().iter().map(|e| line(e, usize::from(area.width), &log.zone)).collect()
+        log.visible()
+            .iter()
+            .map(|e| line(e, usize::from(area.width), &log.zone))
+            .collect()
     };
     f.render_widget(Paragraph::new(lines), area);
     // the Event the view was opened at is the blue block across the popup's whole width, the margins included
-    if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
+    if let Some(i) = log
+        .visible()
+        .iter()
+        .position(|e| log.selected == Some(e.id))
+    {
         let row = Rect::new(outer.x, area.y + i as u16, outer.width, 1);
-        f.buffer_mut().set_style(row.intersection(outer), palette::selected());
+        f.buffer_mut()
+            .set_style(row.intersection(outer), palette::selected());
     }
 }
 
 /// The layout test's sample (`layout_tests`): the popup drawn as the view draws it, with three Events; its title is rows 0 to 2.
 #[cfg(test)]
-pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
-    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+pub(crate) fn layout_sample(
+    width: u16,
+    height: u16,
+    case: crate::layout_tests::SectionCase,
+) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, Sample, SectionCase};
     let events = (0..3)
         .map(|id| Event {
             id: id + 1,
@@ -220,14 +259,24 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
         .collect();
     let mut log = Log::new(events, test_zone());
     log.fit(height);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
     let pane = Rect::new(0, 0, width, height);
     let boxes = match case {
-        SectionCase::Title => vec![Placed { name: "logs title", kind: Kind::Rule, rect: Rect::new(0, 0, width, 3), exempt: Vec::new() }],
+        SectionCase::Title => vec![Placed {
+            name: "logs title",
+            kind: Kind::Rule,
+            rect: Rect::new(0, 0, width, 3),
+            exempt: Vec::new(),
+        }],
         SectionCase::Rows => Vec::new(),
     };
-    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+    Sample {
+        buf: terminal.backend().buffer().clone(),
+        container: pane,
+        boxes,
+    }
 }
 
 #[cfg(test)]
@@ -265,7 +314,12 @@ mod tests {
     }
 
     fn wheel(kind: MouseEventKind) -> MouseEvent {
-        MouseEvent { kind, column: 2, row: 2, modifiers: KeyModifiers::NONE }
+        MouseEvent {
+            kind,
+            column: 2,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     /// The texts on screen, `height` rows of the area (the title's included).
@@ -308,7 +362,10 @@ mod tests {
     fn keys_and_the_wheel_scroll_and_scrolling_to_the_bottom_follows_again() {
         let mut log = Log::new(events(20), test_zone());
         // 7 rows: the title with its two empty rows and 4 Events
-        assert_eq!(shown(&mut log, 7), ["event 16", "event 17", "event 18", "event 19"]);
+        assert_eq!(
+            shown(&mut log, 7),
+            ["event 16", "event 17", "event 18", "event 19"]
+        );
         assert!(log.follows());
         assert!(log.key(key(KeyCode::Up)) && !log.follows());
         assert_eq!(shown(&mut log, 7)[0], "event 15");
@@ -317,13 +374,21 @@ mod tests {
         assert_eq!(shown(&mut log, 7)[0], "event 10");
         assert!(log.mouse(wheel(MouseEventKind::ScrollUp)));
         assert_eq!(shown(&mut log, 7)[0], format!("event {}", 10 - WHEEL_ROWS));
-        assert!(log.mouse(wheel(MouseEventKind::ScrollDown)) && log.mouse(wheel(MouseEventKind::ScrollDown)));
+        assert!(
+            log.mouse(wheel(MouseEventKind::ScrollDown))
+                && log.mouse(wheel(MouseEventKind::ScrollDown))
+        );
         assert!(!log.follows(), "{:?}", shown(&mut log, 7));
         assert!(log.key(key(KeyCode::PageDown)) && log.key(key(KeyCode::Char('j'))));
         assert!(log.follows());
         assert_eq!(shown(&mut log, 7)[3], "event 19");
         // keys that do not scroll are left to the view
-        for code in [KeyCode::Char('q'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('J')] {
+        for code in [
+            KeyCode::Char('q'),
+            KeyCode::Esc,
+            KeyCode::Enter,
+            KeyCode::Char('J'),
+        ] {
             assert!(!log.key(key(code)), "{code:?}");
         }
         assert!(!log.mouse(wheel(MouseEventKind::Moved)));
@@ -334,7 +399,10 @@ mod tests {
         let mut log = Log::new(events(10), test_zone());
         shown(&mut log, 7);
         log.push(events(12)[10..].to_vec());
-        assert_eq!(shown(&mut log, 7), ["event 8", "event 9", "event 10", "event 11"]);
+        assert_eq!(
+            shown(&mut log, 7),
+            ["event 8", "event 9", "event 10", "event 11"]
+        );
         log.mouse(wheel(MouseEventKind::ScrollUp));
         let before = shown(&mut log, 7);
         log.push(events(15)[12..].to_vec());
@@ -368,7 +436,10 @@ mod tests {
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
         // an empty row, the title, an empty row, then the Events
         assert_eq!(row(0).trim_end(), "");
-        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(14)));
+        assert_eq!(
+            row(1),
+            format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(14))
+        );
         assert_eq!(row(2).trim_end(), "");
         assert!(row(3).starts_with(" 19:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
@@ -387,7 +458,11 @@ mod tests {
         let got = terminal.backend().buffer();
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
         assert_eq!(row(0).trim_end(), "", "an empty row above");
-        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(24 - 1 - 2 - 6 - 1)), "column 1 to column 22");
+        assert_eq!(
+            row(1),
+            format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(24 - 1 - 2 - 6 - 1)),
+            "column 1 to column 22"
+        );
         assert_eq!(row(2).trim_end(), "", "an empty row below");
         crate::section::check::grey_pill(got, 3, 1, "Logs");
     }
@@ -418,20 +493,47 @@ mod error_colour {
     }
 
     fn error(plan: Option<&str>, source: &str, code: &str) -> Event {
-        event("error", plan, json!({"source": source, "code": code, "message": "m", "details": {}}))
+        event(
+            "error",
+            plan,
+            json!({"source": source, "code": code, "message": "m", "details": {}}),
+        )
     }
 
     /// The colour of the Event's text in its line (the line is ` 10:20:30 something happened`).
     fn colour(e: &Event) -> Option<Color> {
-        line(e, 60, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())).spans.last().unwrap().style.fg
+        line(
+            e,
+            60,
+            &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(
+                &cpd_core::clock::ManualClock::new(),
+            ),
+        )
+        .spans
+        .last()
+        .unwrap()
+        .style
+        .fg
     }
 
     #[test]
     fn an_error_the_engine_reports_for_itself_is_red() {
         let red = Some(palette::color(Meaning::Failed));
-        assert_eq!(colour(&error(None, "watch", "tmux_failed")), red, "the machine");
-        assert_eq!(colour(&error(Some("pay"), "watch", "store_failed")), red, "a step of the engine, about a Plan");
-        assert_eq!(colour(&error(None, "pr poll", "gh_rate_limited")), red, "no Plan to address: the User's");
+        assert_eq!(
+            colour(&error(None, "watch", "tmux_failed")),
+            red,
+            "the machine"
+        );
+        assert_eq!(
+            colour(&error(Some("pay"), "watch", "store_failed")),
+            red,
+            "a step of the engine, about a Plan"
+        );
+        assert_eq!(
+            colour(&error(None, "pr poll", "gh_rate_limited")),
+            red,
+            "no Plan to address: the User's"
+        );
     }
 
     #[test]
@@ -447,6 +549,10 @@ mod error_colour {
 
     #[test]
     fn other_events_have_no_colour() {
-        assert_eq!(colour(&event("job-failed", Some("pay"), json!({}))), palette::read_only_text().fg, "read-only text, colour 7");
+        assert_eq!(
+            colour(&event("job-failed", Some("pay"), json!({}))),
+            palette::read_only_text().fg,
+            "read-only text, colour 7"
+        );
     }
 }

@@ -46,20 +46,90 @@ pub(super) struct Legacy {
 /// migration `i + 1`, and `PRAGMA user_version` of such a store is how many of
 /// them it has. A numbered migration is never added again.
 pub(super) const LEGACY: &[Legacy] = &[
-    Legacy { name: "0001-initial", compat: Compat::Breaking, sql: include_str!("migrations/0001-initial.sql"), apply: migration_1 },
-    Legacy { name: "0002-cockpit-parity", compat: Compat::Additive, sql: include_str!("migrations/0002-cockpit-parity.sql"), apply: migration_2 },
-    Legacy { name: "0003-archive", compat: Compat::Breaking, sql: include_str!("migrations/0003-archive.sql"), apply: migration_3 },
-    Legacy { name: "0004-cross-repo", compat: Compat::Breaking, sql: include_str!("migrations/0004-cross-repo.sql"), apply: migration_4 },
-    Legacy { name: "0005-plan-reopen", compat: Compat::Breaking, sql: include_str!("migrations/0005-plan-reopen.sql"), apply: migration_5 },
-    Legacy { name: "0006-pr-poller", compat: Compat::Breaking, sql: include_str!("migrations/0006-pr-poller.sql"), apply: migration_6 },
-    Legacy { name: "0007-context-records", compat: Compat::Breaking, sql: include_str!("migrations/0007-context-records.sql"), apply: migration_7 },
-    Legacy { name: "0008-phase-deploy", compat: Compat::Breaking, sql: include_str!("migrations/0008-phase-deploy.sql"), apply: migration_8 },
-    Legacy { name: "0009-session-message", compat: Compat::Breaking, sql: include_str!("migrations/0009-session-message.sql"), apply: migration_9 },
-    Legacy { name: "0010-manager", compat: Compat::Breaking, sql: include_str!("migrations/0010-manager.sql"), apply: migration_10 },
-    Legacy { name: "0011-pr-mergeable", compat: Compat::Breaking, sql: include_str!("migrations/0011-pr-mergeable.sql"), apply: migration_11 },
-    Legacy { name: "0012-inbox", compat: Compat::Breaking, sql: include_str!("migrations/0012-inbox.sql"), apply: migration_12 },
-    Legacy { name: "0013-pr-inbox", compat: Compat::Breaking, sql: include_str!("migrations/0013-pr-inbox.sql"), apply: migration_13 },
-    Legacy { name: "0014-register", compat: Compat::Breaking, sql: include_str!("migrations/0014-register.sql"), apply: migration_14 },
+    Legacy {
+        name: "0001-initial",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0001-initial.sql"),
+        apply: migration_1,
+    },
+    Legacy {
+        name: "0002-cockpit-parity",
+        compat: Compat::Additive,
+        sql: include_str!("migrations/0002-cockpit-parity.sql"),
+        apply: migration_2,
+    },
+    Legacy {
+        name: "0003-archive",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0003-archive.sql"),
+        apply: migration_3,
+    },
+    Legacy {
+        name: "0004-cross-repo",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0004-cross-repo.sql"),
+        apply: migration_4,
+    },
+    Legacy {
+        name: "0005-plan-reopen",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0005-plan-reopen.sql"),
+        apply: migration_5,
+    },
+    Legacy {
+        name: "0006-pr-poller",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0006-pr-poller.sql"),
+        apply: migration_6,
+    },
+    Legacy {
+        name: "0007-context-records",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0007-context-records.sql"),
+        apply: migration_7,
+    },
+    Legacy {
+        name: "0008-phase-deploy",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0008-phase-deploy.sql"),
+        apply: migration_8,
+    },
+    Legacy {
+        name: "0009-session-message",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0009-session-message.sql"),
+        apply: migration_9,
+    },
+    Legacy {
+        name: "0010-manager",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0010-manager.sql"),
+        apply: migration_10,
+    },
+    Legacy {
+        name: "0011-pr-mergeable",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0011-pr-mergeable.sql"),
+        apply: migration_11,
+    },
+    Legacy {
+        name: "0012-inbox",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0012-inbox.sql"),
+        apply: migration_12,
+    },
+    Legacy {
+        name: "0013-pr-inbox",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0013-pr-inbox.sql"),
+        apply: migration_13,
+    },
+    Legacy {
+        name: "0014-register",
+        compat: Compat::Breaking,
+        sql: include_str!("migrations/0014-register.sql"),
+        apply: migration_14,
+    },
 ];
 
 /// The legacy version whose migration (`0007-context-records`) imports the old
@@ -69,6 +139,9 @@ pub(super) const LEGACY: &[Legacy] = &[
 /// (`verdict.rs`) never reads `$CPD_HOME`.
 pub(super) const IMPORTS_OLD_STORES: usize = 7;
 
+/// The Rust beside a migration's SQL.
+pub(super) type MigrationRun = fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>;
+
 /// A named migration (contract §4.5 N1–N4): a file of `migrations/`, listed by
 /// `build.rs`. `run` is the Rust beside its SQL, called after the SQL.
 #[derive(Clone, Copy)]
@@ -76,7 +149,7 @@ pub(super) struct Named {
     pub(super) name: &'static str,
     pub(super) compat: Compat,
     pub(super) sql: &'static str,
-    pub(super) run: Option<fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>>,
+    pub(super) run: Option<MigrationRun>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
@@ -101,7 +174,10 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "2d346012b74ad0cba8d2f1658e1b9178942c0f9b6dc0d1014c0a2b722d62c599",
 ];
 
-const _: () = assert!(SCHEMA_HASHES.len() == LEGACY.len(), "one legacy schema hash per legacy migration");
+const _: () = assert!(
+    SCHEMA_HASHES.len() == LEGACY.len(),
+    "one legacy schema hash per legacy migration"
+);
 
 /// `PRAGMA user_version` of every named store (§4.5): it never changes again,
 /// and means only "this store uses named migrations".
@@ -156,7 +232,9 @@ fn migration_1(conn: &Connection) -> Result<()> {
 /// `pr_checks`, so its history triggers are dropped and generated again to list them.
 fn migration_2(conn: &Connection) -> Result<()> {
     conn.execute_batch(LEGACY[1].sql)?;
-    conn.execute_batch("DROP TRIGGER plans_hist_ins; DROP TRIGGER plans_hist_upd; DROP TRIGGER plans_no_delete;")?;
+    conn.execute_batch(
+        "DROP TRIGGER plans_hist_ins; DROP TRIGGER plans_hist_upd; DROP TRIGGER plans_no_delete;",
+    )?;
     create_history_triggers(conn, "plans", true)
 }
 
@@ -183,7 +261,8 @@ const FILL_PRS: &str = "\n-- @fill-prs\n";
 /// caller's, around the migrating transaction. Needs the migration's `txns`
 /// row: each migrated Workflow's `created_txn` and history row name it.
 fn migration_4(conn: &Connection) -> Result<()> {
-    let (tables, rebuild) = LEGACY[3].sql
+    let (tables, rebuild) = LEGACY[3]
+        .sql
         .split_once(FILL_PRS)
         .expect("0004.sql has its `-- @fill-prs` line");
     conn.execute_batch(tables)?;
@@ -214,7 +293,8 @@ const HISTORY: &str = "\n-- @history\n";
 /// history row in the migration's `txns` row; the rebuild of `prs` writes
 /// none, and its history triggers are generated after it.
 fn migration_6(conn: &Connection) -> Result<()> {
-    let (create, rebuild) = LEGACY[5].sql
+    let (create, rebuild) = LEGACY[5]
+        .sql
         .split_once(HISTORY)
         .expect("0006.sql has its `-- @history` line");
     conn.execute_batch(create)?;
@@ -296,21 +376,33 @@ pub(super) fn import_old_stores(conn: &Connection, dir: &Path) -> Result<()> {
             event(
                 "context-created",
                 id,
-                format!("Context {id} \"{}\" exists. Next: cpd context show --context {id}", manifest.title),
+                format!(
+                    "Context {id} \"{}\" exists. Next: cpd context show --context {id}",
+                    manifest.title
+                ),
                 json!({"title": manifest.title, "jira": manifest.jira, "created_on": manifest.created_on}),
             )?;
         }
         for record in &store.records {
             // Looked up first: a conflicting insert would still use up an index position.
             let held = conn
-                .query_row("SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2", params![id, record.id.to_string()], |_| Ok(()))
+                .query_row(
+                    "SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2",
+                    params![id, record.id.to_string()],
+                    |_| Ok(()),
+                )
                 .optional()?
                 .is_some();
             if held || !record.insert(conn, &manifest.id)? {
                 continue;
             }
             let seq = conn.last_insert_rowid();
-            let snippet: String = record.text.chars().take(80).map(|c| if c.is_control() { ' ' } else { c }).collect();
+            let snippet: String = record
+                .text
+                .chars()
+                .take(80)
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
             event(
                 "context-record",
                 id,
@@ -367,7 +459,9 @@ fn migration_14(conn: &Connection) -> Result<()> {
 /// status from the Plan's phase. No `pr_needs`: one Workflow has no needs.
 fn fill_prs(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT id, repo FROM plans ORDER BY id")?;
-    let plans: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_>>()?;
+    let plans: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_>>()?;
     let mut insert = conn.prepare(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks, all_merged_at,
@@ -428,7 +522,8 @@ fn create_history_triggers(conn: &Connection, table: &str, no_delete: bool) -> R
 /// The table's columns `(name, pk)` in column order, empty when it does not exist.
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY cid")?;
-    stmt.query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
+    stmt.query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
 }
 
 /// `P(x)` of contract §4.4 "The delete exception": the Plan `x` is deleted.
@@ -444,7 +539,13 @@ fn context_deleted(context: &str) -> String {
 /// The `<owner>` of the delete exception of `table` (§4.4 "The delete exception"): true when the row's
 /// owner is deleted. `None` for a table no delete reaches.
 fn delete_owner(table: &str) -> Option<String> {
-    let plan_row = || format!("{} OR (OLD.plan IS NULL AND {})", plan_deleted("OLD.plan"), context_deleted("OLD.context"));
+    let plan_row = || {
+        format!(
+            "{} OR (OLD.plan IS NULL AND {})",
+            plan_deleted("OLD.plan"),
+            context_deleted("OLD.context")
+        )
+    };
     let session_row = |column: &str| {
         format!(
             "EXISTS (SELECT 1 FROM sessions s WHERE s.id = OLD.{column} AND ({} OR (s.plan IS NULL AND {})))",
@@ -466,22 +567,38 @@ fn delete_owner(table: &str) -> Option<String> {
 /// `tombstone` (the generator since `delete-tombstone`, §4.4 "Triggers") the
 /// `_no_delete` trigger holds the table's delete exception and `_hist_del` is
 /// written; the legacy migrations create neither.
-fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: UpdateRow, tombstone: bool) -> Result<Vec<(String, String)>> {
+fn history_triggers(
+    conn: &Connection,
+    table: &str,
+    no_delete: bool,
+    update: UpdateRow,
+    tombstone: bool,
+) -> Result<Vec<(String, String)>> {
     let columns = table_columns(conn, table)?;
     if columns.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName(format!("no table {table}")));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "no table {table}"
+        )));
     }
     let mut key: Vec<&(String, i64)> = columns.iter().filter(|(_, n)| *n > 0).collect();
     key.sort_by_key(|(_, n)| *n);
     if key.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName(format!("table {table} has no primary key")));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "table {table} has no primary key"
+        )));
     }
     let pk = |row: &str| -> String {
-        let cols: Vec<String> = key.iter().map(|(name, _)| format!("{row}.{name}")).collect();
+        let cols: Vec<String> = key
+            .iter()
+            .map(|(name, _)| format!("{row}.{name}"))
+            .collect();
         format!("json_array({})", cols.join(", "))
     };
     let object = |row: &str| -> String {
-        let pairs: Vec<String> = columns.iter().map(|(name, _)| format!("'{name}', {row}.{name}")).collect();
+        let pairs: Vec<String> = columns
+            .iter()
+            .map(|(name, _)| format!("'{name}', {row}.{name}"))
+            .collect();
         format!("json_object({})", pairs.join(", "))
     };
     // §4.4 "History row shape": a `json_group_object` of the key columns and of
@@ -490,15 +607,26 @@ fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: Upd
         let keys: Vec<String> = key
             .iter()
             .enumerate()
-            .map(|(i, (name, _))| if i == 0 { format!("SELECT '{name}' AS k, {row}.{name} AS v") } else { format!("SELECT '{name}', {row}.{name}") })
+            .map(|(i, (name, _))| {
+                if i == 0 {
+                    format!("SELECT '{name}' AS k, {row}.{name} AS v")
+                } else {
+                    format!("SELECT '{name}', {row}.{name}")
+                }
+            })
             .collect();
         let mut lines = vec![keys.join(" UNION ALL ")];
         for (name, n) in &columns {
             if *n == 0 {
-                lines.push(format!("UNION ALL SELECT '{name}', {row}.{name} WHERE OLD.{name} IS NOT NEW.{name}"));
+                lines.push(format!(
+                    "UNION ALL SELECT '{name}', {row}.{name} WHERE OLD.{name} IS NOT NEW.{name}"
+                ));
             }
         }
-        format!("(SELECT json_group_object(k, v) FROM (\n       {}\n    ))", lines.join("\n       "))
+        format!(
+            "(SELECT json_group_object(k, v) FROM (\n       {}\n    ))",
+            lines.join("\n       ")
+        )
     };
     let (before, after) = match update {
         UpdateRow::Whole => (object("OLD"), object("NEW")),
@@ -557,7 +685,12 @@ fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: Upd
 
 /// The `sql` of the trigger `name`, when the store has it.
 fn stored_trigger(conn: &Connection, name: &str) -> Result<Option<String>> {
-    conn.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1", [name], |r| r.get(0)).optional()
+    conn.query_row(
+        "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
+        [name],
+        |r| r.get(0),
+    )
+    .optional()
 }
 
 /// The tables with generated history triggers in a store before `kind-tables`
@@ -594,13 +727,19 @@ fn history_tables(conn: &Connection) -> Result<Vec<(String, bool)>> {
     if !listed {
         let mut tables: Vec<_> = LEGACY_HISTORY_TABLES
             .iter()
-            .map(|t| (t.to_string(), !matches!(*t, "dependencies" | "pr_needs" | "pull_requests")))
+            .map(|t| {
+                (
+                    t.to_string(),
+                    !matches!(*t, "dependencies" | "pr_needs" | "pull_requests"),
+                )
+            })
             .collect();
         tables.sort();
         return Ok(tables);
     }
     let mut stmt = conn.prepare("SELECT name, no_delete FROM history_tables ORDER BY name")?;
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))?.collect()
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))?
+        .collect()
 }
 
 /// §4.5 K4: after the last migration of a migrating transaction, makes every
@@ -636,11 +775,14 @@ pub(super) fn legacy_schema_hash(conn: &Connection) -> Result<String> {
             Ok(Value::from(vec![
                 Value::from(row.get::<_, String>(0)?),
                 Value::from(row.get::<_, String>(1)?),
-                row.get::<_, Option<String>>(2)?.map_or(Value::Null, Value::from),
+                row.get::<_, Option<String>>(2)?
+                    .map_or(Value::Null, Value::from),
             ]))
         })?
         .collect::<Result<_>>()?;
-    Ok(sha256_hex(&serde_json::to_string(&rows).expect("JSON values always serialise")))
+    Ok(sha256_hex(
+        &serde_json::to_string(&rows).expect("JSON values always serialise"),
+    ))
 }
 
 /// Lowercase hex sha256.
@@ -722,7 +864,10 @@ struct TableParts {
 
 /// The first word of `item`: up to the first whitespace or `(`.
 fn first_word(item: &[char]) -> &[char] {
-    let end = item.iter().position(|c| c.is_ascii_whitespace() || *c == '(').unwrap_or(item.len());
+    let end = item
+        .iter()
+        .position(|c| c.is_ascii_whitespace() || *c == '(')
+        .unwrap_or(item.len());
     &item[..end]
 }
 
@@ -736,7 +881,11 @@ fn column_key(item: &[char]) -> String {
             let mut i = 0;
             while i < inner.len() {
                 key.push(inner[i]);
-                i += if open != '[' && inner.get(i + 1) == Some(&open) { 2 } else { 1 };
+                i += if open != '[' && inner.get(i + 1) == Some(&open) {
+                    2
+                } else {
+                    1
+                };
             }
             key
         }
@@ -788,14 +937,21 @@ fn table_parts(sql: &str) -> Option<TableParts> {
         let item = normalize(&item.iter().collect::<String>());
         let chars: Vec<char> = item.chars().collect();
         let word: String = first_word(&chars).iter().collect();
-        if ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"].iter().any(|k| word.eq_ignore_ascii_case(k)) {
+        if ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"]
+            .iter()
+            .any(|k| word.eq_ignore_ascii_case(k))
+        {
             constraints.push(item);
         } else {
             columns.push((column_key(&chars), item));
         }
     }
     columns.sort();
-    Some(TableParts { columns, constraints, options: normalize(&text[close + 1..].iter().collect::<String>()) })
+    Some(TableParts {
+        columns,
+        constraints,
+        options: normalize(&text[close + 1..].iter().collect::<String>()),
+    })
 }
 
 /// The canonical entries (§4.3 items 1 to 4), sorted by `(type, name)`: every
@@ -814,14 +970,19 @@ pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
         .collect();
     let mut stmt = conn
         .prepare("SELECT type, name, sql FROM sqlite_schema WHERE substr(name, 1, 7) <> 'sqlite_' ORDER BY type, name")?;
-    let rows: Vec<(String, String, Option<String>)> =
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_>>()?;
+    let rows: Vec<(String, String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_>>()?;
     let mut entries = Vec::new();
     for (kind, name, sql) in rows {
         if kind == "trigger" && generated.contains(&name) {
             continue;
         }
-        let parts = if kind == "table" { sql.as_deref().and_then(table_parts) } else { None };
+        let parts = if kind == "table" {
+            sql.as_deref().and_then(table_parts)
+        } else {
+            None
+        };
         let entry = match parts {
             Some(t) => Value::from(vec![
                 Value::from("table"),
@@ -830,7 +991,11 @@ pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
                 Value::from(t.constraints),
                 Value::from(t.options),
             ]),
-            _ => Value::from(vec![Value::from(kind), Value::from(name), sql.map_or(Value::Null, Value::from)]),
+            _ => Value::from(vec![
+                Value::from(kind),
+                Value::from(name),
+                sql.map_or(Value::Null, Value::from),
+            ]),
         };
         entries.push(entry);
     }
@@ -842,16 +1007,24 @@ pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
 /// on their order.
 pub fn canonical_hash(conn: &Connection) -> Result<String> {
     let entries = canonical_entries(conn)?;
-    Ok(sha256_hex(&serde_json::to_string(&entries).expect("JSON values always serialise")))
+    Ok(sha256_hex(
+        &serde_json::to_string(&entries).expect("JSON values always serialise"),
+    ))
 }
 
 /// §4.3 item 5: the first generated history trigger that is missing or that
 /// differs from what the generator makes from its table's current columns, as
 /// `(name, expected sql, stored sql)`.
-pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, String, Option<String>)>> {
+pub(super) fn generated_mismatch(
+    conn: &Connection,
+) -> Result<Option<(String, String, Option<String>)>> {
     for (table, no_delete) in history_tables(conn)? {
         if table_columns(conn, &table)?.is_empty() {
-            return Ok(Some((format!("{table}_hist_ins"), format!("a table {table}"), None)));
+            return Ok(Some((
+                format!("{table}_hist_ins"),
+                format!("a table {table}"),
+                None,
+            )));
         }
         for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed, true)? {
             let stored = stored_trigger(conn, &name)?;
@@ -864,41 +1037,45 @@ pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, St
 }
 
 #[cfg(test)]
-mod tests;
+mod actual_files_tests;
 #[cfg(test)]
 mod blue_tests;
 #[cfg(test)]
-mod job_verify_tests;
-#[cfg(test)]
-mod job_edit_tests;
-#[cfg(test)]
-mod cyan_tests;
-#[cfg(test)]
-mod models_notice_tests;
-#[cfg(test)]
 mod claim_tests;
 #[cfg(test)]
-mod tier_catalog_tests;
+mod cyan_tests;
 #[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod drafts_parked_tests;
 #[cfg(test)]
-mod pr_closed_kind_tests;
-#[cfg(test)]
-mod worker_runner_tests;
-#[cfg(test)]
-mod session_runner_tests;
-#[cfg(test)]
-mod lead_branch_tests;
-#[cfg(test)]
-mod restack_tests;
-#[cfg(test)]
-mod reaction_refusal_tests;
+mod explore_kinds_tests;
 #[cfg(test)]
 mod jira_transitions_tests;
 #[cfg(test)]
-mod explore_kinds_tests;
+mod job_addenda_tests;
+#[cfg(test)]
+mod job_edit_tests;
+#[cfg(test)]
+mod job_verify_tests;
+#[cfg(test)]
+mod lead_branch_tests;
+#[cfg(test)]
+mod models_notice_tests;
+#[cfg(test)]
+mod pr_closed_kind_tests;
+#[cfg(test)]
+mod reaction_refusal_tests;
+#[cfg(test)]
+mod restack_tests;
+#[cfg(test)]
+mod session_runner_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod tier_catalog_tests;
+#[cfg(test)]
+mod worker_runner_tests;
 #[cfg(test)]
 mod working_pr_tests;
 #[cfg(test)]

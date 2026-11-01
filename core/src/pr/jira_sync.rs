@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{append, NewEvent};
+use crate::events::{NewEvent, append};
 use crate::ids::PlanId;
 use crate::store::WriteTxn;
 
@@ -89,7 +89,8 @@ fn corrupt(what: String) -> rusqlite::Error {
 
 fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Due, Option<String>)> {
     let target: String = r.get(3)?;
-    let target = Target::parse(&target).ok_or_else(|| corrupt(format!("unknown jira target {target}")))?;
+    let target =
+        Target::parse(&target).ok_or_else(|| corrupt(format!("unknown jira target {target}")))?;
     let ticket: Option<String> = r.get(4)?;
     let row = Due { id: r.get(0)?, plan: r.get(1)?, workflow: r.get(2)?, target, ticket: ticket.unwrap_or_default() };
     Ok((row, r.get(5)?))
@@ -112,7 +113,10 @@ pub fn next_due(conn: &Connection, skip: &[i64]) -> Result<Option<Due>, CpdError
         "{SELECT} WHERE t.settled_at IS NULL AND t.refused_at IS NULL AND p.jira IS NOT NULL AND p.status <> 'cancelled'
            AND t.id NOT IN (SELECT value FROM json_each(?1)) ORDER BY t.id LIMIT 1"
     );
-    Ok(conn.query_row(&sql, [skip], due).optional()?.map(|(due, _)| due))
+    Ok(conn
+        .query_row(&sql, [skip], due)
+        .optional()?
+        .map(|(due, _)| due))
 }
 
 /// Settles a PENDING row (`settled_at` = the transaction's time); `false` when nothing changed.
@@ -127,7 +131,12 @@ pub fn mark_settled(tx: &WriteTxn<'_>, id: i64, outcome: Outcome) -> Result<bool
 
 /// Parks a PENDING row and appends the one `error` Event `jira_refused` in the same transaction (`source` is its source);
 /// `false`, nothing written, when the row is not PENDING.
-pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, refusal: &Refusal) -> Result<bool, CpdError> {
+pub fn refuse(
+    tx: &WriteTxn<'_>,
+    source: &str,
+    id: i64,
+    refusal: &Refusal,
+) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "UPDATE jira_transitions SET refused_at = (SELECT at FROM txns WHERE id = cpd_txn()), refusal = ?2, refused_with = ?3
           WHERE id = ?1 AND settled_at IS NULL AND refused_at IS NULL",
@@ -145,7 +154,14 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, refusal: &Refusal) -> Re
         "Jira refused to move ticket {} of Workflow {workflow} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the Workflow's ticket (cpd workflow edit {workflow} --jira <KEY>) or the policy key pr.jira.{target} changes.",
         refusal.ticket, refusal.status, refusal.reason, refusal.message
     );
-    let event = NewEvent::error(text.clone(), source, ErrorCode::JiraRefused.as_str(), &text, details).plan(PlanId::parse(&plan)?);
+    let event = NewEvent::error(
+        text.clone(),
+        source,
+        ErrorCode::JiraRefused.as_str(),
+        &text,
+        details,
+    )
+    .plan(PlanId::parse(&plan)?);
     append(tx, event)?;
     Ok(true)
 }
@@ -157,7 +173,10 @@ pub fn parked(conn: &Connection) -> Result<Vec<Parked>, CpdError> {
     let rows = stmt
         .query_map([], |r| {
             let (due, tried) = due(r)?;
-            Ok(Parked { due, tried: tried.unwrap_or_default() })
+            Ok(Parked {
+                due,
+                tried: tried.unwrap_or_default(),
+            })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -214,7 +233,12 @@ mod tests {
     }
 
     fn refusal(status: &str) -> Refusal {
-        Refusal { reason: "no_transition".into(), message: "none".into(), ticket: "ABC-1".into(), status: status.into() }
+        Refusal {
+            reason: "no_transition".into(),
+            message: "none".into(),
+            ticket: "ABC-1".into(),
+            status: status.into(),
+        }
     }
 
     #[test]
@@ -235,7 +259,9 @@ mod tests {
         assert!(q(&mut store, "api", Target::InProgress));
         assert!(!q(&mut store, "api", Target::InProgress));
         assert!(q(&mut store, "api", Target::Done));
-        let n: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM jira_transitions", [], |r| r.get(0))?)).unwrap();
+        let n: i64 = store
+            .read(|c| Ok(c.query_row("SELECT count(*) FROM jira_transitions", [], |r| r.get(0))?))
+            .unwrap();
         assert_eq!(n, 2);
     }
 
@@ -265,11 +291,32 @@ mod tests {
     fn a_row_settles_once_and_is_no_longer_due() {
         let (_dir, mut store) = store();
         q(&mut store, "api", Target::InProgress);
-        assert!(store.write("t", |tx| mark_settled(tx, 1, Outcome::Moved)).unwrap());
-        assert!(!store.write("t", |tx| mark_settled(tx, 1, Outcome::Unchanged)).unwrap());
-        assert!(!store.write("t", |tx| refuse(tx, "watch", 1, &refusal("X"))).unwrap(), "a settled row is not parked");
+        assert!(
+            store
+                .write("t", |tx| mark_settled(tx, 1, Outcome::Moved))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .write("t", |tx| mark_settled(tx, 1, Outcome::Unchanged))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .write("t", |tx| refuse(tx, "watch", 1, &refusal("X")))
+                .unwrap(),
+            "a settled row is not parked"
+        );
         assert_eq!(store.read(|c| next_due(c, &[])).unwrap(), None);
-        let outcome: String = store.read(|c| Ok(c.query_row("SELECT outcome FROM jira_transitions WHERE id = 1", [], |r| r.get(0))?)).unwrap();
+        let outcome: String = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT outcome FROM jira_transitions WHERE id = 1",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
         assert_eq!(outcome, "moved");
     }
 
@@ -277,9 +324,23 @@ mod tests {
     fn a_refused_row_is_parked_once_with_one_event_and_reopens() {
         let (_dir, mut store) = store();
         q(&mut store, "api", Target::InReview);
-        assert!(store.write("t", |tx| refuse(tx, "watch", 1, &refusal("In Review"))).unwrap());
-        assert!(!store.write("t", |tx| refuse(tx, "watch", 1, &refusal("In Review"))).unwrap(), "already parked: nothing written");
-        assert!(!store.write("t", |tx| mark_settled(tx, 1, Outcome::Moved)).unwrap(), "a parked row is not settled");
+        assert!(
+            store
+                .write("t", |tx| refuse(tx, "watch", 1, &refusal("In Review")))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .write("t", |tx| refuse(tx, "watch", 1, &refusal("In Review")))
+                .unwrap(),
+            "already parked: nothing written"
+        );
+        assert!(
+            !store
+                .write("t", |tx| mark_settled(tx, 1, Outcome::Moved))
+                .unwrap(),
+            "a parked row is not settled"
+        );
         let (events, plan, details): (i64, Option<String>, String) = store
             .read(|c| {
                 Ok(c.query_row(
@@ -289,14 +350,30 @@ mod tests {
                 )?)
             })
             .unwrap();
-        assert_eq!((events, plan.as_deref(), details.as_str()), (1, Some("pay"), "no_transition"));
-        assert_eq!(store.read(|c| next_due(c, &[])).unwrap(), None, "a parked row is never due");
+        assert_eq!(
+            (events, plan.as_deref(), details.as_str()),
+            (1, Some("pay"), "no_transition")
+        );
+        assert_eq!(
+            store.read(|c| next_due(c, &[])).unwrap(),
+            None,
+            "a parked row is never due"
+        );
         let rows = store.read(parked).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].due.id, rows[0].tried.as_str()), (1, "ABC-1|In Review"));
+        assert_eq!(
+            (rows[0].due.id, rows[0].tried.as_str()),
+            (1, "ABC-1|In Review")
+        );
         assert!(store.write("t", |tx| reopen(tx, 1)).unwrap());
-        assert!(!store.write("t", |tx| reopen(tx, 1)).unwrap(), "not parked any more");
-        assert_eq!(store.read(|c| next_due(c, &[])).unwrap().map(|d| d.id), Some(1));
+        assert!(
+            !store.write("t", |tx| reopen(tx, 1)).unwrap(),
+            "not parked any more"
+        );
+        assert_eq!(
+            store.read(|c| next_due(c, &[])).unwrap().map(|d| d.id),
+            Some(1)
+        );
         assert!(store.read(parked).unwrap().is_empty());
     }
 
@@ -305,9 +382,18 @@ mod tests {
         let (_dir, mut store) = store();
         q(&mut store, "api", Target::InProgress);
         q(&mut store, "api", Target::InReview);
-        store.write("t", |tx| refuse(tx, "watch", 2, &refusal("B"))).unwrap();
-        store.write("t", |tx| refuse(tx, "watch", 1, &refusal("A"))).unwrap();
-        let ids: Vec<i64> = store.read(parked).unwrap().iter().map(|p| p.due.id).collect();
+        store
+            .write("t", |tx| refuse(tx, "watch", 2, &refusal("B")))
+            .unwrap();
+        store
+            .write("t", |tx| refuse(tx, "watch", 1, &refusal("A")))
+            .unwrap();
+        let ids: Vec<i64> = store
+            .read(parked)
+            .unwrap()
+            .iter()
+            .map(|p| p.due.id)
+            .collect();
         assert_eq!(ids, [1, 2]);
     }
 }

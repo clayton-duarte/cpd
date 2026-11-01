@@ -30,7 +30,10 @@ pub struct FakePi {
 impl FakePi {
     /// A `pi` that, until [`FakePi::set`], curates every record of the batch.
     pub fn new() -> FakePi {
-        FakePi { behave: Mutex::new(Box::new(|inputs| says(&curates_all(inputs)))), seen: Mutex::default() }
+        FakePi {
+            behave: Mutex::new(Box::new(|inputs| says(&curates_all(inputs)))),
+            seen: Mutex::default(),
+        }
     }
 
     /// Installs a [`FakePi::new`] as the route for `pi` on `fx`'s `FakeRunner`.
@@ -65,8 +68,12 @@ impl FakePi {
     /// The file `name` as the last call saw it; panics when pi was never called or the file was missing.
     pub fn seen(&self, name: &str) -> String {
         let seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        let last = seen.last().unwrap_or_else(|| panic!("pi was never called, it saw no {name}"));
-        last.get(name).unwrap_or_else(|| panic!("the distiller saw no {name}")).clone()
+        let last = seen
+            .last()
+            .unwrap_or_else(|| panic!("pi was never called, it saw no {name}"));
+        last.get(name)
+            .unwrap_or_else(|| panic!("the distiller saw no {name}"))
+            .clone()
     }
 }
 
@@ -74,17 +81,42 @@ impl Handler for FakePi {
     fn handle(&self, call: &Call) -> Reply {
         let mut inputs = Inputs::new();
         for name in INPUT_FILES {
-            if let Some(text) = call.cwd.as_ref().and_then(|dir| std::fs::read_to_string(dir.join(name)).ok()) {
+            if let Some(text) = call
+                .cwd
+                .as_ref()
+                .and_then(|dir| std::fs::read_to_string(dir.join(name)).ok())
+            {
                 inputs.insert(name.to_owned(), text);
             }
         }
-        self.seen.lock().unwrap_or_else(PoisonError::into_inner).push(inputs.clone());
+        self.seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(inputs.clone());
         let reply = (self.behave.lock().unwrap_or_else(PoisonError::into_inner))(&inputs);
         match (reply, &call.stderr_to) {
-            (Reply::Exit { code, stdout, stderr, takes }, Some(log)) => {
-                let mut file = OpenOptions::new().create(true).append(true).open(log).expect("open the log pi's stderr goes to");
-                file.write_all(&stderr).expect("write pi's stderr to the log");
-                Reply::Exit { code, stdout, stderr: Vec::new(), takes }
+            (
+                Reply::Exit {
+                    code,
+                    stdout,
+                    stderr,
+                    takes,
+                },
+                Some(log),
+            ) => {
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log)
+                    .expect("open the log pi's stderr goes to");
+                file.write_all(&stderr)
+                    .expect("write pi's stderr to the log");
+                Reply::Exit {
+                    code,
+                    stdout,
+                    stderr: Vec::new(),
+                    takes,
+                }
             }
             (reply, _) => reply,
         }
@@ -93,7 +125,10 @@ impl Handler for FakePi {
 
 /// One valid curation line for every block of `batch.md`: topic `t`, short `s <id>`, no retirement, no doc candidate.
 pub fn curates_all(inputs: &Inputs) -> String {
-    let batch = inputs.get("batch.md").map(String::as_str).unwrap_or_default();
+    let batch = inputs
+        .get("batch.md")
+        .map(String::as_str)
+        .unwrap_or_default();
     batch
         .lines()
         .filter_map(|line| line.strip_prefix('[')?.split_once(']').map(|(id, _)| id))

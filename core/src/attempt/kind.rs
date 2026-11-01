@@ -7,14 +7,14 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::Env;
-use crate::error::{CpdError, ErrorCode};
-use crate::git::{self, HookOutcome, Operation};
-use crate::git::hooks::{Log, run_command};
 use crate::config::RepoTests;
-use crate::policy::Policy;
+use crate::error::{CpdError, ErrorCode};
+use crate::git::hooks::{Log, run_command};
+use crate::git::{self, HookOutcome, Operation};
 use crate::ids::{AttemptId, PlanId};
 use crate::job::guard;
 use crate::plan::jobs::{self, Job};
+use crate::policy::Policy;
 
 /// Whether the Job's kind has the checks of this module.
 pub(super) fn has_checks(job: &Job) -> bool {
@@ -25,19 +25,32 @@ pub(super) fn has_checks(job: &Job) -> bool {
 fn fresh(env: &mut Env, plan: &PlanId, key: &str) -> Result<(Vec<Job>, Job), CpdError> {
     env.store.read(|conn| {
         let all = jobs::load(conn, plan)?;
-        let job = all.iter().find(|j| j.key == key).cloned().ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has no Job {key}")))?;
+        let job = all
+            .iter()
+            .find(|j| j.key == key)
+            .cloned()
+            .ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has no Job {key}")))?;
         Ok((all, job))
     })
 }
 
 /// The red-test guard (`tests_tampered`, §7.5, §7.7) for an `impl` Job: its diff `base...sha` changes no path a `test` Job it needs guards, unless the Lead approved it.
-pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, compare: &str, base: &str, sha: &str) -> Result<(), CpdError> {
+pub(super) fn guard_tests(
+    env: &mut Env,
+    plan: &PlanId,
+    job: &Job,
+    root: &Path,
+    compare: &str,
+    base: &str,
+    sha: &str,
+) -> Result<(), CpdError> {
     if job.kind != "impl" {
         return Ok(());
     }
     let (all, job) = fresh(env, plan, &job.key)?;
     let guard = guard::of(&all, &job);
-    let paths = git::tamper::touched_guarded(root, compare, base, sha, &guard.files, &guard.approved)?;
+    let paths =
+        git::tamper::touched_guarded(root, compare, base, sha, &guard.files, &guard.approved)?;
     if paths.is_empty() {
         return Ok(());
     }
@@ -71,13 +84,32 @@ struct Ran {
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
 /// `build`, the optional `list` and the `run` of the Job's named tests. HEAD is `sha`, the worktree clean.
-pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, policy: &Policy, root: &Path, lead: &str, diff_base: &str, sha: &str) -> Result<(), CpdError> {
+// Each argument is a distinct input of the check; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn check(
+    env: &mut Env,
+    plan: &PlanId,
+    id: &AttemptId,
+    job: &Job,
+    policy: &Policy,
+    root: &Path,
+    lead: &str,
+    diff_base: &str,
+    sha: &str,
+) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
-    let tests = if job.kind == "impl" { guard::of(&all, &job).tests } else { guard::own(&job).0 };
+    let tests = if job.kind == "impl" {
+        guard::of(&all, &job).tests
+    } else {
+        guard::own(&job).0
+    };
     if job.kind == "test" {
         let (_, files) = guard::own(&job);
         let changed = git::tamper::changed_paths(root, diff_base, sha)?;
-        let missing: Vec<&String> = files.iter().filter(|f| !changed.iter().any(|c| git::tamper::path_matches(f, c))).collect();
+        let missing: Vec<&String> = files
+            .iter()
+            .filter(|f| !changed.iter().any(|c| git::tamper::path_matches(f, c)))
+            .collect();
         if !missing.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::TestFilesMissing,
@@ -90,7 +122,9 @@ pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, pol
             .with("paths", json!(missing)));
         }
     }
-    let Some(commands) = policy.test_commands.clone() else { return Err(unconfigured(&job.key)) };
+    let Some(commands) = policy.test_commands.clone() else {
+        return Err(unconfigured(&job.key));
+    };
     if tests.is_empty() {
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
@@ -124,15 +158,26 @@ fn run_tests(
             .with("tail", ran.tail.clone())
             .with("log", ran.log.as_str())
     };
-    let go = |what: &str, template: &str, extra: &[(&str, Value)], mode: Log| -> Result<Ran, CpdError> {
-        let log = log_of(what);
-        let result = run_command(template, extra, root, &operation, timeout, &log, mode)?;
-        let wrote = result.tail.is_some();
-        Ok(Ran { outcome: result.outcome, tail: result.tail, log: if wrote { log.display().to_string() } else { String::new() } })
-    };
+    let go =
+        |what: &str, template: &str, extra: &[(&str, Value)], mode: Log| -> Result<Ran, CpdError> {
+            let log = log_of(what);
+            let result = run_command(template, extra, root, &operation, timeout, &log, mode)?;
+            let wrote = result.tail.is_some();
+            Ok(Ran {
+                outcome: result.outcome,
+                tail: result.tail,
+                log: if wrote {
+                    log.display().to_string()
+                } else {
+                    String::new()
+                },
+            })
+        };
     // A command that could not run: `tests_error`, exit 1, the Worker asks the Lead.
     let error = |what: &str, ran: &Ran, tests: &[String]| -> Option<CpdError> {
-        let HookOutcome::Error(why) = &ran.outcome else { return None };
+        let HookOutcome::Error(why) = &ran.outcome else {
+            return None;
+        };
         let mut e = refuse(
             ErrorCode::TestsError,
             format!("The repo's [test-commands] `{what}` command could not be judged: {why}. Ask the Lead: cpd ask {id} \"<question>\"."),
@@ -155,7 +200,9 @@ fn run_tests(
     if let HookOutcome::Failed { exit, .. } = build.outcome {
         return Err(refuse(
             ErrorCode::TestsBuildFailed,
-            format!("The repo's [test-commands] `build` failed (exit {exit}): the branch does not build. Fix it, commit, and submit again; the tail is in details.tail."),
+            format!(
+                "The repo's [test-commands] `build` failed (exit {exit}): the branch does not build. Fix it, commit, and submit again; the tail is in details.tail."
+            ),
             &build,
             tests,
         ));
@@ -164,9 +211,21 @@ fn run_tests(
     // list, once per named test: non-zero means no test has that name.
     if let Some(list) = &commands.list {
         let log = log_of("list");
-        std::fs::remove_file(&log).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }).map_err(|e| {
-            CpdError::new(ErrorCode::TestsError, format!("Cannot reset {}: {e}.", log.display())).with("job", job.key.as_str())
-        })?;
+        std::fs::remove_file(&log)
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(|e| {
+                CpdError::new(
+                    ErrorCode::TestsError,
+                    format!("Cannot reset {}: {e}.", log.display()),
+                )
+                .with("job", job.key.as_str())
+            })?;
         let mut unknown = Vec::new();
         let mut last = None;
         for name in tests {
@@ -180,11 +239,16 @@ fn run_tests(
             last = Some(ran);
         }
         if let (false, Some(ran)) = (unknown.is_empty(), last) {
-            let tail = std::fs::read_to_string(&log).ok().map(|t| git::tail(&t, git::TAIL_LINES));
+            let tail = std::fs::read_to_string(&log)
+                .ok()
+                .map(|t| git::tail(&t, git::TAIL_LINES));
             let ran = Ran { tail, ..ran };
             return Err(refuse(
                 ErrorCode::TestsNotFound,
-                format!("No test has the name: {}. Fix the name or the test, commit, and submit again; the repo's `list` said so (details.log).", unknown.join(", ")),
+                format!(
+                    "No test has the name: {}. Fix the name or the test, commit, and submit again; the repo's `list` said so (details.log).",
+                    unknown.join(", ")
+                ),
                 &ran,
                 &unknown,
             ));
@@ -192,7 +256,12 @@ fn run_tests(
     }
 
     // run: a `test` Job's named tests must fail, an `impl` Job's must pass.
-    let run = go("run", &commands.run, &[("tests", json!(tests))], Log::Truncate)?;
+    let run = go(
+        "run",
+        &commands.run,
+        &[("tests", json!(tests))],
+        Log::Truncate,
+    )?;
     if let Some(e) = error("run", &run, tests) {
         return Err(e);
     }

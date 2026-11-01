@@ -34,7 +34,12 @@ fn fx() -> Fx {
     let mut u = Universe::new(Arc::new(clock.clone()));
     u.set_global("user.name", "cpd test");
     u.set_global("user.email", "test@cpd.invalid");
-    Fx { tmp: tempfile::tempdir().unwrap(), clock, u, repos: 0 }
+    Fx {
+        tmp: tempfile::tempdir().unwrap(),
+        clock,
+        u,
+        repos: 0,
+    }
 }
 
 impl Fx {
@@ -48,16 +53,26 @@ impl Fx {
         (self.u.init(&dir, false), dir)
     }
     /// A commit of `files` on `parents` one virtual second after the last one.
-    fn commit(&mut self, repo: RepoId, parents: &[&Oid], files: &[(&str, &str)], message: &str) -> Oid {
+    fn commit(
+        &mut self,
+        repo: RepoId,
+        parents: &[&Oid],
+        files: &[(&str, &str)],
+        message: &str,
+    ) -> Oid {
         self.clock.advance(Duration::from_secs(1));
-        let blobs: Vec<(&str, Oid)> = files.iter().map(|(p, t)| (*p, self.u.blob(repo, t.as_bytes()))).collect();
+        let blobs: Vec<(&str, Oid)> = files
+            .iter()
+            .map(|(p, t)| (*p, self.u.blob(repo, t.as_bytes())))
+            .collect();
         let entries: Vec<(&str, &Oid)> = blobs.iter().map(|(p, b)| (*p, b)).collect();
         let tree = self.u.tree(repo, &entries);
         let parents: Vec<Oid> = parents.iter().map(|p| (*p).clone()).collect();
         self.u.commit(repo, &tree, &parents, message)
     }
     fn branch(&mut self, repo: RepoId, name: &str, at: &Oid) {
-        self.u.set_ref(repo, &format!("refs/heads/{name}"), at, "branch");
+        self.u
+            .set_ref(repo, &format!("refs/heads/{name}"), at, "branch");
     }
     /// A repo on `main` with one commit, and its main worktree.
     fn on_main(&mut self) -> (RepoId, PathBuf, Oid) {
@@ -94,7 +109,11 @@ fn an_id_is_forty_lowercase_hex_characters() {
     let (repo, _) = fx.repo();
     let id = fx.u.blob(repo, b"x").to_string();
     assert_eq!(id.len(), 40);
-    assert!(id.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)), "{id}");
+    assert!(
+        id.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "{id}"
+    );
 }
 
 #[test]
@@ -141,7 +160,10 @@ fn a_tree_id_does_not_depend_on_the_order_of_its_entries() {
     let (repo, _) = fx.repo();
     let a = fx.u.blob(repo, b"a");
     let b = fx.u.blob(repo, b"b");
-    assert_eq!(fx.u.tree(repo, &[("a.txt", &a), ("b.txt", &b)]), fx.u.tree(repo, &[("b.txt", &b), ("a.txt", &a)]));
+    assert_eq!(
+        fx.u.tree(repo, &[("a.txt", &a), ("b.txt", &b)]),
+        fx.u.tree(repo, &[("b.txt", &b), ("a.txt", &a)])
+    );
 }
 
 #[test]
@@ -151,7 +173,13 @@ fn a_tree_is_flat_a_path_with_a_slash_is_one_entry_and_entries_read_back_sorted(
     let a = fx.u.blob(repo, b"a");
     let b = fx.u.blob(repo, b"b");
     let tree = fx.u.tree(repo, &[("z.txt", &b), ("dir/sub/a.txt", &a)]);
-    assert_eq!(fx.u.tree_entries(&tree), Some(vec![("dir/sub/a.txt".to_owned(), a), ("z.txt".to_owned(), b)]));
+    assert_eq!(
+        fx.u.tree_entries(&tree),
+        Some(vec![
+            ("dir/sub/a.txt".to_owned(), a),
+            ("z.txt".to_owned(), b)
+        ])
+    );
 }
 
 #[test]
@@ -159,7 +187,10 @@ fn a_commit_on_the_empty_tree_has_the_id_git_gives_it() {
     let mut fx = fx();
     let (repo, _) = fx.repo();
     let tree = fx.u.tree(repo, &[]);
-    assert_eq!(fx.u.commit(repo, &tree, &[], "init"), oid(INIT_ON_EMPTY_TREE));
+    assert_eq!(
+        fx.u.commit(repo, &tree, &[], "init"),
+        oid(INIT_ON_EMPTY_TREE)
+    );
 }
 
 #[test]
@@ -168,7 +199,10 @@ fn a_commit_of_one_file_has_the_id_git_gives_it() {
     let (repo, _) = fx.repo();
     let blob = fx.u.blob(repo, b"hello\n");
     let tree = fx.u.tree(repo, &[("a.txt", &blob)]);
-    assert_eq!(fx.u.commit(repo, &tree, &[], "init"), oid(INIT_ON_A_TXT_TREE));
+    assert_eq!(
+        fx.u.commit(repo, &tree, &[], "init"),
+        oid(INIT_ON_A_TXT_TREE)
+    );
 }
 
 #[test]
@@ -177,7 +211,8 @@ fn a_commit_reads_back_its_tree_parents_author_message_and_time() {
     let (repo, _) = fx.repo();
     let first = fx.commit(repo, &[], &[("a.txt", "a")], "first");
     let tree = fx.u.tree(repo, &[]);
-    let second = fx.u.commit(repo, &tree, std::slice::from_ref(&first), "second");
+    let second =
+        fx.u.commit(repo, &tree, std::slice::from_ref(&first), "second");
     let data = fx.u.commit_data(&second).unwrap();
     assert_eq!(data.tree, tree);
     assert_eq!(data.parents, vec![first]);
@@ -234,7 +269,10 @@ fn a_commit_takes_its_author_from_the_global_user_config() {
     let (repo, _) = fx.repo();
     let tree = fx.u.tree(repo, &[]);
     let c = fx.u.commit(repo, &tree, &[], "m");
-    assert_eq!(fx.u.commit_data(&c).unwrap().author, "Ada <ada@example.test>");
+    assert_eq!(
+        fx.u.commit_data(&c).unwrap().author,
+        "Ada <ada@example.test>"
+    );
 }
 
 #[test]
@@ -244,7 +282,10 @@ fn a_repos_own_user_config_overrides_the_global_one() {
     fx.u.config_set(repo, "user.name", "Local");
     let tree = fx.u.tree(repo, &[]);
     let c = fx.u.commit(repo, &tree, &[], "m");
-    assert_eq!(fx.u.commit_data(&c).unwrap().author, "Local <test@cpd.invalid>");
+    assert_eq!(
+        fx.u.commit_data(&c).unwrap().author,
+        "Local <test@cpd.invalid>"
+    );
 }
 
 #[test]
@@ -272,7 +313,10 @@ fn a_repo_holds_what_was_made_in_it_and_not_what_was_made_in_another() {
 fn a_repo_holds_no_object_nobody_made() {
     let mut fx = fx();
     let (a, _) = fx.repo();
-    assert!(!fx.u.has(a, &oid("0123456789012345678901234567890123456789")));
+    assert!(
+        !fx.u
+            .has(a, &oid("0123456789012345678901234567890123456789"))
+    );
 }
 
 #[test]
@@ -328,7 +372,10 @@ fn nothing_but_an_empty_git_dir_exists_on_disk_for_objects_refs_and_config() {
     let mut fx = fx();
     let (repo, dir, _) = fx.on_main();
     fx.u.config_add(repo, "remote.origin.url", "https://github.com/acme/x.git");
-    let names: Vec<String> = std::fs::read_dir(dir.join(".git")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let names: Vec<String> = std::fs::read_dir(dir.join(".git"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     for absent in ["objects", "refs", "config", "packed-refs"] {
         assert!(!names.iter().any(|n| n == absent), "{absent} in {names:?}");
     }
@@ -383,11 +430,21 @@ fn a_linked_worktree_is_a_directory_with_a_dot_git_file_naming_its_admin_dir() {
     let mut fx = fx();
     let (repo, dir, _) = fx.on_main();
     let wt_path = fx.root().join("wt");
-    let wt = fx.u.add_worktree(repo, &wt_path, Head::Branch("feat".to_owned()));
-    assert_eq!(wt, super::Worktree { path: wt_path.clone(), id: Some("wt".to_owned()) });
+    let wt =
+        fx.u.add_worktree(repo, &wt_path, Head::Branch("feat".to_owned()));
+    assert_eq!(
+        wt,
+        super::Worktree {
+            path: wt_path.clone(),
+            id: Some("wt".to_owned())
+        }
+    );
     let admin = dir.join(".git/worktrees/wt");
     assert!(admin.is_dir());
-    assert_eq!(std::fs::read_to_string(wt_path.join(".git")).unwrap(), format!("gitdir: {}\n", admin.display()));
+    assert_eq!(
+        std::fs::read_to_string(wt_path.join(".git")).unwrap(),
+        format!("gitdir: {}\n", admin.display())
+    );
     assert_eq!(fx.u.admin_dir(&wt_path), admin);
 }
 
@@ -395,8 +452,16 @@ fn a_linked_worktree_is_a_directory_with_a_dot_git_file_naming_its_admin_dir() {
 fn a_taken_worktree_id_gets_the_first_free_number() {
     let mut fx = fx();
     let (repo, _, _) = fx.on_main();
-    let first = fx.u.add_worktree(repo, &fx.root().join("a/wt"), Head::Branch("one".to_owned()));
-    let second = fx.u.add_worktree(repo, &fx.root().join("b/wt"), Head::Branch("two".to_owned()));
+    let first = fx.u.add_worktree(
+        repo,
+        &fx.root().join("a/wt"),
+        Head::Branch("one".to_owned()),
+    );
+    let second = fx.u.add_worktree(
+        repo,
+        &fx.root().join("b/wt"),
+        Head::Branch("two".to_owned()),
+    );
     assert_eq!(first.id.as_deref(), Some("wt"));
     assert_eq!(second.id.as_deref(), Some("wt1"));
 }
@@ -421,7 +486,13 @@ fn the_main_worktree_comes_first_and_the_main_admin_dir_is_the_git_dir() {
     let wt_path = fx.root().join("wt");
     fx.u.add_worktree(repo, &wt_path, Head::Branch("feat".to_owned()));
     let listed = fx.u.worktrees(repo);
-    assert_eq!(listed[0], super::Worktree { path: dir.clone(), id: None });
+    assert_eq!(
+        listed[0],
+        super::Worktree {
+            path: dir.clone(),
+            id: None
+        }
+    );
     assert_eq!(listed[1].path, wt_path);
     assert_eq!(fx.u.admin_dir(&dir), dir.join(".git"));
 }
@@ -460,7 +531,11 @@ fn refs_under_a_prefix_are_sorted_by_name() {
     fx.u.set_ref(repo, "refs/heads/b", &c, "x");
     fx.u.set_ref(repo, "refs/heads/a", &c, "x");
     fx.u.set_ref(repo, "refs/tags/v1", &c, "x");
-    let names: Vec<String> = fx.u.refs(repo, "refs/heads/").into_iter().map(|(n, _)| n).collect();
+    let names: Vec<String> =
+        fx.u.refs(repo, "refs/heads/")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
     assert_eq!(names, ["refs/heads/a", "refs/heads/b", "refs/heads/main"]);
 }
 
@@ -479,7 +554,11 @@ fn a_symbolic_ref_reads_back_its_target() {
     let (repo, _, _) = fx.on_main();
     assert_eq!(fx.u.symbolic_ref(repo, "refs/remotes/origin/HEAD"), None);
     fx.u.set_symbolic_ref(repo, "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-    assert_eq!(fx.u.symbolic_ref(repo, "refs/remotes/origin/HEAD").as_deref(), Some("refs/remotes/origin/main"));
+    assert_eq!(
+        fx.u.symbolic_ref(repo, "refs/remotes/origin/HEAD")
+            .as_deref(),
+        Some("refs/remotes/origin/main")
+    );
 }
 
 #[test]
@@ -546,9 +625,23 @@ fn the_remote_tips_are_the_refs_under_that_remote_only() {
 fn config_is_multi_valued_in_the_order_added() {
     let mut fx = fx();
     let (repo, _) = fx.repo();
-    fx.u.config_add(repo, "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*");
-    fx.u.config_add(repo, "remote.origin.fetch", "+refs/heads/x:refs/remotes/origin/x");
-    assert_eq!(fx.u.config_values(repo, "remote.origin.fetch"), ["+refs/heads/*:refs/remotes/origin/*", "+refs/heads/x:refs/remotes/origin/x"]);
+    fx.u.config_add(
+        repo,
+        "remote.origin.fetch",
+        "+refs/heads/*:refs/remotes/origin/*",
+    );
+    fx.u.config_add(
+        repo,
+        "remote.origin.fetch",
+        "+refs/heads/x:refs/remotes/origin/x",
+    );
+    assert_eq!(
+        fx.u.config_values(repo, "remote.origin.fetch"),
+        [
+            "+refs/heads/*:refs/remotes/origin/*",
+            "+refs/heads/x:refs/remotes/origin/x"
+        ]
+    );
 }
 
 #[test]
@@ -587,7 +680,10 @@ fn a_key_is_case_insensitive_in_its_section_and_variable_but_not_its_subsection(
     let mut fx = fx();
     let (repo, _) = fx.repo();
     fx.u.config_add(repo, "url.Base.insteadOf", "https://x/");
-    assert_eq!(fx.u.config_values(repo, "URL.Base.INSTEADOF"), ["https://x/"]);
+    assert_eq!(
+        fx.u.config_values(repo, "URL.Base.INSTEADOF"),
+        ["https://x/"]
+    );
     assert!(fx.u.config_values(repo, "url.base.insteadOf").is_empty());
 }
 
@@ -595,8 +691,15 @@ fn a_key_is_case_insensitive_in_its_section_and_variable_but_not_its_subsection(
 fn a_url_is_rewritten_by_instead_of() {
     let mut fx = fx();
     let (repo, _) = fx.repo();
-    fx.u.config_add(repo, "url./tmp/origin.git.insteadOf", "https://github.com/acme/x.git");
-    assert_eq!(fx.u.resolve_url(repo, "https://github.com/acme/x.git"), "/tmp/origin.git");
+    fx.u.config_add(
+        repo,
+        "url./tmp/origin.git.insteadOf",
+        "https://github.com/acme/x.git",
+    );
+    assert_eq!(
+        fx.u.resolve_url(repo, "https://github.com/acme/x.git"),
+        "/tmp/origin.git"
+    );
 }
 
 #[test]
@@ -604,7 +707,10 @@ fn instead_of_rewrites_a_prefix_and_keeps_the_rest() {
     let mut fx = fx();
     let (repo, _) = fx.repo();
     fx.u.config_add(repo, "url./srv/git/.insteadOf", "https://github.com/acme/");
-    assert_eq!(fx.u.resolve_url(repo, "https://github.com/acme/x.git"), "/srv/git/x.git");
+    assert_eq!(
+        fx.u.resolve_url(repo, "https://github.com/acme/x.git"),
+        "/srv/git/x.git"
+    );
 }
 
 #[test]
@@ -613,15 +719,25 @@ fn the_longest_instead_of_prefix_wins() {
     let (repo, _) = fx.repo();
     fx.u.config_add(repo, "url./short/.insteadOf", "https://github.com/");
     fx.u.config_add(repo, "url./long/.insteadOf", "https://github.com/acme/");
-    assert_eq!(fx.u.resolve_url(repo, "https://github.com/acme/x.git"), "/long/x.git");
+    assert_eq!(
+        fx.u.resolve_url(repo, "https://github.com/acme/x.git"),
+        "/long/x.git"
+    );
 }
 
 #[test]
 fn a_url_no_instead_of_matches_is_kept() {
     let mut fx = fx();
     let (repo, _) = fx.repo();
-    fx.u.config_add(repo, "url./tmp/o.git.insteadOf", "https://github.com/acme/x.git");
-    assert_eq!(fx.u.resolve_url(repo, "https://github.com/acme/y.git"), "https://github.com/acme/y.git");
+    fx.u.config_add(
+        repo,
+        "url./tmp/o.git.insteadOf",
+        "https://github.com/acme/x.git",
+    );
+    assert_eq!(
+        fx.u.resolve_url(repo, "https://github.com/acme/y.git"),
+        "https://github.com/acme/y.git"
+    );
 }
 
 // ---- the index file ------------------------------------------------------------------
@@ -658,7 +774,10 @@ fn every_change_of_the_index_gives_the_file_a_new_inode() {
     let first = std::fs::metadata(&path).unwrap().ino();
     fx.u.stage(&dir, "b.txt", &blob, 0);
     let second = std::fs::metadata(&path).unwrap().ino();
-    assert_ne!(first, second, "the index is rewritten by rename, never in place");
+    assert_ne!(
+        first, second,
+        "the index is rewritten by rename, never in place"
+    );
 }
 
 #[test]
@@ -700,7 +819,10 @@ fn head_resolves_to_the_branch_it_names() {
 fn head_of_an_unborn_branch_is_unknown() {
     let mut fx = fx();
     let (_, dir) = fx.repo();
-    assert!(matches!(parse(&fx.u, &dir, "HEAD"), Err(RevError::Unknown(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, "HEAD"),
+        Err(RevError::Unknown(_))
+    ));
 }
 
 #[test]
@@ -737,7 +859,10 @@ fn a_full_sha_followed_by_caret_commit_of_an_object_the_repo_does_not_hold_is_un
     let (other, _) = fx.repo();
     let foreign = fx.commit(other, &[], &[("a", "a")], "elsewhere");
     let (_, dir, _) = fx.on_main();
-    assert!(matches!(parse(&fx.u, &dir, &format!("{foreign}^{{commit}}")), Err(RevError::Unknown(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, &format!("{foreign}^{{commit}}")),
+        Err(RevError::Unknown(_))
+    ));
 }
 
 #[test]
@@ -801,7 +926,10 @@ fn a_name_under_refs_wins_over_a_branch_of_the_same_name() {
 fn a_name_that_exists_nowhere_is_unknown() {
     let mut fx = fx();
     let (_, dir, _) = fx.on_main();
-    assert!(matches!(parse(&fx.u, &dir, "nope"), Err(RevError::Unknown(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, "nope"),
+        Err(RevError::Unknown(_))
+    ));
 }
 
 #[test]
@@ -810,7 +938,10 @@ fn caret_commit_of_a_commit_is_itself_and_of_a_blob_is_a_wrong_type() {
     let (repo, dir, c) = fx.on_main();
     assert_eq!(parse(&fx.u, &dir, "HEAD^{commit}"), Ok(c));
     let blob = fx.u.blob(repo, b"x");
-    assert!(matches!(parse(&fx.u, &dir, &format!("{blob}^{{commit}}")), Err(RevError::WrongType(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, &format!("{blob}^{{commit}}")),
+        Err(RevError::WrongType(_))
+    ));
 }
 
 #[test]
@@ -819,7 +950,10 @@ fn caret_tree_of_a_commit_is_its_tree_and_of_a_tree_is_itself() {
     let (_, dir, c) = fx.on_main();
     let tree = fx.u.commit_data(&c).unwrap().tree;
     assert_eq!(parse(&fx.u, &dir, "HEAD^{tree}"), Ok(tree.clone()));
-    assert_eq!(parse(&fx.u, &dir, &format!("{c}^{{tree}}")), Ok(tree.clone()));
+    assert_eq!(
+        parse(&fx.u, &dir, &format!("{c}^{{tree}}")),
+        Ok(tree.clone())
+    );
     assert_eq!(parse(&fx.u, &dir, &format!("{tree}^{{tree}}")), Ok(tree));
 }
 
@@ -828,25 +962,39 @@ fn caret_tree_of_a_blob_is_a_wrong_type() {
     let mut fx = fx();
     let (repo, dir, _) = fx.on_main();
     let blob = fx.u.blob(repo, b"x");
-    assert!(matches!(parse(&fx.u, &dir, &format!("{blob}^{{tree}}")), Err(RevError::WrongType(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, &format!("{blob}^{{tree}}")),
+        Err(RevError::WrongType(_))
+    ));
 }
 
 #[test]
 fn a_rev_colon_path_is_the_blob_at_that_path() {
     let mut fx = fx();
     let (repo, dir, _) = fx.on_main();
-    let c = fx.commit(repo, &[], &[("README.md", "one\n"), ("dir/sub/f.txt", "deep\n")], "two files");
+    let c = fx.commit(
+        repo,
+        &[],
+        &[("README.md", "one\n"), ("dir/sub/f.txt", "deep\n")],
+        "two files",
+    );
     fx.branch(repo, "main", &c);
     let deep = fx.u.blob(repo, b"deep\n");
     assert_eq!(parse(&fx.u, &dir, "HEAD:dir/sub/f.txt"), Ok(deep));
-    assert_eq!(parse(&fx.u, &dir, &format!("{c}:README.md")), Ok(fx.u.blob(repo, b"one\n")));
+    assert_eq!(
+        parse(&fx.u, &dir, &format!("{c}:README.md")),
+        Ok(fx.u.blob(repo, b"one\n"))
+    );
 }
 
 #[test]
 fn a_rev_colon_a_path_not_in_the_tree_is_unknown() {
     let mut fx = fx();
     let (_, dir, _) = fx.on_main();
-    assert!(matches!(parse(&fx.u, &dir, "HEAD:nope.txt"), Err(RevError::Unknown(_))));
+    assert!(matches!(
+        parse(&fx.u, &dir, "HEAD:nope.txt"),
+        Err(RevError::Unknown(_))
+    ));
 }
 
 #[test]
@@ -855,7 +1003,13 @@ fn two_dots_select_what_b_has_that_a_has_not() {
     let (repo, dir, c) = fx.on_main();
     let d = fx.commit(repo, &[&c], &[("a", "a")], "d");
     fx.branch(repo, "feat", &d);
-    assert_eq!(range(&fx.u, &dir, "main..feat"), Ok(Selection { include: vec![d], exclude: vec![c] }));
+    assert_eq!(
+        range(&fx.u, &dir, "main..feat"),
+        Ok(Selection {
+            include: vec![d],
+            exclude: vec![c]
+        })
+    );
 }
 
 #[test]
@@ -866,7 +1020,13 @@ fn three_dots_select_both_sides_minus_their_merge_base() {
     let on_feat = fx.commit(repo, &[&c], &[("f", "f")], "on feat");
     fx.branch(repo, "main", &on_main);
     fx.branch(repo, "feat", &on_feat);
-    assert_eq!(range(&fx.u, &dir, "main...feat"), Ok(Selection { include: vec![on_main, on_feat], exclude: vec![c] }));
+    assert_eq!(
+        range(&fx.u, &dir, "main...feat"),
+        Ok(Selection {
+            include: vec![on_main, on_feat],
+            exclude: vec![c]
+        })
+    );
 }
 
 #[test]
@@ -875,14 +1035,23 @@ fn a_range_side_left_empty_is_head() {
     let (repo, dir, c) = fx.on_main();
     let d = fx.commit(repo, &[&c], &[("a", "a")], "d");
     fx.branch(repo, "feat", &d);
-    assert_eq!(range(&fx.u, &dir, "main.."), Ok(Selection { include: vec![c.clone()], exclude: vec![c] }));
+    assert_eq!(
+        range(&fx.u, &dir, "main.."),
+        Ok(Selection {
+            include: vec![c.clone()],
+            exclude: vec![c]
+        })
+    );
 }
 
 #[test]
 fn a_range_with_an_unknown_side_is_unknown() {
     let mut fx = fx();
     let (_, dir, _) = fx.on_main();
-    assert!(matches!(range(&fx.u, &dir, "main..nope"), Err(RevError::Unknown(_))));
+    assert!(matches!(
+        range(&fx.u, &dir, "main..nope"),
+        Err(RevError::Unknown(_))
+    ));
 }
 
 // ---- ancestry ------------------------------------------------------------------------
@@ -947,15 +1116,24 @@ fn an_ancestor_test_of_an_object_the_repo_does_not_hold_is_an_error_naming_it() 
     let (repo, base, ..) = forked(&mut fx);
     let (other, _) = fx.repo();
     let foreign = fx.commit(other, &[], &[("q", "q")], "elsewhere");
-    assert_eq!(fx.u.is_ancestor(repo, &base, &foreign), Err(UnknownObject(foreign.clone())));
-    assert_eq!(fx.u.is_ancestor(repo, &foreign, &base), Err(UnknownObject(foreign)));
+    assert_eq!(
+        fx.u.is_ancestor(repo, &base, &foreign),
+        Err(UnknownObject(foreign.clone()))
+    );
+    assert_eq!(
+        fx.u.is_ancestor(repo, &foreign, &base),
+        Err(UnknownObject(foreign))
+    );
 }
 
 #[test]
 fn rev_list_walks_a_linear_history_newest_first() {
     let mut fx = fx();
     let (repo, base, a1, a2, _) = forked(&mut fx);
-    let sel = Selection { include: vec![a2.clone()], exclude: vec![] };
+    let sel = Selection {
+        include: vec![a2.clone()],
+        exclude: vec![],
+    };
     assert_eq!(fx.u.rev_list(repo, &sel, false), vec![a2, a1, base]);
 }
 
@@ -963,7 +1141,10 @@ fn rev_list_walks_a_linear_history_newest_first() {
 fn rev_list_not_leaves_out_what_the_excluded_side_reaches() {
     let mut fx = fx();
     let (repo, base, a1, a2, _) = forked(&mut fx);
-    let sel = Selection { include: vec![a2.clone()], exclude: vec![base] };
+    let sel = Selection {
+        include: vec![a2.clone()],
+        exclude: vec![base],
+    };
     assert_eq!(fx.u.rev_list(repo, &sel, false), vec![a2, a1]);
 }
 
@@ -998,7 +1179,10 @@ fn rev_list_no_merges_drops_the_commits_with_two_parents() {
     let mut fx = fx();
     let (repo, base, a1, _, b1) = forked(&mut fx);
     let merge = fx.commit(repo, &[&a1, &b1], &[("a", "1"), ("b", "1")], "merge");
-    let sel = Selection { include: vec![merge.clone()], exclude: vec![base] };
+    let sel = Selection {
+        include: vec![merge.clone()],
+        exclude: vec![base],
+    };
     let with = fx.u.rev_list(repo, &sel, false);
     let without = fx.u.rev_list(repo, &sel, true);
     assert_eq!(with.len(), 3);
@@ -1013,7 +1197,10 @@ fn rev_list_not_the_remotes_lists_what_is_unpushed() {
     let (repo, _, base) = fx.on_main();
     fx.u.set_ref(repo, "refs/remotes/origin/main", &base, "fetch");
     let local = fx.commit(repo, &[&base], &[("a", "a")], "local");
-    let sel = Selection { include: vec![local.clone()], exclude: fx.u.remote_tips(repo, "origin") };
+    let sel = Selection {
+        include: vec![local.clone()],
+        exclude: fx.u.remote_tips(repo, "origin"),
+    };
     assert_eq!(fx.u.rev_list(repo, &sel, true), vec![local]);
 }
 
@@ -1022,6 +1209,9 @@ fn rev_list_of_what_a_remote_already_has_is_empty() {
     let mut fx = fx();
     let (repo, _, base) = fx.on_main();
     fx.u.set_ref(repo, "refs/remotes/origin/main", &base, "fetch");
-    let sel = Selection { include: vec![base], exclude: fx.u.remote_tips(repo, "origin") };
+    let sel = Selection {
+        include: vec![base],
+        exclude: fx.u.remote_tips(repo, "origin"),
+    };
     assert!(fx.u.rev_list(repo, &sel, true).is_empty());
 }

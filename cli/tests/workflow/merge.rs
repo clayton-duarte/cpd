@@ -41,8 +41,20 @@ fn plan() -> PlanId {
 }
 
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-    Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } }
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![0, 1, 2, 3, 4, 5],
+    };
+    Catalog {
+        pi_version: "1.2.0".to_owned(),
+        o: model("p/opus"),
+        s: model("p/sonnet"),
+        h: model("p/haiku"),
+        g: TierModel {
+            model: "p/gemini".to_owned(),
+            efforts: vec![],
+        },
+    }
 }
 
 fn metrics(_: &Attempt) -> Option<Value> {
@@ -95,9 +107,18 @@ fn fx_origin() -> (Fx, PathBuf) {
 
 fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
     let mut fx = plan_without_prs(config_extra);
-    let origin = if with_origin { add_origin(&fx, &fx.repo) } else { fx.env.root().join("origins").join("pay.git") };
-    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
-    let created = fx.scoped(|| create_lead_worktree(&fx.repo, &plan(), "main", &setup)).unwrap();
+    let origin = if with_origin {
+        add_origin(&fx, &fx.repo)
+    } else {
+        fx.env.root().join("origins").join("pay.git")
+    };
+    let setup = Setup {
+        timeout: Duration::from_secs(30),
+        log: fx.env.root().join("lead.log"),
+    };
+    let created = fx
+        .scoped(|| create_lead_worktree(&fx.repo, &plan(), "main", &setup))
+        .unwrap();
     assert!(created.push_failed.is_none());
     fx.lead = created.path;
     fx.store()
@@ -122,7 +143,17 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
 fn add_origin(fx: &Fx, repo: &Path) -> PathBuf {
     let name = repo.file_name().unwrap().to_string_lossy().into_owned();
     let origin = fx.env.root().join("origins").join(format!("{name}.git"));
-    fx.git(fx.env.root(), &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
     fx.github_origin(repo);
     fx.local_origin(repo, &origin);
     fx.git(repo, &["push", "-q", "origin", "main"]);
@@ -137,11 +168,21 @@ fn plan_without_prs(config_extra: &str) -> Fx {
     let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
     fs::write(
         home.config(),
-        format!("version = 1\nmachine = \"t\"\n{config_extra}\n[tmux]\nsocket = \"{}\"\n", kit.env.tmux_socket()),
+        format!(
+            "version = 1\nmachine = \"t\"\n{config_extra}\n[tmux]\nsocket = \"{}\"\n",
+            kit.env.tmux_socket()
+        ),
     )
     .unwrap();
     let config = Config::load(&home).unwrap();
-    let fx = Fx { kit, home, config, catalog: catalog(), repo, lead: PathBuf::new() };
+    let fx = Fx {
+        kit,
+        home,
+        config,
+        catalog: catalog(),
+        repo,
+        lead: PathBuf::new(),
+    };
     fx.store()
         .write("fixture", |tx| {
             exec(
@@ -164,7 +205,9 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
 
 /// Whether `call` is a `git -C <dir> ...` of `dir`.
 fn in_dir(call: &Call, dir: &Path) -> bool {
-    call.args.windows(2).any(|w| w[0] == "-C" && Path::new(&w[1]) == dir)
+    call.args
+        .windows(2)
+        .any(|w| w[0] == "-C" && Path::new(&w[1]) == dir)
 }
 
 /// Whether `call` is `git <.. sub ..>`.
@@ -174,7 +217,11 @@ fn is(call: &Call, sub: &str) -> bool {
 
 /// What `git push --porcelain` prints and exits with when the remote's `pre-receive` hook declines (and prints `nope`).
 fn declined_push() -> Reply {
-    Reply::exit(1, "To origin\n!\trefs/heads/x:refs/heads/cpd/pay\t[remote rejected] (pre-receive hook declined)\nDone\n", "remote: nope\n")
+    Reply::exit(
+        1,
+        "To origin\n!\trefs/heads/x:refs/heads/cpd/pay\t[remote rejected] (pre-receive hook declined)\nDone\n",
+        "remote: nope\n",
+    )
 }
 
 /// What GitHub's ref-lock race prints (contract §7.4 rule P): a `!` line with no `(non-fast-forward)` reason.
@@ -192,7 +239,13 @@ impl Fx {
     }
 
     fn ctx<'a>(&'a self, source: &'a str) -> Ctx<'a> {
-        Ctx { home: &self.home, config: &self.config, catalog: &self.catalog, source, metrics: &metrics }
+        Ctx {
+            home: &self.home,
+            config: &self.config,
+            catalog: &self.catalog,
+            source,
+            metrics: &metrics,
+        }
     }
 
     /// `git <args>` answers `reply` wherever `matches` says so: a rule of the `FakeRunner`, which wins over the git route.
@@ -220,7 +273,10 @@ impl Fx {
         let tip = self.git(worktree, &["rev-parse", "HEAD"]);
         self.store()
             .write("fixture", |tx| {
-                tx.execute("UPDATE attempts SET submitted_sha = ?2 WHERE plan = 'pay' AND id = ?1", params![attempt.to_string(), tip])?;
+                tx.execute(
+                    "UPDATE attempts SET submitted_sha = ?2 WHERE plan = 'pay' AND id = ?1",
+                    params![attempt.to_string(), tip],
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -235,7 +291,6 @@ impl Fx {
     fn first_pr(&self) -> Workflow {
         Workflow { key: "repo".into(), repo: self.repo.clone(), branch: "cpd/pay".into(), lead: self.lead.clone(), origin: None }
     }
-
 
     /// Job `key` (`running`, Tier S2) of the first PR with Attempt `<key>-a1` in `merging`:
     /// its worktree cut from the Lead Branch HEAD, with one commit writing
@@ -259,8 +314,13 @@ impl Fx {
     /// Dependency are written in the Job's own transaction (a Dependency of a Locked Job is refused later, `dependencies_locked`).
     fn submitted_needing(&self, pr: &Workflow, key: &str, kind: &str, change: Option<(&str, &str)>, guarded: Option<&str>) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = self.scoped(|| create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup)).unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("attempt.log"),
+        };
+        let made = self
+            .scoped(|| create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup))
+            .unwrap();
         let sha = match change {
             Some((path, content)) => self.commit(&made.path, path, content),
             None => self.git(&made.path, &["rev-parse", "HEAD"]),
@@ -270,14 +330,14 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, created_txn, created_at)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
                     params![key, "f".repeat(64), tx.id(), pr.key, i64::from(kind != "work"), kind],
                 )?;
                 if let Some(files) = guarded {
                     tx.execute(
                         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                            fingerprint, created_txn, created_at, kind, tests, test_files, merged_sha)
-                         VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                         VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                                  ?2, 't', 'test', '[\"t::one\"]', ?3, 'c0ffee')",
                         params![pr.key, tx.id(), files],
                     )?;
@@ -382,7 +442,10 @@ impl Fx {
             .into_iter()
             .filter_map(|(p, a)| {
                 let (p, a) = (PlanId::parse(&p).unwrap(), AttemptId::parse(&a).unwrap());
-                self.scoped(|| merge::recover_attempt(&mut self.store(), &self.ctx("watch"), &p, &a)).unwrap()
+                self.scoped(|| {
+                    merge::recover_attempt(&mut self.store(), &self.ctx("watch"), &p, &a)
+                })
+                .unwrap()
             })
             .collect()
     }
@@ -405,7 +468,14 @@ impl Fx {
 
     /// [`Fx::merge`] that does not unwrap: the merge of an Attempt that is not `merging` is refused.
     fn try_merge(&self, attempt: &AttemptId) -> Result<Merge, CpdError> {
-        self.scoped(|| merge::merge(&mut self.store(), &self.ctx("attempt run"), &plan(), attempt))
+        self.scoped(|| {
+            merge::merge(
+                &mut self.store(),
+                &self.ctx("attempt run"),
+                &plan(),
+                attempt,
+            )
+        })
     }
 
     /// R as E2 runs it, for the Attempts of [`Fx::repo`].
@@ -414,7 +484,16 @@ impl Fx {
     }
 
     /// `(status, outcome, cause, merged_sha, metrics)` of an Attempt.
-    fn attempt_row(&self, attempt: &AttemptId) -> (String, Option<String>, Option<String>, Option<String>, Option<String>) {
+    fn attempt_row(
+        &self,
+        attempt: &AttemptId,
+    ) -> (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) {
         self.store()
             .read(|c| {
                 Ok(c.query_row(
@@ -443,10 +522,15 @@ impl Fx {
     fn events(&self, attempt: &AttemptId) -> Vec<(String, Value)> {
         self.store()
             .read(|c| {
-                let mut stmt = c.prepare("SELECT kind, data FROM events WHERE plan = 'pay' AND attempt = ?1 ORDER BY id")?;
+                let mut stmt = c.prepare(
+                    "SELECT kind, data FROM events WHERE plan = 'pay' AND attempt = ?1 ORDER BY id",
+                )?;
                 let rows = stmt
                     .query_map([attempt.to_string()], |r| {
-                        Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap()))
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            serde_json::from_str(&r.get::<_, String>(1)?).unwrap(),
+                        ))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
@@ -456,16 +540,28 @@ impl Fx {
 
     fn assert_failed(&self, attempt: &AttemptId, key: &str, cause: &str) -> Value {
         let (status, outcome, row_cause, merged, metrics) = self.attempt_row(attempt);
-        assert_eq!((status.as_str(), outcome.as_deref(), row_cause.as_deref(), merged), ("ended", Some("failed"), Some(cause), None));
+        assert_eq!(
+            (
+                status.as_str(),
+                outcome.as_deref(),
+                row_cause.as_deref(),
+                merged
+            ),
+            ("ended", Some("failed"), Some(cause), None)
+        );
         assert_eq!(metrics.as_deref(), Some(r#"{"turns":7}"#));
-        assert_eq!(self.job_row(key), ("failed".to_owned(), None, Some(cause.to_owned())));
+        assert_eq!(
+            self.job_row(key),
+            ("failed".to_owned(), None, Some(cause.to_owned()))
+        );
         let events = self.events(attempt);
-        assert_eq!(events.len(), 1, "{events:?}");
-        assert_eq!(events[0].0, "job-failed");
-        assert_eq!(events[0].1["cause"], cause);
-        assert_eq!(events[0].1["tier"], "S2");
-        assert_eq!(events[0].1["attempts"], 1);
-        events[0].1.clone()
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].0, "attempt-ended");
+        assert_eq!(events[1].0, "job-failed");
+        assert_eq!(events[1].1["cause"], cause);
+        assert_eq!(events[1].1["tier"], "S2");
+        assert_eq!(events[1].1["attempts"], 1);
+        events[1].1.clone()
     }
 
     fn status(&self, dir: &Path) -> String {
@@ -476,13 +572,22 @@ impl Fx {
     fn reflog_message(&self, repo: &Path, branch: &str) -> String {
         let u = self.universe.lock().unwrap();
         let id = u.repo_of(repo).expect("a repo of the Universe");
-        u.reflog(id, &format!("refs/heads/{branch}")).first().expect("the branch has a reflog").message.clone()
+        u.reflog(id, &format!("refs/heads/{branch}"))
+            .first()
+            .expect("the branch has a reflog")
+            .message
+            .clone()
     }
 
     /// The parents of commit `sha` (`git rev-list --parents -n 1`, `<sha>^2`): the route has no `^N`.
     fn parents(&self, sha: &str) -> Vec<String> {
         let u = self.universe.lock().unwrap();
-        u.commit_data(&Oid::new(sha)).expect("a commit of the Universe").parents.iter().map(|p| p.as_str().to_owned()).collect()
+        u.commit_data(&Oid::new(sha))
+            .expect("a commit of the Universe")
+            .parents
+            .iter()
+            .map(|p| p.as_str().to_owned())
+            .collect()
     }
 
     /// The paths where the index of worktree `wt` differs from the tree of `rev` (`git diff --cached --name-only <rev>`).
@@ -490,8 +595,20 @@ impl Fx {
         let u = self.universe.lock().unwrap();
         let tree = parse(&u, wt, &format!("{rev}^{{tree}}")).unwrap();
         let committed: BTreeMap<String, Oid> = u.tree_entries(&tree).unwrap().into_iter().collect();
-        let staged: BTreeMap<String, Oid> = u.index(wt).into_iter().filter(|(_, _, stage)| *stage == 0).map(|(p, o, _)| (p, o)).collect();
-        committed.keys().chain(staged.keys()).filter(|p| committed.get(*p) != staged.get(*p)).cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+        let staged: BTreeMap<String, Oid> = u
+            .index(wt)
+            .into_iter()
+            .filter(|(_, _, stage)| *stage == 0)
+            .map(|(p, o, _)| (p, o))
+            .collect();
+        committed
+            .keys()
+            .chain(staged.keys())
+            .filter(|p| committed.get(*p) != staged.get(*p))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     /// What `git merge --no-commit` and `git commit` make of a resolved conflict (the route keeps no `MERGE_HEAD`): the worktree's
@@ -505,14 +622,39 @@ impl Fx {
         let commit = {
             let mut u = self.universe.lock().unwrap();
             let id = u.repo_of(worktree).expect("a repo of the Universe");
-            u.commit(id, &Oid::new(&tree), &[Oid::new(&head), Oid::new(other)], message).as_str().to_owned()
+            u.commit(
+                id,
+                &Oid::new(&tree),
+                &[Oid::new(&head), Oid::new(other)],
+                message,
+            )
+            .as_str()
+            .to_owned()
         };
-        self.git(worktree, &["update-ref", &format!("refs/heads/{branch}"), &commit, &head]);
+        self.git(
+            worktree,
+            &[
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &commit,
+                &head,
+            ],
+        );
         commit
     }
 
     fn branch_exists(&self, branch: &str) -> bool {
-        self.git_output(&self.repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).status.success()
+        self.git_output(
+            &self.repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .status
+        .success()
     }
 }
 
@@ -542,17 +684,40 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
     // Rebased onto the newer Lead Branch, then fast-forwarded.
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD~1"]), other);
     assert_eq!(fx.lead_sha(), new);
-    assert_eq!(fx.reflog_message(&fx.repo, "cpd/pay"), "cpd: merge pay/api-a1");
+    assert_eq!(
+        fx.reflog_message(&fx.repo, "cpd/pay"),
+        "cpd: merge pay/api-a1"
+    );
     // Step 9: the Lead worktree holds the new commit, clean.
-    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("api.txt")).unwrap(),
+        "api\n"
+    );
     assert_eq!(fx.status(&fx.lead), "");
     // Step 10.
     assert_eq!(
         fx.attempt_row(&attempt),
-        ("ended".into(), Some("merged".into()), Some("merged".into()), Some(new.clone()), Some(r#"{"turns":7}"#.into()))
+        (
+            "ended".into(),
+            Some("merged".into()),
+            Some("merged".into()),
+            Some(new.clone()),
+            Some(r#"{"turns":7}"#.into())
+        )
     );
-    assert_eq!(fx.job_row("api"), ("merged".into(), Some(new.clone()), None));
-    assert_eq!(fx.events(&attempt), [("job-merged".to_owned(), json!({"sha": new, "tier": "S2", "kind": "work", "turn": false}))]);
+    assert_eq!(
+        fx.job_row("api"),
+        ("merged".into(), Some(new.clone()), None)
+    );
+    let events = fx.events(&attempt);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
+    assert_eq!(
+        events[1].1,
+        json!({"sha": new, "tier": "S2", "kind": "work", "turn": false})
+    );
     let command: String = fx
         .store()
         .read(|c| Ok(c.query_row("SELECT t.command FROM events e JOIN txns t ON t.id = e.txn ORDER BY e.id DESC LIMIT 1", [], |r| r.get(0))?))
@@ -567,7 +732,10 @@ fn an_attempt_that_already_contains_the_lead_tip_lands_as_is_with_its_merge_comm
     // The Lead Branch changes the same file on the other side.
     let old = fx.advance_lead("README.md", "theirs\n");
     // The Job merges the Lead tip and resolves the conflict.
-    let merge = fx.git_output(&worktree, &["merge", "--no-ff", "-m", "merge the base", &old]);
+    let merge = fx.git_output(
+        &worktree,
+        &["merge", "--no-ff", "-m", "merge the base", &old],
+    );
     assert!(!merge.status.success(), "the fixture needs a conflict");
     fs::write(worktree.join("README.md"), "resolved\n").unwrap();
     fx.git(&worktree, &["add", "-A"]);
@@ -582,7 +750,10 @@ fn an_attempt_that_already_contains_the_lead_tip_lands_as_is_with_its_merge_comm
     // The merge commit is kept, with both parents.
     assert_eq!(fx.parents(&tip).len(), 2);
     assert_eq!(fx.parents(&tip)[1], old);
-    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved\n");
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("README.md")).unwrap(),
+        "resolved\n"
+    );
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip), None));
 }
 
@@ -595,25 +766,58 @@ fn merge_conflict_aborts_the_rebase_and_retries_at_the_same_tier() {
 
     let result = fx.merge(&attempt);
 
-    let End::Failed { cause: Failure::MergeConflict, detail } = &result.end else { panic!("{result:?}") };
+    let End::Failed {
+        cause: Failure::MergeConflict,
+        detail,
+    } = &result.end
+    else {
+        panic!("{result:?}")
+    };
     assert!(detail.contains("README.md"), "{detail}");
     // The rebase was aborted; nothing moved.
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
     assert_eq!(fx.status(&worktree), "");
-    let rebasing = fx.git(&worktree, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge"]);
-    assert!(!worktree.join(rebasing).exists(), "a rebase is still in progress");
+    let rebasing = fx.git(
+        &worktree,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "rebase-merge",
+        ],
+    );
+    assert!(
+        !worktree.join(rebasing).exists(),
+        "a rebase is still in progress"
+    );
     assert_eq!(fx.lead_sha(), old);
     // Retried at the same Tier: the Job is queued again.
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
-    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
+    assert_eq!(
+        (
+            status.as_str(),
+            outcome.as_deref(),
+            cause.as_deref(),
+            merged
+        ),
+        ("ended", Some("failed"), Some("merge_conflict"), None)
+    );
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0, "attempt-retry");
-    assert_eq!(events[0].1["outcome"], "failed");
-    assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S2");
-    assert!(events[0].1["feedback"].as_str().unwrap().contains("README.md"));
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        (events[0].0.as_str(), events[1].0.as_str()),
+        ("attempt-ended", "attempt-retry")
+    );
+    assert_eq!(events[1].1["outcome"], "failed");
+    assert_eq!(events[1].1["cause"], "merge_conflict");
+    assert_eq!(events[1].1["next_tier"], "S2");
+    assert!(
+        events[1].1["feedback"]
+            .as_str()
+            .unwrap()
+            .contains("README.md")
+    );
 }
 
 #[test]
@@ -624,7 +828,16 @@ fn merge_conflict_with_the_cap_reached_fails_the_job() {
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::MergeConflict, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::MergeConflict,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     let data = fx.assert_failed(&attempt, "api", "merge_conflict");
     assert!(data["detail"].as_str().unwrap().contains("README.md"));
 }
@@ -644,10 +857,22 @@ fn an_untracked_file_in_the_lead_worktree_does_not_stop_the_merge() {
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD~1"]), other);
     assert_eq!(fx.lead_sha(), new);
-    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
-    assert_eq!(fs::read_to_string(fx.lead.join("stray.txt")).unwrap(), "untracked\n");
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("api.txt")).unwrap(),
+        "api\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("stray.txt")).unwrap(),
+        "untracked\n"
+    );
     assert_eq!(fx.status(&fx.lead), "?? stray.txt");
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&attempt)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 /// Rule S after the fast-forward never overwrites a Lead's staged edit: the
@@ -665,13 +890,22 @@ fn a_staged_edit_in_the_lead_worktree_is_kept_and_reported_stale() {
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(new), None));
-    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "the Lead's edit\n");
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("README.md")).unwrap(),
+        "the Lead's edit\n"
+    );
     assert_eq!(fx.staged_against(&fx.lead, "HEAD~1"), ["README.md"]);
-    assert!(!fx.lead.join("api.txt").exists(), "rule S stopped: nothing was written");
+    assert!(
+        !fx.lead.join("api.txt").exists(),
+        "rule S stopped: nothing was written"
+    );
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "lead_worktree_stale");
-    assert_eq!(events[1].1["source"], "attempt run");
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged", "error"]
+    );
+    assert_eq!(events[2].1["code"], "lead_worktree_stale");
+    assert_eq!(events[2].1["source"], "attempt run");
 }
 
 #[test]
@@ -684,33 +918,71 @@ fn tampered_when_the_diff_touches_a_protected_path() {
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::Tampered,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     assert_eq!(fx.lead_sha(), old);
     let data = fx.assert_failed(&attempt, "api", "tampered");
     assert!(data["detail"].as_str().unwrap().contains(".cpd/x"));
 }
 
 #[test]
-fn an_impl_jobs_diff_that_changes_a_guarded_red_test_ends_tampered_unless_the_lead_approved_the_path() {
+fn an_impl_jobs_diff_that_changes_a_guarded_red_test_ends_tampered_unless_the_lead_approved_the_path()
+ {
     // Contract §7.5, §7.7: the files of the `test` Jobs an `impl` Job needs are guarded at the merge as at the submit.
     for (approved, tampered) in [(None, true), (Some("[\"tests/\"]"), false)] {
         let fx = fx();
         fx.advance_lead("tests/t.rs", "// red\n");
-        let (attempt, _) = fx.submitted_needing(&fx.first_pr(), "api", "impl", Some(("tests/t.rs", "// edited to pass\n")), Some("[\"tests/\"]"));
+        let (attempt, _) = fx.submitted_needing(
+            &fx.first_pr(),
+            "api",
+            "impl",
+            Some(("tests/t.rs", "// edited to pass\n")),
+            Some("[\"tests/\"]"),
+        );
         if let Some(paths) = approved {
-            fx.store().write("fixture", |tx| exec(tx, &format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"))).unwrap();
+            fx.store()
+                .write("fixture", |tx| {
+                    exec(
+                        tx,
+                        &format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"),
+                    )
+                })
+                .unwrap();
         }
         let old = fx.lead_sha();
 
         let result = fx.merge(&attempt);
 
         if tampered {
-            assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+            assert!(
+                matches!(
+                    result.end,
+                    End::Failed {
+                        cause: Failure::Tampered,
+                        ..
+                    }
+                ),
+                "{result:?}"
+            );
             assert_eq!(fx.lead_sha(), old);
             let data = fx.assert_failed(&attempt, "api", "tampered");
-            assert!(data["detail"].as_str().unwrap().contains("tests/t.rs"), "{data}");
+            assert!(
+                data["detail"].as_str().unwrap().contains("tests/t.rs"),
+                "{data}"
+            );
         } else {
-            assert!(matches!(result.end, End::Merged { .. }), "an approved path is merged: {result:?}");
+            assert!(
+                matches!(result.end, End::Merged { .. }),
+                "an approved path is merged: {result:?}"
+            );
         }
     }
 }
@@ -725,21 +997,43 @@ fn a_commit_after_submit_ends_tampered_and_merges_nothing() {
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::Tampered,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     assert_eq!(fx.lead_sha(), old);
     let data = fx.assert_failed(&attempt, "api", "tampered");
-    assert_eq!(data["detail"], format!("the Attempt branch moved after submit ({submitted} -> {late})"));
+    assert_eq!(
+        data["detail"],
+        format!("the Attempt branch moved after submit ({submitted} -> {late})")
+    );
 }
 
 #[test]
 fn tampered_also_by_the_protected_paths_of_the_prs_policy() {
     let fx = fx();
-    fx.env.repo_policy("acme", "repo", "[protected]\npaths = [\"verify.sh\"]\n");
+    fx.env
+        .repo_policy("acme", "repo", "[protected]\npaths = [\"verify.sh\"]\n");
     let (attempt, _) = fx.submitted("api", "verify.sh", "exit 0\n");
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::Tampered,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     fx.assert_failed(&attempt, "api", "tampered");
 }
 
@@ -759,14 +1053,25 @@ fn base_edits(fx: &Fx, path: &str, content: Option<&str>) {
 
 /// The Attempt's worktree merges `origin/main` (the Lead tip is its ancestor, so no rebase).
 fn merge_the_base(fx: &Fx, attempt: &AttemptId, worktree: &Path) -> String {
-    fx.git(worktree, &["merge", "-q", "--no-ff", "-m", "merge the base", "origin/main"]);
+    fx.git(
+        worktree,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge the base",
+            "origin/main",
+        ],
+    );
     fx.resubmit(attempt, worktree);
     fx.git(worktree, &["rev-parse", "HEAD"])
 }
 
 #[test]
 fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -776,13 +1081,18 @@ fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
 
         assert_eq!(result.end, End::Merged { sha: tip.clone() }, "{path}");
         assert_eq!(fx.lead_sha(), tip, "{path}");
-        assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip), None), "{path}");
+        assert_eq!(
+            fx.job_row("api"),
+            ("merged".into(), Some(tip), None),
+            "{path}"
+        );
     }
 }
 
 #[test]
 fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampered() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -793,7 +1103,16 @@ fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampere
 
         let result = fx.merge(&attempt);
 
-        assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{path}: {result:?}");
+        assert!(
+            matches!(
+                result.end,
+                End::Failed {
+                    cause: Failure::Tampered,
+                    ..
+                }
+            ),
+            "{path}: {result:?}"
+        );
         assert_eq!(fx.lead_sha(), old, "{path}");
         fx.assert_failed(&attempt, "api", "tampered");
     }
@@ -801,7 +1120,8 @@ fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampere
 
 #[test]
 fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, _) = fx_origin();
         base_edits(&fx, path, Some("protected = []\n"));
         fx.git(&fx.lead, &["merge", "-q", "--ff-only", "origin/main"]);
@@ -829,7 +1149,10 @@ fn stacked_job() -> (Fx, Workflow, Workflow, AttemptId, PathBuf) {
 
 /// The Attempt's worktree merges `reference` (the Lead tip is its ancestor, so no rebase) and is submitted again.
 fn merge_ref(fx: &Fx, attempt: &AttemptId, worktree: &Path, reference: &str) {
-    fx.git(worktree, &["merge", "-q", "--no-ff", "-m", "merge the base", reference]);
+    fx.git(
+        worktree,
+        &["merge", "-q", "--no-ff", "-m", "merge the base", reference],
+    );
     fx.resubmit(attempt, worktree);
 }
 
@@ -841,7 +1164,8 @@ fn advance_and_push(fx: &Fx, pr: &Workflow, path: &str, content: &str) {
 
 #[test]
 fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, base, web, attempt, worktree) = stacked_job();
         // The base PR's Lead Branch moves on, a protected file with it, and is pushed.
         advance_and_push(&fx, &base, path, "protected = [\"verify.sh\"]\n");
@@ -856,8 +1180,10 @@ fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged()
 }
 
 #[test]
-fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes_without_tampering() {
-    for path in [".cpd/x"] {
+fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes_without_tampering()
+{
+    {
+        let path = ".cpd/x";
         let (fx, _, web, attempt, worktree) = stacked_job();
         // `main`, the branch the stack lands on, changes a protected file the base PR's branch does not have yet.
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -873,7 +1199,8 @@ fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes
 
 #[test]
 fn a_stacked_prs_job_that_changes_a_protected_file_to_anything_else_is_tampered() {
-    for path in [".cpd/x"] {
+    {
+        let path = ".cpd/x";
         let (fx, base, web, attempt, worktree) = stacked_job();
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
         advance_and_push(&fx, &base, path, "protected = [\"base-pr\"]\n");
@@ -884,13 +1211,23 @@ fn a_stacked_prs_job_that_changes_a_protected_file_to_anything_else_is_tampered(
 
         let result = fx.merge(&attempt);
 
-        assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{path}: {result:?}");
+        assert!(
+            matches!(
+                result.end,
+                End::Failed {
+                    cause: Failure::Tampered,
+                    ..
+                }
+            ),
+            "{path}: {result:?}"
+        );
         assert_eq!(fx.tip(&web), old, "{path}");
     }
 }
 
 #[test]
-fn a_job_of_a_pr_that_is_not_stacked_gets_no_extra_base_for_a_protected_file_only_another_branch_has() {
+fn a_job_of_a_pr_that_is_not_stacked_gets_no_extra_base_for_a_protected_file_only_another_branch_has()
+ {
     // The root base is the stacked PR's extra: a PR that is not stacked accepts the Lead tip's and `origin/main`'s only.
     let fx = plan_without_prs("");
     let origin = add_origin(&fx, &fx.repo);
@@ -902,7 +1239,16 @@ fn a_job_of_a_pr_that_is_not_stacked_gets_no_extra_base_for_a_protected_file_onl
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::Tampered,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -922,21 +1268,39 @@ fn cas_lost_when_the_lead_branch_keeps_moving_outside_cpd() {
             }
             let mut u = universe.lock().unwrap();
             let id = u.repo_of(&repo).expect("a repo of the Universe");
-            let old = u.ref_oid(id, "refs/heads/cpd/pay").expect("the Lead Branch");
+            let old = u
+                .ref_oid(id, "refs/heads/cpd/pay")
+                .expect("the Lead Branch");
             let tree = u.commit_data(&old).expect("a commit").tree;
             let outsider = u.commit(id, &tree, &[old], "outsider");
             u.set_ref(id, "refs/heads/cpd/pay", &outsider, "outsider");
             counted.fetch_add(1, Ordering::SeqCst);
             true
         },
-        Reply::exit(128, "", "fatal: cannot lock ref 'refs/heads/cpd/pay': is at another commit than expected\n"),
+        Reply::exit(
+            128,
+            "",
+            "fatal: cannot lock ref 'refs/heads/cpd/pay': is at another commit than expected\n",
+        ),
     );
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::CasLost, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::CasLost,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     // Back to step 2 at most 3 times: 4 fast-forwards tried, each lost.
-    assert_eq!(moves.load(Ordering::SeqCst), 1 + merge::CAS_RETRIES as usize);
+    assert_eq!(
+        moves.load(Ordering::SeqCst),
+        1 + merge::CAS_RETRIES as usize
+    );
     assert_ne!(fx.lead_sha(), fx.git(&worktree, &["rev-parse", "HEAD"]));
     fx.assert_failed(&attempt, "api", "cas_lost");
 }
@@ -955,9 +1319,17 @@ fn a_cancel_request_ends_it_cancelled_before_the_merge() {
     assert_eq!(fx.lead_sha(), old);
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
     let (status, outcome, cause, _, _) = fx.attempt_row(&attempt);
-    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref()), ("ended", Some("cancelled"), Some("cancel_requested")));
+    assert_eq!(
+        (status.as_str(), outcome.as_deref(), cause.as_deref()),
+        ("ended", Some("cancelled"), Some("cancel_requested"))
+    );
     assert_eq!(fx.job_row("api").0, "cancelled");
-    assert_eq!(fx.events(&attempt), [("job-cancelled".to_owned(), json!({"reason": "not needed"}))]);
+    let events = fx.events(&attempt);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-cancelled"]
+    );
+    assert_eq!(events[1].1, json!({"reason": "not needed"}));
 }
 
 #[test]
@@ -969,14 +1341,24 @@ fn step_9_failure_keeps_the_merge_and_reports_a_stale_lead_worktree() {
 
     let result = fx.merge(&attempt);
 
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     assert_eq!(&fx.lead_sha(), sha);
     assert_eq!(fx.job_row("api").0, "merged");
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "lead_worktree_stale");
-    assert_eq!(events[1].1["source"], "attempt run");
-    assert!(events[1].1["details"]["fix"].as_str().unwrap().contains("read-tree -m -u"));
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged", "error"]
+    );
+    assert_eq!(events[2].1["code"], "lead_worktree_stale");
+    assert_eq!(events[2].1["source"], "attempt run");
+    assert!(
+        events[2].1["details"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("read-tree -m -u")
+    );
 }
 
 #[test]
@@ -997,10 +1379,18 @@ fn a_merge_pushes_the_lead_branch_to_origin() {
 
     let result = fx.merge(&attempt);
 
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     assert_eq!(&fx.lead_sha(), sha);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), *sha);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&attempt)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
@@ -1008,20 +1398,128 @@ fn a_rejected_push_leaves_the_job_merged_with_one_push_failed_error() {
     let (fx, origin) = fx_origin();
     let before = fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]);
     // The `pre-receive` hook of origin declines the push (the hook is the remote's, not ours: scripted).
-    fx.script(|call| is(call, "push") && is(call, "--porcelain"), declined_push());
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        declined_push(),
+    );
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
 
     let result = fx.merge(&attempt);
 
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     assert_eq!(&fx.lead_sha(), sha);
-    assert_eq!(fx.job_row("api"), ("merged".into(), Some(sha.clone()), None));
-    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
+    assert_eq!(
+        fx.job_row("api"),
+        ("merged".into(), Some(sha.clone()), None)
+    );
+    assert_eq!(
+        fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]),
+        before
+    );
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert_eq!(events[1].1["source"], "attempt run");
-    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("nope"));
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged", "error"]
+    );
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert_eq!(events[2].1["source"], "attempt run");
+    assert!(
+        events[2].1["details"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("nope")
+    );
+}
+
+impl Fx {
+    /// `data` of every `error` Event of the Plan, in order.
+    fn plan_errors(&self) -> Vec<Value> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT data FROM events WHERE plan = 'pay' AND kind = 'error' ORDER BY id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok(serde_json::from_str(&r.get::<_, String>(0)?).unwrap())
+                    })?
+                    .collect::<rusqlite::Result<Vec<Value>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+}
+
+fn codes(errors: &[Value]) -> Vec<&str> {
+    errors.iter().map(|e| e["code"].as_str().unwrap()).collect()
+}
+
+#[test]
+fn a_driver_error_repeated_for_the_plan_inside_the_window_is_appended_once() {
+    let (fx, _origin) = fx_origin();
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        declined_push(),
+    );
+    let (api, _) = fx.submitted("api", "api.txt", "api\n");
+    fx.merge(&api);
+    let (web, _) = fx.submitted("web", "web.txt", "web\n");
+    fx.merge(&web);
+
+    assert_eq!(fx.job_row("api").0, "merged");
+    assert_eq!(fx.job_row("web").0, "merged");
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed"], "{errors:?}");
+
+    let (docs, _) = fx.submitted("docs", "docs.txt", "docs\n");
+    fx.script(|call| is(call, "read-tree"), Reply::exit(128, "", "error: unable to create file docs.txt: Permission denied\nfatal: Could not reset index file to revision\n"));
+    fx.merge(&docs);
+
+    let errors = fx.plan_errors();
+    assert_eq!(
+        codes(&errors),
+        ["push_failed", "lead_worktree_stale"],
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_driver_error_repeated_for_the_plan_after_the_window_is_appended_again() {
+    let (fx, _origin) = fx_origin();
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        declined_push(),
+    );
+    let (api, _) = fx.submitted("api", "api.txt", "api\n");
+    fx.merge(&api);
+    let (web, _) = fx.submitted("web", "web.txt", "web\n");
+    fx.merge(&web);
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed"], "{errors:?}");
+
+    fx.store()
+        .write("fixture", |tx| {
+            let guard: String = tx.query_row(
+                "SELECT sql FROM sqlite_schema WHERE name = 'events_no_update'",
+                [],
+                |r| r.get(0),
+            )?;
+            tx.execute_batch(&format!(
+                "DROP TRIGGER events_no_update;
+                 UPDATE events SET at = '2026-01-01T00:00:00.000Z'
+                  WHERE id = (SELECT min(id) FROM events WHERE plan = 'pay' AND kind = 'error');
+                 {guard};"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    let (docs, _) = fx.submitted("docs", "docs.txt", "docs\n");
+    fx.merge(&docs);
+
+    let errors = fx.plan_errors();
+    assert_eq!(codes(&errors), ["push_failed", "push_failed"], "{errors:?}");
 }
 
 #[test]
@@ -1029,7 +1527,13 @@ fn a_repo_without_origin_does_not_push_and_appends_no_error() {
     let fx = fx();
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
     fx.merge(&attempt);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&attempt)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
@@ -1054,7 +1558,15 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
     // A descendant of `new` reaches origin first, then leaves the worktree.
     let later = fx.commit(&worktree, "later.txt", "later\n");
-    fx.git(&worktree, &["push", "-q", "origin", &format!("{later}:refs/heads/cpd/pay")]);
+    fx.git(
+        &worktree,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{later}:refs/heads/cpd/pay"),
+        ],
+    );
     fx.git(&worktree, &["reset", "-q", "--hard", &new]);
 
     let result = fx.merge(&attempt);
@@ -1062,7 +1574,13 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&attempt)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
@@ -1071,30 +1589,68 @@ fn a_remote_rejected_lock_race_the_origin_already_contains_is_no_push_failed() {
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
     let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
     let later = fx.commit(&worktree, "later.txt", "later\n");
-    fx.git(&worktree, &["push", "-q", "origin", &format!("{later}:refs/heads/cpd/pay")]);
+    fx.git(
+        &worktree,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{later}:refs/heads/cpd/pay"),
+        ],
+    );
     fx.git(&worktree, &["reset", "-q", "--hard", &new]);
-    fx.script(|call| is(call, "push") && is(call, "--porcelain"), lock_race_push());
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        lock_race_push(),
+    );
 
     let result = fx.merge(&attempt);
 
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&attempt)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
-fn a_remote_rejected_push_the_origin_does_not_contain_puts_git_s_reason_in_the_push_failed_message() {
+fn a_remote_rejected_push_the_origin_does_not_contain_puts_git_s_reason_in_the_push_failed_message()
+{
     let (fx, _origin) = fx_origin();
-    fx.script(|call| is(call, "push") && is(call, "--porcelain"), lock_race_push());
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        lock_race_push(),
+    );
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
 
     fx.merge(&attempt);
 
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert!(events[1].1["message"].as_str().unwrap().contains("cannot lock ref"), "{:?}", events[1].1);
-    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("failed to push some refs"), "{:?}", events[1].1);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged", "error"]
+    );
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert!(
+        events[2].1["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot lock ref"),
+        "{:?}",
+        events[2].1
+    );
+    assert!(
+        events[2].1["details"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("failed to push some refs"),
+        "{:?}",
+        events[2].1
+    );
 }
 
 // ------------------------------------------------- an `open` or `update` Job's merge (contract §7.4; hs-d340)
@@ -1112,14 +1668,40 @@ fn an_update_jobs_merge_never_rebases_and_ends_merge_conflict_lead_branch_moved(
 
     let result = fx.merge(&attempt);
 
-    let End::Failed { cause: Failure::MergeConflict, detail } = &result.end else { panic!("{result:?}") };
+    let End::Failed {
+        cause: Failure::MergeConflict,
+        detail,
+    } = &result.end
+    else {
+        panic!("{result:?}")
+    };
     assert!(detail.contains("lead_branch_moved"), "{detail}");
-    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before, "never rebased");
+    assert_eq!(
+        fx.git(&worktree, &["rev-parse", "HEAD"]),
+        before,
+        "never rebased"
+    );
     assert_eq!(fx.lead_sha(), old, "the Lead Branch did not move");
-    assert_ne!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), old, "nothing was pushed");
+    assert_ne!(
+        fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]),
+        old,
+        "nothing was pushed"
+    );
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
-    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
-    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "retried at the same Tier: the next Attempt starts from the newer tip");
+    assert_eq!(
+        (
+            status.as_str(),
+            outcome.as_deref(),
+            cause.as_deref(),
+            merged
+        ),
+        ("ended", Some("failed"), Some("merge_conflict"), None)
+    );
+    assert_eq!(
+        fx.job_row("up-repo"),
+        ("queued".into(), None, None),
+        "retried at the same Tier: the next Attempt starts from the newer tip"
+    );
 }
 
 /// An `update` Job whose Worker merged the base (the Lead tip is its ancestor) lands as it is, `new` = HEAD, and its push is the point:
@@ -1127,7 +1709,12 @@ fn an_update_jobs_merge_never_rebases_and_ends_merge_conflict_lead_branch_moved(
 #[test]
 fn an_update_jobs_merge_pushes_what_it_landed() {
     let (fx, origin) = fx_origin();
-    let (attempt, worktree) = fx.submitted_as(&fx.first_pr(), "up-repo", "update", Some(("resolved.txt", "resolved\n")));
+    let (attempt, worktree) = fx.submitted_as(
+        &fx.first_pr(),
+        "up-repo",
+        "update",
+        Some(("resolved.txt", "resolved\n")),
+    );
 
     let result = fx.merge(&attempt);
 
@@ -1136,9 +1723,9 @@ fn an_update_jobs_merge_pushes_what_it_landed() {
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), new);
     assert_eq!(fx.job_row("up-repo"), ("merged".into(), Some(new), None));
     let kinds: Vec<String> = fx.events(&attempt).into_iter().map(|e| e.0).collect();
-    assert_eq!(kinds, ["job-merged"]);
+    assert_eq!(kinds, ["attempt-ended", "job-merged"]);
     // `job-merged` carries the Job's kind (§5.2); an `update` Job writes no PR row and no `pr-opened`.
-    let merged = &fx.events(&attempt)[0].1;
+    let merged = &fx.events(&attempt)[1].1;
     assert_eq!(merged["kind"], "update", "{merged}");
 }
 
@@ -1146,21 +1733,55 @@ fn an_update_jobs_merge_pushes_what_it_landed() {
 /// detail `push_failed`, after the fast-forward (the next Attempt finds the Lead Branch already holding the merge), where an ordinary Job
 /// stays Merged with a `push_failed` error.
 #[test]
-fn a_failed_push_of_an_update_job_ends_the_attempt_crashed_with_push_failed_after_the_fast_forward() {
+fn a_failed_push_of_an_update_job_ends_the_attempt_crashed_with_push_failed_after_the_fast_forward()
+{
     let (fx, origin) = fx_origin();
     let before = fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]);
-    fx.script(|call| is(call, "push") && is(call, "--porcelain"), declined_push());
-    let (attempt, worktree) = fx.submitted_as(&fx.first_pr(), "up-repo", "update", Some(("resolved.txt", "resolved\n")));
+    fx.script(
+        |call| is(call, "push") && is(call, "--porcelain"),
+        declined_push(),
+    );
+    let (attempt, worktree) = fx.submitted_as(
+        &fx.first_pr(),
+        "up-repo",
+        "update",
+        Some(("resolved.txt", "resolved\n")),
+    );
 
     let result = fx.merge(&attempt);
 
-    let End::Failed { cause: Failure::Crashed, detail } = &result.end else { panic!("{result:?}") };
+    let End::Failed {
+        cause: Failure::Crashed,
+        detail,
+    } = &result.end
+    else {
+        panic!("{result:?}")
+    };
     assert!(detail.contains("push_failed"), "{detail}");
-    assert_eq!(fx.lead_sha(), fx.git(&worktree, &["rev-parse", "HEAD"]), "the fast-forward stands");
-    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
+    assert_eq!(
+        fx.lead_sha(),
+        fx.git(&worktree, &["rev-parse", "HEAD"]),
+        "the fast-forward stands"
+    );
+    assert_eq!(
+        fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]),
+        before
+    );
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
-    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("crashed"), None));
-    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "crashed is retried at the same Tier");
+    assert_eq!(
+        (
+            status.as_str(),
+            outcome.as_deref(),
+            cause.as_deref(),
+            merged
+        ),
+        ("ended", Some("failed"), Some("crashed"), None)
+    );
+    assert_eq!(
+        fx.job_row("up-repo"),
+        ("queued".into(), None, None),
+        "crashed is retried at the same Tier"
+    );
 }
 
 // ------------------------------------------------------------ R
@@ -1183,17 +1804,34 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
     assert_eq!(recovered[0].end, Some(End::Merged { sha: tip.clone() }));
     // Step 9 finished.
     assert_eq!(fx.status(&fx.lead), "");
-    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(
+        fs::read_to_string(fx.lead.join("api.txt")).unwrap(),
+        "api\n"
+    );
     assert_eq!(fx.lead_sha(), tip);
     // Step 10, with the cancel request reported as too late.
     assert_eq!(
         fx.attempt_row(&attempt),
-        ("ended".into(), Some("merged".into()), Some("merged".into()), Some(tip.clone()), Some(r#"{"turns":7}"#.into()))
+        (
+            "ended".into(),
+            Some("merged".into()),
+            Some("merged".into()),
+            Some(tip.clone()),
+            Some(r#"{"turns":7}"#.into())
+        )
     );
-    assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip.clone()), None));
     assert_eq!(
-        fx.events(&attempt),
-        [("job-merged".to_owned(), json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false, "cancel_too_late": true}))]
+        fx.job_row("api"),
+        ("merged".into(), Some(tip.clone()), None)
+    );
+    let events = fx.events(&attempt);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
+    assert_eq!(
+        events[1].1,
+        json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false, "cancel_too_late": true})
     );
     // The rest of A9: the worktree and branch are gone.
     assert!(!worktree.exists());
@@ -1211,14 +1849,38 @@ fn r_before_step_8_ends_crashed_and_retries_at_the_same_tier() {
     let recovered = fx.recover();
 
     assert_eq!(recovered.len(), 1);
-    assert!(matches!(recovered[0].end, Some(End::Failed { cause: Failure::Crashed, .. })), "{recovered:?}");
+    assert!(
+        matches!(
+            recovered[0].end,
+            Some(End::Failed {
+                cause: Failure::Crashed,
+                ..
+            })
+        ),
+        "{recovered:?}"
+    );
     assert_eq!(fx.lead_sha(), old);
     let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
-    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("crashed"), None));
+    assert_eq!(
+        (
+            status.as_str(),
+            outcome.as_deref(),
+            cause.as_deref(),
+            merged
+        ),
+        ("ended", Some("failed"), Some("crashed"), None)
+    );
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!((events[0].0.as_str(), &events[0].1["cause"], &events[0].1["next_tier"]), ("attempt-retry", &json!("crashed"), &json!("S2")));
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        (
+            events[1].0.as_str(),
+            &events[1].1["cause"],
+            &events[1].1["next_tier"]
+        ),
+        ("attempt-retry", &json!("crashed"), &json!("S2"))
+    );
     // Kept for debugging.
     assert!(worktree.exists());
 }
@@ -1254,7 +1916,7 @@ fn r_before_step_8_with_a_cancel_request_ends_cancelled() {
 
     assert_eq!(recovered[0].end, Some(End::Cancelled));
     assert_eq!(fx.job_row("api").0, "cancelled");
-    assert_eq!(fx.events(&attempt)[0].0, "job-cancelled");
+    assert_eq!(fx.events(&attempt)[1].0, "job-cancelled");
 }
 
 #[test]
@@ -1262,7 +1924,10 @@ fn r_on_a_git_failure_changes_nothing_and_reports_merge_check_failed_once() {
     let fx = fx();
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
     // The Attempt branch is gone: R1's rev-parse fails, which proves nothing.
-    fx.script(|call| is(call, "rev-parse") && is(call, "refs/heads/cpd/pay--api-a1"), Reply::exit(128, "", "fatal: Needed a single revision\n"));
+    fx.script(
+        |call| is(call, "rev-parse") && is(call, "refs/heads/cpd/pay--api-a1"),
+        Reply::exit(128, "", "fatal: Needed a single revision\n"),
+    );
 
     for _ in 0..2 {
         let recovered = fx.recover();
@@ -1283,12 +1948,18 @@ fn r_on_a_git_failure_changes_nothing_and_reports_merge_check_failed_once() {
 fn r_leaves_an_attempt_whose_driver_is_alive() {
     let fx = fx();
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
-    let _driver = take_free_driver_lock(&fx.home, &plan(), &attempt).unwrap().expect("free");
+    let _driver = take_free_driver_lock(&fx.home, &plan(), &attempt)
+        .unwrap()
+        .expect("free");
 
     assert!(fx.recover().is_empty());
     assert_eq!(fx.attempt_row(&attempt).0, "merging");
     // While the lock is held, a fresh probe sees it held.
-    assert!(take_free_driver_lock(&fx.home, &plan(), &attempt).unwrap().is_none());
+    assert!(
+        take_free_driver_lock(&fx.home, &plan(), &attempt)
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// The merge runs no R first (hs-d243): a dead driver's stale Lead worktree is
@@ -1299,7 +1970,11 @@ fn rule_s_finishes_a_dead_drivers_stale_lead_worktree_and_the_merge_leaves_its_a
     let (dead, dead_worktree) = fx.submitted("api", "api.txt", "api\n");
     let (live, live_worktree) = fx.submitted("ui", "ui.txt", "ui\n");
     let dead_tip = die_after_step_8(&fx, &dead_worktree);
-    assert_ne!(fx.status(&fx.lead), "", "the fixture needs a stale Lead worktree");
+    assert_ne!(
+        fx.status(&fx.lead),
+        "",
+        "the fixture needs a stale Lead worktree"
+    );
 
     let result = fx.merge(&live);
 
@@ -1309,14 +1984,23 @@ fn rule_s_finishes_a_dead_drivers_stale_lead_worktree_and_the_merge_leaves_its_a
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.status(&fx.lead), "");
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
-    assert_eq!(fx.events(&live).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&live)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
     assert_eq!(fx.job_row("ui").0, "merged");
     // Not the merge's: the dead driver's Attempt is still `merging` until R.
     assert_eq!(fx.attempt_row(&dead).0, "merging");
     assert_eq!(fx.job_row("api").0, "running");
     let recovered = fx.recover();
     assert_eq!(recovered.len(), 1);
-    assert_eq!((&recovered[0].attempt, &recovered[0].end), (&dead, &Some(End::Merged { sha: dead_tip })));
+    assert_eq!(
+        (&recovered[0].attempt, &recovered[0].end),
+        (&dead, &Some(End::Merged { sha: dead_tip }))
+    );
     assert_eq!(fx.job_row("api").0, "merged");
 }
 
@@ -1333,8 +2017,20 @@ fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip(
     let ports = fx.fakes.ports.clone();
     let merge_on_thread = |attempt: &AttemptId| {
         Ports::scope(&ports, || {
-            let ctx = Ctx { home: &fx.home, config: &fx.config, catalog: &fx.catalog, source: "attempt run", metrics: &metrics };
-            merge::merge(&mut Store::open(&fx.home, 5000).unwrap(), &ctx, &plan(), attempt).unwrap()
+            let ctx = Ctx {
+                home: &fx.home,
+                config: &fx.config,
+                catalog: &fx.catalog,
+                source: "attempt run",
+                metrics: &metrics,
+            };
+            merge::merge(
+                &mut Store::open(&fx.home, 5000).unwrap(),
+                &ctx,
+                &plan(),
+                attempt,
+            )
+            .unwrap()
         })
     };
     let (a, b) = std::thread::scope(|s| {
@@ -1354,7 +2050,13 @@ fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip(
     assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), tip);
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
     for attempt in [&api, &ui] {
-        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+        assert_eq!(
+            fx.events(attempt)
+                .iter()
+                .map(|e| e.0.as_str())
+                .collect::<Vec<_>>(),
+            ["attempt-ended", "job-merged"]
+        );
     }
 }
 
@@ -1383,12 +2085,22 @@ fn die_after_step_8_on(fx: &Fx, pr: &Workflow, worktree: &Path) -> String {
     let old = fx.tip(pr);
     fx.git(worktree, &["rebase", &old]);
     let tip = fx.git(worktree, &["rev-parse", "HEAD"]);
-    fx.git(&pr.repo, &["update-ref", &format!("refs/heads/{}", pr.branch), &tip, &old]);
+    fx.git(
+        &pr.repo,
+        &[
+            "update-ref",
+            &format!("refs/heads/{}", pr.branch),
+            &tip,
+            &old,
+        ],
+    );
     tip
 }
 
 fn merged_sha(result: &Merge) -> String {
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     sha.clone()
 }
 
@@ -1410,19 +2122,46 @@ fn in_two_repos_each_merge_lands_on_its_own_prs_branch_only() {
 
     assert_eq!(fx.tip(&schema), on_schema);
     assert_eq!(fx.tip(&web), on_web);
-    assert_eq!(fx.git(&schema.repo, &["rev-parse", &format!("{on_schema}~1")]), schema_old);
-    assert_eq!(fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")]), web_old);
+    assert_eq!(
+        fx.git(&schema.repo, &["rev-parse", &format!("{on_schema}~1")]),
+        schema_old
+    );
+    assert_eq!(
+        fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")]),
+        web_old
+    );
     // Each repo holds its own PR's branch and not the other's.
-    assert!(!fx.git(&web.repo, &["branch", "--list", "cpd/pay/schema"]).contains("schema"));
-    assert!(!fx.git(&schema.repo, &["branch", "--list", "cpd/pay/web"]).contains("web"));
+    assert!(
+        !fx.git(&web.repo, &["branch", "--list", "cpd/pay/schema"])
+            .contains("schema")
+    );
+    assert!(
+        !fx.git(&schema.repo, &["branch", "--list", "cpd/pay/web"])
+            .contains("web")
+    );
     // Step 9 synced each Lead worktree; step 10 recorded both.
-    assert_eq!(fs::read_to_string(schema.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(
+        fs::read_to_string(schema.lead.join("api.txt")).unwrap(),
+        "api\n"
+    );
     assert_eq!(fs::read_to_string(web.lead.join("ui.txt")).unwrap(), "ui\n");
     assert!(!schema.lead.join("ui.txt").exists() && !web.lead.join("api.txt").exists());
-    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
-    assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema.clone()), None));
-    assert_eq!(fx.job_row("ui"), ("merged".into(), Some(on_web.clone()), None));
-    assert_eq!(fx.reflog_message(&web.repo, "cpd/pay/web"), "cpd: merge pay/ui-a1");
+    assert_eq!(
+        (fx.status(&schema.lead), fx.status(&web.lead)),
+        (String::new(), String::new())
+    );
+    assert_eq!(
+        fx.job_row("api"),
+        ("merged".into(), Some(on_schema.clone()), None)
+    );
+    assert_eq!(
+        fx.job_row("ui"),
+        ("merged".into(), Some(on_web.clone()), None)
+    );
+    assert_eq!(
+        fx.reflog_message(&web.repo, "cpd/pay/web"),
+        "cpd: merge pay/ui-a1"
+    );
 }
 
 #[test]
@@ -1442,10 +2181,16 @@ fn in_one_repo_each_merge_lands_on_its_own_prs_branch_only() {
     assert_eq!(fx.tip(&schema), on_schema);
     assert_eq!(fx.tip(&web), on_web);
     // The two branches share the base, not each other's commits.
-    assert_eq!(fx.git(&web.repo, &["merge-base", &on_schema, &on_web]), fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")]));
+    assert_eq!(
+        fx.git(&web.repo, &["merge-base", &on_schema, &on_web]),
+        fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")])
+    );
     assert!(schema.lead.join("api.txt").exists() && !schema.lead.join("ui.txt").exists());
     assert!(web.lead.join("ui.txt").exists() && !web.lead.join("api.txt").exists());
-    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
+    assert_eq!(
+        (fx.status(&schema.lead), fx.status(&web.lead)),
+        (String::new(), String::new())
+    );
     assert_eq!(fx.job_row("api").0, "merged");
     assert_eq!(fx.job_row("ui").0, "merged");
 }
@@ -1460,10 +2205,22 @@ fn the_cas_and_the_dirty_check_are_those_of_the_prs_own_branch_and_worktree() {
     // And one that moved the schema PR's branch: the rebase picks it up.
     let moved = fx.advance(&schema, "moved.txt", "moved\n");
 
-    let worktree = fx.store().read(|c| Ok(c.query_row("SELECT worktree FROM attempts WHERE id = 'api-a1'", [], |r| r.get::<_, String>(0))?)).unwrap();
+    let worktree = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT worktree FROM attempts WHERE id = 'api-a1'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .unwrap();
     let sha = merged_sha(&fx.merge(&api));
 
-    assert_eq!(fx.git(Path::new(&worktree), &["rev-parse", "HEAD~1"]), moved);
+    assert_eq!(
+        fx.git(Path::new(&worktree), &["rev-parse", "HEAD~1"]),
+        moved
+    );
     assert_eq!(fx.tip(&schema), sha);
 }
 
@@ -1471,11 +2228,21 @@ fn the_cas_and_the_dirty_check_are_those_of_the_prs_own_branch_and_worktree() {
 fn the_tamper_list_is_that_of_the_prs_own_policy() {
     let (fx, schema, web) = two_prs(true, false);
     // Only the schema PR's policy protects verify.sh.
-    fx.env.repo_policy("acme", "schema", "[protected]\npaths = [\"verify.sh\"]\n");
+    fx.env
+        .repo_policy("acme", "schema", "[protected]\npaths = [\"verify.sh\"]\n");
     let (api, _) = fx.submitted_on(&schema, "api", "verify.sh", "exit 0\n");
 
     let result = fx.merge(&api);
-    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert!(
+        matches!(
+            result.end,
+            End::Failed {
+                cause: Failure::Tampered,
+                ..
+            }
+        ),
+        "{result:?}"
+    );
     fx.assert_failed(&api, "api", "tampered");
 
     let (ui, _) = fx.submitted_on(&web, "ui", "verify.sh", "exit 0\n");
@@ -1493,14 +2260,24 @@ fn each_merge_pushes_its_own_prs_branch_to_its_own_origin() {
 
     let on_schema = merged_sha(&fx.merge(&api));
     assert_eq!(fx.remote_tip(&schema), on_schema);
-    assert_eq!(fx.remote_tip(&web), web_remote, "the other repo's origin was not touched");
+    assert_eq!(
+        fx.remote_tip(&web),
+        web_remote,
+        "the other repo's origin was not touched"
+    );
     let on_web = merged_sha(&fx.merge(&ui));
 
     assert_eq!(fx.remote_tip(&web), on_web);
     assert_eq!(fx.remote_tip(&schema), on_schema);
     assert_ne!(schema_remote, on_schema);
     for attempt in [&api, &ui] {
-        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+        assert_eq!(
+            fx.events(attempt)
+                .iter()
+                .map(|e| e.0.as_str())
+                .collect::<Vec<_>>(),
+            ["attempt-ended", "job-merged"]
+        );
     }
 }
 
@@ -1514,7 +2291,13 @@ fn in_one_repo_a_merge_pushes_its_prs_branch_and_not_the_others() {
 
     assert_eq!(fx.remote_tip(&schema), on_schema);
     assert_eq!(fx.remote_tip(&web), web_remote);
-    assert_eq!(fx.events(&api).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        fx.events(&api)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
@@ -1522,7 +2305,10 @@ fn a_rejected_push_of_one_prs_branch_is_that_attempts_push_failed_only() {
     let (fx, schema, web) = two_prs(false, true);
     // Only the origin of the schema PR's repo declines.
     let schema_lead = schema.lead.clone();
-    fx.script(move |call| is(call, "push") && is(call, "--porcelain") && in_dir(call, &schema_lead), declined_push());
+    fx.script(
+        move |call| is(call, "push") && is(call, "--porcelain") && in_dir(call, &schema_lead),
+        declined_push(),
+    );
     let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
     let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
 
@@ -1532,9 +2318,18 @@ fn a_rejected_push_of_one_prs_branch_is_that_attempts_push_failed_only() {
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
     assert_eq!(fx.remote_tip(&web), on_web);
     let events = fx.events(&api);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert_eq!(fx.events(&ui).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(
+        events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged", "error"]
+    );
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert_eq!(
+        fx.events(&ui)
+            .iter()
+            .map(|e| e.0.as_str())
+            .collect::<Vec<_>>(),
+        ["attempt-ended", "job-merged"]
+    );
 }
 
 #[test]
@@ -1548,19 +2343,41 @@ fn r_recovers_the_orphans_of_its_repo_per_pr_and_pushes_each_prs_branch() {
 
     let recovered = fx.recover_in(&web.repo);
 
-    let ends: Vec<_> = recovered.iter().map(|r| (r.attempt.to_string(), r.end.clone())).collect();
+    let ends: Vec<_> = recovered
+        .iter()
+        .map(|r| (r.attempt.to_string(), r.end.clone()))
+        .collect();
     assert_eq!(
         ends,
         [
-            ("api-a1".to_owned(), Some(End::Merged { sha: on_schema.clone() })),
-            ("ui-a1".to_owned(), Some(End::Merged { sha: on_web.clone() })),
+            (
+                "api-a1".to_owned(),
+                Some(End::Merged {
+                    sha: on_schema.clone()
+                })
+            ),
+            (
+                "ui-a1".to_owned(),
+                Some(End::Merged {
+                    sha: on_web.clone()
+                })
+            ),
         ]
     );
-    assert_eq!((fx.remote_tip(&schema), fx.remote_tip(&web)), (on_schema.clone(), on_web.clone()));
+    assert_eq!(
+        (fx.remote_tip(&schema), fx.remote_tip(&web)),
+        (on_schema.clone(), on_web.clone())
+    );
     // Step 9 finished in each PR's own Lead worktree.
-    assert_eq!(fs::read_to_string(schema.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(
+        fs::read_to_string(schema.lead.join("api.txt")).unwrap(),
+        "api\n"
+    );
     assert_eq!(fs::read_to_string(web.lead.join("ui.txt")).unwrap(), "ui\n");
-    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
+    assert_eq!(
+        (fx.status(&schema.lead), fx.status(&web.lead)),
+        (String::new(), String::new())
+    );
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
     assert_eq!(fx.job_row("ui"), ("merged".into(), Some(on_web), None));
     assert!(!api_worktree.exists() && !ui_worktree.exists());
@@ -1577,7 +2394,10 @@ fn r_of_one_repo_leaves_the_orphans_of_another_repo() {
     let recovered = fx.recover_in(&web.repo);
 
     assert_eq!(recovered.len(), 1);
-    assert_eq!((&recovered[0].attempt, &recovered[0].end), (&ui, &Some(End::Merged { sha: on_web })));
+    assert_eq!(
+        (&recovered[0].attempt, &recovered[0].end),
+        (&ui, &Some(End::Merged { sha: on_web }))
+    );
     assert_eq!(fx.attempt_row(&api).0, "merging");
     assert_eq!(fx.job_row("api").0, "running");
 }
@@ -1597,7 +2417,6 @@ fn a_merge_leaves_another_prs_orphan_in_its_repo_to_r() {
     assert_eq!(fx.job_row("api").0, "running");
 }
 
-
 // ------------------------------------------------------------ a base's commits keep their SHAs (§7.4 step 5, hs-d747)
 
 /// The Attempt of `api.txt`, `main` gaining `base.txt` (pushed), the Lead Branch gaining `lead.txt`, then `bring` run in
@@ -1616,11 +2435,25 @@ fn attempt_with_the_base(bring: &[&str]) -> (Fx, AttemptId, String) {
 fn assert_lands_with_the_base(fx: &Fx, attempt: &AttemptId, main: &str) {
     let result = fx.merge(attempt);
 
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     assert_eq!(&fx.lead_sha(), sha);
-    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", main, "--not", sha]), "0", "the base's commit lost its SHA");
-    for (file, content) in [("api.txt", "api\n"), ("lead.txt", "lead\n"), ("base.txt", "base\n")] {
-        assert_eq!(fs::read_to_string(fx.lead.join(file)).unwrap(), content, "{file}");
+    assert_eq!(
+        fx.git(&fx.repo, &["rev-list", "--count", main, "--not", sha]),
+        "0",
+        "the base's commit lost its SHA"
+    );
+    for (file, content) in [
+        ("api.txt", "api\n"),
+        ("lead.txt", "lead\n"),
+        ("base.txt", "base\n"),
+    ] {
+        assert_eq!(
+            fs::read_to_string(fx.lead.join(file)).unwrap(),
+            content,
+            "{file}"
+        );
     }
 }
 
@@ -1632,12 +2465,20 @@ fn an_attempt_that_rebased_onto_the_base_lands_the_bases_commits_under_their_own
 
 #[test]
 fn an_attempt_that_merged_the_base_lands_the_bases_commits_under_their_own_shas() {
-    let (fx, attempt, main) = attempt_with_the_base(&["merge", "-q", "--no-ff", "-m", "merge the base", "origin/main"]);
+    let (fx, attempt, main) = attempt_with_the_base(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "merge the base",
+        "origin/main",
+    ]);
     assert_lands_with_the_base(&fx, &attempt, &main);
 }
 
 #[test]
-fn a_stacked_prs_attempt_that_brought_in_the_root_base_lands_the_bases_commits_under_their_own_shas() {
+fn a_stacked_prs_attempt_that_brought_in_the_root_base_lands_the_bases_commits_under_their_own_shas()
+ {
     let (fx, _, web, attempt, worktree) = stacked_job();
     base_edits(&fx, "base.txt", Some("base\n"));
     let main = fx.git(&fx.repo, &["rev-parse", "origin/main"]);
@@ -1646,13 +2487,20 @@ fn a_stacked_prs_attempt_that_brought_in_the_root_base_lands_the_bases_commits_u
 
     let result = fx.merge(&attempt);
 
-    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    let End::Merged { sha } = &result.end else {
+        panic!("{result:?}")
+    };
     assert_eq!(&fx.tip(&web), sha);
-    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", &main, "--not", sha]), "0", "the base's commit lost its SHA");
+    assert_eq!(
+        fx.git(&fx.repo, &["rev-list", "--count", &main, "--not", sha]),
+        "0",
+        "the base's commit lost its SHA"
+    );
 }
 
 #[test]
-fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_conflict_with_the_files() {
+fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_conflict_with_the_files()
+ {
     let (fx, _) = fx_origin();
     let (attempt, worktree) = fx.submitted("api", "shared.txt", "mine\n");
     base_edits(&fx, "base.txt", Some("base\n"));
@@ -1663,16 +2511,30 @@ fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_c
 
     let result = fx.merge(&attempt);
 
-    let End::Failed { cause: Failure::MergeConflict, detail } = &result.end else { panic!("{result:?}") };
+    let End::Failed {
+        cause: Failure::MergeConflict,
+        detail,
+    } = &result.end
+    else {
+        panic!("{result:?}")
+    };
     assert!(detail.contains("shared.txt"), "{detail}");
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
     assert_eq!(fx.status(&worktree), "");
     assert_eq!(fx.lead_sha(), old);
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0, "attempt-retry");
-    assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S2");
-    assert!(events[0].1["feedback"].as_str().unwrap().contains("shared.txt"));
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        (events[0].0.as_str(), events[1].0.as_str()),
+        ("attempt-ended", "attempt-retry")
+    );
+    assert_eq!(events[1].1["cause"], "merge_conflict");
+    assert_eq!(events[1].1["next_tier"], "S2");
+    assert!(
+        events[1].1["feedback"]
+            .as_str()
+            .unwrap()
+            .contains("shared.txt")
+    );
 }

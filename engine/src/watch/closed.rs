@@ -23,8 +23,13 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E20, About::Machine, &e),
     };
     for row in rows {
-        let Some(lead) = row.lead_session.clone() else { continue };
-        if !leads.iter().any(|(plan, l)| *plan == row.plan && *l == lead) {
+        let Some(lead) = row.lead_session.clone() else {
+            continue;
+        };
+        if !leads
+            .iter()
+            .any(|(plan, l)| *plan == row.plan && *l == lead)
+        {
             continue;
         }
         match wake(engine, &row, &lead) {
@@ -52,7 +57,12 @@ fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
     )
 }
 
-fn sent(conn: &Connection, plan: &PlanId, row: &ClosedUnmerged, lead: &SessionId) -> Result<bool, CpdError> {
+fn sent(
+    conn: &Connection,
+    plan: &PlanId,
+    row: &ClosedUnmerged,
+    lead: &SessionId,
+) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND kind = 'session-message'
             AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?2) = 1)",

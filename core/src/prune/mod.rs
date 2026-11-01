@@ -9,15 +9,15 @@ use clap::Args as ClapArgs;
 
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::output::Output;
 use crate::host::deadline::Failed;
+use crate::output::Output;
 use crate::ports::Ports;
 use crate::store::Store;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod lead_branch_tests;
+#[cfg(test)]
+mod tests;
 
 /// `cpd prune [--apply] [--drop <lead-branch>]... <repo>...`
 #[derive(ClapArgs, Debug, Clone, PartialEq, Eq)]
@@ -54,12 +54,23 @@ const MAX_LEVELS: usize = 5;
 pub fn run(ports: &Ports, home: &CpdHome, args: &Args) -> Outcome {
     let protected = match protected(ports, home) {
         Ok(p) => p,
-        Err(e) => return Outcome { exit: 2, stdout: String::new(), stderr: format!("failed: cannot read the protected set: {e}\n") },
+        Err(e) => {
+            return Outcome {
+                exit: 2,
+                stdout: String::new(),
+                stderr: format!("failed: cannot read the protected set: {e}\n"),
+            };
+        }
     };
-    let mut out = Outcome { exit: 0, stdout: String::new(), stderr: String::new() };
+    let mut out = Outcome {
+        exit: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    };
     for repo in &args.repos {
         if let Err(e) = prune_repo(ports, args, &protected, repo, &mut out) {
-            out.stderr.push_str(&format!("failed {}: {e}\n", repo.display()));
+            out.stderr
+                .push_str(&format!("failed {}: {e}\n", repo.display()));
             out.exit = 1;
         }
     }
@@ -98,7 +109,9 @@ fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError
              JOIN plans ON plans.id = workflows.plan \
              WHERE plans.phase != 'done' AND workflows.status != 'merged'",
         )?;
-        for row in attempts.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        for row in
+            attempts.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        {
             let (plan, id) = row?;
             set.insert(format!("cpd/{plan}--{id}"));
         }
@@ -123,7 +136,10 @@ struct Worktree {
 fn git(ports: &Ports, dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
-    ports.runner.output(&mut cmd, "git", GIT).map_err(|e| failure(&e))
+    ports
+        .runner
+        .output(&mut cmd, "git", GIT)
+        .map_err(|e| failure(&e))
 }
 
 /// `git` that must exit 0: its stdout.
@@ -161,14 +177,32 @@ fn slug(url: &str) -> String {
 
 fn merged_prs(ports: &Ports, slug: &str) -> Result<Vec<Merged>, String> {
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "list", "--repo", slug, "--state", "merged", "--limit", "500", "--json", "number,headRefName,baseRefName,headRefOid"]);
-    let out = ports.runner.output(&mut cmd, "gh", GH).map_err(|e| failure(&e))?;
+    cmd.args([
+        "pr",
+        "list",
+        "--repo",
+        slug,
+        "--state",
+        "merged",
+        "--limit",
+        "500",
+        "--json",
+        "number,headRefName,baseRefName,headRefOid",
+    ]);
+    let out = ports
+        .runner
+        .output(&mut cmd, "gh", GH)
+        .map_err(|e| failure(&e))?;
     if !out.status.success() {
         return Err(text(&out.stderr));
     }
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("cannot read the output of gh pr list: {e}"))?;
-    let list = json.as_array().ok_or("cannot read the output of gh pr list: not a list")?;
-    let field = |v: &serde_json::Value, k: &str| v.get(k).and_then(|s| s.as_str()).map(str::to_owned);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("cannot read the output of gh pr list: {e}"))?;
+    let list = json
+        .as_array()
+        .ok_or("cannot read the output of gh pr list: not a list")?;
+    let field =
+        |v: &serde_json::Value, k: &str| v.get(k).and_then(|s| s.as_str()).map(str::to_owned);
     list.iter()
         .map(|v| {
             Some(Merged {
@@ -189,7 +223,11 @@ fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
         .skip(1)
         .filter(|block| !block.trim().is_empty())
         .map(|block| {
-            let mut wt = Worktree { path: PathBuf::new(), head: String::new(), branch: None };
+            let mut wt = Worktree {
+                path: PathBuf::new(),
+                head: String::new(),
+                branch: None,
+            };
             for line in block.lines() {
                 if let Some(p) = line.strip_prefix("worktree ") {
                     wt.path = PathBuf::from(p);
@@ -213,7 +251,10 @@ fn reached(workflows: &[Merged], base: &str, level: usize) -> bool {
 fn merged_via_pr(ports: &Ports, repo: &Path, workflows: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
     let lead = lead_of(branch);
     let attempt_plan = attempt_plan(branch);
-    let legacy = lead.strip_prefix("cpd/").and_then(|rest| rest.split_once('/')).map(|(plan, _)| format!("cpd/{plan}"));
+    let legacy = lead
+        .strip_prefix("cpd/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(plan, _)| format!("cpd/{plan}"));
     let prefix = format!("{lead}/");
     let plan_prefix = attempt_plan.map(|plan| format!("{plan}/"));
     for workflow in workflows {
@@ -250,7 +291,13 @@ fn lead_of(branch: &str) -> &str {
     }
 }
 
-fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &Path, out: &mut Outcome) -> Result<(), String> {
+fn prune_repo(
+    ports: &Ports,
+    args: &Args,
+    protected: &BTreeSet<String>,
+    repo: &Path,
+    out: &mut Outcome,
+) -> Result<(), String> {
     let url = git_ok(ports, repo, &["remote", "get-url", "origin"])?;
     let slug = slug(&url);
     git_ok(ports, repo, &["fetch", "-q", "origin"])?;
@@ -289,16 +336,24 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
             }
         }
         if let Some(reason) = reason {
-            out.stdout.push_str(&format!("keep {path} ({label}): {reason}\n"));
+            out.stdout
+                .push_str(&format!("keep {path} ({label}): {reason}\n"));
             keeps += 1;
             continue;
         }
-        out.stdout.push_str(&format!("remove {path} ({label}){}\n", if dropped { ": dropped" } else { "" }));
+        out.stdout.push_str(&format!(
+            "remove {path} ({label}){}\n",
+            if dropped { ": dropped" } else { "" }
+        ));
         removes += 1;
         if !args.apply {
             continue;
         }
-        if let Err(e) = git_ok(ports, repo, &["worktree", "remove", "--force", &wt.path.to_string_lossy()]) {
+        if let Err(e) = git_ok(
+            ports,
+            repo,
+            &["worktree", "remove", "--force", &wt.path.to_string_lossy()],
+        ) {
             out.stdout.push_str(&format!("failed {path}: {e}\n"));
             failed.push(e);
             continue;
@@ -307,7 +362,8 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
             let exists = matches!(git(ports, repo, &["rev-parse", "--verify", "-q", &format!("refs/heads/{branch}")]), Ok(o) if o.status.success());
             let line = format!("branch refs/heads/{branch}");
             let used = worktrees_all(ports, repo)?.lines().any(|l| l == line);
-            if exists && !used
+            if exists
+                && !used
                 && let Err(e) = git_ok(ports, repo, &["branch", "-D", branch])
             {
                 out.stdout.push_str(&format!("failed {path}: {e}\n"));
@@ -318,8 +374,15 @@ fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &P
     if args.apply {
         git_ok(ports, repo, &["worktree", "prune"]).map_err(|e| e.to_string())?;
     }
-    out.stdout.push_str(&format!("{}: {removes} remove, {keeps} keep\n", repo.display()));
-    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
+    out.stdout.push_str(&format!(
+        "{}: {removes} remove, {keeps} keep\n",
+        repo.display()
+    ));
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
 }
 
 fn worktrees_all(ports: &Ports, repo: &Path) -> Result<String, String> {

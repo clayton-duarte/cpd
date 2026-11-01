@@ -42,7 +42,15 @@ pub(super) struct AutoMerge {
 
 impl Default for AutoMerge {
     fn default() -> Self {
-        AutoMerge { allowed: true, already: false, refuse: None, squash: true, merge: false, rebase: false, fail_mutation: false }
+        AutoMerge {
+            allowed: true,
+            already: false,
+            refuse: None,
+            squash: true,
+            merge: false,
+            rebase: false,
+            fail_mutation: false,
+        }
     }
 }
 
@@ -62,7 +70,10 @@ impl Handler for Gh {
                 return match &auto.refuse {
                     Some(message) => Reply::exit(
                         1,
-                        &format!("{}\n", json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})),
+                        &format!(
+                            "{}\n",
+                            json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})
+                        ),
                         &format!("gh: {message}\n"),
                     ),
                     None => Reply::ok(&format!(
@@ -72,7 +83,11 @@ impl Handler for Gh {
                 };
             }
             if text.contains("autoMergeAllowed") {
-                let request = if auto.already { json!({"enabledAt": "2026-10-27T17:00:00Z"}) } else { serde_json::Value::Null };
+                let request = if auto.already {
+                    json!({"enabledAt": "2026-10-27T17:00:00Z"})
+                } else {
+                    serde_json::Value::Null
+                };
                 return Reply::ok(&format!(
                     "{}\n",
                     json!({"data": {"repository": {"autoMergeAllowed": auto.allowed, "squashMergeAllowed": auto.squash, "mergeCommitAllowed": auto.merge, "rebaseMergeAllowed": auto.rebase, "pullRequest": {"id": "PR_812", "autoMergeRequest": request}}}})
@@ -81,9 +96,16 @@ impl Handler for Gh {
         }
         match args[..2] {
             ["pr", "view"] => Reply::ok(VIEW),
-            ["api", endpoint] if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") => {
+            ["api", endpoint]
+                if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") =>
+            {
                 // `gh api --paginate` prints every page, one JSON array after the other.
-                let second = self.inline2.lock().unwrap().clone().filter(|_| args.contains(&"--paginate"));
+                let second = self
+                    .inline2
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .filter(|_| args.contains(&"--paginate"));
                 Reply::ok(&format!("{INLINE}{}", second.unwrap_or_default()))
             }
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
@@ -116,17 +138,31 @@ pub(super) fn fx(status: &str) -> Pay {
     let fx = Fx::with_ports();
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
+    fs::write(
+        home.config(),
+        format!(
+            "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n",
+            env.tmux_socket()
+        ),
+    )
+    .unwrap();
     env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let gh = Arc::new(Gh::default());
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let lead: PathBuf = env.root().join("lead");
     fs::create_dir_all(&lead).unwrap();
     let (columns, values) = match status {
-        "open" => (", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests)")),
+        "open" => (
+            ", pr_number, pr_url, pr_opened_at, pull_request",
+            format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests)"),
+        ),
         _ => ("", String::new()),
     };
-    let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'LEAD'", "'t'") };
+    let (worktree, started) = if status == "waiting" {
+        ("NULL", "NULL")
+    } else {
+        ("'LEAD'", "'t'")
+    };
     let sql = format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -142,7 +178,9 @@ pub(super) fn fx(status: &str) -> Pay {
     )
     .replace("LEAD", &lead.display().to_string());
     let pay = Pay { fx, home, gh };
-    pay.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
+    pay.store()
+        .write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into))
+        .unwrap();
     pay
 }
 
@@ -152,7 +190,9 @@ impl Pay {
     }
 
     fn count(&self, table: &str) -> i64 {
-        self.store().read(|c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)).unwrap()
+        self.store()
+            .read(|c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?))
+            .unwrap()
     }
 
     fn gh_inline2(&self, text: &str) {
@@ -164,7 +204,11 @@ impl Pay {
     }
 
     fn gh_calls(&self) -> Vec<Vec<String>> {
-        self.fx.calls("gh").into_iter().map(|call| call.args).collect()
+        self.fx
+            .calls("gh")
+            .into_iter()
+            .map(|call| call.args)
+            .collect()
     }
 }
 
@@ -189,8 +233,18 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     );
     let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
-    assert_eq!(gh[0][4], "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url");
-    assert_eq!(gh[1], ["api", "repos/{owner}/{repo}/pulls/812/comments?per_page=100", "--paginate"]);
+    assert_eq!(
+        gh[0][4],
+        "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"
+    );
+    assert_eq!(
+        gh[1],
+        [
+            "api",
+            "repos/{owner}/{repo}/pulls/812/comments?per_page=100",
+            "--paginate"
+        ]
+    );
 }
 
 #[test]
@@ -230,7 +284,10 @@ fn view_refuses_a_waiting_pr() {
 
     let run = fx.fx.cpd(&["pr", "view", "--plan", "pay"]);
 
-    assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("illegal_transition", 3));
+    assert_eq!(
+        (run.error()["code"].as_str().unwrap(), run.exit),
+        ("illegal_transition", 3)
+    );
     assert!(fx.gh_calls().is_empty());
 }
 
@@ -242,10 +299,22 @@ fn view_reports_a_failing_gh_as_gh_failed() {
 
     let run = fx.fx.cpd(&["pr", "view", "--plan", "pay"]);
 
-    assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("gh_failed", 1));
+    assert_eq!(
+        (run.error()["code"].as_str().unwrap(), run.exit),
+        ("gh_failed", 1)
+    );
     let details = &run.error()["details"];
-    assert_eq!(details["argv"].as_array().unwrap()[..3], [json!("gh"), json!("pr"), json!("view")]);
-    assert!(details["stderr"].as_str().unwrap().contains("bad credentials"), "{details}");
+    assert_eq!(
+        details["argv"].as_array().unwrap()[..3],
+        [json!("gh"), json!("pr"), json!("view")]
+    );
+    assert!(
+        details["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("bad credentials"),
+        "{details}"
+    );
     assert_eq!(fx.count("txns"), txns);
 }
 
@@ -287,12 +356,24 @@ fn guardian() -> serde_json::Value {
 
 #[test]
 fn view_reports_pending_checks_when_a_required_check_is_missing() {
-    assert_eq!(summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian()]), "pending");
+    assert_eq!(
+        summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian()]),
+        "pending"
+    );
 }
 
 #[test]
 fn view_with_an_empty_required_list_or_a_passed_required_check_reports_passed() {
-    assert_eq!(summary_of("[pr]\nrequired_checks = []\n", vec![guardian()]), "passed");
+    assert_eq!(
+        summary_of("[pr]\nrequired_checks = []\n", vec![guardian()]),
+        "passed"
+    );
     let gate = json!({"__typename": "CheckRun", "name": "gate", "status": "COMPLETED", "conclusion": "SUCCESS"});
-    assert_eq!(summary_of("[pr]\nrequired_checks = [\"gate\"]\n", vec![guardian(), gate]), "passed");
+    assert_eq!(
+        summary_of(
+            "[pr]\nrequired_checks = [\"gate\"]\n",
+            vec![guardian(), gate]
+        ),
+        "passed"
+    );
 }

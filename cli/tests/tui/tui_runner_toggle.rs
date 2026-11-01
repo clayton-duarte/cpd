@@ -21,13 +21,28 @@ fn with_config(extra: &str) -> Fx {
         "version = 1\nmachine = \"m1\"\n{extra}[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
         fx.env.tmux_socket()
     ));
-    let out = fx.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "cpd tui view tree"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = fx.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "cpd tui view tree",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     fx
 }
 
 fn tmux_calls(fx: &Fx, since: usize) -> Vec<String> {
-    fx.calls("tmux")[since..].iter().map(|c| c.args.join(" ")).collect()
+    fx.calls("tmux")[since..]
+        .iter()
+        .map(|c| c.args.join(" "))
+        .collect()
 }
 
 #[test]
@@ -38,9 +53,22 @@ fn tui_action_runner_flips_the_config_line_and_sets_the_option_and_refreshes_the
     let text = std::fs::read_to_string(config(&fx)).unwrap();
     assert!(text.contains("worker_runner = \"durable\""), "{text}");
     let calls = tmux_calls(&fx, before);
-    assert!(calls.iter().any(|c| c.contains("set -g @cpd_runner durable")), "{calls:?}");
-    assert!(calls.iter().any(|c| c.contains(&format!("refresh-client -S -c {CLIENT}"))), "{calls:?}");
-    assert_eq!(fx.tmux(&["show", "-gv", "@cpd_runner"]).stdout, b"durable\n");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("set -g @cpd_runner durable")),
+        "{calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains(&format!("refresh-client -S -c {CLIENT}"))),
+        "{calls:?}"
+    );
+    assert_eq!(
+        fx.tmux(&["show", "-gv", "@cpd_runner"]).stdout,
+        b"durable\n"
+    );
 }
 
 #[test]
@@ -53,8 +81,14 @@ fn tui_action_runner_changes_only_the_worker_runner_line_of_the_config() {
     assert_eq!(old.len(), new.len(), "{after}");
     let changed: Vec<_> = old.iter().zip(&new).filter(|(a, b)| a != b).collect();
     assert_eq!(changed.len(), 1, "only one line differs: {changed:?}");
-    assert!(changed[0].0.starts_with("worker_runner = \"durable\""), "{changed:?}");
-    assert!(changed[0].1.starts_with("worker_runner = \"pi\" # "), "{changed:?}");
+    assert!(
+        changed[0].0.starts_with("worker_runner = \"durable\""),
+        "{changed:?}"
+    );
+    assert!(
+        changed[0].1.starts_with("worker_runner = \"pi\" # "),
+        "{changed:?}"
+    );
 }
 
 #[test]
@@ -62,13 +96,23 @@ fn tui_action_runner_touches_no_attempt_and_sends_no_signal() {
     let fx = with_config("worker_runner = \"pi\"\n");
     let before = fx.calls("tmux").len();
     action(&fx, &["runner", "--client", CLIENT]);
-    assert!(!fx.env.cpd_home().join("store.db").exists(), "no store is opened");
+    assert!(
+        !fx.env.cpd_home().join("store.db").exists(),
+        "no store is opened"
+    );
     let calls = tmux_calls(&fx, before);
     assert!(
-        calls.iter().all(|c| !c.contains("kill") && !c.contains("send-keys") && !c.contains("respawn")),
+        calls
+            .iter()
+            .all(|c| !c.contains("kill") && !c.contains("send-keys") && !c.contains("respawn")),
         "no pane, key or process is touched: {calls:?}"
     );
-    assert!(calls.iter().any(|c| c.contains("set -g @cpd_runner durable")), "the click did its work: {calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("set -g @cpd_runner durable")),
+        "the click did its work: {calls:?}"
+    );
     assert!(fx.calls("kill").is_empty(), "no signal");
 }
 
@@ -79,11 +123,27 @@ fn tui_action_runner_with_a_broken_config_says_so_on_the_client_and_leaves_the_f
     std::fs::write(config(&fx), broken).unwrap();
     let before = fx.calls("tmux").len();
     action(&fx, &["runner", "--client", CLIENT]); // exits 0 and prints nothing
-    assert_eq!(std::fs::read_to_string(config(&fx)).unwrap(), broken, "the file is untouched");
+    assert_eq!(
+        std::fs::read_to_string(config(&fx)).unwrap(),
+        broken,
+        "the file is untouched"
+    );
     let calls = tmux_calls(&fx, before);
-    let shown: Vec<_> = calls.iter().filter(|c| c.contains(&format!("display-message -l -c {CLIENT}"))).collect();
+    let shown: Vec<_> = calls
+        .iter()
+        .filter(|c| c.contains(&format!("display-message -l -c {CLIENT}")))
+        .collect();
     assert_eq!(shown.len(), 1, "{calls:?}");
-    assert!(!shown[0].contains("unknown action"), "`runner` is a known action that failed: {shown:?}");
-    assert!(shown[0].contains("config"), "the message names the config: {shown:?}");
-    assert!(calls.iter().all(|c| !c.contains("@cpd_runner")), "no option is set: {calls:?}");
+    assert!(
+        !shown[0].contains("unknown action"),
+        "`runner` is a known action that failed: {shown:?}"
+    );
+    assert!(
+        shown[0].contains("config"),
+        "the message names the config: {shown:?}"
+    );
+    assert!(
+        calls.iter().all(|c| !c.contains("@cpd_runner")),
+        "no option is set: {calls:?}"
+    );
 }

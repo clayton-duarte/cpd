@@ -8,8 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::fx::Fx;
-use common::{refused, write_executable, Run};
-use serde_json::{json, Value};
+use common::{Run, refused, write_executable};
+use serde_json::{Value, json};
 
 struct Models {
     fx: Fx,
@@ -23,7 +23,12 @@ impl Models {
         fs::remove_dir_all(fx.env.cpd_home().join("policy")).unwrap();
         fs::create_dir_all(fx.env.cpd_home().join("policy")).unwrap();
         let m = Models { fx };
-        for rel in ["acme/owner.toml", "acme/r.toml", "acme/r1.toml", "acme/r2.toml"] {
+        for rel in [
+            "acme/owner.toml",
+            "acme/r.toml",
+            "acme/r1.toml",
+            "acme/r2.toml",
+        ] {
             m.write(rel, "");
         }
         m
@@ -40,7 +45,10 @@ impl Models {
     }
 
     fn real(&self, rel: &str) -> String {
-        fs::canonicalize(self.path(rel)).unwrap().display().to_string()
+        fs::canonicalize(self.path(rel))
+            .unwrap()
+            .display()
+            .to_string()
     }
 
     fn show(&self, args: &[&str]) -> Run {
@@ -62,7 +70,10 @@ const LETTERS: [&str; 4] = ["O", "S", "H", "G"];
 
 /// A `[model]` table whose four refs are `github-copilot/<prefix>-<letter>`.
 fn table(prefix: &str) -> String {
-    let lines: Vec<String> = LETTERS.iter().map(|l| format!("{l} = \"github-copilot/{prefix}-{}\"", l.to_lowercase())).collect();
+    let lines: Vec<String> = LETTERS
+        .iter()
+        .map(|l| format!("{l} = \"github-copilot/{prefix}-{}\"", l.to_lowercase()))
+        .collect();
     format!("[model]\n{}\n", lines.join("\n"))
 }
 
@@ -73,7 +84,11 @@ fn key<'a>(out: &'a Value, letter: &str) -> &'a Value {
 fn assert_all(out: &Value, prefix: &str, source: &str) {
     for l in LETTERS {
         let k = key(out, l);
-        assert_eq!(k["value"], format!("github-copilot/{prefix}-{}", l.to_lowercase()), "{l}: {out}");
+        assert_eq!(
+            k["value"],
+            format!("github-copilot/{prefix}-{}", l.to_lowercase()),
+            "{l}: {out}"
+        );
         assert_eq!(k["source"], source, "{l}: {out}");
     }
 }
@@ -90,7 +105,11 @@ fn m1_default_models_are_todays_tiers() {
             ("H", "github-copilot/claude-haiku-4.5"),
             ("G", "github-copilot/gemini-3.8-flash"),
         ] {
-            assert_eq!(key(&out, letter), &json!({"value": model, "source": "default"}), "{out}");
+            assert_eq!(
+                key(&out, letter),
+                &json!({"value": model, "source": "default"}),
+                "{out}"
+            );
         }
     }
 }
@@ -101,7 +120,10 @@ fn m1_the_model_domain_has_no_text() {
     let out = fx.owner().ok();
     assert!(out["policy"]["model"].is_object(), "{out}");
     // Like the repo-only domains (commands.md §22.1): `text` is `""` (or not printed), never a text.
-    let text = out["policy"]["model"].get("text").and_then(Value::as_str).unwrap_or("");
+    let text = out["policy"]["model"]
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     assert_eq!(text, "", "{out}");
     assert_eq!(out["policy"]["model"]["audience"], json!([]), "{out}");
 }
@@ -112,7 +134,11 @@ fn m1_the_model_domain_has_no_text() {
 fn m2_the_machine_sets_the_models() {
     let fx = Models::new();
     fx.write("host.toml", &table("machine"));
-    assert_all(&fx.owner().ok(), "machine", &format!("machine:{}", fx.real("host.toml")));
+    assert_all(
+        &fx.owner().ok(),
+        "machine",
+        &format!("machine:{}", fx.real("host.toml")),
+    );
 }
 
 #[test]
@@ -120,7 +146,11 @@ fn m2_the_owner_wins_over_the_machine() {
     let fx = Models::new();
     fx.write("host.toml", &table("machine"));
     fx.write("acme/owner.toml", &table("owner"));
-    assert_all(&fx.owner().ok(), "owner", &format!("owner:{}", fx.real("acme/owner.toml")));
+    assert_all(
+        &fx.owner().ok(),
+        "owner",
+        &format!("owner:{}", fx.real("acme/owner.toml")),
+    );
 }
 
 #[test]
@@ -129,9 +159,17 @@ fn m2_the_repo_wins_over_the_owner_and_the_machine() {
     fx.write("host.toml", &table("machine"));
     fx.write("acme/owner.toml", &table("owner"));
     fx.write("acme/r.toml", &table("repo"));
-    assert_all(&fx.repo().ok(), "repo", &format!("repo:{}", fx.real("acme/r.toml")));
+    assert_all(
+        &fx.repo().ok(),
+        "repo",
+        &format!("repo:{}", fx.real("acme/r.toml")),
+    );
     // The owner's own key is untouched by the repo file.
-    assert_all(&fx.owner().ok(), "owner", &format!("owner:{}", fx.real("acme/owner.toml")));
+    assert_all(
+        &fx.owner().ok(),
+        "owner",
+        &format!("owner:{}", fx.real("acme/owner.toml")),
+    );
 }
 
 // ------------------------------------------------------------------ m3: whole-domain replacement
@@ -143,13 +181,21 @@ fn m3_the_owner_replaces_the_machine_whole_and_the_rest_is_the_default() {
     fx.write("acme/owner.toml", "[model]\nO = \"github-copilot/own\"\n");
     let out = fx.owner().ok();
     let source = format!("owner:{}", fx.real("acme/owner.toml"));
-    assert_eq!(key(&out, "O"), &json!({"value": "github-copilot/own", "source": source}), "{out}");
+    assert_eq!(
+        key(&out, "O"),
+        &json!({"value": "github-copilot/own", "source": source}),
+        "{out}"
+    );
     for (letter, model) in [
         ("S", "github-copilot/claude-sonnet-5.5"),
         ("H", "github-copilot/claude-haiku-4.5"),
         ("G", "github-copilot/gemini-3.8-flash"),
     ] {
-        assert_eq!(key(&out, letter), &json!({"value": model, "source": format!("{source} (key default)")}), "{out}");
+        assert_eq!(
+            key(&out, letter),
+            &json!({"value": model, "source": format!("{source} (key default)")}),
+            "{out}"
+        );
     }
 }
 
@@ -161,7 +207,10 @@ fn assert_mixed(error: &Value, file: &str) {
     assert_eq!(error["details"]["file"], file, "{error}");
     assert_eq!(error["details"]["key"], "model", "{error}");
     let message = error["message"].as_str().unwrap();
-    assert!(message.contains("bifrost") && message.contains("github-copilot"), "the message names the providers: {error}");
+    assert!(
+        message.contains("bifrost") && message.contains("github-copilot"),
+        "the message names the providers: {error}"
+    );
 }
 
 #[test]
@@ -182,7 +231,11 @@ fn m4_four_refs_of_one_other_provider_are_accepted() {
     fx.write("acme/owner.toml", BIFROST);
     let out = fx.owner().ok();
     for (letter, model) in [("O", "o"), ("S", "s"), ("H", "h"), ("G", "g")] {
-        assert_eq!(key(&out, letter)["value"], format!("bifrost/vertex/{model}"), "{out}");
+        assert_eq!(
+            key(&out, letter)["value"],
+            format!("bifrost/vertex/{model}"),
+            "{out}"
+        );
     }
 }
 
@@ -218,7 +271,11 @@ fn m5_a_badly_shaped_model_is_policy_invalid_naming_its_key() {
         let fx = Models::new();
         fx.write("acme/owner.toml", &format!("[model]\n{line}\n"));
         let error = refused(&fx.owner(), "policy_invalid", 1);
-        assert_eq!(error["details"]["file"], fx.real("acme/owner.toml"), "{line}: {error}");
+        assert_eq!(
+            error["details"]["file"],
+            fx.real("acme/owner.toml"),
+            "{line}: {error}"
+        );
         assert_eq!(error["details"]["key"], key, "{line}: {error}");
     }
 }
@@ -236,11 +293,18 @@ fn m6_model_is_accepted_in_a_machine_an_owner_and_a_repo_file() {
 
 #[test]
 fn m6_text_and_provider_are_not_model_keys() {
-    for (line, key) in [("text = \"x\"", "model.text"), ("provider = \"github-copilot\"", "model.provider")] {
+    for (line, key) in [
+        ("text = \"x\"", "model.text"),
+        ("provider = \"github-copilot\"", "model.provider"),
+    ] {
         let fx = Models::new();
         fx.write("acme/owner.toml", &format!("[model]\n{line}\n"));
         let error = refused(&fx.owner(), "policy_invalid", 1);
-        assert_eq!(error["details"]["file"], fx.real("acme/owner.toml"), "{line}: {error}");
+        assert_eq!(
+            error["details"]["file"],
+            fx.real("acme/owner.toml"),
+            "{line}: {error}"
+        );
         assert_eq!(error["details"]["key"], key, "{line}: {error}");
     }
 }
@@ -254,11 +318,24 @@ const VERSION: &str = "1.0.0";
 fn cache(fx: &Fx, prefixes: &[&str]) {
     write_executable(&fx.env.bin().join("pi"), "");
     fs::create_dir_all(fx.env.root().join("install")).unwrap();
-    fs::write(fx.env.root().join("install/current-version"), format!("{VERSION}\n")).unwrap();
-    let scope = fx.env.root().join("install/releases").join(VERSION).join("node_modules/@earendil-works");
+    fs::write(
+        fx.env.root().join("install/current-version"),
+        format!("{VERSION}\n"),
+    )
+    .unwrap();
+    let scope = fx
+        .env
+        .root()
+        .join("install/releases")
+        .join(VERSION)
+        .join("node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
-        fs::write(scope.join(package).join("package.json"), "{\"type\": \"module\"}").unwrap();
+        fs::write(
+            scope.join(package).join("package.json"),
+            "{\"type\": \"module\"}",
+        )
+        .unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
     let rows: String = prefixes
@@ -306,17 +383,36 @@ fn assert_tiers(out: &Value, prefix: &str, owner: Option<&str>, repo: Option<&st
 }
 
 fn assert_tiers_models(out: &Value, prefix: &str) {
-    for (letter, efforts) in [("O", json!([0, 1, 2, 3, 4, 5])), ("S", json!([0, 1])), ("H", json!([0, 1, 2])), ("G", json!([]))] {
+    for (letter, efforts) in [
+        ("O", json!([0, 1, 2, 3, 4, 5])),
+        ("S", json!([0, 1])),
+        ("H", json!([0, 1, 2])),
+        ("G", json!([])),
+    ] {
         let model = format!("github-copilot/{prefix}-{}", letter.to_lowercase());
-        assert_eq!(out["tiers"][letter], json!({"model": model, "efforts": efforts}), "{letter}: {out}");
+        assert_eq!(
+            out["tiers"][letter],
+            json!({"model": model, "efforts": efforts}),
+            "{letter}: {out}"
+        );
     }
 }
 
 #[test]
 fn m7_owner_and_repo_select_the_repos_models() {
     let fx = tiers_world();
-    assert_tiers(&tiers(&fx, &["--owner", "acme", "--repo", "r1"]).ok(), "one", Some("acme"), Some("r1"));
-    assert_tiers(&tiers(&fx, &["--owner", "acme", "--repo", "r2"]).ok(), "two", Some("acme"), Some("r2"));
+    assert_tiers(
+        &tiers(&fx, &["--owner", "acme", "--repo", "r1"]).ok(),
+        "one",
+        Some("acme"),
+        Some("r1"),
+    );
+    assert_tiers(
+        &tiers(&fx, &["--owner", "acme", "--repo", "r2"]).ok(),
+        "two",
+        Some("acme"),
+        Some("r2"),
+    );
 }
 
 #[test]
@@ -329,13 +425,23 @@ fn m7_pr_selects_its_repo() {
 #[test]
 fn m7_context_selects_its_owner() {
     let fx = tiers_world();
-    assert_tiers(&tiers(&fx, &["--context", "ctx"]).ok(), "own", Some("acme"), None);
+    assert_tiers(
+        &tiers(&fx, &["--context", "ctx"]).ok(),
+        "own",
+        Some("acme"),
+        None,
+    );
 }
 
 #[test]
 fn m7_owner_selects_the_owners_models() {
     let fx = tiers_world();
-    assert_tiers(&tiers(&fx, &["--owner", "acme"]).ok(), "own", Some("acme"), None);
+    assert_tiers(
+        &tiers(&fx, &["--owner", "acme"]).ok(),
+        "own",
+        Some("acme"),
+        None,
+    );
 }
 
 #[test]

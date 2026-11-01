@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::fx::{Fx as Kit, exit_code};
-use common::{Run, empty_comments};
 use common::refused;
+use common::{Run, empty_comments};
 use cpd_core::clock::Clock;
 use cpd_core::host::runner::Reply;
 use cpd_core::ports::Ports;
@@ -75,8 +75,12 @@ fn fx() -> Fx {
         "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[tmux]\nsocket = \"{}\"\n",
         kit.env.tmux_socket()
     ));
-    kit.env.quiet_models(cpd_core::clock::Clock::utc(&*kit.fakes.clock));
-    let fx = Fx { kit, clones: std::cell::Cell::new(0) };
+    kit.env
+        .quiet_models(cpd_core::clock::Clock::utc(&*kit.fakes.clock));
+    let fx = Fx {
+        kit,
+        clones: std::cell::Cell::new(0),
+    };
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -89,14 +93,27 @@ fn fx() -> Fx {
 
 impl Fx {
     fn events(&self, kind: &str) -> Vec<Value> {
-        self.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+        self.cpd(&["events", "list", "--kind", kind]).ok()["events"]
+            .as_array()
+            .unwrap()
+            .clone()
     }
 
     /// A repo `name` on `main` with a bare `origin` holding `main`.
     fn repo(&self, name: &str) -> Repo {
         let path = self.keyed_repo(name).canonicalize().unwrap();
         let origin = self.env.root().join("origins").join(format!("{name}.git"));
-        self.git(self.env.root(), &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+        self.git(
+            self.env.root(),
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
         self.local_origin(&path, &origin);
         self.git(&path, &["push", "-q", "origin", "main"]);
         Repo { path, origin }
@@ -117,7 +134,16 @@ impl Fx {
 
     /// Cancels the stub draft `<pr>-config` of the shape: these tests add the Jobs they need, as a Lead cancels a stub it does not need.
     fn cancel_stub(&self, pr: &str, plan: &str) {
-        self.cpd(&["job", "cancel", &format!("{pr}-config"), "--reason", "a stub of the template", "--plan", plan]).ok();
+        self.cpd(&[
+            "job",
+            "cancel",
+            &format!("{pr}-config"),
+            "--reason",
+            "a stub of the template",
+            "--plan",
+            plan,
+        ])
+        .ok();
     }
 
     /// A draft Job of PR `pr`.
@@ -131,9 +157,12 @@ impl Fx {
     /// Reviews and approves the Plan as it is.
     fn approve(&self) {
         self.env.outline_for_review("pay");
-        let review = self.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+        let review = self
+            .cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"])
+            .ok();
         let id = review["review"]["id"].as_str().unwrap().to_owned();
-        self.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"]).ok();
+        self.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"])
+            .ok();
     }
 
     fn lock(&self) -> Run {
@@ -144,7 +173,8 @@ impl Fx {
 
     /// The Plan locked, as `plan lock` leaves it, without starting any PR.
     fn dispatch(&self) {
-        self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
+        self.env
+            .sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     }
 
     /// PR `key` started (`dispatch`), as `fx.start` leaves it without a worktree.
@@ -172,12 +202,14 @@ impl Fx {
 
     /// PR `key` `open`, one allowed step at a time.
     fn open(&self, key: &str) {
-        self.env.sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key)));
+        self.env
+            .sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key)));
     }
 
     /// PR `key` `merged`, in one write: the engine never sees it `open`.
     fn merged(&self, key: &str) {
-        self.env.sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key) + &Self::merge_sql(key)));
+        self.env
+            .sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key) + &Self::merge_sql(key)));
     }
 
     /// Plan `pay` in `dispatch` with `a1` merged and `a2` (needing it) waiting, both in `repo`.
@@ -212,19 +244,35 @@ impl Fx {
     }
 
     fn log(&self, key: &str) -> String {
-        self.env.cpd_home().join(format!("run/pay/logs/lead-{key}.pre-start.log")).display().to_string()
+        self.env
+            .cpd_home()
+            .join(format!("run/pay/logs/lead-{key}.pre-start.log"))
+            .display()
+            .to_string()
     }
 
     /// Sets `pre-start = <command>` in the `[hooks]` of `repo`'s policy file.
     fn pre_start(&self, repo: &Repo, command: &str) {
         let name = repo.path.file_name().unwrap().to_str().unwrap();
-        self.env.repo_policy("acme", name, &format!("[hooks]\npre-start = \"{command}\"\n"));
+        self.env.repo_policy(
+            "acme",
+            name,
+            &format!("[hooks]\npre-start = \"{command}\"\n"),
+        );
     }
 
     /// Lands a commit on the remote `main` through a second clone, so `repo` has not fetched it.
     fn land_on_origin(&self, repo: &Repo, message: &str) -> String {
         let other = self.other_clone();
-        self.git(self.env.root(), &["clone", "-q", repo.origin.to_str().unwrap(), other.to_str().unwrap()]);
+        self.git(
+            self.env.root(),
+            &[
+                "clone",
+                "-q",
+                repo.origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
         self.git(&other, &["commit", "-q", "--allow-empty", "-m", message]);
         self.git(&other, &["push", "-q", "origin", "main"]);
         self.git(&other, &["rev-parse", "HEAD"])
@@ -233,24 +281,47 @@ impl Fx {
     /// Lands a commit writing `path` on the remote `main` through a second clone, so `repo` has not fetched it.
     fn land_file_on_origin(&self, repo: &Repo, path: &str, content: &str) -> String {
         let other = self.other_clone();
-        self.git(self.env.root(), &["clone", "-q", repo.origin.to_str().unwrap(), other.to_str().unwrap()]);
+        self.git(
+            self.env.root(),
+            &[
+                "clone",
+                "-q",
+                repo.origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
         fs::write(other.join(path), content).unwrap();
         self.git(&other, &["add", "-A"]);
-        self.git(&other, &["commit", "-q", "-m", &format!("main writes {path}")]);
+        self.git(
+            &other,
+            &["commit", "-q", "-m", &format!("main writes {path}")],
+        );
         self.git(&other, &["push", "-q", "origin", "main"]);
         self.git(&other, &["rev-parse", "HEAD"])
     }
 
     /// `branch` is on the remote at one commit past the old `main` that writes `path`; then `main` moves on, writing
     /// `path` differently (so the branch conflicts with it) or another file (so it only lacks it). Returns the branch's tip.
-    fn remote_branch_then_main_moves(&self, repo: &Repo, branch: &str, conflicting: bool) -> String {
+    fn remote_branch_then_main_moves(
+        &self,
+        repo: &Repo,
+        branch: &str,
+        conflicting: bool,
+    ) -> String {
         fs::write(repo.path.join("clash.txt"), "the branch's\n").unwrap();
         self.git(&repo.path, &["add", "-A"]);
         self.git(&repo.path, &["commit", "-q", "-m", "the branch"]);
         let tip = head(self, &repo.path, "HEAD");
-        self.git(&repo.path, &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")]);
+        self.git(
+            &repo.path,
+            &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+        );
         self.git(&repo.path, &["reset", "-q", "--hard", "HEAD~1"]);
-        let (path, content) = if conflicting { ("clash.txt", "main's\n") } else { ("moved.txt", "main moved\n") };
+        let (path, content) = if conflicting {
+            ("clash.txt", "main's\n")
+        } else {
+            ("moved.txt", "main moved\n")
+        };
         self.land_file_on_origin(repo, path, content);
         tip
     }
@@ -258,14 +329,20 @@ impl Fx {
     /// A second clone's directory, a new one at each call.
     fn other_clone(&self) -> PathBuf {
         self.clones.set(self.clones.get() + 1);
-        self.env.root().join(format!("other-clone-{}", self.clones.get()))
+        self.env
+            .root()
+            .join(format!("other-clone-{}", self.clones.get()))
     }
 
     /// The engine with E5 polling every second of virtual time and `cpd pr poll` run for real, in this process, over a `gh`
     /// that finds no pull request by search and knows `acme/a1#1`, merged on GitHub once `merged` is set.
     fn engine_polling(&self, merged: &Arc<AtomicBool>) {
         let text = fs::read_to_string(self.env.cpd_home().join("config.toml")).unwrap();
-        fs::write(self.env.cpd_home().join("config.toml"), text.replace("pr_poll_seconds = 3600", "pr_poll_seconds = 1")).unwrap();
+        fs::write(
+            self.env.cpd_home().join("config.toml"),
+            text.replace("pr_poll_seconds = 3600", "pr_poll_seconds = 1"),
+        )
+        .unwrap();
         self.engine_routes_polling();
         let merged = merged.clone();
         self.route_fn("gh", move |call| {
@@ -288,25 +365,40 @@ impl Fx {
     fn engine_until(&self, done: impl Fn(&Look) -> bool + Send + 'static) {
         let db = self.env.cpd_home().join("cpd.db");
         // E7 starts a PR through the ambient ports of the thread: the fake ones, scoped.
-        self.scoped(|| self.watch_steps(move |_| {
-            let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).expect("open the store");
-            conn.busy_timeout(std::time::Duration::from_secs(5)).expect("set the busy timeout");
-            done(&Look(conn))
-        }))
+        self.scoped(|| {
+            self.watch_steps(move |_| {
+                let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .expect("open the store");
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .expect("set the busy timeout");
+                done(&Look(conn))
+            })
+        })
         .expect("the engine ends cleanly");
     }
 
     /// Runs the engine until `n` more polls have searched.
     fn engine_polls(&self, n: usize) {
         let runner = self.fakes.runner.clone();
-        let searches = move || runner.calls().iter().filter(|call| call.program.ends_with("gh") && call.args.iter().any(|a| a.contains("search(type"))).count();
+        let searches = move || {
+            runner
+                .calls()
+                .iter()
+                .filter(|call| {
+                    call.program.ends_with("gh")
+                        && call.args.iter().any(|a| a.contains("search(type"))
+                })
+                .count()
+        };
         let to = searches() + n;
-        self.scoped(|| self.watch_steps(move |_| searches() >= to)).expect("the engine ends cleanly");
+        self.scoped(|| self.watch_steps(move |_| searches() >= to))
+            .expect("the engine ends cleanly");
     }
 
     /// Runs the engine for `n` ticks.
     fn engine_ticks(&self, n: usize) {
-        self.scoped(|| self.watch_ticks(n)).expect("the engine ends cleanly");
+        self.scoped(|| self.watch_ticks(n))
+            .expect("the engine ends cleanly");
     }
 }
 
@@ -335,7 +427,11 @@ fn remote_branch(fx: &Fx, repo: &Path, branch: &str) -> String {
 /// The `branch.*` entries of `repo`'s `.git/config` (upstreams), one per line.
 fn branch_config(fx: &Fx, repo: &Path) -> String {
     // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
-    String::from_utf8(fx.git_output(repo, &["config", "--get-regexp", r"^branch\."]).stdout).unwrap()
+    String::from_utf8(
+        fx.git_output(repo, &["config", "--get-regexp", r"^branch\."])
+            .stdout,
+    )
+    .unwrap()
 }
 
 // ---------- plan lock ----------
@@ -354,7 +450,10 @@ fn lock_starts_only_the_workflows_without_needs() {
     let out = fx.lock().ok();
 
     let worktree = fx.lead_path(&api.path, "api");
-    assert_eq!(worktree.file_name().unwrap().to_str().unwrap(), "api.pay.api");
+    assert_eq!(
+        worktree.file_name().unwrap().to_str().unwrap(),
+        "api.pay.api"
+    );
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"],
@@ -376,8 +475,17 @@ fn lock_starts_only_the_workflows_without_needs() {
     assert_eq!(fx.git(&web.path, &["branch", "--list", "pay/*"]), "");
     assert_eq!(remote_branch(&fx, &web.path, "pay/web"), "");
     // Every Job is queued at once.
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 4);
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+    assert_eq!(
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"
+        ),
+        4
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "dispatch"
+    );
 
     let phase = fx.events("plan-phase");
     assert_eq!(phase.last().unwrap()["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"], "workflows": ["api"]}));
@@ -429,10 +537,29 @@ fn lock_leaves_a_stacked_workflow_waiting_and_starts_only_its_base_workflow() {
     assert_eq!(fx.workflow_status("a1"), "dispatch");
     assert_eq!(fx.workflow_status("b1"), "waiting");
     assert!(!fx.lead_path(&repo.path, "b1").exists());
-    assert_eq!(fx.git(&repo.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
+    assert_eq!(
+        fx.git(
+            &repo.path,
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/pay/"
+            ]
+        ),
+        "pay/a1"
+    );
     assert_eq!(remote_branch(&fx, &repo.path, "pay/b1"), "");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 4);
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+    assert_eq!(
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"
+        ),
+        4
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "dispatch"
+    );
 
     let phase = fx.events("plan-phase");
     assert_eq!(phase.last().unwrap()["data"]["workflows"], json!(["a1"]));
@@ -466,7 +593,11 @@ fn lock_starts_no_workflow_down_a_stack_and_still_starts_an_independent_workflow
     let out = fx.lock().ok();
 
     let rows = out["prs"].as_array().unwrap();
-    let row = |key: &str| rows.iter().find(|p| p["key"] == key).unwrap_or_else(|| panic!("no row {key}: {out}"));
+    let row = |key: &str| {
+        rows.iter()
+            .find(|p| p["key"] == key)
+            .unwrap_or_else(|| panic!("no row {key}: {out}"))
+    };
     assert_eq!(row("a1")["status"], "dispatch");
     assert_eq!(row("w1")["status"], "dispatch");
     assert_eq!(row("b1")["status"], "waiting");
@@ -476,7 +607,11 @@ fn lock_starts_no_workflow_down_a_stack_and_still_starts_an_independent_workflow
     for key in ["b1", "c1"] {
         assert_eq!(fx.workflow_status(key), "waiting");
         assert!(!fx.lead_path(&api.path, key).exists(), "{key}'s worktree");
-        assert_eq!(remote_branch(&fx, &api.path, &format!("pay/{key}")), "", "{key} on origin");
+        assert_eq!(
+            remote_branch(&fx, &api.path, &format!("pay/{key}")),
+            "",
+            "{key} on origin"
+        );
     }
     assert_eq!(fx.git(&api.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/a1");
     assert_eq!(fx.git(&web.path, &["for-each-ref", "--format=%(refname:short)", "refs/heads/pay/"]), "pay/w1");
@@ -500,14 +635,31 @@ fn lock_is_all_or_nothing_when_a_workflow_fails_to_start() {
 
     let error = refused(&fx.lock(), "setup_failed", 1);
 
-    assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("web"), &json!("pre-start")));
+    assert_eq!(
+        (&error["details"]["pr"], &error["details"]["step"]),
+        (&json!("web"), &json!("pre-start"))
+    );
     assert_eq!(error["details"]["log"], fx.log("web"));
-    assert!(error["details"]["tail"].as_str().unwrap().contains("setting up"), "{error}");
+    assert!(
+        error["details"]["tail"]
+            .as_str()
+            .unwrap()
+            .contains("setting up"),
+        "{error}"
+    );
     // The PR that passed is gone again, and nothing was pushed.
     for (repo, key) in [(&api, "api"), (&web, "web")] {
         assert!(!fx.lead_path(&repo.path, key).exists(), "{key}'s worktree");
-        assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "", "{key}'s branch");
-        assert_eq!(remote_branch(&fx, &repo.path, &format!("pay/{key}")), "", "{key} on origin");
+        assert_eq!(
+            fx.git(&repo.path, &["branch", "--list", "pay/*"]),
+            "",
+            "{key}'s branch"
+        );
+        assert_eq!(
+            remote_branch(&fx, &repo.path, &format!("pay/{key}")),
+            "",
+            "{key} on origin"
+        );
     }
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows WHERE status <> 'waiting'"), 0);
@@ -523,14 +675,27 @@ fn lock_refuses_a_workflow_without_a_draft_job() {
     fx.add("api", &api.path, &[]);
     fx.add("web", &web.path, &[]);
     // As a Lead cancels a stub it does not need: the opener stub too, so `api` has no draft Job left.
-    fx.cpd(&["job", "cancel", "open-api", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "open-api",
+        "--reason",
+        "a stub of the template",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx.job("ui", "web");
     fx.approve();
 
     let error = refused(&fx.lock(), "workflow_empty", 3);
 
     assert_eq!(error["details"]["prs"], json!(["api"]));
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "plan"
+    );
     assert!(!fx.lead_path(&web.path, "web").exists());
 }
 
@@ -553,11 +718,27 @@ fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() 
 
     let out = fx.lock().ok();
 
-    let started = out["prs"].as_array().unwrap().iter().find(|p| p["key"] == "web").unwrap();
+    let started = out["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "web")
+        .unwrap();
     assert_eq!(started["reused"], true, "{out}");
-    assert_eq!(fx.git(&fx.lead_path(&web.path, "web"), &["rev-parse", "HEAD"]), tip);
-    assert_eq!(remote_branch(&fx, &web.path, "pay/web"), format!("{tip}\trefs/heads/pay/web"), "not reset, not pushed over");
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+    assert_eq!(
+        fx.git(&fx.lead_path(&web.path, "web"), &["rev-parse", "HEAD"]),
+        tip
+    );
+    assert_eq!(
+        remote_branch(&fx, &web.path, "pay/web"),
+        format!("{tip}\trefs/heads/pay/web"),
+        "not reset, not pushed over"
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "dispatch"
+    );
 }
 
 #[test]
@@ -569,11 +750,18 @@ fn lock_refuses_a_remote_lead_branch_of_a_workflow_that_conflicts_with_its_base(
     assert_eq!(error["details"]["pr"], "web");
     assert_eq!(error["details"]["branch"], "pay/web");
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
-    assert_eq!(remote_branch(&fx, &web.path, "pay/web"), format!("{tip}\trefs/heads/pay/web"));
+    assert_eq!(
+        remote_branch(&fx, &web.path, "pay/web"),
+        format!("{tip}\trefs/heads/pay/web")
+    );
     // All or nothing: api, started first, is not left behind or pushed.
     assert!(!fx.lead_path(&api.path, "api").exists());
     assert_eq!(remote_branch(&fx, &api.path, "pay/api"), "");
-    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT phase FROM plans WHERE id = 'pay'"),
+        "plan"
+    );
 }
 
 // ---------- pr start ----------
@@ -588,7 +776,10 @@ fn workflow_start_refusals_change_nothing() {
     fx.cpd(&["workflow", "cancel", "c", "--plan", "pay"]).ok();
 
     let error = refused(&fx.start("a1"), "illegal_phase", 3);
-    assert_eq!((&error["details"]["phase"], &error["details"]["needs"]), (&json!("plan"), &json!("dispatch")));
+    assert_eq!(
+        (&error["details"]["phase"], &error["details"]["needs"]),
+        (&json!("plan"), &json!("dispatch"))
+    );
     fx.dispatch();
     refused(&fx.start("zz"), "workflow_not_found", 4);
     refused(&fx.start("c"), "illegal_transition", 3);
@@ -653,12 +844,21 @@ fn eight_workflow_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream()
         let started: Vec<_> = keys
             .iter()
             .map(|key| {
-                let ports = Ports { clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())), runner: fx.fakes.ports.runner.clone(), spawn: fx.fakes.ports.spawn.clone() };
+                let ports = Ports {
+                    clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())),
+                    runner: fx.fakes.ports.runner.clone(),
+                    spawn: fx.fakes.ports.spawn.clone(),
+                    ..Ports::real()
+                };
                 s.spawn(move || {
                     let argv = ["cpd", "workflow", "start", key, "--plan", "pay"].map(std::ffi::OsString::from);
                     let mut stdout = Vec::new();
                     let code = cpd::run_with(&ports, argv, &mut stdout);
-                    Run { exit: exit_code(code), stdout: String::from_utf8(stdout).unwrap(), stderr: String::new() }
+                    Run {
+                        exit: exit_code(code),
+                        stdout: String::from_utf8(stdout).unwrap(),
+                        stderr: String::new(),
+                    }
                 })
             })
             .collect();
@@ -669,7 +869,13 @@ fn eight_workflow_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream()
         let out = run.ok();
         assert_eq!((&out["workflow"]["status"], &out["workflow"]["pushed"]), (&json!("dispatch"), &json!(true)), "{key}");
         let branch = format!("pay/{key}");
-        assert_eq!(fx.git(&fx.lead_path(&repo.path, key), &["symbolic-ref", "--short", "HEAD"]), branch);
+        assert_eq!(
+            fx.git(
+                &fx.lead_path(&repo.path, key),
+                &["symbolic-ref", "--short", "HEAD"]
+            ),
+            branch
+        );
         assert_ne!(remote_branch(&fx, &repo.path, &branch), "", "{key} pushed");
     }
     assert_eq!(branch_config(&fx, &repo.path), "", "no branch.* entry in .git/config");
@@ -683,9 +889,15 @@ fn workflow_start_reuses_a_remote_lead_branch_that_contains_the_base() {
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
     // A commit only the remote has, on top of the base, on the PR's branch.
-    fx.git(&repo.path, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
+    fx.git(
+        &repo.path,
+        &["commit", "-q", "--allow-empty", "-m", "only on the remote"],
+    );
     let tip = head(&fx, &repo.path, "HEAD");
-    fx.git(&repo.path, &["push", "-q", "origin", "HEAD:refs/heads/pay/a2"]);
+    fx.git(
+        &repo.path,
+        &["push", "-q", "origin", "HEAD:refs/heads/pay/a2"],
+    );
     fx.git(&repo.path, &["reset", "-q", "--hard", "HEAD~1"]);
 
     let out = fx.start("a2").ok();
@@ -721,7 +933,10 @@ fn workflow_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
 
     let error = refused(&fx.start("a2"), "branch_exists", 3);
 
-    assert_eq!((&error["details"]["pr"], &error["details"]["branch"]), (&json!("a2"), &json!("pay/a2")));
+    assert_eq!(
+        (&error["details"]["pr"], &error["details"]["branch"]),
+        (&json!("a2"), &json!("pay/a2"))
+    );
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
     assert!(!fx.lead_path(&repo.path, "a2").exists());
@@ -736,7 +951,11 @@ fn a_push_failure_at_workflow_start_still_starts_it_and_appends_one_push_failed_
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
     // What the remote's pre-receive hook does is git's: the push is answered as git answers a refusal.
-    let _ = (*fx.fakes.runner).clone().on("git", |call| call.args.iter().any(|a| a == "push"), Reply::exit(1, "", "remote: refused by hook\n"));
+    let _ = (*fx.fakes.runner).clone().on(
+        "git",
+        |call| call.args.iter().any(|a| a == "push"),
+        Reply::exit(1, "", "remote: refused by hook\n"),
+    );
 
     let out = fx.start("a2").ok();
 
@@ -762,7 +981,13 @@ fn a_repo_without_origin_starts_a_workflow_as_before() {
 
     assert_eq!((&out["workflow"]["base_sha"], &out["workflow"]["reused"], &out["workflow"]["pushed"]), (&json!(base), &json!(false), &json!(false)));
     assert_eq!(fx.git(&repo, &["remote"]), "");
-    assert_eq!(fx.git(&fx.lead_path(&repo, "a2"), &["symbolic-ref", "--short", "HEAD"]), "pay/a2");
+    assert_eq!(
+        fx.git(
+            &fx.lead_path(&repo, "a2"),
+            &["symbolic-ref", "--short", "HEAD"]
+        ),
+        "pay/a2"
+    );
     assert!(fx.events("error").is_empty());
 }
 
@@ -841,7 +1066,11 @@ fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_
     let seen = marker.clone();
     fx.route_fn("sh", move |call| {
         assert_eq!(call.args, ["-c", hook.as_str()]);
-        if seen.exists() { Reply::ok("") } else { Reply::exit(1, "", "") }
+        if seen.exists() {
+            Reply::ok("")
+        } else {
+            Reply::exit(1, "", "")
+        }
     });
 
     // E7's workflow_start_failed: the engine runs until the PR is marked.
@@ -856,8 +1085,15 @@ fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_
     assert_eq!(fx.workflow_status("a2"), "waiting");
     let failed_at: String = fx.env.query("SELECT start_failed_at FROM workflows WHERE key = 'a2'");
     assert!(!failed_at.is_empty());
-    assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "", "the branch is removed");
-    assert!(!fx.lead_path(&repo.path, "a2").exists(), "the worktree is removed");
+    assert_eq!(
+        fx.git(&repo.path, &["branch", "--list", "pay/*"]),
+        "",
+        "the branch is removed"
+    );
+    assert!(
+        !fx.lead_path(&repo.path, "a2").exists(),
+        "the worktree is removed"
+    );
 
     // The engine does not try again.
     fx.engine_ticks(3);
@@ -865,7 +1101,10 @@ fn a_failed_start_marks_the_workflow_and_appends_one_error_until_workflow_start_
     assert!(fx.events("workflow-started").is_empty());
 
     // `pr start` fails the same way and changes nothing.
-    let writes = (fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events"));
+    let writes = (
+        fx.env.query::<i64>("SELECT count(*) FROM txns"),
+        fx.env.query::<i64>("SELECT count(*) FROM events"),
+    );
     let error = refused(&fx.start("a2"), "setup_failed", 1);
     assert_eq!((&error["details"]["pr"], &error["details"]["step"], &error["details"]["log"]), (&json!("a2"), &json!("pre-start"), &json!(fx.log("a2"))));
     assert_eq!(fx.env.query::<String>("SELECT start_failed_at FROM workflows WHERE key = 'a2'"), failed_at);
@@ -995,8 +1234,15 @@ fn a_stacked_workflow_starts_from_origin_when_the_base_workflows_local_branch_is
     let repo = fx.repo("pay");
     stacked_on_open_a1(&fx, &repo);
     let a1 = fx.lead_path(&repo.path, "a1");
-    let on_origin = remote_branch(&fx, &repo.path, "pay/a1").split('\t').next().unwrap().to_owned();
-    fx.git(&repo.path, &["worktree", "remove", "--force", a1.to_str().unwrap()]);
+    let on_origin = remote_branch(&fx, &repo.path, "pay/a1")
+        .split('\t')
+        .next()
+        .unwrap()
+        .to_owned();
+    fx.git(
+        &repo.path,
+        &["worktree", "remove", "--force", a1.to_str().unwrap()],
+    );
     fx.git(&repo.path, &["branch", "-D", "pay/a1"]);
     // Neither the local branch nor origin's: nothing to start from.
     fx.git(&repo.path, &["push", "-q", "origin", "--delete", "pay/a1"]);
@@ -1009,7 +1255,15 @@ fn a_stacked_workflow_starts_from_origin_when_the_base_workflows_local_branch_is
     assert_eq!(fx.git(&repo.path, &["branch", "--list", "pay/*"]), "");
 
     // origin has it again: that is the start point.
-    fx.git(&repo.path, &["push", "-q", "origin", &format!("{on_origin}:refs/heads/pay/a1")]);
+    fx.git(
+        &repo.path,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{on_origin}:refs/heads/pay/a1"),
+        ],
+    );
     let out = fx.start("b1").ok();
     assert_eq!(out["workflow"]["base_sha"], on_origin);
     assert_eq!(fx.git(&fx.lead_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), on_origin);
@@ -1051,7 +1305,10 @@ fn workflow_start_refuses_a_workflow_whose_need_of_another_plan_is_not_merged() 
 
     let error = refused(&fx.start("c1"), "workflow_not_ready", 3);
 
-    assert_eq!((&error["details"]["needs"], &error["details"]["base_pr"]), (&json!(["a1"]), &Value::Null));
+    assert_eq!(
+        (&error["details"]["needs"], &error["details"]["base_pr"]),
+        (&json!(["a1"]), &Value::Null)
+    );
     assert!(error["message"].as_str().unwrap().contains("a1"), "{error}");
     assert_eq!(fx.workflow_status("c1"), "waiting");
     fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
@@ -1125,10 +1382,19 @@ fn e7_starts_a_stacked_workflow_once_its_base_workflow_is_open_and_not_before() 
 fn a1_merged_and_deleted(fx: &Fx, repo: &Repo) -> String {
     stacked_on_a1(fx, repo);
     let a1 = fx.lead_path(&repo.path, "a1");
-    fx.git(&repo.path, &["worktree", "remove", "--force", a1.to_str().unwrap()]);
+    fx.git(
+        &repo.path,
+        &["worktree", "remove", "--force", a1.to_str().unwrap()],
+    );
     fx.git(&repo.path, &["branch", "-D", "pay/a1"]);
     fx.git(&repo.path, &["push", "-q", "origin", "--delete", "pay/a1"]);
-    assert_eq!((fx.git(&repo.path, &["branch", "--list", "pay/*"]), remote_branch(fx, &repo.path, "pay/a1")), (String::new(), String::new()));
+    assert_eq!(
+        (
+            fx.git(&repo.path, &["branch", "--list", "pay/*"]),
+            remote_branch(fx, &repo.path, "pay/a1")
+        ),
+        (String::new(), String::new())
+    );
     fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
     fx.land_on_origin(repo, "what a1 merged")
 }

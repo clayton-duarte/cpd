@@ -63,5 +63,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
         .with("job", key.as_str())
         .with("status", job.status.as_str()));
     }
-    Ok(if job.urgent { Decision::Already(job) } else { Decision::Mark(job) })
+    Ok(if job.urgent {
+        Decision::Already(job)
+    } else {
+        Decision::Mark(job)
+    })
 }

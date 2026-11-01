@@ -46,9 +46,17 @@ fn a_pr_ready_item_fills_its_leads_dot_only_when_it_is_yellow_or_red() {
     ];
     for (u, lead) in cases {
         let items = [item(Kind::PrReady, u, None, Some("pp"))];
-        assert_eq!(urgency(&items, &id("s-lead"), Some(&pp)), lead, "lead of pp, {u:?}");
+        assert_eq!(
+            urgency(&items, &id("s-lead"), Some(&pp)),
+            lead,
+            "lead of pp, {u:?}"
+        );
         assert_eq!(urgency(&items, &id("s-lead"), None), None, "fork, {u:?}");
-        assert_eq!(urgency(&items, &id("s-lead"), Some(&other)), None, "lead of another Plan, {u:?}");
+        assert_eq!(
+            urgency(&items, &id("s-lead"), Some(&other)),
+            None,
+            "lead of another Plan, {u:?}"
+        );
     }
 }
 

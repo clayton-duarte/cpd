@@ -33,6 +33,8 @@ test("hs-d634, pro-d8: the protocol is 15, the incident kinds and mcp-attached a
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
   }
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["mcp-attached"], undefined, "mcp-attached is not a LEAD_MESSAGES entry: delivery none");
+  assert.ok((KINDS as readonly string[]).includes("job-addendum"), "job-addendum is not in KINDS");
+  assert.equal((LEAD_MESSAGES as Record<string, unknown>)["job-addendum"], undefined, "job-addendum is not a LEAD_MESSAGES entry: a Plan Lead gets none");
   assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
   // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-resumed"], undefined, "session-resumed is not a LEAD_MESSAGES entry");

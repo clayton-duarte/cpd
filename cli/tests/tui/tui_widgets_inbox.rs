@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use common::fx::Fx;
 use common::inbox::{
-    FOUR, W, World, engine_at, four, frame_with, gone, manager, open, open_at, press, rows, seed, show,
-    typed, view_fx,
+    FOUR, W, World, engine_at, four, frame_with, gone, manager, open, open_at, press, rows, seed,
+    show, typed, view_fx,
 };
 use common::tree::{engine, stamp};
 use cpd_core::events::{Kind as EventKind, NewEvent, append};
@@ -33,12 +33,20 @@ fn pill(count: usize) -> String {
 /// The section as it is drawn, pinned to the bottom: its blank row, the header with `count`, the ▲ line (blank), the item rows
 /// and the ▼ line (blank), which is the pane's last row.
 fn section(count: usize, items: &[String]) -> Vec<String> {
-    [vec![String::new(), pill(count), String::new()], items.to_vec(), vec![String::new()]].concat()
+    [
+        vec![String::new(), pill(count), String::new()],
+        items.to_vec(),
+        vec![String::new()],
+    ]
+    .concat()
 }
 
 /// The item rows of `items` (glyph, label), all aged `age`.
 fn item_rows(items: &[(&str, &str)], age: &str) -> Vec<String> {
-    items.iter().flat_map(|(glyph, label)| common::inbox::item_rows(glyph, label, "", age)).collect()
+    items
+        .iter()
+        .flat_map(|(glyph, label)| common::inbox::item_rows(glyph, label, "", age))
+        .collect()
 }
 
 /// [`four`]'s section, aged `age`.
@@ -56,8 +64,18 @@ fn under(screen: &[String], section: &[String]) -> bool {
 }
 
 /// [`frame_with`] for a section right under the header: the first frame from `from` on that has `section` there.
-fn frame_under(frames: &[common::screen::Screen], from: usize, what: &str, section: &[String]) -> usize {
-    frame_with(frames, from, &format!("{what}, at the bottom, being\n{}\n", section.join("\n")), |r| under(r, section))
+fn frame_under(
+    frames: &[common::screen::Screen],
+    from: usize,
+    what: &str,
+    section: &[String],
+) -> usize {
+    frame_with(
+        frames,
+        from,
+        &format!("{what}, at the bottom, being\n{}\n", section.join("\n")),
+        |r| under(r, section),
+    )
 }
 
 /// An `Fx` with the engine's lock held by the caller's guard, the store seeded with `items` opened 330 s ago (`5m`).
@@ -70,7 +88,11 @@ fn prepared(items: &[Condition]) -> Fx {
 /// The `cpd` and `tmux` commands the view ran that name the Inbox or a Session: none of the tests of this file runs one.
 fn commands_of_the_inbox(fx: &Fx) -> Vec<Vec<String>> {
     let calls = fx.fakes.runner.calls();
-    calls.into_iter().map(|c| c.args).filter(|a| a.iter().any(|w| w == "inbox" || w == "session")).collect()
+    calls
+        .into_iter()
+        .map(|c| c.args)
+        .filter(|a| a.iter().any(|w| w == "inbox" || w == "session"))
+        .collect()
 }
 
 #[test]
@@ -80,9 +102,20 @@ fn the_age_of_an_item_is_redrawn_every_second() {
     let _engine = engine(&fx);
     let (first, second) = (fx.fakes.clock.clone(), fx.fakes.clock.clone());
     let world = World::new()
-        .at(|screen| under(screen, &folded4_at("58s")), move || first.advance(ONE_SECOND))
-        .at(|screen| under(screen, &folded4_at("59s")), move || second.advance(ONE_SECOND));
-    let frames = show(&fx, 30, vec![Signal::Commit, Signal::Due, Signal::Due, gone()], &world);
+        .at(
+            |screen| under(screen, &folded4_at("58s")),
+            move || first.advance(ONE_SECOND),
+        )
+        .at(
+            |screen| under(screen, &folded4_at("59s")),
+            move || second.advance(ONE_SECOND),
+        );
+    let frames = show(
+        &fx,
+        30,
+        vec![Signal::Commit, Signal::Due, Signal::Due, gone()],
+        &world,
+    );
     // the ages move with the clock: 58 s, 59 s, then the first minute
     let a = frame_under(&frames, 0, "the items aged 58s", &folded4_at("58s"));
     let b = frame_under(&frames, a, "the items aged 59s", &folded4_at("59s"));
@@ -91,14 +124,23 @@ fn the_age_of_an_item_is_redrawn_every_second() {
 
 /// The glyph cell of the row that shows `label`: the second cell of ` <glyph> <label>`.
 fn glyph_of(screen: &[String], label: &str) -> Option<String> {
-    screen.iter().find(|r| r.contains(label)).and_then(|r| r.chars().nth(1)).map(String::from)
+    screen
+        .iter()
+        .find(|r| r.contains(label))
+        .and_then(|r| r.chars().nth(1))
+        .map(String::from)
 }
 
 #[test]
 fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let fx = view_fx();
     let ready = "acme/api#3 ready";
-    let mut items = vec![common::inbox::condition(Kind::Dialog, Urgency::Red, "session:f-blocked", "f-blocked label")];
+    let mut items = vec![common::inbox::condition(
+        Kind::Dialog,
+        Urgency::Red,
+        "session:f-blocked",
+        "f-blocked label",
+    )];
     items.push(Condition {
         url: Some("https://x.io/ready".into()),
         ..common::inbox::condition(Kind::PrReady, Urgency::White, "pr:acme/api#3", ready)
@@ -109,7 +151,9 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
     let (home, clock) = (fx.env.cpd_home(), fx.fakes.clock.clone());
     crate::tui_merge::put_marker_at(&home, "acme__api__3.json", fx.live_pid());
     let dead = fx.ended_pid();
-    let spinning = |screen: &[String]| glyph_of(screen, ready).is_some_and(|g| palette::SPINNER.contains(&g.as_str()));
+    let spinning = |screen: &[String]| {
+        glyph_of(screen, ready).is_some_and(|g| palette::SPINNER.contains(&g.as_str()))
+    };
     // the same marker, stale (a dead pid), is ignored as no marker is
     let world = World::new().at(spinning, {
         let home = home.clone();
@@ -118,18 +162,34 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
             clock.advance(3 * ONE_SECOND);
         }
     });
-    let frames = show(&fx, 30, vec![Signal::Commit, Signal::Due, Signal::Due, gone()], &world);
-    let at = frame_with(&frames, 0, "the spinner in the glyph cell of the pr-ready item", spinning);
+    let frames = show(
+        &fx,
+        30,
+        vec![Signal::Commit, Signal::Due, Signal::Due, gone()],
+        &world,
+    );
+    let at = frame_with(
+        &frames,
+        0,
+        "the spinner in the glyph cell of the pr-ready item",
+        spinning,
+    );
     let screen = rows(&frames, at);
     let glyph = glyph_of(&screen, ready).unwrap();
     let red = common::inbox::item_row(palette::TIER_RED, "f-blocked label", "5m");
     let busy = common::inbox::linked_item_row(&glyph, ready, "5m");
     // each item is one row: the list has no blank row
     let head = screen.iter().position(|r| *r == pill(2)).unwrap();
-    assert_eq!([screen[head + 2].clone(), screen[head + 3].clone()], [red.clone(), busy], "the other items keep their tier glyph: {screen:?}");
+    assert_eq!(
+        [screen[head + 2].clone(), screen[head + 3].clone()],
+        [red.clone(), busy],
+        "the other items keep their tier glyph: {screen:?}"
+    );
     // stale: the tier glyph is back
     let white = common::inbox::linked_item_row(palette::ITEM_PR_READY, ready, "5m");
-    frame_with(&frames, at, "the tier glyph back", |screen| screen.contains(&white));
+    frame_with(&frames, at, "the tier glyph back", |screen| {
+        screen.contains(&white)
+    });
 }
 
 /// Changes the item `subject` as `inbox dismiss` (`dismissed_at`) or `inbox snooze` (`snoozed_until`) does: the row, and its Event
@@ -137,11 +197,17 @@ fn a_pr_ready_item_whose_merge_runs_shows_the_spinner() {
 fn change(home: &Path, subject: &str, column: &str, value: &str, event: bool) {
     open_at(home)
         .write("test", |tx| {
-            tx.execute(&format!("UPDATE inbox_items SET {column} = ?2 WHERE subject = ?1"), [subject, value])?;
+            tx.execute(
+                &format!("UPDATE inbox_items SET {column} = ?2 WHERE subject = ?1"),
+                [subject, value],
+            )?;
             if event {
                 let (kind, data) = match column {
                     "dismissed_at" => (EventKind::InboxDismissed, serde_json::json!({"item": 1})),
-                    _ => (EventKind::InboxSnoozed, serde_json::json!({"item": 1, "until": value})),
+                    _ => (
+                        EventKind::InboxSnoozed,
+                        serde_json::json!({"item": 1, "until": value}),
+                    ),
                 };
                 append(tx, NewEvent::new(kind, "Inbox item changed.", data))?;
             }
@@ -152,8 +218,18 @@ fn change(home: &Path, subject: &str, column: &str, value: &str, event: bool) {
 
 /// The Inbox follows what changes it, one run of the view per change (the view starts on what the store holds, the
 /// change is made at its first frame that shows the section, and a commit tells the view): `phase` runs the view once.
-fn phase(fx: &Fx, before: Vec<String>, change: impl FnMut() + 'static, signals: Vec<Signal>) -> Vec<common::screen::Screen> {
-    show(fx, 30, signals, &World::new().at(move |screen| under(screen, &before), change))
+fn phase(
+    fx: &Fx,
+    before: Vec<String>,
+    change: impl FnMut() + 'static,
+    signals: Vec<Signal>,
+) -> Vec<common::screen::Screen> {
+    show(
+        fx,
+        30,
+        signals,
+        &World::new().at(move |screen| under(screen, &before), change),
+    )
 }
 
 /// The start of the `engine-down` item's row: red, first of the rows, `engine is down`.
@@ -163,7 +239,10 @@ fn engine_down() -> String {
 
 /// Whether the Inbox counts 5 items and its first row is `engine-down`'s.
 fn shows_down(screen: &[String]) -> bool {
-    screen.iter().position(|r| *r == pill(5)).is_some_and(|t| screen[t + 2].starts_with(&engine_down()))
+    screen
+        .iter()
+        .position(|r| *r == pill(5))
+        .is_some_and(|t| screen[t + 2].starts_with(&engine_down()))
 }
 
 #[test]
@@ -182,42 +261,107 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
             clock.advance(3 * ONE_SECOND);
         })
     };
-    let frames = show(&fx, 30, vec![Signal::Commit, Signal::Due, Signal::Due, gone()], &world);
-    let down = frame_with(&frames, 0, "the engine-down item first, 5 items counted", shows_down);
-    frame_under(&frames, down, "the four items once an engine holds the lock", &folded4());
+    let frames = show(
+        &fx,
+        30,
+        vec![Signal::Commit, Signal::Due, Signal::Due, gone()],
+        &world,
+    );
+    let down = frame_with(
+        &frames,
+        0,
+        "the engine-down item first, 5 items counted",
+        shows_down,
+    );
+    frame_under(
+        &frames,
+        down,
+        "the four items once an engine holds the lock",
+        &folded4(),
+    );
     assert!(held.borrow().is_some(), "the engine's lock was taken");
 
     // inbox-opened: a fifth item, opened 300 s ago, comes after the two red ones that are older
     let five = || {
         let mut items = four();
-        items.push(common::inbox::condition(Kind::Dialog, Urgency::Red, "session:new", "new label"));
+        items.push(common::inbox::condition(
+            Kind::Dialog,
+            Urgency::Red,
+            "session:new",
+            "new label",
+        ));
         items
     };
-    let with_new = section(5, &item_rows(&[FOUR[0], FOUR[1], (palette::TIER_RED, "new label"), FOUR[2], FOUR[3]], "5m"));
+    let with_new = section(
+        5,
+        &item_rows(
+            &[
+                FOUR[0],
+                FOUR[1],
+                (palette::TIER_RED, "new label"),
+                FOUR[2],
+                FOUR[3],
+            ],
+            "5m",
+        ),
+    );
     let (opened, at) = (home.clone(), stamp(&fx, -300));
-    let frames = phase(&fx, folded4(), move || drop(reconcile(&mut open_at(&opened), &five(), &at).unwrap()), commits());
+    let frames = phase(
+        &fx,
+        folded4(),
+        move || drop(reconcile(&mut open_at(&opened), &five(), &at).unwrap()),
+        commits(),
+    );
     frame_under(&frames, 0, "the fifth item after inbox-opened", &with_new);
 
     // inbox-closed: its cause ends
     let (closed, at) = (home.clone(), stamp(&fx, -300));
-    let frames = phase(&fx, with_new, move || drop(reconcile(&mut open_at(&closed), &four(), &at).unwrap()), commits());
+    let frames = phase(
+        &fx,
+        with_new,
+        move || drop(reconcile(&mut open_at(&closed), &four(), &at).unwrap()),
+        commits(),
+    );
     frame_under(&frames, 0, "the four items after inbox-closed", &folded4());
 
     // inbox-dismissed: the first leaves
     let three = section(3, &item_rows(&[FOUR[1], FOUR[2], FOUR[3]], "5m"));
     let dismissed = home.clone();
-    let frames = phase(&fx, folded4(), move || change(&dismissed, "session:f-blocked", "dismissed_at", "2026-01-04T00:00:00.000Z", true), commits());
+    let frames = phase(
+        &fx,
+        folded4(),
+        move || {
+            change(
+                &dismissed,
+                "session:f-blocked",
+                "dismissed_at",
+                "2026-01-04T00:00:00.000Z",
+                true,
+            )
+        },
+        commits(),
+    );
     frame_under(&frames, 0, "three items after inbox-dismissed", &three);
 
     // inbox-snoozed: `m-beta` hides for 8 s
     let two = section(2, &item_rows(&[FOUR[1], FOUR[3]], "5m"));
     let (snoozed, until) = (home, stamp(&fx, 8));
-    let frames = phase(&fx, three.clone(), move || change(&snoozed, "session:m-beta", "snoozed_until", &until, true), commits());
+    let frames = phase(
+        &fx,
+        three.clone(),
+        move || change(&snoozed, "session:m-beta", "snoozed_until", &until, true),
+        commits(),
+    );
     frame_under(&frames, 0, "two items after inbox-snoozed", &two);
 
     // the snooze ends by the clock, with no Event: the item is back, and 9 s older still `5m`
     let clock = fx.fakes.clock.clone();
-    let frames = phase(&fx, two, move || clock.advance(9 * ONE_SECOND), vec![Signal::Commit, Signal::Due, Signal::Due, gone()]);
+    let frames = phase(
+        &fx,
+        two,
+        move || clock.advance(9 * ONE_SECOND),
+        vec![Signal::Commit, Signal::Due, Signal::Due, gone()],
+    );
     frame_under(&frames, 0, "the snoozed item back", &three);
 }
 
@@ -226,11 +370,18 @@ fn the_engine_down_item_shows_first_when_no_engine_and_no_manager() {
     let fx = prepared(&four());
     // no engine holds the lock and no Manager lives: red, first of the rows, counted
     let frames = show(&fx, 30, vec![Signal::Commit, gone()], &World::new());
-    let at = frame_with(&frames, 0, "the engine-down item first and 5 items counted", |screen| {
-        let want = section(5, &item_rows(&FOUR, "5m"));
-        let start = screen.len() - want.len() - 1;
-        screen[start..start + 3] == want[..3] && screen[start + 3].starts_with(&engine_down()) && screen[start + 4..] == want[3..]
-    });
+    let at = frame_with(
+        &frames,
+        0,
+        "the engine-down item first and 5 items counted",
+        |screen| {
+            let want = section(5, &item_rows(&FOUR, "5m"));
+            let start = screen.len() - want.len() - 1;
+            screen[start..start + 3] == want[..3]
+                && screen[start + 3].starts_with(&engine_down())
+                && screen[start + 4..] == want[3..]
+        },
+    );
     assert!(at < frames.len());
     // with a live Manager the engine's absence is no item
     manager(&fx.env, "alpha");
@@ -263,7 +414,11 @@ fn the_deploy_column_has_no_keys_for_the_inbox() {
         let screen = frame.shown_rows();
         assert!(under(&screen, &folded4()), "frame {i}");
     }
-    assert_eq!(commands_of_the_inbox(&fx), Vec::<Vec<String>>::new(), "no command ran");
+    assert_eq!(
+        commands_of_the_inbox(&fx),
+        Vec::<Vec<String>>::new(),
+        "no command ran"
+    );
     let touched = open(&fx.env)
         .read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE dismissed_at IS NOT NULL OR snoozed_until IS NOT NULL", [], |r| r.get::<_, i64>(0))?))
         .unwrap();

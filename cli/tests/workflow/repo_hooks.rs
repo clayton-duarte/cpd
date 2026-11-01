@@ -40,7 +40,10 @@ fn hooks_file(pre_commit: &str, pre_merge: &str) -> String {
 
 /// The commands the hooks were run with (`sh -c <command>`), in order.
 fn commands(fx: &Fx) -> Vec<String> {
-    fx.calls("sh").iter().map(|call| call.args[1].clone()).collect()
+    fx.calls("sh")
+        .iter()
+        .map(|call| call.args[1].clone())
+        .collect()
 }
 
 /// A bare `origin` for `repo` holding `main`: the GitHub URL of the repo resolves to it.
@@ -76,7 +79,11 @@ fn start_fx() -> Start {
         common::TICK_SECONDS,
         fx.env.tmux_socket()
     ));
-    let _ = (*fx.fakes.runner).clone().on("cpd", |call: &Call| call.args == ["watch", "--ensure"], Reply::ok(WATCH_OK));
+    let _ = (*fx.fakes.runner).clone().on(
+        "cpd",
+        |call: &Call| call.args == ["watch", "--ensure"],
+        Reply::ok(WATCH_OK),
+    );
     fx.fake_gh(Reply::ok(EMPTY_SEARCH));
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
@@ -100,9 +107,12 @@ impl Start {
     /// Approves the Plan and locks it: the PR `api` is started.
     fn lock(&self) {
         self.outline_for_review("pay");
-        let review = self.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+        let review = self
+            .cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"])
+            .ok();
         let id = review["review"]["id"].as_str().unwrap().to_owned();
-        self.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"]).ok();
+        self.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"])
+            .ok();
         self.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     }
 
@@ -143,16 +153,39 @@ fn core(status: &str) -> Core {
     fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
     let origin = fx.env.root().join("origins/pay.git");
-    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.git(
+        fx.env.root(),
+        &[
+            "init",
+            "--bare",
+            "-q",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
     fx.local_origin(&repo, &origin);
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [
+        ("user.name", "cpd test"),
+        ("user.email", "test@cpd.invalid"),
+        ("commit.gpgsign", "false"),
+    ] {
         fx.git(&repo, &["config", key, value]);
     }
     fx.git(&repo, &["push", "-q", "origin", "main"]);
-    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("setup.log") };
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap().path;
+    let setup = Setup {
+        timeout: Duration::from_secs(30),
+        log: fx.env.root().join("setup.log"),
+    };
+    let lead = fx
+        .scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup))
+        .unwrap()
+        .path;
     fx.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
-    fx.env.write_config(&format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()));
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
     let (phase, extra_columns, extra_values, pull_request) = match status {
         "dispatch" => ("dispatch", "", String::new(), String::new()),
         "open" => (
@@ -178,7 +211,13 @@ fn core(status: &str) -> Core {
         repo = repo.display(),
         lead = lead.display(),
     ));
-    let mut core = Core { fx, repo, origin, lead, work: PathBuf::new() };
+    let mut core = Core {
+        fx,
+        repo,
+        origin,
+        lead,
+        work: PathBuf::new(),
+    };
     core.work = core.attempt();
     core
 }
@@ -187,8 +226,13 @@ impl Core {
     /// Job `api` (`running`) with Attempt `api-a1` (`running`), its worktree cut from the Lead Branch.
     fn attempt(&self) -> PathBuf {
         let attempt = AttemptId::parse("api-a1").unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("attempt.log"),
+        };
+        let made = self
+            .scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup))
+            .unwrap();
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
@@ -208,7 +252,10 @@ impl Core {
     }
 
     fn submit(&self) -> common::Run {
-        self.cpd_in(&self.work, &["attempt", "submit", "api-a1", "--plan", "pay"])
+        self.cpd_in(
+            &self.work,
+            &["attempt", "submit", "api-a1", "--plan", "pay"],
+        )
     }
 
     fn push(&self) -> common::Run {
@@ -216,7 +263,13 @@ impl Core {
     }
 
     fn attempt_status(&self) -> String {
-        self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+        self.env
+            .query("SELECT status FROM attempts WHERE id = 'api-a1'")
+    }
+
+    /// Ends the fixture Attempt `api-a1`, so that `pr push` does not refuse `attempt_running` and the Gate is reached.
+    fn end_attempt(&self) {
+        self.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE plan = 'pay' AND id = 'api-a1'");
     }
 
     fn lead_sha(&self) -> String {
@@ -242,18 +295,31 @@ impl Core {
     fn merge(&self) -> cpd_core::merge::Merge {
         let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
         let config = Config::load(&home).unwrap();
-        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+        let model = |m: &str| TierModel {
+            model: m.to_owned(),
+            efforts: vec![0, 1, 2, 3, 4, 5],
+        };
         let catalog = Catalog {
             pi_version: "1.0.0".to_owned(),
             o: model("p/opus"),
             s: model("p/sonnet"),
             h: model("p/haiku"),
-            g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+            g: TierModel {
+                model: "p/gemini".to_owned(),
+                efforts: vec![],
+            },
         };
-        let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "hooks test", metrics: &|_| None };
+        let ctx = Ctx {
+            home: &home,
+            config: &config,
+            catalog: &catalog,
+            source: "hooks test",
+            metrics: &|_| None,
+        };
         let attempt = AttemptId::parse("api-a1").unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        self.scoped(|| cpd_core::merge::merge(&mut store, &ctx, &plan(), &attempt)).unwrap()
+        self.scoped(|| cpd_core::merge::merge(&mut store, &ctx, &plan(), &attempt))
+            .unwrap()
     }
 }
 
@@ -262,14 +328,27 @@ impl Core {
 #[test]
 fn pre_start_of_the_repo_file_runs_in_the_lead_worktree_of_a_started_pr() {
     let fx = start_fx();
-    fx.env.repo_policy("acme", "pay", "[hooks]\npre-start = \"touch ran-pre-start\"\n");
+    fx.env.repo_policy(
+        "acme",
+        "pay",
+        "[hooks]\npre-start = \"touch ran-pre-start\"\n",
+    );
     fx.fake("sh", Reply::ok(""));
 
     fx.lock();
 
     let calls = fx.calls("sh");
-    assert_eq!(commands(&fx), ["touch ran-pre-start"], "the repo file's pre-start did not run");
-    assert_eq!(calls[0].cwd.as_deref(), Some(fx.lead_path().as_path()), "the repo file's pre-start ran elsewhere than in {}", fx.lead_path().display());
+    assert_eq!(
+        commands(&fx),
+        ["touch ran-pre-start"],
+        "the repo file's pre-start did not run"
+    );
+    assert_eq!(
+        calls[0].cwd.as_deref(),
+        Some(fx.lead_path().as_path()),
+        "the repo file's pre-start ran elsewhere than in {}",
+        fx.lead_path().display()
+    );
 }
 
 #[test]
@@ -284,12 +363,20 @@ fn the_merge_gate_is_the_pre_commit_of_the_repo_file() {
 
     // Submit runs no quick check any more: the repo file's pre-commit is the merge gate, not the submit check.
     fx.submit().ok();
-    assert_eq!(commands(&fx), Vec::<String>::new(), "submit ran the repo file's pre-commit (the quick check)");
+    assert_eq!(
+        commands(&fx),
+        Vec::<String>::new(),
+        "submit ran the repo file's pre-commit (the quick check)"
+    );
     assert_eq!(fx.attempt_status(), "merging");
 
     fx.merge();
 
-    assert_eq!(commands(&fx), [hook], "the repo file's pre-commit did not run at the Job merge");
+    assert_eq!(
+        commands(&fx),
+        [hook],
+        "the repo file's pre-commit did not run at the Job merge"
+    );
 }
 
 #[test]
@@ -300,10 +387,15 @@ fn the_gate_runs_the_pre_merge_of_the_repo_file_before_pr_push() {
     fx.fake("sh", Reply::ok(""));
     fx.commit_lead();
     assert_ne!(fx.remote_sha(), fx.lead_sha());
+    fx.end_attempt();
 
     let out = fx.push().ok();
 
-    assert_eq!(commands(&fx), [gate], "the repo file's pre-merge did not run");
+    assert_eq!(
+        commands(&fx),
+        [gate],
+        "the repo file's pre-merge did not run"
+    );
     assert_eq!(out["pushed"], json!(true));
     assert_eq!(fx.remote_sha(), fx.lead_sha());
 }
@@ -311,14 +403,25 @@ fn the_gate_runs_the_pre_merge_of_the_repo_file_before_pr_push() {
 #[test]
 fn a_failing_pre_merge_of_the_repo_file_refuses_pr_push_with_gate_failed() {
     let fx = core("open");
-    fx.env.repo_policy("acme", "pay", &hooks_file("true", "echo the suite is red; exit 1"));
+    fx.env.repo_policy(
+        "acme",
+        "pay",
+        &hooks_file("true", "echo the suite is red; exit 1"),
+    );
     fx.fake("sh", Reply::exit(1, "the suite is red\n", ""));
     fx.commit_lead();
     let before = fx.remote_sha();
+    fx.end_attempt();
 
     let error = refused(&fx.push(), "gate_failed", 3);
 
-    assert!(error["details"]["tail"].as_str().unwrap().contains("the suite is red"), "{error}");
+    assert!(
+        error["details"]["tail"]
+            .as_str()
+            .unwrap()
+            .contains("the suite is red"),
+        "{error}"
+    );
     assert_eq!(fx.remote_sha(), before, "nothing is pushed");
 }
 
@@ -333,7 +436,11 @@ fn a_wt_toml_in_the_repo_tree_runs_no_hook() {
         start.commit_wt_toml(wt_toml);
         start.lock();
         assert!(start.lead_path().exists(), "the PR started");
-        assert_eq!(commands(&start), Vec::<String>::new(), "the tree's pre-start ran");
+        assert_eq!(
+            commands(&start),
+            Vec::<String>::new(),
+            "the tree's pre-start ran"
+        );
     }
 
     // pre-commit and pre-merge: the tree's file is on the Lead Branch, the Attempt is cut from it.
@@ -341,18 +448,36 @@ fn a_wt_toml_in_the_repo_tree_runs_no_hook() {
     fx.commit_wt_toml(wt_toml);
     let attempt = fx.attempt_after_wt_toml();
     fx.commit_file(&attempt, "b.txt", "b\n", "b");
-    fx.cpd_in(&attempt, &["attempt", "submit", "api-b-a1", "--plan", "pay"]).ok();
-    assert_eq!(commands(&fx), Vec::<String>::new(), "the tree's pre-commit ran");
+    fx.cpd_in(
+        &attempt,
+        &["attempt", "submit", "api-b-a1", "--plan", "pay"],
+    )
+    .ok();
+    assert_eq!(
+        commands(&fx),
+        Vec::<String>::new(),
+        "the tree's pre-commit ran"
+    );
+    fx.end_attempt();
     fx.push().ok();
-    assert_eq!(commands(&fx), Vec::<String>::new(), "the tree's pre-merge ran");
+    assert_eq!(
+        commands(&fx),
+        Vec::<String>::new(),
+        "the tree's pre-merge ran"
+    );
 }
 
 impl Core {
     /// Job `api-b` with Attempt `api-b-a1` (`running`), cut from the Lead Branch as it is now.
     fn attempt_after_wt_toml(&self) -> PathBuf {
         let attempt = AttemptId::parse("api-b-a1").unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt-b.log") };
-        let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
+        let setup = Setup {
+            timeout: Duration::from_secs(30),
+            log: self.env.root().join("attempt-b.log"),
+        };
+        let made = self
+            .scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup))
+            .unwrap();
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', 'repo', 'api-b', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
@@ -398,7 +523,10 @@ fn the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file() {
         .read(|conn| {
             let target = ledger::load(conn, &plan(), &AttemptId::parse("spec-a1").unwrap())?;
             let jobs = cpd_core::plan::jobs::load(conn, &plan())?;
-            let job = jobs.iter().find(|j| j.key == "spec").expect("the Job `spec`");
+            let job = jobs
+                .iter()
+                .find(|j| j.key == "spec")
+                .expect("the Job `spec`");
             render_spec(conn, &home, &target, job)
         })
         .unwrap();

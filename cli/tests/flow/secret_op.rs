@@ -1,9 +1,9 @@
 //! The op calls, the use of the grants and the output of `cpd secret` (commands.md §24.1-§24.7, contract §8.4),
 //! driving the built `cpd` against a fake `op`. Real op output is unverified: the shapes are those of the docs.
 
-use crate::common::fx::{bare_with_store, Fx};
 use crate::common::Run;
-use crate::secret::{approve_args, args, denied, strs, Who};
+use crate::common::fx::{Fx, bare_with_store};
+use crate::secret::{Who, approve_args, args, denied, strs};
 
 use std::fs;
 use std::io::ErrorKind;
@@ -12,10 +12,11 @@ use std::time::Duration;
 
 use cpd_core::host::runner::Reply;
 use rusqlite::types::ValueRef;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const ACCOUNT: &str = "--account my.1password.com";
-const NO_ITEM: &str = "[ERROR] 2026/10/22 10:00:00 \"deployment\" isn't an item in the \"cpd\" vault\n";
+const NO_ITEM: &str =
+    "[ERROR] 2026/10/22 10:00:00 \"deployment\" isn't an item in the \"cpd\" vault\n";
 
 /// Context `ctx`; Plan `pl` (Lead `lead1`, Manager `mgr1`) with the Jobs `a` (Attempt `a-a1`, running, Worker `w-a`)
 /// and `e` (Attempt `e-a1`, ended); Plan `pl2` (Lead `lead2`) with Job `b` (Attempt `b-a1`, running): what
@@ -68,7 +69,11 @@ fn run(fx: &Fx, who: Who, args: &[&str], stdin: Option<&str>) -> Run {
         Who::Unknown => &[("CPD_SESSION", "no-such-session")],
         Who::Lead => &[("CPD_SESSION", "lead1")],
         Who::Manager => &[("CPD_SESSION", "mgr1")],
-        Who::Worker => &[("CPD_SESSION", "w-a"), ("CPD_ATTEMPT", "a-a1"), ("CPD_PLAN", "pl")],
+        Who::Worker => &[
+            ("CPD_SESSION", "w-a"),
+            ("CPD_ATTEMPT", "a-a1"),
+            ("CPD_PLAN", "pl"),
+        ],
     };
     match stdin {
         None => fx.cpd_with(fx.env.root(), args, vars),
@@ -76,7 +81,15 @@ fn run(fx: &Fx, who: Who, args: &[&str], stdin: Option<&str>) -> Run {
     }
 }
 
-fn secret(fx: &Fx, who: Who, command: &str, vault: &str, item: &str, field: &str, stdin: Option<&str>) -> Run {
+fn secret(
+    fx: &Fx,
+    who: Who,
+    command: &str,
+    vault: &str,
+    item: &str,
+    field: &str,
+    stdin: Option<&str>,
+) -> Run {
     run(fx, who, &strs(&args(command, vault, item, field)), stdin)
 }
 
@@ -115,7 +128,15 @@ fn get_reads_one_field_and_pins_the_account() {
     assert_eq!(out["value"], "hunter2\n", "{r:?}");
     let log = fx.op_log();
     assert_eq!(log.len(), 1, "{log:?}");
-    for part in [ACCOUNT, "item", "get", "deployment", "--vault cpd", "--fields label=password", "--reveal"] {
+    for part in [
+        ACCOUNT,
+        "item",
+        "get",
+        "deployment",
+        "--vault cpd",
+        "--fields label=password",
+        "--reveal",
+    ] {
         assert!(log[0].contains(part), "{part} not in {}", log[0]);
     }
     assert!(!log[0].contains("--session"), "{}", log[0]);
@@ -152,12 +173,25 @@ fn create_sends_a_template_on_stdin_and_never_the_value_in_argv() {
     fx.op_says("get", "", NO_ITEM, 1);
     fx.op_says("create", "{\"id\":\"new1\"}\n", "", 0);
     let value = "pa ss\"word";
-    let r = secret(&fx, Who::Lead, "create", "cpd", "deployment", "password", Some(&format!("{value}\n")));
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "create",
+        "cpd",
+        "deployment",
+        "password",
+        Some(&format!("{value}\n")),
+    );
     let out = r.ok();
     assert_eq!(out["created"], true, "{r:?}");
     let log = fx.op_log();
     assert_eq!(log.len(), 2, "{log:?}");
-    for part in [ACCOUNT, "item get deployment", "--vault cpd", "--format json"] {
+    for part in [
+        ACCOUNT,
+        "item get deployment",
+        "--vault cpd",
+        "--format json",
+    ] {
         assert!(log[0].contains(part), "{part} not in {}", log[0]);
     }
     for part in [ACCOUNT, "item create", "--vault cpd -"] {
@@ -172,14 +206,25 @@ fn create_sends_a_template_on_stdin_and_never_the_value_in_argv() {
     for line in &log {
         assert!(!line.contains("pa ss"), "the value is in argv: {line}");
     }
-    assert!(!r.stdout.contains("pa ss") && !r.stderr.contains("pa ss"), "{r:?}");
+    assert!(
+        !r.stdout.contains("pa ss") && !r.stderr.contains("pa ss"),
+        "{r:?}"
+    );
 }
 
 #[test]
 fn create_refuses_an_existing_item() {
     let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
-    let r = secret(&fx, Who::Lead, "create", "cpd", "deployment", "password", Some("v\n"));
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "create",
+        "cpd",
+        "deployment",
+        "password",
+        Some("v\n"),
+    );
     denied(&r, "secret_exists", 3);
     let log = fx.op_log();
     assert_eq!(log.len(), 1, "{log:?}");
@@ -191,7 +236,15 @@ fn edit_updates_the_field_in_a_template_on_stdin() {
     let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
     fx.op_says("edit", "", "", 0);
-    let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "password", Some("brand new\n"));
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "edit",
+        "cpd",
+        "deployment",
+        "password",
+        Some("brand new\n"),
+    );
     assert_eq!(r.ok()["edited"], true, "{r:?}");
     let log = fx.op_log();
     assert_eq!(log.len(), 2, "{log:?}");
@@ -202,8 +255,14 @@ fn edit_updates_the_field_in_a_template_on_stdin() {
     expected["fields"][0]["value"] = json!("brand new");
     let sent: Value = serde_json::from_str(&fx.op_stdin("edit")).expect("the edited item is JSON");
     assert_eq!(sent, expected);
-    assert!(!log.iter().any(|l| l.contains("brand new")), "the value is in argv: {log:?}");
-    assert!(!r.stdout.contains("brand new") && !r.stderr.contains("brand new"), "{r:?}");
+    assert!(
+        !log.iter().any(|l| l.contains("brand new")),
+        "the value is in argv: {log:?}"
+    );
+    assert!(
+        !r.stdout.contains("brand new") && !r.stderr.contains("brand new"),
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -211,7 +270,15 @@ fn edit_adds_a_missing_field() {
     let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
     fx.op_says("edit", "", "", 0);
-    let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "token", Some("t0k\n"));
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "edit",
+        "cpd",
+        "deployment",
+        "token",
+        Some("t0k\n"),
+    );
     assert_eq!(r.ok()["edited"], true, "{r:?}");
     let sent: Value = serde_json::from_str(&fx.op_stdin("edit")).expect("the edited item is JSON");
     let fields = sent["fields"].as_array().unwrap();
@@ -227,7 +294,15 @@ fn edit_adds_a_missing_field() {
 fn edit_of_a_missing_item_is_not_found() {
     let fx = fixture();
     fx.op_says("get", "", NO_ITEM, 1);
-    let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "password", Some("v\n"));
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "edit",
+        "cpd",
+        "deployment",
+        "password",
+        Some("v\n"),
+    );
     denied(&r, "secret_not_found", 4);
     let log = fx.op_log();
     assert_eq!(log.len(), 1, "{log:?}");
@@ -237,11 +312,21 @@ fn edit_of_a_missing_item_is_not_found() {
 #[test]
 fn delete_archives_the_item() {
     let fx = fixture();
-    let r = run(&fx, Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None);
+    let r = run(
+        &fx,
+        Who::Lead,
+        &strs(&args("delete", "cpd", "deployment", "")),
+        None,
+    );
     assert_eq!(r.ok()["archived"], true, "{r:?}");
     let log = fx.op_log();
     assert_eq!(log.len(), 1, "{log:?}");
-    for part in [ACCOUNT, "item delete deployment", "--vault cpd", "--archive"] {
+    for part in [
+        ACCOUNT,
+        "item delete deployment",
+        "--vault cpd",
+        "--archive",
+    ] {
         assert!(log[0].contains(part), "{part} not in {}", log[0]);
     }
 }
@@ -249,7 +334,10 @@ fn delete_archives_the_item() {
 #[test]
 fn a_missing_item_is_not_found() {
     let fx = fixture();
-    for stderr in [NO_ITEM, "[ERROR] 2026/10/22 10:00:00 \"password\" isn't a field in the \"deployment\" item\n"] {
+    for stderr in [
+        NO_ITEM,
+        "[ERROR] 2026/10/22 10:00:00 \"password\" isn't a field in the \"deployment\" item\n",
+    ] {
         fx.op_says("get", "", stderr, 1);
         let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
         denied(&r, "secret_not_found", 4);
@@ -259,7 +347,12 @@ fn a_missing_item_is_not_found() {
 #[test]
 fn not_signed_in_is_its_own_code() {
     let fx = fixture();
-    fx.op_says("get", "", "[ERROR] 2026/10/22 10:00:00 account is not signed in\n", 1);
+    fx.op_says(
+        "get",
+        "",
+        "[ERROR] 2026/10/22 10:00:00 account is not signed in\n",
+        1,
+    );
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     let error = denied(&r, "secret_not_signed_in", 3);
     let message = error["message"].as_str().unwrap().to_lowercase();
@@ -273,7 +366,12 @@ fn another_op_failure_keeps_its_stderr() {
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     let error = denied(&r, "secret_op_failed", 1);
     assert_eq!(error["details"]["exit"], 7, "{r:?}");
-    assert!(error["details"]["stderr"].to_string().contains("something odd happened"), "{r:?}");
+    assert!(
+        error["details"]["stderr"]
+            .to_string()
+            .contains("something odd happened"),
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -290,25 +388,77 @@ fn a_missing_op_is_secret_op_missing() {
 fn a_manager_writes_in_homeserver() {
     let fx = fixture();
     fx.op_says("get", "", NO_ITEM, 1);
-    let r = secret(&fx, Who::Manager, "create", "homeserver", "token", "password", Some("v1\n"));
+    let r = secret(
+        &fx,
+        Who::Manager,
+        "create",
+        "homeserver",
+        "token",
+        "password",
+        Some("v1\n"),
+    );
     assert_eq!(r.ok()["created"], true, "{r:?}");
-    assert!(fx.op_log().last().unwrap().contains("item create --vault homeserver -"), "{:?}", fx.op_log());
+    assert!(
+        fx.op_log()
+            .last()
+            .unwrap()
+            .contains("item create --vault homeserver -"),
+        "{:?}",
+        fx.op_log()
+    );
 
     fx.op_says("get", &item_json().to_string(), "", 0);
-    let r = secret(&fx, Who::Manager, "edit", "homeserver", "token", "password", Some("v2\n"));
+    let r = secret(
+        &fx,
+        Who::Manager,
+        "edit",
+        "homeserver",
+        "token",
+        "password",
+        Some("v2\n"),
+    );
     assert_eq!(r.ok()["edited"], true, "{r:?}");
-    assert!(fx.op_log().last().unwrap().contains("item edit token --vault homeserver"), "{:?}", fx.op_log());
+    assert!(
+        fx.op_log()
+            .last()
+            .unwrap()
+            .contains("item edit token --vault homeserver"),
+        "{:?}",
+        fx.op_log()
+    );
 
-    let r = run(&fx, Who::Manager, &strs(&args("delete", "homeserver", "token", "")), None);
+    let r = run(
+        &fx,
+        Who::Manager,
+        &strs(&args("delete", "homeserver", "token", "")),
+        None,
+    );
     assert_eq!(r.ok()["archived"], true, "{r:?}");
-    assert!(fx.op_log().last().unwrap().contains("item delete token --vault homeserver --archive"), "{:?}", fx.op_log());
+    assert!(
+        fx.op_log()
+            .last()
+            .unwrap()
+            .contains("item delete token --vault homeserver --archive"),
+        "{:?}",
+        fx.op_log()
+    );
 }
 
 #[test]
 fn an_approval_runs_one_command_once() {
     let fx = fixture();
     fx.op_says("get", "v\n", "", 0);
-    let get = || secret(&fx, Who::Lead, "get", "other", "deployment", "password", None);
+    let get = || {
+        secret(
+            &fx,
+            Who::Lead,
+            "get",
+            "other",
+            "deployment",
+            "password",
+            None,
+        )
+    };
     let r = get();
     denied(&r, "secret_grant_required", 3);
     assert_op_not_called(&fx, &r);
@@ -320,7 +470,11 @@ fn an_approval_runs_one_command_once() {
     let r = get();
     assert_eq!(r.ok()["value"], "v", "{r:?}");
     assert!(approvals(&fx).is_empty());
-    assert!(fx.op_log()[0].contains("--vault other"), "{:?}", fx.op_log());
+    assert!(
+        fx.op_log()[0].contains("--vault other"),
+        "{:?}",
+        fx.op_log()
+    );
 
     let r = get();
     denied(&r, "secret_grant_required", 3);
@@ -337,9 +491,18 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
     assert_eq!(files.len(), 1);
 
     let refused = |who: Who, command: &str, vault: &str, item: &str, field: &str| {
-        let r = run(&fx, who, &strs(&args(command, vault, item, field)), if command == "get" { None } else { Some("v\n") });
+        let r = run(
+            &fx,
+            who,
+            &strs(&args(command, vault, item, field)),
+            if command == "get" { None } else { Some("v\n") },
+        );
         denied(&r, "secret_grant_required", 3);
-        assert_eq!(approvals(&fx), files, "the approval was used or removed: {r:?}");
+        assert_eq!(
+            approvals(&fx),
+            files,
+            "the approval was used or removed: {r:?}"
+        );
         assert_op_not_called(&fx, &r);
     };
     refused(Who::Manager, "get", "other", "deployment", "password");
@@ -351,7 +514,15 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
 
     // The approval is old: virtual time passes the lifetime of an approval (10 minutes; it was written at the clock's time).
     fx.advance(Duration::from_secs(11 * 60));
-    let r = secret(&fx, Who::Lead, "get", "other", "deployment", "password", None);
+    let r = secret(
+        &fx,
+        Who::Lead,
+        "get",
+        "other",
+        "deployment",
+        "password",
+        None,
+    );
     denied(&r, "secret_grant_required", 3);
     assert!(approvals(&fx).is_empty(), "the expired approval stays");
     assert_op_not_called(&fx, &r);
@@ -361,24 +532,50 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
 fn an_allowance_lasts_until_the_attempt_ends() {
     let fx = fixture();
     fx.op_says("get", "v\n", "", 0);
-    run(&fx, Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
+    run(
+        &fx,
+        Who::Lead,
+        &strs(&args("allow", "cpd", "deployment", "password")),
+        None,
+    )
+    .ok();
     let file = fx.env.cpd_home().join("run/secret/allow/a-a1.json");
 
     for _ in 0..2 {
-        let r = secret(&fx, Who::Worker, "get", "cpd", "deployment", "password", None);
+        let r = secret(
+            &fx,
+            Who::Worker,
+            "get",
+            "cpd",
+            "deployment",
+            "password",
+            None,
+        );
         assert_eq!(r.ok()["value"], "v", "{r:?}");
         assert!(file.exists());
     }
     assert_eq!(fx.op_log().len(), 2);
 
-    for (vault, item, field) in [("cpd", "other-item", "password"), ("cpd", "deployment", "other-field"), ("homeserver", "deployment", "password")] {
+    for (vault, item, field) in [
+        ("cpd", "other-item", "password"),
+        ("cpd", "deployment", "other-field"),
+        ("homeserver", "deployment", "password"),
+    ] {
         let r = secret(&fx, Who::Worker, "get", vault, item, field, None);
         denied(&r, "secret_grant_required", 3);
     }
     assert_eq!(fx.op_log().len(), 2);
 
     fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';");
-    let r = secret(&fx, Who::Worker, "get", "cpd", "deployment", "password", None);
+    let r = secret(
+        &fx,
+        Who::Worker,
+        "get",
+        "cpd",
+        "deployment",
+        "password",
+        None,
+    );
     denied(&r, "secret_grant_required", 3);
     assert_eq!(fx.op_log().len(), 2);
 }
@@ -387,29 +584,78 @@ fn an_allowance_lasts_until_the_attempt_ends() {
 fn secret_commands_write_nothing_to_the_store() {
     let fx = fixture();
     let count = |t: &str| fx.env.query::<i64>(&format!("SELECT count(*) FROM {t}"));
-    let before: Vec<i64> = ["events", "txns", "history"].iter().map(|t| count(t)).collect();
+    let before: Vec<i64> = ["events", "txns", "history"]
+        .iter()
+        .map(|t| count(t))
+        .collect();
     let value = "sup3r-s3cret-value";
     let stdin = format!("{value}\n");
 
     fx.op_says("get", "", NO_ITEM, 1);
-    secret(&fx, Who::Lead, "create", "cpd", "deployment", "password", Some(&stdin)).ok();
+    secret(
+        &fx,
+        Who::Lead,
+        "create",
+        "cpd",
+        "deployment",
+        "password",
+        Some(&stdin),
+    )
+    .ok();
     fx.op_says("get", &item_json().to_string(), "", 0);
-    secret(&fx, Who::Lead, "edit", "cpd", "deployment", "password", Some(&stdin)).ok();
+    secret(
+        &fx,
+        Who::Lead,
+        "edit",
+        "cpd",
+        "deployment",
+        "password",
+        Some(&stdin),
+    )
+    .ok();
     fx.op_says("get", &format!("{value}\n"), "", 0);
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     assert_eq!(r.ok()["value"], value, "{r:?}");
     fx.op_says("list", "[{\"id\":\"a\",\"title\":\"deployment\"}]", "", 0);
     run(&fx, Who::Lead, &strs(&args("list", "cpd", "", "")), None).ok();
-    run(&fx, Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None).ok();
-    run(&fx, Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
-    run(&fx, Who::Lead, &strs(&approve_args("get", "other", Some("deployment"), Some("password"))), None).ok();
+    run(
+        &fx,
+        Who::Lead,
+        &strs(&args("delete", "cpd", "deployment", "")),
+        None,
+    )
+    .ok();
+    run(
+        &fx,
+        Who::Lead,
+        &strs(&args("allow", "cpd", "deployment", "password")),
+        None,
+    )
+    .ok();
+    run(
+        &fx,
+        Who::Lead,
+        &strs(&approve_args(
+            "get",
+            "other",
+            Some("deployment"),
+            Some("password"),
+        )),
+        None,
+    )
+    .ok();
 
-    let after: Vec<i64> = ["events", "txns", "history"].iter().map(|t| count(t)).collect();
+    let after: Vec<i64> = ["events", "txns", "history"]
+        .iter()
+        .map(|t| count(t))
+        .collect();
     assert_eq!(before, after);
     // Every table of the store, through the test's own read handle: the secret is in no row of any of them.
     let leaked = fx.env.read(|conn| {
         let tables: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")?
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )?
             .query_map([], |row| row.get(0))?
             .collect::<Result<_, _>>()?;
         let mut leaked = Vec::new();
@@ -420,7 +666,9 @@ fn secret_commands_write_nothing_to_the_store() {
             while let Some(row) = rows.next()? {
                 for column in 0..columns {
                     let text = match row.get_ref(column)? {
-                        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+                            String::from_utf8_lossy(bytes).into_owned()
+                        }
                         other => format!("{other:?}"),
                     };
                     if text.contains(value) {

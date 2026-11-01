@@ -14,7 +14,11 @@ const L: &str = "\u{E0B6}";
 const R: &str = "\u{E0B4}";
 
 fn input(prompt: &str, initial: &str, validator: Validator) -> Dialog {
-    let mode = Mode::Input { validator, field: Field::new(initial), refused: None };
+    let mode = Mode::Input {
+        validator,
+        field: Field::new(initial),
+        refused: None,
+    };
     Dialog::new("Rename".into(), prompt.into(), mode)
 }
 
@@ -52,7 +56,10 @@ fn top(label: &str, n: usize) -> String {
     if label.is_empty() {
         format!(" ╭{}╮ ", "─".repeat(n - 4))
     } else {
-        format!(" ╭─{L}{label}{R}{}╮ ", "─".repeat(n - label.chars().count() - 7))
+        format!(
+            " ╭─{L}{label}{R}{}╮ ",
+            "─".repeat(n - label.chars().count() - 7)
+        )
     }
 }
 
@@ -75,7 +82,11 @@ fn buttons(w: usize) -> String {
 
 #[test]
 fn input_dialog_draws_the_prompt_as_the_label_of_the_box_inside_the_walls_above_the_buttons() {
-    let mut d = input("Fork cpd-ui into a new Plan, name:", "abc", Validator::PlanId);
+    let mut d = input(
+        "Fork cpd-ui into a new Plan, name:",
+        "abc",
+        Validator::PlanId,
+    );
     let buf = render(&mut d, 46, 10);
     let rows = rows(&buf);
     assert!(rows[0].contains("Rename"), "{rows:?}");
@@ -91,7 +102,12 @@ fn input_dialog_draws_the_prompt_as_the_label_of_the_box_inside_the_walls_above_
 
 #[test]
 fn input_dialog_label_drops_the_prompts_trailing_colon_and_spaces() {
-    for (prompt, label) in [("Title: ", "Title"), ("Name", "Name"), ("Name :", "Name"), ("", "")] {
+    for (prompt, label) in [
+        ("Title: ", "Title"),
+        ("Name", "Name"),
+        ("Name :", "Name"),
+        ("", ""),
+    ] {
         let mut d = input(prompt, "", Validator::Name);
         let rows = rows(&render(&mut d, 46, 10));
         assert_eq!(rows[2], wall(&top(label, 44)), "prompt {prompt:?}");
@@ -112,7 +128,10 @@ fn input_dialog_box_is_always_focused_blue_12_with_text_15() {
     for x in 2..44 {
         assert_eq!(buf[(x, 4)].fg, numbered::C12, "bottom {x}");
     }
-    assert_eq!((buf[(2, 3)].fg, buf[(43, 3)].fg), (numbered::C12, numbered::C12));
+    assert_eq!(
+        (buf[(2, 3)].fg, buf[(43, 3)].fg),
+        (numbered::C12, numbered::C12)
+    );
     for x in [4, 5, 6] {
         assert_eq!(buf[(x, 3)].fg, numbered::C15, "text {x}");
     }
@@ -133,19 +152,32 @@ fn the_input_box_sits_inside_the_walls_on_row_two_with_its_label_pill_in_the_bor
     }
     // walls 8, the box's own border and label pill 12: caps 12 on the terminal's background, text inverted in 12
     for y in 0..10 {
-        assert_eq!((buf[(0, y)].fg, buf[(41, y)].fg), (numbered::C8, numbered::C8), "wall row {y}");
+        assert_eq!(
+            (buf[(0, y)].fg, buf[(41, y)].fg),
+            (numbered::C8, numbered::C8),
+            "wall row {y}"
+        );
     }
     for x in [2, 3, 39] {
         assert_eq!(buf[(x, 2)].fg, numbered::C12, "border {x}");
     }
     let reset = ratatui::buffer::Cell::EMPTY.bg;
-    assert_eq!((buf[(4, 2)].symbol(), buf[(4, 2)].fg, buf[(4, 2)].bg), (L, numbered::C12, reset));
+    assert_eq!(
+        (buf[(4, 2)].symbol(), buf[(4, 2)].fg, buf[(4, 2)].bg),
+        (L, numbered::C12, reset)
+    );
     for x in 5..=8 {
         let cell = &buf[(x, 2)];
         assert_eq!((cell.fg, cell.bg), (numbered::C12, reset), "pill text {x}");
-        assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED), "pill text {x} is reversed: {cell:?}");
+        assert!(
+            cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+            "pill text {x} is reversed: {cell:?}"
+        );
     }
-    assert_eq!((buf[(9, 2)].symbol(), buf[(9, 2)].fg, buf[(9, 2)].bg), (R, numbered::C12, reset));
+    assert_eq!(
+        (buf[(9, 2)].symbol(), buf[(9, 2)].fg, buf[(9, 2)].bg),
+        (R, numbered::C12, reset)
+    );
 }
 
 #[test]
@@ -162,13 +194,22 @@ fn the_refusal_rows_follow_the_box_inside_the_padding() {
         assert_eq!(rows[5 + n], wall(&format!("{text:<40}")), "refusal row {n}");
     }
     // the text starts at column 2, in the note colour, and stays inside the padding
-    assert_eq!(buf[(2, 5)].symbol(), why.chars().next().unwrap().to_string());
+    assert_eq!(
+        buf[(2, 5)].symbol(),
+        why.chars().next().unwrap().to_string()
+    );
     for (x, c) in drawn[0].chars().enumerate().filter(|(_, c)| *c != ' ') {
-        assert_eq!((buf[(2 + x as u16, 5)].symbol(), Some(buf[(2 + x as u16, 5)].fg)), (c.to_string().as_str(), palette::note().fg));
+        assert_eq!(
+            (
+                buf[(2 + x as u16, 5)].symbol(),
+                Some(buf[(2 + x as u16, 5)].fg)
+            ),
+            (c.to_string().as_str(), palette::note().fg)
+        );
     }
     assert_eq!(rows[7], blank(42));
     assert_eq!(rows[8], buttons(42));
-    assert!(REFUSAL_ROWS >= 1);
+    const _: () = assert!(REFUSAL_ROWS >= 1);
 }
 
 #[test]

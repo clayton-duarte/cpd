@@ -39,16 +39,36 @@ fn id(text: &str) -> RecordId {
 }
 
 fn record(seq: i64, text_id: &str, text: &str, draft: Draft) -> Indexed {
-    (seq, Record { id: id(text_id), at: "2026-10-01T10:00:00.000Z".into(), by: By { session: None, plan: None }, text: text.into(), draft })
+    (
+        seq,
+        Record {
+            id: id(text_id),
+            at: "2026-10-01T10:00:00.000Z".into(),
+            by: By {
+                session: None,
+                plan: None,
+            },
+            text: text.into(),
+            draft,
+        },
+    )
 }
 
 fn decision(seq: i64, text_id: &str) -> Indexed {
-    record(seq, text_id, "Use it.", Draft::Decision { supersedes: None })
+    record(
+        seq,
+        text_id,
+        "Use it.",
+        Draft::Decision { supersedes: None },
+    )
 }
 
 /// The argv of one grep call, after the program: what the product asks.
 fn grep_args(repo: &str, word: &str) -> Vec<String> {
-    ["-C", repo, "grep", "-l", "-w", word, "--", "docs", "*.md"].iter().map(|a| (*a).to_owned()).collect()
+    ["-C", repo, "grep", "-l", "-w", word, "--", "docs", "*.md"]
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect()
 }
 
 /// A fake that answers the grep of `word` in `repo` with `reply`.
@@ -66,7 +86,9 @@ fn repos(names: &[&str]) -> Vec<String> {
 }
 
 fn hits_of(map: &HashMap<RecordId, Vec<String>>, text_id: &str) -> Vec<String> {
-    map.get(&id(text_id)).unwrap_or_else(|| panic!("no entry for {text_id}: {map:?}")).clone()
+    map.get(&id(text_id))
+        .unwrap_or_else(|| panic!("no entry for {text_id}: {map:?}"))
+        .clone()
 }
 
 // ---- scripted replies -------------------------------------------------------------------------------------
@@ -79,7 +101,10 @@ fn docs_md_lists_the_grep_hits_of_the_contexts_repos() {
     let r = answer(r, "/r/b", "hs-d1", Reply::ok("README.md\nsub/deep.md\n"));
     let r = answer(r, "/r/b", "hs-d10", Reply::exit(1, "", ""));
     let hits = grep_hits_with(&r, &repos(&["/r/a", "/r/b"]), &[&d1, &d10]).unwrap();
-    assert_eq!(hits_of(&hits, "hs-d1"), ["/r/a:docs/design.md", "/r/b:README.md", "/r/b:sub/deep.md"]);
+    assert_eq!(
+        hits_of(&hits, "hs-d1"),
+        ["/r/a:docs/design.md", "/r/b:README.md", "/r/b:sub/deep.md"]
+    );
     assert_eq!(hits_of(&hits, "hs-d10"), ["/r/a:docs/other.md"]);
     assert_eq!(hits.len(), 2);
 }
@@ -90,7 +115,10 @@ fn the_grep_asks_git_for_each_record_in_each_repo_in_that_order_and_nothing_else
     let r = runner().on("git", |_| true, Reply::exit(1, "", ""));
     grep_hits_with(&r, &repos(&["/r/a", "/r/b"]), &[&d1, &d2]).unwrap();
     let calls = r.calls();
-    let asked: Vec<(&str, &Vec<String>)> = calls.iter().map(|c| (c.program.as_str(), &c.args)).collect();
+    let asked: Vec<(&str, &Vec<String>)> = calls
+        .iter()
+        .map(|c| (c.program.as_str(), &c.args))
+        .collect();
     assert_eq!(
         asked,
         [
@@ -110,7 +138,10 @@ fn a_git_grep_call_names_its_tool_and_has_a_deadline() {
     grep_hits_with(&r, &repos(&["/r/a"]), &[&d1]).unwrap();
     let call = &r.calls()[0];
     assert_eq!(call.tool, "git");
-    assert!(call.deadline > std::time::Duration::ZERO, "the Runner is given a deadline: {call:?}");
+    assert!(
+        call.deadline > std::time::Duration::ZERO,
+        "the Runner is given a deadline: {call:?}"
+    );
 }
 
 #[test]
@@ -136,7 +167,11 @@ fn a_grep_that_fails_is_git_failed_with_the_repo_and_the_stderr() {
     let r = runner().on(
         "git",
         |_| true,
-        Reply::exit(128, "", "fatal: not a git repository (or any of the parent directories): .git\n"),
+        Reply::exit(
+            128,
+            "",
+            "fatal: not a git repository (or any of the parent directories): .git\n",
+        ),
     );
     let e = grep_hits_with(&r, &repos(&["/r/a"]), &[&d1]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::GitFailed);
@@ -144,7 +179,10 @@ fn a_grep_that_fails_is_git_failed_with_the_repo_and_the_stderr() {
         e.message(),
         "Cannot search /r/a for the record ids: fatal: not a git repository (or any of the parent directories): .git."
     );
-    assert_eq!(e.details().get("repo").and_then(|v| v.as_str()), Some("/r/a"));
+    assert_eq!(
+        e.details().get("repo").and_then(|v| v.as_str()),
+        Some("/r/a")
+    );
 }
 
 #[test]
@@ -161,13 +199,21 @@ fn a_git_that_cannot_start_is_git_failed_with_the_repo() {
     let r = runner().on("git", |_| true, Reply::io(ErrorKind::NotFound));
     let e = grep_hits_with(&r, &repos(&["/r/a"]), &[&d1]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::GitFailed);
-    assert_eq!(e.details().get("repo").and_then(|v| v.as_str()), Some("/r/a"));
+    assert_eq!(
+        e.details().get("repo").and_then(|v| v.as_str()),
+        Some("/r/a")
+    );
 }
 
 #[test]
 fn a_grep_that_fails_ends_the_search_at_that_repo() {
     let (d1, d2) = (decision(1, "hs-d1"), decision(2, "hs-d2"));
-    let r = answer(runner(), "/r/a", "hs-d1", Reply::exit(128, "", "fatal: boom\n"));
+    let r = answer(
+        runner(),
+        "/r/a",
+        "hs-d1",
+        Reply::exit(128, "", "fatal: boom\n"),
+    );
     let r = r.on("git", |_| true, Reply::exit(1, "", ""));
     let e = grep_hits_with(&r, &repos(&["/r/a", "/r/b"]), &[&d1, &d2]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::GitFailed);
@@ -180,12 +226,17 @@ fn a_hit_is_the_repo_as_given_a_colon_and_the_path_git_printed() {
     let repo = "/Users/x/projects/cpd.a";
     let r = answer(runner(), repo, "hs-d1", Reply::ok("docs/design.md\n"));
     let hits = grep_hits_with(&r, &repos(&[repo]), &[&d1]).unwrap();
-    assert_eq!(hits_of(&hits, "hs-d1"), ["/Users/x/projects/cpd.a:docs/design.md"]);
+    assert_eq!(
+        hits_of(&hits, "hs-d1"),
+        ["/Users/x/projects/cpd.a:docs/design.md"]
+    );
 }
 
 /// The model's line for `id`, retiring it as documented at `target`.
 fn documented(text_id: &str, topic: &str, short: &str, target: &str) -> String {
-    format!(r#"{{"id":"{text_id}","topic":"{topic}","short":"{short}","retire":{{"reason":"documented","target":"{target}"}},"doc":false}}"#)
+    format!(
+        r#"{{"id":"{text_id}","topic":"{topic}","short":"{short}","retire":{{"reason":"documented","target":"{target}"}},"doc":false}}"#
+    )
 }
 
 #[test]
@@ -198,7 +249,14 @@ fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
     let r = answer(r, "/r/a", "hs-n3", Reply::exit(1, "", ""));
     let records = [&d1, &d2, &n3];
     let hits = grep_hits_with(&r, &repos(&["/r/a"]), &records).unwrap();
-    let batch = Batch { records: &records, in_force: records.iter().map(|(seq, rec)| (rec.id.clone(), *seq)).collect(), hits };
+    let batch = Batch {
+        records: &records,
+        in_force: records
+            .iter()
+            .map(|(seq, rec)| (rec.id.clone(), *seq))
+            .collect(),
+        hits,
+    };
     // hs-d1 names a path that is no hit; hs-d2 names a real hit of its own; hs-n3 names a hit of hs-d1.
     let text = [
         documented("hs-d1", "storage", "sqlite", "/r/a:docs/invented.md"),
@@ -207,12 +265,42 @@ fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
     ]
     .join("\n");
     let checked = batch.check(&text);
-    let rejected: Vec<(Option<String>, Option<usize>)> =
-        checked.rejected.iter().map(|p| (p.id.as_ref().map(ToString::to_string), p.line)).collect();
-    assert_eq!(rejected, [(Some("hs-d1".to_owned()), Some(1)), (Some("hs-n3".to_owned()), Some(3))]);
-    assert!(checked.rejected.iter().all(|p| p.what.contains("is not one of the record's grep hits")), "{:?}", checked.rejected);
-    assert_eq!(checked.curations.iter().map(|c| c.record.to_string()).collect::<Vec<_>>(), ["hs-d2"]);
-    assert_eq!(checked.proposals.iter().map(|p| (p.record.to_string(), p.target.clone())).collect::<Vec<_>>(), [("hs-d2".to_owned(), wal.to_owned())]);
+    let rejected: Vec<(Option<String>, Option<usize>)> = checked
+        .rejected
+        .iter()
+        .map(|p| (p.id.as_ref().map(ToString::to_string), p.line))
+        .collect();
+    assert_eq!(
+        rejected,
+        [
+            (Some("hs-d1".to_owned()), Some(1)),
+            (Some("hs-n3".to_owned()), Some(3))
+        ]
+    );
+    assert!(
+        checked
+            .rejected
+            .iter()
+            .all(|p| p.what.contains("is not one of the record's grep hits")),
+        "{:?}",
+        checked.rejected
+    );
+    assert_eq!(
+        checked
+            .curations
+            .iter()
+            .map(|c| c.record.to_string())
+            .collect::<Vec<_>>(),
+        ["hs-d2"]
+    );
+    assert_eq!(
+        checked
+            .proposals
+            .iter()
+            .map(|p| (p.record.to_string(), p.target.clone()))
+            .collect::<Vec<_>>(),
+        [("hs-d2".to_owned(), wal.to_owned())]
+    );
 }
 
 #[test]
@@ -222,9 +310,18 @@ fn a_documented_target_that_is_a_grep_hit_of_the_record_in_a_second_repo_is_acce
     let r = answer(r, "/r/b", "hs-d1", Reply::ok("README.md\n"));
     let records = [&d1];
     let hits = grep_hits_with(&r, &repos(&["/r/a", "/r/b"]), &records).unwrap();
-    let batch = Batch { records: &records, in_force: HashMap::from([(id("hs-d1"), 1)]), hits };
+    let batch = Batch {
+        records: &records,
+        in_force: HashMap::from([(id("hs-d1"), 1)]),
+        hits,
+    };
     let checked = batch.check(&documented("hs-d1", "storage", "sqlite", "/r/b:README.md"));
-    assert_eq!((checked.rejected.len(), checked.proposals.len()), (0, 1), "{:?}", checked.rejected);
+    assert_eq!(
+        (checked.rejected.len(), checked.proposals.len()),
+        (0, 1),
+        "{:?}",
+        checked.rejected
+    );
 }
 
 #[test]
@@ -234,15 +331,32 @@ fn a_doc_candidate_has_its_grep_hits_as_its_doc_paths_and_none_when_it_is_not_on
     let r = answer(r, "/r/a", "hs-d2", Reply::exit(1, "", ""));
     let records = [&d1, &d2];
     let hits = grep_hits_with(&r, &repos(&["/r/a"]), &records).unwrap();
-    let batch = Batch { records: &records, in_force: HashMap::new(), hits };
+    let batch = Batch {
+        records: &records,
+        in_force: HashMap::new(),
+        hits,
+    };
     let text = [
         r#"{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":true}"#,
         r#"{"id":"hs-d2","topic":"locking","short":"flock","retire":null,"doc":false}"#,
     ]
     .join("\n");
     let checked = batch.check(&text);
-    let paths: Vec<(String, Option<Vec<String>>)> = checked.curations.iter().map(|c| (c.record.to_string(), c.doc_paths.clone())).collect();
-    assert_eq!(paths, [("hs-d1".to_owned(), Some(vec!["/r/a:docs/design.md".to_owned()])), ("hs-d2".to_owned(), None)]);
+    let paths: Vec<(String, Option<Vec<String>>)> = checked
+        .curations
+        .iter()
+        .map(|c| (c.record.to_string(), c.doc_paths.clone()))
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            (
+                "hs-d1".to_owned(),
+                Some(vec!["/r/a:docs/design.md".to_owned()])
+            ),
+            ("hs-d2".to_owned(), None)
+        ]
+    );
 }
 
 #[test]
@@ -251,8 +365,13 @@ fn a_doc_candidate_with_no_grep_hit_has_an_empty_list_of_doc_paths() {
     let r = runner().on("git", |_| true, Reply::exit(1, "", ""));
     let records = [&d1];
     let hits = grep_hits_with(&r, &repos(&["/r/a"]), &records).unwrap();
-    let batch = Batch { records: &records, in_force: HashMap::new(), hits };
-    let checked = batch.check(r#"{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":true}"#);
+    let batch = Batch {
+        records: &records,
+        in_force: HashMap::new(),
+        hits,
+    };
+    let checked = batch
+        .check(r#"{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":true}"#);
     assert_eq!(checked.curations[0].doc_paths, Some(Vec::new()));
 }
 
@@ -260,7 +379,10 @@ fn a_doc_candidate_with_no_grep_hit_has_an_empty_list_of_doc_paths() {
 fn the_grep_is_spawned_through_the_runner_not_as_a_direct_command() {
     // The tripwire of the rule "no direct spawn of git": the file that greps names no `Command::new("git")`.
     let source = include_str!("distill.rs");
-    assert!(!source.contains("Command::new(\"git\")"), "distill.rs still spawns git directly");
+    assert!(
+        !source.contains("Command::new(\"git\")"),
+        "distill.rs still spawns git directly"
+    );
 }
 
 // ---- the route --------------------------------------------------------------------------------------------
@@ -288,7 +410,13 @@ fn world() -> World {
     let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let runner = FakeRunner::new(clock).with_git(&route);
-    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, repos: 0 }
+    World {
+        tmp: tempfile::tempdir().unwrap(),
+        universe,
+        route,
+        runner,
+        repos: 0,
+    }
 }
 
 fn p(path: &Path) -> &str {
@@ -303,7 +431,10 @@ impl World {
     /// A repo on `main` whose one commit holds `files`.
     fn repo(&mut self, files: &[(&str, &str)]) -> Repo {
         self.repos += 1;
-        let repo = Repo::init(&self.universe, &self.root().join(format!("repo{}", self.repos)));
+        let repo = Repo::init(
+            &self.universe,
+            &self.root().join(format!("repo{}", self.repos)),
+        );
         for (path, text) in files {
             repo.write(path, text);
         }
@@ -349,7 +480,15 @@ fn git_grep_lists_what_is_under_docs_and_the_markdown_files_at_any_depth_sorted(
     let mut w = world();
     let repo = docs_repo(&mut w);
     let out = grep(&w, repo.dir(), "hs-d1");
-    assert_eq!((out.code, out.stdout.as_str()), (0, "README.md\ndocs/data.txt\ndocs/design.md\ndocs/sub/z.md\nsub/deep.md\n"), "{}", out.stderr);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (
+            0,
+            "README.md\ndocs/data.txt\ndocs/design.md\ndocs/sub/z.md\nsub/deep.md\n"
+        ),
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -357,7 +496,12 @@ fn git_grep_w_matches_whole_words_only() {
     let mut w = world();
     let repo = docs_repo(&mut w);
     let out = grep(&w, repo.dir(), "hs-d10");
-    assert_eq!((out.code, out.stdout.as_str()), (0, "docs/other.md\n"), "{}", out.stderr);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "docs/other.md\n"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -365,7 +509,10 @@ fn git_grep_exits_1_and_prints_nothing_when_no_file_has_the_word() {
     let mut w = world();
     let repo = docs_repo(&mut w);
     let out = grep(&w, repo.dir(), "hs-d2");
-    assert_eq!((out.code, out.stdout, out.stderr), (1, String::new(), String::new()));
+    assert_eq!(
+        (out.code, out.stdout, out.stderr),
+        (1, String::new(), String::new())
+    );
 }
 
 #[test]
@@ -377,7 +524,11 @@ fn git_grep_searches_tracked_files_as_they_are_in_the_working_tree() {
     repo.write("untracked.md", "hs-d1\n");
     std::fs::remove_file(repo.dir().join("README.md")).unwrap();
     let out = grep(&w, repo.dir(), "hs-d1");
-    assert_eq!(out.stdout, "clean.md\ndocs/data.txt\ndocs/design.md\ndocs/sub/z.md\nsub/deep.md\n", "{}", out.stderr);
+    assert_eq!(
+        out.stdout, "clean.md\ndocs/data.txt\ndocs/design.md\ndocs/sub/z.md\nsub/deep.md\n",
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -386,7 +537,13 @@ fn git_grep_in_a_directory_that_is_no_repo_is_128() {
     let plain = w.root().join("plain");
     std::fs::create_dir_all(&plain).unwrap();
     let out = grep(&w, &plain, "hs-d1");
-    assert_eq!((out.code, out.stderr.as_str()), (128, "fatal: not a git repository (or any of the parent directories): .git\n"));
+    assert_eq!(
+        (out.code, out.stderr.as_str()),
+        (
+            128,
+            "fatal: not a git repository (or any of the parent directories): .git\n"
+        )
+    );
 }
 
 #[test]
@@ -400,15 +557,35 @@ fn git_grep_is_a_call_the_route_supports() {
 #[test]
 fn the_hits_through_the_route_are_the_repo_as_given_and_the_paths_of_git_grep() {
     let mut w = world();
-    let (a, b) = (docs_repo(&mut w), w.repo(&[("README.md", "Decided in hs-d1.\n")]));
+    let (a, b) = (
+        docs_repo(&mut w),
+        w.repo(&[("README.md", "Decided in hs-d1.\n")]),
+    );
     let (d1, d10) = (decision(1, "hs-d1"), decision(2, "hs-d10"));
     let names = vec![p(a.dir()).to_owned(), p(b.dir()).to_owned()];
     let hits = grep_hits_with(&w.runner, &names, &[&d1, &d10]).unwrap();
-    let prefix = |dir: &Path, paths: &[&str]| -> Vec<String> { paths.iter().map(|p| format!("{}:{p}", dir.display())).collect() };
-    let mut want_d1 = prefix(a.dir(), &["README.md", "docs/data.txt", "docs/design.md", "docs/sub/z.md", "sub/deep.md"]);
+    let prefix = |dir: &Path, paths: &[&str]| -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| format!("{}:{p}", dir.display()))
+            .collect()
+    };
+    let mut want_d1 = prefix(
+        a.dir(),
+        &[
+            "README.md",
+            "docs/data.txt",
+            "docs/design.md",
+            "docs/sub/z.md",
+            "sub/deep.md",
+        ],
+    );
     want_d1.extend(prefix(b.dir(), &["README.md"]));
     assert_eq!(hits_of(&hits, "hs-d1"), want_d1);
-    assert_eq!(hits_of(&hits, "hs-d10"), prefix(a.dir(), &["docs/other.md"]));
+    assert_eq!(
+        hits_of(&hits, "hs-d10"),
+        prefix(a.dir(), &["docs/other.md"])
+    );
     assert_eq!(w.route.unsupported(), Vec::<String>::new());
 }
 
@@ -420,5 +597,9 @@ fn a_repo_that_is_gone_is_git_failed_through_the_route() {
     let d1 = decision(1, "hs-d1");
     let e = grep_hits_with(&w.runner, &[p(&gone).to_owned()], &[&d1]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::GitFailed);
-    assert!(e.message().contains("fatal: not a git repository"), "{}", e.message());
+    assert!(
+        e.message().contains("fatal: not a git repository"),
+        "{}",
+        e.message()
+    );
 }

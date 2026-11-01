@@ -33,8 +33,16 @@ pub(super) fn leaves(all: &[Job], plan: &PlanId, workflow: &str, workflow_status
         .filter(|j| after_open.contains(&j.key) && !after_key.contains(&j.key))
         .filter(|j| j.status != "cancelled" && !j.is_draft() && j.kind != "update")
         .collect();
-    let leaves: Vec<&Job> = members.iter().copied().filter(|j| !members.iter().any(|m| m.needs.contains(&j.key))).collect();
-    let failed: Vec<&str> = leaves.iter().filter(|j| j.status == "failed").map(|j| j.key.as_str()).collect();
+    let leaves: Vec<&Job> = members
+        .iter()
+        .copied()
+        .filter(|j| !members.iter().any(|m| m.needs.contains(&j.key)))
+        .collect();
+    let failed: Vec<&str> = leaves
+        .iter()
+        .filter(|j| j.status == "failed")
+        .map(|j| j.key.as_str())
+        .collect();
     if !failed.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsUnavailable,

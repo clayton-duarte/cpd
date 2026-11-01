@@ -37,9 +37,10 @@ fn failed(what: impl std::fmt::Display, e: io::Error) -> Stop {
 pub(super) fn preflight(install: &Install) -> Result<(), Stop> {
     let link = link_of(install);
     match fs::symlink_metadata(&link) {
-        Ok(meta) if !meta.file_type().is_symlink() && !meta.is_dir() => {
-            Err(refused(format!("{} is neither a symlink nor a directory", link.display())))
-        }
+        Ok(meta) if !meta.file_type().is_symlink() && !meta.is_dir() => Err(refused(format!(
+            "{} is neither a symlink nor a directory",
+            link.display()
+        ))),
         _ => Ok(()),
     }
 }
@@ -91,24 +92,46 @@ pub(super) fn swap(ports: &Ports, install: &Install) -> Result<Option<String>, S
     result
 }
 
-fn build_and_swap(ports: &Ports, install: &Install, share: &Path, adapter: &Path, tmp: &Path, link: &Path) -> Result<Option<String>, Stop> {
-    fs::create_dir_all(share).map_err(|e| failed(format!("cannot create {}", share.display()), e))?;
+fn build_and_swap(
+    ports: &Ports,
+    install: &Install,
+    share: &Path,
+    adapter: &Path,
+    tmp: &Path,
+    link: &Path,
+) -> Result<Option<String>, Stop> {
+    fs::create_dir_all(share)
+        .map_err(|e| failed(format!("cannot create {}", share.display()), e))?;
     let stamp = ports
         .clock
         .utc()
-        .format(format_description!("[year][month][day]T[hour][minute][second]"))
+        .format(format_description!(
+            "[year][month][day]T[hour][minute][second]"
+        ))
         .expect("a UTC time always formats");
     let version = format!("pi.{stamp}-{}", install.pid);
     fs::create_dir(tmp).map_err(|e| failed(format!("cannot create {}", tmp.display()), e))?;
     let source = install.root.join("pi");
-    copy_tree(&source, tmp, &["test"]).map_err(|e| failed(format!("cannot copy {} to {}", source.display(), tmp.display()), e))?;
+    copy_tree(&source, tmp, &["test"]).map_err(|e| {
+        failed(
+            format!("cannot copy {} to {}", source.display(), tmp.display()),
+            e,
+        )
+    })?;
     let built = share.join(&version);
-    fs::rename(tmp, &built).map_err(|e| failed(format!("cannot rename {} to {}", tmp.display(), built.display()), e))?;
-    symlink(&version, link).map_err(|e| failed(format!("cannot link {} to {version}", link.display()), e))?;
+    fs::rename(tmp, &built).map_err(|e| {
+        failed(
+            format!("cannot rename {} to {}", tmp.display(), built.display()),
+            e,
+        )
+    })?;
+    symlink(&version, link)
+        .map_err(|e| failed(format!("cannot link {} to {version}", link.display()), e))?;
 
     let (displaced, is_dir) = match fs::symlink_metadata(adapter) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            let target = fs::read_link(adapter).map_err(|e| failed(format!("cannot read the link {}", adapter.display()), e))?;
+            let target = fs::read_link(adapter)
+                .map_err(|e| failed(format!("cannot read the link {}", adapter.display()), e))?;
             (Some(target.to_string_lossy().into_owned()), false)
         }
         Ok(meta) if meta.is_dir() => (Some("pi.legacy".to_owned()), true),
@@ -118,7 +141,13 @@ fn build_and_swap(ports: &Ports, install: &Install, share: &Path, adapter: &Path
         // The migration: a rename of a symlink over a directory fails, and no portable call exchanges the two.
         let legacy = share.join("pi.legacy");
         fs::remove_dir_all(&legacy)
-            .or_else(|e| if e.kind() == io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+            .or_else(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
             .and_then(|()| fs::rename(adapter, &legacy))
             .and_then(|()| {
                 fs::rename(link, adapter).inspect_err(|_| {
@@ -128,8 +157,20 @@ fn build_and_swap(ports: &Ports, install: &Install, share: &Path, adapter: &Path
     } else {
         fs::rename(link, adapter)
     };
-    let back = if is_dir { "; the old directory is back" } else { "" };
-    swapped.map_err(|e| failed(format!("cannot swap the adapter link over {}{back}", adapter.display()), e))?;
+    let back = if is_dir {
+        "; the old directory is back"
+    } else {
+        ""
+    };
+    swapped.map_err(|e| {
+        failed(
+            format!(
+                "cannot swap the adapter link over {}{back}",
+                adapter.display()
+            ),
+            e,
+        )
+    })?;
     Ok(displaced)
 }
 
@@ -139,26 +180,46 @@ pub(super) fn verify(install: &Install) -> Result<(), Stop> {
     if adapter.join("package.json").is_file() {
         return Ok(());
     }
-    Err(Stop(format!("cpd install failed: {} has no package.json after the swap", adapter.display())))
+    Err(Stop(format!(
+        "cpd install failed: {} has no package.json after the swap",
+        adapter.display()
+    )))
 }
 
 /// Whether `name` is `pi.legacy` or `pi.<digit>...-<digit>...`.
 fn is_version(name: &str) -> bool {
-    let Some(id) = name.strip_prefix("pi.") else { return false };
-    id == "legacy" || (id.starts_with(|c: char| c.is_ascii_digit()) && id.match_indices('-').any(|(i, _)| id[i + 1..].starts_with(|c: char| c.is_ascii_digit())))
+    let Some(id) = name.strip_prefix("pi.") else {
+        return false;
+    };
+    id == "legacy"
+        || (id.starts_with(|c: char| c.is_ascii_digit())
+            && id
+                .match_indices('-')
+                .any(|(i, _)| id[i + 1..].starts_with(|c: char| c.is_ascii_digit())))
 }
 
 /// The cleanup: versions that are neither current, nor displaced, nor pinned by a live pid, nor modified in the
 /// last 60 minutes, the pins and the scratch of pids that are gone. A failure is a warning, never a failed install.
-pub(super) fn cleanup(ports: &Ports, install: &Install, displaced: Option<&str>, err: &mut dyn Write) {
+pub(super) fn cleanup(
+    ports: &Ports,
+    install: &Install,
+    displaced: Option<&str>,
+    err: &mut dyn Write,
+) {
     let share = share(install);
-    let current = fs::read_link(share.join("pi")).ok().map(|t| t.to_string_lossy().into_owned());
+    let current = fs::read_link(share.join("pi"))
+        .ok()
+        .map(|t| t.to_string_lossy().into_owned());
     let now = ports.clock.utc().unix_timestamp();
     let mut cleaned = true;
     let entries = match fs::read_dir(&share) {
         Ok(entries) => entries,
         Err(_) => {
-            let _ = writeln!(err, "cpd install warning: could not remove every old adapter version under {}", share.display());
+            let _ = writeln!(
+                err,
+                "cpd install warning: could not remove every old adapter version under {}",
+                share.display()
+            );
             return;
         }
     };
@@ -169,7 +230,11 @@ pub(super) fn cleanup(ports: &Ports, install: &Install, displaced: Option<&str>,
         if !name.starts_with(PIN_PREFIX) {
             continue;
         }
-        let alive = name.rsplit('.').next().and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| ports.spawn.alive(Pid(p)));
+        let alive = name
+            .rsplit('.')
+            .next()
+            .and_then(|p| p.parse::<u32>().ok())
+            .is_some_and(|p| ports.spawn.alive(Pid(p)));
         if !alive {
             cleaned &= remove_any(&entry.path()).is_ok();
         } else if let Ok(target) = fs::read_link(entry.path()) {
@@ -186,23 +251,41 @@ pub(super) fn cleanup(ports: &Ports, install: &Install, displaced: Option<&str>,
             continue;
         }
         if is_version(&name) {
-            if Some(name.as_str()) == current.as_deref() || Some(name.as_str()) == displaced || protected.contains(&name) {
+            if Some(name.as_str()) == current.as_deref()
+                || Some(name.as_str()) == displaced
+                || protected.contains(&name)
+            {
                 continue;
             }
-            let modified = fs::symlink_metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+            let modified = fs::symlink_metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
             match modified {
-                Some(at) if now - i64::try_from(at.as_secs()).unwrap_or(i64::MAX) > KEEP_SECONDS => cleaned &= remove_any(&path).is_ok(),
+                Some(at)
+                    if now - i64::try_from(at.as_secs()).unwrap_or(i64::MAX) > KEEP_SECONDS =>
+                {
+                    cleaned &= remove_any(&path).is_ok()
+                }
                 Some(_) => {}
                 None => cleaned = false,
             }
         } else if name.starts_with("pi.tmp.") || name.starts_with("pi.link.") {
-            let alive = name.rsplit('.').next().and_then(|p| p.parse::<u32>().ok()).is_some_and(|p| ports.spawn.alive(Pid(p)));
+            let alive = name
+                .rsplit('.')
+                .next()
+                .and_then(|p| p.parse::<u32>().ok())
+                .is_some_and(|p| ports.spawn.alive(Pid(p)));
             if !alive {
                 cleaned &= remove_any(&path).is_ok();
             }
         }
     }
     if !cleaned {
-        let _ = writeln!(err, "cpd install warning: could not remove every old adapter version under {}", share.display());
+        let _ = writeln!(
+            err,
+            "cpd install warning: could not remove every old adapter version under {}",
+            share.display()
+        );
     }
 }

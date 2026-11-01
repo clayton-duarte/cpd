@@ -63,11 +63,17 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 
 /// The refusal of a caller that is not a live Manager (commands.md §25).
 fn manager_only() -> CpdError {
-    CpdError::new(ErrorCode::ManagerOnly, "Only a live Manager Session may change incident mode.")
+    CpdError::new(
+        ErrorCode::ManagerOnly,
+        "Only a live Manager Session may change incident mode.",
+    )
 }
 
 /// The caller must be a live (not archived) Manager Session.
-fn require_manager<'a>(conn: &Connection, caller: Option<&'a SessionId>) -> Result<&'a SessionId, CpdError> {
+fn require_manager<'a>(
+    conn: &Connection,
+    caller: Option<&'a SessionId>,
+) -> Result<&'a SessionId, CpdError> {
     let caller = caller.ok_or_else(manager_only)?;
     let manager: Option<bool> = conn
         .query_row(
@@ -106,7 +112,10 @@ pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
 
 /// Whether incident mode is on (contract §2.2): one row in `incident`.
 pub fn is_on(conn: &Connection) -> bool {
-    conn.query_row("SELECT EXISTS(SELECT 1 FROM incident)", [], |r| r.get::<_, bool>(0)).unwrap_or(false)
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM incident)", [], |r| {
+        r.get::<_, bool>(0)
+    })
+    .unwrap_or(false)
 }
 
 /// Whether `plan` is held by incident mode (contract §2.2): the incident is on and `plan` is not
@@ -125,7 +134,9 @@ pub fn plans(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
     let mut stmt = conn.prepare("SELECT plan FROM incident_plans ORDER BY plan")?;
     let plans = stmt
         .query_map([], |r| r.get::<_, String>(0))?
-        .map(|r| PlanId::parse(&r?).map_err(|e| CpdError::bad_row(format!("incident_plans.plan: {e}"))))
+        .map(|r| {
+            PlanId::parse(&r?).map_err(|e| CpdError::bad_row(format!("incident_plans.plan: {e}")))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(plans)
 }
@@ -134,8 +145,12 @@ pub fn plans(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
 /// `incident.lead` is used when set; a null one (a row written before the migration) falls back to
 /// the alphabetically first Plan's Lead. `None` when there is no incident row or no resolvable Lead.
 pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
-    let stored: Option<Option<String>> = conn.query_row("SELECT lead FROM incident WHERE id = 1", [], |r| r.get(0)).optional()?;
-    let Some(stored) = stored else { return Ok(None) };
+    let stored: Option<Option<String>> = conn
+        .query_row("SELECT lead FROM incident WHERE id = 1", [], |r| r.get(0))
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
     let id = match stored {
         Some(id) => id,
         None => match conn
@@ -150,7 +165,9 @@ pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
             None => return Ok(None),
         },
     };
-    SessionId::parse(&id).map(Some).map_err(|e| CpdError::bad_row(format!("incident.lead: {e}")))
+    SessionId::parse(&id)
+        .map(Some)
+        .map_err(|e| CpdError::bad_row(format!("incident.lead: {e}")))
 }
 
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
@@ -183,7 +200,10 @@ pub fn start(
     until_workflow: Option<&str>,
 ) -> Result<Output, CpdError> {
     if plans.is_empty() {
-        return Err(CpdError::new(ErrorCode::Usage, "Incident mode needs at least one --plan."));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            "Incident mode needs at least one --plan.",
+        ));
     }
     let until = until_workflow.map(parse_until_workflow).transpose()?;
     store.write("incident start", |tx| {
@@ -295,7 +315,10 @@ pub fn end(store: &mut Store, caller: Option<&SessionId>) -> Result<Output, CpdE
         tx.execute("DELETE FROM incident_plans", [])?;
         tx.execute("DELETE FROM incident WHERE id = 1", [])?;
         let ended_at = clock::now();
-        append(tx, NewEvent::incident_ended("Incident mode off.", caller.as_str(), &ended_at, "manual"))?;
+        append(
+            tx,
+            NewEvent::incident_ended("Incident mode off.", caller.as_str(), &ended_at, "manual"),
+        )?;
         Ok(Output::success(json!({"changed": true, "incident": null})))
     })
 }
@@ -303,7 +326,9 @@ pub fn end(store: &mut Store, caller: Option<&SessionId>) -> Result<Output, CpdE
 /// `cpd incident status` (commands.md §25.3): a read of the row and its Plan set, for any caller.
 pub fn status(store: &mut Store) -> Result<Output, CpdError> {
     let incident = store.read(row)?;
-    Ok(Output::success(json!({"on": incident.is_some(), "incident": incident})))
+    Ok(Output::success(
+        json!({"on": incident.is_some(), "incident": incident}),
+    ))
 }
 
 /// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
@@ -316,7 +341,12 @@ pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError>
         .query_row(
             "SELECT until_plan, until_workflow FROM incident WHERE id = 1",
             [],
-            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .optional()?;
     let Some((Some(until_plan), Some(until_workflow))) = stored else { return Ok(false) };
@@ -341,9 +371,15 @@ pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError>
 /// values truncated, a `started_at` in the future reads `0s`. `started_at` is RFC 3339, the format
 /// `clock::timestamp` writes; anything else is a loud `StoreFailed`.
 pub fn elapsed(started_at: &str, now: time::OffsetDateTime) -> Result<String, CpdError> {
-    let started = time::OffsetDateTime::parse(started_at, &time::format_description::well_known::Rfc3339).map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("The incident holds a started_at that is not RFC 3339: {started_at:?} ({e}).")).with("started_at", started_at)
-    })?;
+    let started =
+        time::OffsetDateTime::parse(started_at, &time::format_description::well_known::Rfc3339)
+            .map_err(|e| {
+                CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The incident holds a started_at that is not RFC 3339: {started_at:?} ({e})."),
+        )
+        .with("started_at", started_at)
+            })?;
     let seconds = (now - started).whole_seconds().max(0);
     Ok(if seconds < 60 {
         format!("{seconds}s")

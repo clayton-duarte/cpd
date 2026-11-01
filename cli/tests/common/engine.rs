@@ -22,8 +22,8 @@ use cpd_core::clock::{Clock, ManualClock, timestamp};
 use cpd_core::error::CpdError;
 use cpd_core::events::{NewEvent, append};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
-use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -89,14 +89,19 @@ impl Clock for Stepped {
             && std::thread::current().id() != self.engine_thread
         {
             ENDED.with(|ended| {
-                ended.borrow_mut().get_or_insert_with(|| Guard(hook.clone()));
+                ended
+                    .borrow_mut()
+                    .get_or_insert_with(|| Guard(hook.clone()));
             });
         }
         now
     }
     fn sleep(&self, d: Duration) {
         let nap = self.inner.naps().len() + 1;
-        assert!(nap <= MAX_NAPS, "the engine napped {MAX_NAPS} times (virtual time) and the step never said it was done");
+        assert!(
+            nap <= MAX_NAPS,
+            "the engine napped {MAX_NAPS} times (virtual time) and the step never said it was done"
+        );
         let last = (self.step.lock().unwrap())(nap);
         self.inner.sleep(d);
         if last {
@@ -122,7 +127,10 @@ impl Fx {
     pub fn engine_config_on_tmux(&self, extra: &str) {
         self.env.write_models();
         self.env.quiet_models(self.fakes.clock.utc());
-        self.env.write_config(&engine_config_text(extra, &format!("[tmux]\nsocket = \"{}\"\n", self.env.tmux_socket())));
+        self.env.write_config(&engine_config_text(
+            extra,
+            &format!("[tmux]\nsocket = \"{}\"\n", self.env.tmux_socket()),
+        ));
     }
 
     /// What the engine's own calls get when a test does not care: tmux has no server, and `cpd pr poll` (E5, through the
@@ -144,7 +152,10 @@ impl Fx {
     /// ([`ENGINE_EXE`]) and a tmux that has no server.
     pub fn engine_base_routes(&self) {
         self.fakes.spawn.set_self_exe(ENGINE_EXE);
-        self.fake("tmux", Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"));
+        self.fake(
+            "tmux",
+            Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"),
+        );
     }
 
     /// [`Fx::engine_routes`] with the tmux route left to answer, not a tmux with no server: the fake server of [`Fx::tmux`] is the
@@ -160,21 +171,33 @@ impl Fx {
     /// (the process's are the `Fx`'s, set once; `CPD_HOME` is the same for the engine and the command it runs).
     pub fn cpd_runs_in_process(&self) {
         // The runner is held weakly: the route lives in the runner's own script and calls it back.
-        let ports = Ports { clock: self.fakes.ports.clock.clone(), runner: self.fakes.runner.weak(), spawn: self.fakes.ports.spawn.clone() };
-        let _ = (*self.fakes.runner).clone().route("cpd", Arc::new(CpdRoute { ports }));
+        let ports = Ports {
+            clock: self.fakes.ports.clock.clone(),
+            runner: self.fakes.runner.weak(),
+            spawn: self.fakes.ports.spawn.clone(),
+            ..Ports::real()
+        };
+        let _ = (*self.fakes.runner)
+            .clone()
+            .route("cpd", Arc::new(CpdRoute { ports }));
     }
 
     /// Answers every call of `program` with `reply(call)`, in the thread that makes it: a script that depends on the call or
     /// on what the test changed since the last one.
     pub fn route_fn(&self, program: &str, reply: impl Fn(&Call) -> Reply + Send + Sync + 'static) {
-        let _ = (*self.fakes.runner).clone().route(program, Arc::new(FnRoute(Box::new(reply))));
+        let _ = (*self.fakes.runner)
+            .clone()
+            .route(program, Arc::new(FnRoute(Box::new(reply))));
     }
 
     /// Context `ctx` and Plan `pay` in `dispatch` (PR `repo` in `dispatch`, its Lead Session `lead1` stopped, the Tier
     /// catalog of pi 1.0.0 seeded): the Plan of the engine tests. Its repo and Lead worktree are paths that are not on disk:
     /// a step that runs git needs a repo of its own.
     pub fn engine_plan(&self) {
-        self.engine_plan_at(&self.env.root().join("pay"), &self.env.root().join("pay.pay"));
+        self.engine_plan_at(
+            &self.env.root().join("pay"),
+            &self.env.root().join("pay.pay"),
+        );
     }
 
     /// [`Fx::engine_plan`] with PR `repo` on the repo `repo` and the Lead worktree `lead` (a repo and a worktree of the fake git).
@@ -232,11 +255,17 @@ impl Fx {
              VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
-            sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{PLAN}', '{key}', '{need}');");
+            sql += &format!(
+                "INSERT INTO dependencies (plan, job, needs) VALUES ('{PLAN}', '{key}', '{need}');"
+            );
         }
         self.env.sql(&sql);
         let plan = PlanId::parse(PLAN).unwrap();
-        let all = self.env.store().read(|conn| jobs::load(conn, &plan)).unwrap();
+        let all = self
+            .env
+            .store()
+            .read(|conn| jobs::load(conn, &plan))
+            .unwrap();
         let job = all.iter().find(|j| j.key == key).unwrap();
         self.env.sql(&format!(
             "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{PLAN}' AND key = '{key}'; {then}",
@@ -246,7 +275,11 @@ impl Fx {
 
     /// `cpd watch` in `CPD_HOME` on this `Fx`'s ports until it has napped `stop_after` times (see the module), `hook`
     /// running before each nap. It returns what `cpd watch` returns when it is stopped.
-    pub fn watch(&self, stop_after: usize, mut hook: impl FnMut(usize) + Send + 'static) -> Result<Output, CpdError> {
+    pub fn watch(
+        &self,
+        stop_after: usize,
+        mut hook: impl FnMut(usize) + Send + 'static,
+    ) -> Result<Output, CpdError> {
         self.watch_steps(move |nap| {
             hook(nap);
             nap >= stop_after
@@ -255,7 +288,10 @@ impl Fx {
 
     /// `cpd watch` in `CPD_HOME` on this `Fx`'s ports, `step` running before each nap passes (with its 1-based number): it
     /// returns whether that nap is the last. What `step` reads is the state after the tick that came before the nap.
-    pub fn watch_steps(&self, step: impl FnMut(usize) -> bool + Send + 'static) -> Result<Output, CpdError> {
+    pub fn watch_steps(
+        &self,
+        step: impl FnMut(usize) -> bool + Send + 'static,
+    ) -> Result<Output, CpdError> {
         self.watch_steps_on(step, None)
     }
 
@@ -264,11 +300,19 @@ impl Fx {
     /// stamp the end of the poll, then sends its result, so `poll_ended` runs at the poll thread's exit, after its send,
     /// and the result is already on the channel. A `step` that waits for what `poll_ended` signals stops the engine's
     /// virtual time while a poll runs, so the poll ends at a time the test knows. `poll_ended` must not panic.
-    pub fn watch_gated(&self, step: impl FnMut(usize) -> bool + Send + 'static, poll_ended: impl Fn() + Send + Sync + 'static) -> Result<Output, CpdError> {
+    pub fn watch_gated(
+        &self,
+        step: impl FnMut(usize) -> bool + Send + 'static,
+        poll_ended: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Output, CpdError> {
         self.watch_steps_on(step, Some(Arc::new(poll_ended)))
     }
 
-    fn watch_steps_on(&self, step: impl FnMut(usize) -> bool + Send + 'static, on_other_thread: Option<Hook>) -> Result<Output, CpdError> {
+    fn watch_steps_on(
+        &self,
+        step: impl FnMut(usize) -> bool + Send + 'static,
+        on_other_thread: Option<Hook>,
+    ) -> Result<Output, CpdError> {
         let until = Arc::new(AtomicBool::new(false));
         let stepped = Stepped {
             inner: (*self.fakes.clock).clone(),
@@ -277,7 +321,12 @@ impl Fx {
             engine_thread: std::thread::current().id(),
             on_other_thread,
         };
-        let ports = Ports { clock: Arc::new(stepped), runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
+        let ports = Ports {
+            clock: Arc::new(stepped),
+            runner: self.fakes.ports.runner.clone(),
+            spawn: self.fakes.ports.spawn.clone(),
+            ..Ports::real()
+        };
         // The steps that reach git or tmux through the core's wrappers (E2's merge recovery, a Worker's window) read `Ports::current()`.
         Ports::scope(&ports, || cpd_engine::watch::run_with(&ports, &until))
     }
@@ -339,7 +388,11 @@ impl Fx {
              VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
         ));
         let plan = PlanId::parse(PLAN).unwrap();
-        let all = self.env.store().read(|conn| jobs::load(conn, &plan)).unwrap();
+        let all = self
+            .env
+            .store()
+            .read(|conn| jobs::load(conn, &plan))
+            .unwrap();
         let job = all.iter().find(|j| j.key == key).unwrap();
         self.env.sql(&format!(
             "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{PLAN}' AND key = '{key}'; {then}",
@@ -350,8 +403,10 @@ impl Fx {
     /// `(key, status)` of every Job of `kind`, by key.
     pub fn jobs_of_kind(&self, kind: &str) -> Vec<(String, String)> {
         self.env.read(|conn| {
-            let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
-            Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            let mut stmt =
+                conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
+            stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
         })
     }
 }
@@ -361,12 +416,23 @@ impl Fx {
     /// its driver pid 4242 and its worktree beside the repo's. The `starting → running` Event is at `started_at` when the
     /// Attempt is `running`.
     pub fn add_running(&self, key: &str, status: &str, started_at: &str) {
-        self.add_running_since(key, status, started_at, (status == "running").then_some(started_at));
+        self.add_running_since(
+            key,
+            status,
+            started_at,
+            (status == "running").then_some(started_at),
+        );
     }
 
     /// [`Fx::add_running`] with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`): an
     /// Attempt that waited in `starting`.
-    pub fn add_running_since(&self, key: &str, status: &str, started_at: &str, running_at: Option<&str>) {
+    pub fn add_running_since(
+        &self,
+        key: &str,
+        status: &str,
+        started_at: &str,
+        running_at: Option<&str>,
+    ) {
         let event = running_at
             .map(|at| {
                 format!(
@@ -402,20 +468,37 @@ impl Fx {
     /// it is not external software). The lock goes with the value the test holds.
     pub fn live_driver(&self, attempt: &str) -> Flock<File> {
         let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
-        let path = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
+        let path = home.attempt_lock(
+            &PlanId::parse(PLAN).unwrap(),
+            &AttemptId::parse(attempt).unwrap(),
+        );
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-        Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        Flock::lock(file, FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .unwrap()
     }
 
     /// A tmux server with one session, `keepalive`, on the tmux route ([`Fx::engine_config_on_tmux`]).
     pub fn tmux_server(&self) {
-        assert!(self.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+        assert!(
+            self.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"])
+                .status
+                .success()
+        );
     }
 
     /// The server option `name` (`show -gv`), without its trailing newline: empty when it is not set.
     pub fn tmux_option(&self, name: &str) -> String {
-        String::from_utf8_lossy(&self.tmux(&["show", "-gv", name]).stdout).trim_end().to_owned()
+        String::from_utf8_lossy(&self.tmux(&["show", "-gv", name]).stdout)
+            .trim_end()
+            .to_owned()
     }
 }
 
@@ -448,30 +531,48 @@ pub struct Engines {
 impl Engines {
     /// `tmux <args>` on the fake server of the env's socket, not through the runner (it is no call of the product's).
     fn tmux(&self, args: &[&str]) -> Option<String> {
-        let argv = ["-L", &self.socket].into_iter().chain(args.iter().copied()).map(str::to_owned).collect();
-        let out = self.route.fake().run(&Invocation { argv, tmux_tmpdir: self.tmpdir.clone(), cwd: self.cwd.clone(), env: Vec::new() });
+        let argv = ["-L", &self.socket]
+            .into_iter()
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect();
+        let out = self.route.fake().run(&Invocation {
+            argv,
+            tmux_tmpdir: self.tmpdir.clone(),
+            cwd: self.cwd.clone(),
+            env: Vec::new(),
+        });
         (out.code == 0).then_some(out.stdout)
     }
 
     /// What the process of the engine window does by the time `--ensure` has napped once more.
     pub fn at_nap(&self) {
         // No server yet: the call has not made the window.
-        let Some(rows) = self.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{session_name}:#{window_name} #{pane_dead} #{pane_pid}"]) else {
+        let Some(rows) = self.tmux(&[
+            "list-panes",
+            "-a",
+            "-F",
+            "#{pane_id} #{session_name}:#{window_name} #{pane_dead} #{pane_pid}",
+        ]) else {
             return;
         };
         for row in rows.lines() {
             let fields: Vec<&str> = row.split(' ').collect();
-            let [pane, window, dead, pid] = fields[..] else { panic!("a pane row: {row:?}") };
+            let [pane, window, dead, pid] = fields[..] else {
+                panic!("a pane row: {row:?}")
+            };
             if window != "cpd-work:watch" || dead == "1" {
                 continue;
             }
             match self.how {
                 EngineWindow::Runs => self.runs(pid.parse().expect("a pane pid")),
                 EngineWindow::Exits(status) => {
-                    self.tmux(&["__ctl", "pane-exit", pane, "--status", &status.to_string()]).expect("pane-exit");
+                    self.tmux(&["__ctl", "pane-exit", pane, "--status", &status.to_string()])
+                        .expect("pane-exit");
                 }
                 EngineWindow::IsKilled => {
-                    self.tmux(&["__ctl", "pane-exit", pane, "--signal"]).expect("pane-exit");
+                    self.tmux(&["__ctl", "pane-exit", pane, "--signal"])
+                        .expect("pane-exit");
                 }
             }
         }
@@ -493,12 +594,27 @@ impl Engines {
             return;
         }
         let path = self.home.watch_lock();
-        std::fs::create_dir_all(path.parent().expect("the lock's directory")).expect("create locks/");
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).expect("open the engine's lock");
-        let lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("the engine's lock is free when an engine starts");
+        std::fs::create_dir_all(path.parent().expect("the lock's directory"))
+            .expect("create locks/");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open the engine's lock");
+        let lock = Flock::lock(file, FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .expect("the engine's lock is free when an engine starts");
         *self.lock.lock().unwrap() = Some(lock);
         store
-            .write("engine", |tx| append(tx, NewEvent::watch_started(format!("The engine started (pid {pid})."), pid)).map(|_| ()))
+            .write("engine", |tx| {
+                append(
+                    tx,
+                    NewEvent::watch_started(format!("The engine started (pid {pid})."), pid),
+                )
+                .map(|_| ())
+            })
             .expect("append watch-started");
     }
 
@@ -558,10 +674,17 @@ struct CpdRoute {
 
 impl Handler for CpdRoute {
     fn handle(&self, call: &Call) -> Reply {
-        let argv = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).map(OsString::from);
+        let argv = std::iter::once(call.program.clone())
+            .chain(call.args.iter().cloned())
+            .map(OsString::from);
         let mut stdout = Vec::new();
         let code = cpd::run_with(&self.ports, argv, &mut stdout);
-        Reply::Exit { code: exit_code(code), stdout, stderr: Vec::new(), takes: Duration::ZERO }
+        Reply::Exit {
+            code: exit_code(code),
+            stdout,
+            stderr: Vec::new(),
+            takes: Duration::ZERO,
+        }
     }
 }
 

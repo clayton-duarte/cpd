@@ -22,7 +22,8 @@ pub struct Selection {
 }
 
 fn repo_of(u: &Universe, wt: &Path, spec: &str) -> Result<RepoId, RevError> {
-    u.repo_of(wt).ok_or_else(|| RevError::Unknown(spec.to_owned()))
+    u.repo_of(wt)
+        .ok_or_else(|| RevError::Unknown(spec.to_owned()))
 }
 
 /// The full ref name a name reaches in git's DWIM order: `<x>`, `refs/<x>`, `refs/tags/<x>`,
@@ -46,15 +47,23 @@ fn atom(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
     let repo = repo_of(u, wt, spec)?;
     if is_oid(spec) {
         let oid = Oid::new(spec);
-        return if u.has(repo, &oid) { Ok(oid) } else { Err(unknown()) };
+        return if u.has(repo, &oid) {
+            Ok(oid)
+        } else {
+            Err(unknown())
+        };
     }
     if spec == "HEAD" {
         return match u.head(wt) {
-            Head::Branch(b) => u.resolve_ref(repo, &format!("refs/heads/{b}")).ok_or_else(unknown),
+            Head::Branch(b) => u
+                .resolve_ref(repo, &format!("refs/heads/{b}"))
+                .ok_or_else(unknown),
             Head::Detached(oid) => Ok(oid),
         };
     }
-    dwim_ref(u, repo, spec).and_then(|name| u.resolve_ref(repo, &name)).ok_or_else(unknown)
+    dwim_ref(u, repo, spec)
+        .and_then(|name| u.resolve_ref(repo, &name))
+        .ok_or_else(unknown)
 }
 
 /// Resolves one revision in the repo of the worktree `wt` (the `HEAD` it reads is that worktree's).
@@ -70,7 +79,9 @@ pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
             let wrong = || RevError::WrongType(spec.to_owned());
             return match (u.kind(&oid), want) {
                 (Some(Kind::Commit), Kind::Commit) => Ok(oid),
-                (Some(Kind::Commit), Kind::Tree) => Ok(u.commit_data(&oid).expect("a commit has data").tree),
+                (Some(Kind::Commit), Kind::Tree) => {
+                    Ok(u.commit_data(&oid).expect("a commit has data").tree)
+                }
                 (Some(Kind::Tree), Kind::Tree) => Ok(oid),
                 _ => Err(wrong()),
             };
@@ -78,7 +89,9 @@ pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
     }
     if let Some(path) = spec.strip_prefix(':').filter(|p| !p.starts_with('/')) {
         // `:<path>`: the blob the index holds at stage 0.
-        let wt_root = u.worktree_of(wt).ok_or_else(|| RevError::Unknown(spec.to_owned()))?;
+        let wt_root = u
+            .worktree_of(wt)
+            .ok_or_else(|| RevError::Unknown(spec.to_owned()))?;
         return u
             .effective_index(&wt_root)
             .into_iter()
@@ -96,7 +109,11 @@ pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
     }
     if let Some((inner, steps)) = spec.rsplit_once('~') {
         // `<rev>~<n>`: the n-th first parent (`~` alone is `~1`).
-        if let Ok(n) = if steps.is_empty() { Ok(1) } else { steps.parse::<usize>() } {
+        if let Ok(n) = if steps.is_empty() {
+            Ok(1)
+        } else {
+            steps.parse::<usize>()
+        } {
             let mut oid = parse(u, wt, &format!("{inner}^{{commit}}"))?;
             for _ in 0..n {
                 let parent = u.commit_data(&oid).and_then(|c| c.parents.first().cloned());
@@ -132,8 +149,14 @@ pub fn range(u: &Universe, wt: &Path, spec: &str) -> Result<Selection, RevError>
     if symmetric {
         let repo = repo_of(u, wt, spec)?;
         let exclude = u.merge_base(repo, &a, &b).into_iter().collect();
-        Ok(Selection { include: vec![a, b], exclude })
+        Ok(Selection {
+            include: vec![a, b],
+            exclude,
+        })
     } else {
-        Ok(Selection { include: vec![b], exclude: vec![a] })
+        Ok(Selection {
+            include: vec![b],
+            exclude: vec![a],
+        })
     }
 }

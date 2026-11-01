@@ -11,7 +11,7 @@ use ratatui::style::Modifier;
 
 use super::*;
 use crate::link::CUE;
-use crate::read::{Pull, PrState};
+use crate::read::{PrState, Pull};
 use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::ports::Fakes;
 
@@ -51,7 +51,9 @@ fn title_x(buf: &Buffer, number: i64) -> Option<(u16, u16)> {
 }
 
 fn cells(buf: &Buffer, x: u16, y: u16, n: u16) -> Vec<String> {
-    (x..x + n).map(|x| buf[(x, y)].symbol().to_owned()).collect()
+    (x..x + n)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect()
 }
 
 fn underlined(buf: &Buffer, x: u16, y: u16) -> bool {
@@ -59,7 +61,12 @@ fn underlined(buf: &Buffer, x: u16, y: u16) -> bool {
 }
 
 fn left(x: u16, y: u16, modifiers: KeyModifiers) -> MouseEvent {
-    MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers }
+    MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers,
+    }
 }
 
 /// Ports whose `open` answers `reply`, and the runner to read its calls from.
@@ -72,7 +79,12 @@ fn ports_with(reply: Reply) -> (Ports, Arc<FakeRunner>) {
 }
 
 fn opened(runner: &FakeRunner) -> Vec<String> {
-    runner.calls().iter().filter(|c| c.program == "open").flat_map(|c| c.args.clone()).collect()
+    runner
+        .calls()
+        .iter()
+        .filter(|c| c.program == "open")
+        .flat_map(|c| c.args.clone())
+        .collect()
 }
 
 fn one_box(number: i64, working: bool) -> Centre {
@@ -89,13 +101,24 @@ fn a_pr_box_title_draws_number_and_state_underlined_then_the_cue_and_no_cell_hol
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
     assert_eq!(cells(&buf, x, y, 10).concat(), format!("#12 open {CUE}"));
     for dx in 0..8 {
-        assert!(underlined(&buf, x + dx, y), "`#12 open` is underlined at +{dx}");
+        assert!(
+            underlined(&buf, x + dx, y),
+            "`#12 open` is underlined at +{dx}"
+        );
     }
     assert!(!underlined(&buf, x + 8, y), "the gap is not underlined");
     assert!(!underlined(&buf, x + 9, y), "the cue is not underlined");
-    assert_eq!(buf[(x + 9, y)].fg, palette::clickable_text().fg.unwrap(), "the cue is in the clickable colour");
+    assert_eq!(
+        buf[(x + 9, y)].fg,
+        palette::clickable_text().fg.unwrap(),
+        "the cue is in the clickable colour"
+    );
     for cell in &buf.content {
-        assert!(!cell.symbol().contains('\u{1b}'), "no cell holds an escape: {:?}", cell.symbol());
+        assert!(
+            !cell.symbol().contains('\u{1b}'),
+            "no cell holds an escape: {:?}",
+            cell.symbol()
+        );
     }
 }
 
@@ -106,14 +129,25 @@ fn a_left_click_on_a_pr_box_titles_text_or_cue_opens_its_pull_request_url() {
     let buf = draw(&mut ui, &centre, 10);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
     let url = "https://github.com/acme/repo/pull/12";
-    for (dx, modifiers) in [(0, KeyModifiers::NONE), (5, KeyModifiers::NONE), (9, KeyModifiers::NONE), (3, KeyModifiers::SHIFT | KeyModifiers::SUPER)] {
+    for (dx, modifiers) in [
+        (0, KeyModifiers::NONE),
+        (5, KeyModifiers::NONE),
+        (9, KeyModifiers::NONE),
+        (3, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+    ] {
         let (ports, runner) = ports_with(Reply::ok(""));
-        assert!(ui.click(&ports, left(x + dx, y, modifiers)).unwrap(), "a click at +{dx} is the link's");
+        assert!(
+            ui.click(&ports, left(x + dx, y, modifiers)).unwrap(),
+            "a click at +{dx} is the link's"
+        );
         assert_eq!(opened(&runner), [url], "+{dx} {modifiers:?}");
     }
     // another button, or a cell off the title, opens nothing
     let (ports, runner) = ports_with(Reply::ok(""));
-    let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..left(x, y, KeyModifiers::NONE) };
+    let right = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        ..left(x, y, KeyModifiers::NONE)
+    };
     assert!(!ui.click(&ports, right).unwrap());
     assert!(!ui.click(&ports, left(0, 0, KeyModifiers::NONE)).unwrap());
     assert!(opened(&runner).is_empty(), "{:?}", opened(&runner));
@@ -127,9 +161,16 @@ fn a_click_on_the_title_does_nothing_else_than_open_the_page() {
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
     let scroll = ui.scroll;
     let (ports, runner) = ports_with(Reply::ok(""));
-    assert!(ui.click(&ports, left(x + 2, y, KeyModifiers::NONE)).unwrap());
+    assert!(
+        ui.click(&ports, left(x + 2, y, KeyModifiers::NONE))
+            .unwrap()
+    );
     assert_eq!(opened(&runner), ["https://github.com/acme/repo/pull/12"]);
-    assert_eq!((ui.scroll, ui.error.clone()), (scroll, None), "no scroll or message changes");
+    assert_eq!(
+        (ui.scroll, ui.error.clone()),
+        (scroll, None),
+        "no scroll or message changes"
+    );
     assert_eq!(runner.calls().len(), 1, "nothing but `open` ran");
 }
 
@@ -140,11 +181,21 @@ fn the_lead_working_dot_stays_between_the_state_and_the_cue_inside_the_link() {
     let buf = draw(&mut ui, &centre, 10);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
     let dot = palette::SPINNER[0];
-    assert_eq!(cells(&buf, x, y, 12).concat(), format!("#12 open {dot} {CUE}"));
+    assert_eq!(
+        cells(&buf, x, y, 12).concat(),
+        format!("#12 open {dot} {CUE}")
+    );
     assert!(underlined(&buf, x + 9, y), "the dot is part of the text");
-    assert!(!underlined(&buf, x + 10, y) && !underlined(&buf, x + 11, y), "the gap and the cue are not");
+    assert!(
+        !underlined(&buf, x + 10, y) && !underlined(&buf, x + 11, y),
+        "the gap and the cue are not"
+    );
     let (ports, runner) = ports_with(Reply::ok(""));
-    assert!(ui.click(&ports, left(x + 9, y, KeyModifiers::NONE)).unwrap(), "a click on the dot is the link's");
+    assert!(
+        ui.click(&ports, left(x + 9, y, KeyModifiers::NONE))
+            .unwrap(),
+        "a click on the dot is the link's"
+    );
     assert_eq!(opened(&runner), ["https://github.com/acme/repo/pull/12"]);
 }
 
@@ -162,14 +213,25 @@ fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_poi
     ui.scroll = (0, 100);
     let moved = draw(&mut ui, &centre, 8);
     let (wx, wy2) = title_x(&moved, 2).expect("web's title is in view");
-    assert!(wy2 < wy, "the title moved up with the scroll: {wy} to {wy2}");
+    assert!(
+        wy2 < wy,
+        "the title moved up with the scroll: {wy} to {wy2}"
+    );
     let (ports, runner) = ports_with(Reply::ok(""));
     assert!(ui.click(&ports, left(wx, wy2, KeyModifiers::NONE)).unwrap());
-    assert_eq!(opened(&runner), ["https://github.com/acme/repo/pull/2"], "the title under the pointer is web's");
+    assert_eq!(
+        opened(&runner),
+        ["https://github.com/acme/repo/pull/2"],
+        "the title under the pointer is web's"
+    );
     // the cell api's title left is not a link of api any more
     let (ports, runner) = ports_with(Reply::ok(""));
     ui.click(&ports, left(ax, ay, KeyModifiers::NONE)).unwrap();
-    assert!(!opened(&runner).iter().any(|u| u.ends_with("/pull/1")), "{:?}", opened(&runner));
+    assert!(
+        !opened(&runner).iter().any(|u| u.ends_with("/pull/1")),
+        "{:?}",
+        opened(&runner)
+    );
 }
 
 #[test]
@@ -187,11 +249,17 @@ fn a_pr_box_with_no_pull_request_has_no_link() {
     let (ports, runner2) = ports_with(Reply::ok(""));
     for cy in 0..y.saturating_sub(1) {
         for cx in 0..buf.area.width {
-            assert!(!ui.click(&ports, left(cx, cy, KeyModifiers::NONE)).unwrap(), "({cx}, {cy})");
+            assert!(
+                !ui.click(&ports, left(cx, cy, KeyModifiers::NONE)).unwrap(),
+                "({cx}, {cy})"
+            );
         }
     }
     assert!(opened(&runner2).is_empty());
     assert_eq!(opened(&runner), ["https://github.com/acme/repo/pull/2"]);
     let api_row: String = (0..buf.area.width).map(|x| buf[(x, 1)].symbol()).collect();
-    assert!(!api_row.contains(CUE) && !api_row.contains('\u{1b}'), "{api_row:?}");
+    assert!(
+        !api_row.contains(CUE) && !api_row.contains('\u{1b}'),
+        "{api_row:?}"
+    );
 }

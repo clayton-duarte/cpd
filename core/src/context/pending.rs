@@ -13,9 +13,9 @@ use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId};
 use crate::plan::display::Display;
-use crate::plan::jobs::{self as plan_jobs, Job};
 use crate::plan::fingerprint::load_workflows;
 use crate::output::Output;
+use crate::plan::jobs::{self as plan_jobs, Job};
 
 #[derive(Args, Debug)]
 pub struct PendingArgs {
@@ -50,7 +50,12 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
     )?;
     let heads = stmt
         .query_map([context.as_str()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     heads
@@ -142,7 +147,9 @@ fn jobs(conn: &Connection, plan: &str, workflow: &str, display: &Display, all: &
             let touches: Value = touches
                 .map(|text| {
                     serde_json::from_str(&text).map_err(|e| {
-                        CpdError::bad_row(format!("Job {key} of Plan {plan} has touches {text:?}: {e}"))
+                        CpdError::bad_row(format!(
+                            "Job {key} of Plan {plan} has touches {text:?}: {e}"
+                        ))
                     })
                 })
                 .transpose()?
@@ -169,7 +176,11 @@ fn add_waiting_on(item: &mut Value, blockers: Vec<String>) {
 
 /// What `waiting_on` of a Job or Workflow says, joined: none for work that waits for nothing.
 fn waiting_on(item: &Value) -> Option<String> {
-    let keys: Vec<&str> = item["waiting_on"].as_array()?.iter().filter_map(Value::as_str).collect();
+    let keys: Vec<&str> = item["waiting_on"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
     Some(keys.join(", "))
 }
 
@@ -198,7 +209,13 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
             if pull.is_null() {
                 out.push_str("no pull request\n\n");
             } else {
-                let _ = write!(out, "#{} {} {}\n\n", pull["number"], text(&pull["state"]), text(&pull["url"]));
+                let _ = write!(
+                    out,
+                    "#{} {} {}\n\n",
+                    pull["number"],
+                    text(&pull["state"]),
+                    text(&pull["url"])
+                );
             }
             for job in workflow["jobs"].as_array().expect("jobs") {
                 let touches: Vec<String> =
@@ -220,7 +237,12 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
         if !jobs.is_empty() {
             let _ = write!(out, "\n### Jobs\n\n");
             for job in jobs {
-                let touches: Vec<String> = job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let touches: Vec<String> = job["touches"]
+                    .as_array()
+                    .expect("touches")
+                    .iter()
+                    .map(text)
+                    .collect();
                 let status = match waiting_on(job) {
                     Some(keys) => format!("{} on {keys}", text(&job["status"])),
                     None => text(&job["status"]),

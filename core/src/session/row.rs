@@ -8,11 +8,11 @@ use serde_json::{Value, json};
 use super::{Env, ListArgs, ShowArgs, session_not_found};
 use crate::args::SessionArg;
 use crate::config::{Letter, Tier};
-use crate::policy::model::Models;
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
+use crate::policy::model::Models;
 
 /// A Session's role (§2.2).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +32,9 @@ impl Role {
     }
 
     fn parse(s: &str) -> Option<Role> {
-        [Role::Manager, Role::Lead, Role::Worker].into_iter().find(|r| r.as_str() == s)
+        [Role::Manager, Role::Lead, Role::Worker]
+            .into_iter()
+            .find(|r| r.as_str() == s)
     }
 }
 
@@ -52,7 +54,9 @@ impl Runner {
     }
 
     fn parse(s: &str) -> Option<Runner> {
-        [Runner::Pi, Runner::Durable].into_iter().find(|r| r.as_str() == s)
+        [Runner::Pi, Runner::Durable]
+            .into_iter()
+            .find(|r| r.as_str() == s)
     }
 }
 
@@ -83,7 +87,15 @@ impl State {
     }
 
     fn parse(s: &str) -> Option<State> {
-        [State::Working, State::Waiting, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
+        [
+            State::Working,
+            State::Waiting,
+            State::Blocked,
+            State::Idle,
+            State::Stopped,
+        ]
+        .into_iter()
+        .find(|v| v.as_str() == s)
     }
 }
 
@@ -203,18 +215,27 @@ impl Row {
             return Ok(dynamic.clone());
         }
         match (&self.plan, self.plan_lead) {
-            (Some(plan), true) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
+            (Some(plan), true) => Ok(conn.query_row(
+                "SELECT title FROM plans WHERE id = ?1",
+                [plan.as_str()],
+                |r| r.get(0),
+            )?),
             _ => Ok(self.name.clone()),
         }
     }
 
     fn parse(raw: Raw) -> Result<Row, CpdError> {
-        let id = SessionId::parse(&raw.id).map_err(|_| CpdError::bad_row(format!("id {:?}", raw.id)))?;
-        let field = |name: &str, value: &str| CpdError::bad_row(format!("{id} has {name} {value:?}"));
+        let id =
+            SessionId::parse(&raw.id).map_err(|_| CpdError::bad_row(format!("id {:?}", raw.id)))?;
+        let field =
+            |name: &str, value: &str| CpdError::bad_row(format!("{id} has {name} {value:?}"));
         Ok(Row {
             role: Role::parse(&raw.role).ok_or_else(|| field("role", &raw.role))?,
             context: ContextId::parse(&raw.context).map_err(|_| field("context", &raw.context))?,
-            plan: raw.plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
+            plan: raw
+                .plan
+                .map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p)))
+                .transpose()?,
             forked_from: raw
                 .forked_from
                 .map(|f| SessionId::parse(&f).map_err(|_| field("forked_from", &f)))
@@ -240,7 +261,12 @@ impl Row {
             runner: Runner::parse(&raw.runner).ok_or_else(|| field("runner", &raw.runner))?,
             switch_failed: raw
                 .switch_failed
-                .map(|j| serde_json::from_str::<Value>(&j).ok().filter(Value::is_object).ok_or_else(|| field("switch_failed", &j)))
+                .map(|j| {
+                    serde_json::from_str::<Value>(&j)
+                        .ok()
+                        .filter(Value::is_object)
+                        .ok_or_else(|| field("switch_failed", &j))
+                })
                 .transpose()?,
             id,
         })
@@ -290,7 +316,11 @@ fn query(conn: &Connection, filter: &str, params: Vec<Sql>) -> Result<Vec<Row>, 
 
 /// Every Lead and Manager that is not archived, oldest first.
 pub(super) fn live(conn: &Connection) -> Result<Vec<Row>, CpdError> {
-    query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())
+    query(
+        conn,
+        "s.role IN ('lead', 'manager') AND s.archived_at IS NULL",
+        Vec::new(),
+    )
 }
 
 /// The fields a live model switch needs (commands.md §14.6 step 7): the same live selection `session retier` uses.
@@ -306,17 +336,32 @@ pub(crate) struct ModelSwitchRow {
 /// Every live Lead and Manager that is not archived, oldest first, as the model-switch step of `cpd preset apply`
 /// reads them (commands.md §14.6 step 7).
 pub(crate) fn live_model_switch(conn: &Connection) -> Result<Vec<ModelSwitchRow>, CpdError> {
-    Ok(query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())?
-        .into_iter()
-        .map(|r| ModelSwitchRow { id: r.id, role: r.role, context: r.context, plan: r.plan, tier: r.tier })
-        .collect())
+    Ok(query(
+        conn,
+        "s.role IN ('lead', 'manager') AND s.archived_at IS NULL",
+        Vec::new(),
+    )?
+    .into_iter()
+    .map(|r| ModelSwitchRow {
+        id: r.id,
+        role: r.role,
+        context: r.context,
+        plan: r.plan,
+        tier: r.tier,
+    })
+    .collect())
 }
 
 /// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): the `<letter>` ref of the Session's `Models` (its Context's key) and
 /// the level of the Tier's digit. The one function `session show` and `session run` share, so a Session retiered and a
 /// Session started later are on the same model.
-pub(crate) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
-    let tier = Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
+pub(crate) fn model_and_level(
+    models: &Models,
+    id: &SessionId,
+    tier: &str,
+) -> Result<(String, &'static str), CpdError> {
+    let tier =
+        Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
     let model = match tier.letter() {
         Letter::O => &models.o,
         Letter::S => &models.s,
@@ -329,7 +374,8 @@ pub(crate) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Re
 /// The models of the Session's Context (contract §8.3 "Models" (5)): its owner's key, or the machine layer.
 pub(super) fn models_of(env: &mut Env, row: &Row) -> Result<Models, CpdError> {
     let home = env.home.clone();
-    env.store.read(|conn| crate::policy::model::models_of_context(conn, &home, row.context.as_str()))
+    env.store
+        .read(|conn| crate::policy::model::models_of_context(conn, &home, row.context.as_str()))
 }
 
 /// The Session `id`, if it exists.
@@ -349,7 +395,11 @@ pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
     let mut env = Env::open()?;
     let title = env.store.read(|conn| load(conn, id)?.title(conn))?;
     let tmux = env.tmux();
-    for pane in tmux.list_panes()?.iter().filter(|p| !p.dead && p.cpd_session.as_ref() == Some(id)) {
+    for pane in tmux
+        .list_panes()?
+        .iter()
+        .filter(|p| !p.dead && p.cpd_session.as_ref() == Some(id))
+    {
         tmux.set_pane_title(&pane.pane, &title)?;
     }
     Ok(())
@@ -373,15 +423,25 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     }
     let mut any_of = |column: &str, values: Vec<&'static str>| {
         if !values.is_empty() {
-            filter.push(format!("s.{column} IN ({})", vec!["?"; values.len()].join(", ")));
+            filter.push(format!(
+                "s.{column} IN ({})",
+                vec!["?"; values.len()].join(", ")
+            ));
             params.extend(values.into_iter().map(|v| Sql::Text(v.to_owned())));
         }
     };
     any_of("role", args.roles.iter().map(|r| r.as_str()).collect());
     any_of("state", args.states.iter().map(|s| s.as_str()).collect());
-    let (sessions, cursor) = env.store.read(|conn| Ok((query(conn, &filter.join(" AND "), params)?, highest_id(conn)?)))?;
+    let (sessions, cursor) = env.store.read(|conn| {
+        Ok((
+            query(conn, &filter.join(" AND "), params)?,
+            highest_id(conn)?,
+        ))
+    })?;
     let sessions: Vec<Value> = sessions.iter().map(Row::list_json).collect();
-    Ok(Output::success(json!({"sessions": sessions, "events_cursor": cursor})))
+    Ok(Output::success(
+        json!({"sessions": sessions, "events_cursor": cursor}),
+    ))
 }
 
 /// `session show` (commands.md §10.2).
@@ -423,19 +483,31 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 
 /// The ids of the Plan's `open` Escalations, oldest first.
 fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT id FROM escalations WHERE plan = ?1 AND status = 'open' ORDER BY asked_at, id")?;
-    let ids = stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    let mut stmt = conn.prepare(
+        "SELECT id FROM escalations WHERE plan = ?1 AND status = 'open' ORDER BY asked_at, id",
+    )?;
+    let ids = stmt
+        .query_map([plan.as_str()], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(ids)
 }
 
 /// The Plan's `lead_session`, if the Plan exists.
-pub(super) fn plan_lead(conn: &Connection, plan: &PlanId) -> Result<Option<(ContextId, String)>, CpdError> {
+pub(super) fn plan_lead(
+    conn: &Connection,
+    plan: &PlanId,
+) -> Result<Option<(ContextId, String)>, CpdError> {
     let found: Option<(String, String)> = conn
-        .query_row("SELECT context, lead_session FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            "SELECT context, lead_session FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
     found
         .map(|(context, lead)| {
-            let context = ContextId::parse(&context).map_err(|_| CpdError::bad_row(format!("Plan {plan} has context {context:?}")))?;
+            let context = ContextId::parse(&context)
+                .map_err(|_| CpdError::bad_row(format!("Plan {plan} has context {context:?}")))?;
             Ok((context, lead))
         })
         .transpose()
@@ -456,7 +528,9 @@ mod tests {
         let mut store = Store::open(&home, 5000).unwrap();
         let plan: Vec<(i64, i64, String)> = store
             .read(|conn| {
-                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {SELECT} WHERE 1 ORDER BY s.created_at, s.id"))?;
+                let mut stmt = conn.prepare(&format!(
+                    "EXPLAIN QUERY PLAN {SELECT} WHERE 1 ORDER BY s.created_at, s.id"
+                ))?;
                 let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(3)?)))?;
                 Ok(rows.collect::<rusqlite::Result<_>>()?)
             })
@@ -473,6 +547,9 @@ mod tests {
             .filter(|(_, parent, detail)| detail.starts_with("SCAN") && per_session(*parent))
             .map(|(.., detail)| detail.as_str())
             .collect();
-        assert!(scans.is_empty(), "scanned once per Session: {scans:?}\n{plan:#?}");
+        assert!(
+            scans.is_empty(),
+            "scanned once per Session: {scans:?}\n{plan:#?}"
+        );
     }
 }

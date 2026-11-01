@@ -29,7 +29,10 @@ pub struct PlanArg {
 impl PlanArg {
     pub fn require(&self) -> Result<&PlanId, CpdError> {
         self.plan.as_ref().ok_or_else(|| {
-            CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
+            CpdError::new(
+                ErrorCode::PlanRequired,
+                "No Plan selected: pass --plan <id> or set CPD_PLAN.",
+            )
         })
     }
 }
@@ -82,7 +85,12 @@ impl WorkflowArg {
 #[derive(clap::Args, Clone, Debug, PartialEq)]
 pub struct SessionArg {
     /// The Session [default: $CPD_SESSION]
-    #[arg(long = "session", value_name = "id", env = "CPD_SESSION", hide_env = true)]
+    #[arg(
+        long = "session",
+        value_name = "id",
+        env = "CPD_SESSION",
+        hide_env = true
+    )]
     pub session: Option<SessionRef>,
 }
 
@@ -151,7 +159,10 @@ impl FromStr for Text {
         if chars == 0 || chars > Text::MAX_CHARS || s.contains('\0') {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("Text must be 1 to {} characters with no NUL.", Text::MAX_CHARS),
+                format!(
+                    "Text must be 1 to {} characters with no NUL.",
+                    Text::MAX_CHARS
+                ),
             )
             .with("chars", chars));
         }
@@ -186,7 +197,10 @@ impl FromStr for Title {
         if chars == 0 || chars > Title::MAX_CHARS || s.chars().any(char::is_control) {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A title must be 1 to {} characters with no control characters.", Title::MAX_CHARS),
+                format!(
+                    "A title must be 1 to {} characters with no control characters.",
+                    Title::MAX_CHARS
+                ),
             )
             .with("chars", chars));
         }
@@ -262,7 +276,10 @@ impl FromStr for Name {
         if chars == 0 || chars > Name::MAX_CHARS || s.chars().any(char::is_control) {
             return Err(CpdError::new(
                 ErrorCode::InvalidName,
-                format!("A name must be 1 to {} characters with no control characters.", Name::MAX_CHARS),
+                format!(
+                    "A name must be 1 to {} characters with no control characters.",
+                    Name::MAX_CHARS
+                ),
             )
             .with("value", s));
         }
@@ -285,8 +302,19 @@ mod tests {
         for ok in ["a", "é".repeat(200).as_str(), "a b"] {
             assert_eq!(ok.parse::<Title>().unwrap().as_str(), ok);
         }
-        for bad in ["", "a".repeat(201).as_str(), "a\nb", "a\tb", "a\0b", "a\u{7f}b"] {
-            assert_eq!(bad.parse::<Title>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+        for bad in [
+            "",
+            "a".repeat(201).as_str(),
+            "a\nb",
+            "a\tb",
+            "a\0b",
+            "a\u{7f}b",
+        ] {
+            assert_eq!(
+                bad.parse::<Title>().unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad:?}"
+            );
         }
     }
 
@@ -306,7 +334,14 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::PlanRequired);
         assert_eq!(err.exit().code(), 2);
         let plan = PlanId::parse("cpd2").unwrap();
-        assert_eq!(PlanArg { plan: Some(plan.clone()) }.require().unwrap(), &plan);
+        assert_eq!(
+            PlanArg {
+                plan: Some(plan.clone())
+            }
+            .require()
+            .unwrap(),
+            &plan
+        );
     }
 
     #[test]
@@ -336,7 +371,11 @@ mod tests {
     fn text_bounds() {
         assert_eq!("a".parse::<Text>().unwrap().as_str(), "a");
         assert!("é".repeat(Text::MAX_CHARS).parse::<Text>().is_ok());
-        for bad in [String::new(), "a".repeat(Text::MAX_CHARS + 1), "a\0b".to_owned()] {
+        for bad in [
+            String::new(),
+            "a".repeat(Text::MAX_CHARS + 1),
+            "a\0b".to_owned(),
+        ] {
             assert_eq!(bad.parse::<Text>().unwrap_err().code(), ErrorCode::Usage);
         }
     }
@@ -345,8 +384,17 @@ mod tests {
     fn name_bounds() {
         assert!("cpd rust lead".parse::<Name>().is_ok());
         assert!("ü".repeat(Name::MAX_CHARS).parse::<Name>().is_ok());
-        for bad in [String::new(), "a".repeat(Name::MAX_CHARS + 1), "a\nb".to_owned(), "a\tb".to_owned()] {
-            assert_eq!(bad.parse::<Name>().unwrap_err().code(), ErrorCode::InvalidName, "{bad:?}");
+        for bad in [
+            String::new(),
+            "a".repeat(Name::MAX_CHARS + 1),
+            "a\nb".to_owned(),
+            "a\tb".to_owned(),
+        ] {
+            assert_eq!(
+                bad.parse::<Name>().unwrap_err().code(),
+                ErrorCode::InvalidName,
+                "{bad:?}"
+            );
         }
     }
 }

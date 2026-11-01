@@ -30,7 +30,13 @@ fn pr_title(workflow: &WorkflowRow) -> &str {
 fn free_key(taken: &[String], prefix: &str, workflow: &WorkflowRow) -> Result<JobKey, CpdError> {
     let stem = format!("{prefix}-{}", workflow.key);
     (1u32..)
-        .map(|n| if n == 1 { stem.clone() } else { format!("{stem}-{n}") })
+        .map(|n| {
+            if n == 1 {
+                stem.clone()
+            } else {
+                format!("{stem}-{n}")
+            }
+        })
         .find(|key| !taken.contains(key))
         .ok_or_else(|| CpdError::bad_row(format!("Workflow {} has no free {prefix} Job key", workflow.key)))
         .and_then(|key| JobKey::parse(&key))
@@ -59,9 +65,13 @@ pub(crate) fn spec(workflow: &WorkflowRow) -> JobSpec {
             key = workflow.key,
             repo = workflow.repo,
         ),
-        touches: json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+        touches: json!([format!(
+            "The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate"
+        )]),
         acceptance: json!([
-            format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
+            format!(
+                "`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"
+            ),
             "Nothing was pushed by the Worker and no pull request was created or edited by it",
         ]),
         out_of_scope: json!([
@@ -121,7 +131,9 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
                 key = workflow.key,
                 repo = workflow.repo,
             ),
-            json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([format!(
+                "The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate"
+            )]),
             json!([
                 "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
                 format!("Merging {remote} when it does not conflict"),
@@ -143,7 +155,9 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
                 key = workflow.key,
                 repo = workflow.repo,
             ),
-            json!([format!("The files {remote} merges into {lead} in, and what the merge needs in order to build and pass the Gate")]),
+            json!([format!(
+                "The files {remote} merges into {lead} in, and what the merge needs in order to build and pass the Gate"
+            )]),
             json!([
                 "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
                 format!("Leaving {remote}'s commits out of {lead}"),
@@ -156,7 +170,9 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
         context,
         touches,
         acceptance: json!([
-            format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
+            format!(
+                "`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"
+            ),
             "Nothing was pushed by the Worker and no pull request was created or edited by it",
         ]),
         out_of_scope,
@@ -189,7 +205,9 @@ impl Cause {
 
     /// The cause a `reason` spells (the inverse of [`Cause::as_str`]); `None` for a reason no cause spells.
     pub fn parse(text: &str) -> Option<Cause> {
-        [Cause::Conflict, Cause::BaseMerged].into_iter().find(|cause| cause.as_str() == text)
+        [Cause::Conflict, Cause::BaseMerged]
+            .into_iter()
+            .find(|cause| cause.as_str() == text)
     }
 }
 
@@ -203,7 +221,10 @@ pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, Cp
             |r| r.get(0),
         )
         .optional()?;
-    Ok(reason.as_deref().and_then(Cause::parse).unwrap_or(Cause::Conflict))
+    Ok(reason
+        .as_deref()
+        .and_then(Cause::parse)
+        .unwrap_or(Cause::Conflict))
 }
 
 /// Queues Workflow `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the Workflow has one `queued` or `running`: one transaction writes the
@@ -230,7 +251,8 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, ti
 fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
-        stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        stmt.query_map([plan.as_str()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
     };
     let update = kind == "update";
     let key = free_key(&taken, if update { "up" } else { "open" }, workflow)?;
@@ -249,6 +271,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
         tests: None,
         test_files: None,
         test_approved: None,
+        touches_approved: None,
         resources: None,
         urgent: false,
         fingerprint: None,
@@ -257,6 +280,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, workflow: &WorkflowRow, tier: Tier, 
         cancel_requested_at: None,
         failed_cause: None,
         merged_sha: None,
+        summary: None,
         created_at: String::new(),
         needs: Vec::new(),
     };
@@ -318,8 +342,18 @@ fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
 /// or `running` (a `draft` or `failed` Job does not hold it back). `None` for a Job of another kind, whose Dependency rows are its needs.
 pub fn unfinished(all: &[Job], job: &Job) -> Option<Vec<String>> {
     match job.kind.as_str() {
-        "open" => Some(others(all, job).filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")).map(|j| j.key.clone()).collect()),
-        "update" => Some(others(all, job).filter(|j| matches!(j.status.as_str(), "queued" | "running")).map(|j| j.key.clone()).collect()),
+        "open" => Some(
+            others(all, job)
+                .filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled"))
+                .map(|j| j.key.clone())
+                .collect(),
+        ),
+        "update" => Some(
+            others(all, job)
+                .filter(|j| matches!(j.status.as_str(), "queued" | "running"))
+                .map(|j| j.key.clone())
+                .collect(),
+        ),
         _ => None,
     }
 }
@@ -331,11 +365,17 @@ pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
         return job.needs.clone();
     }
     // A Job chained after the merged open Job (it needs it, directly or not) is no need of it: that would be a cycle.
-    let mut after: std::collections::BTreeSet<&str> = std::collections::BTreeSet::from([job.key.as_str()]);
-    while let Some(next) = all.iter().find(|j| !after.contains(j.key.as_str()) && j.needs.iter().any(|n| after.contains(n.as_str()))) {
+    let mut after: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::from([job.key.as_str()]);
+    while let Some(next) = all.iter().find(|j| {
+        !after.contains(j.key.as_str()) && j.needs.iter().any(|n| after.contains(n.as_str()))
+    }) {
         after.insert(next.key.as_str());
     }
-    let mut keys: Vec<String> = others(all, job).filter(|j| j.status != "cancelled" && !after.contains(j.key.as_str())).map(|j| j.key.clone()).collect();
+    let mut keys: Vec<String> = others(all, job)
+        .filter(|j| j.status != "cancelled" && !after.contains(j.key.as_str()))
+        .map(|j| j.key.clone())
+        .collect();
     keys.sort();
     keys
 }
@@ -365,6 +405,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            touches_approved: None,
             resources: None,
             urgent: false,
             fingerprint: None,
@@ -373,6 +414,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: vec!["unused".into()],
         }
@@ -407,8 +449,14 @@ mod tests {
             job("open-a", "a", "open", "queued"),
             update.clone(),
         ];
-        assert_eq!(unfinished(&all, &update), Some(vec!["q".to_owned(), "r".to_owned()]));
-        assert_eq!(shown_needs(&all, &update), ["d", "f", "m", "q", "r"].map(str::to_owned));
+        assert_eq!(
+            unfinished(&all, &update),
+            Some(vec!["q".to_owned(), "r".to_owned()])
+        );
+        assert_eq!(
+            shown_needs(&all, &update),
+            ["d", "f", "m", "q", "r"].map(str::to_owned)
+        );
     }
 
     #[test]
@@ -430,15 +478,32 @@ mod tests {
         assert_eq!(waiting, ["broken", "busy", "later", "queued"], "the open and update Jobs of a Workflow do not count each other");
         assert_eq!(unfinished(&all, &all[0]), None, "a Job of another kind has Dependency rows");
         assert!(!nothing_merged(&all, &open));
-        assert!(nothing_merged(&[job("gone", "a", "work", "cancelled"), job("merged-open", "a", "open", "merged"), open.clone()], &open));
+        assert!(nothing_merged(
+            &[
+                job("gone", "a", "work", "cancelled"),
+                job("merged-open", "a", "open", "merged"),
+                open.clone()
+            ],
+            &open
+        ));
     }
 
     #[test]
     fn the_needs_an_open_job_shows_are_the_other_jobs_of_its_pr_that_are_not_cancelled() {
         let open = job("open-a", "a", "open", "queued");
-        let all = [job("z", "a", "work", "merged"), job("gone", "a", "work", "cancelled"), job("b", "a", "work", "queued"), job("x", "b", "work", "queued"), open.clone()];
+        let all = [
+            job("z", "a", "work", "merged"),
+            job("gone", "a", "work", "cancelled"),
+            job("b", "a", "work", "queued"),
+            job("x", "b", "work", "queued"),
+            open.clone(),
+        ];
         assert_eq!(shown_needs(&all, &open), ["b", "z"]);
-        assert_eq!(shown_needs(&all, &all[0]), ["unused"], "any other kind shows its Dependency rows");
+        assert_eq!(
+            shown_needs(&all, &all[0]),
+            ["unused"],
+            "any other kind shows its Dependency rows"
+        );
     }
 
     #[test]
@@ -449,6 +514,9 @@ mod tests {
         let mut fix2 = job("fix2", "a", "work", "queued");
         fix2.needs = vec!["fix1".into()];
         let early = job("early", "a", "work", "merged");
-        assert_eq!(shown_needs(&[early, fix1, fix2, open.clone()], &open), ["early"]);
+        assert_eq!(
+            shown_needs(&[early, fix1, fix2, open.clone()], &open),
+            ["early"]
+        );
     }
 }

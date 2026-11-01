@@ -12,7 +12,12 @@ fn layout_pr_box() {
         for scroll in [Scroll::Corner, Scroll::Middle] {
             for case in [PlanCase::Empty(scroll), PlanCase::Three(scroll)] {
                 let drawn = crate::plan::layout_sample(width, HEIGHT, case);
-                check_at(&format!("pr box, {case:?}, {width}x{HEIGHT}"), width, &drawn, scroll);
+                check_at(
+                    &format!("pr box, {case:?}, {width}x{HEIGHT}"),
+                    width,
+                    &drawn,
+                    scroll,
+                );
             }
         }
     }

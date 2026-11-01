@@ -1,7 +1,7 @@
 //! Red tests of `Background::with_waker`: a finished job wakes the loop (no sleeps, no real-time waits).
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use ratatui::crossterm::event::Event;
@@ -11,7 +11,7 @@ use crate::pump::{Pump, Signal};
 
 fn fake() -> (mpsc::Sender<Event>, Pump) {
     let (tx, rx) = mpsc::channel::<Event>();
-    let pump = Pump::new(move || rx.recv().map_err(|e| io::Error::new(io::ErrorKind::Other, e)));
+    let pump = Pump::new(move || rx.recv().map_err(io::Error::other));
     (tx, pump)
 }
 

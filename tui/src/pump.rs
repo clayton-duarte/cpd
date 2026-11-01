@@ -53,7 +53,11 @@ const DUE_LIMIT: usize = 10_000;
 enum Mode {
     Thread,
     Driven,
-    Script { clock: Arc<dyn Clock>, signals: RefCell<VecDeque<Signal>>, dues: Cell<usize> },
+    Script {
+        clock: Arc<dyn Clock>,
+        signals: RefCell<VecDeque<Signal>>,
+        dues: Cell<usize>,
+    },
 }
 
 /// The one wait of a view loop. In production it reads input on its own thread and waits on the real clock. A scripted pump
@@ -70,20 +74,26 @@ impl Pump {
         let tx = send.clone();
         std::thread::Builder::new()
             .name("cpd-input".into())
-            .spawn(move || loop {
-                let signal = match input() {
-                    Ok(event) => Signal::Input(event),
-                    Err(e) => {
-                        let _ = tx.send(Signal::InputFailed(e));
+            .spawn(move || {
+                loop {
+                    let signal = match input() {
+                        Ok(event) => Signal::Input(event),
+                        Err(e) => {
+                            let _ = tx.send(Signal::InputFailed(e));
+                            return;
+                        }
+                    };
+                    if tx.send(signal).is_err() {
                         return;
                     }
-                };
-                if tx.send(signal).is_err() {
-                    return;
                 }
             })
             .expect("spawn the input thread");
-        Pump { send, recv, mode: Mode::Thread }
+        Pump {
+            send,
+            recv,
+            mode: Mode::Thread,
+        }
     }
     /// A pump with no thread: `wait` answers the signals of `signals` in order, each at once. Signals sent through its
     /// [`Waker`] (a commit the test announces, a read that finished inline) come before them. When none is left and the
@@ -91,7 +101,11 @@ impl Pump {
     /// time and no signal left is a script that did not end the loop: it panics.
     pub fn scripted(clock: Arc<dyn Clock>, signals: Vec<Signal>) -> Pump {
         let (send, recv) = mpsc::channel();
-        let mode = Mode::Script { clock, signals: RefCell::new(signals.into()), dues: Cell::new(0) };
+        let mode = Mode::Script {
+            clock,
+            signals: RefCell::new(signals.into()),
+            dues: Cell::new(0),
+        };
         Pump { send, recv, mode }
     }
     /// Whether the jobs of this pump's loop run in the caller (a scripted pump) and not on their own threads.
@@ -101,20 +115,32 @@ impl Pump {
     /// A pump with no input thread: the loop that owns it waits through [`Pump::wait_driven`], on the input it is given.
     pub fn undriven() -> Pump {
         let (send, recv) = mpsc::channel();
-        Pump { send, recv, mode: Mode::Driven }
+        Pump {
+            send,
+            recv,
+            mode: Mode::Driven,
+        }
     }
     /// Whether the loop that owns this pump waits through [`Pump::wait_driven`] (it was made by [`Pump::undriven`]).
     pub fn is_driven(&self) -> bool {
         matches!(self.mode, Mode::Driven)
     }
     pub fn waker(&self) -> Waker {
-        Waker { send: self.send.clone() }
+        Waker {
+            send: self.send.clone(),
+        }
     }
     /// [`Pump::wait`] for a loop that is driven: no input thread, and no real time. A signal a background job posted is
     /// returned at once. While work is `busy` the wait blocks until it posts its signal (the work ends by itself, in no
     /// time of the clock's), unless `input` says an event is there meanwhile. Else nothing is under way: `input` is polled for the time left until `until` (a poll that
     /// finds nothing naps it on the `ports`' clock and says so), so the input decides what happens next.
-    pub fn wait_driven(&self, ports: &Ports, input: &mut dyn Input, until: Option<Instant>, busy: bool) -> Signal {
+    pub fn wait_driven(
+        &self,
+        ports: &Ports,
+        input: &mut dyn Input,
+        until: Option<Instant>,
+        busy: bool,
+    ) -> Signal {
         if let Ok(signal) = self.recv.try_recv() {
             return signal;
         }
@@ -133,14 +159,26 @@ impl Pump {
         }
     }
     pub fn wait(&self, until: Option<Instant>) -> Signal {
-        if let Mode::Script { clock, signals, dues } = &self.mode {
-            let next = self.recv.try_recv().ok().or_else(|| signals.borrow_mut().pop_front());
+        if let Mode::Script {
+            clock,
+            signals,
+            dues,
+        } = &self.mode
+        {
+            let next = self
+                .recv
+                .try_recv()
+                .ok()
+                .or_else(|| signals.borrow_mut().pop_front());
             if let Some(signal) = next {
                 dues.set(0);
                 return signal;
             }
             let at = until.expect("the script is over and the loop waits for a signal: end it with Signal::InputFailed");
-            assert!(dues.get() < DUE_LIMIT, "the script is over and the loop still waits: end it with Signal::InputFailed");
+            assert!(
+                dues.get() < DUE_LIMIT,
+                "the script is over and the loop still waits: end it with Signal::InputFailed"
+            );
             dues.set(dues.get() + 1);
             let wait = at.saturating_duration_since(clock.now());
             if !wait.is_zero() {
@@ -176,7 +214,14 @@ pub struct Schedule {
 
 impl Schedule {
     pub fn new(now: Instant, every: Duration) -> Schedule {
-        Schedule { every, since: now, started: false, wanted: false, force: false, out: false }
+        Schedule {
+            every,
+            since: now,
+            started: false,
+            wanted: false,
+            force: false,
+            out: false,
+        }
     }
     pub fn commit(&mut self) {
         self.wanted = true;
@@ -212,7 +257,11 @@ impl Schedule {
         if self.out {
             None
         } else if self.wanted {
-            Some(if self.started { self.since + FRAME } else { now })
+            Some(if self.started {
+                self.since + FRAME
+            } else {
+                now
+            })
         } else {
             Some(self.since + self.every)
         }
@@ -225,12 +274,22 @@ pub struct Needs {
     pub at: Option<Instant>,
 }
 
-pub fn wake(now: Instant, wall_ms: u64, needs: &Needs, deadline: Option<Instant>) -> Option<Instant> {
+pub fn wake(
+    now: Instant,
+    wall_ms: u64,
+    needs: &Needs,
+    deadline: Option<Instant>,
+) -> Option<Instant> {
     let next = |period: u64| now + Duration::from_millis(period - wall_ms % period);
-    [deadline, needs.at, needs.frame.then(|| next(crate::palette::FRAME_MS)), needs.second.then(|| next(1000))]
-        .into_iter()
-        .flatten()
-        .min()
+    [
+        deadline,
+        needs.at,
+        needs.frame.then(|| next(crate::palette::FRAME_MS)),
+        needs.second.then(|| next(1000)),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 /// What a loop that follows the store waits on: the pump, and the commit watcher whose signals the pump carries. The watcher is
@@ -250,10 +309,16 @@ impl Feed {
     }
     /// A scripted pump over `clock` and no watcher.
     pub fn scripted(clock: Arc<dyn Clock>, signals: Vec<Signal>) -> Feed {
-        Feed { pump: Pump::scripted(clock, signals), watch: Ok(None) }
+        Feed {
+            pump: Pump::scripted(clock, signals),
+            watch: Ok(None),
+        }
     }
     /// A pump with no input thread and no watcher: the loop waits on the input it is given ([`Pump::wait_driven`]) and polls.
     pub fn driven() -> Feed {
-        Feed { pump: Pump::undriven(), watch: Ok(None) }
+        Feed {
+            pump: Pump::undriven(),
+            watch: Ok(None),
+        }
     }
 }

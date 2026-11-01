@@ -33,11 +33,18 @@ impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         match args[..] {
-            ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => Reply::ok(
-                r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#,
-            ),
+            ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
+                Reply::ok(
+                    r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#,
+                )
+            }
             ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => {
-                let aliases: Vec<String> = self.merged.iter().enumerate().map(|(i, n)| format!(r#""p{i}":{{"pullRequest":{}}}"#, node(*n))).collect();
+                let aliases: Vec<String> = self
+                    .merged
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| format!(r#""p{i}":{{"pullRequest":{}}}"#, node(*n)))
+                    .collect();
                 Reply::ok(&format!(r#"{{"data":{{{}}}}}"#, aliases.join(",")))
             }
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
@@ -55,7 +62,15 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
 
     // `Env::open_with` reads `$CPD_HOME`: the one variable this test sets, to its own temp dir (as `inbox/snooze_time_tests.rs`).
     unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    let out = Ports::scope(&rig.fakes.ports, || poll(&rig.fakes.ports, PollArgs { plan: PlanArg { plan: None } })).unwrap();
+    let out = Ports::scope(&rig.fakes.ports, || {
+        poll(
+            &rig.fakes.ports,
+            PollArgs {
+                plan: PlanArg { plan: None },
+            },
+        )
+    })
+    .unwrap();
 
     let status: String = {
         let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
@@ -65,10 +80,24 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     for workflow in &rig.workflows {
         assert_eq!(rig.left(workflow), [true; 6], "{} Workflow {}: the poll leaves every worktree, registration and branch", workflow.status, workflow.key);
     }
-    let kills: Vec<Call> = rig.fakes.runner.calls().into_iter().filter(|c| c.program.ends_with("tmux") && c.args.iter().any(|a| a.starts_with("kill-"))).collect();
+    let kills: Vec<Call> = rig
+        .fakes
+        .runner
+        .calls()
+        .into_iter()
+        .filter(|c| c.program.ends_with("tmux") && c.args.iter().any(|a| a.starts_with("kill-")))
+        .collect();
     assert!(kills.is_empty(), "the poll kills no window: {kills:?}");
-    let cleanup: Vec<_> = rig.errors().into_iter().filter(|(_, data)| data["code"] == "cleanup_failed").collect();
-    assert_eq!(cleanup, Vec::new(), "the poll appends no cleanup_failed Event");
+    let cleanup: Vec<_> = rig
+        .errors()
+        .into_iter()
+        .filter(|(_, data)| data["code"] == "cleanup_failed")
+        .collect();
+    assert_eq!(
+        cleanup,
+        Vec::new(),
+        "the poll appends no cleanup_failed Event"
+    );
 }
 
 /// The in-process `gh` of the required-checks tests: the search lists the one open Workflow `acme/pay#801` with the bulk rollup
@@ -83,7 +112,9 @@ impl Handler for OpenGh {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         match args[..] {
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
-                let rollup = self.rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
+                let rollup = self
+                    .rollup
+                    .map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
                 let node = format!(
                     r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801",
                     "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
@@ -122,18 +153,39 @@ fn stored_checks(rollup: Option<&'static str>, nodes: Vec<serde_json::Value>, po
     let dir = rig.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("pay.toml"), policy).unwrap();
-    let _ = (*rig.fakes.runner).clone().route("gh", Arc::new(OpenGh { rollup, nodes }));
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(OpenGh { rollup, nodes }));
     unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
-    let out = Ports::scope(&rig.fakes.ports, || poll(&rig.fakes.ports, PollArgs { plan: PlanArg { plan: None } })).unwrap();
+    let out = Ports::scope(&rig.fakes.ports, || {
+        poll(
+            &rig.fakes.ports,
+            PollArgs {
+                plan: PlanArg { plan: None },
+            },
+        )
+    })
+    .unwrap();
     let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
-    store.read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 801", [], |r| r.get(0))?)).unwrap_or_else(|e| panic!("{e:?} {out:?}"))
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT checks FROM pull_requests WHERE number = 801",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap_or_else(|e| panic!("{e:?} {out:?}"))
 }
 
 const REQUIRED: &str = "[pr]\nrequired_checks = [\"gate\"]\n";
 
 #[test]
 fn poll_stores_pending_when_a_required_check_is_missing_on_a_passed_rollup() {
-    assert_eq!(stored_checks(Some("SUCCESS"), vec![guardian()], REQUIRED), "pending");
+    assert_eq!(
+        stored_checks(Some("SUCCESS"), vec![guardian()], REQUIRED),
+        "pending"
+    );
 }
 
 #[test]
@@ -143,14 +195,27 @@ fn poll_stores_pending_when_a_required_check_has_no_rollup_at_all() {
 
 #[test]
 fn poll_with_an_empty_required_list_stores_the_rollup_as_it_does_today() {
-    assert_eq!(stored_checks(Some("SUCCESS"), vec![guardian()], "[pr]\nrequired_checks = []\n"), "passed");
-    assert_eq!(stored_checks(None, vec![], "[pr]\nrequired_checks = []\n"), "none");
+    assert_eq!(
+        stored_checks(
+            Some("SUCCESS"),
+            vec![guardian()],
+            "[pr]\nrequired_checks = []\n"
+        ),
+        "passed"
+    );
+    assert_eq!(
+        stored_checks(None, vec![], "[pr]\nrequired_checks = []\n"),
+        "none"
+    );
 }
 
 #[test]
 fn poll_stores_passed_when_the_required_check_passed() {
     let gate = serde_json::json!({"__typename": "CheckRun", "name": "gate", "status": "COMPLETED", "conclusion": "SUCCESS"});
-    assert_eq!(stored_checks(Some("SUCCESS"), vec![guardian(), gate], REQUIRED), "passed");
+    assert_eq!(
+        stored_checks(Some("SUCCESS"), vec![guardian(), gate], REQUIRED),
+        "passed"
+    );
 }
 
 // --- the widened update-Job trigger (contract §3.7 E5, §3.8; commands.md §9.2; hs-d794, hs-n617) ---
@@ -177,8 +242,12 @@ fn tier() -> Tier {
 fn update_jobs(store: &mut Store) -> Vec<String> {
     store
         .read(|c| {
-            let mut stmt = c.prepare("SELECT key FROM jobs WHERE plan = 'pay' AND kind = 'update' ORDER BY key")?;
-            Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            let mut stmt = c.prepare(
+                "SELECT key FROM jobs WHERE plan = 'pay' AND kind = 'update' ORDER BY key",
+            )?;
+            Ok(stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -205,12 +274,22 @@ fn a_base_merge_with_main_ahead_queues_an_update_job() {
 
     // The repoint happened (GitHub moved the Workflow to the default branch) and main is ahead without a conflict.
     let queued = store
-        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+        })
         .unwrap()
         .expect("a base merge with main ahead queues one update Job");
 
-    assert_eq!(update_jobs(&mut store), vec![queued.as_str().to_owned()], "exactly one update Job");
-    assert_eq!(last_reason(&mut store).as_deref(), Some("base-merged"), "the Job's cause is base-merged");
+    assert_eq!(
+        update_jobs(&mut store),
+        vec![queued.as_str().to_owned()],
+        "exactly one update Job"
+    );
+    assert_eq!(
+        last_reason(&mut store).as_deref(),
+        Some("base-merged"),
+        "the Job's cause is base-merged"
+    );
 }
 
 #[test]
@@ -241,12 +320,22 @@ fn a_conflict_still_queues_an_update_job() {
     let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
     let queued = store
-        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::Conflict, false, tier()))
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::Conflict, false, tier())
+        })
         .unwrap()
         .expect("the conflict still queues its update Job");
 
-    assert_eq!(update_jobs(&mut store), vec![queued.as_str().to_owned()], "exactly one update Job");
-    assert_eq!(last_reason(&mut store).as_deref(), Some("conflict"), "the conflict cause is unchanged");
+    assert_eq!(
+        update_jobs(&mut store),
+        vec![queued.as_str().to_owned()],
+        "exactly one update Job"
+    );
+    assert_eq!(
+        last_reason(&mut store).as_deref(),
+        Some("conflict"),
+        "the conflict cause is unchanged"
+    );
 }
 
 #[test]
@@ -256,13 +345,17 @@ fn an_update_job_already_live_is_not_duplicated() {
     let (pay, api) = (PlanId::parse("pay").unwrap(), WorkflowKey::parse("api").unwrap());
 
     let first = store
-        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+        })
         .unwrap()
         .expect("the first repoint queues its update Job");
 
     // A queued update Job is not duplicated by the next repoint.
     let queued_again = store
-        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+        })
         .unwrap();
     assert_eq!(queued_again, None, "a queued update Job is not duplicated");
     assert_eq!(update_jobs(&mut store).len(), 1, "still one update Job");
@@ -270,13 +363,25 @@ fn an_update_job_already_live_is_not_duplicated() {
     // A running update Job is not duplicated either (the Job's own push is no new transition).
     store
         .write("fixture", |tx| {
-            tx.execute("UPDATE jobs SET status = 'running' WHERE key = ?1", [first.as_str()])?;
+            tx.execute(
+                "UPDATE jobs SET status = 'running' WHERE key = ?1",
+                [first.as_str()],
+            )?;
             Ok(())
         })
         .unwrap();
     let running_again = store
-        .write("pr poll", |tx| queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier()))
+        .write("pr poll", |tx| {
+            queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
+        })
         .unwrap();
-    assert_eq!(running_again, None, "a running update Job is not duplicated");
-    assert_eq!(update_jobs(&mut store), vec![first.as_str().to_owned()], "still exactly the one update Job");
+    assert_eq!(
+        running_again, None,
+        "a running update Job is not duplicated"
+    );
+    assert_eq!(
+        update_jobs(&mut store),
+        vec![first.as_str().to_owned()],
+        "still exactly the one update Job"
+    );
 }

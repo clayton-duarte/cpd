@@ -18,12 +18,26 @@ struct Open {
 
 pub(super) fn run(engine: &mut Engine) {
     let open = engine.store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT plan, id, asker_pid FROM escalations WHERE status = 'open' ORDER BY plan, id")?;
+        let mut stmt = conn.prepare(
+            "SELECT plan, id, asker_pid FROM escalations WHERE status = 'open' ORDER BY plan, id",
+        )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, asker_pid)| Ok(Open { plan: PlanId::parse(&plan)?, id: EscalationId::parse(&id)?, asker_pid }))
+            .map(|(plan, id, asker_pid)| {
+                Ok(Open {
+                    plan: PlanId::parse(&plan)?,
+                    id: EscalationId::parse(&id)?,
+                    asker_pid,
+                })
+            })
             .collect::<Result<Vec<_>, CpdError>>()
     });
     let open = match open {
@@ -34,12 +48,18 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E1, About::Machine, &e),
     };
     let spawn = engine.ports.spawn.clone();
-    for escalation in open.into_iter().filter(|e| !u32::try_from(e.asker_pid).is_ok_and(|pid| spawn.alive(Pid(pid)))) {
+    for escalation in open
+        .into_iter()
+        .filter(|e| !u32::try_from(e.asker_pid).is_ok_and(|pid| spawn.alive(Pid(pid))))
+    {
         let about = About::Attempt(escalation.plan.clone(), escalation.id.attempt().clone());
         match expire(engine, &escalation) {
             Ok(expired) => {
                 if expired {
-                    engine.log.line(&format!("E1: expired {} of Plan {}: its asker is gone", escalation.id, escalation.plan));
+                    engine.log.line(&format!(
+                        "E1: expired {} of Plan {}: its asker is gone",
+                        escalation.id, escalation.plan
+                    ));
                 }
                 engine.clear(Step::E1, &about);
             }
@@ -70,7 +90,7 @@ fn expire(engine: &mut Engine, escalation: &Open) -> Result<bool, CpdError> {
             tx,
             NewEvent::escalation_expired(text, id.to_string(), "asker_dead").plan(plan.clone()).job(attempt.job().clone()).attempt(attempt.clone()),
         )?;
-        cpd_core::ask::resume_attempt(tx, plan, &attempt)?;
+        cpd_core::ask::resume_attempt(tx, plan, attempt)?;
         Ok(true)
     })
 }

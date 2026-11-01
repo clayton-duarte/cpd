@@ -40,7 +40,8 @@ pub fn wilson_lower(passed: u32, n: u32) -> f64 {
     let n = f64::from(n);
     let p = f64::from(passed) / n;
     let z2 = Z * Z;
-    let lower = (p + z2 / (2.0 * n) - Z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt()) / (1.0 + z2 / n);
+    let lower =
+        (p + z2 / (2.0 * n) - Z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt()) / (1.0 + z2 / n);
     lower.clamp(0.0, 1.0)
 }
 
@@ -71,11 +72,22 @@ pub fn qualifying(rows: &[Row], floor: u32, next: impl Fn(Tier) -> Option<Tier>)
             let failure = match next(r.tier) {
                 None => 0.0,
                 Some(up) => {
-                    let cost = rows.iter().find(|o| o.kind == r.kind && o.tier == up)?.avg_cost?;
+                    let cost = rows
+                        .iter()
+                        .find(|o| o.kind == r.kind && o.tier == up)?
+                        .avg_cost?;
                     (1.0 - rate) * cost
                 }
             };
-            Some(Advice { kind: r.kind.clone(), tier: r.tier, n: r.n, passed: r.passed, rate, lower, expected_cost: own + failure })
+            Some(Advice {
+                kind: r.kind.clone(),
+                tier: r.tier,
+                n: r.n,
+                passed: r.passed,
+                rate,
+                lower,
+                expected_cost: own + failure,
+            })
         })
         .collect()
 }
@@ -107,14 +119,28 @@ pub fn first_attempts(conn: &rusqlite::Connection) -> Result<Vec<Row>, CpdError>
     )?;
     let raw = stmt
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, u32>(2)?, r.get::<_, u32>(3)?, r.get::<_, Option<f64>>(4)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u32>(2)?,
+                r.get::<_, u32>(3)?,
+                r.get::<_, Option<f64>>(4)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut rows = raw
         .into_iter()
         .map(|(kind, tier, n, passed, avg_cost)| {
-            let tier = Tier::parse(&tier).map_err(|_| CpdError::bad_row(format!("Job kind {kind} has an Attempt with tier {tier:?}")))?;
-            Ok(Row { kind, tier, n, passed, avg_cost })
+            let tier = Tier::parse(&tier).map_err(|_| {
+                CpdError::bad_row(format!("Job kind {kind} has an Attempt with tier {tier:?}"))
+            })?;
+            Ok(Row {
+                kind,
+                tier,
+                n,
+                passed,
+                avg_cost,
+            })
         })
         .collect::<Result<Vec<_>, CpdError>>()?;
     rows.sort_by(|a, b| a.kind.cmp(&b.kind).then(rank(a.tier).cmp(&rank(b.tier))));

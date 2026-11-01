@@ -25,15 +25,28 @@ fn populate(env: &mut Env) {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ship', 'alpha', 'Plan ship', 'grounding', 'l-ship', '2026-01-02T00:00:00.000Z');",
     );
     s += &fork("l-ship", "", "", "2026-01-02T00:00:00.000Z");
-    s += &fork("f-slp", ", asleep_at", &format!(", '{WHEN}'"), "2026-01-02T00:00:01.000Z");
+    s += &fork(
+        "f-slp",
+        ", asleep_at",
+        &format!(", '{WHEN}'"),
+        "2026-01-02T00:00:01.000Z",
+    );
     s += &fork("f-live", "", "", "2026-01-02T00:00:02.000Z");
-    s += &fork("f-arc", ", archived_at", &format!(", '{WHEN}'"), "2026-01-02T00:00:03.000Z");
+    s += &fork(
+        "f-arc",
+        ", archived_at",
+        &format!(", '{WHEN}'"),
+        "2026-01-02T00:00:03.000Z",
+    );
     env.sql(&s);
 }
 
 /// The index of the row of the fork labelled `ship·<suffix>`.
 fn row_of(screen: &[String], suffix: &str) -> u16 {
-    screen.iter().position(|r| r.contains(&format!("ship·{suffix}"))).unwrap_or_else(|| panic!("no row of {suffix}: {screen:?}")) as u16
+    screen
+        .iter()
+        .position(|r| r.contains(&format!("ship·{suffix}")))
+        .unwrap_or_else(|| panic!("no row of {suffix}: {screen:?}")) as u16
 }
 
 /// The foregrounds of the cells that draw something on row `y`, as runs (a colour escape of the row each time it changes), in order.
@@ -53,8 +66,15 @@ fn asleep_row_is_colour_7_among_live_rows() {
     populate(&mut env);
     let buf = draw(&mut env.view(), 60, 20);
     let plain = text_rows(&buf);
-    let (asleep, live, archived) = (row_of(&plain, "f-sl"), row_of(&plain, "f-li"), row_of(&plain, "f-ar"));
-    assert!(live < asleep && asleep < archived, "the asleep row keeps its place among the live rows by creation, newest first (hs-d686, pro-d48), the archived one is after them: {plain:?}");
+    let (asleep, live, archived) = (
+        row_of(&plain, "f-sl"),
+        row_of(&plain, "f-li"),
+        row_of(&plain, "f-ar"),
+    );
+    assert!(
+        live < asleep && asleep < archived,
+        "the asleep row keeps its place among the live rows by creation, newest first (hs-d686, pro-d48), the archived one is after them: {plain:?}"
+    );
 
     // Contract §6.1.1: a live idle row's dot and name are clickable text (15); an asleep row's marks are all 7 (inactive text);
     // an archived row's are all 8 (muted); the branch `├─` is a line, 8, on all three.
@@ -62,14 +82,32 @@ fn asleep_row_is_colour_7_among_live_rows() {
     let name_end = |y: u16| 5 + plain[y as usize].trim_start().chars().skip(4).count() as u16;
     let fg = |x: u16, y: u16| buf[(x, y)].fg;
     // the space between the dot and the name draws nothing: no colour of its own
-    let all = |y: u16, from: u16, color: Color| (from..name_end(y)).filter(|&x| buf[(x, y)].symbol() != " ").all(|x| fg(x, y) == color);
+    let all = |y: u16, from: u16, color: Color| {
+        (from..name_end(y))
+            .filter(|&x| buf[(x, y)].symbol() != " ")
+            .all(|x| fg(x, y) == color)
+    };
     assert!(all(live, 3, C15), "a live idle row: {:?}", runs(&buf, live));
-    assert!(all(asleep, 3, C7), "an asleep row (one colour 7 run from the dot to the name): {:?}", runs(&buf, asleep));
-    assert!(!runs(&buf, asleep).contains(&C15), "an asleep row has no clickable-text mark: {:?}", runs(&buf, asleep));
+    assert!(
+        all(asleep, 3, C7),
+        "an asleep row (one colour 7 run from the dot to the name): {:?}",
+        runs(&buf, asleep)
+    );
+    assert!(
+        !runs(&buf, asleep).contains(&C15),
+        "an asleep row has no clickable-text mark: {:?}",
+        runs(&buf, asleep)
+    );
     let archived_runs = runs(&buf, archived);
     assert!(
-        archived_runs.contains(&C8) && !archived_runs.contains(&C7) && !archived_runs.contains(&C15),
+        archived_runs.contains(&C8)
+            && !archived_runs.contains(&C7)
+            && !archived_runs.contains(&C15),
         "an archived row: {archived_runs:?}"
     );
-    assert_ne!(runs(&buf, asleep), archived_runs, "an asleep row is inactive (7), an archived one muted (8)");
+    assert_ne!(
+        runs(&buf, asleep),
+        archived_runs,
+        "an asleep row is inactive (7), an archived one muted (8)"
+    );
 }

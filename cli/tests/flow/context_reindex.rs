@@ -16,14 +16,29 @@ const CTX: &str = "building-cpd";
 fn env() -> (Fx, FakeBridge) {
     let fx = Fx::new();
     let bridge = FakeBridge::new(&fx.env);
-    fx.env.write_config(&format!("version = 1\nmachine = \"hs\"\n{}", bridge.config()));
-    fx.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n{}",
+        bridge.config()
+    ));
+    fx.cpd(&[
+        "context",
+        "new",
+        CTX,
+        "--title",
+        "Building cpd",
+        "--owner",
+        "acme",
+    ])
+    .ok();
     (fx, bridge)
 }
 
 /// Records a note and returns its id.
 fn note(fx: &Fx, text: &str) -> String {
-    fx.cpd(&["context", "note", text, "--context", CTX]).ok()["record"]["id"].as_str().unwrap().to_owned()
+    fx.cpd(&["context", "note", text, "--context", CTX]).ok()["record"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// Takes `id` out of force with an approved retirement row (a fixture): reindex still projects it.
@@ -41,7 +56,10 @@ fn reindex_resets_and_indexes_every_record_with_no_event() {
     let n2 = note(&fx, "The retired note.");
     retire(&fx, &n2);
     bridge.reply("reset", &json!({"ok": true}).to_string());
-    bridge.reply("index", &json!({"ok": true, "inserted": 2, "updated": 0}).to_string());
+    bridge.reply(
+        "index",
+        &json!({"ok": true, "inserted": 2, "updated": 0}).to_string(),
+    );
 
     let events_before: i64 = fx.env.query("SELECT count(*) FROM events");
     let records_before: i64 = fx.env.query("SELECT count(*) FROM context_records");
@@ -49,7 +67,12 @@ fn reindex_resets_and_indexes_every_record_with_no_event() {
     let out = fx.cpd(&["context", "reindex", "--context", CTX]).ok();
     assert_eq!(out["ok"], true, "{out}");
 
-    assert_eq!(bridge.commands(), ["reset", "index"], "reset then one index: {:?}", bridge.requests());
+    assert_eq!(
+        bridge.commands(),
+        ["reset", "index"],
+        "reset then one index: {:?}",
+        bridge.requests()
+    );
     let requests = bridge.requests();
     let indexed: Vec<&str> = requests[1]["facts"]
         .as_array()
@@ -57,8 +80,21 @@ fn reindex_resets_and_indexes_every_record_with_no_event() {
         .iter()
         .map(|fact| fact["record"].as_str().unwrap())
         .collect();
-    assert_eq!(indexed, [n1.as_str(), n2.as_str()], "every record, in force or not: {:?}", bridge.requests());
+    assert_eq!(
+        indexed,
+        [n1.as_str(), n2.as_str()],
+        "every record, in force or not: {:?}",
+        bridge.requests()
+    );
 
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events_before, "reindex appends no Event");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM context_records"), records_before, "reindex changes no record");
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events"),
+        events_before,
+        "reindex appends no Event"
+    );
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM context_records"),
+        records_before,
+        "reindex changes no record"
+    );
 }

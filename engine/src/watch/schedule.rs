@@ -14,10 +14,11 @@ use time::format_description::well_known::Rfc3339;
 use cpd_core::clock::Clock;
 use cpd_core::driver::schedule::{Pool, Ready, Schedule, schedule};
 use cpd_core::driver::{self, Allocation, StartCtx};
-use cpd_core::resource;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
 use cpd_core::host::limit::limit;
 use cpd_core::ids::{JobKey, PlanId, WorkflowKey};
+use cpd_core::resource;
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
 const BACKOFF_CAP_SECONDS: u64 = 300;
@@ -35,13 +36,18 @@ pub(super) fn incident_starts(conn: &Connection, plan: &PlanId, urgent: bool) ->
 /// How long E3 waits after the last of `k` Attempts in a row whose driver never
 /// started: `min(2^k, 300)` seconds.
 fn backoff_seconds(k: u32) -> u64 {
-    1u64.checked_shl(k).map_or(BACKOFF_CAP_SECONDS, |s| s.min(BACKOFF_CAP_SECONDS))
+    1u64.checked_shl(k)
+        .map_or(BACKOFF_CAP_SECONDS, |s| s.min(BACKOFF_CAP_SECONDS))
 }
 
 /// The latest Attempts of Job `key` in a row that ended with `driver_pid` null,
 /// as `(k, ended_at of the last)`; `None` when the latest Attempt's driver started
 /// or there is none. One query; an Attempt whose driver started resets `k`.
-fn spawn_failures(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Option<(u32, String)>, CpdError> {
+fn spawn_failures(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+) -> Result<Option<(u32, String)>, CpdError> {
     let (k, last): (u32, Option<String>) = conn.query_row(
         "SELECT count(*), max(ended_at) FROM attempts
           WHERE plan = ?1 AND job = ?2 AND status = 'ended' AND driver_pid IS NULL
@@ -53,19 +59,33 @@ fn spawn_failures(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Opti
 }
 
 /// Whether the back-off of Job `key` still runs at `now`.
-fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTime) -> Result<bool, CpdError> {
-    let Some((k, ended_at)) = spawn_failures(conn, plan, key)? else { return Ok(false) };
+fn backing_off(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+    now: OffsetDateTime,
+) -> Result<bool, CpdError> {
+    let Some((k, ended_at)) = spawn_failures(conn, plan, key)? else {
+        return Ok(false);
+    };
     let ended = OffsetDateTime::parse(&ended_at, &Rfc3339).map_err(|e| {
         CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: ended_at {ended_at:?} of an Attempt of Job {key}: {e}."))
     })?;
     let unit = limit("BACKOFF_UNIT", BACKOFF_UNIT);
-    let wait = time::Duration::try_from(unit * u32::try_from(backoff_seconds(k)).expect("at most 300")).expect("at most 300 units");
+    let wait =
+        time::Duration::try_from(unit * u32::try_from(backoff_seconds(k)).expect("at most 300"))
+            .expect("at most 300 units");
     Ok(now < ended + wait)
 }
 
 /// [`backing_off`] at the time `clock` reads (`Clock::utc`). The unit is [`BACKOFF_UNIT`] unless `CPD_TEST_BACKOFF_UNIT`
 /// says otherwise (cli/tests/engine/watch.rs still reads it).
-pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, clock: &dyn Clock) -> Result<bool, CpdError> {
+pub(super) fn backing_off_with(
+    conn: &Connection,
+    plan: &PlanId,
+    key: &JobKey,
+    clock: &dyn Clock,
+) -> Result<bool, CpdError> {
     backing_off(conn, plan, key, clock.utc())
 }
 
@@ -79,7 +99,7 @@ pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, c
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped_n FROM jobs j JOIN plans p ON p.id = j.plan
   LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-  WHERE j.status = 'queued'
+  WHERE j.status = 'queued' AND p.archived_at IS NULL
     AND ((j.pr IS NOT NULL AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open'))
       OR (j.pr IS NULL AND j.kind IN ('scout', 'research') AND p.archived_at IS NULL
           AND p.phase IN ('grounding', 'plan', 'dispatch', 'deploy')))
@@ -149,7 +169,12 @@ struct Entry {
 /// `job_tenants`) and each resource the Jobs' Specs list (`resource::free_slots`: slots minus the Job tenants minus the held
 /// command slots). The ids of the result are indices of `ready`. The starter then decides again under the guards; a take that
 /// loses a race leaves the Job queued for the next tick.
-fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, ready: &[Entry]) -> Result<Schedule, CpdError> {
+fn pick(
+    conn: &Connection,
+    home: &cpd_core::home::CpdHome,
+    concurrency: u32,
+    ready: &[Entry],
+) -> Result<Schedule, CpdError> {
     let mut pools = vec![resource::workers(conn, concurrency)?.pool()];
     let mut identities: Vec<String> = vec![resource::WORKERS.to_owned()];
     let mut jobs = Vec::with_capacity(ready.len());
@@ -166,7 +191,10 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
                     let at = match identities.iter().position(|d| *d == identity) {
                         Some(at) => at,
                         None => {
-                            pools.push(Pool { free: resource::free_slots(conn, home, &pool)?, urgent_free: 0 });
+                            pools.push(Pool {
+                                free: resource::free_slots(conn, home, &pool)?,
+                                urgent_free: 0,
+                            });
                             identities.push(identity);
                             pools.len() - 1
                         }
@@ -181,24 +209,47 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
             |r| r.get(0),
         )?;
         let id = u32::try_from(i).expect("few Ready Jobs");
-        jobs.push(Ready { id, urgent: e.urgent, skipped: e.skipped, seq: e.seq, tenant, needs });
+        jobs.push(Ready {
+            id,
+            urgent: e.urgent,
+            skipped: e.skipped,
+            seq: e.seq,
+            tenant,
+            needs,
+        });
     }
     Ok(schedule(&pools, &jobs))
 }
 
 /// Records the Jobs of `ids` skipped (contract §3.7 E3 "The skip order"): each Job not yet skipped gets the number above every
-/// other skip, in the order given; one already skipped keeps its place. No Event.
+/// other skip, in the order given; one already skipped keeps its place. A Job whose row the UPDATE newly set (`changes()` > 0)
+/// has just begun a waiting episode, and its episode gets one `job-blocked` Event (hs-d798), with `waiting` the number of Ready
+/// Jobs this walk skipped; a Job already skipped appends no second one.
 fn record_skips(engine: &mut Engine, jobs: &[(PlanId, JobKey)]) -> Result<(), CpdError> {
     if jobs.is_empty() {
         return Ok(());
     }
     engine.store.write(SOURCE, |tx| {
-        for (plan, key) in jobs {
-            tx.execute(
+        let mut newly: Vec<&(PlanId, JobKey)> = Vec::new();
+        for job in jobs {
+            let changed = tx.execute(
                 "UPDATE jobs SET skipped_n = (SELECT coalesce(max(skipped_n), 0) + 1 FROM jobs)
                   WHERE plan = ?1 AND key = ?2 AND status = 'queued' AND skipped_n IS NULL",
-                params![plan.as_str(), key.as_str()],
+                params![job.0.as_str(), job.1.as_str()],
             )?;
+            if changed > 0 {
+                newly.push(job);
+            }
+        }
+        // One Event per waiting episode (hs-d798): `waiting` is the number of Ready Jobs skipped this walk.
+        if !newly.is_empty() {
+            let waiting = newly.len() as u64;
+            for (plan, key) in newly {
+                let text = format!(
+                    "Job {key} of Plan {plan} waits for a slot: {waiting} Ready Job(s) are waiting for one. Next: cpd plan show --plan {plan}"
+                );
+                events::append(tx, NewEvent::job_blocked(text, waiting).plan(plan.clone()).job(key.clone()))?;
+            }
         }
         Ok(())
     })
@@ -206,12 +257,21 @@ fn record_skips(engine: &mut Engine, jobs: &[(PlanId, JobKey)]) -> Result<(), Cp
 
 /// Clears the skip of every Job that is no longer `queued` (a cancelled Job, say): the walk ignores it.
 fn clear_stale_skips(engine: &mut Engine) -> Result<(), CpdError> {
-    let stale: i64 = engine.store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM jobs WHERE skipped_n IS NOT NULL AND status <> 'queued'", [], |r| r.get(0))?))?;
+    let stale: i64 = engine.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT count(*) FROM jobs WHERE skipped_n IS NOT NULL AND status <> 'queued'",
+            [],
+            |r| r.get(0),
+        )?)
+    })?;
     if stale == 0 {
         return Ok(());
     }
     engine.store.write(SOURCE, |tx| {
-        tx.execute("UPDATE jobs SET skipped_n = NULL WHERE skipped_n IS NOT NULL AND status <> 'queued'", [])?;
+        tx.execute(
+            "UPDATE jobs SET skipped_n = NULL WHERE skipped_n IS NOT NULL AND status <> 'queued'",
+            [],
+        )?;
         Ok(())
     })
 }
@@ -219,7 +279,11 @@ fn clear_stale_skips(engine: &mut Engine) -> Result<(), CpdError> {
 pub(super) fn run(engine: &mut Engine) {
     // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
     match restart::holding(&engine.home) {
-        Ok(true) => return engine.log.line("E3: holding: a tmux restart is pending, no new Attempt starts until it has run"),
+        Ok(true) => {
+            return engine.log.line(
+                "E3: holding: a tmux restart is pending, no new Attempt starts until it has run",
+            );
+        }
         Ok(false) => {}
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     }
@@ -231,7 +295,13 @@ pub(super) fn run(engine: &mut Engine) {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, r.get::<_, u32>(3)?, r.get::<_, Option<u32>>(4)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                    r.get::<_, u32>(3)?,
+                    r.get::<_, Option<u32>>(4)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut ready = Vec::new();
@@ -244,7 +314,9 @@ pub(super) fn run(engine: &mut Engine) {
             let key = JobKey::parse(&k)?;
             // Its driver could not be started the last times: wait before the next try.
             // Its latest Attempt ended provider_error less than 30 s ago: the Job stays queued (pro-d102).
-            if !backing_off_with(conn, &plan, &key, &*clock)? && !super::provider_hold::holding_with(conn, &plan, &key, &*clock)? {
+            if !backing_off_with(conn, &plan, &key, &*clock)?
+                && !super::provider_hold::holding_with(conn, &plan, &key, &*clock)?
+            {
                 ready.push((plan, key, urgent, seq, skipped));
             }
         }
@@ -260,7 +332,15 @@ pub(super) fn run(engine: &mut Engine) {
     if ready.is_empty() {
         return;
     }
-    let allocations = match engine.store.read(|conn| allocations(conn, &ready.iter().map(|(p, k, ..)| (p.clone(), k.clone())).collect::<Vec<_>>())) {
+    let allocations = match engine.store.read(|conn| {
+        allocations(
+            conn,
+            &ready
+                .iter()
+                .map(|(p, k, ..)| (p.clone(), k.clone()))
+                .collect::<Vec<_>>(),
+        )
+    }) {
         Ok(allocations) => allocations,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
@@ -268,7 +348,16 @@ pub(super) fn run(engine: &mut Engine) {
     let ready: Vec<Entry> = ready
         .into_iter()
         .zip(allocations)
-        .filter_map(|((plan, key, urgent, seq, skipped), a)| a.map(|allocation| Entry { plan, key, urgent, allocation, seq, skipped }))
+        .filter_map(|((plan, key, urgent, seq, skipped), a)| {
+            a.map(|allocation| Entry {
+                plan,
+                key,
+                urgent,
+                allocation,
+                seq,
+                skipped,
+            })
+        })
         .collect();
     // pro-d199: the runner is re-read before Attempts start; a config that does not parse starts none (no stale value).
     let runner = match cpd_core::config::Config::load(&engine.home) {
@@ -282,11 +371,23 @@ pub(super) fn run(engine: &mut Engine) {
     // The walk names the Jobs to start and the Jobs it skips. A start that fails (a tier outside the Worker range, a tampered Job,
     // a lost race) takes no slot, so the walk runs again without the Jobs tried.
     loop {
-        let plan_of = match engine.store.read(|conn| pick(conn, &home, concurrency, &remaining)) {
+        let plan_of = match engine
+            .store
+            .read(|conn| pick(conn, &home, concurrency, &remaining))
+        {
             Ok(schedule) => schedule,
             Err(e) => return engine.fail(Step::E3, About::Machine, &e),
         };
-        let skipped: Vec<(PlanId, JobKey)> = plan_of.skipped.iter().map(|&i| (remaining[i as usize].plan.clone(), remaining[i as usize].key.clone())).collect();
+        let skipped: Vec<(PlanId, JobKey)> = plan_of
+            .skipped
+            .iter()
+            .map(|&i| {
+                (
+                    remaining[i as usize].plan.clone(),
+                    remaining[i as usize].key.clone(),
+                )
+            })
+            .collect();
         if let Err(e) = record_skips(engine, &skipped) {
             return engine.fail(Step::E3, About::Machine, &e);
         }
@@ -295,7 +396,12 @@ pub(super) fn run(engine: &mut Engine) {
         for &i in &plan_of.start {
             let i = i as usize;
             tried.push(i);
-            let Entry { plan, key, allocation, .. } = remaining[i].clone();
+            let Entry {
+                plan,
+                key,
+                allocation,
+                ..
+            } = remaining[i].clone();
             let about = About::Job(plan.clone(), key.clone());
             // The Job's Workflow repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
             let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
@@ -306,8 +412,20 @@ pub(super) fn run(engine: &mut Engine) {
                     break;
                 }
             };
-            let ctx = StartCtx { home: &engine.home, config: &config, catalog: &catalog, command: SOURCE };
-            match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
+            let ctx = StartCtx {
+                home: &engine.home,
+                config: &config,
+                catalog: &catalog,
+                command: SOURCE,
+            };
+            match driver::start_with_allocation(
+                &engine.ports,
+                &mut engine.store,
+                &ctx,
+                &plan,
+                &key,
+                Some(allocation),
+            ) {
                 Ok(started) => {
                     engine.log.line(&format!(
                         "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",
@@ -322,14 +440,20 @@ pub(super) fn run(engine: &mut Engine) {
                 // A pool of the Job has no free slot any more (a command or `job dispatch` took it first): the Job is skipped, no
                 // Attempt, no back-off, no Event; the next tick tries again (§3.7 E3 "The queue walk").
                 Err(e) if matches!(e.code(), ErrorCode::NoSlot | ErrorCode::ResourceBusy) => {
-                    engine.log.line(&format!("E3: Job {key} of Plan {plan} is skipped: {}", e.message()));
+                    engine.log.line(&format!(
+                        "E3: Job {key} of Plan {plan} is skipped: {}",
+                        e.message()
+                    ));
                     if let Err(e) = record_skips(engine, &[(plan.clone(), key.clone())]) {
                         return engine.fail(Step::E3, About::Machine, &e);
                     }
                 }
                 // The Job changed since it was read (another starter, a cancel): decided again next tick.
                 Err(e) if matches!(e.code(), ErrorCode::CasLost | ErrorCode::JobNotReady) => {
-                    engine.log.line(&format!("E3: skipped Job {key} of Plan {plan}: {}", e.message()));
+                    engine.log.line(&format!(
+                        "E3: skipped Job {key} of Plan {plan}: {}",
+                        e.message()
+                    ));
                 }
                 Err(e) => engine.fail(Step::E3, about, &e),
             }
@@ -353,7 +477,9 @@ mod tests {
 
     #[test]
     fn the_backoff_doubles_with_each_spawn_failure_up_to_300_seconds() {
-        let seconds: Vec<u64> = [1, 2, 3, 8, 9, 10, 63, 64, 1000].map(backoff_seconds).to_vec();
+        let seconds: Vec<u64> = [1, 2, 3, 8, 9, 10, 63, 64, 1000]
+            .map(backoff_seconds)
+            .to_vec();
         assert_eq!(seconds, [2, 4, 8, 256, 300, 300, 300, 300, 300]);
     }
 
@@ -375,22 +501,43 @@ mod tests {
     }
 
     fn failures(conn: &Connection) -> Option<(u32, String)> {
-        spawn_failures(conn, &PlanId::parse("pay").unwrap(), &JobKey::parse("api").unwrap()).unwrap()
+        spawn_failures(
+            conn,
+            &PlanId::parse("pay").unwrap(),
+            &JobKey::parse("api").unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
-    fn the_latest_attempts_in_a_row_without_a_driver_are_counted_and_a_started_driver_resets_them() {
+    fn the_latest_attempts_in_a_row_without_a_driver_are_counted_and_a_started_driver_resets_them()
+    {
         assert_eq!(failures(&attempts(&[])), None);
-        assert_eq!(failures(&attempts(&[(1, Some(7), "2026-10-18T00:00:01.000Z")])), None);
-        let two = attempts(&[(1, None, "2026-10-18T00:00:01.000Z"), (2, None, "2026-10-18T00:00:03.000Z")]);
-        assert_eq!(failures(&two), Some((2, "2026-10-18T00:00:03.000Z".to_owned())));
+        assert_eq!(
+            failures(&attempts(&[(1, Some(7), "2026-10-18T00:00:01.000Z")])),
+            None
+        );
+        let two = attempts(&[
+            (1, None, "2026-10-18T00:00:01.000Z"),
+            (2, None, "2026-10-18T00:00:03.000Z"),
+        ]);
+        assert_eq!(
+            failures(&two),
+            Some((2, "2026-10-18T00:00:03.000Z".to_owned()))
+        );
         let reset = attempts(&[
             (1, None, "2026-10-18T00:00:01.000Z"),
             (2, Some(7), "2026-10-18T00:00:02.000Z"),
             (3, None, "2026-10-18T00:00:03.000Z"),
         ]);
-        assert_eq!(failures(&reset), Some((1, "2026-10-18T00:00:03.000Z".to_owned())));
-        let started_last = attempts(&[(1, None, "2026-10-18T00:00:01.000Z"), (2, Some(7), "2026-10-18T00:00:02.000Z")]);
+        assert_eq!(
+            failures(&reset),
+            Some((1, "2026-10-18T00:00:03.000Z".to_owned()))
+        );
+        let started_last = attempts(&[
+            (1, None, "2026-10-18T00:00:01.000Z"),
+            (2, Some(7), "2026-10-18T00:00:02.000Z"),
+        ]);
         assert_eq!(failures(&started_last), None);
     }
 
@@ -401,7 +548,10 @@ mod tests {
         let one = attempts(&[(1, None, "2026-10-18T00:00:10.000Z")]);
         assert!(backing_off(&one, &plan, &key, at("2026-10-18T00:00:11.999Z")).unwrap());
         assert!(!backing_off(&one, &plan, &key, at("2026-10-18T00:00:12.000Z")).unwrap());
-        let two = attempts(&[(1, None, "2026-10-18T00:00:01.000Z"), (2, None, "2026-10-18T00:00:10.000Z")]);
+        let two = attempts(&[
+            (1, None, "2026-10-18T00:00:01.000Z"),
+            (2, None, "2026-10-18T00:00:10.000Z"),
+        ]);
         assert!(backing_off(&two, &plan, &key, at("2026-10-18T00:00:13.999Z")).unwrap());
         assert!(!backing_off(&two, &plan, &key, at("2026-10-18T00:00:14.000Z")).unwrap());
         assert!(!backing_off(&attempts(&[]), &plan, &key, at("2026-10-18T00:00:00.000Z")).unwrap());

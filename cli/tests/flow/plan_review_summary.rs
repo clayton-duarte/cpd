@@ -18,15 +18,29 @@ fn home(fx: &Fx) -> CpdHome {
 
 /// `run/<plan>/<name>`, beside `plan.md`.
 fn run_file(fx: &Fx, plan: &str, name: &str) -> PathBuf {
-    home(fx).plan_md(&PlanId::parse(plan).unwrap()).with_file_name(name)
+    home(fx)
+        .plan_md(&PlanId::parse(plan).unwrap())
+        .with_file_name(name)
 }
 
 /// A Plan `pay` in phase `plan` with one draft Job `a`, outlined for review.
 fn plan_with_one_draft(fx: &Fx) -> PathBuf {
     fx.env.write_tmux_config("");
-    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+    fx.cpd(&[
+        "context", "new", "ctx", "--title", "Payments", "--owner", "acme",
+    ])
+    .ok();
     let repo = fx.keyed_repo("pay");
-    fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
+    fx.cpd(&[
+        "plan",
+        "new",
+        "pay",
+        "--context",
+        "ctx",
+        "--title",
+        "Plan pay",
+    ])
+    .ok();
     fx.github_origin(&repo);
     fx.cpd(&["workflow", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     fx.cpd(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
@@ -51,12 +65,17 @@ fn plan_with_one_draft(fx: &Fx) -> PathBuf {
 }
 
 fn review(fx: &Fx) -> Value {
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok()
+    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"])
+        .ok()
 }
 
 fn last_line(path: &Path) -> String {
     let text = fs::read_to_string(path).unwrap();
-    text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_owned()
+    text.lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .to_owned()
 }
 
 #[test]
@@ -67,7 +86,10 @@ fn plan_review_writes_the_summary_copy_and_no_full_render() {
     for name in ["summary-r1.md", "plan.md", "summary.md"] {
         assert!(run_file(&fx, "pay", name).exists(), "run/pay/{name} exists");
     }
-    assert!(!run_file(&fx, "pay", "plan-r1.md").exists(), "the full render plan-r1.md is deleted (hs-d739)");
+    assert!(
+        !run_file(&fx, "pay", "plan-r1.md").exists(),
+        "the full render plan-r1.md is deleted (hs-d739)"
+    );
 }
 
 #[test]
@@ -84,5 +106,8 @@ fn plan_review_output_has_no_path_and_the_summary_ends_with_approve_change() {
 
     let again = review(&fx);
     assert_eq!(again["already"], true, "{again}");
-    assert!(again.get("path").is_none(), "no `path` key on the pending review again: {again}");
+    assert!(
+        again.get("path").is_none(),
+        "no `path` key on the pending review again: {again}"
+    );
 }

@@ -41,8 +41,11 @@ pub struct Approval {
 }
 
 fn io(path: &Path, what: &str, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::Internal, format!("Cannot {what} {}: {e}.", path.display()))
-        .with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::Internal,
+        format!("Cannot {what} {}: {e}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 /// `dir` and its missing parents; `dir` and everything below `$CPD_HOME/run/secret` made 0700.
@@ -54,7 +57,8 @@ fn private_dir(home: &CpdHome, dir: &Path) -> Result<(), CpdError> {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(io(&d, "create", e)),
         }
-        fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).map_err(|e| io(&d, "protect", e))?;
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o700))
+            .map_err(|e| io(&d, "protect", e))?;
     }
     Ok(())
 }
@@ -63,7 +67,12 @@ fn private_dir(home: &CpdHome, dir: &Path) -> Result<(), CpdError> {
 fn write_private(home: &CpdHome, dir: &Path, name: &str, bytes: &[u8]) -> Result<(), CpdError> {
     private_dir(home, dir)?;
     let tmp = dir.join(format!(".{name}.{}.tmp", SessionId::new_v4()));
-    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| io(&tmp, "create", e))?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| io(&tmp, "create", e))?;
     let done = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     let target = dir.join(name);
@@ -75,7 +84,9 @@ fn write_private(home: &CpdHome, dir: &Path, name: &str, bytes: &[u8]) -> Result
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, CpdError> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| io(path, "parse", e)),
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| io(path, "parse", e)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(io(path, "read", e)),
     }
@@ -95,14 +106,24 @@ pub fn allow(home: &CpdHome, attempt: &AttemptId, entry: Allowed) -> Result<bool
     }
     held.push(entry);
     let bytes = serde_json::to_vec(&held).expect("entries serialize");
-    write_private(home, &home.secret_allow_dir(), &format!("{attempt}.json"), &bytes)?;
+    write_private(
+        home,
+        &home.secret_allow_dir(),
+        &format!("{attempt}.json"),
+        &bytes,
+    )?;
     Ok(false)
 }
 
 /// Whether the Attempt is running or was never ended: it exists and has not ended (the store says).
 pub fn attempt_live(conn: &Connection, attempt: &AttemptId) -> Result<bool, CpdError> {
-    let status: Option<String> =
-        conn.query_row("SELECT status FROM attempts WHERE id = ?1", [attempt.to_string()], |r| r.get(0)).optional()?;
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM attempts WHERE id = ?1",
+            [attempt.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
     Ok(status.is_some_and(|s| s != "ended"))
 }
 
@@ -120,40 +141,73 @@ pub fn allowance_held(
 pub fn approve(home: &CpdHome, approval: &Approval) -> Result<OffsetDateTime, CpdError> {
     let at = OffsetDateTime::parse(&approval.at, &Rfc3339).expect("`at` is written by cpd");
     let bytes = serde_json::to_vec(approval).expect("an approval serializes");
-    write_private(home, &home.secret_approve_dir(), &format!("{}.json", SessionId::new_v4()), &bytes)?;
+    write_private(
+        home,
+        &home.secret_approve_dir(),
+        &format!("{}.json", SessionId::new_v4()),
+        &bytes,
+    )?;
     Ok(at + APPROVAL_LIFETIME)
 }
 
 /// [`approve`] with `at` the time of `ports.clock.utc()`: the approval `want` (its `at` ignored), and when it expires.
-pub(crate) fn approve_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<OffsetDateTime, CpdError> {
-    approve(home, &Approval { at: crate::clock::timestamp(ports.clock.utc()), ..want.clone() })
+pub(crate) fn approve_on(
+    ports: &crate::ports::Ports,
+    home: &CpdHome,
+    want: &Approval,
+) -> Result<OffsetDateTime, CpdError> {
+    approve(
+        home,
+        &Approval {
+            at: crate::clock::timestamp(ports.clock.utc()),
+            ..want.clone()
+        },
+    )
 }
 
 /// [`take_approval`] at `ports.clock.utc()`.
-pub(crate) fn take_approval_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<bool, CpdError> {
+pub(crate) fn take_approval_on(
+    ports: &crate::ports::Ports,
+    home: &CpdHome,
+    want: &Approval,
+) -> Result<bool, CpdError> {
     take_approval(home, want, ports.clock.utc())
 }
 
 /// Consumes the first approval equal to `want` (its `at` aside) that has not expired: removes it and says so.
 /// Expired files are removed and ignored.
-pub fn take_approval(home: &CpdHome, want: &Approval, now: OffsetDateTime) -> Result<bool, CpdError> {
+pub fn take_approval(
+    home: &CpdHome,
+    want: &Approval,
+    now: OffsetDateTime,
+) -> Result<bool, CpdError> {
     let dir = home.secret_approve_dir();
     let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(io(&dir, "read", e)),
     };
-    let mut names: Vec<_> = entries.collect::<Result<Vec<_>, _>>().map_err(|e| io(&dir, "read", e))?;
+    let mut names: Vec<_> = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io(&dir, "read", e))?;
     names.sort_by_key(|e| e.file_name());
     for entry in names {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Some(held) = read_json::<Approval>(&path)? else { continue };
+        let Some(held) = read_json::<Approval>(&path)? else {
+            continue;
+        };
         let at = OffsetDateTime::parse(&held.at, &Rfc3339).map_err(|e| io(&path, "parse", e))?;
         let expired = now >= at + APPROVAL_LIFETIME;
-        let same = Approval { at: String::new(), ..held.clone() } == Approval { at: String::new(), ..want.clone() };
+        let same = Approval {
+            at: String::new(),
+            ..held.clone()
+        } == Approval {
+            at: String::new(),
+            ..want.clone()
+        };
         if expired || same {
             fs::remove_file(&path).map_err(|e| io(&path, "remove", e))?;
         }
@@ -192,6 +246,10 @@ mod tests {
         approve(&home, &approval(now - Duration::minutes(11))).unwrap();
         assert!(take_approval(&home, &approval(now), now).unwrap());
         assert!(!take_approval(&home, &approval(now), now).unwrap());
-        assert_eq!(fs::read_dir(home.secret_approve_dir()).unwrap().count(), 0, "the expired one is removed too");
+        assert_eq!(
+            fs::read_dir(home.secret_approve_dir()).unwrap().count(),
+            0,
+            "the expired one is removed too"
+        );
     }
 }

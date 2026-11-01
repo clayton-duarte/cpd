@@ -36,7 +36,9 @@ fn usage(message: &str) -> CpdError {
 pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> {
     let text = match (&args.body, &args.body_file) {
         (Some(text), None) => text.clone(),
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?,
+        (None, Some(path)) => {
+            std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?
+        }
         _ => return Err(usage("Give exactly one of --body and --body-file.")),
     };
     let text = text.trim();
@@ -74,10 +76,17 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
     let url = match item.kind {
-        Kind::Thread => gh::reply_to_thread(runner, lead, &item.id, &format!("{text}\n\n{MARKER}"))?,
+        Kind::Thread => {
+            gh::reply_to_thread(runner, lead, &item.id, &format!("{text}\n\n{MARKER}"))?
+        }
         Kind::Comment | Kind::Review => {
             let node = gh::pull_request_id(runner, lead, &pull.repo, pull.number)?;
-            gh::reply_to_comment(runner, lead, &node, &format!("Re: {}\n\n{text}\n\n{MARKER}", item.url))?
+            gh::reply_to_comment(
+                runner,
+                lead,
+                &node,
+                &format!("Re: {}\n\n{text}\n\n{MARKER}", item.url),
+            )?
         }
     };
     Ok(Output::success(json!({"replied": {"pr": workflow.key, "to": args.to, "url": url}})))

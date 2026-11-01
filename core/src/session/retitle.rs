@@ -92,29 +92,50 @@ impl Reason {
 }
 
 fn title_failed(session: &SessionId, reason: Reason, why: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::TitleFailed, format!("The title of Session {session} was not written: {why}."))
-        .with("session", session.as_str())
-        .with("reason", reason.as_str())
+    CpdError::new(
+        ErrorCode::TitleFailed,
+        format!("The title of Session {session} was not written: {why}."),
+    )
+    .with("session", session.as_str())
+    .with("reason", reason.as_str())
 }
 
 fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
-    CpdError::new(ErrorCode::FileUnreadable, format!("Cannot {what} {}: {e}.", path.display())).with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::FileUnreadable,
+        format!("Cannot {what} {}: {e}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 /// Step 1: the lock, without waiting; `title_failed` with reason `running` when another run holds it.
 fn take_lock(home: &CpdHome, session: &SessionId) -> Result<File, CpdError> {
     let path = lock_path(home, session);
     let failed = |e: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the title lock {}: {e}.", path.display()))
-            .with("lock", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use the title lock {}: {e}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| failed(&e))?;
     match crate::lock::try_lock(&file) {
         Ok(true) => Ok(file),
-        Ok(false) => Err(title_failed(session, Reason::Running, "another retitle of it is running").with("lock", path.display().to_string())),
+        Ok(false) => {
+            Err(
+                title_failed(session, Reason::Running, "another retitle of it is running")
+                    .with("lock", path.display().to_string()),
+            )
+        }
         Err(e) => Err(failed(&e)),
     }
 }
@@ -127,7 +148,9 @@ pub(super) fn retitle(args: RetitleArgs) -> Result<Output, CpdError> {
     check(&read)?;
     let _lock = take_lock(&env.home, &id)?;
     let Some(text) = conversation(read.file.as_deref())? else {
-        return Ok(Output::success(json!({"session": id, "title": null, "skipped": "no_messages"})));
+        return Ok(Output::success(
+            json!({"session": id, "title": null, "skipped": "no_messages"}),
+        ));
     };
     let title = run_pi(&mut env, &read, &text, limit(args.width))?;
     let (event, titled_at) = env.store.write("session retitle", |tx| {
@@ -143,7 +166,9 @@ pub(super) fn retitle(args: RetitleArgs) -> Result<Output, CpdError> {
         Ok((event, titled_at))
     })?;
     let pane = set_header(&env, &id, &title);
-    Ok(Output::success(json!({"session": id, "title": title.as_str(), "titled_at": titled_at, "event": event, "pane": pane})))
+    Ok(Output::success(
+        json!({"session": id, "title": title.as_str(), "titled_at": titled_at, "event": event, "pane": pane}),
+    ))
 }
 
 /// The preconditions on the row: a Lead or a Manager, not archived.
@@ -163,7 +188,12 @@ fn check(row: &Row) -> Result<(), CpdError> {
 fn set_header(env: &Env, id: &SessionId, title: &Title) -> Option<String> {
     let tmux = env.tmux();
     let set = tmux.list_panes().and_then(|panes| {
-        let Some(pane) = panes.into_iter().find(|p| !p.dead && p.cpd_session.as_ref() == Some(id)) else { return Ok(None) };
+        let Some(pane) = panes
+            .into_iter()
+            .find(|p| !p.dead && p.cpd_session.as_ref() == Some(id))
+        else {
+            return Ok(None);
+        };
         tmux.set_pane_title(&pane.pane, title.as_str())?;
         Ok(Some(pane.pane.as_str().to_owned()))
     });
@@ -193,7 +223,12 @@ fn conversation_text(content: &str) -> Option<String> {
     if messages.is_empty() {
         return None;
     }
-    let users: Vec<usize> = messages.iter().enumerate().filter(|(_, m)| m.starts_with("user: ")).map(|(i, _)| i).collect();
+    let users: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.starts_with("user: "))
+        .map(|(i, _)| i)
+        .collect();
     let first = users.len().checked_sub(TURNS).map_or(0, |i| users[i]);
     let text = messages[first..].join("\n\n");
     let skip = text.chars().count().saturating_sub(CHARACTERS);
@@ -208,7 +243,9 @@ fn message_text(line: &str) -> Option<String> {
         return None;
     }
     let message = &value["message"];
-    let role = message["role"].as_str().filter(|r| matches!(*r, "user" | "assistant"))?;
+    let role = message["role"]
+        .as_str()
+        .filter(|r| matches!(*r, "user" | "assistant"))?;
     let text = match &message["content"] {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
@@ -232,21 +269,53 @@ fn run_pi(env: &mut Env, row: &Row, text: &str, limit: usize) -> Result<Title, C
     let model = catalog.model_arg(Tier::new(Letter::G, 0).expect("GX"))?;
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
-    let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
-    run_pi_with(&*Ports::current().runner, id, &model, &dir, text, limit, &environ)
+    let environ: Vec<String> = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .collect();
+    run_pi_with(
+        &*Ports::current().runner,
+        id,
+        &model,
+        &dir,
+        text,
+        limit,
+        &environ,
+    )
 }
 
 pub(crate) use crate::host::runner::NO_DEADLINE;
 
 /// Steps 3 and 4 on `runner`: pi on `model` in `dir` (its stderr is the `Output`'s, passed on to this run's stderr), the conversation
 /// `text` as stdin, under [`NO_DEADLINE`]. The variables of `environ` that start with `CPD_` are removed.
-pub(crate) fn run_pi_with(runner: &dyn Runner, id: &SessionId, model: &str, dir: &Path, text: &str, limit: usize, environ: &[String]) -> Result<Title, CpdError> {
-    let mut envs: Vec<(String, Option<String>)> = environ.iter().filter(|k| k.starts_with("CPD_")).map(|k| (k.clone(), None)).collect();
+pub(crate) fn run_pi_with(
+    runner: &dyn Runner,
+    id: &SessionId,
+    model: &str,
+    dir: &Path,
+    text: &str,
+    limit: usize,
+    environ: &[String],
+) -> Result<Title, CpdError> {
+    let mut envs: Vec<(String, Option<String>)> = environ
+        .iter()
+        .filter(|k| k.starts_with("CPD_"))
+        .map(|k| (k.clone(), None))
+        .collect();
     envs.push(("PI_SKIP_VERSION_CHECK".to_owned(), Some("1".to_owned())));
     let call = Call {
         tool: "pi".to_owned(),
         program: "pi".to_owned(),
-        args: ["--print", "--no-session", "--no-extensions", "--model", model, "--", &prompt(limit)].map(str::to_owned).to_vec(),
+        args: [
+            "--print",
+            "--no-session",
+            "--no-extensions",
+            "--model",
+            model,
+            "--",
+            &prompt(limit),
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         envs,
         cwd: Some(dir.to_path_buf()),
         deadline: NO_DEADLINE,
@@ -260,10 +329,16 @@ pub(crate) fn run_pi_with(runner: &dyn Runner, id: &SessionId, model: &str, dir:
     let _ = io::stderr().write_all(&out.stderr);
     let tail = tail(&out.stderr);
     if !out.status.success() {
-        let how = out.status.code().map_or_else(|| format!("was ended by {}", out.status), |c| format!("exited with status {c}"));
-        return Err(title_failed(id, Reason::Exit, format_args!("pi {how}")).with("exit", out.status.code()).with("tail", tail));
+        let how = out.status.code().map_or_else(
+            || format!("was ended by {}", out.status),
+            |c| format!("exited with status {c}"),
+        );
+        return Err(title_failed(id, Reason::Exit, format_args!("pi {how}"))
+            .with("exit", out.status.code())
+            .with("tail", tail));
     }
-    sanitise(&String::from_utf8_lossy(&out.stdout), limit).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
+    sanitise(&String::from_utf8_lossy(&out.stdout), limit)
+        .map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
 }
 
 /// Step 4: the title is the text after the marker of the only line that starts with `TITLE:` (leading
@@ -276,9 +351,13 @@ fn sanitise(answer: &str, limit: usize) -> Result<Title, (Reason, String)> {
         return Err((Reason::Empty, "pi's answer is empty".to_owned()));
     }
     let malformed = |why: String| (Reason::Malformed, why);
-    let mut marked = answer.lines().filter_map(|l| l.trim_start().strip_prefix(MARKER));
+    let mut marked = answer
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix(MARKER));
     let (Some(text), None) = (marked.next(), marked.next()) else {
-        return Err(malformed(format!("pi's answer has no single line starting with {MARKER}")));
+        return Err(malformed(format!(
+            "pi's answer has no single line starting with {MARKER}"
+        )));
     };
     let text = text.trim().trim_matches(QUOTES).trim();
     let bad = if text.is_empty() {
@@ -291,9 +370,16 @@ fn sanitise(answer: &str, limit: usize) -> Result<Title, (Reason, String)> {
         None
     };
     if let Some(bad) = bad {
-        return Err(malformed(format!("pi's answer {text:?} is not a title: {bad}")));
+        return Err(malformed(format!(
+            "pi's answer {text:?} is not a title: {bad}"
+        )));
     }
-    text.parse::<Title>().map_err(|e| malformed(format!("pi's answer {text:?} is not a title: {}", e.message())))
+    text.parse::<Title>().map_err(|e| {
+        malformed(format!(
+            "pi's answer {text:?} is not a title: {}",
+            e.message()
+        ))
+    })
 }
 
 /// The last [`TAIL_LINES`] lines of `bytes`.
@@ -308,7 +394,9 @@ mod tests {
     use super::*;
 
     fn title(answer: &str) -> Result<String, Reason> {
-        sanitise(answer, LIMIT).map(|t| t.as_str().to_owned()).map_err(|(reason, _)| reason)
+        sanitise(answer, LIMIT)
+            .map(|t| t.as_str().to_owned())
+            .map_err(|(reason, _)| reason)
     }
 
     /// The limit the unit tests use: a chat slot of 68 columns.
@@ -332,35 +420,72 @@ mod tests {
 
     #[test]
     fn a_unmarked_line_is_malformed_even_when_it_would_pass_as_a_title() {
-        for unmarked in ["Dynamic session titles", "\"Plan the titles\"\nmore\n", "Title: Dynamic session titles", "title: x y z"] {
+        for unmarked in [
+            "Dynamic session titles",
+            "\"Plan the titles\"\nmore\n",
+            "Title: Dynamic session titles",
+            "title: x y z",
+        ] {
             assert_eq!(title(unmarked), Err(Reason::Malformed), "{unmarked:?}");
         }
     }
 
     #[test]
     fn the_marked_line_is_the_title() {
-        assert_eq!(title("TITLE: Dynamic session titles"), Ok("Dynamic session titles".to_owned()));
-        assert_eq!(title("TITLE: Dynamic session titles\n"), Ok("Dynamic session titles".to_owned()));
-        assert_eq!(title("  TITLE:   Dynamic session titles  \n"), Ok("Dynamic session titles".to_owned()));
+        assert_eq!(
+            title("TITLE: Dynamic session titles"),
+            Ok("Dynamic session titles".to_owned())
+        );
+        assert_eq!(
+            title("TITLE: Dynamic session titles\n"),
+            Ok("Dynamic session titles".to_owned())
+        );
+        assert_eq!(
+            title("  TITLE:   Dynamic session titles  \n"),
+            Ok("Dynamic session titles".to_owned())
+        );
     }
 
     #[test]
     fn lines_without_the_marker_are_ignored_so_a_preamble_does_no_harm() {
-        assert_eq!(title(&format!("{PREAMBLE}\nTITLE: Dynamic session titles")), Ok("Dynamic session titles".to_owned()));
-        assert_eq!(title(&format!("{PREAMBLE}\n\nTITLE: Dynamic session titles\nThat is all.\n")), Ok("Dynamic session titles".to_owned()));
+        assert_eq!(
+            title(&format!("{PREAMBLE}\nTITLE: Dynamic session titles")),
+            Ok("Dynamic session titles".to_owned())
+        );
+        assert_eq!(
+            title(&format!(
+                "{PREAMBLE}\n\nTITLE: Dynamic session titles\nThat is all.\n"
+            )),
+            Ok("Dynamic session titles".to_owned())
+        );
     }
 
     #[test]
     fn the_marked_text_is_unquoted() {
-        assert_eq!(title("TITLE: \"Plan the titles\""), Ok("Plan the titles".to_owned()));
-        assert_eq!(title("TITLE: “Curly quotes”"), Ok("Curly quotes".to_owned()));
-        assert_eq!(title("TITLE: 'Single quotes'"), Ok("Single quotes".to_owned()));
+        assert_eq!(
+            title("TITLE: \"Plan the titles\""),
+            Ok("Plan the titles".to_owned())
+        );
+        assert_eq!(
+            title("TITLE: “Curly quotes”"),
+            Ok("Curly quotes".to_owned())
+        );
+        assert_eq!(
+            title("TITLE: 'Single quotes'"),
+            Ok("Single quotes".to_owned())
+        );
     }
 
     #[test]
     fn two_marked_lines_are_malformed() {
-        assert_eq!(title("TITLE: First title\nTITLE: Second title"), Err(Reason::Malformed));
-        assert_eq!(title("TITLE: Same title\nsome words\n  TITLE: Same title"), Err(Reason::Malformed));
+        assert_eq!(
+            title("TITLE: First title\nTITLE: Second title"),
+            Err(Reason::Malformed)
+        );
+        assert_eq!(
+            title("TITLE: Same title\nsome words\n  TITLE: Same title"),
+            Err(Reason::Malformed)
+        );
     }
 
     #[test]
@@ -374,8 +499,14 @@ mod tests {
     fn a_title_over_the_limit_is_malformed_and_never_cut() {
         let at_limit = "é".repeat(LIMIT);
         assert_eq!(title(&format!("TITLE: {at_limit}")), Ok(at_limit));
-        assert_eq!(title(&format!("TITLE: {}", "é".repeat(LIMIT + 1))), Err(Reason::Malformed));
-        assert_eq!(title(&format!("TITLE: {}", "é".repeat(300))), Err(Reason::Malformed));
+        assert_eq!(
+            title(&format!("TITLE: {}", "é".repeat(LIMIT + 1))),
+            Err(Reason::Malformed)
+        );
+        assert_eq!(
+            title(&format!("TITLE: {}", "é".repeat(300))),
+            Err(Reason::Malformed)
+        );
     }
 
     #[test]
@@ -388,7 +519,10 @@ mod tests {
 
     #[test]
     fn a_title_has_no_word_cap() {
-        assert_eq!(title("TITLE: a b c d e f g h i j k l"), Ok("a b c d e f g h i j k l".to_owned()));
+        assert_eq!(
+            title("TITLE: a b c d e f g h i j k l"),
+            Ok("a b c d e f g h i j k l".to_owned())
+        );
     }
 
     #[test]
@@ -407,7 +541,11 @@ mod tests {
         ] {
             assert_eq!(title(sentences), Err(Reason::Malformed), "{sentences:?}");
         }
-        assert_eq!(title("TITLE: Fix v1.2 titles"), Ok("Fix v1.2 titles".to_owned()), "a dot that is not `. ` or the end is fine");
+        assert_eq!(
+            title("TITLE: Fix v1.2 titles"),
+            Ok("Fix v1.2 titles".to_owned()),
+            "a dot that is not `. ` or the end is fine"
+        );
     }
 
     #[test]
@@ -417,8 +555,17 @@ mod tests {
 
     #[test]
     fn the_conversation_is_the_last_2_turns_with_text_newest_characters_kept() {
-        let line = |role: &str, text: &str| json!({"type": "message", "message": {"role": role, "content": text}}).to_string();
-        let mut lines: Vec<String> = (1..=35).map(|i| line(if i % 2 == 0 { "assistant" } else { "user" }, &format!("m{i}"))).collect();
+        let line = |role: &str, text: &str| {
+            json!({"type": "message", "message": {"role": role, "content": text}}).to_string()
+        };
+        let mut lines: Vec<String> = (1..=35)
+            .map(|i| {
+                line(
+                    if i % 2 == 0 { "assistant" } else { "user" },
+                    &format!("m{i}"),
+                )
+            })
+            .collect();
         lines.push(line("toolResult", "out"));
         lines.push(line("assistant", "   "));
         lines.push("{\"type\":\"mess".to_owned());
@@ -431,8 +578,17 @@ mod tests {
 
     #[test]
     fn fewer_than_2_user_messages_is_the_whole_file() {
-        let line = |role: &str, text: &str| json!({"type": "message", "message": {"role": role, "content": text}}).to_string();
-        let lines = [line("assistant", "hello"), line("user", "q"), line("assistant", "a")];
-        assert_eq!(conversation_text(&lines.join("\n")).unwrap(), "assistant: hello\n\nuser: q\n\nassistant: a");
+        let line = |role: &str, text: &str| {
+            json!({"type": "message", "message": {"role": role, "content": text}}).to_string()
+        };
+        let lines = [
+            line("assistant", "hello"),
+            line("user", "q"),
+            line("assistant", "a"),
+        ];
+        assert_eq!(
+            conversation_text(&lines.join("\n")).unwrap(),
+            "assistant: hello\n\nuser: q\n\nassistant: a"
+        );
     }
 }

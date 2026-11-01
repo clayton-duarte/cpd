@@ -34,12 +34,18 @@ pub struct PlanRef {
 /// links it may have, so a decision cannot name a question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Draft {
-    Decision { supersedes: Option<RecordId> },
+    Decision {
+        supersedes: Option<RecordId>,
+    },
     Note,
     /// A note that replaces an earlier note (recency wins, §2.2).
-    NoteSupersedes { supersedes: RecordId },
+    NoteSupersedes {
+        supersedes: RecordId,
+    },
     Question,
-    Answer { question: RecordId },
+    Answer {
+        question: RecordId,
+    },
     Plan(PlanRef),
     /// A Plan's brief (B3-A4): `plan` is `{id, machine}`.
     Brief(PlanRef),
@@ -106,7 +112,12 @@ impl Record {
 
     /// The first line of a `brief`'s text: how `context show` lists it (commands.md §3.3).
     pub fn first_line(&self) -> &str {
-        self.text.trim_start().lines().next().unwrap_or_default().trim_end()
+        self.text
+            .trim_start()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim_end()
     }
 
     /// [`Record::to_json`] for a listing: a `brief` is short, its `text` its first line, with `"short": true`.
@@ -127,7 +138,10 @@ impl Record {
         map.insert("kind".into(), json!(self.kind().as_str()));
         map.insert("at".into(), json!(self.at));
         map.insert("machine".into(), json!(self.machine()));
-        map.insert("by".into(), json!({"session": self.by.session, "plan": self.by.plan}));
+        map.insert(
+            "by".into(),
+            json!({"session": self.by.session, "plan": self.by.plan}),
+        );
         map.insert("text".into(), json!(self.text));
         if let Some(supersedes) = self.supersedes() {
             map.insert("supersedes".into(), json!(supersedes));
@@ -174,7 +188,8 @@ impl Record {
             id: PlanId,
             machine: MachineName,
             #[serde(default)]
-            #[allow(dead_code)] // Accepted so `deny_unknown_fields` takes a pre-R34 record; never read.
+            #[allow(dead_code)]
+            // Accepted so `deny_unknown_fields` takes a pre-R34 record; never read.
             repo: Option<String>,
             #[serde(default)]
             jira: Option<String>,
@@ -188,15 +203,28 @@ impl Record {
             return Err(format!("id {} does not match kind {}", raw.id, raw.kind));
         }
         if raw.machine != *machine || raw.id.machine() != machine {
-            return Err(format!("record {} is not this file's machine, {machine}", raw.id));
+            return Err(format!(
+                "record {} is not this file's machine, {machine}",
+                raw.id
+            ));
         }
         OffsetDateTime::parse(&raw.at, &Rfc3339).map_err(|e| format!("at is not RFC 3339: {e}"))?;
         if raw.text.is_empty() {
             return Err("text is empty".into());
         }
-        let plan = raw.plan.map(|p| PlanRef { id: p.id, machine: p.machine, jira: p.jira });
+        let plan = raw.plan.map(|p| PlanRef {
+            id: p.id,
+            machine: p.machine,
+            jira: p.jira,
+        });
         let draft = Draft::from_parts(kind, raw.supersedes, raw.question, plan)?;
-        Ok(Record { id: raw.id, at: raw.at, by: raw.by, text: raw.text, draft })
+        Ok(Record {
+            id: raw.id,
+            at: raw.at,
+            by: raw.by,
+            text: raw.text,
+            draft,
+        })
     }
 
     /// The columns of `context_records` in [`Record::from_row`]'s order, after `seq`.
@@ -205,11 +233,17 @@ impl Record {
 
     /// Reads a row selected with [`Record::COLUMNS`]: its `seq` and the record.
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Record)> {
-        fn bad(column: usize, e: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
+        fn bad(
+            column: usize,
+            e: impl std::error::Error + Send + Sync + 'static,
+        ) -> rusqlite::Error {
             rusqlite::Error::FromSqlConversionFailure(column, Type::Text, Box::new(e))
         }
         fn invalid(column: usize, message: String) -> rusqlite::Error {
-            bad(column, std::io::Error::new(std::io::ErrorKind::InvalidData, message))
+            bad(
+                column,
+                std::io::Error::new(std::io::ErrorKind::InvalidData, message),
+            )
         }
         let optional = |column: usize| row.get::<_, Option<String>>(column);
         let id = RecordId::parse(&row.get::<_, String>(1)?).map_err(|e| bad(1, e))?;
@@ -217,14 +251,26 @@ impl Record {
         let kind = kind_named(&kind).ok_or_else(|| invalid(2, format!("unknown kind {kind:?}")))?;
         let machine = MachineName::parse(&row.get::<_, String>(4)?).map_err(|e| bad(4, e))?;
         if id.kind() != kind || *id.machine() != machine {
-            return Err(invalid(1, format!("record {id} does not match its kind and machine")));
+            return Err(invalid(
+                1,
+                format!("record {id} does not match its kind and machine"),
+            ));
         }
         let by = By {
-            session: optional(5)?.map(|s| SessionId::parse(&s)).transpose().map_err(|e| bad(5, e))?,
-            plan: optional(6)?.map(|p| PlanId::parse(&p)).transpose().map_err(|e| bad(6, e))?,
+            session: optional(5)?
+                .map(|s| SessionId::parse(&s))
+                .transpose()
+                .map_err(|e| bad(5, e))?,
+            plan: optional(6)?
+                .map(|p| PlanId::parse(&p))
+                .transpose()
+                .map_err(|e| bad(6, e))?,
         };
         let record_id = |column| -> rusqlite::Result<Option<RecordId>> {
-            optional(column)?.map(|s| RecordId::parse(&s)).transpose().map_err(|e| bad(column, e))
+            optional(column)?
+                .map(|s| RecordId::parse(&s))
+                .transpose()
+                .map_err(|e| bad(column, e))
         };
         let plan = match optional(10)? {
             None => None,
@@ -234,14 +280,25 @@ impl Record {
                 jira: optional(12)?,
             }),
         };
-        let draft = Draft::from_parts(kind, record_id(8)?, record_id(9)?, plan).map_err(|m| invalid(2, m))?;
-        let record = Record { id, at: row.get(3)?, by, text: row.get(7)?, draft };
+        let draft = Draft::from_parts(kind, record_id(8)?, record_id(9)?, plan)
+            .map_err(|m| invalid(2, m))?;
+        let record = Record {
+            id,
+            at: row.get(3)?,
+            by,
+            text: row.get(7)?,
+            draft,
+        };
         Ok((row.get(0)?, record))
     }
 
     /// Inserts the record into `context_records`; a record whose `(context, id)`
     /// is already indexed is left alone. Returns whether a row was added.
-    pub fn insert(&self, conn: &rusqlite::Connection, context: &ContextId) -> rusqlite::Result<bool> {
+    pub fn insert(
+        &self,
+        conn: &rusqlite::Connection,
+        context: &ContextId,
+    ) -> rusqlite::Result<bool> {
         let plan = self.plan();
         let added = conn.execute(
             "INSERT INTO context_records
@@ -279,7 +336,8 @@ impl Draft {
         question: Option<RecordId>,
         plan: Option<PlanRef>,
     ) -> Result<Draft, String> {
-        let extra = |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
+        let extra =
+            |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
         if supersedes.is_some() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
             return Err(extra("supersedes", kind));
         }
@@ -292,7 +350,11 @@ impl Draft {
         if let Some(s) = &supersedes
             && !may_supersede(kind, s.kind())
         {
-            return Err(format!("a {} record cannot supersede {s}, a {}", kind.as_str(), s.kind().as_str()));
+            return Err(format!(
+                "a {} record cannot supersede {s}, a {}",
+                kind.as_str(),
+                s.kind().as_str()
+            ));
         }
         if let Some(q) = &question
             && q.kind() != RecordKind::Question
@@ -306,7 +368,9 @@ impl Draft {
                 None => Draft::Note,
             },
             RecordKind::Question => Draft::Question,
-            RecordKind::Answer => Draft::Answer { question: question.ok_or("an answer needs its question")? },
+            RecordKind::Answer => Draft::Answer {
+                question: question.ok_or("an answer needs its question")?,
+            },
             RecordKind::Plan => Draft::Plan(plan.ok_or("a plan record needs its plan")?),
             RecordKind::Brief => Draft::Brief(plan.ok_or("a brief record needs its plan")?),
         })
@@ -361,13 +425,27 @@ mod tests {
         let old = line("")
             .replace("hs-d1", "hs-p1")
             .replace("decision", "plan")
-            .replace(r#""text""#, r#""plan":{"id":"pay","machine":"hs","repo":"/r/pay","jira":"ABC-1"},"text""#);
+            .replace(
+                r#""text""#,
+                r#""plan":{"id":"pay","machine":"hs","repo":"/r/pay","jira":"ABC-1"},"text""#,
+            );
         let record = Record::parse_line(&old, &machine()).unwrap();
         let plan = record.plan().unwrap();
-        assert_eq!((plan.id.as_str(), plan.jira.as_deref()), ("pay", Some("ABC-1")));
-        assert!(!record.to_json()["plan"].as_object().unwrap().contains_key("repo"));
+        assert_eq!(
+            (plan.id.as_str(), plan.jira.as_deref()),
+            ("pay", Some("ABC-1"))
+        );
+        assert!(
+            !record.to_json()["plan"]
+                .as_object()
+                .unwrap()
+                .contains_key("repo")
+        );
         let other = old.replace(r#""repo":"/r/pay""#, r#""base":"main""#);
-        assert!(Record::parse_line(&other, &machine()).is_err(), "no other unknown field");
+        assert!(
+            Record::parse_line(&other, &machine()).is_err(),
+            "no other unknown field"
+        );
     }
 
     #[test]
@@ -379,16 +457,32 @@ mod tests {
             (line(r#","supersedes":"hs-q1""#), "supersedes a question"),
             (line("").replace(r#""v":1"#, r#""v":2"#), "version"),
             (line("").replace("hs-d1", "hs-n1"), "id letter against kind"),
-            (line("").replace(r#""machine":"hs""#, r#""machine":"zz""#), "machine"),
-            (line("").replace("2026-10-14T21:12:00.000Z", "yesterday"), "time"),
+            (
+                line("").replace(r#""machine":"hs""#, r#""machine":"zz""#),
+                "machine",
+            ),
+            (
+                line("").replace("2026-10-14T21:12:00.000Z", "yesterday"),
+                "time",
+            ),
             (line("").replace("One engine.", ""), "empty text"),
             (line("").replace("decision", "idea"), "kind"),
         ] {
             assert!(Record::parse_line(&bad, &m).is_err(), "{why}");
         }
-        let answer = line("").replace("hs-d1", "hs-a1").replace("decision", "answer");
-        assert!(Record::parse_line(&answer, &m).is_err(), "an answer needs its question");
-        let plan = line("").replace("hs-d1", "hs-p1").replace("decision", "plan");
-        assert!(Record::parse_line(&plan, &m).is_err(), "a plan record needs its plan");
+        let answer = line("")
+            .replace("hs-d1", "hs-a1")
+            .replace("decision", "answer");
+        assert!(
+            Record::parse_line(&answer, &m).is_err(),
+            "an answer needs its question"
+        );
+        let plan = line("")
+            .replace("hs-d1", "hs-p1")
+            .replace("decision", "plan");
+        assert!(
+            Record::parse_line(&plan, &m).is_err(),
+            "a plan record needs its plan"
+        );
     }
 }

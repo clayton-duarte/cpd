@@ -52,8 +52,11 @@ fn fixture() -> Fixture {
 fn update_jobs(f: &mut Fixture, plan: &str) -> Vec<String> {
     f.store
         .read(|c| {
-            let mut stmt = c.prepare("SELECT key FROM jobs WHERE plan = ?1 AND kind = 'update' ORDER BY key")?;
-            Ok(stmt.query_map([plan], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            let mut stmt =
+                c.prepare("SELECT key FROM jobs WHERE plan = ?1 AND kind = 'update' ORDER BY key")?;
+            Ok(stmt
+                .query_map([plan], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -83,11 +86,22 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     // `ops` is held: the poll's conflict cause queues nothing.
     let queued = f.store.write("pr poll", |tx| queue_update(tx, &ops, &ops_workflow, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();
     assert_eq!(queued, None, "a held Plan queues no conflict update Job");
-    assert!(update_jobs(&mut f, "ops").is_empty(), "no update Job row is written for the held Plan");
+    assert!(
+        update_jobs(&mut f, "ops").is_empty(),
+        "no update Job row is written for the held Plan"
+    );
 
     // `pay` is in the incident: the same call queues as it always has.
     let queued = f.store.write("pr poll", |tx| queue_update(tx, &pay, &pay_workflow, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();
     let key = queued.expect("an incident Plan still queues its conflict update Job");
-    assert_eq!(update_jobs(&mut f, "pay"), vec![key.as_str().to_owned()], "the incident Plan's update Job is queued");
-    assert_eq!(last_reason(&mut f, "pay").as_deref(), Some("conflict"), "the incident Plan's Job carries the conflict cause");
+    assert_eq!(
+        update_jobs(&mut f, "pay"),
+        vec![key.as_str().to_owned()],
+        "the incident Plan's update Job is queued"
+    );
+    assert_eq!(
+        last_reason(&mut f, "pay").as_deref(),
+        Some("conflict"),
+        "the incident Plan's Job carries the conflict cause"
+    );
 }

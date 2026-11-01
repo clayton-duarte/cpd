@@ -20,7 +20,9 @@ fn locked() -> Fx {
 /// `job add <key> --draft --title <t>`, a stub, in Plan `pl` with `extra` flags.
 fn stub(fx: &Fx, key: &str, extra: &[&str]) -> Run {
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", "pl"];
+    let mut args = vec![
+        "job", "add", key, "--draft", "--title", &title, "--plan", "pl",
+    ];
     args.extend(extra);
     fx.cpd(&args)
 }
@@ -47,7 +49,11 @@ fn web_waits_for_repo(fx: &Fx) {
 }
 
 fn writes(fx: &Fx) -> (i64, i64, i64) {
-    (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"))
+    (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    )
 }
 
 // ---------- refused ----------
@@ -56,14 +62,22 @@ fn writes(fx: &Fx) -> (i64, i64, i64) {
 fn stub_without_need_after_lock_is_refused() {
     let fx = locked();
     let e = refused(&stub(&fx, "k", &[]), "draft_parked", 3);
-    assert_eq!(e["details"], json!({"plan": "pl", "job": "k", "pr": "repo", "needs": []}), "{e}");
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pl", "job": "k", "pr": "repo", "needs": []}),
+        "{e}"
+    );
     let message = e["message"].as_str().unwrap();
     for form in ["--needs", "cpd_plan_review", "--draft"] {
         assert!(message.contains(form), "the message names {form}: {e}");
     }
     // A Tier alone, or a Spec alone, is still a stub.
     refused(&stub(&fx, "t", &["--tier", "S2"]), "draft_parked", 3);
-    refused(&stub(&fx, "s", &["--spec", &spec_file(&fx.env)]), "draft_parked", 3);
+    refused(
+        &stub(&fx, "s", &["--spec", &spec_file(&fx.env)]),
+        "draft_parked",
+        3,
+    );
 }
 
 #[test]
@@ -82,7 +96,11 @@ fn stub_needing_merged_job_is_refused() {
     let fx = locked();
     engine(&fx.env, "pl", "a", "merged");
     let e = refused(&stub(&fx, "k", &["--needs", "a"]), "draft_parked", 3);
-    assert_eq!(e["details"], json!({"plan": "pl", "job": "k", "pr": "repo", "needs": ["a"]}), "{e}");
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pl", "job": "k", "pr": "repo", "needs": ["a"]}),
+        "{e}"
+    );
 }
 
 #[test]
@@ -91,7 +109,11 @@ fn stub_needing_parked_stub_is_refused() {
     parked(&fx, "p", "work");
     let before = writes(&fx);
     let e = refused(&stub(&fx, "k", &["--needs", "p"]), "draft_parked", 3);
-    assert_eq!(e["details"], json!({"plan": "pl", "job": "k", "pr": "repo", "needs": ["p"]}), "{e}");
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pl", "job": "k", "pr": "repo", "needs": ["p"]}),
+        "{e}"
+    );
     assert_eq!(writes(&fx), before);
 }
 
@@ -100,10 +122,23 @@ fn edit_no_needs_of_stub_after_lock_is_refused() {
     let fx = locked();
     stub(&fx, "k", &["--needs", "a"]).ok();
     let before = (writes(&fx), count(&fx.env, "history"));
-    let e = refused(&job(&fx, &["edit", "k", "--no-needs"], "pl"), "draft_parked", 3);
-    assert_eq!(e["details"], json!({"plan": "pl", "job": "k", "pr": "repo", "needs": []}), "{e}");
+    let e = refused(
+        &job(&fx, &["edit", "k", "--no-needs"], "pl"),
+        "draft_parked",
+        3,
+    );
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pl", "job": "k", "pr": "repo", "needs": []}),
+        "{e}"
+    );
     assert_eq!((writes(&fx), count(&fx.env, "history")), before);
-    assert_eq!(fx.env.query::<String>("SELECT group_concat(needs) FROM dependencies WHERE job = 'k'"), "a", "unchanged");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT group_concat(needs) FROM dependencies WHERE job = 'k'"),
+        "a",
+        "unchanged"
+    );
     assert_eq!(job_row(&fx.env, "pl", "k", "status"), "draft");
 }
 
@@ -113,7 +148,11 @@ fn edit_no_needs_of_stub_after_lock_is_refused() {
 fn stub_needing_a_queued_running_or_failed_job_is_accepted() {
     let fx = locked();
     let out = stub(&fx, "q", &["--needs", "a"]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["needs"]), (&json!("draft"), &json!(["a"])), "queued need");
+    assert_eq!(
+        (&out["job"]["status"], &out["job"]["needs"]),
+        (&json!("draft"), &json!(["a"])),
+        "queued need"
+    );
     job_add(&fx, "pl", "r", "S2", &[]).ok();
     engine(&fx.env, "pl", "r", "running");
     stub(&fx, "on-running", &["--needs", "r"]).ok();
@@ -122,7 +161,10 @@ fn stub_needing_a_queued_running_or_failed_job_is_accepted() {
     // `job add` and `job edit` refuse a new need on a failed Job (`needs_unavailable`), so the stub that needs it
     // is a fixture (it was added while `f` was running); retrying `f` recovers it, so the stub waits: any edit is accepted.
     parked(&fx, "on-failed", "work");
-    fixture(&fx.env, "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', 'on-failed', 'f');");
+    fixture(
+        &fx.env,
+        "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', 'on-failed', 'f');",
+    );
     job(&fx, &["edit", "on-failed", "--title", "Other"], "pl").ok();
 }
 
@@ -147,7 +189,10 @@ fn full_draft_with_no_needs_is_accepted() {
     let fx = locked();
     let spec = spec_file(&fx.env);
     let out = stub(&fx, "k", &["--tier", "S2", "--spec", &spec]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["needs"]), (&json!("draft"), &json!([])));
+    assert_eq!(
+        (&out["job"]["status"], &out["job"]["needs"]),
+        (&json!("draft"), &json!([]))
+    );
 }
 
 #[test]

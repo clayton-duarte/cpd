@@ -15,12 +15,30 @@ use cpd_core::store::Store;
 
 /// `cpd tui action incident --client <client>` (commands.md §9.13): opens the incident's Lead in
 /// the chat slot; `run_command` runs `cpd`'s commands in this process.
-pub fn run(home: &CpdHome, config: &Config, tmux: &Tmux, run_command: RunCommand) -> Result<(), CpdError> {
+pub fn run(
+    home: &CpdHome,
+    config: &Config,
+    tmux: &Tmux,
+    run_command: RunCommand,
+) -> Result<(), CpdError> {
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
-    let (on, lead) = store.read(|conn| Ok((cpd_core::incident::is_on(conn), cpd_core::incident::lead(conn)?)))?;
+    let (on, lead) = store.read(|conn| {
+        Ok((
+            cpd_core::incident::is_on(conn),
+            cpd_core::incident::lead(conn)?,
+        ))
+    })?;
     match lead {
-        Some(session) => super::widgets::open_lead(run_command, tmux, config.tmux.cockpit_session.as_str(), &session),
+        Some(session) => super::widgets::open_lead(
+            run_command,
+            tmux,
+            config.tmux.cockpit_session.as_str(),
+            &session,
+        ),
         None if on => Err(CpdError::new(ErrorCode::Usage, "incidents require a lead")),
-        None => Err(CpdError::new(ErrorCode::Usage, "no incident: nothing to open")),
+        None => Err(CpdError::new(
+            ErrorCode::Usage,
+            "no incident: nothing to open",
+        )),
     }
 }

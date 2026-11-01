@@ -53,34 +53,67 @@ fn attached(fx: &Fx) -> Vec<Launch> {
 
 /// The arguments of the attach of the cockpit's session on the env's socket.
 fn attach_args(fx: &Fx) -> Vec<String> {
-    ["-u", "-L", fx.env.tmux_socket(), "-f", "/dev/null", "attach", "-t", "cpd"].map(str::to_owned).to_vec()
+    [
+        "-u",
+        "-L",
+        fx.env.tmux_socket(),
+        "-f",
+        "/dev/null",
+        "attach",
+        "-t",
+        "cpd",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// The attach `bare` execs with `program`: `tmux` or the server's own binary. Its client has no `TMUX`, `TMUX_PANE`,
 /// `CPD_SESSION` or `CPD_ATTEMPT` (hs-d463).
 fn attach(fx: &Fx, program: &str) -> Launch {
-    let env_remove = ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec();
-    Launch { program: program.to_owned(), args: attach_args(fx), env_remove, ..Launch::default() }
+    let env_remove = ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]
+        .map(str::to_owned)
+        .to_vec();
+    Launch {
+        program: program.to_owned(),
+        args: attach_args(fx),
+        env_remove,
+        ..Launch::default()
+    }
 }
 
 /// Bare `cpd` in a terminal: what it wrote to stderr, after it ended in the attach that the `FakeSpawn` failed.
 fn in_a_terminal(fx: &Fx) -> String {
     let (result, stderr) = fx.with_stderr(|| bare(fx, RESTART));
     let error = result.expect_err("the attach is an exec: it returns only when it fails");
-    assert_eq!((error.code(), error.message()), (ErrorCode::TmuxFailed, "Cannot run tmux attach: faked exec."), "{error:?}");
+    assert_eq!(
+        (error.code(), error.message()),
+        (ErrorCode::TmuxFailed, "Cannot run tmux attach: faked exec."),
+        "{error:?}"
+    );
     stderr
 }
 
 /// `(view, pid)` of the live panes of `cpd:main` that have a view, from the fake server.
 fn view_pids_in(fx: &Fx) -> Vec<(String, u32)> {
-    let out = fx.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{pane_pid} #{pane_dead}"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = fx.tmux(&[
+        "list-panes",
+        "-t",
+        "=cpd:main",
+        "-F",
+        "#{@cpd_view} #{pane_pid} #{pane_dead}",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let mut views: Vec<(String, u32)> = String::from_utf8(out.stdout)
         .unwrap()
         .lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(' ').collect();
-            (f.len() == 3 && !f[0].is_empty() && f[2] == "0").then(|| Some((f[0].to_owned(), f[1].parse().ok()?)))?
+            (f.len() == 3 && !f[0].is_empty() && f[2] == "0")
+                .then(|| Some((f[0].to_owned(), f[1].parse().ok()?)))?
         })
         .collect();
     views.sort();
@@ -96,7 +129,10 @@ fn without_a_terminal_it_is_the_usage_error_and_does_nothing() {
     assert_eq!(error["code"], "usage");
     assert_eq!(error["message"], "A command is required: see details.help.");
     assert!(error["details"]["help"].is_string());
-    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(
+        !fx.tmux(&["list-sessions"]).status.success(),
+        "a tmux server was started"
+    );
     assert!(fx.calls("cpd").is_empty() && attached(&fx).is_empty());
 }
 
@@ -110,7 +146,10 @@ fn with_a_terminal_only_on_stdin_it_is_the_usage_error() {
     assert_eq!(run.exit, 2, "{run:?}");
     let printed: serde_json::Value = serde_json::from_str(run.stdout.trim()).unwrap();
     assert_eq!(printed["error"]["code"], "usage");
-    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(
+        !fx.tmux(&["list-sessions"]).status.success(),
+        "a tmux server was started"
+    );
 }
 
 // What the recording `RunCommand` of `inside_the_cockpit_it_does_not_nest_an_attach` ran.
@@ -128,33 +167,74 @@ fn inside_the_cockpit_it_does_not_nest_an_attach() {
     let fx = fx();
     // the cockpit's four views, running a binary that is not the installed one
     fx.cockpit();
-    let tree = fx.panes().into_iter().find(|p| p.view == "tree").unwrap().pane;
-    let widgets = fx.tmux(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    let tree = fx
+        .panes()
+        .into_iter()
+        .find(|p| p.view == "tree")
+        .unwrap()
+        .pane;
+    let widgets = fx.tmux(&[
+        "split-window",
+        "-d",
+        "-t",
+        &tree,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view widgets",
+    ]);
     assert!(widgets.status.success());
     let widgets = String::from_utf8(widgets.stdout).unwrap();
-    assert!(fx.tmux(&["set", "-p", "-t", widgets.trim(), "@cpd_view", "widgets"]).status.success());
+    assert!(
+        fx.tmux(&["set", "-p", "-t", widgets.trim(), "@cpd_view", "widgets"])
+            .status
+            .success()
+    );
     cpd_core::host::exe::record_start();
     let old = fx.env.root().join("old-cpd");
     fs::write(&old, "an older cpd").unwrap();
     let before = view_pids_in(&fx);
-    assert_eq!(before.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    assert_eq!(
+        before.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(),
+        ["chat", "plan", "tree", "widgets"]
+    );
     for (_, pid) in &before {
         fx.fakes.spawn.set_exe_of(Pid(*pid), &old);
     }
     // this terminal is in the cockpit's server
-    fx.export("TMUX", &format!("{}/{},4242,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
+    fx.export(
+        "TMUX",
+        &format!(
+            "{}/{},4242,0",
+            fx.env.tmux_tmpdir().display(),
+            fx.env.tmux_socket()
+        ),
+    );
     fx.export("TMUX_PANE", "%999");
 
-    let (result, stderr) = fx.with_stderr(|| Ports::scope(&fx.fakes.ports, || cpd_tui::bare("test", record, NO_RESTART)));
-    assert!(matches!(result, Ok(Output::Owned)), "it prints nothing and attaches nothing");
+    let (result, stderr) = fx.with_stderr(|| {
+        Ports::scope(&fx.fakes.ports, || {
+            cpd_tui::bare("test", record, NO_RESTART)
+        })
+    });
+    assert!(
+        matches!(result, Ok(Output::Owned)),
+        "it prints nothing and attaches nothing"
+    );
     assert!(attached(&fx).is_empty(), "{:?}", attached(&fx));
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert!(stderr.contains("tmux switch-client -t cpd"), "{stderr}");
     // The follow-ups that are safe from inside still ran: the engine, and the views of the older binary restarted.
-    assert_eq!(RAN.with(|ran| ran.borrow().clone()), [["cpd", "watch", "--ensure"].map(OsString::from).to_vec()]);
+    assert_eq!(
+        RAN.with(|ran| ran.borrow().clone()),
+        [["cpd", "watch", "--ensure"].map(OsString::from).to_vec()]
+    );
     let after = view_pids_in(&fx);
     assert_eq!(after.len(), 4, "{after:?}");
-    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
+    assert!(
+        after.iter().zip(&before).all(|(a, b)| a.1 != b.1),
+        "{before:?} -> {after:?}"
+    );
 }
 
 #[test]
@@ -163,7 +243,13 @@ fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
     assert_eq!(in_a_terminal(&fx), "");
 
     assert_eq!(attached(&fx), [attach(&fx, "tmux")]);
-    assert_eq!(view_pids_in(&fx).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    assert_eq!(
+        view_pids_in(&fx)
+            .iter()
+            .map(|(v, _)| v.as_str())
+            .collect::<Vec<_>>(),
+        ["chat", "plan", "tree", "widgets"]
+    );
     // The engine is started by the recorded `cpd watch --ensure` (its own session is `watch --ensure`'s).
     assert_eq!(ran(), [["cpd", "watch", "--ensure"]]);
 }
@@ -173,16 +259,53 @@ fn it_removes_an_older_cpds_statusbar_pane() {
     let fx = terminal();
     assert_eq!(in_a_terminal(&fx), "");
     // A main built by an older cpd: the StatusBar pane at the bottom (the StatusBar is now the status line).
-    let tree = fx.panes().into_iter().find(|p| p.view == "tree").unwrap().pane;
-    let bar = fx.tmux(&["split-window", "-d", "-v", "-f", "-l", "1", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
-    assert!(bar.status.success(), "{}", String::from_utf8_lossy(&bar.stderr));
+    let tree = fx
+        .panes()
+        .into_iter()
+        .find(|p| p.view == "tree")
+        .unwrap()
+        .pane;
+    let bar = fx.tmux(&[
+        "split-window",
+        "-d",
+        "-v",
+        "-f",
+        "-l",
+        "1",
+        "-t",
+        &tree,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "sleep",
+        "3600",
+    ]);
+    assert!(
+        bar.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bar.stderr)
+    );
     let bar = String::from_utf8(bar.stdout).unwrap().trim().to_owned();
-    assert!(fx.tmux(&["set", "-p", "-t", &bar, "@cpd_view", "statusbar"]).status.success());
+    assert!(
+        fx.tmux(&["set", "-p", "-t", &bar, "@cpd_view", "statusbar"])
+            .status
+            .success()
+    );
     assert_eq!(view_pids_in(&fx).len(), 5);
 
     assert_eq!(in_a_terminal(&fx), "");
-    assert!(!fx.panes().iter().any(|p| p.pane == bar), "the old StatusBar pane is gone: {:?}", fx.panes());
-    assert_eq!(view_pids_in(&fx).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    assert!(
+        !fx.panes().iter().any(|p| p.pane == bar),
+        "the old StatusBar pane is gone: {:?}",
+        fx.panes()
+    );
+    assert_eq!(
+        view_pids_in(&fx)
+            .iter()
+            .map(|(v, _)| v.as_str())
+            .collect::<Vec<_>>(),
+        ["chat", "plan", "tree", "widgets"]
+    );
     assert_eq!(attached(&fx).len(), 2);
 }
 
@@ -198,8 +321,16 @@ fn views_run(fx: &Fx, exe: &Path) -> Vec<(String, u32)> {
 /// The pane pids of `window` of the fake server.
 fn pane_pids_of_window(fx: &Fx, target: &str) -> Vec<String> {
     let out = fx.tmux(&["list-panes", "-t", target, "-F", "#{pane_id} #{pane_pid}"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[test]
@@ -213,14 +344,33 @@ fn it_restarts_views_that_run_an_older_binary_once() {
     let before = views_run(&fx, &old);
     assert_eq!(before.len(), 4, "{before:?}");
     // The engine's pane, in its own session.
-    fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "cpd", "watch"]);
+    fx.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd-work",
+        "-n",
+        "watch",
+        "cpd",
+        "watch",
+    ]);
     let engine = pane_pids_of_window(&fx, "=cpd-work:watch");
 
     assert_eq!(in_a_terminal(&fx), "");
     let after = views_run(&fx, &installed);
-    assert_eq!(after.iter().map(|(v, _)| v).collect::<Vec<_>>(), before.iter().map(|(v, _)| v).collect::<Vec<_>>());
-    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
-    assert_eq!(pane_pids_of_window(&fx, "=cpd-work:watch"), engine, "the engine is not touched");
+    assert_eq!(
+        after.iter().map(|(v, _)| v).collect::<Vec<_>>(),
+        before.iter().map(|(v, _)| v).collect::<Vec<_>>()
+    );
+    assert!(
+        after.iter().zip(&before).all(|(a, b)| a.1 != b.1),
+        "{before:?} -> {after:?}"
+    );
+    assert_eq!(
+        pane_pids_of_window(&fx, "=cpd-work:watch"),
+        engine,
+        "the engine is not touched"
+    );
     assert_eq!(attached(&fx).len(), 1);
 
     // Nothing is old now (the restarted views run the installed binary): the next one restarts nothing.
@@ -261,7 +411,16 @@ fn older_server(fx: &Fx) -> OlderServer {
         },
         Reply::ok(""),
     );
-    let _ = runner.on("tmux", move |call| says.load(Ordering::SeqCst) && call.args.ends_with(&["display".into(), "-p".into(), "#{version}".into()]), Reply::ok("1.0\n"));
+    let _ = runner.on(
+        "tmux",
+        move |call| {
+            says.load(Ordering::SeqCst)
+                && call
+                    .args
+                    .ends_with(&["display".into(), "-p".into(), "#{version}".into()])
+        },
+        Reply::ok("1.0\n"),
+    );
     OlderServer { armed, program }
 }
 
@@ -276,8 +435,12 @@ impl OlderServer {
 fn states(fx: &Fx) -> Vec<(String, String, Option<String>)> {
     store_of(&fx.env)
         .read(|c| {
-            let mut stmt = c.prepare("SELECT id, state, tmux_pane FROM sessions WHERE role != 'worker' ORDER BY id")?;
-            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            let mut stmt = c.prepare(
+                "SELECT id, state, tmux_pane FROM sessions WHERE role != 'worker' ORDER BY id",
+            )?;
+            Ok(stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -296,7 +459,11 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
 }
 
 fn now() -> String {
-    OffsetDateTime::now_utc().format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
+    OffsetDateTime::now_utc()
+        .format(format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+        ))
+        .unwrap()
 }
 
 /// Context `ctx` with its Manager `manager1`, and Plans `pay` (Lead `lead1`) and
@@ -354,8 +521,16 @@ fn fixture(env: &common::TestEnv, attempt: Option<&str>) -> Option<Flock<fs::Fil
     attempt.map(|_| {
         let path = home_of(env).attempt_lock(&"pay".parse().unwrap(), &"api-a1".parse().unwrap());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-        Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        Flock::lock(file, FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .unwrap()
     })
 }
 
@@ -370,15 +545,23 @@ fn cockpit_with_sessions(fx: &Fx) {
 
 /// `(session, window name)` of every pane that has a Session, sorted.
 fn session_windows(fx: &Fx) -> Vec<(String, String)> {
-    let mut found: Vec<(String, String)> =
-        fx.panes().into_iter().filter(|p| !p.session.is_empty()).map(|p| (p.session, p.window_name)).collect();
+    let mut found: Vec<(String, String)> = fx
+        .panes()
+        .into_iter()
+        .filter(|p| !p.session.is_empty())
+        .map(|p| (p.session, p.window_name))
+        .collect();
     found.sort();
     found
 }
 
 /// The `kill-server` calls so far, by the program that made them: the installed `tmux` or another one.
 fn kill_server_calls(fx: &Fx) -> Vec<String> {
-    fx.calls("tmux").into_iter().filter(|c| c.args.iter().any(|a| a == "kill-server")).map(|c| c.program).collect()
+    fx.calls("tmux")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|a| a == "kill-server"))
+        .map(|c| c.program)
+        .collect()
 }
 
 fn pending_file(fx: &Fx) -> PathBuf {
@@ -386,14 +569,22 @@ fn pending_file(fx: &Fx) -> PathBuf {
 }
 
 /// The windows the Sessions are in when `cockpit_with_sessions` has run.
-const PLACES: [(&str, &str); 3] = [("lead1", "main"), ("lead2", "park-other"), ("manager1", "ctx-ctx")];
+const PLACES: [(&str, &str); 3] = [
+    ("lead1", "main"),
+    ("lead2", "park-other"),
+    ("manager1", "ctx-ctx"),
+];
 
 fn places() -> Vec<(String, String)> {
-    PLACES.iter().map(|(s, w)| ((*s).to_owned(), (*w).to_owned())).collect()
+    PLACES
+        .iter()
+        .map(|(s, w)| ((*s).to_owned(), (*w).to_owned()))
+        .collect()
 }
 
 #[test]
-fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches() {
+fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches()
+ {
     for (what, lead_state, attempt) in [
         ("a starting Attempt", "idle", Some("starting")),
         ("a running Attempt", "idle", Some("running")),
@@ -414,14 +605,24 @@ fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_s
         assert_eq!(kill_server_calls(&fx), Vec::<String>::new(), "{what}");
         assert_eq!(fx.panes(), panes, "{what}");
         // The attach is by the server's own tmux: the installed one must not attach.
-        assert_eq!(attached(&fx), [attach(&fx, &older.program.display().to_string())], "{what}");
+        assert_eq!(
+            attached(&fx),
+            [attach(&fx, &older.program.display().to_string())],
+            "{what}"
+        );
         assert_eq!(stderr.lines().count(), 1, "{what}: {stderr}");
         assert!(
-            stderr.contains("attaching with the server's own tmux") && stderr.contains("the restart happens once nothing is in the way"),
+            stderr.contains("attaching with the server's own tmux")
+                && stderr.contains("the restart happens once nothing is in the way"),
             "{what}: {stderr}"
         );
-        let pending: Value = serde_json::from_str(&fs::read_to_string(pending_file(&fx)).unwrap()).unwrap();
-        assert_eq!((pending["server"].as_str(), pending["failed"].is_null()), (Some("1.0"), true), "{what}");
+        let pending: Value =
+            serde_json::from_str(&fs::read_to_string(pending_file(&fx)).unwrap()).unwrap();
+        assert_eq!(
+            (pending["server"].as_str(), pending["failed"].is_null()),
+            (Some("1.0"), true),
+            "{what}"
+        );
     }
 }
 
@@ -433,7 +634,10 @@ fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_clear
     fs::write(pending_file(&fx), r#"{"at":"t","server":"1.0","installed":"9.9","failed":{"at":"t","code":"tmux_failed","reason":"it broke.","reported":true}}"#).unwrap();
     let stderr = in_a_terminal(&fx);
     assert_eq!(kill_server_calls(&fx), Vec::<String>::new());
-    assert!(stderr.contains("The tmux restart failed") && stderr.contains("it broke."), "{stderr}");
+    assert!(
+        stderr.contains("The tmux restart failed") && stderr.contains("it broke."),
+        "{stderr}"
+    );
     assert!(!pending_file(&fx).exists());
 }
 
@@ -469,22 +673,51 @@ fn a_real_older_tmux_server_is_restarted_onto_the_installed_tmux() {
     cockpit_with_sessions(&fx);
     assert_eq!(session_windows(&fx), places());
     let old_version = fx.tmux(&["display", "-p", "#{version}"]);
-    assert_eq!(String::from_utf8(old_version.stdout).unwrap().trim(), "3.6a");
+    assert_eq!(
+        String::from_utf8(old_version.stdout).unwrap().trim(),
+        "3.6a"
+    );
     older.arm();
-    assert_eq!(String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim(), "1.0");
+    assert_eq!(
+        String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout)
+            .unwrap()
+            .trim(),
+        "1.0"
+    );
 
     let stderr = in_a_terminal(&fx);
     // The server was killed once, by its own binary (a call of the installed tmux to the old server is one the restart must not make).
-    assert_eq!(kill_server_calls(&fx), [older.program.display().to_string()]);
-    assert!(stderr.contains("restarted the tmux server onto tmux 3.6a; 3 Session(s) reopened."), "{stderr}");
+    assert_eq!(
+        kill_server_calls(&fx),
+        [older.program.display().to_string()]
+    );
+    assert!(
+        stderr.contains("restarted the tmux server onto tmux 3.6a; 3 Session(s) reopened."),
+        "{stderr}"
+    );
     // The new server runs the installed tmux's version, and the installed tmux attaches to it.
-    assert_eq!(String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim(), "3.6a");
-    assert_eq!(attached(&fx).iter().map(|l| l.program.as_str()).collect::<Vec<_>>(), ["tmux"]);
+    assert_eq!(
+        String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout)
+            .unwrap()
+            .trim(),
+        "3.6a"
+    );
+    assert_eq!(
+        attached(&fx)
+            .iter()
+            .map(|l| l.program.as_str())
+            .collect::<Vec<_>>(),
+        ["tmux"]
+    );
     assert_eq!(session_windows(&fx), places());
     // Every Lead and Manager has a pane that is in the server (the Sessions' idle reports are their pi adapter's).
     let panes: Vec<String> = fx.panes().into_iter().map(|p| p.pane).collect();
     for (id, _, pane) in states(&fx) {
-        assert!(pane.as_deref().is_some_and(|p| panes.iter().any(|live| live == p)), "{id}: {pane:?} in {panes:?}");
+        assert!(
+            pane.as_deref()
+                .is_some_and(|p| panes.iter().any(|live| live == p)),
+            "{id}: {pane:?} in {panes:?}"
+        );
     }
     assert!(!pending_file(&fx).exists());
 }

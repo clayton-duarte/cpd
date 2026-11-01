@@ -21,9 +21,12 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    let workflow = require_open(&plan, &args)?;
+    let workflow = require_pushable(&plan, &args)?;
     let key = workflow.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
+    // Checked before the Gate too: a running Attempt refuses at once, without a long Gate
+    // (commands.md §9.9). The transaction below re-checks it, since an Attempt may start during the Gate.
+    env.store.read(|conn| super::rebase::refuse_running_conn(conn, &id, &key, "do the push"))?;
     let branch = workflow.lead_branch.clone();
     let remote_branch = workflow.remote_branch().to_owned();
     let adopted = workflow.head_ref.is_some();
@@ -43,37 +46,49 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 
     // The Workflow is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(&id)?;
-    require_open(&plan, &args)?;
+    require_pushable(&plan, &args)?;
 
-    // 3. Rule P with G.
-    let (pushed, remote) = match git::push_commit(&lead, &remote_branch, &sha)? {
-        Push::Pushed { new } => (new, sha.clone()),
-        Push::Contained { remote } => (false, remote),
-        Push::Rejected { stderr } => {
-            let next = if adopted { "It gained commits cpd lacks: catch up" } else { "Rebase" };
-            return Err(CpdError::new(
-                ErrorCode::PushRejected,
-                format!("The remote {remote_branch} does not contain the gated commit, so it moved: nothing was pushed. {next} with cpd pr rebase --workflow {key}."),
-            )
-            .with("plan", id.as_str())
-            .with("pr", key.as_str())
-            .with("sha", sha.as_str())
-            .with("stderr", stderr));
+    // 3. Rule P with G, inside one write transaction: the driver starts an Attempt in a store write
+    // transaction of its own (ADR-0014), so re-reading the status and the running Attempts here
+    // serialises the push with the Attempt start. The Attempt start either committed before this
+    // transaction (the refusal wins) or waits for it (the push wins, and the next Attempt's
+    // `base_sha` is the pushed commit). The status was re-read before the transaction too, so a Workflow
+    // merged during the Gate is refused without taking the write lock.
+    let (pushed, remote) = env.store.write(COMMAND, |tx| {
+        let plan = super::row::load(tx, &id)?;
+        require_pushable(&plan, &args)?;
+        super::rebase::refuse_running_conn(tx, &id, &key, "do the push")?;
+
+        match git::push_commit(&lead, &remote_branch, &sha)? {
+            Push::Pushed { new } => Ok((new, sha.clone())),
+            Push::Contained { remote } => Ok((false, remote)),
+            Push::Rejected { stderr } => {
+                let next = if adopted { "It gained commits cpd lacks: catch up" } else { "Rebase" };
+                Err(CpdError::new(
+                    ErrorCode::PushRejected,
+                    format!("The remote {remote_branch} does not contain the gated commit, so it moved: nothing was pushed. {next} with cpd pr rebase --workflow {key}."),
+                )
+                .with("plan", id.as_str())
+                .with("pr", key.as_str())
+                .with("sha", sha.as_str())
+                .with("stderr", stderr))
+            }
         }
-    };
+    })?;
 
     Ok(Output::success(json!({"plan": id, "pr": key, "pushed": pushed, "sha": sha, "remote": remote})))
 }
 
-/// The selected Workflow must be `open` (`illegal_transition`); a Plan that has not
-/// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
+/// The selected Workflow must be `open` or `dispatch` (`illegal_transition`); a Plan that has not
+/// been locked is `illegal_phase`. A `dispatch` Workflow is started but not yet open: it has a Lead
+/// worktree and Lead Branch, so pre-open pushes are allowed (hs-d801).
+fn require_pushable<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let workflow = plan.select(&args.workflow)?;
-    if workflow.status != "open" {
-        return Err(workflow.refuse(&plan.plan.id, COMMAND, "open"));
+    if workflow.status != "open" && workflow.status != "dispatch" {
+        return Err(workflow.refuse(&plan.plan.id, COMMAND, "open or dispatch"));
     }
     Ok(workflow)
 }

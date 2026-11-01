@@ -78,7 +78,10 @@ use crate::plan::WorkflowRow;
 use row::PlanWorkflows;
 
 pub use gh::close_pr;
-pub use open::{Pulled, description_required, jira_required, jira_required_of, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{
+    Pulled, base_check, description_required, is_merged_on_github, jira_required, jira_required_of,
+    pull_request, record as record_pull, stored_description_of, submit_checks,
+};
 #[cfg(test)]
 pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
@@ -235,7 +238,11 @@ pub(crate) fn workflow_locked(plan: &PlanId, phase: Phase, command: &str) -> Cpd
 pub(crate) fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     use rusqlite::OptionalExtension;
     let phase: String = conn
-        .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT phase FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
@@ -318,7 +325,16 @@ fn gate_in(
     }
     steps.push((Hook::PreMerge, hooks.pre_merge_commands, &hooks.pre_merge));
     for (hook, pipeline, setup) in steps {
-        let result = git::run_hook_as(hook, pipeline, worktree, &detached, Some(&operation), setup.timeout, &setup.log, HookLog::Truncate)?;
+        let result = git::run_hook_as(
+            hook,
+            pipeline,
+            worktree,
+            &detached,
+            Some(&operation),
+            setup.timeout,
+            &setup.log,
+            HookLog::Truncate,
+        )?;
         if result.outcome != HookOutcome::Passed {
             return Err(refusal(plan, workflow, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
         }
@@ -358,16 +374,41 @@ struct Hidden {
 /// Moves every untracked entry of `lead` beside the worktree, so the Gate sees the tree of the
 /// gated commit and not these files (hs-d679). They are put back by [`Hidden::restore`].
 fn hide_untracked(lead: &std::path::Path) -> Result<Hidden, CpdError> {
-    let listed = git::run::ok(lead, &["ls-files", "--others", "--exclude-standard", "--directory", "-z"])?;
-    let entries: Vec<PathBuf> = listed.split('\0').filter(|e| !e.is_empty()).map(PathBuf::from).collect();
-    let name = lead.file_name().map_or_else(|| "worktree".into(), |n| n.to_string_lossy().into_owned());
-    let hidden = Hidden { lead: lead.to_path_buf(), dir: lead.with_file_name(format!("{name}.cpd-gate-{}", std::process::id())), moved: Vec::new() };
+    let listed = git::run::ok(
+        lead,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+    )?;
+    let entries: Vec<PathBuf> = listed
+        .split('\0')
+        .filter(|e| !e.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    let name = lead
+        .file_name()
+        .map_or_else(|| "worktree".into(), |n| n.to_string_lossy().into_owned());
+    let hidden = Hidden {
+        lead: lead.to_path_buf(),
+        dir: lead.with_file_name(format!("{name}.cpd-gate-{}", std::process::id())),
+        moved: Vec::new(),
+    };
     if entries.is_empty() {
         return Ok(hidden);
     }
     let fail = |e: std::io::Error| {
-        CpdError::new(ErrorCode::GateError, format!("Cannot hide {}'s untracked files for the Gate: {e}.", lead.display()))
-            .with("worktree", lead.display().to_string())
+        CpdError::new(
+            ErrorCode::GateError,
+            format!(
+                "Cannot hide {}'s untracked files for the Gate: {e}.",
+                lead.display()
+            ),
+        )
+        .with("worktree", lead.display().to_string())
     };
     std::fs::create_dir_all(&hidden.dir).map_err(fail)?;
     let mut hidden = hidden;
@@ -386,8 +427,14 @@ impl Hidden {
     /// Puts every hidden entry back; an empty list means it was restored already.
     fn restore(mut self) -> Result<(), CpdError> {
         let fail = |e: std::io::Error| {
-            CpdError::new(ErrorCode::GateError, format!("Cannot put back {}'s untracked files after the Gate: {e}.", self.lead.display()))
-                .with("worktree", self.lead.display().to_string())
+            CpdError::new(
+                ErrorCode::GateError,
+                format!(
+                    "Cannot put back {}'s untracked files after the Gate: {e}.",
+                    self.lead.display()
+                ),
+            )
+            .with("worktree", self.lead.display().to_string())
         };
         for (entry, held) in std::mem::take(&mut self.moved) {
             let target = self.lead.join(&entry);

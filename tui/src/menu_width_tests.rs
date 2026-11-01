@@ -25,7 +25,10 @@ impl Entry for Maybe {
 
 #[test]
 fn a_busy_menu_entry_is_padded_by_columns() {
-    let menu = Menu::new(vec![Maybe(WIDE, true), Maybe("Copy Link", false)], Position::new(1, 1));
+    let menu = Menu::new(
+        vec![Maybe(WIDE, true), Maybe("Copy Link", false)],
+        Position::new(1, 1),
+    );
     let mut terminal = Terminal::new(TestBackend::new(30, 8)).unwrap();
     terminal.draw(|f| menu.draw_at(f, f.area(), 3)).unwrap();
     let buf = terminal.backend().buffer();
@@ -43,8 +46,24 @@ fn a_busy_menu_entry_is_padded_by_columns() {
         cx += u16::try_from(Span::raw(symbol).width().max(1)).unwrap();
     }
     let row = Line::from(row);
-    assert_eq!(row.width(), usize::from(inner), "the busy entry is padded by columns to the body's width: {row:?}");
-    assert_eq!(row.spans.iter().flat_map(|s| s.content.chars()).filter(|c| *c == '計').count(), 10, "the whole wide label fits: {row:?}");
+    assert_eq!(
+        row.width(),
+        usize::from(inner),
+        "the busy entry is padded by columns to the body's width: {row:?}"
+    );
+    assert_eq!(
+        row.spans
+            .iter()
+            .flat_map(|s| s.content.chars())
+            .filter(|c| *c == '計')
+            .count(),
+        10,
+        "the whole wide label fits: {row:?}"
+    );
     let spinner = crate::palette::SPINNER[3];
-    assert_eq!(buf[(x + inner - 1, y)].symbol(), spinner, "the spinner is in the body's last column, not one past it: {row:?}");
+    assert_eq!(
+        buf[(x + inner - 1, y)].symbol(),
+        spinner,
+        "the spinner is in the body's last column, not one past it: {row:?}"
+    );
 }

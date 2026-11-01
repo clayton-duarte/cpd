@@ -21,12 +21,29 @@ use crate::ports::{Fakes, Ports};
 use crate::store::Store;
 
 fn config() -> Config {
-    Config::parse("version = 1\nmachine = \"test\"\n", Path::new("config.toml")).unwrap().0
+    Config::parse(
+        "version = 1\nmachine = \"test\"\n",
+        Path::new("config.toml"),
+    )
+    .unwrap()
+    .0
 }
 
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
-    Catalog { pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: TierModel { model: "g/m".to_owned(), efforts: vec![] } }
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
+    Catalog {
+        pi_version: "1.0.0".to_owned(),
+        o: model("o/m"),
+        s: model("s/m"),
+        h: model("h/m"),
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
+    }
 }
 
 /// Plan `pay`, its Workflow `api` and Job `a`, and the fake git of the Lead worktree on `cpd/pay/api`.
@@ -53,7 +70,11 @@ fn rig() -> Rig {
     repo.commit("base");
     repo.branch("cpd/pay/api");
     let lead_worktree = root.join("r.lead");
-    universe.lock().unwrap().add_worktree(repo.id(), &lead_worktree, Head::Branch("cpd/pay/api".to_owned()));
+    universe.lock().unwrap().add_worktree(
+        repo.id(),
+        &lead_worktree,
+        Head::Branch("cpd/pay/api".to_owned()),
+    );
 
     let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -79,28 +100,56 @@ fn rig() -> Rig {
         .unwrap();
     // The Fingerprint of §2.3, computed from the stored row.
     let plan = PlanId::parse("pay").unwrap();
-    let jobs = store.read(|conn| crate::plan::jobs::load(conn, &plan)).unwrap();
-    let fingerprints: Vec<(String, String)> = jobs.iter().map(|j| (j.key.clone(), crate::plan::locked_fingerprint(j))).collect();
+    let jobs = store
+        .read(|conn| crate::plan::jobs::load(conn, &plan))
+        .unwrap();
+    let fingerprints: Vec<(String, String)> = jobs
+        .iter()
+        .map(|j| (j.key.clone(), crate::plan::locked_fingerprint(j)))
+        .collect();
     store
         .write("fixture", |tx| {
             for (key, fingerprint) in &fingerprints {
-                tx.execute("UPDATE jobs SET fingerprint = ?2 WHERE plan = 'pay' AND key = ?1", rusqlite::params![key, fingerprint])?;
+                tx.execute(
+                    "UPDATE jobs SET fingerprint = ?2 WHERE plan = 'pay' AND key = ?1",
+                    rusqlite::params![key, fingerprint],
+                )?;
             }
             Ok(())
         })
         .unwrap();
-    Rig { _tmp: tmp, fakes, home, store, lead_worktree }
+    Rig {
+        _tmp: tmp,
+        fakes,
+        home,
+        store,
+        lead_worktree,
+    }
 }
 
 #[test]
 fn a_linear_attempt_submits_from_the_workflow_worktree() {
     let mut rig = rig();
-    rig.fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
+    rig.fakes
+        .spawn
+        .set_self_exe(std::env::current_exe().unwrap());
     let config = config();
     let catalog = catalog();
-    let ctx = StartCtx { home: &rig.home, config: &config, catalog: &catalog, command: "test" };
+    let ctx = StartCtx {
+        home: &rig.home,
+        config: &config,
+        catalog: &catalog,
+        command: "test",
+    };
     let plan = PlanId::parse("pay").unwrap();
-    start_with(&rig.fakes.ports, &mut rig.store, &ctx, &plan, &JobKey::parse("a").unwrap()).unwrap();
+    start_with(
+        &rig.fakes.ports,
+        &mut rig.store,
+        &ctx,
+        &plan,
+        &JobKey::parse("a").unwrap(),
+    )
+    .unwrap();
     let id = AttemptId::parse("a-a1").unwrap();
     let attempt = rig.store.read(|conn| row::load(conn, &plan, &id)).unwrap();
     assert_eq!(attempt.branch, "cpd/pay/api", "the linear Attempt's branch is the Lead Branch");
@@ -108,8 +157,15 @@ fn a_linear_attempt_submits_from_the_workflow_worktree() {
     let previous = std::env::current_dir().unwrap();
     std::env::set_current_dir(&rig.lead_worktree).unwrap();
     let worktree = PathBuf::from(&attempt.worktree);
-    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone() };
-    let result = Ports::scope(&ports, || super::submit::require_inside(&attempt, &worktree));
+    let ports = Ports {
+        clock: rig.fakes.ports.clock.clone(),
+        runner: rig.fakes.ports.runner.clone(),
+        spawn: rig.fakes.ports.spawn.clone(),
+        ..Ports::real()
+    };
+    let result = Ports::scope(&ports, || {
+        super::submit::require_inside(&attempt, &worktree)
+    });
     std::env::set_current_dir(previous).unwrap();
     assert!(result.is_ok(), "submit accepts a cwd in the Lead worktree on the Lead Branch: {result:?}");
 }

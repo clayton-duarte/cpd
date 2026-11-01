@@ -33,7 +33,12 @@ pub(crate) fn args(popup: Popup<'_>) -> Vec<String> {
     if let Some(title) = popup.title {
         args.extend(["-T".to_owned(), title.to_owned()]);
     }
-    args.extend(["-w".to_owned(), popup.size.0.to_string(), "-h".to_owned(), popup.size.1.to_string()]);
+    args.extend([
+        "-w".to_owned(),
+        popup.size.0.to_string(),
+        "-h".to_owned(),
+        popup.size.1.to_string(),
+    ]);
     if popup.dash {
         args.push("--".to_owned());
     }
@@ -52,7 +57,11 @@ pub(crate) fn newest_client(listing: &str) -> Option<(Option<String>, (u16, u16)
             let mut words = line.splitn(4, ' ');
             let activity: u64 = words.next()?.parse().ok()?;
             let size = (words.next()?.parse().ok()?, words.next()?.parse().ok()?);
-            Some((activity, words.next().filter(|n| !n.is_empty()).map(str::to_owned), size))
+            Some((
+                activity,
+                words.next().filter(|n| !n.is_empty()).map(str::to_owned),
+                size,
+            ))
         })
         .max_by_key(|(activity, _, _)| *activity)
         .map(|(_, name, size)| (name, size))

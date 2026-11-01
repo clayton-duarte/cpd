@@ -1,11 +1,14 @@
 //! The fake's SQLite state: the schema, the id counters and the read view `State`.
 //! A pane is a row; no process is ever started for it.
 
-use rusqlite::{params, Connection, OpenFlags};
+use parking_lot::ReentrantMutex;
+use rusqlite::{Connection, OpenFlags, params};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use parking_lot::ReentrantMutex;
 use std::sync::Arc;
+
+/// A `panes` row joined with its session: id, window, session, argv, cwd, dead, dead status.
+type PaneRow = (i64, i64, i64, String, String, bool, Option<i32>);
 
 /// One socket's connection, shared by the calls that run on it and the read views of it. Reentrant: a
 /// `run-shell` child on the same thread calls the fake again while its parent waits (the parent has committed).
@@ -44,9 +47,17 @@ CREATE TABLE IF NOT EXISTS clients (
 
 /// Next id of a kind (`session`, `window`, `pane`).
 pub fn next_id(db: &Connection, kind: &str) -> rusqlite::Result<i64> {
-    db.execute("INSERT OR IGNORE INTO counters (name, next) VALUES (?1, 0)", [kind])?;
-    let n: i64 = db.query_row("SELECT next FROM counters WHERE name = ?1", [kind], |r| r.get(0))?;
-    db.execute("UPDATE counters SET next = next + 1 WHERE name = ?1", [kind])?;
+    db.execute(
+        "INSERT OR IGNORE INTO counters (name, next) VALUES (?1, 0)",
+        [kind],
+    )?;
+    let n: i64 = db.query_row("SELECT next FROM counters WHERE name = ?1", [kind], |r| {
+        r.get(0)
+    })?;
+    db.execute(
+        "UPDATE counters SET next = next + 1 WHERE name = ?1",
+        [kind],
+    )?;
     Ok(n)
 }
 
@@ -92,7 +103,10 @@ pub struct State {
 
 fn pairs(db: &Connection, sql: &str, args: impl rusqlite::Params) -> Vec<(String, String)> {
     let mut st = db.prepare(sql).expect("fake tmux state: prepare");
-    st.query_map(args, |r| Ok((r.get(0)?, r.get(1)?))).expect("fake tmux state: query").map(|r| r.expect("row")).collect()
+    st.query_map(args, |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("fake tmux state: query")
+        .map(|r| r.expect("row"))
+        .collect()
 }
 
 impl State {
@@ -102,7 +116,11 @@ impl State {
         if !path.exists() {
             return None;
         }
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok().map(|db| State { db: Arc::new(ReentrantMutex::new(db)) })
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()
+            .map(|db| State {
+                db: Arc::new(ReentrantMutex::new(db)),
+            })
     }
     /// The view of a connection a [`FakeTmux`](super::FakeTmux) holds.
     pub(super) fn of(db: Shared) -> State {
@@ -119,8 +137,18 @@ impl State {
                  JOIN windows w ON w.id = p.window ORDER BY p.id",
             )
             .expect("prepare");
-        let rows: Vec<(i64, i64, i64, String, String, bool, Option<i32>)> = st
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
+        let rows: Vec<PaneRow> = st
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            })
             .expect("query")
             .map(|r| r.expect("row"))
             .collect();
@@ -154,7 +182,11 @@ impl State {
     /// The server (global) options.
     pub fn options(&self) -> Vec<(String, String)> {
         let db = self.db();
-        pairs(&db, "SELECT key, value FROM options WHERE scope = 'server' ORDER BY rowid", [])
+        pairs(
+            &db,
+            "SELECT key, value FROM options WHERE scope = 'server' ORDER BY rowid",
+            [],
+        )
     }
     pub fn sessions(&self) -> Vec<SessionRow> {
         let db = self.db();
@@ -165,11 +197,19 @@ impl State {
     }
     pub fn windows(&self) -> Vec<WindowRow> {
         let db = self.db();
-        let mut st = db.prepare("SELECT '@' || id, '$' || session, name FROM windows ORDER BY id").expect("prepare");
-        st.query_map([], |r| Ok(WindowRow { id: r.get(0)?, session: r.get(1)?, name: r.get(2)? }))
-            .expect("query")
-            .map(|r| r.expect("row"))
-            .collect()
+        let mut st = db
+            .prepare("SELECT '@' || id, '$' || session, name FROM windows ORDER BY id")
+            .expect("prepare");
+        st.query_map([], |r| {
+            Ok(WindowRow {
+                id: r.get(0)?,
+                session: r.get(1)?,
+                name: r.get(2)?,
+            })
+        })
+        .expect("query")
+        .map(|r| r.expect("row"))
+        .collect()
     }
     /// The hooks set with `set-hook -g`: (name, command), in the order set.
     pub fn hooks(&self) -> Vec<(String, String)> {
@@ -179,17 +219,29 @@ impl State {
     /// The `send-keys` log, in call order.
     pub fn keys(&self) -> Vec<KeyLog> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pane, keys, literal FROM keys ORDER BY seq").expect("prepare");
-        let rows: Vec<(i64, String, bool)> =
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("query").map(|r| r.expect("row")).collect();
+        let mut st = db
+            .prepare("SELECT pane, keys, literal FROM keys ORDER BY seq")
+            .expect("prepare");
+        let rows: Vec<(i64, String, bool)> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("query")
+            .map(|r| r.expect("row"))
+            .collect();
         rows.into_iter()
-            .map(|(pane, keys, literal)| KeyLog { pane: format!("%{pane}"), keys: serde_json::from_str(&keys).expect("keys json"), literal })
+            .map(|(pane, keys, literal)| KeyLog {
+                pane: format!("%{pane}"),
+                keys: serde_json::from_str(&keys).expect("keys json"),
+                literal,
+            })
             .collect()
     }
     /// The names of the attached clients (`attach`).
     pub fn clients(&self) -> Vec<String> {
         let db = self.db();
-        pairs(&db, "SELECT name, name FROM clients ORDER BY seq", []).into_iter().map(|p| p.0).collect()
+        pairs(&db, "SELECT name, name FROM clients ORDER BY seq", [])
+            .into_iter()
+            .map(|p| p.0)
+            .collect()
     }
     /// The argv (subcommand name first) of each `display-popup` call.
     pub fn popups(&self) -> Vec<Vec<String>> {
@@ -201,9 +253,13 @@ impl State {
     }
     fn calls(&self, kind: &str) -> Vec<Vec<String>> {
         let db = self.db();
-        pairs(&db, "SELECT argv, argv FROM calls WHERE kind = ?1 ORDER BY seq", [kind])
-            .into_iter()
-            .map(|p| serde_json::from_str(&p.0).expect("argv json"))
-            .collect()
+        pairs(
+            &db,
+            "SELECT argv, argv FROM calls WHERE kind = ?1 ORDER BY seq",
+            [kind],
+        )
+        .into_iter()
+        .map(|p| serde_json::from_str(&p.0).expect("argv json"))
+        .collect()
     }
 }

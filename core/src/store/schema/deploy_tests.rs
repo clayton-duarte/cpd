@@ -17,7 +17,14 @@ fn inbox_items_accepts_the_deploy_kind() {
             Ok::<(), crate::error::CpdError>(())
         })
         .expect("inbox_items accepts the kind `deploy`");
-    let kind: String = store.read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?)).unwrap();
+    let kind: String = store
+        .read(|c| Ok(c.query_row("SELECT kind FROM inbox_items", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(kind, "deploy");
-    assert!(NAMED.iter().any(|m| m.name.ends_with("20261102T0900-deploy-kind")), "the migration deploy-kind is declared");
+    assert!(
+        NAMED
+            .iter()
+            .any(|m| m.name.ends_with("20261102T0900-deploy-kind")),
+        "the migration deploy-kind is declared"
+    );
 }

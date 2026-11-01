@@ -17,13 +17,21 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 fn assert_invalid(store: &mut Store, sql: &str) {
     let err = write(store, sql).expect_err(sql);
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
-    assert_eq!(err.details()["sqlite_message"].as_str().unwrap_or_default(), "working_pr_invalid", "{sql}");
+    assert_eq!(
+        err.details()["sqlite_message"].as_str().unwrap_or_default(),
+        "working_pr_invalid",
+        "{sql}"
+    );
 }
 
 fn working_pr(store: &mut Store, id: &str) -> Option<String> {
     store
         .write("read", |tx| {
-            Ok::<_, CpdError>(tx.query_row("SELECT working_pr FROM sessions WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0))?)
+            Ok::<_, CpdError>(tx.query_row(
+                "SELECT working_pr FROM sessions WHERE id = ?1",
+                [id],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
         })
         .unwrap()
 }
@@ -95,7 +103,11 @@ fn working_pr_store_refuses_a_pr_of_another_plan_or_no_pr() {
 fn working_pr_store_refuses_a_lead_that_is_not_working() {
     let (_dir, mut store) = fixture();
     for state in ["idle", "stopped"] {
-        write(&mut store, &format!("UPDATE sessions SET state = '{state}' WHERE id = 'lead-pay'")).unwrap();
+        write(
+            &mut store,
+            &format!("UPDATE sessions SET state = '{state}' WHERE id = 'lead-pay'"),
+        )
+        .unwrap();
         assert_invalid(&mut store, &name("a"));
         assert_eq!(working_pr(&mut store, "lead-pay"), None);
     }
@@ -104,20 +116,49 @@ fn working_pr_store_refuses_a_lead_that_is_not_working() {
 #[test]
 fn working_pr_store_refuses_a_worker_and_a_manager() {
     let (_dir, mut store) = fixture();
-    assert_invalid(&mut store, "UPDATE sessions SET working_pr = 'a' WHERE id = 'w'");
-    assert_invalid(&mut store, "UPDATE sessions SET working_pr = 'a' WHERE id = 'mgr'");
+    assert_invalid(
+        &mut store,
+        "UPDATE sessions SET working_pr = 'a' WHERE id = 'w'",
+    );
+    assert_invalid(
+        &mut store,
+        "UPDATE sessions SET working_pr = 'a' WHERE id = 'mgr'",
+    );
 }
 
 #[test]
 fn working_pr_store_leaving_working_clears_it() {
-    for (state, label) in [("idle", "NULL"), ("waiting", "'l'"), ("blocked", "'l'"), ("stopped", "NULL")] {
+    for (state, label) in [
+        ("idle", "NULL"),
+        ("waiting", "'l'"),
+        ("blocked", "'l'"),
+        ("stopped", "NULL"),
+    ] {
         let (_dir, mut store) = fixture();
         write(&mut store, &name("a")).unwrap();
-        assert_eq!(working_pr(&mut store, "lead-pay").as_deref(), Some("a"), "{state}");
-        write(&mut store, &format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = 'lead-pay'")).unwrap();
+        assert_eq!(
+            working_pr(&mut store, "lead-pay").as_deref(),
+            Some("a"),
+            "{state}"
+        );
+        write(
+            &mut store,
+            &format!(
+                "UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = 'lead-pay'"
+            ),
+        )
+        .unwrap();
         assert_eq!(working_pr(&mut store, "lead-pay"), None, "{state}");
-        write(&mut store, "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'lead-pay'").unwrap();
-        assert_eq!(working_pr(&mut store, "lead-pay"), None, "re-entering working after {state}");
+        write(
+            &mut store,
+            "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'lead-pay'",
+        )
+        .unwrap();
+        assert_eq!(
+            working_pr(&mut store, "lead-pay"),
+            None,
+            "re-entering working after {state}"
+        );
     }
 }
 
@@ -135,14 +176,26 @@ fn working_pr_store_a_new_session_cannot_have_one() {
 fn working_pr_store_staying_in_working_keeps_it() {
     let (_dir, mut store) = fixture();
     write(&mut store, &name("a")).unwrap();
-    write(&mut store, "UPDATE sessions SET state = 'working', state_at = 't2' WHERE id = 'lead-pay'").unwrap();
+    write(
+        &mut store,
+        "UPDATE sessions SET state = 'working', state_at = 't2' WHERE id = 'lead-pay'",
+    )
+    .unwrap();
     assert_eq!(working_pr(&mut store, "lead-pay").as_deref(), Some("a"));
 }
 
 #[test]
 fn working_pr_store_null_is_always_allowed() {
     let (_dir, mut store) = fixture();
-    write(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'lead-pay'").unwrap();
-    write(&mut store, "UPDATE sessions SET working_pr = NULL WHERE id = 'lead-pay'").unwrap();
+    write(
+        &mut store,
+        "UPDATE sessions SET state = 'idle' WHERE id = 'lead-pay'",
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE sessions SET working_pr = NULL WHERE id = 'lead-pay'",
+    )
+    .unwrap();
     assert_eq!(working_pr(&mut store, "lead-pay"), None);
 }

@@ -18,7 +18,8 @@ fn connection(path: &std::path::Path) -> Connection {
 
 fn prepared(conn: Connection) -> Connection {
     conn.pragma_update(None, "synchronous", "OFF").unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64))
+        .unwrap();
     conn
 }
 
@@ -27,11 +28,13 @@ fn prepared(conn: Connection) -> Connection {
 /// migration 7's import of the old Context stores is the runner's, not run here.
 fn at_version(conn: &Connection, n: usize) {
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+    conn.pragma_update(None, "legacy_alter_table", "ON")
+        .unwrap();
     for legacy in &LEGACY[..n] {
         (legacy.apply)(conn).unwrap();
     }
-    conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+    conn.pragma_update(None, "legacy_alter_table", "OFF")
+        .unwrap();
     conn.pragma_update(None, "user_version", n as i64).unwrap();
 }
 
@@ -47,10 +50,17 @@ fn migrating_an_empty_database_gives_every_versions_schema_hash() {
     let conn = prepared(Connection::open_in_memory().unwrap());
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     for (n, expected) in SCHEMA_HASHES.iter().enumerate() {
-        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "ON")
+            .unwrap();
         (LEGACY[n].apply)(&conn).unwrap();
-        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
-        assert_eq!(legacy_schema_hash(&conn).unwrap(), *expected, "version {}", n + 1);
+        conn.pragma_update(None, "legacy_alter_table", "OFF")
+            .unwrap();
+        assert_eq!(
+            legacy_schema_hash(&conn).unwrap(),
+            *expected,
+            "version {}",
+            n + 1
+        );
     }
 }
 
@@ -62,7 +72,8 @@ fn home(dir: &tempfile::TempDir) -> CpdHome {
 fn database_at(home: &CpdHome, n: usize, sql: &str) {
     std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
     let conn = connection(&home.db());
-    conn.pragma_update(None, "application_id", APPLICATION_ID).unwrap();
+    conn.pragma_update(None, "application_id", APPLICATION_ID)
+        .unwrap();
     at_version(&conn, n);
     conn.execute_batch(&format!(
         "BEGIN;
@@ -91,7 +102,11 @@ fn a_version_1_database_migrates_and_its_pr_gets_a_row_titled_like_the_plan() {
     database_at(&home, 1, VERSION_1_PLAN);
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     type Row = (String, i64, String, String, String, String);
     let (version, row, migrations): (i64, Row, i64) = store
         .read(|c| {
@@ -108,8 +123,18 @@ fn a_version_1_database_migrates_and_its_pr_gets_a_row_titled_like_the_plan() {
         })
         .unwrap();
     assert_eq!(version, VERSION);
-    let expected: Row = ("repo".into(), 7, "acme/pay".into(), "Pay".into(), "none".into(), "none".into());
-    assert_eq!(row, expected, "no title was polled: the Plan's title, and no review or checks");
+    let expected: Row = (
+        "repo".into(),
+        7,
+        "acme/pay".into(),
+        "Pay".into(),
+        "none".into(),
+        "none".into(),
+    );
+    assert_eq!(
+        row, expected,
+        "no title was polled: the Plan's title, and no review or checks"
+    );
     assert_eq!(migrations, 2, "the old migration's row and the new one");
 }
 
@@ -130,19 +155,46 @@ fn pull_requests_history_lists_every_column_and_their_checks_hold() {
         })
         .unwrap();
     let after: String = store
-        .read(|c| Ok(c.query_row("SELECT after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )?)
+        })
         .unwrap();
     let after: Value = serde_json::from_str(&after).unwrap();
     assert_eq!(after["title"], "T");
     assert_eq!(after["review_decision"], "approved");
     assert_eq!(after["checks"], "passed");
     assert_eq!(after["draft"], 1);
-    assert_eq!((&after["mergeable"], &after["merge_state"]), (&Value::from("conflicting"), &Value::from("dirty")));
+    assert_eq!(
+        (&after["mergeable"], &after["merge_state"]),
+        (&Value::from("conflicting"), &Value::from("dirty"))
+    );
 
-    for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2", "mergeable = 'maybe'", "merge_state = 'ready'"] {
+    for bad in [
+        "title = ''",
+        "review_decision = 'maybe'",
+        "checks = 'green'",
+        "state = 'merged'",
+        "repo = 'x'",
+        "number = 0",
+        "draft = 2",
+        "mergeable = 'maybe'",
+        "merge_state = 'ready'",
+    ] {
         let sql = format!("UPDATE pull_requests SET {bad} WHERE number = 7");
-        let err = store.write("test", |tx| Ok::<(), CpdError>({ tx.execute(&sql, [])?; })).unwrap_err();
-        assert!(err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"), "{bad}: {err:?}");
+        let err = store
+            .write("test", |tx| {
+                tx.execute(&sql, [])?;
+                Ok::<(), CpdError>(())
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"),
+            "{bad}: {err:?}"
+        );
     }
 }
 
@@ -163,8 +215,13 @@ fn version_2_with_events(home: &CpdHome) {
     database_at(home, 2, &format!("{VERSION_1_PLAN}\n{events}"));
 }
 
-const NEW_KINDS: [&str; 5] =
-    ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"];
+const NEW_KINDS: [&str; 5] = [
+    "context-renamed",
+    "plan-renamed",
+    "context-archived",
+    "plan-archived",
+    "session-archived",
+];
 
 #[test]
 fn a_version_2_database_migrates_through_3_keeping_every_row_and_event_id() {
@@ -173,7 +230,11 @@ fn a_version_2_database_migrates_through_3_keeping_every_row_and_event_id() {
     version_2_with_events(&home);
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let (version, events, archived, triggers): (i64, Vec<(i64, String)>, i64, i64) = store
         .read(|c| {
             let mut stmt = c.prepare("SELECT id, text FROM events ORDER BY id")?;
@@ -197,9 +258,19 @@ fn a_version_2_database_migrates_through_3_keeping_every_row_and_event_id() {
         })
         .unwrap();
     assert_eq!(version, VERSION);
-    assert_eq!(events, [(1, "event 1".to_owned()), (2, "event 2".to_owned()), (5, "event 5".to_owned())]);
+    assert_eq!(
+        events,
+        [
+            (1, "event 1".to_owned()),
+            (2, "event 2".to_owned()),
+            (5, "event 5".to_owned())
+        ]
+    );
     assert_eq!(archived, 3, "every row kept, every archived_at null");
-    assert_eq!(triggers, 3, "events_own, events_no_update, events_no_delete");
+    assert_eq!(
+        triggers, 3,
+        "events_own, events_no_update, events_no_delete"
+    );
 
     let id = store
         .write("test", |tx| {
@@ -220,14 +291,31 @@ fn after_migration_3_the_sequence_never_goes_back_and_the_history_lists_archived
     let home = home(&dir);
     version_2_with_events(&home);
     // An old sequence above the highest id (rows that no longer exist) is kept.
-    Connection::open(home.db()).unwrap().execute("UPDATE sqlite_sequence SET seq = 40 WHERE name = 'events'", []).unwrap();
+    Connection::open(home.db())
+        .unwrap()
+        .execute(
+            "UPDATE sqlite_sequence SET seq = 40 WHERE name = 'events'",
+            [],
+        )
+        .unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     let (seq, after): (i64, String) = store
         .write("test", |tx| {
-            tx.execute("UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'pay'", [])?;
+            tx.execute(
+                "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'pay'",
+                [],
+            )?;
             Ok::<_, CpdError>((
-                tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'events'", [], |r| r.get(0))?,
-                tx.query_row("SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?,
+                tx.query_row(
+                    "SELECT seq FROM sqlite_sequence WHERE name = 'events'",
+                    [],
+                    |r| r.get(0),
+                )?,
+                tx.query_row(
+                    "SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )?,
             ))
         })
         .unwrap();
@@ -250,10 +338,17 @@ fn events_allow_the_five_new_kinds_and_still_refuse_an_unknown_one() {
         )
     };
     for kind in NEW_KINDS {
-        store.write("test", |tx| Ok::<_, CpdError>(insert(tx, kind)?)).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        store
+            .write("test", |tx| Ok::<_, CpdError>(insert(tx, kind)?))
+            .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
-    let err = store.write("test", |tx| Ok::<_, CpdError>(insert(tx, "plan-exploded")?)).unwrap_err();
-    assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
+    let err = store
+        .write("test", |tx| Ok::<_, CpdError>(insert(tx, "plan-exploded")?))
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("FOREIGN KEY"),
+        "an Event kind is a foreign key to event_kinds: {err:?}"
+    );
 }
 
 // ---------- migration 4 ----------
@@ -267,8 +362,14 @@ fn migrated_pr_keys_follow_4_5() {
         ("/src/-x", "pr--x"),
         ("/src/Ünïcode", "pr--n-code"),
         ("/src/web/", "web"),
-        ("/src/a-very-long-repository-name-indeed", "a-very-long-repository-n"),
-        ("/src/123456789012345678901234567", "pr-123456789012345678901"),
+        (
+            "/src/a-very-long-repository-name-indeed",
+            "a-very-long-repository-n",
+        ),
+        (
+            "/src/123456789012345678901234567",
+            "pr-123456789012345678901",
+        ),
         ("/", "pr-"),
     ] {
         assert_eq!(migrated_workflow_key(repo).as_str(), key, "{repo}");
@@ -341,7 +442,11 @@ fn migrated(dir: &tempfile::TempDir) -> Store {
     let home = home(dir);
     version_2(&home);
     let store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     store
 }
 
@@ -357,7 +462,9 @@ fn rows(store: &mut Store, sql: &str) -> Vec<Value> {
                             Ok(match r.get_ref(i)? {
                                 rusqlite::types::ValueRef::Null => Value::Null,
                                 rusqlite::types::ValueRef::Integer(v) => Value::from(v),
-                                rusqlite::types::ValueRef::Text(t) => Value::from(String::from_utf8_lossy(t).into_owned()),
+                                rusqlite::types::ValueRef::Text(t) => {
+                                    Value::from(String::from_utf8_lossy(t).into_owned())
+                                }
                                 other => panic!("{other:?}"),
                             })
                         })
@@ -371,7 +478,9 @@ fn rows(store: &mut Store, sql: &str) -> Vec<Value> {
 }
 
 fn count(store: &mut Store, sql: &str) -> i64 {
-    store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+    store
+        .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+        .unwrap()
 }
 
 #[test]
@@ -379,7 +488,10 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
+    let migrate = count(
+        &mut store,
+        "SELECT max(id) FROM txns WHERE command = 'migrate'",
+    );
     assert_eq!(migrate, 2);
 
     let workflows = rows(
@@ -392,24 +504,109 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     assert_eq!(
         workflows,
         vec![
-            serde_json::json!(["gr", "pay", "/src/pay", "main", "waiting", "cpd/gr", n, n, n, n, n, n, n,
-                               migrate, "2026-01-01T00:00:00.001Z", n, n]),
-            serde_json::json!(["pl", "my-repo-git", "/src/My Repo.git", "main", "waiting", "cpd/pl", n, n, n, n, n, n, n,
-                               migrate, "2026-01-01T00:00:00.002Z", n, n]),
-            serde_json::json!(["di", "pr-2fa", "/src/2fa", "main", "dispatch", "cpd/di", "/src/2fa.di", n, n, n, n, n, n,
-                               migrate, "2026-01-01T00:00:00.003Z", "2026-01-02T00:00:00.003Z", n]),
-            serde_json::json!(["pr", "a-very-long-repository-n", "/src/a-very-long-repository-name-indeed", "main", "open",
-                               "cpd/pr", "/src/long.pr", 7, "https://github.com/acme/pay/pull/7", "2026-01-03T00:00:00.004Z",
-                               2, "2026-01-03T00:00:00.004Z", n,
-                               migrate, "2026-01-01T00:00:00.004Z", "2026-01-02T00:00:00.004Z", n]),
-            serde_json::json!(["dn", "web", "/src/web/", "develop", "merged", "cpd/dn", "/src/web.dn", 9,
-                               "https://github.com/acme/long/pull/9", "2026-01-03T00:00:00.005Z", 1, n, n,
-                               migrate, "2026-01-01T00:00:00.005Z", "2026-01-02T00:00:00.005Z", "2026-01-05T00:00:00.005Z"]),
+            serde_json::json!([
+                "gr",
+                "pay",
+                "/src/pay",
+                "main",
+                "waiting",
+                "cpd/gr",
+                n,
+                n,
+                n,
+                n,
+                n,
+                n,
+                n,
+                migrate,
+                "2026-01-01T00:00:00.001Z",
+                n,
+                n
+            ]),
+            serde_json::json!([
+                "pl",
+                "my-repo-git",
+                "/src/My Repo.git",
+                "main",
+                "waiting",
+                "cpd/pl",
+                n,
+                n,
+                n,
+                n,
+                n,
+                n,
+                n,
+                migrate,
+                "2026-01-01T00:00:00.002Z",
+                n,
+                n
+            ]),
+            serde_json::json!([
+                "di",
+                "pr-2fa",
+                "/src/2fa",
+                "main",
+                "dispatch",
+                "cpd/di",
+                "/src/2fa.di",
+                n,
+                n,
+                n,
+                n,
+                n,
+                n,
+                migrate,
+                "2026-01-01T00:00:00.003Z",
+                "2026-01-02T00:00:00.003Z",
+                n
+            ]),
+            serde_json::json!([
+                "pr",
+                "a-very-long-repository-n",
+                "/src/a-very-long-repository-name-indeed",
+                "main",
+                "open",
+                "cpd/pr",
+                "/src/long.pr",
+                7,
+                "https://github.com/acme/pay/pull/7",
+                "2026-01-03T00:00:00.004Z",
+                2,
+                "2026-01-03T00:00:00.004Z",
+                n,
+                migrate,
+                "2026-01-01T00:00:00.004Z",
+                "2026-01-02T00:00:00.004Z",
+                n
+            ]),
+            serde_json::json!([
+                "dn",
+                "web",
+                "/src/web/",
+                "develop",
+                "merged",
+                "cpd/dn",
+                "/src/web.dn",
+                9,
+                "https://github.com/acme/long/pull/9",
+                "2026-01-03T00:00:00.005Z",
+                1,
+                n,
+                n,
+                migrate,
+                "2026-01-01T00:00:00.005Z",
+                "2026-01-02T00:00:00.005Z",
+                "2026-01-05T00:00:00.005Z"
+            ]),
         ]
     );
     // One pull request row for each Workflow with a number, in Plan and key order (migration 6).
     assert_eq!(
-        rows(&mut store, "SELECT id, repo, number, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT id, repo, number, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id"
+        ),
         vec![
             serde_json::json!([1, "acme/long", 9, "Done", 0, "merged", "none", "none", "2026-01-03T00:00:00.005Z", "2026-01-05T00:00:00.005Z", "2026-01-03T00:00:00.005Z"]),
             serde_json::json!([2, "acme/pay", 7, "Open Workflow", 0, "open", "approved", "passed", "2026-01-03T00:00:00.004Z", n, "2026-01-03T00:00:00.004Z"]),
@@ -432,37 +629,78 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
 
     // Every other row and id is kept.
     assert_eq!(
-        rows(&mut store, "SELECT id, phase, locked_at, done_at FROM plans ORDER BY created_at"),
+        rows(
+            &mut store,
+            "SELECT id, phase, locked_at, done_at FROM plans ORDER BY created_at"
+        ),
         vec![
             serde_json::json!(["gr", "grounding", n, n]),
             serde_json::json!(["pl", "plan", n, n]),
             serde_json::json!(["di", "dispatch", "2026-01-02T00:00:00.003Z", n]),
             serde_json::json!(["pr", "deploy", "2026-01-02T00:00:00.004Z", n]),
-            serde_json::json!(["dn", "done", "2026-01-02T00:00:00.005Z", "2026-01-05T00:00:00.005Z"]),
+            serde_json::json!([
+                "dn",
+                "done",
+                "2026-01-02T00:00:00.005Z",
+                "2026-01-05T00:00:00.005Z"
+            ]),
         ]
     );
-    assert_eq!(rows(&mut store, "SELECT id, kind, plan, job FROM events ORDER BY id"), vec![
-        serde_json::json!([1, "plan-created", "gr", n]),
-        serde_json::json!([2, "job-merged", "pr", "z"]),
-        serde_json::json!([3, "all-merged", "pr", n]),
-    ]);
-    assert_eq!(rows(&mut store, "SELECT seq, id, plan_id, plan_machine, plan_jira FROM context_records ORDER BY seq"), vec![
-        serde_json::json!([1, "m1-p1", "gr", "m1", "PAY-1"]),
-        serde_json::json!([2, "m1-n1", n, n, n]),
-    ]);
-    assert_eq!(rows(&mut store, "SELECT plan, job, needs FROM dependencies ORDER BY plan"), vec![
-        serde_json::json!(["di", "x", "y"]),
-        serde_json::json!(["pl", "b", "a"]),
-    ]);
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT id, kind, plan, job FROM events ORDER BY id"
+        ),
+        vec![
+            serde_json::json!([1, "plan-created", "gr", n]),
+            serde_json::json!([2, "job-merged", "pr", "z"]),
+            serde_json::json!([3, "all-merged", "pr", n]),
+        ]
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT seq, id, plan_id, plan_machine, plan_jira FROM context_records ORDER BY seq"
+        ),
+        vec![
+            serde_json::json!([1, "m1-p1", "gr", "m1", "PAY-1"]),
+            serde_json::json!([2, "m1-n1", n, n, n]),
+        ]
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT plan, job, needs FROM dependencies ORDER BY plan"
+        ),
+        vec![
+            serde_json::json!(["di", "x", "y"]),
+            serde_json::json!(["pl", "b", "a"]),
+        ]
+    );
     assert_eq!(count(&mut store, "SELECT count(*) FROM attempts"), 2);
     assert_eq!(count(&mut store, "SELECT count(*) FROM escalations"), 1);
     assert_eq!(count(&mut store, "SELECT count(*) FROM sessions"), 5);
     assert_eq!(count(&mut store, "SELECT count(*) FROM plan_reviews"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
 
     // The moved and dropped columns are gone.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 12); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM pragma_table_info('plans')"
+        ),
+        12
+    ); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"
+        ),
+        0
+    );
 
     // History: one insert per migrated Workflow (migration 4) and one per back-filled pull request
     // (migration 6) in the migration's txn; the copies write none.
@@ -475,7 +713,13 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         .collect();
     expected.push(serde_json::json!([2, "pull_requests", "[1]", "insert"]));
     expected.push(serde_json::json!([2, "pull_requests", "[2]", "insert"]));
-    assert_eq!(rows(&mut store, "SELECT txn, tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"), expected);
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT txn, tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"
+        ),
+        expected
+    );
 
     // AUTOINCREMENT goes on after the kept ids.
     let (job, event, record) = store
@@ -523,23 +767,32 @@ fn a_tree_menu_version_3_database_migrates_to_6_keeping_archived_at() {
     let home = home(&dir);
     version_3(&home);
     // The starting schema is exactly the one tree-menu's migration 3 installs.
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[2]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[2]
+    );
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     let n = Value::Null;
     assert_eq!(
-        rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT id, phase, archived_at FROM plans ORDER BY id"
+        ),
         vec![
             serde_json::json!(["ar", "plan", "2026-01-06T00:00:00.002Z"]),
             serde_json::json!(["li", "grounding", n]),
         ]
     );
-    assert_eq!(rows(&mut store, "SELECT id, archived_at FROM contexts"), vec![serde_json::json!(["ctx", "2026-01-06T00:00:00.000Z"])]);
     assert_eq!(
-        rows(&mut store, "SELECT id, archived_at FROM sessions ORDER BY id"),
-        vec![serde_json::json!(["l-ar", "2026-01-06T00:00:00.001Z"]), serde_json::json!(["l-li", n])]
+        rows(&mut store, "SELECT id, archived_at FROM contexts"),
+        vec![serde_json::json!(["ctx", "2026-01-06T00:00:00.000Z"])]
     );
     assert_eq!(
         rows(&mut store, "SELECT plan, key, repo, status, lead_branch FROM workflows ORDER BY plan"),
@@ -562,9 +815,15 @@ fn a_tree_menu_version_3_database_migrates_to_6_keeping_archived_at() {
                          (cpd_txn(), 't', 'plan-archived', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'pr-started', 'ctx', 'x', '{}');
                        UPDATE plans SET archived_at = NULL WHERE id = 'ar'")
         .unwrap();
-    let after = rows(&mut store, "SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1");
+    let after = rows(
+        &mut store,
+        "SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1",
+    );
     let plan: Value = serde_json::from_str(after[0][0].as_str().unwrap()).unwrap();
-    assert!(plan.as_object().unwrap().contains_key("archived_at") && plan["archived_at"].is_null(), "{plan}");
+    assert!(
+        plan.as_object().unwrap().contains_key("archived_at") && plan["archived_at"].is_null(),
+        "{plan}"
+    );
     assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
 }
 
@@ -602,9 +861,16 @@ fn version_4(home: &CpdHome) {
 fn migrated_4(dir: &tempfile::TempDir) -> Store {
     let home = home(dir);
     version_4(&home);
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[3]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[3]
+    );
     let store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     store
 }
 
@@ -614,7 +880,10 @@ fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row()
     let mut store = migrated_4(&dir);
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     assert_eq!(
-        rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT id, phase, done_at FROM plans ORDER BY id"
+        ),
         vec![
             serde_json::json!(["di", "dispatch", Value::Null]),
             serde_json::json!(["dn", "done", "2026-01-05T00:00:00.000Z"]),
@@ -648,12 +917,24 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
         assert_eq!(err.code(), ErrorCode::IllegalTransition, "{sql}: {err:?}");
     }
     // `done_at` must be cleared by the same update (the CHECK of §4.4).
-    assert!(write(&mut store, "UPDATE plans SET phase = 'dispatch' WHERE id = 'dn'").is_err());
-    write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'dn';
-                       UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pr'")
-        .unwrap();
+    assert!(
+        write(
+            &mut store,
+            "UPDATE plans SET phase = 'dispatch' WHERE id = 'dn'"
+        )
+        .is_err()
+    );
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'dn';
+                       UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pr'",
+    )
+    .unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT id, phase, done_at FROM plans ORDER BY id"
+        ),
         vec![
             serde_json::json!(["di", "dispatch", Value::Null]),
             serde_json::json!(["dn", "dispatch", Value::Null]),
@@ -736,7 +1017,11 @@ fn migrated_5(dir: &tempfile::TempDir) -> (Store, Vec<(String, String)>) {
     let before = triggers_on(&conn, "prs");
     drop(conn);
     let store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     (store, before)
 }
 
@@ -765,8 +1050,14 @@ fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"),
-        vec![serde_json::json!(["pull_requests", "[1]", "insert"]), serde_json::json!(["pull_requests", "[2]", "insert"])]
+        rows(
+            &mut store,
+            "SELECT tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"
+        ),
+        vec![
+            serde_json::json!(["pull_requests", "[1]", "insert"]),
+            serde_json::json!(["pull_requests", "[2]", "insert"])
+        ]
     );
 }
 
@@ -784,19 +1075,40 @@ fn version_10(home: &CpdHome) {
 }
 
 #[test]
-fn a_version_10_database_migrates_to_11_with_its_rows_unknown_and_its_history_listing_both_columns() {
+fn a_version_10_database_migrates_to_11_with_its_rows_unknown_and_its_history_listing_both_columns()
+{
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_10(&home);
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[9]
+    );
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     assert_eq!(
-        rows(&mut store, "SELECT number, checks, mergeable, merge_state FROM pull_requests ORDER BY id"),
-        vec![serde_json::json!([7, "failed", "unknown", "unknown"]), serde_json::json!([9, "passed", "unknown", "unknown"])]
+        rows(
+            &mut store,
+            "SELECT number, checks, mergeable, merge_state FROM pull_requests ORDER BY id"
+        ),
+        vec![
+            serde_json::json!([7, "failed", "unknown", "unknown"]),
+            serde_json::json!([9, "passed", "unknown", "unknown"])
+        ]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"), 2, "the migration wrote no history row");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"
+        ),
+        2,
+        "the migration wrote no history row"
+    );
 
     // An update, an insert and a delete: each history row lists both new columns.
     write(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting', merge_state = 'dirty' WHERE number = 7").unwrap();
@@ -807,23 +1119,52 @@ fn a_version_10_database_migrates_to_11_with_its_rows_unknown_and_its_history_li
     )
     .unwrap();
     write(&mut store, "DELETE FROM pull_requests WHERE number = 9").unwrap();
-    let history = rows(&mut store, "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id");
+    let history = rows(
+        &mut store,
+        "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id",
+    );
     let side = |row: &Value, n: usize| -> Value {
-        row[n].as_str().map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+        row[n]
+            .as_str()
+            .map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
     };
     let columns = |v: &Value| (v["mergeable"].clone(), v["merge_state"].clone());
     let unknown = || (Value::from("unknown"), Value::from("unknown"));
     assert_eq!(history.len(), 3);
     assert_eq!(history[0][0], "update");
-    assert_eq!((columns(&side(&history[0], 1)), columns(&side(&history[0], 2))), (unknown(), (Value::from("conflicting"), Value::from("dirty"))));
-    assert_eq!((history[1][0].as_str(), columns(&side(&history[1], 2))), (Some("insert"), unknown()));
-    assert_eq!((history[2][0].as_str(), columns(&side(&history[2], 1))), (Some("delete"), unknown()));
+    assert_eq!(
+        (
+            columns(&side(&history[0], 1)),
+            columns(&side(&history[0], 2))
+        ),
+        (
+            unknown(),
+            (Value::from("conflicting"), Value::from("dirty"))
+        )
+    );
+    assert_eq!(
+        (history[1][0].as_str(), columns(&side(&history[1], 2))),
+        (Some("insert"), unknown())
+    );
+    assert_eq!(
+        (history[2][0].as_str(), columns(&side(&history[2], 1))),
+        (Some("delete"), unknown())
+    );
 
     // `pull_requests_owned` is kept and `pull_requests` still gets no `_no_delete`.
-    let triggers = rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name");
+    let triggers = rows(
+        &mut store,
+        "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name",
+    );
     assert_eq!(
         triggers,
-        ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
+        [
+            "pull_requests_hist_del",
+            "pull_requests_hist_ins",
+            "pull_requests_hist_upd",
+            "pull_requests_owned"
+        ]
+        .map(|n| serde_json::json!([n]))
     );
 }
 
@@ -833,19 +1174,42 @@ fn the_checks_of_mergeable_and_merge_state_refuse_a_value_outside_their_sets() {
     let home = home(&dir);
     version_10(&home);
     let mut store = Store::open(&home, 5000).unwrap();
-    for ok in ["mergeable = 'mergeable'", "mergeable = 'conflicting'", "merge_state = 'has_hooks'", "merge_state = 'behind'"] {
-        write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
+    for ok in [
+        "mergeable = 'mergeable'",
+        "mergeable = 'conflicting'",
+        "merge_state = 'has_hooks'",
+        "merge_state = 'behind'",
+    ] {
+        write(
+            &mut store,
+            &format!("UPDATE pull_requests SET {ok} WHERE number = 7"),
+        )
+        .unwrap();
     }
-    for bad in ["mergeable = 'MERGEABLE'", "mergeable = 'dirty'", "mergeable = NULL", "merge_state = 'DIRTY'", "merge_state = 'conflicting'", "merge_state = NULL"] {
-        let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
-        assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
+    for bad in [
+        "mergeable = 'MERGEABLE'",
+        "mergeable = 'dirty'",
+        "mergeable = NULL",
+        "merge_state = 'DIRTY'",
+        "merge_state = 'conflicting'",
+        "merge_state = NULL",
+    ] {
+        let err = refused(
+            &mut store,
+            &format!("UPDATE pull_requests SET {bad} WHERE number = 7"),
+        );
+        assert!(
+            format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"),
+            "{bad}: {err:?}"
+        );
     }
 }
 
 // ---------- migration 13: the pull request poll's Inbox kinds ----------
 
 #[test]
-fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_listing_both_columns() {
+fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_listing_both_columns()
+ {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     database_at(
@@ -855,18 +1219,39 @@ fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_l
            ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', 't', 't'),
            ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', 't', 't');",
     );
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[11]
+    );
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     assert_eq!(
-        rows(&mut store, "SELECT number, authored, review_requested FROM pull_requests ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT number, authored, review_requested FROM pull_requests ORDER BY id"
+        ),
         vec![serde_json::json!([7, 1, 0]), serde_json::json!([9, 1, 0])]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"), 2, "the migration wrote no history row");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"
+        ),
+        2,
+        "the migration wrote no history row"
+    );
 
     // An update, an insert and a delete: each history row lists both new columns.
-    write(&mut store, "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 7").unwrap();
+    write(
+        &mut store,
+        "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 7",
+    )
+    .unwrap();
     write(
         &mut store,
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
@@ -874,23 +1259,49 @@ fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_l
     )
     .unwrap();
     write(&mut store, "DELETE FROM pull_requests WHERE number = 9").unwrap();
-    let history = rows(&mut store, "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id");
+    let history = rows(
+        &mut store,
+        "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id",
+    );
     let side = |row: &Value, n: usize| -> Value {
-        row[n].as_str().map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+        row[n]
+            .as_str()
+            .map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
     };
     let columns = |v: &Value| (v["authored"].clone(), v["review_requested"].clone());
     let pair = |a: i64, r: i64| (Value::from(a), Value::from(r));
     assert_eq!(history.len(), 3);
     assert_eq!(history[0][0], "update");
-    assert_eq!((columns(&side(&history[0], 1)), columns(&side(&history[0], 2))), (pair(1, 0), pair(0, 1)));
-    assert_eq!((history[1][0].as_str(), columns(&side(&history[1], 2))), (Some("insert"), pair(0, 1)));
-    assert_eq!((history[2][0].as_str(), columns(&side(&history[2], 1))), (Some("delete"), pair(1, 0)));
+    assert_eq!(
+        (
+            columns(&side(&history[0], 1)),
+            columns(&side(&history[0], 2))
+        ),
+        (pair(1, 0), pair(0, 1))
+    );
+    assert_eq!(
+        (history[1][0].as_str(), columns(&side(&history[1], 2))),
+        (Some("insert"), pair(0, 1))
+    );
+    assert_eq!(
+        (history[2][0].as_str(), columns(&side(&history[2], 1))),
+        (Some("delete"), pair(1, 0))
+    );
 
     // `pull_requests_owned` is kept and `pull_requests` still gets no `_no_delete`.
-    let triggers = rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name");
+    let triggers = rows(
+        &mut store,
+        "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name",
+    );
     assert_eq!(
         triggers,
-        ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
+        [
+            "pull_requests_hist_del",
+            "pull_requests_hist_ins",
+            "pull_requests_hist_upd",
+            "pull_requests_owned"
+        ]
+        .map(|n| serde_json::json!([n]))
     );
 }
 
@@ -906,27 +1317,57 @@ fn a_version_12_database_keeps_its_inbox_items_and_accepts_the_four_pull_request
          INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, closed_at) VALUES ('dialog', 'red', 'session:a', 'l3', 't3', 't4');",
     );
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     assert_eq!(
-        rows(&mut store, "SELECT id, kind, subject, label, closed_at FROM inbox_items ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT id, kind, subject, label, closed_at FROM inbox_items ORDER BY id"
+        ),
         vec![
             serde_json::json!([1, "dialog", "session:a", "l1", null]),
             serde_json::json!([2, "unread", "plan:p", "l2", null]),
             serde_json::json!([3, "dialog", "session:a", "l3", "t4"]),
         ]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'"), 3, "the copy wrote no history row (the 3 are the inserts)");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'inbox_items'"
+        ),
+        3,
+        "the copy wrote no history row (the 3 are the inserts)"
+    );
     // The partial unique index, the history triggers and `inbox_items_no_delete` are back.
     assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', 'red', 'session:a', 'l', 't')").is_err());
-    let history = |store: &mut Store| count(store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'");
+    let history = |store: &mut Store| {
+        count(
+            store,
+            "SELECT count(*) FROM history WHERE tbl = 'inbox_items'",
+        )
+    };
     let kept = history(&mut store);
     for kind in ["pr-failing", "pr-changes", "pr-ready", "review-requested"] {
         write(&mut store, &format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('{kind}', 'red', 'pr:{kind}', 'l', 't')")).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
-        write(&mut store, &format!("UPDATE inbox_items SET closed_at = 't' WHERE subject = 'pr:{kind}'")).unwrap();
+        write(
+            &mut store,
+            &format!("UPDATE inbox_items SET closed_at = 't' WHERE subject = 'pr:{kind}'"),
+        )
+        .unwrap();
     }
-    assert_eq!(history(&mut store) - kept, 8, "an insert and an update each");
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+    assert_eq!(
+        history(&mut store) - kept,
+        8,
+        "an insert and an update each"
+    );
+    assert_eq!(
+        sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")),
+        "append_only: inbox_items"
+    );
     assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
 }
 
@@ -936,12 +1377,32 @@ fn the_checks_of_authored_and_review_requested_refuse_a_value_outside_0_and_1() 
     let home = home(&dir);
     version_10(&home);
     let mut store = Store::open(&home, 5000).unwrap();
-    for ok in ["authored = 0", "review_requested = 1", "authored = 1", "review_requested = 0"] {
-        write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
+    for ok in [
+        "authored = 0",
+        "review_requested = 1",
+        "authored = 1",
+        "review_requested = 0",
+    ] {
+        write(
+            &mut store,
+            &format!("UPDATE pull_requests SET {ok} WHERE number = 7"),
+        )
+        .unwrap();
     }
-    for bad in ["authored = 2", "review_requested = -1", "authored = NULL", "review_requested = NULL"] {
-        let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
-        assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
+    for bad in [
+        "authored = 2",
+        "review_requested = -1",
+        "authored = NULL",
+        "review_requested = NULL",
+    ] {
+        let err = refused(
+            &mut store,
+            &format!("UPDATE pull_requests SET {bad} WHERE number = 7"),
+        );
+        assert!(
+            format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"),
+            "{bad}: {err:?}"
+        );
     }
 }
 
@@ -1009,15 +1470,28 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_6(&home);
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[5]
+    );
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    assert_eq!(canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASH);
+    assert_eq!(
+        canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASH
+    );
     assert_eq!(
         rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
-        vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
+        vec![
+            serde_json::json!([1, "context-created"]),
+            serde_json::json!([2, "pr-merged"])
+        ]
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 0);
 
@@ -1030,7 +1504,11 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
     assert!(write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'inbox-other', 'x', '{}')").is_err());
     // The rebuilt table kept its triggers.
     for sql in ["UPDATE events SET text = 'y'", "DELETE FROM events"] {
-        assert_eq!(sqlite_message(&refused(&mut store, sql)), "append_only: events", "{sql}");
+        assert_eq!(
+            sqlite_message(&refused(&mut store, sql)),
+            "append_only: events",
+            "{sql}"
+        );
     }
 }
 
@@ -1040,7 +1518,9 @@ fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
     let home = home(&dir);
     let mut store = Store::open(&home, 5000).unwrap();
     let item = |urgency: &str| {
-        format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');")
+        format!(
+            "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');"
+        )
     };
     for urgency in ["white", "cyan", "blue", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
@@ -1056,17 +1536,26 @@ fn inbox_items_keep_one_open_item_per_identity_and_write_history_and_never_delet
     version_6(&home);
     let mut store = Store::open(&home, 5000).unwrap();
     let item = |urgency: &str| {
-        format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', '{urgency}', 'session:a', 'l', 't');")
+        format!(
+            "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', '{urgency}', 'session:a', 'l', 't');"
+        )
     };
     write(&mut store, &item("red")).unwrap();
     // The same identity cannot be open twice; another urgency is another identity.
     assert!(write(&mut store, &item("red")).is_err());
     write(&mut store, &item("magenta")).unwrap();
     // Once closed, the identity is free again.
-    write(&mut store, "UPDATE inbox_items SET closed_at = 't' WHERE urgency = 'red'").unwrap();
+    write(
+        &mut store,
+        "UPDATE inbox_items SET closed_at = 't' WHERE urgency = 'red'",
+    )
+    .unwrap();
     write(&mut store, &item("red")).unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT pk, op FROM history WHERE tbl = 'inbox_items' ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT pk, op FROM history WHERE tbl = 'inbox_items' ORDER BY id"
+        ),
         vec![
             serde_json::json!(["[1]", "insert"]),
             serde_json::json!(["[2]", "insert"]),
@@ -1074,7 +1563,10 @@ fn inbox_items_keep_one_open_item_per_identity_and_write_history_and_never_delet
             serde_json::json!(["[3]", "insert"]),
         ]
     );
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+    assert_eq!(
+        sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")),
+        "append_only: inbox_items"
+    );
     // A kind the poll adds later is refused until its migration; `engine-down` is never stored.
     assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
 }
@@ -1127,25 +1619,49 @@ fn version_6_with_known_context(home: &CpdHome) {
 }
 
 #[test]
-fn migration_7_imports_what_the_index_lacks_and_archives_the_folders_and_a_reopen_changes_nothing() {
+fn migration_7_imports_what_the_index_lacks_and_archives_the_folders_and_a_reopen_changes_nothing()
+{
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_6_with_known_context(&home);
-    old_store(&home, "known", &[("m1", &[NOTE_1, NOTE_2, PLAN_1]), ("m2", &[OTHER_1])]);
+    old_store(
+        &home,
+        "known",
+        &[("m1", &[NOTE_1, NOTE_2, PLAN_1]), ("m2", &[OTHER_1])],
+    );
     old_store(&home, "fresh", &[("m1", &[NOTE_1])]);
     std::fs::write(home.old_contexts_dir().join("README"), "not a store").unwrap();
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('contexts') WHERE name = 'sync_failing'"), 0);
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM pragma_table_info('contexts') WHERE name = 'sync_failing'"
+        ),
+        0
+    );
     // The Context the index had keeps its row; the index's own record keeps its seq.
     assert_eq!(
-        rows(&mut store, "SELECT id, title, jira FROM contexts ORDER BY id"),
-        vec![serde_json::json!(["fresh", "Title of fresh", "ABC-1"]), serde_json::json!(["known", "Known", null])]
+        rows(
+            &mut store,
+            "SELECT id, title, jira FROM contexts ORDER BY id"
+        ),
+        vec![
+            serde_json::json!(["fresh", "Title of fresh", "ABC-1"]),
+            serde_json::json!(["known", "Known", null])
+        ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT context, id, seq FROM context_records ORDER BY seq"),
+        rows(
+            &mut store,
+            "SELECT context, id, seq FROM context_records ORDER BY seq"
+        ),
         vec![
             serde_json::json!(["known", "m1-n1", 1]),
             serde_json::json!(["fresh", "m1-n1", 2]),
@@ -1155,12 +1671,18 @@ fn migration_7_imports_what_the_index_lacks_and_archives_the_folders_and_a_reope
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT plan_id, plan_machine, plan_jira FROM context_records WHERE id = 'm1-p1'"),
+        rows(
+            &mut store,
+            "SELECT plan_id, plan_machine, plan_jira FROM context_records WHERE id = 'm1-p1'"
+        ),
         vec![serde_json::json!(["pay", "m1", "PAY-1"])]
     );
     // `context-created` for the new Context, `context-record` for each imported record, in the migration's txn.
     assert_eq!(
-        rows(&mut store, "SELECT kind, context, json_extract(data, '$.record'), txn FROM events ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT kind, context, json_extract(data, '$.record'), txn FROM events ORDER BY id"
+        ),
         vec![
             serde_json::json!(["context-created", "fresh", null, 2]),
             serde_json::json!(["context-record", "fresh", "m1-n1", 2]),
@@ -1170,18 +1692,32 @@ fn migration_7_imports_what_the_index_lacks_and_archives_the_folders_and_a_reope
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT text FROM events WHERE kind = 'context-created'"),
-        vec![serde_json::json!(["Context fresh \"Title of fresh\" exists. Next: cpd context show --context fresh"])]
+        rows(
+            &mut store,
+            "SELECT text FROM events WHERE kind = 'context-created'"
+        ),
+        vec![serde_json::json!([
+            "Context fresh \"Title of fresh\" exists. Next: cpd context show --context fresh"
+        ])]
     );
 
     // The folders are archived, nothing else is touched.
     let archived = home.archived_contexts_dir();
     for id in ["known", "fresh"] {
-        assert!(!home.old_contexts_dir().join(id).exists(), "{id} is still in contexts/");
-        assert!(archived.join(id).join("context.json").is_file(), "{id} is not archived");
+        assert!(
+            !home.old_contexts_dir().join(id).exists(),
+            "{id} is still in contexts/"
+        );
+        assert!(
+            archived.join(id).join("context.json").is_file(),
+            "{id} is not archived"
+        );
     }
     assert!(archived.join("known/records/m2.jsonl").is_file());
-    assert!(home.old_contexts_dir().join("README").is_file(), "a file that is no store stays");
+    assert!(
+        home.old_contexts_dir().join("README").is_file(),
+        "a file that is no store stays"
+    );
 
     // A second open changes nothing.
     let before = (
@@ -1215,12 +1751,17 @@ fn the_import_of_migration_7_is_idempotent_on_its_own() {
     import_old_stores(&conn, &home.old_contexts_dir()).unwrap();
     let counts = |conn: &Connection| -> (i64, i64, i64) {
         let n = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-        (n("SELECT count(*) FROM contexts"), n("SELECT count(*) FROM context_records"), n("SELECT count(*) FROM events"))
+        (
+            n("SELECT count(*) FROM contexts"),
+            n("SELECT count(*) FROM context_records"),
+            n("SELECT count(*) FROM events"),
+        )
     };
     assert_eq!(counts(&conn), (1, 2, 3));
     conn.execute_batch("DROP TRIGGER contexts_hist_ins; DROP TRIGGER contexts_hist_upd; DROP TRIGGER contexts_no_delete;")
         .unwrap();
-    conn.execute_batch("ALTER TABLE contexts ADD COLUMN sync_failing INTEGER NOT NULL DEFAULT 0").unwrap();
+    conn.execute_batch("ALTER TABLE contexts ADD COLUMN sync_failing INTEGER NOT NULL DEFAULT 0")
+        .unwrap();
     import_old_stores(&conn, &home.old_contexts_dir()).unwrap();
     assert_eq!(counts(&conn), (1, 2, 3));
 }
@@ -1239,16 +1780,42 @@ fn an_existing_destination_is_never_overwritten_the_folder_stays_and_the_open_fa
     let err = Store::open(&home, 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
     assert!(err.message().contains("blocked"), "{}", err.message());
-    assert!(home.old_contexts_dir().join("blocked/context.json").is_file(), "the folder stays");
-    assert_eq!(std::fs::read_to_string(taken.join("mine.txt")).unwrap(), "keep");
-    assert!(!taken.join("context.json").exists(), "nothing was written over it");
-    assert!(home.archived_contexts_dir().join("moves/context.json").is_file(), "the others are moved");
+    assert!(
+        home.old_contexts_dir()
+            .join("blocked/context.json")
+            .is_file(),
+        "the folder stays"
+    );
+    assert_eq!(
+        std::fs::read_to_string(taken.join("mine.txt")).unwrap(),
+        "keep"
+    );
+    assert!(
+        !taken.join("context.json").exists(),
+        "nothing was written over it"
+    );
+    assert!(
+        home.archived_contexts_dir()
+            .join("moves/context.json")
+            .is_file(),
+        "the others are moved"
+    );
 
     // The database did migrate, so the next open works; the folder still stays.
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM context_records WHERE context = 'blocked'"), 1);
-    assert!(home.old_contexts_dir().join("blocked/context.json").is_file());
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM context_records WHERE context = 'blocked'"
+        ),
+        1
+    );
+    assert!(
+        home.old_contexts_dir()
+            .join("blocked/context.json")
+            .is_file()
+    );
 }
 
 #[test]
@@ -1260,14 +1827,25 @@ fn a_folder_that_is_not_a_valid_store_fails_the_migration_and_changes_nothing() 
     old_store(&home, "bad", &[("m1", &[NOTE_1, "{not json"])]);
     let err = Store::open(&home, 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
-    assert!(err.message().contains("Context bad") && err.message().contains("line 2"), "{}", err.message());
+    assert!(
+        err.message().contains("Context bad") && err.message().contains("line 2"),
+        "{}",
+        err.message()
+    );
     let conn = Connection::open(home.db()).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 6);
     assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
-    let contexts: i64 = conn.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0)).unwrap();
+    let contexts: i64 = conn
+        .query_row("SELECT count(*) FROM contexts", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(contexts, 1);
-    assert!(home.old_contexts_dir().join("good/context.json").is_file(), "no folder is moved");
+    assert!(
+        home.old_contexts_dir().join("good/context.json").is_file(),
+        "no folder is moved"
+    );
     assert!(!home.archived_contexts_dir().exists());
 }
 
@@ -1282,9 +1860,14 @@ fn a_migration_that_breaks_a_foreign_key_fails_and_changes_nothing() {
     ));
     let err = Store::open(&home, 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
-    assert_eq!(err.details()["foreign_key_violations"], serde_json::json!([{"table": "events", "rowid": 1, "parent": "plans"}]));
+    assert_eq!(
+        err.details()["foreign_key_violations"],
+        serde_json::json!([{"table": "events", "rowid": 1, "parent": "plans"}])
+    );
     let conn = Connection::open(home.db()).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 2);
     assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[1]);
 }
@@ -1322,35 +1905,77 @@ fn version_13(home: &CpdHome) {
 }
 
 #[test]
-fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks_triggers_and_history() {
+fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks_triggers_and_history()
+ {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_13(&home);
-    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[12]);
+    assert_eq!(
+        legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASHES[12]
+    );
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     // The schema is the one a fresh store gets.
-    assert_eq!(canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASH);
+    assert_eq!(
+        canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(),
+        SCHEMA_HASH
+    );
 
     // Every row, with its seq, its Spec and its review flag, as it was.
     let n = Value::Null;
     assert_eq!(
-        rows(&mut store, "SELECT seq, key, status, tier, goal, context, touches, out_of_scope, review, fingerprint, merged_sha FROM jobs ORDER BY seq"),
+        rows(
+            &mut store,
+            "SELECT seq, key, status, tier, goal, context, touches, out_of_scope, review, fingerprint, merged_sha FROM jobs ORDER BY seq"
+        ),
         vec![
-            serde_json::json!([1, "a", "merged", "S2", "g", "c", "[\"a\"]", "[]", 0, FP, "abc"]),
-            serde_json::json!([2, "b", "running", "S3", "g", "c", "[\"a\"]", "[\"x\"]", 0, FP, n]),
+            serde_json::json!([
+                1, "a", "merged", "S2", "g", "c", "[\"a\"]", "[]", 0, FP, "abc"
+            ]),
+            serde_json::json!([
+                2, "b", "running", "S3", "g", "c", "[\"a\"]", "[\"x\"]", 0, FP, n
+            ]),
             serde_json::json!([3, "c", "queued", "O3", "g", "c", "[\"a\"]", "[]", 0, FP, n]),
             serde_json::json!([4, "d", "failed", "S2", "g", "", "[\"a\"]", "[]", 0, FP, n]),
             serde_json::json!([5, "e", "draft", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
-            serde_json::json!([6, "f", "cancelled", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
-            serde_json::json!([7, "r", "merged", "S2", "g", "c", "[\"a\"]", "[]", 1, FP, "def"]),
+            serde_json::json!([
+                6,
+                "f",
+                "cancelled",
+                "S2",
+                "g",
+                "c",
+                "[\"a\"]",
+                "[]",
+                0,
+                n,
+                n
+            ]),
+            serde_json::json!([
+                7, "r", "merged", "S2", "g", "c", "[\"a\"]", "[]", 1, FP, "def"
+            ]),
         ]
     );
     assert_eq!(count(&mut store, "SELECT count(*) FROM dependencies"), 2);
     assert_eq!(count(&mut store, "SELECT count(*) FROM attempts"), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'jobs'"), 7, "the copy wrote no history row (the 7 are the inserts)");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'jobs'"
+        ),
+        7,
+        "the copy wrote no history row (the 7 are the inserts)"
+    );
 
     // A draft with only a title is accepted, with either half given too, and a stub can be cancelled.
     let stub = |key: &str, columns: &str, values: &str| {
@@ -1363,24 +1988,61 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     write(&mut store, &stub("s2", "tier, ", "'S2', ")).unwrap();
     write(
         &mut store,
-        &stub("s3", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]', "),
+        &stub(
+            "s3",
+            "goal, context, touches, acceptance, out_of_scope, ",
+            "'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ",
+        ),
     )
     .unwrap();
-    assert_eq!(count(&mut store, "SELECT max(seq) FROM jobs"), 10, "AUTOINCREMENT goes on after the kept seq");
+    assert_eq!(
+        count(&mut store, "SELECT max(seq) FROM jobs"),
+        10,
+        "AUTOINCREMENT goes on after the kept seq"
+    );
     write(&mut store, &format!("UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = '{T}' WHERE key = 's1'")).unwrap();
-    assert_eq!(rows(&mut store, "SELECT status, tier, goal FROM jobs WHERE key = 's1'"), vec![serde_json::json!(["cancelled", n, n])]);
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT status, tier, goal FROM jobs WHERE key = 's1'"
+        ),
+        vec![serde_json::json!(["cancelled", n, n])]
+    );
 
     // Anything that is not a draft or cancelled has its Tier and Spec; the Spec is all or nothing; each field keeps its own check.
     let check = |store: &mut Store, sql: &str| {
         let message = sqlite_message(&refused(store, sql));
-        assert!(message.contains("CHECK constraint failed"), "{sql}: {message}");
+        assert!(
+            message.contains("CHECK constraint failed"),
+            "{sql}: {message}"
+        );
     };
-    check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's2'"));
-    check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'"));
+    check(
+        &mut store,
+        &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's2'"),
+    );
+    check(
+        &mut store,
+        &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'"),
+    );
     check(&mut store, &stub("s4", "tier, goal, ", "'S2', 'g', "));
     check(&mut store, &stub("s5", "tier, ", "'X9', "));
-    check(&mut store, &stub("s6", "goal, context, touches, acceptance, out_of_scope, ", "'', 'c', '[\"a\"]', '[\"b\"]', '[]', "));
-    check(&mut store, &stub("s7", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[]', '[\"b\"]', '[]', "));
+    check(
+        &mut store,
+        &stub(
+            "s6",
+            "goal, context, touches, acceptance, out_of_scope, ",
+            "'', 'c', '[\"a\"]', '[\"b\"]', '[]', ",
+        ),
+    );
+    check(
+        &mut store,
+        &stub(
+            "s7",
+            "goal, context, touches, acceptance, out_of_scope, ",
+            "'g', 'c', '[]', '[\"b\"]', '[]', ",
+        ),
+    );
     check(
         &mut store,
         &format!(
@@ -1391,22 +2053,22 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
 
     // Completed, a stub is queued like any draft.
     write(&mut store, "UPDATE jobs SET tier = 'S2' WHERE key = 's3'").unwrap();
-    write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'")).unwrap();
+    write(
+        &mut store,
+        &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'"),
+    )
+    .unwrap();
 
     // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
     assert_eq!(
-        rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
+        rows(
+            &mut store,
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"
+        ),
         // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'; `jobs_hist_del` is `delete-tombstone`'s (the generator's).
         ["jobs_hist_del", "jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_status", "jobs_workflow_dependencies"]
             .map(|name| serde_json::json!([name]))
     );
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET goal = 'x' WHERE key = 's1'")), "job_locked", "a cancelled stub is Locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET status = 'queued' WHERE key = 'a'")), "illegal_transition");
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE key = 'a'")), "append_only: jobs");
-    write(&mut store, "UPDATE jobs SET title = 'New', tier = 'S3' WHERE key = 's2'").unwrap();
-    let history = rows(&mut store, "SELECT op, json_extract(after, '$.title'), json_extract(after, '$.tier') FROM history WHERE tbl = 'jobs' AND pk = '[9]'");
-    assert_eq!(history, vec![serde_json::json!(["insert", "T", "S2"]), serde_json::json!(["update", "New", "S3"])]);
 }
 
 // ---------- the triggers of §4.4 after migration 4 ----------
@@ -1421,7 +2083,10 @@ fn refused(store: &mut Store, sql: &str) -> CpdError {
 }
 
 fn sqlite_message(err: &CpdError) -> String {
-    err.details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    err.details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A second Workflow `web` in Plan `gr` (grounding), with a draft Job `v`, before `workflow-rename`: the object table is `prs`.
@@ -1576,7 +2241,11 @@ fn jobs_locked_refuses_changing_a_locked_jobs_pr_or_review() {
         let err = refused(&mut store, sql);
         assert_eq!(err.code(), ErrorCode::JobLocked, "{sql}: {err:?}");
     }
-    write(&mut store, "UPDATE jobs SET review = 1, title = 'New' WHERE plan = 'pl' AND key = 'a'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET review = 1, title = 'New' WHERE plan = 'pl' AND key = 'a'",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1600,13 +2269,21 @@ fn events_and_context_records_stay_append_only() {
     for (sql, message) in [
         ("UPDATE events SET text = 'y'", "append_only: events"),
         ("DELETE FROM events", "append_only: events"),
-        ("UPDATE context_records SET text = 'y'", "append_only: context_records"),
-        ("DELETE FROM context_records", "append_only: context_records"),
+        (
+            "UPDATE context_records SET text = 'y'",
+            "append_only: context_records",
+        ),
+        (
+            "DELETE FROM context_records",
+            "append_only: context_records",
+        ),
         ("DELETE FROM plans", "append_only: plans"),
         ("DELETE FROM workflows", "append_only: workflows"),
         ("DELETE FROM jobs", "append_only: jobs"),
-        ("INSERT INTO events (txn, at, kind, context, text, data) VALUES (1, 't', 'pr-added', 'ctx', 'x', '{}')",
-         "events.txn must be cpd_txn()"),
+        (
+            "INSERT INTO events (txn, at, kind, context, text, data) VALUES (1, 't', 'pr-added', 'ctx', 'x', '{}')",
+            "events.txn must be cpd_txn()",
+        ),
     ] {
         let err = refused(&mut store, sql);
         assert_eq!(sqlite_message(&err), message, "{sql}");
@@ -1623,17 +2300,26 @@ fn events_and_context_records_stay_append_only() {
 fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, "UPDATE jobs SET review = 1 WHERE plan = 'pl' AND key = 'a';
-                       UPDATE plans SET title = 'G2' WHERE id = 'gr'")
-        .unwrap();
-    let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' AND tbl IN ('jobs', 'plans') ORDER BY id");
+    write(
+        &mut store,
+        "UPDATE jobs SET review = 1 WHERE plan = 'pl' AND key = 'a';
+                       UPDATE plans SET title = 'G2' WHERE id = 'gr'",
+    )
+    .unwrap();
+    let after = rows(
+        &mut store,
+        "SELECT tbl, after FROM history WHERE op = 'update' AND tbl IN ('jobs', 'plans') ORDER BY id",
+    );
     let job: Value = serde_json::from_str(after[0][1].as_str().unwrap()).unwrap();
     assert_eq!(job["review"], 1, "{job}");
     // An update row holds the changed columns only (§4.4 "History row shape"): `pr` is listed in the trigger.
     let upd = rows(&mut store, "SELECT sql FROM sqlite_schema WHERE name = 'jobs_hist_upd'");
     assert!(upd[0][0].as_str().unwrap().contains("WHERE OLD.workflow IS NOT NEW.workflow"), "{upd:?}");
     let plan: Value = serde_json::from_str(after[1][1].as_str().unwrap()).unwrap();
-    assert!(plan.get("repo").is_none() && plan["title"] == "G2", "{plan}");
+    assert!(
+        plan.get("repo").is_none() && plan["title"] == "G2",
+        "{plan}"
+    );
 }
 
 // ---------- named migrations: the conversion (§4.5 C1–C6) ----------
@@ -1666,11 +2352,13 @@ fn legacy_stores(upto: usize) -> Vec<Vec<u8>> {
     let conn = connection(&chain.db());
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     for n in 3..=upto {
-        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "ON")
+            .unwrap();
         conn.execute_batch("BEGIN IMMEDIATE").unwrap();
         (LEGACY[n - 1].apply)(&conn).unwrap();
         conn.execute_batch("COMMIT").unwrap();
-        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "OFF")
+            .unwrap();
         conn.pragma_update(None, "user_version", n as i64).unwrap();
         // The chain is at rest: no open transaction and so no journal file, so the file is the database.
         let mut bytes = std::fs::read(chain.db()).unwrap();
@@ -1719,12 +2407,34 @@ fn dump(conn: &Connection) -> std::collections::BTreeMap<String, Vec<String>> {
     tables
         .into_iter()
         .map(|table| {
-            let columns: Vec<String> = table_columns(conn, &table).unwrap().into_iter().map(|(c, _)| format!("\"{c}\"")).collect();
-            let without_rowid: bool =
-                conn.query_row("SELECT wr FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0)).unwrap();
-            let order = if without_rowid { columns.join(", ") } else { "rowid".to_owned() };
-            let sql = format!("SELECT json_array({}) FROM \"{table}\" ORDER BY {order}", columns.join(", "));
-            let rows = conn.prepare(&sql).unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_>>().unwrap();
+            let columns: Vec<String> = table_columns(conn, &table)
+                .unwrap()
+                .into_iter()
+                .map(|(c, _)| format!("\"{c}\""))
+                .collect();
+            let without_rowid: bool = conn
+                .query_row(
+                    "SELECT wr FROM pragma_table_list WHERE name = ?1",
+                    [&table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let order = if without_rowid {
+                columns.join(", ")
+            } else {
+                "rowid".to_owned()
+            };
+            let sql = format!(
+                "SELECT json_array({}) FROM \"{table}\" ORDER BY {order}",
+                columns.join(", ")
+            );
+            let rows = conn
+                .prepare(&sql)
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_>>()
+                .unwrap();
             (table, rows)
         })
         .collect()
@@ -1756,21 +2466,39 @@ fn converts_keeping_every_row_and_id(n: usize) {
     write_store(&home, &legacy_stores(n).pop().unwrap());
     let before = Connection::open(home.db()).unwrap();
     let rows_before = dump(&before);
-    let ids_before: Vec<(String, Vec<i64>)> =
-        rows_before.keys().map(|t| (t.clone(), rowids(&before, t))).collect();
-    let empty: Vec<&String> = ids_before.iter().filter(|(_, ids)| ids.is_empty()).map(|(t, _)| t).collect();
-    assert!(empty.is_empty(), "version {n}: the fixture has no row in {empty:?}");
+    let ids_before: Vec<(String, Vec<i64>)> = rows_before
+        .keys()
+        .map(|t| (t.clone(), rowids(&before, t)))
+        .collect();
+    let empty: Vec<&String> = ids_before
+        .iter()
+        .filter(|(_, ids)| ids.is_empty())
+        .map(|(t, _)| t)
+        .collect();
+    assert!(
+        empty.is_empty(),
+        "version {n}: the fixture has no row in {empty:?}"
+    );
     drop(before);
 
     let store = Store::open(&home, 5000).unwrap_or_else(|e| panic!("version {n}: {e:?}"));
-    assert!(store.schema_mismatch().is_none(), "version {n}: {:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "version {n}: {:?}",
+        store.schema_mismatch()
+    );
     drop(store);
 
     let conn = Connection::open(home.db()).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, VERSION, "version {n}");
-    let violations: i64 =
-        conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    let violations: i64 = conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(violations, 0, "version {n}: foreign_key_check");
     for (table, ids) in &ids_before {
         // `workflow-rename` renames the object tables: the post-open store speaks the new names.
@@ -1783,10 +2511,16 @@ fn converts_keeping_every_row_and_id(n: usize) {
         if table == "tier_catalog" {
             // Migration `20261030T1100-tier-catalog-source` rebuilds tier_catalog EMPTY: it is a cache, recomputed by the next
             // `cpd tiers`, so it is the one table conversion does not keep.
-            assert!(after.is_empty(), "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)");
+            assert!(
+                after.is_empty(),
+                "version {n}: tier_catalog is empty after conversion (a cache, rebuilt by tier-catalog-source)"
+            );
             continue;
         }
-        assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
+        assert!(
+            ids.iter().all(|id| after.contains(id)),
+            "version {n}: {table} lost a row id"
+        );
     }
     let recorded: Vec<(String, String, i64, i64)> = conn
         .prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")
@@ -1795,15 +2529,33 @@ fn converts_keeping_every_row_and_id(n: usize) {
         .unwrap()
         .collect::<Result<_>>()
         .unwrap();
-    let legacy = LEGACY.iter().enumerate().map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1));
-    let named = NAMED
-        .iter()
-        .enumerate()
-        .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
+    let legacy = LEGACY.iter().enumerate().map(|(i, l)| {
+        (
+            l.name.to_owned(),
+            l.compat.as_str().to_owned(),
+            i as i64 + 1,
+            1,
+        )
+    });
+    let named = NAMED.iter().enumerate().map(|(i, m)| {
+        (
+            m.name.to_owned(),
+            m.compat.as_str().to_owned(),
+            (LEGACY.len() + i) as i64 + 1,
+            0,
+        )
+    });
     let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
-    assert_eq!(recorded, expected, "version {n}: one converted row per legacy migration, then the named ones as not converted");
+    assert_eq!(
+        recorded, expected,
+        "version {n}: one converted row per legacy migration, then the named ones as not converted"
+    );
     // The pinned hash is a fresh store's (`a_fresh_store_has_the_pinned_canonical_hash`).
-    assert_eq!(canonical_hash(&conn).unwrap(), SCHEMA_HASH, "version {n}: the canonical hash of a fresh store");
+    assert_eq!(
+        canonical_hash(&conn).unwrap(),
+        SCHEMA_HASH,
+        "version {n}: the canonical hash of a fresh store"
+    );
 
     if n == LEGACY.len() {
         // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
@@ -1819,11 +2571,24 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
+        assert_eq!(
+            rows_after.remove("slack_reactions").map(|r| r.len()),
+            Some(0)
+        ); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
-        let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
-        assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
+        assert_eq!(
+            rows_after.remove("history_tables").map(|r| r.len()),
+            Some(25)
+        ); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools` and `job_addenda`
+        let (txns_before, txns_after) = (
+            rows_before.remove("txns").unwrap(),
+            rows_after.remove("txns").unwrap(),
+        );
+        assert_eq!(
+            txns_after[..txns_before.len()],
+            txns_before[..],
+            "the migrating transaction only adds a txns row"
+        );
         assert_eq!(txns_after.len(), txns_before.len() + 1);
         // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
         for row in rows_before.get_mut("jobs").unwrap() {
@@ -1832,9 +2597,16 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
         // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
         // (`delete-tombstone`'s `deleted_at` comes after `owner`, so the column is found by its position.)
-        let owner = table_columns(&conn, "contexts").unwrap().iter().position(|(c, _)| c == "owner").unwrap();
+        let owner = table_columns(&conn, "contexts")
+            .unwrap()
+            .iter()
+            .position(|(c, _)| c == "owner")
+            .unwrap();
         assert_eq!(
-            rows_after["contexts"].iter().map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().remove(owner)).collect::<Vec<_>>(),
+            rows_after["contexts"]
+                .iter()
+                .map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().remove(owner))
+                .collect::<Vec<_>>(),
             [Value::from("acme")]
         );
         // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
@@ -1850,6 +2622,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
         // `job-tenancy` made `job_pools`, and it is empty.
         assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
+        // `20261103T0400-job-addenda` made `job_addenda`, and it is empty.
+        assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -1859,13 +2633,29 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
         // `tier-catalog-source` rebuilds tier_catalog EMPTY (a cache, recomputed by the next `cpd tiers`): the one table conversion drops.
         assert_eq!(rows_after.remove("tier_catalog"), Some(Vec::new()));
-        assert!(rows_before.remove("tier_catalog").is_some_and(|r| !r.is_empty()), "the legacy tier_catalog row was seeded");
-        let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
+        assert!(
+            rows_before
+                .remove("tier_catalog")
+                .is_some_and(|r| !r.is_empty()),
+            "the legacy tier_catalog row was seeded"
+        );
+        let (history_before, history_after) = (
+            rows_before.remove("history").unwrap(),
+            rows_after.remove("history").unwrap(),
+        );
         assert_eq!(history_after[..history_before.len()], history_before[..]);
-        assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
+        assert!(
+            history_after[history_before.len()..]
+                .iter()
+                .all(|r| r.contains("\"update\"")),
+            "{history_after:?}"
+        );
         // The columns the other additive named migrations add come last and are null in every converted row.
         for (table, rows) in rows_after.iter_mut() {
-            let width = rows_before.get(table).and_then(|r| r.first()).map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
+            let width = rows_before
+                .get(table)
+                .and_then(|r| r.first())
+                .map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
             for row in rows.iter_mut() {
                 let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
                 let width = width.unwrap_or(values.len());
@@ -1886,7 +2676,11 @@ fn converts_keeping_every_row_and_id(n: usize) {
     let snapshot = dump(&conn);
     drop(conn);
     drop(Store::open(&home, 5000).unwrap());
-    assert_eq!(dump(&Connection::open(home.db()).unwrap()), snapshot, "version {n}: the second open writes nothing");
+    assert_eq!(
+        dump(&Connection::open(home.db()).unwrap()),
+        snapshot,
+        "version {n}: the second open writes nothing"
+    );
 }
 
 macro_rules! conversion_tests {
@@ -1939,15 +2733,27 @@ fn a_fresh_store_records_its_legacy_migrations_as_not_converted() {
         .unwrap();
     let all = LEGACY.len() + NAMED.len();
     assert_eq!(converted, vec![0; all]);
-    let txns: i64 = conn.query_row("SELECT count(*) FROM schema_migrations s JOIN txns t ON t.id = s.txn", [], |r| r.get(0)).unwrap();
-    assert_eq!(txns, all as i64, "every row names the migrating transaction");
+    let txns: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM schema_migrations s JOIN txns t ON t.id = s.txn",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        txns, all as i64,
+        "every row names the migrating transaction"
+    );
 }
 
 #[test]
 fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
     let stores = legacy_stores(LEGACY.len());
     for n in [1, 3, LEGACY.len()] {
-        for tamper in ["DROP TRIGGER contexts_no_delete", "CREATE INDEX stray ON contexts(title)"] {
+        for tamper in [
+            "DROP TRIGGER contexts_no_delete",
+            "CREATE INDEX stray ON contexts(title)",
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let home = home(&dir);
             write_store(&home, &stores[n - 1]);
@@ -1956,14 +2762,26 @@ fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
             let before = (dump(&conn), legacy_schema_hash(&conn).unwrap());
             drop(conn);
 
-            let err = Store::open(&home, 5000).err().unwrap_or_else(|| panic!("version {n}, {tamper}: opened"));
-            assert_eq!(err.code(), ErrorCode::StoreTampered, "version {n}, {tamper}: {err:?}");
+            let err = Store::open(&home, 5000)
+                .err()
+                .unwrap_or_else(|| panic!("version {n}, {tamper}: opened"));
+            assert_eq!(
+                err.code(),
+                ErrorCode::StoreTampered,
+                "version {n}, {tamper}: {err:?}"
+            );
             assert_eq!(err.details()["version"], n);
 
             let conn = connection(&home.db());
-            let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+            let version: i64 = conn
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
             assert_eq!(version, n as i64);
-            assert_eq!((dump(&conn), legacy_schema_hash(&conn).unwrap()), before, "version {n}, {tamper}: changed");
+            assert_eq!(
+                (dump(&conn), legacy_schema_hash(&conn).unwrap()),
+                before,
+                "version {n}, {tamper}: changed"
+            );
         }
     }
 }
@@ -1972,7 +2790,10 @@ fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
 
 #[test]
 fn normalizing_deletes_comments_and_collapses_whitespace_outside_quoted_runs() {
-    assert_eq!(normalize("  a  /* x */ b -- c\n d 'x  --y' [a  b] \"q\"\"  r\" `s  t`  "), "a b d 'x  --y' [a  b] \"q\"\"  r\" `s  t`");
+    assert_eq!(
+        normalize("  a  /* x */ b -- c\n d 'x  --y' [a  b] \"q\"\"  r\" `s  t`  "),
+        "a b d 'x  --y' [a  b] \"q\"\"  r\" `s  t`"
+    );
     assert_eq!(normalize("a/**/b"), "a b");
     assert_eq!(normalize(""), "");
 }
@@ -1986,8 +2807,14 @@ fn a_table_is_split_into_sorted_columns_ordered_constraints_and_options() {
     .unwrap();
     let keys: Vec<&str> = parts.columns.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(keys, ["a c", "b", "check", "zed"]);
-    assert_eq!(parts.columns[1].1, "b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b'))");
-    assert_eq!(parts.constraints, ["CONSTRAINT k UNIQUE (b, \"Zed\")", "check (length(b) > 0)"]);
+    assert_eq!(
+        parts.columns[1].1,
+        "b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b'))"
+    );
+    assert_eq!(
+        parts.constraints,
+        ["CONSTRAINT k UNIQUE (b, \"Zed\")", "check (length(b) > 0)"]
+    );
     assert_eq!(parts.options, "STRICT, WITHOUT ROWID");
 }
 
@@ -1995,13 +2822,19 @@ fn a_table_is_split_into_sorted_columns_ordered_constraints_and_options() {
 fn add_column_in_either_order_gives_one_canonical_table() {
     let canonical = |statements: &[&str]| {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, CHECK (a <> 'x')) STRICT;").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, CHECK (a <> 'x')) STRICT;",
+        )
+        .unwrap();
         for statement in statements {
             conn.execute_batch(statement).unwrap();
         }
         canonical_entries(&conn).unwrap()
     };
-    let (b, c) = ("ALTER TABLE t ADD COLUMN b TEXT", "ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT ''");
+    let (b, c) = (
+        "ALTER TABLE t ADD COLUMN b TEXT",
+        "ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT ''",
+    );
     assert_eq!(canonical(&[b, c]), canonical(&[c, b]));
     assert_ne!(canonical(&[b]), canonical(&[c]));
 }
@@ -2016,18 +2849,33 @@ fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
     let fresh = std::fs::read(template.db()).unwrap();
     for (tamper, trigger) in [
         ("DROP TRIGGER plans_no_delete", Some("plans_no_delete")),
-        ("DROP TRIGGER plans_hist_upd; CREATE TRIGGER plans_hist_upd AFTER UPDATE ON plans BEGIN SELECT 1; END", Some("plans_hist_upd")),
+        (
+            "DROP TRIGGER plans_hist_upd; CREATE TRIGGER plans_hist_upd AFTER UPDATE ON plans BEGIN SELECT 1; END",
+            Some("plans_hist_upd"),
+        ),
         ("DROP TRIGGER plans_phase", None),
         ("CREATE INDEX stray ON contexts (title)", None),
-        ("CREATE TRIGGER stray AFTER INSERT ON contexts BEGIN SELECT 1; END", None),
+        (
+            "CREATE TRIGGER stray AFTER INSERT ON contexts BEGIN SELECT 1; END",
+            None,
+        ),
     ] {
-        let home = CpdHome::resolve(Some(dir.path().join(format!("{}", tamper.len())).into()), None).unwrap();
+        let home = CpdHome::resolve(
+            Some(dir.path().join(format!("{}", tamper.len())).into()),
+            None,
+        )
+        .unwrap();
         write_store(&home, &fresh);
         connection(&home.db()).execute_batch(tamper).unwrap();
         let store = Store::open(&home, 5000).unwrap();
-        let mismatch = store.schema_mismatch().unwrap_or_else(|| panic!("{tamper}: no mismatch"));
+        let mismatch = store
+            .schema_mismatch()
+            .unwrap_or_else(|| panic!("{tamper}: no mismatch"));
         assert_eq!(mismatch.object.as_deref(), trigger, "{tamper}");
-        let err = { let mut store = store; store.write("test", |_| Ok(())).unwrap_err() };
+        let err = {
+            let mut store = store;
+            store.write("test", |_| Ok(())).unwrap_err()
+        };
         assert_eq!(err.code(), ErrorCode::StoreTampered, "{tamper}");
     }
 }
@@ -2038,13 +2886,23 @@ fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
 /// earlier named migration applied, `_hist_upd` with the whole row, and one
 /// such `update` row in `history`.
 fn store_before_history_changed(home: &CpdHome) -> Vec<Named> {
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-history-changed")).collect();
-    assert!(earlier.len() < NAMED.len(), "history-changed is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-history-changed"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "history-changed is a built-in migration"
+    );
     drop(crate::store::tests::open_named(home, &earlier).unwrap());
     let conn = connection(&home.db());
     for (table, no_delete) in history_tables(&conn).unwrap() {
-        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole, false).unwrap().remove(1);
-        conn.execute_batch(&format!("DROP TRIGGER {name}; {sql};")).unwrap();
+        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole, false)
+            .unwrap()
+            .remove(1);
+        conn.execute_batch(&format!("DROP TRIGGER {name}; {sql};"))
+            .unwrap();
     }
     conn.execute_batch(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
@@ -2059,28 +2917,56 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     let (_dir, home) = crate::store::tests::tmp_home();
     let earlier = store_before_history_changed(&home);
     let history = |conn: &Connection| -> Vec<(String, Option<String>, Option<String>)> {
-        let mut stmt = conn.prepare("SELECT op, before, after FROM history WHERE tbl = 'contexts' ORDER BY id").unwrap();
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<Result<_>>().unwrap()
+        let mut stmt = conn
+            .prepare("SELECT op, before, after FROM history WHERE tbl = 'contexts' ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap()
     };
     let old = history(&connection(&home.db()));
     let whole: Value = serde_json::from_str(old[1].2.as_deref().unwrap()).unwrap();
-    assert_eq!((old[1].0.as_str(), whole["title"].clone(), whole["created_on"].clone()), ("update", json!("Ctx 2"), json!("m")));
+    assert_eq!(
+        (
+            old[1].0.as_str(),
+            whole["title"].clone(),
+            whole["created_on"].clone()
+        ),
+        ("update", json!("Ctx 2"), json!("m"))
+    );
 
     // This binary applies `history-changed`: the schema check passes and no row is rewritten.
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-history-changed")));
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-history-changed"))
+    );
     assert_eq!(history(&connection(&home.db())), old);
     // The tamper report reads both shapes alike (§4.3): nothing to report.
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 
     // A new update holds the key and the changed column; applied to the whole row it replays.
-    write(&mut store, "UPDATE contexts SET title = 'Ctx 3' WHERE id = 'ctx'").unwrap();
+    write(
+        &mut store,
+        "UPDATE contexts SET title = 'Ctx 3' WHERE id = 'ctx'",
+    )
+    .unwrap();
     let new = history(&connection(&home.db()));
     assert_eq!(new.len(), 3);
-    let (before, after): (Value, Value) =
-        (serde_json::from_str(new[2].1.as_deref().unwrap()).unwrap(), serde_json::from_str(new[2].2.as_deref().unwrap()).unwrap());
-    assert_eq!((before, after.clone()), (json!({"id": "ctx", "title": "Ctx 2"}), json!({"id": "ctx", "title": "Ctx 3"})));
+    let (before, after): (Value, Value) = (
+        serde_json::from_str(new[2].1.as_deref().unwrap()).unwrap(),
+        serde_json::from_str(new[2].2.as_deref().unwrap()).unwrap(),
+    );
+    assert_eq!(
+        (before, after.clone()),
+        (
+            json!({"id": "ctx", "title": "Ctx 2"}),
+            json!({"id": "ctx", "title": "Ctx 3"})
+        )
+    );
     let mut replayed = whole.as_object().unwrap().clone();
     replayed.extend(after.as_object().unwrap().clone());
     // `policy-keys`, which sorts after `history-changed`, added `contexts.owner`: the old whole row predates it,
@@ -2091,7 +2977,13 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     let conn = connection(&home.db());
     let columns = table_columns(&conn, "contexts").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
-    let row: String = conn.query_row(&format!("SELECT json_object({}) FROM contexts", pairs.join(", ")), [], |r| r.get(0)).unwrap();
+    let row: String = conn
+        .query_row(
+            &format!("SELECT json_object({}) FROM contexts", pairs.join(", ")),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     let row: Value = serde_json::from_str(&row).unwrap();
     assert_eq!(Value::Object(replayed), row);
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
@@ -2115,16 +3007,26 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
             Ok((r.get(0)?, r.get(1)?))
         })
         .unwrap();
-    let seq: i64 = connection(&home.db()).query_row("SELECT seq FROM jobs WHERE key = 'j'", [], |r| r.get(0)).unwrap();
+    let seq: i64 = connection(&home.db())
+        .query_row("SELECT seq FROM jobs WHERE key = 'j'", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(
-        (serde_json::from_str::<Value>(&before).unwrap(), serde_json::from_str::<Value>(&after).unwrap()),
-        (json!({"seq": seq, "urgent": 0}), json!({"seq": seq, "urgent": 1}))
+        (
+            serde_json::from_str::<Value>(&before).unwrap(),
+            serde_json::from_str::<Value>(&after).unwrap()
+        ),
+        (
+            json!({"seq": seq, "urgent": 0}),
+            json!({"seq": seq, "urgent": 1})
+        )
     );
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     drop(store);
 
     // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
-    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    let err = crate::store::tests::open_named(&home, &earlier)
+        .err()
+        .unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
@@ -2134,15 +3036,30 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
 fn session_rows(conn: &Connection) -> Vec<Value> {
     let columns = table_columns(conn, "sessions").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
-    let mut stmt = conn.prepare(&format!("SELECT json_object({}) FROM sessions ORDER BY id", pairs.join(", "))).unwrap();
-    stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| serde_json::from_str(&r.unwrap()).unwrap()).collect()
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT json_object({}) FROM sessions ORDER BY id",
+            pairs.join(", ")
+        ))
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| serde_json::from_str(&r.unwrap()).unwrap())
+        .collect()
 }
 
 #[test]
 fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     let (_dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-waiting-state")).collect();
-    assert!(earlier.len() < NAMED.len(), "waiting-state is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-waiting-state"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "waiting-state is a built-in migration"
+    );
     drop(crate::store::tests::open_named(&home, &earlier).unwrap());
 
     // A Manager, a Plan's Lead, a fork, a Worker and a stopped Lead with no pane, in every state this schema has, each
@@ -2168,32 +3085,80 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     )
     .unwrap();
     let before = session_rows(&conn);
-    let history: i64 = conn.query_row("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap();
+    let history: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM history WHERE tbl = 'sessions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!((before.len(), history), (5, 5));
     drop(conn);
 
     // This binary rebuilds `sessions`: every row and column as it was, the schema check passes, and the copy writes no history.
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-waiting-state"))
+    );
     let conn = connection(&home.db());
     // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, `switch_failed` (`switch-failed`), null, and `working_pr` (`session-working-pr`), null, and `runner` (`session-runner`), 'pi'.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
-            assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
-            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
-            assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
-            assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
-            assert_eq!(row.as_object_mut().unwrap().remove("runner"), Some(Value::from("pi")));
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("asleep_at"),
+                Some(Value::Null)
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("by_user"),
+                Some(Value::from(0))
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("switch_failed"),
+                Some(Value::Null)
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("working_pr"),
+                Some(Value::Null)
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("runner"),
+                Some(Value::from("pi"))
+            );
             row
         })
         .collect();
     assert_eq!(after, before);
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
-    let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
-    for expected in ["sessions_plan", "sessions_one_manager", "sessions_live", "sessions_hist_ins", "sessions_hist_upd", "sessions_no_delete"] {
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT count(*) FROM history WHERE tbl = 'sessions'",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        history
+    );
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+            .get(0))
+            .unwrap(),
+        0
+    );
+    let objects = names(
+        &conn,
+        "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    );
+    for expected in [
+        "sessions_plan",
+        "sessions_one_manager",
+        "sessions_live",
+        "sessions_hist_ins",
+        "sessions_hist_upd",
+        "sessions_no_delete",
+    ] {
         assert!(objects.contains(expected), "{expected} in {objects:?}");
     }
     drop(conn);
@@ -2208,13 +3173,18 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
         "UPDATE sessions SET state = 'asleep', state_label = NULL WHERE id = 'fork'",
     ] {
         let message = sqlite_message(&refused(&mut store, bad));
-        assert!(message.starts_with("CHECK constraint failed"), "{bad}: {message}");
+        assert!(
+            message.starts_with("CHECK constraint failed"),
+            "{bad}: {message}"
+        );
     }
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     drop(store);
 
     // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
-    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    let err = crate::store::tests::open_named(&home, &earlier)
+        .err()
+        .unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
@@ -2223,8 +3193,15 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
 #[test]
 fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_200() {
     let (_dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-session-title-length")).collect();
-    assert!(earlier.len() < NAMED.len(), "session-title-length is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-session-title-length"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "session-title-length is a built-in migration"
+    );
     drop(crate::store::tests::open_named(&home, &earlier).unwrap());
 
     // A Manager with a title of 60 characters, a Lead with a short one and a Lead with none, one asleep.
@@ -2242,53 +3219,121 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
     ))
     .unwrap();
     let before = session_rows(&conn);
-    let history: i64 = conn.query_row("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap();
+    let history: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM history WHERE tbl = 'sessions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!((before.len(), history), (3, 3));
     drop(conn);
 
     // The rebuild keeps every row and column and writes no history; the schema check passes and the triggers are back.
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-session-title-length"))
+    );
     let conn = connection(&home.db());
     // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null; `working_pr` (`session-working-pr`), null; `runner` (`session-runner`), 'pi'.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
-            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
-            assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
-            assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
-            assert_eq!(row.as_object_mut().unwrap().remove("runner"), Some(Value::from("pi")));
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("by_user"),
+                Some(Value::from(0))
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("switch_failed"),
+                Some(Value::Null)
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("working_pr"),
+                Some(Value::Null)
+            );
+            assert_eq!(
+                row.as_object_mut().unwrap().remove("runner"),
+                Some(Value::from("pi"))
+            );
             row
         })
         .collect();
     assert_eq!(after, before);
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
-    let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
-    for expected in ["sessions_plan", "sessions_one_manager", "sessions_live", "sessions_hist_ins", "sessions_hist_upd", "sessions_no_delete"] {
+    assert_eq!(
+        conn.query_row::<i64, _, _>(
+            "SELECT count(*) FROM history WHERE tbl = 'sessions'",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        history
+    );
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+            .get(0))
+            .unwrap(),
+        0
+    );
+    let objects = names(
+        &conn,
+        "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    );
+    for expected in [
+        "sessions_plan",
+        "sessions_one_manager",
+        "sessions_live",
+        "sessions_hist_ins",
+        "sessions_hist_upd",
+        "sessions_no_delete",
+    ] {
         assert!(objects.contains(expected), "{expected} in {objects:?}");
     }
     drop(conn);
 
     // A title is 1–200 characters now; 201 and the empty one are refused.
-    write(&mut store, &format!("UPDATE sessions SET title = '{}' WHERE id = 'lead'", "t".repeat(200))).unwrap();
-    for bad in [format!("UPDATE sessions SET title = '{}' WHERE id = 'lead'", "t".repeat(201)), "UPDATE sessions SET title = '' WHERE id = 'lead'".to_owned()] {
+    write(
+        &mut store,
+        &format!(
+            "UPDATE sessions SET title = '{}' WHERE id = 'lead'",
+            "t".repeat(200)
+        ),
+    )
+    .unwrap();
+    for bad in [
+        format!(
+            "UPDATE sessions SET title = '{}' WHERE id = 'lead'",
+            "t".repeat(201)
+        ),
+        "UPDATE sessions SET title = '' WHERE id = 'lead'".to_owned(),
+    ] {
         let message = sqlite_message(&refused(&mut store, &bad));
-        assert!(message.starts_with("CHECK constraint failed"), "{bad}: {message}");
+        assert!(
+            message.starts_with("CHECK constraint failed"),
+            "{bad}: {message}"
+        );
     }
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     drop(store);
 
     // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
-    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    let err = crate::store::tests::open_named(&home, &earlier)
+        .err()
+        .unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
 // ---------- migration 6: pull_requests and prs.pull_request, on a version 5 database with polled Workflows ----------
 
 fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
-    conn.prepare(sql).unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    conn.prepare(sql)
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
 }
 
 /// A database at version 5, holding
@@ -2344,6 +3389,9 @@ fn version_5_four_prs(home: &CpdHome) {
     database_at(home, 5, &sql);
 }
 
+/// A `prs` row: plan, status, pull_request, pr_number, merged_at.
+type PrsRow = (String, String, Option<i64>, Option<i64>, Option<String>);
+
 #[test]
 fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let dir = tempfile::tempdir().unwrap();
@@ -2351,19 +3399,40 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     version_5_four_prs(&home);
     let store = Store::open(&home, 5000).unwrap();
     // Its schema is exactly that of a fresh database at version 6.
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     drop(store);
     let conn = Connection::open(home.db()).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, VERSION);
-    let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    let violations: i64 = conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(violations, 0);
 
     // One row per Workflow with a number, in Plan and key order; the title is the polled one, else the Plan's.
     let row = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
-        Ok(serde_json::json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
-                  r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?,
-                  r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?]))
+        Ok(serde_json::json!([
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, String>(6)?,
+            r.get::<_, String>(7)?,
+            r.get::<_, String>(8)?,
+            r.get::<_, String>(9)?,
+            r.get::<_, Option<String>>(10)?,
+            r.get::<_, String>(11)?
+        ]))
     };
     let rows: Vec<Value> = conn
         .prepare("SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id")
@@ -2375,12 +3444,48 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     assert_eq!(
         rows,
         vec![
-            serde_json::json!([1, "acme/docs", 9, "https://github.com/acme/docs/pull/9", "Plan mg", 0, "merged", "none", "none",
-                   "2026-01-05T00:00:02.000Z", "2026-01-08T00:00:00.000Z", "2026-01-05T00:00:02.000Z"]),
-            serde_json::json!([2, "acme/api", 7, "https://github.com/acme/api/pull/7", "Add api", 0, "open", "approved", "passed",
-                   "2026-01-05T00:00:00.000Z", null, "2026-01-05T00:00:00.000Z"]),
-            serde_json::json!([3, "acme/web", 8, "https://github.com/acme/web/pull/8", "Plan op2", 0, "open", "none", "none",
-                   "2026-01-05T00:00:01.000Z", null, "2026-01-05T00:00:01.000Z"]),
+            serde_json::json!([
+                1,
+                "acme/docs",
+                9,
+                "https://github.com/acme/docs/pull/9",
+                "Plan mg",
+                0,
+                "merged",
+                "none",
+                "none",
+                "2026-01-05T00:00:02.000Z",
+                "2026-01-08T00:00:00.000Z",
+                "2026-01-05T00:00:02.000Z"
+            ]),
+            serde_json::json!([
+                2,
+                "acme/api",
+                7,
+                "https://github.com/acme/api/pull/7",
+                "Add api",
+                0,
+                "open",
+                "approved",
+                "passed",
+                "2026-01-05T00:00:00.000Z",
+                null,
+                "2026-01-05T00:00:00.000Z"
+            ]),
+            serde_json::json!([
+                3,
+                "acme/web",
+                8,
+                "https://github.com/acme/web/pull/8",
+                "Plan op2",
+                0,
+                "open",
+                "none",
+                "none",
+                "2026-01-05T00:00:01.000Z",
+                null,
+                "2026-01-05T00:00:01.000Z"
+            ]),
         ]
     );
 
@@ -2388,7 +3493,9 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     let workflows: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
         .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM workflows ORDER BY plan")
         .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .unwrap()
         .map(Result::unwrap)
         .collect();
@@ -2396,7 +3503,13 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     assert_eq!(
         workflows,
         vec![
-            ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
+            (
+                "mg".into(),
+                "merged".into(),
+                Some(1),
+                Some(9),
+                some("2026-01-08T00:00:00.000Z")
+            ),
             ("op1".into(), "open".into(), Some(2), Some(7), None),
             ("op2".into(), "open".into(), Some(3), Some(8), None),
             ("wt".into(), "waiting".into(), None, None, None),
@@ -2426,7 +3539,6 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     assert_eq!(inserted, ["[1]", "[2]", "[3]"]);
 }
 
-
 #[test]
 fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history_row() {
     let dir = tempfile::tempdir().unwrap();
@@ -2446,7 +3558,15 @@ fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history
          VALUES ('acme/other', 3, 'https://github.com/acme/other/pull/3', 'Other', 1, 'open', 'none', 'pending', 't', 't')",
     )
     .unwrap();
-    let id: i64 = store.read(|c| Ok(c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| r.get(0))?)).unwrap();
+    let id: i64 = store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap();
     write(&mut store, "DELETE FROM pull_requests WHERE number = 3").unwrap();
     let (op, pk, before, after): (String, String, String, Option<String>) = store
         .read(|c| {
@@ -2457,10 +3577,28 @@ fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history
             )?)
         })
         .unwrap();
-    assert_eq!((op.as_str(), pk, after), ("delete", format!("[{id}]"), None));
+    assert_eq!(
+        (op.as_str(), pk, after),
+        ("delete", format!("[{id}]"), None)
+    );
     let before: Value = serde_json::from_str(&before).unwrap();
-    assert_eq!((&before["repo"], &before["number"], &before["draft"], &before["checks"]), (&serde_json::json!("acme/other"), &serde_json::json!(3), &serde_json::json!(1), &serde_json::json!("pending")));
-    let left: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(
+        (
+            &before["repo"],
+            &before["number"],
+            &before["draft"],
+            &before["checks"]
+        ),
+        (
+            &serde_json::json!("acme/other"),
+            &serde_json::json!(3),
+            &serde_json::json!(1),
+            &serde_json::json!("pending")
+        )
+    );
+    let left: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(left, 3);
 }
 
@@ -2513,17 +3651,31 @@ fn a_version_7_database_migrates_the_phase_pr_to_deploy_everywhere_and_keeps_the
         let conn = connection(&home.db());
         conn.prepare("SELECT id, kind, plan, text FROM events ORDER BY id")
             .unwrap()
-            .query_map([], |r| Ok(serde_json::json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?])))
+            .query_map([], |r| {
+                Ok(serde_json::json!([
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?
+                ]))
+            })
             .unwrap()
             .collect::<Result<Vec<_>>>()
             .unwrap()
     };
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     assert_eq!(
-        rows(&mut store, "SELECT id, phase FROM plans ORDER BY created_at, id"),
+        rows(
+            &mut store,
+            "SELECT id, phase FROM plans ORDER BY created_at, id"
+        ),
         vec![
             serde_json::json!(["di", "dispatch"]),
             serde_json::json!(["dn", "done"]),
@@ -2533,7 +3685,10 @@ fn a_version_7_database_migrates_the_phase_pr_to_deploy_everywhere_and_keeps_the
         ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT plan, json_extract(data, '$.from'), json_extract(data, '$.to') FROM events ORDER BY id"),
+        rows(
+            &mut store,
+            "SELECT plan, json_extract(data, '$.from'), json_extract(data, '$.to') FROM events ORDER BY id"
+        ),
         vec![
             serde_json::json!(["di", "plan", "dispatch"]),
             serde_json::json!(["pr", "dispatch", "deploy"]),
@@ -2542,12 +3697,24 @@ fn a_version_7_database_migrates_the_phase_pr_to_deploy_everywhere_and_keeps_the
         ]
     );
     // Only `from` and `to` change: the rest of `data` and the text stay.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE json_extract(data, '$.prs[0].key') = 'pr'"), 4);
     assert_eq!(
-        rows(&mut store, "SELECT id, kind, plan, text FROM events ORDER BY id"),
+        count(
+            &mut store,
+            "SELECT count(*) FROM events WHERE json_extract(data, '$.prs[0].key') = 'pr'"
+        ),
+        4
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT id, kind, plan, text FROM events ORDER BY id"
+        ),
         events_before
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     // The guards are back; the new phase graph is in force.
     assert_eq!(
         sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")),
@@ -2557,13 +3724,23 @@ fn a_version_7_database_migrates_the_phase_pr_to_deploy_everywhere_and_keeps_the
         sqlite_message(&refused(&mut store, "DELETE FROM events")),
         "append_only: events"
     );
-    write(&mut store, "UPDATE plans SET phase = 'done', done_at = '2026-01-09T00:00:00.000Z' WHERE id = 'pr'").unwrap();
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'done', done_at = '2026-01-09T00:00:00.000Z' WHERE id = 'pr'",
+    )
+    .unwrap();
     assert_eq!(
-        sqlite_message(&refused(&mut store, "UPDATE plans SET phase = 'pr' WHERE id = 'di'")),
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE plans SET phase = 'pr' WHERE id = 'di'"
+        )),
         "illegal_transition"
     );
     assert_eq!(
-        sqlite_message(&refused(&mut store, "UPDATE plans SET phase = 'deploy' WHERE id = 'gr'")),
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE plans SET phase = 'deploy' WHERE id = 'gr'"
+        )),
         "illegal_transition"
     );
 }
@@ -2598,16 +3775,32 @@ fn a_version_8_database_migrates_to_9_keeping_every_event_and_accepts_session_me
     assert_eq!(before.len(), 41);
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    let after = rows(&mut store, "SELECT id, txn, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id");
+    let after = rows(
+        &mut store,
+        "SELECT id, txn, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id",
+    );
     assert_eq!(after.len(), before.len());
     for (i, row) in after.iter().enumerate() {
-        assert_eq!((row[0].as_i64(), row[1].as_i64()), (Some(i as i64 + 1), Some(1)));
+        assert_eq!(
+            (row[0].as_i64(), row[1].as_i64()),
+            (Some(i as i64 + 1), Some(1))
+        );
         assert_eq!(row[9], format!("text of {}", row[3].as_str().unwrap()));
     }
-    assert_eq!((after[0][3].as_str(), after[40][3].as_str()), (Some("context-created"), Some("error")));
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert_eq!(
+        (after[0][3].as_str(), after[40][3].as_str()),
+        (Some("context-created"), Some("error"))
+    );
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     // The sequence never goes back, and the new kind is accepted; an unknown one is not.
     write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-message', 'x', '{\"from\":null,\"text\":\"hi\"}')")
         .unwrap();
@@ -2615,11 +3808,26 @@ fn a_version_8_database_migrates_to_9_keeping_every_event_and_accepts_session_me
     assert!(sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-mail', 'x', '{}')"))
         .contains("FOREIGN KEY constraint failed"), "after kind-tables a kind is a foreign key");
     // The indexes and guards are back.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_schema WHERE tbl_name = 'events' AND type = 'index' AND name LIKE 'events_%'"), 3);
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")), "append_only: events");
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events")), "append_only: events");
     assert_eq!(
-        sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (1, 't', 'error', 'x', '{}')")),
+        count(
+            &mut store,
+            "SELECT count(*) FROM sqlite_schema WHERE tbl_name = 'events' AND type = 'index' AND name LIKE 'events_%'"
+        ),
+        3
+    );
+    assert_eq!(
+        sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")),
+        "append_only: events"
+    );
+    assert_eq!(
+        sqlite_message(&refused(&mut store, "DELETE FROM events")),
+        "append_only: events"
+    );
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "INSERT INTO events (txn, at, kind, text, data) VALUES (1, 't', 'error', 'x', '{}')"
+        )),
         "events.txn must be cpd_txn()"
     );
 }
@@ -2664,44 +3872,107 @@ fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_
         let conn = connection(&home.db());
         let mut stmt = conn.prepare(sql).unwrap();
         let n = stmt.column_count();
-        stmt.query_map([], |r| (0..n).map(|i| r.get::<_, rusqlite::types::Value>(i).map(|v| format!("{v:?}"))).collect())
-            .unwrap()
-            .collect::<Result<_>>()
-            .unwrap()
+        stmt.query_map([], |r| {
+            (0..n)
+                .map(|i| {
+                    r.get::<_, rusqlite::types::Value>(i)
+                        .map(|v| format!("{v:?}"))
+                })
+                .collect()
+        })
+        .unwrap()
+        .collect::<Result<_>>()
+        .unwrap()
     };
     let (records_before, events_before) = (dump(records), dump(events));
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
     drop(store);
     assert_eq!(dump(records), records_before);
     assert_eq!(dump(events), events_before);
     let mut store = Store::open(&home, 5000).unwrap();
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')"), 0);
-    assert_eq!(rows(&mut store, "SELECT id, title, archived_at FROM contexts ORDER BY id").len(), 2);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')"
+        ),
+        0
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT id, title, archived_at FROM contexts ORDER BY id"
+        )
+        .len(),
+        2
+    );
 
     // The grounded Lead is archived, once, with its Event; the Plan's Lead is not.
     assert_eq!(
-        rows(&mut store, "SELECT id, role, plan, archived_at IS NOT NULL, tmux_pane FROM sessions ORDER BY id"),
-        vec![serde_json::json!(["l-a", "lead", "aa", 0, Value::Null]), serde_json::json!(["l-g", "lead", Value::Null, 1, "%3"])]
+        rows(
+            &mut store,
+            "SELECT id, role, plan, archived_at IS NOT NULL, tmux_pane FROM sessions ORDER BY id"
+        ),
+        vec![
+            serde_json::json!(["l-a", "lead", "aa", 0, Value::Null]),
+            serde_json::json!(["l-g", "lead", Value::Null, 1, "%3"])
+        ]
     );
     assert_eq!(
-        rows(&mut store, "SELECT kind, context, plan, session, text, data FROM events WHERE kind = 'session-archived'"),
-        vec![serde_json::json!(["session-archived", "ctx", Value::Null, "l-g", "Session grounded archived.", r#"{"archived":true}"#])]
+        rows(
+            &mut store,
+            "SELECT kind, context, plan, session, text, data FROM events WHERE kind = 'session-archived'"
+        ),
+        vec![serde_json::json!([
+            "session-archived",
+            "ctx",
+            Value::Null,
+            "l-g",
+            "Session grounded archived.",
+            r#"{"archived":true}"#
+        ])]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'update'"), 1);
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'update'"
+        ),
+        1
+    );
 
     // A `brief` record needs its Plan reference; positions continue after the old ones.
     let brief = |plan: &str| {
-        format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm1-b1', 'brief', 't', 'm1', 'B', {plan})")
+        format!(
+            "INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm1-b1', 'brief', 't', 'm1', 'B', {plan})"
+        )
     };
-    assert!(sqlite_message(&refused(&mut store, &brief("NULL, NULL"))).contains("CHECK constraint failed"));
+    assert!(
+        sqlite_message(&refused(&mut store, &brief("NULL, NULL")))
+            .contains("CHECK constraint failed")
+    );
     write(&mut store, &brief("'aa', 'm1'")).unwrap();
-    assert_eq!(count(&mut store, "SELECT seq FROM context_records WHERE id = 'm1-b1'"), 6);
     assert_eq!(
-        sqlite_message(&refused(&mut store, "UPDATE context_records SET text = 'x'")),
+        count(
+            &mut store,
+            "SELECT seq FROM context_records WHERE id = 'm1-b1'"
+        ),
+        6
+    );
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE context_records SET text = 'x'"
+        )),
         "append_only: context_records"
     );
 
@@ -2714,10 +3985,20 @@ fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_
     };
     write(&mut store, &manager("m-1", "ctx", "NULL")).unwrap();
     let second = refused(&mut store, &manager("m-2", "ctx", "NULL"));
-    assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
-    assert!(sqlite_message(&refused(&mut store, &manager("m-3", "two", "'aa'"))).contains("CHECK constraint failed"));
+    assert!(
+        sqlite_message(&second).contains("UNIQUE constraint failed"),
+        "{second:?}"
+    );
+    assert!(
+        sqlite_message(&refused(&mut store, &manager("m-3", "two", "'aa'")))
+            .contains("CHECK constraint failed")
+    );
     write(&mut store, &manager("m-4", "two", "NULL")).unwrap();
-    write(&mut store, "UPDATE sessions SET archived_at = 't' WHERE id = 'm-1'").unwrap();
+    write(
+        &mut store,
+        "UPDATE sessions SET archived_at = 't' WHERE id = 'm-1'",
+    )
+    .unwrap();
     write(&mut store, &manager("m-2", "ctx", "NULL")).unwrap();
     assert_eq!(
         sqlite_message(&refused(&mut store, "DELETE FROM sessions")),
@@ -2736,7 +4017,13 @@ fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_
 fn a_version_9_database_with_no_grounded_lead_migrates_to_10_with_no_new_event() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
-    database_at(&home, 9, &format!("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');"));
+    database_at(
+        &home,
+        9,
+        &format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');"
+        ),
+    );
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(count(&mut store, "SELECT count(*) FROM events"), 0);
     assert!(store.schema_mismatch().is_none());
@@ -2777,8 +4064,15 @@ const STACK: &str = "
 
 /// A named store as the binaries before `stacked-prs` left it, holding [`STACK`] and one need.
 fn store_before_stacked_prs(home: &CpdHome) -> Vec<Named> {
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-stacked-prs")).collect();
-    assert!(earlier.len() < NAMED.len(), "stacked-prs is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-stacked-prs"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "stacked-prs is a built-in migration"
+    );
     drop(crate::store::tests::open_named(home, &earlier).unwrap());
     let conn = connection(&home.db());
     // The Plans and their Leads point at each other: the fixture is written with foreign keys off.
@@ -2788,10 +4082,17 @@ fn store_before_stacked_prs(home: &CpdHome) -> Vec<Named> {
 
 #[test]
 fn stacked_prs_is_breaking_after_the_names_before_it() {
-    let (index, migration) = NAMED.iter().enumerate().find(|(_, n)| n.name.ends_with("-stacked-prs")).unwrap();
+    let (index, migration) = NAMED
+        .iter()
+        .enumerate()
+        .find(|(_, n)| n.name.ends_with("-stacked-prs"))
+        .unwrap();
     assert_eq!(migration.compat, Compat::Breaking);
     let after = LEGACY.len() + index;
-    assert_eq!(migration.sql.lines().next().unwrap(), format!("-- cpd-migration: breaking after {after}"));
+    assert_eq!(
+        migration.sql.lines().next().unwrap(),
+        format!("-- cpd-migration: breaking after {after}")
+    );
 }
 
 #[test]
@@ -2802,8 +4103,16 @@ fn stacked_prs_keeps_every_pr_and_need() {
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-stacked-prs")));
-    let violations: i64 = connection(&home.db()).query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-stacked-prs"))
+    );
+    let violations: i64 = connection(&home.db())
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(violations, 0);
 
     // Every `pr_needs` row is kept; every `prs` row is as it was.
@@ -2859,7 +4168,9 @@ fn stacked_prs_keeps_every_pr_and_need() {
     drop(store);
 
     // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
-    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    let err = crate::store::tests::open_named(&home, &earlier)
+        .err()
+        .unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
@@ -2869,7 +4180,11 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     store_before_stacked_prs(&home);
     // Before it, `base` is Locked for every status after the lock.
     for key in ["a", "b", "c", "d", "e", "x", "xs", "op", "m", "ms"] {
-        let err = connection(&home.db()).execute_batch(&format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'")).unwrap_err();
+        let err = connection(&home.db())
+            .execute_batch(&format!(
+                "UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"
+            ))
+            .unwrap_err();
         assert!(err.to_string().contains("pr_locked"), "{key}: {err}");
     }
 
@@ -2885,7 +4200,14 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
         assert_eq!(err.code(), ErrorCode::WorkflowLocked, "a {key} Workflow is not followed: {err:?}");
     }
     // Nothing but `base` moves: not the identity, the repo or the Lead Branch, nor with the base.
-    for set in ["key = 'z'", "repo = '/x'", "lead_branch = 'cpd/pl/z'", "plan = 'other'", "base = 'main', repo = '/x'", "base = 'main', lead_branch = 'cpd/pl/z'"] {
+    for set in [
+        "key = 'z'",
+        "repo = '/x'",
+        "lead_branch = 'cpd/pl/z'",
+        "plan = 'other'",
+        "base = 'main', repo = '/x'",
+        "base = 'main', lead_branch = 'cpd/pl/z'",
+    ] {
         for key in ["b", "e", "op"] {
             let err = refused(&mut store, &format!("UPDATE workflows SET {set} WHERE plan = 'pl' AND key = '{key}'"));
             assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{set} on {key}: {err:?}");
@@ -2912,14 +4234,26 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
 
 #[test]
 fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
-    let migration = NAMED.iter().find(|n| n.name.ends_with("-event-pr-base-changed")).unwrap();
+    let migration = NAMED
+        .iter()
+        .find(|n| n.name.ends_with("-event-pr-base-changed"))
+        .unwrap();
     assert_eq!(migration.compat, Compat::Additive);
-    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+    assert_eq!(
+        migration.sql.lines().next().unwrap(),
+        "-- cpd-migration: additive"
+    );
 
     let (_dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-event-pr-base-changed")).collect();
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-event-pr-base-changed"))
+        .collect();
     drop(crate::store::tests::open_named(&home, &earlier).unwrap());
-    let before: i64 = connection(&home.db()).query_row("SELECT count(*) FROM event_kinds", [], |r| r.get(0)).unwrap();
+    let before: i64 = connection(&home.db())
+        .query_row("SELECT count(*) FROM event_kinds", [], |r| r.get(0))
+        .unwrap();
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
@@ -2931,8 +4265,12 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
 // ---------- named migration session-titles ----------
 
 #[test]
-fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_and_accepts_session_titled() {
-    let titles = NAMED.iter().position(|n| n.name.ends_with("-session-titles")).expect("the migration session-titles exists");
+fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_and_accepts_session_titled()
+ {
+    let titles = NAMED
+        .iter()
+        .position(|n| n.name.ends_with("-session-titles"))
+        .expect("the migration session-titles exists");
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut before = crate::store::tests::open_named(&home, &NAMED[..titles]).unwrap();
@@ -2954,29 +4292,71 @@ fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_an
     )
     .unwrap();
     let columns = "rowid, id, role, context, plan, attempt, name, cwd, tier, state";
-    let sessions = rows(&mut before, &format!("SELECT {columns} FROM sessions ORDER BY id"));
+    let sessions = rows(
+        &mut before,
+        &format!("SELECT {columns} FROM sessions ORDER BY id"),
+    );
     assert!(sqlite_message(&refused(&mut before, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{}')"))
         .contains("FOREIGN KEY constraint failed"));
     drop(before);
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    assert_eq!(rows(&mut store, &format!("SELECT {columns} FROM sessions ORDER BY id")), sessions);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"), 0);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            &format!("SELECT {columns} FROM sessions ORDER BY id")
+        ),
+        sessions
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"
+        ),
+        0
+    );
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{\"title\":\"T\"}')").unwrap();
     // The title is 1–200 characters (`session-title-length` widened it from 60, hs-d543), and the history lists both new columns.
-    write(&mut store, &format!("UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'", "é".repeat(60))).unwrap();
+    write(
+        &mut store,
+        &format!(
+            "UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'",
+            "é".repeat(60)
+        ),
+    )
+    .unwrap();
     for bad in [String::new(), "x".repeat(201)] {
-        let error = refused(&mut store, &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"));
-        assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad:?}: {error:?}");
+        let error = refused(
+            &mut store,
+            &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"),
+        );
+        assert!(
+            sqlite_message(&error).contains("CHECK constraint failed"),
+            "{bad:?}: {error:?}"
+        );
     }
     assert_eq!(
-        rows(&mut store, "SELECT json_extract(after, '$.title') IS NOT NULL, json_extract(after, '$.titled_at') FROM history WHERE tbl = 'sessions' AND op = 'update'"),
+        rows(
+            &mut store,
+            "SELECT json_extract(after, '$.title') IS NOT NULL, json_extract(after, '$.titled_at') FROM history WHERE tbl = 'sessions' AND op = 'update'"
+        ),
         vec![serde_json::json!([1, "t"])]
     );
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
-    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+    assert_eq!(
+        migrated,
+        fresh_canonical_hash(),
+        "the schema of a fresh store with the migration"
+    );
 }
 
 // ---------- named migration `job-kinds` (§4.5; §2.2 "Job kinds", hs-d341, hs-d497) ----------
@@ -3007,19 +4387,35 @@ const KINDS_FIXTURE: &str = "
 
 /// A named store as the binaries before `job-kinds` left it, holding [`KINDS_FIXTURE`].
 fn store_before_job_kinds(home: &CpdHome) -> Vec<Named> {
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-job-kinds")).collect();
-    assert!(earlier.len() < NAMED.len(), "job-kinds is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-job-kinds"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "job-kinds is a built-in migration"
+    );
     drop(crate::store::tests::open_named(home, &earlier).unwrap());
-    connection(&home.db()).execute_batch(&format!("PRAGMA foreign_keys = OFF; {KINDS_FIXTURE}")).unwrap();
+    connection(&home.db())
+        .execute_batch(&format!("PRAGMA foreign_keys = OFF; {KINDS_FIXTURE}"))
+        .unwrap();
     earlier
 }
 
 #[test]
 fn job_kinds_is_breaking_after_the_names_before_it() {
-    let (index, migration) = NAMED.iter().enumerate().find(|(_, n)| n.name.ends_with("-job-kinds")).unwrap();
+    let (index, migration) = NAMED
+        .iter()
+        .enumerate()
+        .find(|(_, n)| n.name.ends_with("-job-kinds"))
+        .unwrap();
     assert_eq!(migration.compat, Compat::Breaking);
     let after = LEGACY.len() + index;
-    assert_eq!(migration.sql.lines().next().unwrap(), format!("-- cpd-migration: breaking after {after}"));
+    assert_eq!(
+        migration.sql.lines().next().unwrap(),
+        format!("-- cpd-migration: breaking after {after}")
+    );
 }
 
 #[test]
@@ -3030,8 +4426,15 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-job-kinds"))
+    );
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
 
     // Every Job is `work` with the other columns null (`resources` of `job-resources` `skipped_n` of `job-tenancy` and `summary` of `explore-kinds` too) and every Workflow is `free`: the rows are as they were, plus those.
     let after = dump(&connection(&home.db()));
@@ -3046,13 +4449,17 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             })
             .collect()
     };
-    assert_eq!(strip(&after["jobs"], 7, "work"), before["jobs"]);
+    assert_eq!(strip(&after["jobs"], 8, "work"), before["jobs"]);
     // `prs` gained `shape` (`free`), then `pr-adopt` `head_ref` and `pr-description` `description`, both null.
     assert_eq!(strip(&after["workflows"], 4, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
-    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+    assert_eq!(
+        migrated,
+        fresh_canonical_hash(),
+        "the schema of a fresh store with the migration"
+    );
 }
 
 /// The store migrated to `job-kinds` from [`store_before_job_kinds`].
@@ -3102,22 +4509,40 @@ fn job_of_kind(key: &str, kind: &str, columns: &str, values: &str) -> String {
 #[test]
 fn a_jobs_kind_is_one_of_six_and_its_spec_fields_agree_with_it() {
     let (_dir, mut store) = store_with_job_kinds();
-    let spec_invalid = |store: &mut Store, sql: &str| assert_eq!(sqlite_message(&refused(store, sql)), "spec_invalid", "{sql}");
+    let spec_invalid = |store: &mut Store, sql: &str| {
+        assert_eq!(
+            sqlite_message(&refused(store, sql)),
+            "spec_invalid",
+            "{sql}"
+        )
+    };
     let tests = ", tests, test_files";
     let named = ", '[\"t::one\"]', '[\"tests/t.rs\"]'";
     for kind in ["work", "docs", "impl", "open", "update"] {
         write(&mut store, &job_of_kind(&format!("k-{kind}"), kind, "", "")).unwrap();
     }
     write(&mut store, &job_of_kind("k-test", "test", tests, named)).unwrap();
-    assert_eq!(count(&mut store, "SELECT count(DISTINCT kind) FROM jobs"), 6);
+    assert_eq!(
+        count(&mut store, "SELECT count(DISTINCT kind) FROM jobs"),
+        6
+    );
     let bad = refused(&mut store, &job_of_kind("k-bad", "other", "", ""));
-    assert!(sqlite_message(&bad).contains("CHECK constraint failed"), "{bad:?}");
+    assert!(
+        sqlite_message(&bad).contains("CHECK constraint failed"),
+        "{bad:?}"
+    );
 
     // `tests` and `test_files` belong to a `test` Job, and both or neither are set.
     spec_invalid(&mut store, &job_of_kind("k-1", "impl", tests, named));
     spec_invalid(&mut store, &job_of_kind("k-2", "work", tests, named));
-    spec_invalid(&mut store, &job_of_kind("k-3", "test", ", tests", ", '[\"t::one\"]'"));
-    spec_invalid(&mut store, &job_of_kind("k-4", "test", ", test_files", ", '[\"tests/t.rs\"]'"));
+    spec_invalid(
+        &mut store,
+        &job_of_kind("k-3", "test", ", tests", ", '[\"t::one\"]'"),
+    );
+    spec_invalid(
+        &mut store,
+        &job_of_kind("k-4", "test", ", test_files", ", '[\"tests/t.rs\"]'"),
+    );
     // A `test` Job that is a stub draft has neither; one that is queued has both.
     write(
         &mut store,
@@ -3130,26 +4555,72 @@ fn a_jobs_kind_is_one_of_six_and_its_spec_fields_agree_with_it() {
         &format!("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                   VALUES ('pl', 'a', 'k-5', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'test', '{FP}', cpd_txn(), 't')"),
     );
-    write(&mut store, "UPDATE jobs SET kind = 'work' WHERE key = 'k-stub'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET kind = 'work' WHERE key = 'k-stub'",
+    )
+    .unwrap();
     // The same rule on update: the review flag is for `work`, the approvals for `impl`, the named tests for `test`.
-    spec_invalid(&mut store, "UPDATE jobs SET review = 1 WHERE key = 'k-docs'");
-    write(&mut store, "UPDATE jobs SET review = 1 WHERE key = 'k-work'").unwrap();
-    spec_invalid(&mut store, "UPDATE jobs SET kind = 'docs' WHERE key = 'k-work'");
-    spec_invalid(&mut store, "UPDATE jobs SET test_approved = '[\"a\"]' WHERE key = 'k-work'");
-    write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'k-impl'").unwrap();
-    spec_invalid(&mut store, "UPDATE jobs SET kind = 'work' WHERE key = 'k-impl'");
-    spec_invalid(&mut store, "UPDATE jobs SET kind = 'impl' WHERE key = 'k-test'");
-    spec_invalid(&mut store, "UPDATE jobs SET tests = NULL WHERE key = 'k-test'");
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET review = 1 WHERE key = 'k-docs'",
+    );
+    write(
+        &mut store,
+        "UPDATE jobs SET review = 1 WHERE key = 'k-work'",
+    )
+    .unwrap();
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET kind = 'docs' WHERE key = 'k-work'",
+    );
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET test_approved = '[\"a\"]' WHERE key = 'k-work'",
+    );
+    write(
+        &mut store,
+        "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'k-impl'",
+    )
+    .unwrap();
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET kind = 'work' WHERE key = 'k-impl'",
+    );
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET kind = 'impl' WHERE key = 'k-test'",
+    );
+    spec_invalid(
+        &mut store,
+        "UPDATE jobs SET tests = NULL WHERE key = 'k-test'",
+    );
     // Each column keeps its own check: a JSON array, of at least one name for `tests` and `test_files`.
     for column in ["tests", "test_files"] {
         for bad in ["'[]'", "'{}'", "'nope'"] {
-            let error = refused(&mut store, &format!("UPDATE jobs SET {column} = {bad} WHERE key = 'k-test'"));
-            assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{column} = {bad}: {error:?}");
+            let error = refused(
+                &mut store,
+                &format!("UPDATE jobs SET {column} = {bad} WHERE key = 'k-test'"),
+            );
+            assert!(
+                sqlite_message(&error).contains("CHECK constraint failed"),
+                "{column} = {bad}: {error:?}"
+            );
         }
     }
-    let error = refused(&mut store, "UPDATE jobs SET test_approved = '\"a\"' WHERE key = 'k-impl'");
-    assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{error:?}");
-    write(&mut store, "UPDATE jobs SET test_approved = '[]' WHERE key = 'k-impl'").unwrap();
+    let error = refused(
+        &mut store,
+        "UPDATE jobs SET test_approved = '\"a\"' WHERE key = 'k-impl'",
+    );
+    assert!(
+        sqlite_message(&error).contains("CHECK constraint failed"),
+        "{error:?}"
+    );
+    write(
+        &mut store,
+        "UPDATE jobs SET test_approved = '[]' WHERE key = 'k-impl'",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -3157,24 +4628,57 @@ fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() 
     let (_dir, mut store) = store_with_job_kinds();
     write(&mut store, &job_of_kind("impl-draft", "impl", "", "")).unwrap();
     // A draft is editable in all three; once it is not a draft they are Locked, as the Spec is.
-    write(&mut store, "UPDATE jobs SET kind = 'docs' WHERE key = 'draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET kind = 'docs' WHERE key = 'draft'",
+    )
+    .unwrap();
     write(&mut store, "UPDATE jobs SET kind = 'test', tests = '[\"a\"]', test_files = '[\"b\"]' WHERE key = 'draft'").unwrap();
-    write(&mut store, "UPDATE jobs SET kind = 'work', tests = NULL, test_files = NULL WHERE key = 'draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET kind = 'work', tests = NULL, test_files = NULL WHERE key = 'draft'",
+    )
+    .unwrap();
     for sql in [
         "UPDATE jobs SET kind = 'docs' WHERE key = 'queued'",
         "UPDATE jobs SET kind = 'impl' WHERE key = 'running'",
         "UPDATE jobs SET kind = 'work' WHERE key = 'merged'",
         "UPDATE jobs SET kind = 'work' WHERE key = 'failed'",
     ] {
-        assert_eq!(sqlite_message(&refused(&mut store, sql)), "job_locked", "{sql}");
+        assert_eq!(
+            sqlite_message(&refused(&mut store, sql)),
+            "job_locked",
+            "{sql}"
+        );
     }
-    write(&mut store, &job_of_kind("test-draft", "test", ", tests, test_files", ", '[\"t::one\"]', '[\"tests/t.rs\"]'")).unwrap();
+    write(
+        &mut store,
+        &job_of_kind(
+            "test-draft",
+            "test",
+            ", tests, test_files",
+            ", '[\"t::one\"]', '[\"tests/t.rs\"]'",
+        ),
+    )
+    .unwrap();
     for key in ["impl-draft", "test-draft"] {
-        write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'")).unwrap();
+        write(
+            &mut store,
+            &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'"),
+        )
+        .unwrap();
     }
     // `tests` and `test_files` are Spec columns: they change while the queued Job has no Attempt, and are Locked once it has one.
-    write(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
-    write(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'",
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'",
+    )
+    .unwrap();
     write(
         &mut store,
         "UPDATE jobs SET status = 'running' WHERE key = 'test-draft';
@@ -3185,25 +4689,70 @@ fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() 
          UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'test-draft';",
     )
     .unwrap();
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"b\"]' WHERE key = 'test-draft'")), "job_locked");
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE jobs SET tests = '[\"b\"]' WHERE key = 'test-draft'"
+        )),
+        "job_locked"
+    );
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE jobs SET test_files = '[\"b\"]' WHERE key = 'test-draft'"
+        )),
+        "job_locked"
+    );
     // `test_approved` changes after the lock: that is what `job approve-tests` does.
-    write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'").unwrap();
-    assert_eq!(rows(&mut store, "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"), vec![serde_json::json!(["[\"tests/t.rs\"]"])]);
+    write(
+        &mut store,
+        "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"
+        ),
+        vec![serde_json::json!(["[\"tests/t.rs\"]"])]
+    );
 }
 
 #[test]
 fn the_history_of_jobs_and_prs_lists_the_new_columns() {
     let (_dir, mut store) = store_with_job_kinds();
-    write(&mut store, &job_of_kind("h", "test", ", tests, test_files", ", '[\"t::one\"]', '[\"tests/t.rs\"]'")).unwrap();
-    write(&mut store, "UPDATE jobs SET test_files = '[\"tests/u.rs\"]' WHERE key = 'h'").unwrap();
+    write(
+        &mut store,
+        &job_of_kind(
+            "h",
+            "test",
+            ", tests, test_files",
+            ", '[\"t::one\"]', '[\"tests/t.rs\"]'",
+        ),
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET test_files = '[\"tests/u.rs\"]' WHERE key = 'h'",
+    )
+    .unwrap();
     // The insert lists every column; an update the columns it changed (`history-changed`).
     assert_eq!(
-        rows(&mut store, "SELECT json_extract(after, '$.kind'), json_extract(after, '$.tests'), json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'insert' AND json_extract(after, '$.key') = 'h'"),
-        vec![serde_json::json!(["test", "[\"t::one\"]", "[\"tests/t.rs\"]"])]
+        rows(
+            &mut store,
+            "SELECT json_extract(after, '$.kind'), json_extract(after, '$.tests'), json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'insert' AND json_extract(after, '$.key') = 'h'"
+        ),
+        vec![serde_json::json!([
+            "test",
+            "[\"t::one\"]",
+            "[\"tests/t.rs\"]"
+        ])]
     );
     assert_eq!(
-        rows(&mut store, "SELECT json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'update' AND json_extract(after, '$.test_files') IS NOT NULL"),
+        rows(
+            &mut store,
+            "SELECT json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'update' AND json_extract(after, '$.test_files') IS NOT NULL"
+        ),
         vec![serde_json::json!(["[\"tests/u.rs\"]"])]
     );
     write(
@@ -3222,12 +4771,22 @@ fn the_history_of_jobs_and_prs_lists_the_new_columns() {
 
 #[test]
 fn plan_outline_is_additive_and_adds_the_nullable_column_and_its_event_kind() {
-    let migration = NAMED.iter().find(|n| n.name.ends_with("-plan-outline")).expect("the migration plan-outline exists");
+    let migration = NAMED
+        .iter()
+        .find(|n| n.name.ends_with("-plan-outline"))
+        .expect("the migration plan-outline exists");
     assert_eq!(migration.compat, Compat::Additive);
-    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+    assert_eq!(
+        migration.sql.lines().next().unwrap(),
+        "-- cpd-migration: additive"
+    );
 
     let (_dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-plan-outline")).collect();
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-plan-outline"))
+        .collect();
     let mut before = crate::store::tests::open_named(&home, &earlier).unwrap();
     write(
         &mut before,
@@ -3244,31 +4803,60 @@ fn plan_outline_is_additive_and_adds_the_nullable_column_and_its_event_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     // The Plan is kept, with a null outline, and its history lists the new column.
-    assert_eq!(rows(&mut store, "SELECT id, outline FROM plans"), vec![serde_json::json!(["pay", null])]);
-    write(&mut store, "UPDATE plans SET outline = '{\"goal\":\"G\"}' WHERE id = 'pay'").unwrap();
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'plans' AND json_extract(after, '$.outline') IS NOT NULL"), 1);
+    assert_eq!(
+        rows(&mut store, "SELECT id, outline FROM plans"),
+        vec![serde_json::json!(["pay", null])]
+    );
+    write(
+        &mut store,
+        "UPDATE plans SET outline = '{\"goal\":\"G\"}' WHERE id = 'pay'",
+    )
+    .unwrap();
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'plans' AND json_extract(after, '$.outline') IS NOT NULL"
+        ),
+        1
+    );
     // The outline is a JSON object, or null.
     for bad in ["not json", "[]", "\"text\""] {
-        let error = refused(&mut store, &format!("UPDATE plans SET outline = '{bad}' WHERE id = 'pay'"));
-        assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad}: {error:?}");
+        let error = refused(
+            &mut store,
+            &format!("UPDATE plans SET outline = '{bad}' WHERE id = 'pay'"),
+        );
+        assert!(
+            sqlite_message(&error).contains("CHECK constraint failed"),
+            "{bad}: {error:?}"
+        );
     }
     write(&mut store, "INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES (cpd_txn(), 't', 'plan-outlined', 'ctx', 'pay', 'x', '{\"replaced\":false}')").unwrap();
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert_eq!(
+        count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"),
+        0
+    );
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
-    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+    assert_eq!(
+        migrated,
+        fresh_canonical_hash(),
+        "the schema of a fresh store with the migration"
+    );
 }
 
 // ---------- named migration delete-tombstone ----------
 
 #[test]
 fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_context_go() {
-    let at = NAMED.iter().position(|n| n.name.ends_with("-delete-tombstone")).expect("the migration delete-tombstone exists");
+    let at = NAMED
+        .iter()
+        .position(|n| n.name.ends_with("-delete-tombstone"))
+        .expect("the migration delete-tombstone exists");
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut before = crate::store::tests::open_named(&home, &NAMED[..at]).unwrap();
     write(
         &mut before,
-        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
            ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
            ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
@@ -3282,18 +4870,45 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
                   ('live', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
          INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
            (cpd_txn(), 't', 'plan-created', 'ctx', 'pay', 'x', '{}'), (cpd_txn(), 't', 'plan-created', 'other', 'live', 'x', '{}'),
-           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');"
-            .to_owned(),
+           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');",
     )
     .unwrap();
-    let rows_before = rows(&mut before, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans");
+    let rows_before = rows(
+        &mut before,
+        "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans",
+    );
     drop(before);
 
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    assert_eq!(rows(&mut store, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans"), rows_before);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM contexts WHERE deleted_at IS NOT NULL") + count(&mut store, "SELECT count(*) FROM plans WHERE deleted_at IS NOT NULL"), 0);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM event_kinds WHERE name IN ('plan-deleted', 'context-deleted')"), 2);
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    assert_eq!(
+        rows(
+            &mut store,
+            "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans"
+        ),
+        rows_before
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM contexts WHERE deleted_at IS NOT NULL"
+        ) + count(
+            &mut store,
+            "SELECT count(*) FROM plans WHERE deleted_at IS NOT NULL"
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM event_kinds WHERE name IN ('plan-deleted', 'context-deleted')"
+        ),
+        2
+    );
 
     // A live Plan's rows stay undeletable, with the error each had.
     for (sql, message) in [
@@ -3303,7 +4918,10 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
         ("DELETE FROM events WHERE context = 'ctx' AND plan IS NULL", "append_only: events"),
         ("DELETE FROM sessions WHERE id = 'm'", "append_only: sessions"),
         ("DELETE FROM plans WHERE id = 'pay'", "append_only: plans"),
-        ("DELETE FROM contexts WHERE id = 'ctx'", "append_only: contexts"),
+        (
+            "DELETE FROM contexts WHERE id = 'ctx'",
+            "append_only: contexts",
+        ),
         ("DELETE FROM txns", "append_only: txns"),
         ("DELETE FROM history", "append_only: history"),
     ] {
@@ -3322,14 +4940,35 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
         rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' AND tbl <> 'history_tables' ORDER BY id"),
         [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["workflows", "delete", "r"])]
     );
-    assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE plan = 'live'"), 1);
 
     // A Context's own rows go by its tombstone alone.
-    write(&mut store, "UPDATE contexts SET deleted_at = 'd3' WHERE id = 'ctx'").unwrap();
-    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE contexts SET deleted_at = NULL WHERE id = 'ctx'")), "append_only: contexts.deleted_at");
+    write(
+        &mut store,
+        "UPDATE contexts SET deleted_at = 'd3' WHERE id = 'ctx'",
+    )
+    .unwrap();
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "UPDATE contexts SET deleted_at = NULL WHERE id = 'ctx'"
+        )),
+        "append_only: contexts.deleted_at"
+    );
     write(&mut store, "DELETE FROM events WHERE context = 'ctx' AND plan IS NULL; DELETE FROM sessions WHERE id = 'm';").unwrap();
-    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'delete'"), 1);
-    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events WHERE context = 'other'")), "append_only: events");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'delete'"
+        ),
+        1
+    );
+    assert_eq!(
+        sqlite_message(&refused(
+            &mut store,
+            "DELETE FROM events WHERE context = 'other'"
+        )),
+        "append_only: events"
+    );
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }
 
@@ -3339,8 +4978,15 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
 /// while the migration is missing).
 fn before_review_superseded() -> (tempfile::TempDir, CpdHome, Vec<Named>) {
     let (dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-review-superseded")).collect();
-    assert!(earlier.len() < NAMED.len(), "review-superseded is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-review-superseded"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "review-superseded is a built-in migration"
+    );
     drop(crate::store::tests::open_named(&home, &earlier).unwrap());
     (dir, home, earlier)
 }
@@ -3364,7 +5010,11 @@ fn review_plan(id: &str, phase: &str) -> String {
 
 /// One review of `plan`: `number`, `status`, a feedback and a title always set, `decided_at` unless pending.
 fn review_row(plan: &str, number: u32, status: &str) -> String {
-    let decided = if status == "pending" { "NULL" } else { "'2026-01-03T00:00:00.000Z'" };
+    let decided = if status == "pending" {
+        "NULL"
+    } else {
+        "'2026-01-03T00:00:00.000Z'"
+    };
     format!(
         "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, feedback, requested_at, decided_at, title)
            VALUES ('{plan}', 'r{number}', {number}, '{REVIEW_FP}', '{status}', 'feedback of {plan} r{number}', '2026-01-02T00:00:00.000Z', {decided}, 'Title {number}');"
@@ -3374,13 +5024,29 @@ fn review_row(plan: &str, number: u32, status: &str) -> String {
 fn review_rows(conn: &Connection) -> Vec<Value> {
     let columns = table_columns(conn, "plan_reviews").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
-    let mut stmt = conn.prepare(&format!("SELECT json_object({}) FROM plan_reviews ORDER BY plan, number", pairs.join(", "))).unwrap();
-    stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| serde_json::from_str(&r.unwrap()).unwrap()).collect()
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT json_object({}) FROM plan_reviews ORDER BY plan, number",
+            pairs.join(", ")
+        ))
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|r| serde_json::from_str(&r.unwrap()).unwrap())
+        .collect()
 }
 
-fn review_status(conn: &Connection, plan: &str, id: &str) -> (String, Option<String>, Option<String>) {
-    conn.query_row("SELECT status, decided_at, feedback FROM plan_reviews WHERE plan = ?1 AND id = ?2", [plan, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
+fn review_status(
+    conn: &Connection,
+    plan: &str,
+    id: &str,
+) -> (String, Option<String>, Option<String>) {
+    conn.query_row(
+        "SELECT status, decided_at, feedback FROM plan_reviews WHERE plan = ?1 AND id = ?2",
+        [plan, id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -3402,38 +5068,73 @@ fn review_superseded_keeps_every_review_and_accepts_the_status() {
     let before = review_rows(&conn);
     let objects = "SELECT name || ' ' || coalesce(sql, '') FROM sqlite_schema WHERE tbl_name = 'plan_reviews' AND name NOT LIKE 'sqlite_%'";
     let objects_before = names(&conn, objects);
-    let history = |c: &Connection| c.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'plan_reviews'", [], |r| r.get(0)).unwrap();
+    let history = |c: &Connection| {
+        c.query_row::<i64, _, _>(
+            "SELECT count(*) FROM history WHERE tbl = 'plan_reviews'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
     let history_before = history(&conn);
     assert_eq!((before.len(), history_before), (3, 3));
     drop(conn);
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
-    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-review-superseded")));
+    assert!(
+        crate::store::tests::applied(&mut store)
+            .iter()
+            .any(|(name, _, _)| name.ends_with("-review-superseded"))
+    );
     let conn = connection(&home.db());
     assert_eq!(review_rows(&conn), before, "every row, column for column");
     assert_eq!(history(&conn), history_before, "the copy writes no history");
     let after = names(&conn, objects);
-    for expected in ["plan_reviews_hist_ins", "plan_reviews_hist_upd", "plan_reviews_no_delete"] {
-        assert!(after.iter().any(|o| o.starts_with(expected)), "{expected} in {after:?}");
+    for expected in [
+        "plan_reviews_hist_ins",
+        "plan_reviews_hist_upd",
+        "plan_reviews_no_delete",
+    ] {
+        assert!(
+            after.iter().any(|o| o.starts_with(expected)),
+            "{expected} in {after:?}"
+        );
     }
     // Everything but the CHECK is as it was: the same indexes and triggers.
-    let named = |set: &std::collections::BTreeSet<String>| -> Vec<String> { set.iter().map(|o| o.split(' ').next().unwrap().to_owned()).collect() };
+    let named = |set: &std::collections::BTreeSet<String>| -> Vec<String> {
+        set.iter()
+            .map(|o| o.split(' ').next().unwrap().to_owned())
+            .collect()
+    };
     assert_eq!(named(&after), named(&objects_before));
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+            .get(0))
+            .unwrap(),
+        0
+    );
     drop(conn);
 
     // `superseded` is decided: it needs `decided_at`; `pending` still has none.
-    let message = sqlite_message(&refused(&mut store, "UPDATE plan_reviews SET status = 'superseded' WHERE plan = 'pl' AND id = 'r3'"));
+    let message = sqlite_message(&refused(
+        &mut store,
+        "UPDATE plan_reviews SET status = 'superseded' WHERE plan = 'pl' AND id = 'r3'",
+    ));
     assert!(message.starts_with("CHECK constraint failed"), "{message}");
-    let message = sqlite_message(&refused(&mut store, "UPDATE plan_reviews SET status = 'pending' WHERE plan = 'pl' AND id = 'r1'"));
+    let message = sqlite_message(&refused(
+        &mut store,
+        "UPDATE plan_reviews SET status = 'pending' WHERE plan = 'pl' AND id = 'r1'",
+    ));
     assert!(message.starts_with("CHECK constraint failed"), "{message}");
     write(&mut store, "UPDATE plan_reviews SET status = 'superseded', decided_at = '2026-01-04T00:00:00.000Z' WHERE plan = 'pl' AND id = 'r3'").unwrap();
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     drop(store);
 
     // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
-    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    let err = crate::store::tests::open_named(&home, &earlier)
+        .err()
+        .unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
@@ -3464,7 +5165,9 @@ fn review_superseded_closes_the_pending_reviews_that_are_not_the_latest_or_of_a_
     ))
     .unwrap();
     let before = review_rows(&conn);
-    let events: i64 = conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap();
+    let events: i64 = conn
+        .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+        .unwrap();
     drop(conn);
 
     let mut store = Store::open(&home, 5000).unwrap();
@@ -3474,14 +5177,36 @@ fn review_superseded_closes_the_pending_reviews_that_are_not_the_latest_or_of_a_
         let (status, decided_at, feedback) = review_status(&conn, plan, id);
         assert_eq!(status, "superseded", "{plan} {id}");
         assert!(decided_at.is_some(), "{plan} {id}: decided_at");
-        assert_eq!(feedback.as_deref(), Some(format!("feedback of {plan} {id}").as_str()), "{plan} {id}: feedback is kept");
+        assert_eq!(
+            feedback.as_deref(),
+            Some(format!("feedback of {plan} {id}").as_str()),
+            "{plan} {id}: feedback is kept"
+        );
     }
-    for (plan, id, status) in [("pa", "r2", "approved"), ("pb", "r2", "pending"), ("pd", "r1", "pending")] {
-        let row = before.iter().find(|r| r["plan"] == plan && r["id"] == id).unwrap();
+    for (plan, id, status) in [
+        ("pa", "r2", "approved"),
+        ("pb", "r2", "pending"),
+        ("pd", "r1", "pending"),
+    ] {
+        let row = before
+            .iter()
+            .find(|r| r["plan"] == plan && r["id"] == id)
+            .unwrap();
         assert_eq!(row["status"], status);
-        assert_eq!(review_rows(&conn).iter().find(|r| r["plan"] == plan && r["id"] == id), Some(row), "{plan} {id} is as it was");
+        assert_eq!(
+            review_rows(&conn)
+                .iter()
+                .find(|r| r["plan"] == plan && r["id"] == id),
+            Some(row),
+            "{plan} {id} is as it was"
+        );
     }
-    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap(), events, "no event is appended");
+    assert_eq!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM events", [], |r| r.get(0))
+            .unwrap(),
+        events,
+        "no event is appended"
+    );
     drop(conn);
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }
@@ -3525,8 +5250,16 @@ fn review_superseded_refuses_a_plan_done_while_a_review_is_pending() {
 
     // A Plan that is done already is not blocked by a pending review it holds, nor is another phase.
     write(&mut store, &review_row("pc", 1, "pending")).unwrap();
-    write(&mut store, "UPDATE plans SET phase = 'done' WHERE id = 'pc'").unwrap();
-    write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pc'").unwrap();
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'done' WHERE id = 'pc'",
+    )
+    .unwrap();
+    write(
+        &mut store,
+        "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pc'",
+    )
+    .unwrap();
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }
 
@@ -3539,7 +5272,11 @@ const PORT: &str = "repo:acme/pay:e2e-port";
 fn tenancy_store() -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     write(
         &mut store,
         &format!(
@@ -3569,10 +5306,13 @@ const END_FAILED: &str = "UPDATE attempts SET status = 'ended', outcome = 'faile
 
 /// The pools `api` is a tenant of, sorted.
 fn tenancy_of_api(store: &mut Store) -> Vec<String> {
-    rows(store, "SELECT pool FROM job_tenants WHERE plan = 'pl' AND job = 'api' ORDER BY pool")
-        .into_iter()
-        .map(|r| r[0].as_str().unwrap().to_owned())
-        .collect()
+    rows(
+        store,
+        "SELECT pool FROM job_tenants WHERE plan = 'pl' AND job = 'api' ORDER BY pool",
+    )
+    .into_iter()
+    .map(|r| r[0].as_str().unwrap().to_owned())
+    .collect()
 }
 
 fn both() -> Vec<String> {
@@ -3584,12 +5324,19 @@ fn tenancy_job_pools_row_is_written_in_the_transaction_of_the_first_attempt() {
     let (_dir, mut store) = tenancy_store();
     // A row with no Attempt of the Job, or in a later transaction than the first Attempt's, is refused: a Job is a tenant only
     // from its first Attempt, and the rows commit with it.
-    let alone = "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port')";
-    assert!(write(&mut store, alone).is_err(), "a job_pools row with no Attempt is refused");
+    let alone =
+        "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'repo:acme/pay:e2e-port')";
+    assert!(
+        write(&mut store, alone).is_err(),
+        "a job_pools row with no Attempt is refused"
+    );
     assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 0);
 
     write(&mut store, FIRST_ATTEMPT).unwrap();
-    assert_eq!(rows(&mut store, "SELECT plan, job, pool FROM job_pools"), [serde_json::json!(["pl", "api", PORT])]);
+    assert_eq!(
+        rows(&mut store, "SELECT plan, job, pool FROM job_pools"),
+        [serde_json::json!(["pl", "api", PORT])]
+    );
 
     // After the ladder retry (a second Attempt) no row is written: the Job holds its pools already.
     write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
@@ -3601,22 +5348,53 @@ fn tenancy_job_pools_row_is_written_in_the_transaction_of_the_first_attempt() {
            VALUES ('pl', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pl--api-a2', '/w', 't');",
     )
     .unwrap();
-    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'host:other')").is_err(), "no row after the first Attempt");
+    assert!(
+        write(
+            &mut store,
+            "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'host:other')"
+        )
+        .is_err(),
+        "no row after the first Attempt"
+    );
     // Never updated or deleted.
-    assert!(write(&mut store, "UPDATE job_pools SET pool = 'host:x' WHERE job = 'api'").is_err(), "append only: no update");
-    assert!(write(&mut store, "DELETE FROM job_pools WHERE job = 'api'").is_err(), "append only: no delete");
+    assert!(
+        write(
+            &mut store,
+            "UPDATE job_pools SET pool = 'host:x' WHERE job = 'api'"
+        )
+        .is_err(),
+        "append only: no update"
+    );
+    assert!(
+        write(&mut store, "DELETE FROM job_pools WHERE job = 'api'").is_err(),
+        "append only: no delete"
+    );
     assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools"), 1);
     // The pool text names its level: `[a-z]*:*`.
-    assert!(write(&mut store, "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'nocolon')").is_err());
+    assert!(
+        write(
+            &mut store,
+            "INSERT INTO job_pools (plan, job, pool) VALUES ('pl', 'api', 'nocolon')"
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn tenancy_view_lists_a_job_from_its_first_attempt_until_merged_or_cancelled() {
     let (_dir, mut store) = tenancy_store();
-    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "a queued Job with no Attempt is no tenant");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        Vec::<String>::new(),
+        "a queued Job with no Attempt is no tenant"
+    );
 
     write(&mut store, FIRST_ATTEMPT).unwrap();
-    assert_eq!(tenancy_of_api(&mut store), both(), "`workers` (no row) and the pool of its row, from the first Attempt");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        both(),
+        "`workers` (no row) and the pool of its row, from the first Attempt"
+    );
 
     // Another Job that never had an Attempt, and one with no `job_pools` row (a Job started before the migration): `workers` only.
     write(
@@ -3632,8 +5410,15 @@ fn tenancy_view_lists_a_job_from_its_first_attempt_until_merged_or_cancelled() {
     )
     .unwrap();
     assert_eq!(
-        rows(&mut store, "SELECT job, pool FROM job_tenants ORDER BY job, pool"),
-        [serde_json::json!(["api", PORT]), serde_json::json!(["api", "workers"]), serde_json::json!(["old", "workers"])]
+        rows(
+            &mut store,
+            "SELECT job, pool FROM job_tenants ORDER BY job, pool"
+        ),
+        [
+            serde_json::json!(["api", PORT]),
+            serde_json::json!(["api", "workers"]),
+            serde_json::json!(["old", "workers"])
+        ]
     );
 }
 
@@ -3644,14 +5429,30 @@ fn tenancy_survives_a_failed_job_and_a_ladder_retry() {
 
     // The Attempt ends `failed` and the Job is `failed`: it keeps ALL its resources, `workers` included.
     write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
-    assert_eq!(tenancy_of_api(&mut store), both(), "a failed Job keeps its pools and its worker");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        both(),
+        "a failed Job keeps its pools and its worker"
+    );
 
     // `queued` again for the next Attempt (a ladder retry, `job retry`): the same.
-    write(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';").unwrap();
-    assert_eq!(tenancy_of_api(&mut store), both(), "a retried queued Job keeps its pools and its worker");
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'api';",
+    )
+    .unwrap();
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        both(),
+        "a retried queued Job keeps its pools and its worker"
+    );
 
     // Ended `running` Job -> `queued` after a ladder step, with its Attempt ended too.
-    write(&mut store, "UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';").unwrap();
+    write(
+        &mut store,
+        "UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';",
+    )
+    .unwrap();
     assert_eq!(tenancy_of_api(&mut store), both());
 }
 
@@ -3668,7 +5469,11 @@ fn tenancy_ends_at_once_when_a_job_is_merged() {
     )
     .unwrap();
 
-    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "free the moment the Job is merged, no timer");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        Vec::<String>::new(),
+        "free the moment the Job is merged, no timer"
+    );
 }
 
 #[test]
@@ -3680,7 +5485,11 @@ fn tenancy_ends_at_once_when_a_job_is_cancelled_with_no_live_attempt() {
 
     write(&mut store, "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
 
-    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "cancelled with its Attempt ended: free at once");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        Vec::<String>::new(),
+        "cancelled with its Attempt ended: free at once"
+    );
 }
 
 #[test]
@@ -3689,26 +5498,46 @@ fn tenancy_of_a_cancelled_job_with_a_live_attempt_ends_with_the_attempt() {
     write(&mut store, FIRST_ATTEMPT).unwrap();
 
     write(&mut store, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no longer needed', cancel_requested_at = 't' WHERE key = 'api';").unwrap();
-    assert_eq!(tenancy_of_api(&mut store), both(), "a cancelled Job whose Attempt is live holds until the Attempt ends");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        both(),
+        "a cancelled Job whose Attempt is live holds until the Attempt ends"
+    );
 
     write(
         &mut store,
         "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE id = 'api-a1';",
     )
     .unwrap();
-    assert_eq!(tenancy_of_api(&mut store), Vec::<String>::new(), "the Attempt ended: free");
+    assert_eq!(
+        tenancy_of_api(&mut store),
+        Vec::<String>::new(),
+        "the Attempt ended: free"
+    );
 }
 
 #[test]
 fn tenancy_workers_tenants_are_the_jobs_with_an_attempt_not_merged_or_cancelled() {
     let (_dir, mut store) = tenancy_store();
     // `workers` has no row of its own: its tenants are the Jobs with an Attempt, each counted once however many Attempts it had.
-    let workers = |store: &mut Store| count(store, "SELECT count(*) FROM job_tenants WHERE pool = 'workers'");
+    let workers = |store: &mut Store| {
+        count(
+            store,
+            "SELECT count(*) FROM job_tenants WHERE pool = 'workers'",
+        )
+    };
     assert_eq!(workers(&mut store), 0, "a Job with no Attempt is no tenant");
 
     write(&mut store, FIRST_ATTEMPT).unwrap();
     assert_eq!(workers(&mut store), 1);
-    assert_eq!(count(&mut store, "SELECT count(*) FROM job_pools WHERE pool = 'workers'"), 0, "workers has no job_pools row");
+    assert_eq!(
+        count(
+            &mut store,
+            "SELECT count(*) FROM job_pools WHERE pool = 'workers'"
+        ),
+        0,
+        "workers has no job_pools row"
+    );
 
     write(&mut store, &format!("{END_FAILED} UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'api';")).unwrap();
     write(
@@ -3735,8 +5564,15 @@ fn tenancy_workers_tenants_are_the_jobs_with_an_attempt_not_merged_or_cancelled(
 /// `a` merged, reaction, reacted; `b` merged, reaction, not reacted; `c` open, reaction; `d` merged, no reaction.
 fn before_slack_reactions() -> (tempfile::TempDir, crate::home::CpdHome, Vec<Named>) {
     let (dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-slack-reactions")).collect();
-    assert!(earlier.len() < NAMED.len(), "slack-reactions is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-slack-reactions"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "slack-reactions is a built-in migration"
+    );
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
     let workflow = |key: &str, number: u32, state: &str, merged_at: &str, reaction: &str, reacted_at: &str| {
         format!(
@@ -3784,8 +5620,15 @@ fn queue_rows(store: &mut Store) -> Vec<String> {
 fn a_database_with_merged_posts_migrates_to_slack_reactions_copying_them() {
     let (_dir, home, _earlier) = before_slack_reactions();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    let rows: Vec<Value> = queue_rows(&mut store).iter().map(|r| serde_json::from_str(r).unwrap()).collect();
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
+    let rows: Vec<Value> = queue_rows(&mut store)
+        .iter()
+        .map(|r| serde_json::from_str(r).unwrap())
+        .collect();
     assert_eq!(
         rows,
         [
@@ -3800,11 +5643,29 @@ fn a_database_with_merged_posts_migrates_to_slack_reactions_copying_them() {
 fn slack_reactions_refuses_a_second_row_for_one_channel_ts_and_emoji() {
     let (_dir, home, _earlier) = before_slack_reactions();
     let mut store = Store::open(&home, 5000).unwrap();
-    let insert = |emoji: &str, ts: &str| format!("INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('C0POST', '{ts}', '{emoji}', 'q');");
-    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?)).unwrap();
-    let refused = store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?));
+    let insert = |emoji: &str, ts: &str| {
+        format!(
+            "INSERT INTO slack_reactions (channel, ts, emoji, queued_at) VALUES ('C0POST', '{ts}', '{emoji}', 'q');"
+        )
+    };
+    store
+        .write("fixture", |tx| {
+            Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?)
+        })
+        .unwrap();
+    let refused = store.write("fixture", |tx| {
+        Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000001"))?)
+    });
     assert!(refused.is_err(), "the same (channel, ts, emoji) twice");
     // Another emoji, or another post, is another row.
-    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("white_check_mark", "1793040000.000001"))?)).unwrap();
-    store.write("fixture", |tx| Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000009"))?)).unwrap();
+    store
+        .write("fixture", |tx| {
+            Ok::<(), CpdError>(tx.execute_batch(&insert("white_check_mark", "1793040000.000001"))?)
+        })
+        .unwrap();
+    store
+        .write("fixture", |tx| {
+            Ok::<(), CpdError>(tx.execute_batch(&insert("eyes", "1793040000.000009"))?)
+        })
+        .unwrap();
 }

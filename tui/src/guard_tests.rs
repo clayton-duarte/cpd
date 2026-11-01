@@ -11,12 +11,12 @@ pub(crate) fn product_text(text: &str) -> String {
     let mut out = String::new();
     let mut lines = text.lines();
     while let Some(line) = lines.next() {
-        if line.trim() == "#[cfg(test)]" {
-            if let Some(next) = lines.clone().next() {
-                let next = next.trim();
-                if next.starts_with("mod ") && next.ends_with('{') {
-                    break;
-                }
+        if line.trim() == "#[cfg(test)]"
+            && let Some(next) = lines.clone().next()
+        {
+            let next = next.trim();
+            if next.starts_with("mod ") && next.ends_with('{') {
+                break;
             }
         }
         out.push_str(line);
@@ -41,10 +41,19 @@ fn walk(root: &Path, dir: &Path, sources: &mut Vec<(String, String)>) {
         if path.is_dir() {
             walk(root, &path, sources);
         } else if path.extension().is_some_and(|e| e == "rs") {
-            if path.file_name().unwrap().to_string_lossy().contains("tests") {
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("tests")
+            {
                 continue;
             }
-            let file = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let file = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             let text = std::fs::read_to_string(&path).unwrap();
             sources.push((file, product_text(&text)));
         }

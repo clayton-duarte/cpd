@@ -35,12 +35,27 @@ pub(super) fn ago_seconds(seconds: i64) -> String {
 fn catalog() -> Catalog {
     Catalog {
         pi_version: "1.0.0".into(),
-        o: TierModel { model: "p/opus".into(), efforts: vec![1, 2, 3, 4, 5] },
-        s: TierModel { model: "p/sonnet".into(), efforts: vec![0, 1, 2, 3, 4, 5] },
-        h: TierModel { model: "p/haiku".into(), efforts: vec![0, 1, 2, 3] },
-        g: TierModel { model: "p/gemini".into(), efforts: vec![] },
+        o: TierModel {
+            model: "p/opus".into(),
+            efforts: vec![1, 2, 3, 4, 5],
+        },
+        s: TierModel {
+            model: "p/sonnet".into(),
+            efforts: vec![0, 1, 2, 3, 4, 5],
+        },
+        h: TierModel {
+            model: "p/haiku".into(),
+            efforts: vec![0, 1, 2, 3],
+        },
+        g: TierModel {
+            model: "p/gemini".into(),
+            efforts: vec![],
+        },
     }
 }
+
+/// One row of the events table: `(plan, job, attempt, data)`.
+pub(super) type EventRow = (Option<String>, Option<String>, Option<String>, Value);
 
 /// An engine on a temporary home, and the home's directory kept for as long as the test runs.
 pub(super) struct Fx {
@@ -98,13 +113,17 @@ impl Fx {
         let runner = FakeRunner::with_tmux();
         let tmpdir = self.dir.path().join("tmux");
         std::fs::create_dir_all(&tmpdir).unwrap();
-        self.engine.tmux = Tmux::with_tmpdir("testkit", tmpdir).with_runner(std::sync::Arc::new(runner.clone()));
+        self.engine.tmux =
+            Tmux::with_tmpdir("testkit", tmpdir).with_runner(std::sync::Arc::new(runner.clone()));
         runner
     }
 
     /// A tmux server with one session, `keepalive`, on the tmux of [`Fx::on_fake_tmux`].
     pub(super) fn tmux_server(&self) {
-        self.engine.tmux.run(&["new-session", "-d", "-s", "keepalive", "sleep", "600"].map(str::to_owned)).unwrap();
+        self.engine
+            .tmux
+            .run(&["new-session", "-d", "-s", "keepalive", "sleep", "600"].map(str::to_owned))
+            .unwrap();
     }
 
     /// A second engine on the same home: the engine after a restart.
@@ -116,12 +135,18 @@ impl Fx {
 
     /// Runs `sql` in one transaction.
     pub(super) fn fixture(&mut self, sql: &str) {
-        self.engine.store.write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
+        self.engine
+            .store
+            .write("fixture", |tx| Ok(tx.execute_batch(sql)?))
+            .unwrap();
     }
 
     /// The first column of the first row of `sql`.
     pub(super) fn query<T: FromSql>(&mut self, sql: &str) -> T {
-        self.engine.store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        self.engine
+            .store
+            .read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     }
 
     /// Job `key` of Plan `pay` in Workflow `repo`, `queued` with its Locked-Job fingerprint, then moved to another status by `then`
@@ -142,7 +167,9 @@ impl Fx {
              VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
-            sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
+            sql += &format!(
+                "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"
+            );
         }
         self.fixture(&sql);
         self.lock_job(key, then);
@@ -151,7 +178,11 @@ impl Fx {
     /// Job `key` `queued` with its fingerprint (the Job as the lock leaves it), then moved by `then` (SQL).
     pub(super) fn lock_job(&mut self, key: &str, then: &str) {
         let plan = PlanId::parse("pay").unwrap();
-        let all = self.engine.store.read(|conn| jobs::load(conn, &plan)).unwrap();
+        let all = self
+            .engine
+            .store
+            .read(|conn| jobs::load(conn, &plan))
+            .unwrap();
         let job = all.iter().find(|j| j.key == key).unwrap();
         self.fixture(&format!(
             "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}'; {then}",
@@ -162,11 +193,22 @@ impl Fx {
     /// Job `key` `running` with Attempt `<key>-a1` in `status`, started at `started_at`, its driver (pid 4242) started.
     /// A `running` Attempt has its `starting → running` `attempt-status` Event at `started_at` too.
     pub(super) fn add_running(&mut self, key: &str, status: &str, started_at: &str) {
-        self.add_running_since(key, status, started_at, (status == "running").then_some(started_at));
+        self.add_running_since(
+            key,
+            status,
+            started_at,
+            (status == "running").then_some(started_at),
+        );
     }
 
     /// `add_running` with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`).
-    pub(super) fn add_running_since(&mut self, key: &str, status: &str, started_at: &str, running_at: Option<&str>) {
+    pub(super) fn add_running_since(
+        &mut self,
+        key: &str,
+        status: &str,
+        started_at: &str,
+        running_at: Option<&str>,
+    ) {
         let worktree = self.dir.path().join(format!("pay.pay--{key}-a1"));
         let event = running_at
             .map(|at| {
@@ -191,15 +233,22 @@ impl Fx {
     }
 
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
-    pub(super) fn events(&mut self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+    pub(super) fn events(&mut self, kind: &str) -> Vec<EventRow> {
         self.engine
             .store
             .read(|conn| {
-                let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
+                let mut stmt = conn.prepare(
+                    "SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id",
+                )?;
                 let rows = stmt
-                    .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
+                    .query_map([kind], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
+                Ok(rows
+                    .into_iter()
+                    .map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap()))
+                    .collect())
             })
             .unwrap()
     }
@@ -209,7 +258,9 @@ impl Fx {
     }
 
     pub(super) fn job_status(&mut self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.query(&format!(
+            "SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"
+        ))
     }
 }
 
@@ -229,15 +280,27 @@ mod tests {
         assert_eq!(fx.job_status("api"), "queued");
         assert!(fx.query::<bool>("SELECT fingerprint IS NOT NULL FROM jobs WHERE key = 'api'"));
         fx.add_job("web", &["api"], "");
-        assert_eq!(fx.query::<i64>("SELECT count(*) FROM dependencies WHERE job = 'web' AND needs = 'api'"), 1);
+        assert_eq!(
+            fx.query::<i64>(
+                "SELECT count(*) FROM dependencies WHERE job = 'web' AND needs = 'api'"
+            ),
+            1
+        );
 
         let started = ago(5);
         fx.add_running("busy", "running", &started);
         assert_eq!(fx.job_status("busy"), "running");
-        assert_eq!(fx.query::<i64>("SELECT driver_pid FROM attempts WHERE id = 'busy-a1'"), 4242);
+        assert_eq!(
+            fx.query::<i64>("SELECT driver_pid FROM attempts WHERE id = 'busy-a1'"),
+            4242
+        );
         assert_eq!(fx.events("attempt-status").len(), 1);
         fx.add_running("fresh", "starting", &started);
-        assert_eq!(fx.count("attempt-status"), 1, "a starting Attempt has no starting → running Event yet");
+        assert_eq!(
+            fx.count("attempt-status"),
+            1,
+            "a starting Attempt has no starting → running Event yet"
+        );
     }
 
     #[test]
@@ -248,7 +311,10 @@ mod tests {
 
         fx.tmux_server();
         assert!(fx.engine.tmux.server_running().unwrap());
-        fx.engine.tmux.run(&["set", "-g", "@x", "1"].map(str::to_owned)).unwrap();
+        fx.engine
+            .tmux
+            .run(&["set", "-g", "@x", "1"].map(str::to_owned))
+            .unwrap();
 
         let sent: Vec<String> = runner.calls().iter().map(|c| c.args.join(" ")).collect();
         assert!(sent.iter().any(|a| a.contains("set -g @x 1")), "{sent:?}");
@@ -266,8 +332,14 @@ mod tests {
         let mut fx = Fx::new("");
         let mut second = fx.restarted();
         fx.fixture("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', 'red', 's', 'l', 't');");
-        let seen: i64 = second.store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0))?)).unwrap();
+        let seen: i64 = second
+            .store
+            .read(|conn| Ok(conn.query_row("SELECT count(*) FROM inbox_items", [], |r| r.get(0))?))
+            .unwrap();
         assert_eq!(seen, 1);
-        assert!(fx.engine.tmux.server_running().is_err(), "the kit's tmux has no program: any use of it is an error");
+        assert!(
+            fx.engine.tmux.server_running().is_err(),
+            "the kit's tmux has no program: any use of it is an error"
+        );
     }
 }

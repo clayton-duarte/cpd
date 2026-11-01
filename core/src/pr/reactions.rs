@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{append, NewEvent};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::policy::{policy_dir, repo_path};
@@ -43,7 +43,13 @@ fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<Due> {
         (Some(plan), Some(workflow)) => Some(MergeOf { plan, workflow }),
         _ => None,
     };
-    Ok(Due { id: r.get(0)?, channel: r.get(1)?, ts: r.get(2)?, emoji: r.get(3)?, merge })
+    Ok(Due {
+        id: r.get(0)?,
+        channel: r.get(1)?,
+        ts: r.get(2)?,
+        emoji: r.get(3)?,
+        merge,
+    })
 }
 
 /// Queues `emoji` on the post (`channel`, `ts`); `true` when a row was newly queued, `false` when it exists.
@@ -95,7 +101,9 @@ pub fn parked(conn: &Connection) -> Result<Vec<Due>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE refused_at IS NOT NULL AND plan IS NOT NULL ORDER BY id",
     )?;
-    let rows = stmt.query_map([], due)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = stmt
+        .query_map([], due)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
@@ -120,7 +128,13 @@ pub fn reopen(tx: &WriteTxn<'_>, id: i64, emoji: &str) -> Result<bool, CpdError>
 /// Parks a row that is neither reacted nor refused (`refused_at` = the transaction's time, `refusal` = `reason`) and appends the
 /// one `error` Event `slack_refused` in the same transaction (`source` is its source); `false`, nothing written, when the row was
 /// already parked or reacted. `file` is the policy file to fix, for a merge reaction.
-pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Option<&Path>) -> Result<bool, CpdError> {
+pub fn refuse(
+    tx: &WriteTxn<'_>,
+    source: &str,
+    id: i64,
+    reason: &str,
+    file: Option<&Path>,
+) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "UPDATE slack_reactions SET refused_at = (SELECT at FROM txns WHERE id = cpd_txn()), refusal = ?2
           WHERE id = ?1 AND reacted_at IS NULL AND refused_at IS NULL",
@@ -131,7 +145,8 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
     }
     let row = tx.query_row("SELECT id, channel, ts, emoji, plan, workflow FROM slack_reactions WHERE id = ?1", [id], due)?;
     let emoji = &row.emoji;
-    let mut details = json!({"id": id, "emoji": emoji, "reason": reason, "channel": row.channel, "ts": row.ts});
+    let mut details =
+        json!({"id": id, "emoji": emoji, "reason": reason, "channel": row.channel, "ts": row.ts});
     let what = if reason == "policy_empty" {
         "The policy names no emoji (pr.post.merged_reaction is empty)".to_owned()
     } else {
@@ -152,7 +167,13 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
             row.ts, row.channel
         ),
     };
-    let mut event = NewEvent::error(text.clone(), source, ErrorCode::SlackRefused.as_str(), &text, details);
+    let mut event = NewEvent::error(
+        text.clone(),
+        source,
+        ErrorCode::SlackRefused.as_str(),
+        &text,
+        details,
+    );
     if let Some(merge) = &row.merge {
         event = event.plan(PlanId::parse(&merge.plan)?);
     }
@@ -177,7 +198,11 @@ pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, workflow: &st
     let file = match name {
         Some(name) => {
             let repo = repo_path(home, &owner, &RepoName::parse(&name)?);
-            if repo_sets_reaction(&repo)? { repo } else { owner_file }
+            if repo_sets_reaction(&repo)? {
+                repo
+            } else {
+                owner_file
+            }
         }
         None => owner_file,
     };
@@ -189,10 +214,24 @@ fn repo_sets_reaction(path: &Path) -> Result<bool, CpdError> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(CpdError::new(ErrorCode::Internal, format!("cannot read {}: {e}", path.display()))),
+        Err(e) => {
+            return Err(CpdError::new(
+                ErrorCode::Internal,
+                format!("cannot read {}: {e}", path.display()),
+            ));
+        }
     };
-    let value: toml::Table = text.parse().map_err(|e| CpdError::new(ErrorCode::Internal, format!("{} is not TOML: {e}", path.display())))?;
-    Ok(value.get("pr").and_then(|v| v.get("post")).and_then(|v| v.get("merged_reaction")).is_some())
+    let value: toml::Table = text.parse().map_err(|e| {
+        CpdError::new(
+            ErrorCode::Internal,
+            format!("{} is not TOML: {e}", path.display()),
+        )
+    })?;
+    Ok(value
+        .get("pr")
+        .and_then(|v| v.get("post"))
+        .and_then(|v| v.get("merged_reaction"))
+        .is_some())
 }
 
 #[cfg(test)]
@@ -225,18 +264,44 @@ mod tests {
     fn a_refused_row_is_parked_once_with_one_event_and_reopens_with_another_emoji() {
         let (_dir, mut store) = store();
         let file = Path::new("/h/policy/acme/owner.toml");
-        assert!(store.write("t", |tx| refuse(tx, "watch", 1, "invalid_name", Some(file))).unwrap());
-        assert!(!store.write("t", |tx| refuse(tx, "watch", 1, "invalid_name", Some(file))).unwrap(), "already parked: nothing written");
-        let (events, plan): (i64, Option<String>) =
-            store.read(|c| Ok(c.query_row("SELECT count(*), max(plan) FROM events WHERE kind = 'error'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+        assert!(
+            store
+                .write("t", |tx| refuse(tx, "watch", 1, "invalid_name", Some(file)))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .write("t", |tx| refuse(tx, "watch", 1, "invalid_name", Some(file)))
+                .unwrap(),
+            "already parked: nothing written"
+        );
+        let (events, plan): (i64, Option<String>) = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*), max(plan) FROM events WHERE kind = 'error'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
         assert_eq!((events, plan.as_deref()), (1, Some("pay")));
-        assert_eq!(store.read(|c| next_due(c, &[])).unwrap().map(|d| d.id), Some(2), "a parked row is never due");
+        assert_eq!(
+            store.read(|c| next_due(c, &[])).unwrap().map(|d| d.id),
+            Some(2),
+            "a parked row is never due"
+        );
         let parked_rows = store.read(parked).unwrap();
         assert_eq!(parked_rows.len(), 1);
         assert_eq!(parked_rows[0].merge, Some(MergeOf { plan: "pay".into(), workflow: "api".into() }));
         assert!(!store.write("t", |tx| set_emoji(tx, 1, "x")).unwrap(), "a refused row keeps its emoji");
         assert!(store.write("t", |tx| reopen(tx, 1, "git-merged")).unwrap());
-        assert_eq!(store.read(|c| next_due(c, &[])).unwrap().map(|d| (d.id, d.emoji)), Some((1, "git-merged".to_owned())));
+        assert_eq!(
+            store
+                .read(|c| next_due(c, &[]))
+                .unwrap()
+                .map(|d| (d.id, d.emoji)),
+            Some((1, "git-merged".to_owned()))
+        );
         assert!(store.write("t", |tx| set_emoji(tx, 1, "y")).unwrap());
     }
 }

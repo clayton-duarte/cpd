@@ -20,7 +20,8 @@ pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
     let (event, target) = env.store.write("session resume", |tx| {
         let target = row::load(tx, &id)?;
         check(&target)?;
-        if target.state != State::Blocked || target.state_label.as_deref() != Some(LOOP_GUARD_LABEL) {
+        if target.state != State::Blocked || target.state_label.as_deref() != Some(LOOP_GUARD_LABEL)
+        {
             return Err(CpdError::new(
                 ErrorCode::NotLoopGuarded,
                 format!("Session {} is not blocked by the loop guard.", target.id),
@@ -28,8 +29,16 @@ pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
             .with("state", target.state.as_str())
             .with("label", target.state_label.clone()));
         }
-        let event = append(tx, scoped(NewEvent::session_resumed(format!("Loop guard of Session {} resumed.", target.id)), &target))?;
+        let event = append(
+            tx,
+            scoped(
+                NewEvent::session_resumed(format!("Loop guard of Session {} resumed.", target.id)),
+                &target,
+            ),
+        )?;
         Ok((event, target))
     })?;
-    Ok(Output::success(json!({"event": event, "session": target.id})))
+    Ok(Output::success(
+        json!({"event": event, "session": target.id}),
+    ))
 }

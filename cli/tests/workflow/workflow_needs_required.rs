@@ -5,7 +5,8 @@ use crate::workflow::{Added, added};
 use serde_json::{Value, json};
 
 fn error(run: &crate::common::Run) -> Value {
-    let v: Value = serde_json::from_str(run.stdout.trim()).unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr));
+    let v: Value = serde_json::from_str(run.stdout.trim())
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr));
     v["error"].clone()
 }
 
@@ -15,9 +16,16 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
     let e = error(&run);
     assert_eq!(e["code"], "needs_required", "{shape}: {e}");
     assert_eq!(run.exit, 3, "{shape}");
-    assert_eq!(e["details"], json!({"plan": "pay", "pr": key, "phase": "dispatch"}), "{shape}");
+    assert_eq!(
+        e["details"],
+        json!({"plan": "pay", "pr": key, "phase": "dispatch"}),
+        "{shape}"
+    );
     let msg = e["message"].as_str().unwrap();
-    assert!(msg.contains("--needs") && msg.contains("--no-needs"), "{msg}");
+    assert!(
+        msg.contains("--needs") && msg.contains("--no-needs"),
+        "{msg}"
+    );
     // Nothing written.
     let workflows: i64 = f.fx.env.query(&format!("SELECT count(*) FROM workflows WHERE plan = 'pay' AND key = '{key}'"));
     let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND workflow = '{key}'"));
@@ -29,7 +37,9 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
 fn workflow_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
     let f = added("dispatch");
     assert_refused(&f, "fix", "config");
-    let stub: i64 = f.fx.env.query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
+    let stub: i64 =
+        f.fx.env
+            .query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
     assert_eq!(stub, 0);
 }
 
@@ -78,8 +88,12 @@ fn workflow_add_in_plan_phase_needs_no_flag() {
 fn workflow_add_rerun_in_dispatch_without_a_flag_is_already() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
-    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
-    assert_eq!(f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"], true);
+    f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"])
+        .ok();
+    assert_eq!(
+        f.add("fix", &f.repo, &["--base", "pay/repo"]).ok()["already"],
+        true
+    );
 }
 
 /// A stacked PR (`--base` names a PR of the Plan in its repo, or that PR's Lead Branch) needs neither flag: its base is its link.

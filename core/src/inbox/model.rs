@@ -75,9 +75,28 @@ impl Kind {
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard, ModelsChanged, Deploy, DraftsParked, PrClosed]
-            .into_iter()
-            .find(|k| k.as_str() == s)
+        [
+            Dialog,
+            PlanReview,
+            Unread,
+            JobStuck,
+            EngineError,
+            EngineDown,
+            Question,
+            PrFailing,
+            PrChanges,
+            PrReady,
+            ReviewRequested,
+            CurateRetire,
+            CurateDocs,
+            LoopGuard,
+            ModelsChanged,
+            Deploy,
+            DraftsParked,
+            PrClosed,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == s)
     }
 }
 
@@ -108,7 +127,16 @@ impl Urgency {
     }
 
     pub fn parse(s: &str) -> Option<Urgency> {
-        [Urgency::White, Urgency::Cyan, Urgency::Blue, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
+        [
+            Urgency::White,
+            Urgency::Cyan,
+            Urgency::Blue,
+            Urgency::Magenta,
+            Urgency::Yellow,
+            Urgency::Red,
+        ]
+        .into_iter()
+        .find(|u| u.as_str() == s)
     }
 }
 
@@ -186,14 +214,18 @@ impl From<&Item> for Condition {
     }
 }
 
-const COLUMNS: &str = "id, kind, urgency, subject, label, url, context, plan, job, session, record, event,
+const COLUMNS: &str =
+    "id, kind, urgency, subject, label, url, context, plan, job, session, record, event,
                        opened_at, closed_at, snoozed_until, dismissed_at, claimed_at";
 
 /// A stored value that does not parse: the database was written outside cpd.
 fn corrupt(id: i64, column: &str, value: &str) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Inbox item {id} has an invalid {column}: {value:?}."))
-        .with("item", id)
-        .with("column", column)
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Inbox item {id} has an invalid {column}: {value:?}."),
+    )
+    .with("item", id)
+    .with("column", column)
 }
 
 fn id_column<T>(
@@ -202,7 +234,9 @@ fn id_column<T>(
     value: Option<String>,
     parse: fn(&str) -> Result<T, CpdError>,
 ) -> Result<Option<T>, CpdError> {
-    value.map(|v| parse(&v).map_err(|_| corrupt(id, column, &v))).transpose()
+    value
+        .map(|v| parse(&v).map_err(|_| corrupt(id, column, &v)))
+        .transpose()
 }
 
 impl Item {
@@ -232,7 +266,11 @@ impl Item {
     }
 }
 
-fn items(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Item>, CpdError> {
+fn items(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<Item>, CpdError> {
     let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query(params)?;
     let mut items = Vec::new();
@@ -244,7 +282,12 @@ fn items(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<
 
 /// One item, open or closed. A plain read: it takes no lock.
 pub fn get(conn: &Connection, id: i64) -> Result<Option<Item>, CpdError> {
-    Ok(items(conn, &format!("SELECT {COLUMNS} FROM inbox_items WHERE id = ?1"), [id])?.pop())
+    Ok(items(
+        conn,
+        &format!("SELECT {COLUMNS} FROM inbox_items WHERE id = ?1"),
+        [id],
+    )?
+    .pop())
 }
 
 /// Which items [`list`] returns.
@@ -273,8 +316,11 @@ pub const ENGINE_DOWN_LABEL: &str = "engine is down";
 pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
     let path = home.watch_lock();
     let failed = |what: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
-            .with("lock", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use the engine's lock {}: {what}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
     };
     let file = match File::open(&path) {
         Ok(file) => file,
@@ -301,7 +347,8 @@ pub fn one_line(label: &str) -> String {
 /// magenta, blue, cyan, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     let context = filter.context.as_ref().map(ContextId::as_str);
-    let select = format!("SELECT {COLUMNS} FROM inbox_items WHERE (?1 IS NULL OR context = ?1) AND");
+    let select =
+        format!("SELECT {COLUMNS} FROM inbox_items WHERE (?1 IS NULL OR context = ?1) AND");
     let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 WHEN 'blue' THEN 3 WHEN 'cyan' THEN 4 ELSE 5 END, opened_at, id";
     match &filter.state {
         State::Visible { now } => items(
@@ -322,20 +369,42 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
 }
 
 /// Closes `item` at `closed_at` and appends its `inbox-closed` Event, scoped with the item's links.
-pub fn close_item(tx: &crate::store::WriteTxn<'_>, item: &Item, closed_at: &str) -> Result<(), CpdError> {
-    tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, closed_at])?;
-    let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, one_line(&item.label)), item.id, item.kind.as_str());
-    events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+pub fn close_item(
+    tx: &crate::store::WriteTxn<'_>,
+    item: &Item,
+    closed_at: &str,
+) -> Result<(), CpdError> {
+    tx.execute(
+        "UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1",
+        params![item.id, closed_at],
+    )?;
+    let event = NewEvent::inbox_closed(
+        format!("Inbox item {} closed: {}.", item.id, one_line(&item.label)),
+        item.id,
+        item.kind.as_str(),
+    );
+    events::append(
+        tx,
+        scope(event, &item.context, &item.plan, &item.job, &item.session),
+    )?;
     Ok(())
 }
 
 /// Closes the open `pr-ready` item of the pull request `repo#number` (hs-n404), in the caller's transaction, at its time, as
 /// [`reconcile`] does (`closed_at`, `inbox-closed`): every path that stores a pull request as merged calls it, so the item
 /// never waits for E8's next pass. Nothing is written when no such item is open.
-pub fn close_pr_ready(tx: &crate::store::WriteTxn<'_>, repo: &str, number: i64) -> Result<(), CpdError> {
+pub fn close_pr_ready(
+    tx: &crate::store::WriteTxn<'_>,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
     let subject = format!("pr:{repo}#{number}");
-    for item in open_items(tx)?.into_iter().filter(|i| i.kind == Kind::PrReady && i.subject == subject) {
-        let at: String = tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?;
+    for item in open_items(tx)?
+        .into_iter()
+        .filter(|i| i.kind == Kind::PrReady && i.subject == subject)
+    {
+        let at: String =
+            tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?;
         close_item(tx, &item, &at)?;
     }
     Ok(())
@@ -360,11 +429,30 @@ impl Changes {
 /// plan, session); a `dialog` item changes its label (the Verdict's option); a `drafts-parked` item changes its label (the count of drafts, hs-d731); an `unread` item changes its label (Row 2, the title).
 fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
     open.iter()
-        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs | Kind::PrReady | Kind::Dialog | Kind::DraftsParked | Kind::Unread))
-        .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
+        .filter(|i| {
+            matches!(
+                i.kind,
+                Kind::CurateRetire
+                    | Kind::CurateDocs
+                    | Kind::PrReady
+                    | Kind::Dialog
+                    | Kind::DraftsParked
+                    | Kind::Unread
+            )
+        })
+        .filter_map(|i| {
+            conditions
+                .iter()
+                .find(|c| c.identity() == i.identity())
+                .map(|c| (i, c))
+        })
         .filter(|(i, c)| {
             i.label != c.label
-                || (i.kind == Kind::PrReady && (i.url != c.url || i.context != c.context || i.plan != c.plan || i.session != c.session))
+                || (i.kind == Kind::PrReady
+                    && (i.url != c.url
+                        || i.context != c.context
+                        || i.plan != c.plan
+                        || i.session != c.session))
         })
         .collect()
 }
@@ -374,14 +462,24 @@ fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Ite
 fn diff<'a>(open: &'a [Item], conditions: &'a [Condition]) -> (Vec<&'a Item>, Vec<&'a Condition>) {
     let wanted: BTreeSet<_> = conditions.iter().map(Condition::identity).collect();
     let held: BTreeSet<_> = open.iter().map(Item::identity).collect();
-    let gone = open.iter().filter(|i| !wanted.contains(&i.identity())).collect();
+    let gone = open
+        .iter()
+        .filter(|i| !wanted.contains(&i.identity()))
+        .collect();
     let mut seen = BTreeSet::new();
-    let new = conditions.iter().filter(|c| !held.contains(&c.identity()) && seen.insert(c.identity())).collect();
+    let new = conditions
+        .iter()
+        .filter(|c| !held.contains(&c.identity()) && seen.insert(c.identity()))
+        .collect();
     (gone, new)
 }
 
 pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
-    items(conn, &format!("SELECT {COLUMNS} FROM inbox_items WHERE closed_at IS NULL ORDER BY id"), [])
+    items(
+        conn,
+        &format!("SELECT {COLUMNS} FROM inbox_items WHERE closed_at IS NULL ORDER BY id"),
+        [],
+    )
 }
 
 /// Engine step E8 (§3.7): in one write transaction, opens an item for each
@@ -391,7 +489,11 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 /// `dialog`, `pr-ready`, `drafts-parked` or `unread` item whose condition moved inside its identity (see
 /// `relabelled`) is updated in place, with no Event. Writes
 /// nothing, not even a `txns` row, when nothing changed. `now` is §1.3's time.
-pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Result<Changes, CpdError> {
+pub fn reconcile(
+    store: &mut Store,
+    conditions: &[Condition],
+    now: &str,
+) -> Result<Changes, CpdError> {
     let open = store.read(open_items)?;
     let (gone, new) = diff(&open, conditions);
     if gone.is_empty() && new.is_empty() && relabelled(&open, conditions).is_empty() {
@@ -483,8 +585,8 @@ fn scope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::home::CpdHome;
+    use serde_json::json;
 
     fn store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
@@ -527,20 +629,43 @@ mod tests {
     }
 
     fn count(store: &mut Store, sql: &str) -> i64 {
-        store.read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?))
+            .unwrap()
     }
 
     fn all(store: &mut Store, state: State) -> Vec<Item> {
-        store.read(|c| list(c, &Filter { context: None, state })).unwrap()
+        store
+            .read(|c| {
+                list(
+                    c,
+                    &Filter {
+                        context: None,
+                        state,
+                    },
+                )
+            })
+            .unwrap()
     }
 
     fn visible(store: &mut Store) -> Vec<Item> {
-        all(store, State::Visible { now: "2026-01-01T00:00:00.000Z".into() })
+        all(
+            store,
+            State::Visible {
+                now: "2026-01-01T00:00:00.000Z".into(),
+            },
+        )
     }
 
     #[test]
     fn urgency_orders_white_cyan_blue_magenta_yellow_red_and_parses_cyan() {
-        assert!(Urgency::White < Urgency::Cyan && Urgency::Cyan < Urgency::Blue && Urgency::Blue < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+        assert!(
+            Urgency::White < Urgency::Cyan
+                && Urgency::Cyan < Urgency::Blue
+                && Urgency::Blue < Urgency::Magenta
+                && Urgency::Magenta < Urgency::Yellow
+                && Urgency::Yellow < Urgency::Red
+        );
         assert_eq!(Urgency::parse("cyan"), Some(Urgency::Cyan));
         assert_eq!(Urgency::Cyan.as_str(), "cyan");
     }
@@ -548,8 +673,18 @@ mod tests {
     #[test]
     fn kinds_and_urgencies_round_trip_their_names() {
         for name in [
-            "dialog", "plan-review", "unread", "job-stuck", "engine-error", "engine-down", "question", "pr-failing",
-            "pr-changes", "pr-ready", "review-requested", "pr-closed",
+            "dialog",
+            "plan-review",
+            "unread",
+            "job-stuck",
+            "engine-error",
+            "engine-down",
+            "question",
+            "pr-failing",
+            "pr-changes",
+            "pr-ready",
+            "review-requested",
+            "pr-closed",
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }
@@ -575,10 +710,19 @@ mod tests {
         assert_eq!((changes.opened.clone(), changes.closed), (vec![1], vec![]));
 
         let item = store.read(|c| get(c, 1)).unwrap().unwrap();
-        assert_eq!((item.kind, item.urgency, item.subject.as_str()), (Kind::Dialog, Urgency::Magenta, "session:s1"));
-        assert_eq!((item.label.as_str(), item.url.as_deref(), item.event), ("inbox asks you", Some("http://x"), Some(1)));
+        assert_eq!(
+            (item.kind, item.urgency, item.subject.as_str()),
+            (Kind::Dialog, Urgency::Magenta, "session:s1")
+        );
+        assert_eq!(
+            (item.label.as_str(), item.url.as_deref(), item.event),
+            ("inbox asks you", Some("http://x"), Some(1))
+        );
         assert_eq!(item.opened_at, "2026-01-01T00:00:00.000Z");
-        assert_eq!((item.closed_at, item.snoozed_until, item.dismissed_at), (None, None, None));
+        assert_eq!(
+            (item.closed_at, item.snoozed_until, item.dismissed_at),
+            (None, None, None)
+        );
 
         let event: (String, String, Option<String>, Option<String>, String) = store
             .read(|c| {
@@ -589,14 +733,23 @@ mod tests {
             .unwrap();
         assert_eq!(event.0, "inbox-opened");
         let data: serde_json::Value = serde_json::from_str(&event.1).unwrap();
-        assert_eq!(data, json!({"item": 1, "kind": "dialog", "urgency": "magenta", "label": "inbox asks you"}));
-        assert_eq!((event.2.as_deref(), event.3.as_deref()), (Some("ctx"), Some("s1")));
+        assert_eq!(
+            data,
+            json!({"item": 1, "kind": "dialog", "urgency": "magenta", "label": "inbox asks you"})
+        );
+        assert_eq!(
+            (event.2.as_deref(), event.3.as_deref()),
+            (Some("ctx"), Some("s1"))
+        );
     }
 
     #[test]
     fn unchanged_conditions_write_nothing() {
         let (_dir, mut store) = store();
-        let conditions = [dialog("session:a", Urgency::Red), condition(Kind::LoopGuard, Urgency::Red, "session:b")];
+        let conditions = [
+            dialog("session:a", Urgency::Red),
+            condition(Kind::LoopGuard, Urgency::Red, "session:b"),
+        ];
         reconcile(&mut store, &conditions, "2026-01-01T00:00:00.000Z").unwrap();
         let (txns, events, history) = (
             count(&mut store, "SELECT count(*) FROM txns"),
@@ -605,7 +758,10 @@ mod tests {
         );
         // The same conditions, in another order and with another label, are the same conditions.
         let again = [
-            Condition { label: "renamed".into(), ..condition(Kind::LoopGuard, Urgency::Red, "session:b") },
+            Condition {
+                label: "renamed".into(),
+                ..condition(Kind::LoopGuard, Urgency::Red, "session:b")
+            },
             dialog("session:a", Urgency::Red),
         ];
         let changes = reconcile(&mut store, &again, "2026-01-01T00:05:00.000Z").unwrap();
@@ -618,17 +774,37 @@ mod tests {
     #[test]
     fn a_gone_condition_closes_its_item_and_appends_inbox_closed() {
         let (_dir, mut store) = store();
-        reconcile(&mut store, &[dialog("session:a", Urgency::Red), dialog("session:b", Urgency::Red)], "t1").unwrap();
+        reconcile(
+            &mut store,
+            &[
+                dialog("session:a", Urgency::Red),
+                dialog("session:b", Urgency::Red),
+            ],
+            "t1",
+        )
+        .unwrap();
         let changes = reconcile(&mut store, &[dialog("session:b", Urgency::Red)], "t2").unwrap();
         assert_eq!((changes.opened, changes.closed), (vec![], vec![1]));
         let closed = store.read(|c| get(c, 1)).unwrap().unwrap();
-        assert_eq!((closed.opened_at.as_str(), closed.closed_at.as_deref()), ("t1", Some("t2")));
+        assert_eq!(
+            (closed.opened_at.as_str(), closed.closed_at.as_deref()),
+            ("t1", Some("t2"))
+        );
         assert_eq!(store.read(|c| get(c, 2)).unwrap().unwrap().closed_at, None);
         let last: (String, String) = store
-            .read(|c| Ok(c.query_row("SELECT kind, data FROM events ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT kind, data FROM events ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
             .unwrap();
         assert_eq!(last.0, "inbox-closed");
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&last.1).unwrap(), json!({"item": 1, "kind": "dialog"}));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&last.1).unwrap(),
+            json!({"item": 1, "kind": "dialog"})
+        );
     }
 
     #[test]
@@ -638,7 +814,12 @@ mod tests {
         let changes = reconcile(&mut store, &[dialog("session:a", Urgency::Red)], "t2").unwrap();
         assert_eq!((changes.opened, changes.closed), (vec![2], vec![1]));
         let open = all(&mut store, State::Open);
-        assert_eq!(open.iter().map(|i| (i.id, i.urgency, i.opened_at.as_str())).collect::<Vec<_>>(), vec![(2, Urgency::Red, "t2")]);
+        assert_eq!(
+            open.iter()
+                .map(|i| (i.id, i.urgency, i.opened_at.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(2, Urgency::Red, "t2")]
+        );
     }
 
     #[test]
@@ -652,7 +833,13 @@ mod tests {
         assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 2);
         let closed = all(&mut store, State::Closed { limit: 50 });
         assert_eq!(closed.iter().map(|i| i.id).collect::<Vec<_>>(), vec![1]);
-        assert_eq!(all(&mut store, State::Open).iter().map(|i| i.id).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(
+            all(&mut store, State::Open)
+                .iter()
+                .map(|i| i.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     #[test]
@@ -666,8 +853,10 @@ mod tests {
             ("r1", Urgency::Red, "t4"),
             ("m2", Urgency::Magenta, "t6"),
         ] {
-            let mut open: Vec<Condition> =
-                all(&mut store, State::Open).iter().map(|i| dialog(&i.subject, i.urgency)).collect();
+            let mut open: Vec<Condition> = all(&mut store, State::Open)
+                .iter()
+                .map(|i| dialog(&i.subject, i.urgency))
+                .collect();
             open.push(dialog(subject, urgency));
             reconcile(&mut store, &open, at).unwrap();
         }
@@ -678,7 +867,16 @@ mod tests {
     #[test]
     fn hidden_items_are_not_visible_and_a_passed_snooze_returns_at_its_rank() {
         let (_dir, mut store) = store();
-        reconcile(&mut store, &[dialog("a", Urgency::Red), dialog("b", Urgency::Red), dialog("c", Urgency::Red)], "t1").unwrap();
+        reconcile(
+            &mut store,
+            &[
+                dialog("a", Urgency::Red),
+                dialog("b", Urgency::Red),
+                dialog("c", Urgency::Red),
+            ],
+            "t1",
+        )
+        .unwrap();
         store
             .write("test", |tx| {
                 Ok(tx.execute_batch(
@@ -690,7 +888,9 @@ mod tests {
         let subjects = |items: Vec<Item>| items.into_iter().map(|i| i.subject).collect::<Vec<_>>();
         assert_eq!(subjects(visible(&mut store)), ["c"]);
         assert_eq!(subjects(all(&mut store, State::Open)), ["a", "b", "c"]);
-        let later = State::Visible { now: "2026-01-01T01:00:00.000Z".into() };
+        let later = State::Visible {
+            now: "2026-01-01T01:00:00.000Z".into(),
+        };
         assert_eq!(subjects(all(&mut store, later)), ["a", "c"]);
     }
 
@@ -698,23 +898,43 @@ mod tests {
     fn the_list_keeps_one_context_and_closed_come_newest_first_up_to_the_limit() {
         let (_dir, mut store) = store();
         let ctx = Some(ContextId::parse("ctx").unwrap());
-        let in_ctx = Condition { context: ctx.clone(), ..dialog("in", Urgency::Red) };
+        let in_ctx = Condition {
+            context: ctx.clone(),
+            ..dialog("in", Urgency::Red)
+        };
         reconcile(&mut store, &[in_ctx, dialog("out", Urgency::Red)], "t1").unwrap();
-        let filter = Filter { context: ctx, state: State::Open };
+        let filter = Filter {
+            context: ctx,
+            state: State::Open,
+        };
         let found = store.read(|c| list(c, &filter)).unwrap();
-        assert_eq!(found.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(), ["in"]);
+        assert_eq!(
+            found.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(),
+            ["in"]
+        );
 
         reconcile(&mut store, &[], "t2").unwrap();
         reconcile(&mut store, &[dialog("x", Urgency::Red)], "t3").unwrap();
         reconcile(&mut store, &[], "t4").unwrap();
         let closed = all(&mut store, State::Closed { limit: 2 });
-        assert_eq!(closed.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(), ["x", "out"]);
+        assert_eq!(
+            closed
+                .iter()
+                .map(|i| i.subject.as_str())
+                .collect::<Vec<_>>(),
+            ["x", "out"]
+        );
     }
 
     #[test]
     fn a_kind_that_is_not_stored_is_refused_and_nothing_is_written() {
         let (_dir, mut store) = store();
-        let err = reconcile(&mut store, &[condition(Kind::EngineDown, Urgency::Red, "engine")], "t1").unwrap_err();
+        let err = reconcile(
+            &mut store,
+            &[condition(Kind::EngineDown, Urgency::Red, "engine")],
+            "t1",
+        )
+        .unwrap_err();
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
         assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 0);
     }

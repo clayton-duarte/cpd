@@ -60,7 +60,12 @@ pub(crate) const COLUMNS: &str = "id, repo, number, url, title, draft, state, re
 
 /// The items a `feedback` column holds: parsed once, here.
 fn feedback_of(text: Option<String>) -> rusqlite::Result<Option<Vec<Item>>> {
-    text.map(|t| serde_json::from_str(&t).map_err(|e| rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(e)))).transpose()
+    text.map(|t| {
+        serde_json::from_str(&t).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(e))
+        })
+    })
+    .transpose()
 }
 
 /// The `feedback` column of `items`: JSON.
@@ -96,7 +101,10 @@ impl PullRequest {
 
     /// The searches that last listed the pull request.
     pub(super) fn membership(&self) -> Membership {
-        Membership { authored: self.authored, review_requested: self.review_requested }
+        Membership {
+            authored: self.authored,
+            review_requested: self.review_requested,
+        }
     }
 
     /// `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`,
@@ -114,7 +122,10 @@ impl PullRequest {
     /// found. `created_at` is not compared: it is written once, with the row, and never changes (§2.2, store-W5);
     /// `updated_at` is not either: the row's is that of its last comments read, not of the listing.
     pub(super) fn holds(&self, listed: &Listed, read: Option<&Read>) -> Result<bool, CpdError> {
-        let read_held = read.is_none_or(|r| self.updated_at.as_deref() == Some(r.updated_at.as_str()) && self.feedback.as_deref() == Some(r.items.as_slice()));
+        let read_held = read.is_none_or(|r| {
+            self.updated_at.as_deref() == Some(r.updated_at.as_str())
+                && self.feedback.as_deref() == Some(r.items.as_slice())
+        });
         if !read_held {
             return Ok(false);
         }
@@ -122,7 +133,11 @@ impl PullRequest {
         if self.state == "merged" && listed.pr.state != super::status::PrState::Merged {
             return Ok(true);
         }
-        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), updated_at: self.polled()?.updated_at, ..listed.pr.clone() };
+        let same_but_created_at = PolledPr {
+            created_at: self.created_at.clone(),
+            updated_at: self.polled()?.updated_at,
+            ..listed.pr.clone()
+        };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
     }
 
@@ -142,15 +157,24 @@ impl PullRequest {
                 .into_iter()
                 .find(|s| s.as_str() == self.state)
                 .ok_or_else(|| bad("state", &self.state))?,
-            review_decision: [ReviewDecision::None, ReviewDecision::Approved, ReviewDecision::ChangesRequested]
-                .into_iter()
-                .find(|s| s.as_str() == self.review_decision)
-                .ok_or_else(|| bad("review_decision", &self.review_decision))?,
-            checks: [ChecksSummary::None, ChecksSummary::Passed, ChecksSummary::Pending, ChecksSummary::Failed]
-                .into_iter()
-                .find(|s| s.as_str() == self.checks)
-                .ok_or_else(|| bad("checks", &self.checks))?,
-            mergeable: [Mergeable::Mergeable, Mergeable::Conflicting, Mergeable::Unknown]
+            review_decision: [
+                ReviewDecision::None,
+                ReviewDecision::Approved,
+                ReviewDecision::ChangesRequested,
+            ]
+            .into_iter()
+            .find(|s| s.as_str() == self.review_decision)
+            .ok_or_else(|| bad("review_decision", &self.review_decision))?,
+            checks: [
+                ChecksSummary::None,
+                ChecksSummary::Passed,
+                ChecksSummary::Pending,
+                ChecksSummary::Failed,
+            ]
+            .into_iter()
+            .find(|s| s.as_str() == self.checks)
+            .ok_or_else(|| bad("checks", &self.checks))?,
+            mergeable: [Mergeable::Clean, Mergeable::Conflicting, Mergeable::Unknown]
                 .into_iter()
                 .find(|s| s.as_str() == self.mergeable)
                 .ok_or_else(|| bad("mergeable", &self.mergeable))?,
@@ -169,13 +193,21 @@ impl PullRequest {
 
 /// The row `id`, else `store_failed`: a `prs` row points to it, so it exists.
 pub fn load(conn: &Connection, id: i64) -> Result<PullRequest, CpdError> {
-    conn.query_row(&format!("SELECT {COLUMNS} FROM pull_requests WHERE id = ?1"), [id], PullRequest::from_row)
-        .optional()?
-        .ok_or_else(|| CpdError::bad_row(format!("no pull request {id}")))
+    conn.query_row(
+        &format!("SELECT {COLUMNS} FROM pull_requests WHERE id = ?1"),
+        [id],
+        PullRequest::from_row,
+    )
+    .optional()?
+    .ok_or_else(|| CpdError::bad_row(format!("no pull request {id}")))
 }
 
 /// The row of `(repo, number)`, if any.
-pub(super) fn find(conn: &Connection, repo: &str, number: i64) -> Result<Option<PullRequest>, CpdError> {
+pub(super) fn find(
+    conn: &Connection,
+    repo: &str,
+    number: i64,
+) -> Result<Option<PullRequest>, CpdError> {
     Ok(conn
         .query_row(
             &format!("SELECT {COLUMNS} FROM pull_requests WHERE repo = ?1 AND number = ?2"),
@@ -233,8 +265,12 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, WorkflowKey, 
 
 /// Every row stored `open`, owned or not, in id order.
 pub(super) fn stored_open(conn: &Connection) -> Result<Vec<PullRequest>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM pull_requests WHERE state = 'open' ORDER BY id"))?;
-    Ok(stmt.query_map([], PullRequest::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM pull_requests WHERE state = 'open' ORDER BY id"
+    ))?;
+    Ok(stmt
+        .query_map([], PullRequest::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// What `upsert` changed: the row before (none when it was inserted) and after.
@@ -253,17 +289,31 @@ pub(super) fn txn_time(tx: &WriteTxn<'_>) -> Result<String, CpdError> {
 /// (`changed_at` = the transaction's time; the searches that listed it are values):
 /// a poll that finds nothing new writes nothing. `None` when nothing changed. `created_at`
 /// is the one value never updated: GitHub's, as first written.
-pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) -> Result<Option<Change>, CpdError> {
-    let Listed { pr: polled, membership } = listed;
+pub(super) fn upsert(
+    tx: &WriteTxn<'_>,
+    listed: &Listed,
+    read: Option<&Read>,
+) -> Result<Option<Change>, CpdError> {
+    let Listed {
+        pr: polled,
+        membership,
+    } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
-        return Ok(Some(Change { before: None, after: insert(tx, polled, *membership, read)? }));
+        return Ok(Some(Change {
+            before: None,
+            after: insert(tx, polled, *membership, read)?,
+        }));
     };
     if before.holds(listed, read)? {
         return Ok(None);
     }
     let at = txn_time(tx)?;
-    let updated_at = read.map(|r| r.updated_at.clone()).or_else(|| before.updated_at.clone());
-    let feedback = read.map(|r| feedback_text(&r.items)).or_else(|| before.feedback.as_deref().map(feedback_text));
+    let updated_at = read
+        .map(|r| r.updated_at.clone())
+        .or_else(|| before.updated_at.clone());
+    let feedback = read
+        .map(|r| feedback_text(&r.items))
+        .or_else(|| before.feedback.as_deref().map(feedback_text));
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
                 merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
@@ -288,7 +338,10 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
             before.id
         ],
     )?;
-    Ok(Some(Change { after: load(tx, before.id)?, before: Some(before) }))
+    Ok(Some(Change {
+        after: load(tx, before.id)?,
+        before: Some(before),
+    }))
 }
 
 /// The row of `polled`'s pull request: inserted when absent (the User's own: `authored`
@@ -297,11 +350,25 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed, read: Option<&Read>) ->
 pub(super) fn ensure(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<i64, CpdError> {
     match find(tx, &polled.repo, polled.number)? {
         Some(row) => Ok(row.id),
-        None => Ok(insert(tx, polled, Membership { authored: true, review_requested: false }, None)?.id),
+        None => Ok(insert(
+            tx,
+            polled,
+            Membership {
+                authored: true,
+                review_requested: false,
+            },
+            None,
+        )?
+        .id),
     }
 }
 
-fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership, read: Option<&Read>) -> Result<PullRequest, CpdError> {
+fn insert(
+    tx: &WriteTxn<'_>,
+    polled: &PolledPr,
+    membership: Membership,
+    read: Option<&Read>,
+) -> Result<PullRequest, CpdError> {
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
@@ -375,11 +442,16 @@ impl Reason {
 /// (`poll::update_for_conflict`). Checks are a reason only when the Workflow's `pr.feedback.checks` is `any` (§8.3, hs-d292).
 pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks, new: &[&Item], post: PostFacts, excused: Excused) -> Vec<Reason> {
     let (checks, review, state) = match before {
-        Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str()),
+        Some(b) => (
+            b.checks.as_str(),
+            b.review_decision.as_str(),
+            b.state.as_str(),
+        ),
         None => ("none", "none", "open"),
     };
     let mut reasons = Vec::new();
-    if checks_policy == Checks::Any && !excused.0 && after.checks == "failed" && checks != "failed" {
+    if checks_policy == Checks::Any && !excused.0 && after.checks == "failed" && checks != "failed"
+    {
         reasons.push(Reason::ChecksFailed);
     }
     if after.review_decision == "changes_requested" && review != "changes_requested" {
@@ -398,7 +470,11 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
         if !post.posted && !was_ready && super::postable::unready(after).is_empty() {
             reasons.push(Reason::ReadyToPost);
         }
-        if post.posted && after.state == "open" && after.review_decision == "approved" && review != "approved" {
+        if post.posted
+            && after.state == "open"
+            && after.review_decision == "approved"
+            && review != "approved"
+        {
             reasons.push(Reason::Approved);
         }
     }
@@ -408,10 +484,13 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
 /// `owner/name` and the number of `https://github.com/<owner>/<name>/pull/<n>`
 /// (what `gh pr create` prints); `None` for any other URL.
 pub(super) fn parse_url(url: &str) -> Option<(String, i64)> {
-    let (repo, number) = url.strip_prefix("https://github.com/")?.split_once("/pull/")?;
+    let (repo, number) = url
+        .strip_prefix("https://github.com/")?
+        .split_once("/pull/")?;
     let (owner, name) = repo.split_once('/')?;
     let number = number.parse::<i64>().ok().filter(|n| *n >= 1)?;
-    (!owner.is_empty() && !name.is_empty() && !name.contains('/')).then(|| (repo.to_owned(), number))
+    (!owner.is_empty() && !name.is_empty() && !name.contains('/'))
+        .then(|| (repo.to_owned(), number))
 }
 
 #[cfg(test)]
@@ -421,7 +500,10 @@ mod tests {
     use crate::policy::Checks;
 
     const NOT: Excused = Excused(false);
-    const OFF: PostFacts = PostFacts { enabled: false, posted: false };
+    const OFF: PostFacts = PostFacts {
+        enabled: false,
+        posted: false,
+    };
 
     /// `super::attention` with `pr.feedback.checks` `any`, cpd's default.
     fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
@@ -458,44 +540,142 @@ mod tests {
     #[test]
     fn attention_is_checks_failing_changes_requested_and_closing_each_from_anything_else() {
         let open = row("open", "none", "none");
-        assert_eq!(attention(Some(&open), &row("open", "none", "failed")), [Reason::ChecksFailed]);
-        assert_eq!(attention(Some(&row("open", "none", "pending")), &row("open", "none", "failed")), [Reason::ChecksFailed]);
-        assert_eq!(attention(Some(&open), &row("open", "changes_requested", "none")), [Reason::ChangesRequested]);
-        assert_eq!(attention(Some(&row("open", "approved", "none")), &row("open", "changes_requested", "none")), [Reason::ChangesRequested]);
-        assert_eq!(attention(Some(&open), &row("closed", "none", "none")), [Reason::Closed]);
+        assert_eq!(
+            attention(Some(&open), &row("open", "none", "failed")),
+            [Reason::ChecksFailed]
+        );
+        assert_eq!(
+            attention(
+                Some(&row("open", "none", "pending")),
+                &row("open", "none", "failed")
+            ),
+            [Reason::ChecksFailed]
+        );
+        assert_eq!(
+            attention(Some(&open), &row("open", "changes_requested", "none")),
+            [Reason::ChangesRequested]
+        );
+        assert_eq!(
+            attention(
+                Some(&row("open", "approved", "none")),
+                &row("open", "changes_requested", "none")
+            ),
+            [Reason::ChangesRequested]
+        );
+        assert_eq!(
+            attention(Some(&open), &row("closed", "none", "none")),
+            [Reason::Closed]
+        );
     }
 
     #[test]
     fn attention_ignores_failing_checks_when_the_policy_is_none_and_keeps_every_other_reason() {
         let open = row("open", "none", "none");
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None, &[], OFF, NOT), []);
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any, &[], OFF, NOT), [Reason::ChecksFailed]);
-        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None, &[], OFF, NOT);
+        assert_eq!(
+            super::attention(
+                Some(&open),
+                &row("open", "none", "failed"),
+                Checks::None,
+                &[],
+                OFF,
+                NOT
+            ),
+            []
+        );
+        assert_eq!(
+            super::attention(
+                Some(&open),
+                &row("open", "none", "failed"),
+                Checks::Any,
+                &[],
+                OFF,
+                NOT
+            ),
+            [Reason::ChecksFailed]
+        );
+        let all = super::attention(
+            Some(&row("open", "none", "pending")),
+            &row("closed", "changes_requested", "failed"),
+            Checks::None,
+            &[],
+            OFF,
+            NOT,
+        );
         assert_eq!(all, [Reason::ChangesRequested, Reason::Closed]);
     }
 
     #[test]
     fn an_excused_pr_raises_no_checks_failed_and_every_other_reason_stays() {
         let open = row("open", "none", "none");
-        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any, &[], OFF, Excused(true)), []);
-        let rest = super::attention(Some(&open), &row("closed", "changes_requested", "failed"), Checks::Any, &[], OFF, Excused(true));
+        assert_eq!(
+            super::attention(
+                Some(&open),
+                &row("open", "none", "failed"),
+                Checks::Any,
+                &[],
+                OFF,
+                Excused(true)
+            ),
+            []
+        );
+        let rest = super::attention(
+            Some(&open),
+            &row("closed", "changes_requested", "failed"),
+            Checks::Any,
+            &[],
+            OFF,
+            Excused(true),
+        );
         assert_eq!(rest, [Reason::ChangesRequested, Reason::Closed]);
     }
 
     #[test]
     fn attention_lists_every_reason_in_order() {
-        let all = attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"));
-        assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed]);
-        assert_eq!(all.iter().map(|r| r.as_str()).collect::<Vec<_>>(), ["checks_failed", "changes_requested", "closed"]);
-        let order = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Comments, Reason::Closed, Reason::ReadyToPost, Reason::Approved];
+        let all = attention(
+            Some(&row("open", "none", "pending")),
+            &row("closed", "changes_requested", "failed"),
+        );
+        assert_eq!(
+            all,
+            [
+                Reason::ChecksFailed,
+                Reason::ChangesRequested,
+                Reason::Closed
+            ]
+        );
+        assert_eq!(
+            all.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
+            ["checks_failed", "changes_requested", "closed"]
+        );
+        let order = [
+            Reason::ChecksFailed,
+            Reason::ChangesRequested,
+            Reason::Comments,
+            Reason::Closed,
+            Reason::ReadyToPost,
+            Reason::Approved,
+        ];
         assert_eq!(
             order.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
-            ["checks_failed", "changes_requested", "comments", "closed", "ready_to_post", "approved"]
+            [
+                "checks_failed",
+                "changes_requested",
+                "comments",
+                "closed",
+                "ready_to_post",
+                "approved"
+            ]
         );
     }
 
-    const ON: PostFacts = PostFacts { enabled: true, posted: false };
-    const POSTED: PostFacts = PostFacts { enabled: true, posted: true };
+    const ON: PostFacts = PostFacts {
+        enabled: true,
+        posted: false,
+    };
+    const POSTED: PostFacts = PostFacts {
+        enabled: true,
+        posted: true,
+    };
 
     fn ready() -> PullRequest {
         let mut r = row("open", "none", "passed");
@@ -503,12 +683,26 @@ mod tests {
         r
     }
 
-    fn post_reasons(before: Option<&PullRequest>, after: &PullRequest, post: PostFacts) -> Vec<Reason> {
+    fn post_reasons(
+        before: Option<&PullRequest>,
+        after: &PullRequest,
+        post: PostFacts,
+    ) -> Vec<Reason> {
         super::attention(before, after, Checks::Any, &[], post, NOT)
     }
 
     fn bot_item() -> Item {
-        Item { id: "1".into(), kind: super::super::comments::Kind::Thread, last: "t".into(), author: "bot".into(), bot: true, path: None, outdated: false, url: "u".into(), excerpt: "e".into() }
+        Item {
+            id: "1".into(),
+            kind: super::super::comments::Kind::Thread,
+            last: "t".into(),
+            author: "bot".into(),
+            bot: true,
+            path: None,
+            outdated: false,
+            url: "u".into(),
+            excerpt: "e".into(),
+        }
     }
 
     #[test]
@@ -532,13 +726,22 @@ mod tests {
         assert_eq!(post_reasons(None, &ready(), ON), [Reason::ReadyToPost]);
         let mut pending = ready();
         pending.checks = "pending".into();
-        assert_eq!(post_reasons(Some(&pending), &ready(), ON), [Reason::ReadyToPost]);
+        assert_eq!(
+            post_reasons(Some(&pending), &ready(), ON),
+            [Reason::ReadyToPost]
+        );
         let mut unread = ready();
         unread.feedback = None;
-        assert_eq!(post_reasons(Some(&unread), &ready(), ON), [Reason::ReadyToPost]);
+        assert_eq!(
+            post_reasons(Some(&unread), &ready(), ON),
+            [Reason::ReadyToPost]
+        );
         let mut later = ready();
         later.title = "other".into();
-        assert!(post_reasons(Some(&ready()), &later, ON).is_empty(), "no repeat while ready");
+        assert!(
+            post_reasons(Some(&ready()), &later, ON).is_empty(),
+            "no repeat while ready"
+        );
     }
 
     #[test]
@@ -550,7 +753,10 @@ mod tests {
         assert!(post_reasons(None, &other, ON).is_empty(), "not authored");
         let mut bot = ready();
         bot.feedback = Some(vec![bot_item()]);
-        assert!(post_reasons(None, &bot, ON).is_empty(), "a bot item is open");
+        assert!(
+            post_reasons(None, &bot, ON).is_empty(),
+            "a bot item is open"
+        );
         let mut closed = ready();
         closed.state = "closed".into();
         assert_eq!(post_reasons(None, &closed, ON), [Reason::Closed], "a closed Workflow is not ready");
@@ -563,9 +769,19 @@ mod tests {
         assert_eq!(post_reasons(None, &approved, POSTED), [Reason::Approved]);
         let mut changes = ready();
         changes.review_decision = "changes_requested".into();
-        assert_eq!(post_reasons(Some(&changes), &approved, POSTED), [Reason::Approved]);
-        assert!(post_reasons(Some(&approved), &approved, POSTED).is_empty(), "no repeat");
-        assert_eq!(post_reasons(None, &approved, ON), [Reason::ReadyToPost], "unposted: ready, no approved");
+        assert_eq!(
+            post_reasons(Some(&changes), &approved, POSTED),
+            [Reason::Approved]
+        );
+        assert!(
+            post_reasons(Some(&approved), &approved, POSTED).is_empty(),
+            "no repeat"
+        );
+        assert_eq!(
+            post_reasons(None, &approved, ON),
+            [Reason::ReadyToPost],
+            "unposted: ready, no approved"
+        );
         assert!(post_reasons(None, &approved, OFF).is_empty(), "disabled");
         let mut closed = approved.clone();
         closed.state = "closed".into();
@@ -581,7 +797,10 @@ mod tests {
     fn a_conflict_is_no_reason_to_tell_the_lead() {
         let open = || row("open", "none", "none");
         assert!(attention(Some(&open()), &conflicting(open())).is_empty());
-        assert!(attention(None, &conflicting(open())).is_empty(), "a row first seen conflicting");
+        assert!(
+            attention(None, &conflicting(open())).is_empty(),
+            "a row first seen conflicting"
+        );
     }
 
     #[test]
@@ -589,17 +808,51 @@ mod tests {
         let bad = row("open", "changes_requested", "failed");
         assert!(attention(Some(&bad), &bad).is_empty());
         assert!(attention(Some(&bad), &row("open", "approved", "passed")).is_empty());
-        assert!(attention(Some(&row("closed", "none", "none")), &row("closed", "none", "none")).is_empty());
+        assert!(
+            attention(
+                Some(&row("closed", "none", "none")),
+                &row("closed", "none", "none")
+            )
+            .is_empty()
+        );
         // Reopened, then closed again: the second closing is a change from `open`.
-        assert_eq!(attention(Some(&row("open", "none", "none")), &row("closed", "none", "none")), [Reason::Closed]);
-        assert!(attention(Some(&row("closed", "none", "none")), &row("open", "none", "none")).is_empty());
-        assert!(attention(Some(&row("open", "none", "none")), &row("merged", "none", "none")).is_empty());
+        assert_eq!(
+            attention(
+                Some(&row("open", "none", "none")),
+                &row("closed", "none", "none")
+            ),
+            [Reason::Closed]
+        );
+        assert!(
+            attention(
+                Some(&row("closed", "none", "none")),
+                &row("open", "none", "none")
+            )
+            .is_empty()
+        );
+        assert!(
+            attention(
+                Some(&row("open", "none", "none")),
+                &row("merged", "none", "none")
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn the_url_gives_the_repo_and_the_number() {
-        assert_eq!(parse_url("https://github.com/acme/pay/pull/812"), Some(("acme/pay".to_owned(), 812)));
-        for bad in ["", "https://example.com/acme/pay/pull/1", "https://github.com/acme/pay/pull/x", "https://github.com/acme/pull/1", "https://github.com/a/b/c/pull/1", "https://github.com/acme/pay/pull/0"] {
+        assert_eq!(
+            parse_url("https://github.com/acme/pay/pull/812"),
+            Some(("acme/pay".to_owned(), 812))
+        );
+        for bad in [
+            "",
+            "https://example.com/acme/pay/pull/1",
+            "https://github.com/acme/pay/pull/x",
+            "https://github.com/acme/pull/1",
+            "https://github.com/a/b/c/pull/1",
+            "https://github.com/acme/pay/pull/0",
+        ] {
             assert_eq!(parse_url(bad), None, "{bad}");
         }
     }
@@ -624,11 +877,21 @@ mod tests {
         }
     }
 
-    const AUTHORED: Membership = Membership { authored: true, review_requested: false };
+    const AUTHORED: Membership = Membership {
+        authored: true,
+        review_requested: false,
+    };
 
     /// `upsert` of a pull request the User wrote.
     fn up(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Change>, CpdError> {
-        upsert(tx, &Listed { pr: polled.clone(), membership: AUTHORED }, None)
+        upsert(
+            tx,
+            &Listed {
+                pr: polled.clone(),
+                membership: AUTHORED,
+            },
+            None,
+        )
     }
 
     fn store(dir: &tempfile::TempDir) -> Store {
@@ -637,83 +900,184 @@ mod tests {
     }
 
     fn history_rows(store: &mut Store) -> i64 {
-        store.read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'pull_requests'", [], |r| r.get(0))?)).unwrap()
+        store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM history WHERE tbl = 'pull_requests'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     #[test]
     fn upsert_writes_only_when_a_value_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let first = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending))).unwrap().unwrap();
+        let first = store
+            .write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending)))
+            .unwrap()
+            .unwrap();
         assert_eq!(first.before, None);
-        assert_eq!((first.after.checks.as_str(), history_rows(&mut store)), ("pending", 1));
-        assert_eq!((first.after.mergeable.as_str(), first.after.merge_state.as_str()), ("unknown", "unknown"));
+        assert_eq!(
+            (first.after.checks.as_str(), history_rows(&mut store)),
+            ("pending", 1)
+        );
+        assert_eq!(
+            (
+                first.after.mergeable.as_str(),
+                first.after.merge_state.as_str()
+            ),
+            ("unknown", "unknown")
+        );
         let json = first.after.to_json();
-        assert_eq!((&json["mergeable"], &json["merge_state"]), (&json!("unknown"), &json!("unknown")));
+        assert_eq!(
+            (&json["mergeable"], &json["merge_state"]),
+            (&json!("unknown"), &json!("unknown"))
+        );
 
         // The same values: no change, and nothing written (no history row, `changed_at` kept).
-        let again = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending))).unwrap();
+        let again = store
+            .write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending)))
+            .unwrap();
         assert_eq!(again, None);
         assert_eq!(history_rows(&mut store), 1);
         let kept = store.read(|c| load(c, first.after.id)).unwrap();
         assert_eq!(kept, first.after);
 
-        let changed = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap();
+        let changed = store
+            .write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed)))
+            .unwrap()
+            .unwrap();
         assert_eq!(changed.before.as_ref(), Some(&first.after));
-        assert_eq!((changed.after.checks.as_str(), changed.after.id), ("failed", first.after.id));
+        assert_eq!(
+            (changed.after.checks.as_str(), changed.after.id),
+            ("failed", first.after.id)
+        );
         assert_eq!(history_rows(&mut store), 2);
-        assert_eq!(attention(changed.before.as_ref(), &changed.after), [Reason::ChecksFailed]);
+        assert_eq!(
+            attention(changed.before.as_ref(), &changed.after),
+            [Reason::ChecksFailed]
+        );
     }
 
     #[test]
     fn a_change_of_mergeable_or_merge_state_alone_is_a_change_of_the_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let first = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::None))).unwrap().unwrap();
-        let with = |mergeable, merge_state| PolledPr { mergeable, merge_state, ..polled(7, ChecksSummary::None) };
-
-        let conflict = store
-            .write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Unknown)))
+        let first = store
+            .write("test", |tx| up(tx, &polled(7, ChecksSummary::None)))
             .unwrap()
             .unwrap();
-        assert_eq!((conflict.after.mergeable.as_str(), conflict.after.merge_state.as_str()), ("conflicting", "unknown"));
+        let with = |mergeable, merge_state| PolledPr {
+            mergeable,
+            merge_state,
+            ..polled(7, ChecksSummary::None)
+        };
+
+        let conflict = store
+            .write("test", |tx| {
+                up(tx, &with(Mergeable::Conflicting, MergeState::Unknown))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                conflict.after.mergeable.as_str(),
+                conflict.after.merge_state.as_str()
+            ),
+            ("conflicting", "unknown")
+        );
         assert_eq!(attention(conflict.before.as_ref(), &conflict.after), []);
         assert_eq!(history_rows(&mut store), 2);
 
-        let dirty = store.write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap().unwrap();
-        assert_eq!((dirty.after.mergeable.as_str(), dirty.after.merge_state.as_str()), ("conflicting", "dirty"));
+        let dirty = store
+            .write("test", |tx| {
+                up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                dirty.after.mergeable.as_str(),
+                dirty.after.merge_state.as_str()
+            ),
+            ("conflicting", "dirty")
+        );
         assert_eq!(attention(dirty.before.as_ref(), &dirty.after), []);
         assert_eq!(history_rows(&mut store), 3);
 
-        let again = store.write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap();
+        let again = store
+            .write("test", |tx| {
+                up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))
+            })
+            .unwrap();
         assert_eq!(again, None);
         assert_eq!(history_rows(&mut store), 3);
-        assert_eq!(store.read(|c| load(c, first.after.id)).unwrap(), dirty.after);
+        assert_eq!(
+            store.read(|c| load(c, first.after.id)).unwrap(),
+            dirty.after
+        );
     }
 
     #[test]
     fn a_change_of_the_searches_that_list_it_alone_is_a_change_of_the_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let both = Membership { authored: true, review_requested: true };
-        let requested = Membership { authored: false, review_requested: true };
+        let both = Membership {
+            authored: true,
+            review_requested: true,
+        };
+        let requested = Membership {
+            authored: false,
+            review_requested: true,
+        };
         let put = |store: &mut Store, membership| {
-            store.write("test", |tx| upsert(tx, &Listed { pr: polled(7, ChecksSummary::None), membership }, None)).unwrap()
+            store
+                .write("test", |tx| {
+                    upsert(
+                        tx,
+                        &Listed {
+                            pr: polled(7, ChecksSummary::None),
+                            membership,
+                        },
+                        None,
+                    )
+                })
+                .unwrap()
         };
 
         let first = put(&mut store, requested).unwrap();
         assert_eq!(first.before, None);
-        assert_eq!((first.after.authored, first.after.review_requested), (false, true));
-        assert_eq!(put(&mut store, requested), None, "the same searches: nothing written");
+        assert_eq!(
+            (first.after.authored, first.after.review_requested),
+            (false, true)
+        );
+        assert_eq!(
+            put(&mut store, requested),
+            None,
+            "the same searches: nothing written"
+        );
         assert_eq!(history_rows(&mut store), 1);
 
         let both_now = put(&mut store, both).unwrap();
-        assert_eq!((both_now.after.authored, both_now.after.review_requested), (true, true));
+        assert_eq!(
+            (both_now.after.authored, both_now.after.review_requested),
+            (true, true)
+        );
         assert_eq!(history_rows(&mut store), 2);
-        assert_eq!(attention(both_now.before.as_ref(), &both_now.after), [], "no Reason: the flags are no feedback");
+        assert_eq!(
+            attention(both_now.before.as_ref(), &both_now.after),
+            [],
+            "no Reason: the flags are no feedback"
+        );
 
         let gone = put(&mut store, AUTHORED).unwrap();
-        assert_eq!((gone.after.authored, gone.after.review_requested), (true, false));
+        assert_eq!(
+            (gone.after.authored, gone.after.review_requested),
+            (true, false)
+        );
         assert_eq!(history_rows(&mut store), 3);
     }
 
@@ -721,7 +1085,9 @@ mod tests {
     fn ensure_inserts_the_users_own_pull_request_as_authored() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let id = store.write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None))).unwrap();
+        let id = store
+            .write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None)))
+            .unwrap();
         let row = store.read(|c| load(c, id)).unwrap();
         assert_eq!((row.authored, row.review_requested), (true, false));
     }
@@ -730,11 +1096,20 @@ mod tests {
     fn ensure_keeps_a_row_the_poll_stored_first() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let id = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap().after.id;
-        let kept = store.write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None))).unwrap();
+        let id = store
+            .write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed)))
+            .unwrap()
+            .unwrap()
+            .after
+            .id;
+        let kept = store
+            .write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None)))
+            .unwrap();
         assert_eq!(kept, id);
         assert_eq!(store.read(|c| load(c, id)).unwrap().checks, "failed");
-        let new = store.write("test", |tx| ensure(tx, &polled(8, ChecksSummary::None))).unwrap();
+        let new = store
+            .write("test", |tx| ensure(tx, &polled(8, ChecksSummary::None)))
+            .unwrap();
         assert_ne!(new, id);
     }
 
@@ -743,11 +1118,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
         for n in [7, 8] {
-            store.write("test", |tx| up(tx, &polled(n, ChecksSummary::None))).unwrap();
+            store
+                .write("test", |tx| up(tx, &polled(n, ChecksSummary::None)))
+                .unwrap();
         }
-        let closed = PolledPr { state: PrState::Closed, ..polled(9, ChecksSummary::None) };
-        store.write("test", |tx| upsert(tx, &Listed { pr: closed, membership: Membership::default() }, None)).unwrap();
-        let open: Vec<i64> = store.read(stored_open).unwrap().iter().map(|r| r.number).collect();
+        let closed = PolledPr {
+            state: PrState::Closed,
+            ..polled(9, ChecksSummary::None)
+        };
+        store
+            .write("test", |tx| {
+                upsert(
+                    tx,
+                    &Listed {
+                        pr: closed,
+                        membership: Membership::default(),
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        let open: Vec<i64> = store
+            .read(stored_open)
+            .unwrap()
+            .iter()
+            .map(|r| r.number)
+            .collect();
         assert_eq!(open, [7, 8]);
     }
 }

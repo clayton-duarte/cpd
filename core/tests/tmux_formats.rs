@@ -22,7 +22,11 @@ mod tmux_formats {
             "the plain title lead has no style before it: {}",
             *BORDER_FORMAT
         );
-        assert!(!BORDER_FORMAT.contains("#[fg=colour7]━"), "no colour 7 before a lead: {}", *BORDER_FORMAT);
+        assert!(
+            !BORDER_FORMAT.contains("#[fg=colour7]━"),
+            "no colour 7 before a lead: {}",
+            *BORDER_FORMAT
+        );
     }
 
     #[test]
@@ -31,9 +35,25 @@ mod tmux_formats {
         const HEAVY_JUNCTION: char = '\u{253B}';
         const LIGHT_LINE: char = '\u{2500}';
         const LIGHT_JUNCTION: char = '\u{2538}';
-        assert!(STATUS_FORMAT.contains(HEAVY_LINE), "the status line is heavy: {}", *STATUS_FORMAT);
-        assert!(STATUS_FORMAT.contains(HEAVY_JUNCTION), "the status junction is heavy: {}", *STATUS_FORMAT);
-        assert!(!STATUS_FORMAT.contains(LIGHT_LINE), "no light line in the status format: {}", *STATUS_FORMAT);
-        assert!(!STATUS_FORMAT.contains(LIGHT_JUNCTION), "no light junction in the status format: {}", *STATUS_FORMAT);
+        assert!(
+            STATUS_FORMAT.contains(HEAVY_LINE),
+            "the status line is heavy: {}",
+            *STATUS_FORMAT
+        );
+        assert!(
+            STATUS_FORMAT.contains(HEAVY_JUNCTION),
+            "the status junction is heavy: {}",
+            *STATUS_FORMAT
+        );
+        assert!(
+            !STATUS_FORMAT.contains(LIGHT_LINE),
+            "no light line in the status format: {}",
+            *STATUS_FORMAT
+        );
+        assert!(
+            !STATUS_FORMAT.contains(LIGHT_JUNCTION),
+            "no light junction in the status format: {}",
+            *STATUS_FORMAT
+        );
     }
 }

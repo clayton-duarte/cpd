@@ -15,36 +15,36 @@
 //!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
-pub(crate) mod column;
 #[cfg(test)]
 mod approve_tests;
+pub(crate) mod column;
+#[cfg(test)]
+mod column_flat_tests;
 #[cfg(test)]
 mod deploy_tests;
 #[cfg(test)]
 mod draw_tests;
-#[cfg(test)]
-mod column_flat_tests;
+pub(crate) mod host;
+pub(crate) mod inbox;
 #[cfg(test)]
 mod inbox_flat_tests;
 #[cfg(test)]
 mod inbox_rows_tests;
 #[cfg(test)]
 mod inbox_var_tests;
-#[cfg(test)]
-mod needs_tests;
+pub mod legend;
 #[cfg(test)]
 mod legend_cost_tests;
 #[cfg(test)]
+mod needs_tests;
+#[cfg(test)]
 mod window_tests;
-pub(crate) mod host;
-pub(crate) mod inbox;
-pub mod legend;
 
+use cpd_core::host::runner::Runner;
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
 use std::path::Path;
-use cpd_core::host::runner::Runner;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
@@ -53,37 +53,37 @@ use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
+use super::menu::{Menu, Outcome};
 use super::pace::{self, Reads};
 use super::popup;
 use super::pump::{self, Feed, Schedule, Signal};
-use super::viewlog::ViewLog;
-use super::menu::{Menu, Outcome};
 use super::read;
-use super::tree::actions::{self, Failed};
-use inbox::{Entry as InboxEntry, Hit as InboxHit, Jump};
-use cpd_core::clock;
-use cpd_core::inbox::model::{self, Item};
-use crate::menu::Entry;
 use super::runner::{ViewError, kept};
+use super::tree::actions::{self, Failed};
 use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, snooze_over, wall_ms};
-use time::OffsetDateTime;
+use super::viewlog::ViewLog;
 use super::{Capture, RunCommand, run_view_on};
+use crate::menu::Entry;
+use cpd_core::clock;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Pane, Tmux, chat_slot};
 use cpd_core::ids::SessionId;
-use cpd_core::session::PROGRAM;
+use cpd_core::inbox::model::{self, Item};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
+use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
+use inbox::{Entry as InboxEntry, Hit as InboxHit, Jump};
+use time::OffsetDateTime;
 
-pub use column::{Drawn, Machine, draw, draw_error};
-pub use host::Usage;
-use host::Sampler;
-pub use host::ProcReader;
 pub(crate) use column::Window;
+pub use column::{Drawn, Machine, draw, draw_error};
+pub use host::ProcReader;
+use host::Sampler;
+pub use host::Usage;
 
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
@@ -147,11 +147,18 @@ pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
 }
 
 /// The first snapshot of `home`, and the first sample of the machine, whose `/proc` (Linux) is read through `proc`.
-pub fn prepare_with(ports: &Ports, home: CpdHome, proc: host::ProcReader) -> Result<Prepared, CpdError> {
+pub fn prepare_with(
+    ports: &Ports,
+    home: CpdHome,
+    proc: host::ProcReader,
+) -> Result<Prepared, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let mut sampler = Sampler::new(proc);
-    let machine = Machine { name: hostname(ports), usage: sampler.sample_with(ports) };
+    let machine = Machine {
+        name: hostname(ports),
+        usage: sampler.sample_with(ports),
+    };
     let now = clock::timestamp(ports.clock.utc());
     // the mark and the snooze's end are read before the items: a change between the reads is read again
     let mark = read::inbox_mark(&mut store)?;
@@ -161,20 +168,65 @@ pub fn prepare_with(ports: &Ports, home: CpdHome, proc: host::ProcReader) -> Res
     let open = read::open_pulls(&mut store)?;
     let merging = crate::merge::marker::live_with(ports, &home, &open);
     // the reads after them run on the reader thread, with a store of its own
-    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), Some(mark));
-    Ok(Prepared { reader, home, config, inbox, engine_running, snooze_end, merging, machine, sampler })
+    let reader = pace::Owned::new(
+        home.clone(),
+        u64::from(config.timeouts.store_busy_ms),
+        Some(mark),
+    );
+    Ok(Prepared {
+        reader,
+        home,
+        config,
+        inbox,
+        engine_running,
+        snooze_end,
+        merging,
+        machine,
+        sampler,
+    })
 }
 
 /// [`show`] on what [`prepare`] made: the tmux of the config's socket, `run_command` for what a click runs, and `feed`'s pump
 /// for the one wait. A test's `feed` is scripted (signals, the `ManualClock` of `ctx.ports`, reads inline, no watcher) and
 /// `ctx.input` is not read; the end of a script is `Signal::InputFailed`.
-pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, run_command: RunCommand) -> Result<(), ViewError> {
-    let Prepared { reader, home, config, inbox, engine_running, snooze_end, merging, machine, sampler } = prepared;
+pub fn show_with<B: Backend>(
+    ctx: &mut Ctx<B>,
+    feed: Feed,
+    prepared: Prepared,
+    run_command: RunCommand,
+) -> Result<(), ViewError> {
+    let Prepared {
+        reader,
+        home,
+        config,
+        inbox,
+        engine_running,
+        snooze_end,
+        merging,
+        machine,
+        sampler,
+    } = prepared;
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ctx.ports.runner.clone());
     let log = ViewLog::of(&home, "widgets");
     let runner = actions::Runner::new(home.clone(), &config, ctx.ports);
-    let lead = Opener { home: &home, busy_ms: u64::from(config.timeouts.store_busy_ms), run_command, tmux: &tmux, log: &log, runner: &runner };
-    show(ctx, feed, &reader, (inbox, engine_running, snooze_end, merging), machine, sampler, &lead, config.events.poll_ms)
+    let lead = Opener {
+        home: &home,
+        busy_ms: u64::from(config.timeouts.store_busy_ms),
+        run_command,
+        tmux: &tmux,
+        log: &log,
+        runner: &runner,
+    };
+    show(
+        ctx,
+        feed,
+        &reader,
+        (inbox, engine_running, snooze_end, merging),
+        machine,
+        sampler,
+        &lead,
+        config.events.poll_ms,
+    )
 }
 
 /// The area the Dispatch column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
@@ -222,14 +274,18 @@ impl Opener<'_> {
         match inbox::click(&tree, item) {
             None => {}
             Some(Jump::Run(action)) => self.said(self.runner.run(&action)),
-            Some(Jump::Steps(steps)) => self.said(self.runner.run_all(&steps)),
             Some(Jump::Models(provider, at)) => {
-                let shown = inbox::models_body(self.home, &provider, &at).map_err(|e| format!("{}: {}", e.code(), e.message()));
+                let shown = inbox::models_body(self.home, &provider, &at)
+                    .map_err(|e| format!("{}: {}", e.code(), e.message()));
                 match shown {
                     Ok(body) => {
                         // a dialog that cannot open is logged: another dialog would fail the same way
-                        if let Err(e) = dialog::text(self.tmux, &format!("Models: {provider}"), &body) {
-                            let _ = self.log.append(&format!("failed: Models: dialog: {}", e.message()));
+                        if let Err(e) =
+                            dialog::text(self.tmux, &format!("Models: {provider}"), &body)
+                        {
+                            let _ = self
+                                .log
+                                .append(&format!("failed: Models: dialog: {}", e.message()));
                         }
                     }
                     Err(why) => dialog::report_why(self.tmux, self.log, "Models", why),
@@ -255,15 +311,25 @@ impl Opener<'_> {
     /// pull request; no popup, the cockpit waits. A refusal, or no such row, is the failure dialog.
     fn post(&self, item: &Item) {
         const TITLE: &str = "Post Pull Request";
-        let (Some(plan), Some(pull)) = (item.plan.as_ref(), inbox::Pull::from_subject(&item.subject)) else { return };
+        let (Some(plan), Some(pull)) =
+            (item.plan.as_ref(), inbox::Pull::from_subject(&item.subject))
+        else {
+            return;
+        };
         let key = Store::open(self.home, self.busy_ms).and_then(|mut store| {
             store.read(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT r.key FROM workflows r JOIN pull_requests q ON q.id = r.pull_request \
                      WHERE r.plan = ?1 AND q.repo = ?2 AND q.number = ?3 ORDER BY r.key LIMIT 1",
                 )?;
-                let keys = stmt.query_map(rusqlite::params![plan.as_str(), pull.repo, pull.number], |r| r.get::<_, String>(0))?;
-                Ok(keys.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().next())
+                let keys = stmt.query_map(
+                    rusqlite::params![plan.as_str(), pull.repo, pull.number],
+                    |r| r.get::<_, String>(0),
+                )?;
+                Ok(keys
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+                    .into_iter()
+                    .next())
             })
         });
         match key {
@@ -292,7 +358,10 @@ impl Opener<'_> {
     fn choose(&self, choice: inbox::Choice, id: i64) {
         let argv = choice.argv(id);
         let words = argv.join(" ");
-        let all = std::iter::once(PROGRAM.to_owned()).chain(argv).map(std::ffi::OsString::from).collect();
+        let all = std::iter::once(PROGRAM.to_owned())
+            .chain(argv)
+            .map(std::ffi::OsString::from)
+            .collect();
         if let Err(e) = (self.run_command)(all) {
             dialog::report(self.tmux, self.log, &words, &e);
         }
@@ -302,6 +371,7 @@ impl Opener<'_> {
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the Inbox section scrolls it. A left click on a link opens its url, on an Inbox item its jump; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on an
 /// Inbox item opens its menu, which takes every key and click until it closes.
+#[allow(clippy::too_many_arguments)] // takes every input of the show loop; a signature change is out of scope
 fn show<B: Backend>(
     ctx: &mut Ctx<B>,
     feed: Feed,
@@ -321,7 +391,13 @@ fn show<B: Backend>(
         // a driven loop (run_on) watches nothing, says nothing of it and polls
         Ok(None) if pump.is_driven() => (poll, None),
         Ok(None) => (pump::SAFETY, None),
-        Err(e) => (poll, Some(format!("no commit watcher: {}; polling every {poll_ms} ms", e.message()))),
+        Err(e) => (
+            poll,
+            Some(format!(
+                "no commit watcher: {}; polling every {poll_ms} ms",
+                e.message()
+            )),
+        ),
     };
     let mut schedule = Schedule::new(ports.clock.now(), every);
     let mut sampled_at = ports.clock.now();
@@ -340,15 +416,39 @@ fn show<B: Backend>(
         let (frame, second) = (frame_now(ports), wall_ms(ports) / 1000);
         let wants = needs(&inbox, &merging, sampled_at);
         // the Inbox items' ages are redrawn every second, from `opened_at`
-        if redraw || (wants.frame && Some(frame) != drawn_frame) || (wants.second && second != drawn_second) {
+        if redraw
+            || (wants.frame && Some(frame) != drawn_frame)
+            || (wants.second && second != drawn_second)
+        {
             drawn_second = second;
             ctx.draw(|f| {
                 pane = f.area();
                 // an open Inbox menu is drawn over the labels: a link piece (2 cells, forced width) under its border would swallow
                 // the border's cell, so while it is open the labels are drawn without their OSC 8 links
-                let unlinked: Vec<model::Item> = inbox_menu.iter().flat_map(|_| inbox.iter().cloned().map(|i| model::Item { url: None, ..i })).collect();
-                let shown = if inbox_menu.is_some() { &unlinked } else { &inbox };
-                last = Some(draw(f, pane, &machine, frame, shown, inbox_scroll, ports.clock.utc(), &merging));
+                let unlinked: Vec<model::Item> = inbox_menu
+                    .iter()
+                    .flat_map(|_| {
+                        inbox
+                            .iter()
+                            .cloned()
+                            .map(|i| model::Item { url: None, ..i })
+                    })
+                    .collect();
+                let shown = if inbox_menu.is_some() {
+                    &unlinked
+                } else {
+                    &inbox
+                };
+                last = Some(draw(
+                    f,
+                    pane,
+                    &machine,
+                    frame,
+                    shown,
+                    inbox_scroll,
+                    ports.clock.utc(),
+                    &merging,
+                ));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
@@ -362,7 +462,12 @@ fn show<B: Backend>(
         inbox_scroll = inbox_scroll.min(drawn.inbox_shape.max_scroll());
         let now = ports.clock.now();
         let wall_ms = wall_ms(ports);
-        let until = pump::wake(now, wall_ms, &needs(&inbox, &merging, sampled_at), schedule.deadline(now));
+        let until = pump::wake(
+            now,
+            wall_ms,
+            &needs(&inbox, &merging, sampled_at),
+            schedule.deadline(now),
+        );
         let signal = if pump.is_driven() {
             pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out())
         } else {
@@ -370,77 +475,102 @@ fn show<B: Backend>(
         };
         match signal {
             Signal::Input(event) => {
-            redraw = true; // a click, the wheel, a key or a resize
-            if matches!(event, Event::Resize(..)) {
-                // a new pane starts the read pacing afresh: the next commit reads at once, not a frame after the last read
-                schedule = Schedule::new(ports.clock.now(), every);
-            }
-            if let Some(open) = inbox_menu.as_mut() {
-                // an open menu takes every key and click
-                match drive(&mut open.menu, pane, &event) {
-                    Outcome::Stay => {}
-                    Outcome::Close => inbox_menu = None,
-                    Outcome::Pick(entry) => {
-                        let InboxMenu { item, .. } = inbox_menu.take().expect("the menu was open");
-                        match entry {
-                            InboxEntry::Choice(choice) => opener.choose(choice, item.id),
-                            InboxEntry::Merge => {
-                                if let Some(pull) = inbox::Pull::from_subject(&item.subject) {
-                                    if let Err(e) = crate::merge::start(opener.tmux, &pull.to_string()) {
-                                        dialog::report(opener.tmux, opener.log, "Merge Pull Request", &e);
+                redraw = true; // a click, the wheel, a key or a resize
+                if matches!(event, Event::Resize(..)) {
+                    // a new pane starts the read pacing afresh: the next commit reads at once, not a frame after the last read
+                    schedule = Schedule::new(ports.clock.now(), every);
+                }
+                if let Some(open) = inbox_menu.as_mut() {
+                    // an open menu takes every key and click
+                    match drive(&mut open.menu, pane, &event) {
+                        Outcome::Stay => {}
+                        Outcome::Close => inbox_menu = None,
+                        Outcome::Pick(entry) => {
+                            let InboxMenu { item, .. } =
+                                inbox_menu.take().expect("the menu was open");
+                            match entry {
+                                InboxEntry::Choice(choice) => opener.choose(choice, item.id),
+                                InboxEntry::Merge => {
+                                    if let Some(pull) = inbox::Pull::from_subject(&item.subject)
+                                        && let Err(e) =
+                                            crate::merge::start(opener.tmux, &pull.to_string())
+                                    {
+                                        dialog::report(
+                                            opener.tmux,
+                                            opener.log,
+                                            "Merge Pull Request",
+                                            &e,
+                                        );
                                     }
                                 }
+                                InboxEntry::Post => opener.post(&item),
+                                InboxEntry::GoToLead => {
+                                    opener.jump(&item, &clock::timestamp(ports.clock.utc()))
+                                }
+                                InboxEntry::CopyLink => opener.copy_link(&item),
+                                InboxEntry::Merging => {}
                             }
-                            InboxEntry::Post => opener.post(&item),
-                            InboxEntry::GoToLead => opener.jump(&item, &clock::timestamp(ports.clock.utc())),
-                            InboxEntry::CopyLink => opener.copy_link(&item),
-                            InboxEntry::Merging => {}
-                        }
-                        schedule.force(); // the Inbox shows the result on the next read
-                    }
-                }
-            } else {
-                match event {
-                    // a right click on an item row of the Inbox opens its menu; the title and the toggle row have none, and
-                    // `engine-down` is no item to snooze
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Right) && drawn.inbox.contains(Position::new(m.column, m.row)) => {
-                        if let Some(InboxHit::Item(i)) = drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
-                            let item = &inbox[i];
-                            if item.kind != model::Kind::EngineDown {
-                                let at = Position::new(m.column, m.row);
-                                let merging = inbox::merges(&merging, item);
-                                inbox_menu = Some(InboxMenu { menu: Menu::new(InboxEntry::entries(item, merging), at), item: item.clone() });
-                            }
+                            schedule.force(); // the Inbox shows the result on the next read
                         }
                     }
-                    // a left click on an item row jumps to its cause
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) && drawn.links.at(Position::new(m.column, m.row)).is_none() => {
-                        match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
-                            Some(InboxHit::Item(i)) => {
-                                opener.jump(&inbox[i], &clock::timestamp(ports.clock.utc()));
-                                schedule.force(); // the result shows on the next read
+                } else {
+                    match event {
+                        // a right click on an item row of the Inbox opens its menu; the title and the toggle row have none, and
+                        // `engine-down` is no item to snooze
+                        Event::Mouse(m)
+                            if m.kind == MouseEventKind::Down(MouseButton::Right)
+                                && drawn.inbox.contains(Position::new(m.column, m.row)) =>
+                        {
+                            if let Some(InboxHit::Item(i)) =
+                                drawn.inbox_shape.hit(m.row - drawn.inbox.y)
+                            {
+                                let item = &inbox[i];
+                                if item.kind != model::Kind::EngineDown {
+                                    let at = Position::new(m.column, m.row);
+                                    let merging = inbox::merges(&merging, item);
+                                    inbox_menu = Some(InboxMenu {
+                                        menu: Menu::new(InboxEntry::entries(item, merging), at),
+                                        item: item.clone(),
+                                    });
+                                }
                             }
-                            Some(InboxHit::Header) | None => {}
                         }
-                    }
-                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                        let at = Position::new(m.column, m.row);
-                        if let Some(url) = drawn.links.at(at) {
-                            if let Err(e) = crate::link::open_url(&*ports.runner, url) {
+                        // a left click on an item row jumps to its cause
+                        Event::Mouse(m)
+                            if m.kind == MouseEventKind::Down(MouseButton::Left)
+                                && drawn.inbox.contains(Position::new(m.column, m.row))
+                                && drawn.links.at(Position::new(m.column, m.row)).is_none() =>
+                        {
+                            match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
+                                Some(InboxHit::Item(i)) => {
+                                    opener.jump(&inbox[i], &clock::timestamp(ports.clock.utc()));
+                                    schedule.force(); // the result shows on the next read
+                                }
+                                Some(InboxHit::Header) | None => {}
+                            }
+                        }
+                        Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                            let at = Position::new(m.column, m.row);
+                            if let Some(url) = drawn.links.at(at)
+                                && let Err(e) = crate::link::open_url(&*ports.runner, url)
+                            {
                                 dialog::report(opener.tmux, opener.log, "Open Link", &e);
                             }
+                            schedule.force();
                         }
-                        schedule.force();
-                    }
-                    Event::Mouse(m) if drawn.inbox.contains(Position::new(m.column, m.row)) => match m.kind {
-                        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-                            inbox_scroll = drawn.inbox_shape.wheeled(m.kind == MouseEventKind::ScrollDown);
+                        Event::Mouse(m) if drawn.inbox.contains(Position::new(m.column, m.row)) => {
+                            match m.kind {
+                                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                                    inbox_scroll = drawn
+                                        .inbox_shape
+                                        .wheeled(m.kind == MouseEventKind::ScrollDown);
+                                }
+                                _ => {}
+                            }
                         }
                         _ => {}
-                    },
-                    _ => {}
+                    }
                 }
-            }
             }
             Signal::Commit => schedule.commit(),
             Signal::Read => {
@@ -482,8 +612,13 @@ fn show<B: Backend>(
             // Every read takes the merge markers; the Inbox (items, engine lock, snooze end) only when its mark moved (a label
             // changes in place with no Event), a click forced it, an error is shown, a snooze ended or the engine lock changed
             // (an engine stops with no Event either).
-            let (shared, home, retry, ended, now_text) =
-                (Arc::clone(reader), opener.home.clone(), error.is_some(), snooze_over(ports, snooze_end), clock::timestamp(ports.clock.utc()));
+            let (shared, home, retry, ended, now_text) = (
+                Arc::clone(reader),
+                opener.home.clone(),
+                error.is_some(),
+                snooze_over(ports, snooze_end),
+                clock::timestamp(ports.clock.utc()),
+            );
             let force = kind.force;
             let ports = ports.clone();
             reads.request(move || {
@@ -492,7 +627,12 @@ fn show<B: Backend>(
                     let live = crate::merge::marker::live_with(&ports, &home, &open);
                     let mark = read::inbox_mark(store)?;
                     let engine = model::engine_running(&home)?;
-                    let fresh = if last.as_ref() != Some(&mark) || force || retry || ended || engine != engine_running {
+                    let fresh = if last.as_ref() != Some(&mark)
+                        || force
+                        || retry
+                        || ended
+                        || engine != engine_running
+                    {
                         // the mark was read before the items: a change between the reads is read again
                         let end = read::snooze_end_at(store, Some(&now_text))?;
                         let (items, running) = read::inbox_at(store, Some(&now_text))?;
@@ -513,7 +653,13 @@ type Seen = (Vec<Item>, bool, Option<OffsetDateTime>, BTreeSet<String>);
 
 /// What a read of the reader thread returns: the Inbox (its items, the lock and the snooze's end) when it was read, and the
 /// pull requests with a live merge marker.
-type Read = Result<(Option<(Vec<Item>, bool, Option<OffsetDateTime>)>, BTreeSet<String>), CpdError>;
+type Read = Result<
+    (
+        Option<(Vec<Item>, bool, Option<OffsetDateTime>)>,
+        BTreeSet<String>,
+    ),
+    CpdError,
+>;
 
 /// The merge of a `pr-ready` item runs: its spinner turns.
 fn spins(inbox: &[Item], merging: &BTreeSet<String>) -> bool {
@@ -523,13 +669,24 @@ fn spins(inbox: &[Item], merging: &BTreeSet<String>) -> bool {
 /// The clocks the column's screen needs: `frame` is `spins(inbox, merging)`; `second` is `!inbox.is_empty()` (an
 /// age text is on screen); `at` is always `Some(sampled_at + SAMPLE_EVERY)`.
 fn needs(inbox: &[Item], merging: &BTreeSet<String>, sampled_at: Instant) -> pump::Needs {
-    pump::Needs { frame: spins(inbox, merging), second: !inbox.is_empty(), at: Some(sampled_at + SAMPLE_EVERY) }
+    pump::Needs {
+        frame: spins(inbox, merging),
+        second: !inbox.is_empty(),
+        at: Some(sampled_at + SAMPLE_EVERY),
+    }
 }
 
 /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
 /// on the chat. The plan view's tabs use it.
-pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, session: &SessionId) -> Result<(), CpdError> {
-    let argv = [PROGRAM, "session", "open", session.as_str()].map(std::ffi::OsString::from).into();
+pub(crate) fn open_lead(
+    run_command: RunCommand,
+    tmux: &Tmux,
+    cockpit: &str,
+    session: &SessionId,
+) -> Result<(), CpdError> {
+    let argv = [PROGRAM, "session", "open", session.as_str()]
+        .map(std::ffi::OsString::from)
+        .into();
     run_command(argv)?;
     if let Some(chat) = chat_slot(&main_panes(tmux, cockpit)?, cockpit) {
         tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
@@ -540,7 +697,10 @@ pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, ses
 /// The panes of the cockpit's `main` window.
 pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
     let all = tmux.list_panes()?;
-    Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
+    Ok(all
+        .into_iter()
+        .filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW)
+        .collect())
 }
 
 /// What the column draws for a hostname it could not read.
@@ -549,14 +709,22 @@ const UNKNOWN: &str = "?";
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
 fn hostname(ports: &Ports) -> String {
-    hostname_with(&*ports.runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+    hostname_with(
+        &*ports.runner,
+        Path::new("/proc/sys/kernel/hostname"),
+        std::env::var("HOSTNAME").ok().as_deref(),
+    )
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
 pub(crate) fn hostname_with(runner: &dyn Runner, file: &Path, env: Option<&str>) -> String {
     read_hostname(file)
         .or_else(|| env.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
-        .or_else(|| host::run_with(runner, "hostname", &[]).map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+        .or_else(|| {
+            host::run_with(runner, "hostname", &[])
+                .map(|n| n.trim().to_owned())
+                .filter(|n| !n.is_empty())
+        })
         .unwrap_or_else(|| UNKNOWN.to_owned())
 }
 
@@ -568,10 +736,23 @@ fn read_hostname(path: &Path) -> Option<String> {
 
 /// The legend in a tmux popup over the cockpit, sized to it and at most the client's size.
 pub(crate) fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
-    let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-    let client = popup::newest_client(&clients).map(|(_, size)| size).ok_or_else(|| {
-        CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
-    })?;
+    let clients = tmux.run(
+        &[
+            "list-clients",
+            "-F",
+            "#{client_activity} #{client_width} #{client_height}",
+        ]
+        .map(str::to_owned),
+    )?;
+    let client = popup::newest_client(&clients)
+        .map(|(_, size)| size)
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::TmuxFailed,
+                "No tmux client is attached to the cockpit.",
+            )
+            .with("socket", tmux.socket())
+        })?;
     tmux.run(&legend::popup_args(client)).map(drop)
 }
 
@@ -600,9 +781,20 @@ mod tests {
         std::fs::write(&file, "homeserver\n").unwrap();
         assert_eq!(read_hostname(&file).as_deref(), Some("homeserver"));
         // the `hostname` program is the runner's: a fake, never the machine's
-        let fake = FakeRunner::new(ManualClock::new()).on("hostname", |_| true, Reply::ok("mac-mini.local\n"));
-        assert_eq!(hostname_with(&fake, &file, None), "homeserver", "the kernel's file comes first");
-        assert_eq!(hostname_with(&fake, &dir.path().join("none"), Some("")), "mac-mini.local");
+        let fake = FakeRunner::new(ManualClock::new()).on(
+            "hostname",
+            |_| true,
+            Reply::ok("mac-mini.local\n"),
+        );
+        assert_eq!(
+            hostname_with(&fake, &file, None),
+            "homeserver",
+            "the kernel's file comes first"
+        );
+        assert_eq!(
+            hostname_with(&fake, &dir.path().join("none"), Some("")),
+            "mac-mini.local"
+        );
         assert!(!hostname_with(&fake, &file, None).is_empty());
     }
 }

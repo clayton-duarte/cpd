@@ -10,11 +10,19 @@ use crate::read::{AttemptNode, AttemptStatus, JobNode, JobStatus, Origin};
 
 #[test]
 fn the_legend_calls_the_yellow_job_state_landing() {
-    let names: Vec<&str> = palette::JOB_LEGEND.iter().map(|(name, _, _)| *name).collect();
+    let names: Vec<&str> = palette::JOB_LEGEND
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
     assert!(names.contains(&"landing"), "{names:?}");
     assert!(!names.contains(&"merging"), "{names:?}");
-    let landing = palette::JOB_LEGEND.iter().find(|(name, _, _)| *name == "landing");
-    assert_eq!(landing.map(|(_, status, merging)| (*status, *merging)), Some((JobStatus::Running, true)));
+    let landing = palette::JOB_LEGEND
+        .iter()
+        .find(|(name, _, _)| *name == "landing");
+    assert_eq!(
+        landing.map(|(_, status, merging)| (*status, *merging)),
+        Some((JobStatus::Running, true))
+    );
 }
 
 #[test]
@@ -35,12 +43,19 @@ fn only_checking_and_merging_attempts_are_landing() {
 
 #[test]
 fn a_checking_attempt_has_the_review_meaning_like_a_merging_one() {
-    assert_eq!(palette::attempt_status(AttemptStatus::Checking), Meaning::Review);
-    assert_eq!(palette::attempt_status(AttemptStatus::Checking), palette::attempt_status(AttemptStatus::Merging));
+    assert_eq!(
+        palette::attempt_status(AttemptStatus::Checking),
+        Meaning::Review
+    );
+    assert_eq!(
+        palette::attempt_status(AttemptStatus::Checking),
+        palette::attempt_status(AttemptStatus::Merging)
+    );
 }
 
 fn job(status: AttemptStatus) -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse("a").unwrap(),
         workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
@@ -73,8 +88,14 @@ fn job(status: AttemptStatus) -> JobNode {
 
 #[test]
 fn a_job_whose_attempt_is_checking_is_drawn_with_the_landing_pill() {
-    assert_eq!(Live::of(&job(AttemptStatus::Checking), false), Live::Merging);
+    assert_eq!(
+        Live::of(&job(AttemptStatus::Checking), false),
+        Live::Merging
+    );
     assert_eq!(Live::of(&job(AttemptStatus::Merging), false), Live::Merging);
     assert_eq!(Live::of(&job(AttemptStatus::Running), false), Live::Running);
-    assert_eq!(Live::of(&job(AttemptStatus::Checking), false).pill(), palette::job_pill(JobStatus::Running, true, false));
+    assert_eq!(
+        Live::of(&job(AttemptStatus::Checking), false).pill(),
+        palette::job_pill(JobStatus::Running, true, false)
+    );
 }

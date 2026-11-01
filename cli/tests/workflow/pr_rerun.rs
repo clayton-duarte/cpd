@@ -3,8 +3,8 @@
 use cpd_core::host::runner::{Call, Reply};
 use serde_json::{Value, json};
 
-use crate::common::Run;
 use super::pr_view::{Pay, fx};
+use crate::common::Run;
 
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -20,38 +20,79 @@ fn run(id: u64, name: &str, status: &str, conclusion: &str) -> Value {
 fn setup(runs: &[Value], ok: &[u64]) -> Pay {
     let pay = fx("open");
     let runner = (*pay.fx.fakes.runner).clone();
-    let mut runner = runner.on("gh", has("headRefOid"), Reply::ok(&json!({"headRefOid": SHA}).to_string()));
-    runner = runner.on("gh", |c: &Call| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == SHA), Reply::ok(&Value::Array(runs.to_vec()).to_string()));
+    let mut runner = runner.on(
+        "gh",
+        has("headRefOid"),
+        Reply::ok(&json!({"headRefOid": SHA}).to_string()),
+    );
+    runner = runner.on(
+        "gh",
+        |c: &Call| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == SHA),
+        Reply::ok(&Value::Array(runs.to_vec()).to_string()),
+    );
     for id in ok {
         let want = format!("run\nrerun\n{id}\n--failed");
-        runner = runner.on("gh", move |c: &Call| c.args.join("\n") == want, Reply::ok(""));
+        runner = runner.on(
+            "gh",
+            move |c: &Call| c.args.join("\n") == want,
+            Reply::ok(""),
+        );
     }
     pay
 }
 
 fn reruns(pay: &Pay) -> Vec<Call> {
-    pay.fx.calls("gh").into_iter().filter(|c| c.args.starts_with(&["run".to_string(), "rerun".to_string()])).collect()
+    pay.fx
+        .calls("gh")
+        .into_iter()
+        .filter(|c| {
+            c.args
+                .starts_with(&["run".to_string(), "rerun".to_string()])
+        })
+        .collect()
 }
 
 const ARGS: [&str; 5] = ["pr", "rerun", "--workflow", "repo", "--plan"];
 
 fn rerun(pay: &Pay) -> Run {
-    pay.fx.cpd(&[ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], "pay"])
+    pay.fx
+        .cpd(&[ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], "pay"])
 }
 
 #[test]
 fn a_failed_run_of_the_head_commit_is_rerun_with_failed_only_and_listed() {
-    let pay = setup(&[run(111, "CI", "completed", "success"), run(222, "Lint", "completed", "failure")], &[222]);
+    let pay = setup(
+        &[
+            run(111, "CI", "completed", "success"),
+            run(222, "Lint", "completed", "failure"),
+        ],
+        &[222],
+    );
 
     let out = rerun(&pay).ok();
 
-    assert_eq!(out, json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": [{"id": 222, "name": "Lint"}]}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": [{"id": 222, "name": "Lint"}]})
+    );
     let calls = reruns(&pay);
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(calls[0].args, ["run", "rerun", "222", "--failed"]);
-    assert_eq!(calls[0].cwd.as_deref(), Some(pay.fx.env.root().join("lead").as_path()));
-    let list = pay.fx.calls("gh").into_iter().find(|c| c.args.starts_with(&["run".to_string(), "list".to_string()])).expect("run list call");
-    let at = list.args.iter().position(|a| a == "--commit").expect("--commit");
+    assert_eq!(
+        calls[0].cwd.as_deref(),
+        Some(pay.fx.env.root().join("lead").as_path())
+    );
+    let list = pay
+        .fx
+        .calls("gh")
+        .into_iter()
+        .find(|c| c.args.starts_with(&["run".to_string(), "list".to_string()]))
+        .expect("run list call");
+    let at = list
+        .args
+        .iter()
+        .position(|a| a == "--commit")
+        .expect("--commit");
     assert_eq!(list.args[at + 1], SHA);
 }
 
@@ -74,18 +115,27 @@ fn every_failed_conclusion_is_rerun_whatever_its_case_and_no_other_run_is() {
     let out = rerun(&pay).ok();
 
     let want = json!([{"id": 1, "name": "A"}, {"id": 3, "name": "C"}, {"id": 5, "name": "E"}, {"id": 10, "name": "J"}]);
-    assert_eq!(out, json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": want}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "pr": "repo", "head_sha": SHA, "rerun": want})
+    );
     assert_eq!(reruns(&pay).len(), 4);
 }
 
 #[test]
 fn a_head_commit_with_no_failed_run_is_refused_no_failed_run_and_reruns_nothing() {
-    let listed = [run(1, "CI", "completed", "success"), run(2, "Lint", "in_progress", "")];
+    let listed = [
+        run(1, "CI", "completed", "success"),
+        run(2, "Lint", "in_progress", ""),
+    ];
     let pay = setup(&listed, &[]);
 
     let r = rerun(&pay);
 
-    assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("no_failed_run", 3));
+    assert_eq!(
+        (r.error()["code"].as_str().unwrap(), r.exit),
+        ("no_failed_run", 3)
+    );
     assert_eq!(
         r.error()["details"],
         json!({"pr": "repo", "head_sha": SHA, "runs": [
@@ -97,8 +147,14 @@ fn a_head_commit_with_no_failed_run_is_refused_no_failed_run_and_reruns_nothing(
     drop(pay);
     let pay = setup(&[], &[]);
     let r = rerun(&pay);
-    assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("no_failed_run", 3));
-    assert_eq!(r.error()["details"], json!({"pr": "repo", "head_sha": SHA, "runs": []}));
+    assert_eq!(
+        (r.error()["code"].as_str().unwrap(), r.exit),
+        ("no_failed_run", 3)
+    );
+    assert_eq!(
+        r.error()["details"],
+        json!({"pr": "repo", "head_sha": SHA, "runs": []})
+    );
     assert!(reruns(&pay).is_empty());
 }
 
@@ -123,12 +179,28 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
 
 #[test]
 fn a_failing_gh_run_rerun_is_gh_failed_and_lists_the_runs_already_rerun() {
-    let pay = setup(&[run(222, "Lint", "completed", "failure"), run(333, "CI", "completed", "failure")], &[222]);
+    let pay = setup(
+        &[
+            run(222, "Lint", "completed", "failure"),
+            run(333, "CI", "completed", "failure"),
+        ],
+        &[222],
+    );
     let runner = (*pay.fx.fakes.runner).clone();
-    let _ = runner.on("gh", |c: &Call| c.args.join("\n") == "run\nrerun\n333\n--failed", Reply::exit(1, "", "HTTP 502: bad gateway\n"));
+    let _ = runner.on(
+        "gh",
+        |c: &Call| c.args.join("\n") == "run\nrerun\n333\n--failed",
+        Reply::exit(1, "", "HTTP 502: bad gateway\n"),
+    );
 
     let r = rerun(&pay);
 
-    assert_eq!((r.error()["code"].as_str().unwrap(), r.exit), ("gh_failed", 1));
-    assert_eq!(r.error()["details"]["rerun"], json!([{"id": 222, "name": "Lint"}]));
+    assert_eq!(
+        (r.error()["code"].as_str().unwrap(), r.exit),
+        ("gh_failed", 1)
+    );
+    assert_eq!(
+        r.error()["details"]["rerun"],
+        json!([{"id": 222, "name": "Lint"}])
+    );
 }

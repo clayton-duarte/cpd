@@ -15,7 +15,9 @@ use ratatui::crossterm::event::{
     self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
 };
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 
 use crate::runner::{Capture, ViewError};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -88,12 +90,19 @@ pub struct Ctx<'a, B: Backend> {
 
 impl<'a, B: Backend> Ctx<'a, B> {
     pub fn new(ports: &'a Ports, terminal: Terminal<B>, input: &'a mut dyn Input) -> Ctx<'a, B> {
-        Ctx { ports, terminal, input, draws: 0 }
+        Ctx {
+            ports,
+            terminal,
+            input,
+            draws: 0,
+        }
     }
 
     /// Draws one frame; the loops draw only through this, so `draws` counts the writes to the pane.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> io::Result<()> {
-        self.terminal.draw(render).map_err(|e| io::Error::other(e.to_string()))?;
+        self.terminal
+            .draw(render)
+            .map_err(|e| io::Error::other(e.to_string()))?;
         self.draws += 1;
         Ok(())
     }
@@ -131,7 +140,9 @@ impl<W: Write> Drop for Restore<'_, W> {
         match self.capture {
             Capture::Keys => {}
             Capture::Mouse => drop(execute!(self.out, DisableMouseCapture)),
-            Capture::MouseAndFocus => drop(execute!(self.out, DisableFocusChange, DisableMouseCapture)),
+            Capture::MouseAndFocus => {
+                drop(execute!(self.out, DisableFocusChange, DisableMouseCapture))
+            }
         }
         drop(execute!(self.out, LeaveAlternateScreen));
         drop(self.tty.raw_off());
@@ -162,8 +173,11 @@ where
     }
     let prepared = prepare()?;
     let terminal_failed = |e: io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view {name} failed: {e}."))
-            .with("command", format!("tui view {name}"))
+        CpdError::new(
+            ErrorCode::NotATerminal,
+            format!("The terminal of cpd tui view {name} failed: {e}."),
+        )
+        .with("command", format!("tui view {name}"))
     };
     tty.raw_on().map_err(terminal_failed)?;
     let restore = Restore::new(capture, tty, out);
@@ -198,11 +212,16 @@ pub fn backed_off_with(
     err: &mut dyn Write,
     result: Result<Output, CpdError>,
 ) -> Result<Output, CpdError> {
-    if let Err(e) = &result {
-        if on_terminal {
-            drop(writeln!(err, "{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs()));
-            ports.clock.sleep(BACKOFF);
-        }
+    if let Err(e) = &result
+        && on_terminal
+    {
+        drop(writeln!(
+            err,
+            "{}\nStarting again in {} s.",
+            e.message(),
+            BACKOFF.as_secs()
+        ));
+        ports.clock.sleep(BACKOFF);
     }
     result
 }

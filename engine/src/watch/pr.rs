@@ -27,9 +27,9 @@ use cpd_core::clock::Clock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
 use cpd_core::host::deadline::Failed;
+use cpd_core::host::limit::limit;
 use cpd_core::host::runner::Runner;
 use cpd_core::ports::Ports;
-use cpd_core::host::limit::limit;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
@@ -44,9 +44,16 @@ pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
     if engine.poll.is_some() {
         return None;
     }
-    let every = limit("PR_POLL", Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)));
+    let every = limit(
+        "PR_POLL",
+        Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)),
+    );
     let after_last = engine.last_poll_end.map_or(now, |end| end + every);
-    Some(engine.paused_until.map_or(after_last, |until| until.max(after_last)))
+    Some(
+        engine
+            .paused_until
+            .map_or(after_last, |until| until.max(after_last)),
+    )
 }
 
 /// E5, first step: starts `cpd pr poll` on its own thread when it is due and none runs.
@@ -58,7 +65,9 @@ pub(super) fn start(engine: &mut Engine) {
     engine.paused_until = None;
     let root = engine.home.root().to_path_buf();
     let ports = engine.ports.clone();
-    engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || poll(&ports, &root)));
+    engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || {
+        poll(&ports, &root)
+    }));
 }
 
 /// E5, second step: applies the poll that ended, if one did.
@@ -66,14 +75,18 @@ pub(super) fn reap(engine: &mut Engine) {
     if engine.outgrown() {
         return;
     }
-    let Some(finished) = engine.poll.as_mut().and_then(PollRun::try_take) else { return };
+    let Some(finished) = engine.poll.as_mut().and_then(PollRun::try_take) else {
+        return;
+    };
     engine.poll = None;
     apply(engine, finished);
 }
 
 /// At stop: waits for a running poll and applies it.
 pub(super) fn finish(engine: &mut Engine) {
-    let Some(finished) = engine.poll.as_mut().and_then(PollRun::wait) else { return };
+    let Some(finished) = engine.poll.as_mut().and_then(PollRun::wait) else {
+        return;
+    };
     engine.poll = None;
     apply(engine, finished);
 }
@@ -89,7 +102,10 @@ fn apply(engine: &mut Engine, finished: Finished) {
     let out = match finished.result {
         // A busy store is not a failure (contract §3.7): the poll did not happen, so it is not counted as one; it runs again at the next tick.
         Err(failure) if is_store_busy(&failure) => {
-            engine.log.line(&format!("E5: the store is busy, the poll is tried again at the next tick: {}: {}", failure.code, failure.message));
+            engine.log.line(&format!(
+                "E5: the store is busy, the poll is tried again at the next tick: {}: {}",
+                failure.code, failure.message
+            ));
             return;
         }
         Ok(out) => {
@@ -106,7 +122,12 @@ fn apply(engine: &mut Engine, finished: Finished) {
         }
     };
     let listed = |key: &str| out[key].as_array().map_or(0, Vec::len);
-    let (changed, feedback, merged, done) = (listed("changed"), listed("feedback"), listed("merged"), listed("done"));
+    let (changed, feedback, merged, done) = (
+        listed("changed"),
+        listed("feedback"),
+        listed("merged"),
+        listed("done"),
+    );
     if changed + feedback + merged + done > 0 {
         engine.log.line(&format!(
             "E5: polled {} pull request(s): {changed} changed, {feedback} feedback, {merged} merged, {done} plan(s) done",
@@ -128,8 +149,13 @@ fn apply(engine: &mut Engine, finished: Finished) {
 /// transient deletes the record of the failing call and is reported at once.
 fn transient(engine: &mut Engine, failure: Failure) -> Option<Failure> {
     let details = &failure.details;
-    let call = details["call"].as_str().filter(|_| failure.code == ErrorCode::GhFailed.as_str() && details["transient"] == true);
-    let (Some(call), Some(reason)) = (call.map(str::to_owned), details["reason"].as_str().map(str::to_owned)) else {
+    let call = details["call"]
+        .as_str()
+        .filter(|_| failure.code == ErrorCode::GhFailed.as_str() && details["transient"] == true);
+    let (Some(call), Some(reason)) = (
+        call.map(str::to_owned),
+        details["reason"].as_str().map(str::to_owned),
+    ) else {
         failing::delete(engine);
         return Some(failure);
     };
@@ -150,7 +176,12 @@ fn transient(engine: &mut Engine, failure: Failure) -> Option<Failure> {
     if minutes < i64::from(engine.config.watch.pr_poll_transient_minutes) {
         return None;
     }
-    let last = details["stderr"].as_str().and_then(|s| s.lines().rev().find(|l| !l.trim().is_empty())).unwrap_or(&failure.message).trim().to_owned();
+    let last = details["stderr"]
+        .as_str()
+        .and_then(|s| s.lines().rev().find(|l| !l.trim().is_empty()))
+        .unwrap_or(&failure.message)
+        .trim()
+        .to_owned();
     Some(Failure {
         code: failure.code,
         message: format!("pr poll: gh {call} has failed for {minutes} minutes ({reason}): {last}"),
@@ -188,17 +219,25 @@ mod failing {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => {
-                engine.log.line(&format!("pr poll: cannot read {}: {e}", path.display()));
+                engine
+                    .log
+                    .line(&format!("pr poll: cannot read {}: {e}", path.display()));
                 return None;
             }
         };
         let parsed = serde_json::from_str::<Value>(&text).ok().and_then(|v| {
-            let (call, since) = (v["call"].as_str()?.to_owned(), v["since"].as_str()?.to_owned());
+            let (call, since) = (
+                v["call"].as_str()?.to_owned(),
+                v["since"].as_str()?.to_owned(),
+            );
             let at = OffsetDateTime::parse(&since, &Rfc3339).ok()?;
             Some(Record { call, since, at })
         });
         if parsed.is_none() {
-            engine.log.line(&format!("pr poll: {} is not {{call, since}}: deleted, written again", path.display()));
+            engine.log.line(&format!(
+                "pr poll: {} is not {{call, since}}: deleted, written again",
+                path.display()
+            ));
             delete(engine);
         }
         parsed
@@ -206,9 +245,14 @@ mod failing {
 
     pub(super) fn write(engine: &mut Engine, call: &str, since: &str) {
         let path = path(engine);
-        let written = cpd_core::atomic::write_atomic(&path, json!({"call": call, "since": since}).to_string());
+        let written = cpd_core::atomic::write_atomic(
+            &path,
+            json!({"call": call, "since": since}).to_string(),
+        );
         if let Err(e) = written {
-            engine.log.line(&format!("pr poll: cannot write {}: {e}", path.display()));
+            engine
+                .log
+                .line(&format!("pr poll: cannot write {}: {e}", path.display()));
         }
     }
 
@@ -217,7 +261,9 @@ mod failing {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => engine.log.line(&format!("pr poll: cannot delete {}: {e}", path.display())),
+            Err(e) => engine
+                .log
+                .line(&format!("pr poll: cannot delete {}: {e}", path.display())),
         }
     }
 }
@@ -225,11 +271,15 @@ mod failing {
 /// Whether `cpd pr poll` failed on the store being busy: a transient store error, or the wait for the store's setup lock
 /// (`lock_timeout` naming `store.lock`, not `pr-poll.lock`), the same errors every other step waits out (§3.7).
 fn is_store_busy(failure: &Failure) -> bool {
-    let sqlite_busy = failure.details["sqlite_code"].as_i64().is_some_and(|c| matches!(c & 0xff, 5 | 6));
+    let sqlite_busy = failure.details["sqlite_code"]
+        .as_i64()
+        .is_some_and(|c| matches!(c & 0xff, 5 | 6));
     match failure.code.as_str() {
         c if c == ErrorCode::StoreBusy.as_str() => true,
         c if c == ErrorCode::StoreFailed.as_str() => sqlite_busy,
-        c if c == ErrorCode::LockTimeout.as_str() => failure.details["lock"].as_str().is_some_and(|l| l.ends_with("store.lock")),
+        c if c == ErrorCode::LockTimeout.as_str() => failure.details["lock"]
+            .as_str()
+            .is_some_and(|l| l.ends_with("store.lock")),
         _ => false,
     }
 }
@@ -237,18 +287,30 @@ fn is_store_busy(failure: &Failure) -> bool {
 /// D9: `None` when the rate limit leaves room; else when to poll again and the
 /// failure to report. A `rate_limit` that is not `{remaining, reset_at}` is a failure. The reset is read against `clock`,
 /// the same clock the loop waits on, so a test's handover between the poll answering and the guard reading cannot skew it.
-pub(super) fn rate_guard(clock: &dyn Clock, out: &Value, zone: &cpd_core::clock::TimeZone) -> Result<Option<(Instant, Failure)>, Failure> {
+pub(super) fn rate_guard(
+    clock: &dyn Clock,
+    out: &Value,
+    zone: &cpd_core::clock::TimeZone,
+) -> Result<Option<(Instant, Failure)>, Failure> {
     let unusable = |why: String| {
-        Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("cpd pr poll printed an unusable rate_limit: {why}.")).with("stdout", out.to_string()))
+        Failure::from(
+            &CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("cpd pr poll printed an unusable rate_limit: {why}."),
+            )
+            .with("stdout", out.to_string()),
+        )
     };
     let rate = &out["rate_limit"];
-    let (Some(remaining), Some(reset_at)) = (rate["remaining"].as_u64(), rate["reset_at"].as_str()) else {
+    let (Some(remaining), Some(reset_at)) = (rate["remaining"].as_u64(), rate["reset_at"].as_str())
+    else {
         return Err(unusable("it has no remaining and reset_at".to_owned()));
     };
     if remaining >= RATE_FLOOR {
         return Ok(None);
     }
-    let reset = OffsetDateTime::parse(reset_at, &Rfc3339).map_err(|e| unusable(format!("reset_at {reset_at:?} is not RFC 3339: {e}")))?;
+    let reset = OffsetDateTime::parse(reset_at, &Rfc3339)
+        .map_err(|e| unusable(format!("reset_at {reset_at:?} is not RFC 3339: {e}")))?;
     let wait = (reset - clock.utc()).max(time::Duration::ZERO);
     let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
@@ -277,12 +339,18 @@ pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<
         .env_remove("CPD_ATTEMPT")
         .current_dir(root)
         .stdin(Stdio::null());
-    let out = runner.output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
-        Failed::Io(e) => {
-            Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)))
-        }
-        Failed::Timeout(e) => Failure::from(&e),
-    })?;
+    let out = runner
+        .output(&mut cmd, "cpd", POLL_DEADLINE)
+        .map_err(|e| match e {
+            Failed::Io(e) => Failure::from(
+                &CpdError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("Cannot run {}: {e}.", argv.join(" ")),
+                )
+                .with("argv", json!(argv)),
+            ),
+            Failed::Timeout(e) => Failure::from(&e),
+        })?;
     printed(&out, &argv)
 }
 
@@ -312,7 +380,10 @@ pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
                     .with("argv", json!(argv))
                     .with("exit", out.status.code())
                     .with("stdout", tail(&stdout, TAIL_LINES))
-                    .with("stderr", tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES)),
+                    .with(
+                        "stderr",
+                        tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES),
+                    ),
             ))
         }
     }
@@ -327,20 +398,36 @@ mod tests {
     use super::*;
 
     fn failure(code: ErrorCode, details: Value) -> Failure {
-        Failure { code: code.as_str().to_owned(), message: String::new(), details }
+        Failure {
+            code: code.as_str().to_owned(),
+            message: String::new(),
+            details,
+        }
     }
 
     #[test]
     fn a_busy_store_is_not_a_failed_poll() {
         assert!(is_store_busy(&failure(ErrorCode::StoreBusy, json!({}))));
-        assert!(is_store_busy(&failure(ErrorCode::StoreFailed, json!({"sqlite_code": 5}))));
-        assert!(is_store_busy(&failure(ErrorCode::LockTimeout, json!({"lock": "/h/locks/store.lock"}))));
+        assert!(is_store_busy(&failure(
+            ErrorCode::StoreFailed,
+            json!({"sqlite_code": 5})
+        )));
+        assert!(is_store_busy(&failure(
+            ErrorCode::LockTimeout,
+            json!({"lock": "/h/locks/store.lock"})
+        )));
     }
 
     #[test]
     fn other_failures_stay_failures() {
-        assert!(!is_store_busy(&failure(ErrorCode::LockTimeout, json!({"lock": "/h/locks/pr-poll.lock"}))));
-        assert!(!is_store_busy(&failure(ErrorCode::StoreFailed, json!({"sqlite_code": 1}))));
+        assert!(!is_store_busy(&failure(
+            ErrorCode::LockTimeout,
+            json!({"lock": "/h/locks/pr-poll.lock"})
+        )));
+        assert!(!is_store_busy(&failure(
+            ErrorCode::StoreFailed,
+            json!({"sqlite_code": 1})
+        )));
         assert!(!is_store_busy(&failure(ErrorCode::SpawnFailed, json!({}))));
     }
 }

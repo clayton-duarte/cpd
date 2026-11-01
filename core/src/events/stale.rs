@@ -27,27 +27,51 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
                 params![plan, id],
             )
         }
-        Kind::JobFailed => later_of_job(conn, event, &["job-retried", "job-merged", "job-cancelled"]),
-        Kind::AttemptNudge => {
-            later_of_job(conn, event, &["attempt-started", "job-merged", "job-failed", "job-cancelled"])
+        Kind::JobFailed => {
+            later_of_job(conn, event, &["job-retried", "job-merged", "job-cancelled"])
         }
+        Kind::JobAddendum => later_of_job(
+            conn,
+            event,
+            &[
+                "attempt-started",
+                "job-merged",
+                "job-failed",
+                "job-cancelled",
+            ],
+        ),
+        Kind::AttemptNudge => later_of_job(
+            conn,
+            event,
+            &[
+                "attempt-started",
+                "job-merged",
+                "job-failed",
+                "job-cancelled",
+            ],
+        ),
         Kind::Escalation => {
-            if let (Some(plan), Some(escalation)) = (plan, event.data.get("escalation").and_then(Value::as_str)) {
-                if exists(
+            if let (Some(plan), Some(escalation)) =
+                (plan, event.data.get("escalation").and_then(Value::as_str))
+                && exists(
                     conn,
                     "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2
                      AND kind IN ('escalation-answered', 'escalation-expired')
                      AND json_extract(data, '$.escalation') = ?3 LIMIT 1",
                     params![plan, id, escalation],
-                )? {
-                    return Ok(true);
-                }
+                )?
+            {
+                return Ok(true);
             }
             later_of_job(conn, event, &["job-merged", "job-cancelled"])
         }
         Kind::Error => {
             if job.is_some() {
-                return later_of_job(conn, event, &["attempt-started", "job-merged", "job-cancelled"]);
+                return later_of_job(
+                    conn,
+                    event,
+                    &["attempt-started", "job-merged", "job-cancelled"],
+                );
             }
             let workflow = event.data.pointer("/details/pr").and_then(Value::as_str);
             match (plan, workflow) {
@@ -68,7 +92,9 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
 
 /// A later Event of one of `kinds` about the same Job of the same Plan.
 fn later_of_job(conn: &Connection, event: &Event, kinds: &[&str]) -> Result<bool, CpdError> {
-    let (Some(plan), Some(job)) = (event.plan.as_deref(), event.job.as_deref()) else { return Ok(false) };
+    let (Some(plan), Some(job)) = (event.plan.as_deref(), event.job.as_deref()) else {
+        return Ok(false);
+    };
     // The kind list is a fixed set of literals of this module, bound as one JSON array: no value is formatted into SQL.
     let kinds = Value::from(kinds).to_string();
     exists(
@@ -91,10 +117,21 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
     )? {
         return Ok(true);
     }
-    let Some(reasons) = event.data.get("reasons").and_then(Value::as_array).filter(|r| !r.is_empty()) else {
+    let Some(reasons) = event
+        .data
+        .get("reasons")
+        .and_then(Value::as_array)
+        .filter(|r| !r.is_empty())
+    else {
         return Ok(false);
     };
-    let Some(reasons) = reasons.iter().map(Value::as_str).collect::<Option<Vec<&str>>>() else { return Ok(false) };
+    let Some(reasons) = reasons
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<&str>>>()
+    else {
+        return Ok(false);
+    };
     let row: Option<(String, Option<String>, String, Option<String>)> = conn
         .query_row(
             "SELECT p.checks, p.review_decision, p.state, p.feedback FROM workflows
@@ -103,7 +140,9 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    let Some((checks, review, state, feedback)) = row else { return Ok(false) };
+    let Some((checks, review, state, feedback)) = row else {
+        return Ok(false);
+    };
     let review = review.unwrap_or_default();
     for reason in reasons {
         let holds = match reason {
@@ -138,5 +177,8 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
 }
 
 fn exists(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<bool, CpdError> {
-    Ok(conn.query_row(sql, params, |_| Ok(())).optional()?.is_some())
+    Ok(conn
+        .query_row(sql, params, |_| Ok(()))
+        .optional()?
+        .is_some())
 }

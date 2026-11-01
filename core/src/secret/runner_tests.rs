@@ -27,7 +27,18 @@ fn get_with_asks_the_runner_for_item_get_with_the_account() {
     assert_eq!(calls[0].program, PROGRAM);
     assert_eq!(
         calls[0].args,
-        ["item", "get", "Item", "--vault", "Vault", "--fields", "label=token", "--reveal", "--account", "my.1password.com"]
+        [
+            "item",
+            "get",
+            "Item",
+            "--vault",
+            "Vault",
+            "--fields",
+            "label=token",
+            "--reveal",
+            "--account",
+            "my.1password.com"
+        ]
     );
 }
 
@@ -47,10 +58,27 @@ fn get_with_returns_the_value_without_its_trailing_newline() {
 
 #[test]
 fn list_with_asks_for_the_vaults_items_as_json_and_returns_id_and_title() {
-    let runner = fake(Reply::ok(r#"[{"id":"a1","title":"One","extra":1},{"id":"b2","title":"Two"}]"#));
+    let runner = fake(Reply::ok(
+        r#"[{"id":"a1","title":"One","extra":1},{"id":"b2","title":"Two"}]"#,
+    ));
     let fields = list_with(&runner, "Vault").unwrap();
-    assert_eq!(runner.calls()[0].args, ["item", "list", "--vault", "Vault", "--format", "json", "--account", "my.1password.com"]);
-    assert_eq!(fields["items"], json!([{"id": "a1", "title": "One"}, {"id": "b2", "title": "Two"}]));
+    assert_eq!(
+        runner.calls()[0].args,
+        [
+            "item",
+            "list",
+            "--vault",
+            "Vault",
+            "--format",
+            "json",
+            "--account",
+            "my.1password.com"
+        ]
+    );
+    assert_eq!(
+        fields["items"],
+        json!([{"id": "a1", "title": "One"}, {"id": "b2", "title": "Two"}])
+    );
 }
 
 #[test]
@@ -58,7 +86,10 @@ fn list_with_maps_output_that_is_not_json_to_secret_op_failed() {
     let runner = fake(Reply::ok("nope"));
     let err = list_with(&runner, "V").unwrap_err();
     assert_eq!(err.code(), ErrorCode::SecretOpFailed);
-    assert_eq!(err.message(), "op returned a list that is not the expected JSON");
+    assert_eq!(
+        err.message(),
+        "op returned a list that is not the expected JSON"
+    );
 }
 
 #[test]
@@ -79,15 +110,27 @@ fn get_with_maps_any_other_io_error_to_secret_op_failed() {
 #[test]
 fn get_with_maps_a_signed_out_cli_to_secret_not_signed_in() {
     let runner = fake(Reply::exit(1, "", "[ERROR] You are not signed in."));
-    assert_eq!(get_with(&runner, "V", "I", "f").unwrap_err().code(), ErrorCode::SecretNotSignedIn);
+    assert_eq!(
+        get_with(&runner, "V", "I", "f").unwrap_err().code(),
+        ErrorCode::SecretNotSignedIn
+    );
 }
 
 #[test]
 fn get_with_maps_a_missing_item_to_secret_not_found() {
-    let runner = fake(Reply::exit(1, "", "[ERROR] \"I\" isn't an item in the \"V\" vault."));
+    let runner = fake(Reply::exit(
+        1,
+        "",
+        "[ERROR] \"I\" isn't an item in the \"V\" vault.",
+    ));
     let err = get_with(&runner, "V", "I", "f").unwrap_err();
     assert_eq!(err.code(), ErrorCode::SecretNotFound);
-    assert!(err.details()["stderr"].as_str().unwrap().contains("isn't an item"));
+    assert!(
+        err.details()["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("isn't an item")
+    );
 }
 
 #[test]
@@ -102,7 +145,11 @@ fn get_with_maps_any_other_failure_to_secret_op_failed_with_the_exit_and_stderr(
 #[test]
 fn get_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on(PROGRAM, |_| true, Reply::ok("v").takes(Duration::from_secs(300)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        PROGRAM,
+        |_| true,
+        Reply::ok("v").takes(Duration::from_secs(300)),
+    );
     let err = get_with(&runner, "V", "I", "f").unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], PROGRAM);

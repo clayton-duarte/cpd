@@ -10,7 +10,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::OwnerLogin;
 use crate::output::Output;
-use crate::policy::{confirm_fallback, PolicyKey, owner_in_use, resolve};
+use crate::policy::{PolicyKey, confirm_fallback, owner_in_use, resolve};
 
 #[derive(Args, Debug)]
 pub struct OwnerArgs {
@@ -24,7 +24,9 @@ pub struct OwnerArgs {
 }
 
 pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, .. } = Env::open()?;
+    let Env {
+        home, mut store, ..
+    } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     let login = &args.login;
     let out = |already: bool| {
@@ -44,7 +46,11 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
         other => other.map(|_| false)?,
     };
     let already = store.write("context owner", |tx| {
-        let current: Option<String> = tx.query_row("SELECT owner FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0))?;
+        let current: Option<String> = tx.query_row(
+            "SELECT owner FROM contexts WHERE id = ?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )?;
         if current.as_deref() == Some(login.as_str()) {
             return Ok(true);
         }
@@ -61,9 +67,15 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
         if link {
             confirm_fallback(&home, login)?;
         }
-        tx.execute("UPDATE contexts SET owner = ?1 WHERE id = ?2", [login.as_str(), id.as_str()])?;
+        tx.execute(
+            "UPDATE contexts SET owner = ?1 WHERE id = ?2",
+            [login.as_str(), id.as_str()],
+        )?;
         let text = format!("Context {id} has the owner {login}.");
-        append(tx, NewEvent::context_owner(text, login.as_str()).context(id.clone()))?;
+        append(
+            tx,
+            NewEvent::context_owner(text, login.as_str()).context(id.clone()),
+        )?;
         Ok(false)
     })?;
     out(already)

@@ -36,7 +36,8 @@ const CHECK_FAILS: &str = r#"{"ok":false,"error":{"code":"tmux_failed","message"
 const RESPAWN_OK: &str = r#"{"ok":true,"respawned":[]}"#;
 const MARK_OK: &str = r#"{"ok":true,"marked":true,"engine_pid":1}"#;
 const MARK_FAILS: &str = r#"{"ok":false,"error":{"code":"watch_not_started","message":"No engine has started in this home."}}"#;
-const ENSURE_FAILS: &str = r#"{"ok":false,"error":{"code":"watch_start_failed","message":"The engine did not start."}}"#;
+const ENSURE_FAILS: &str =
+    r#"{"ok":false,"error":{"code":"watch_start_failed","message":"The engine did not start."}}"#;
 const NO_VERDICT: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
 const MIGRATED: &str = r#"{"ok":true,"migrated":[]}"#;
 const REFUSING: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":{"opens":false,"refusal":{"code":"store_failed","message":"not a store"}}}"#;
@@ -57,8 +58,17 @@ struct OldEngine {
 impl OldEngine {
     fn hold(&self, lock: &Path) {
         fs::create_dir_all(lock.parent().unwrap()).unwrap();
-        let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock).unwrap();
-        assert!(crate::lock::try_lock(&file).unwrap(), "the old engine's lock was free");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
+        assert!(
+            crate::lock::try_lock(&file).unwrap(),
+            "the old engine's lock was free"
+        );
         *self.file.lock().unwrap() = Some(file);
     }
 
@@ -123,9 +133,21 @@ struct Tmux {
 impl Handler for Tmux {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
-        let target = args.iter().position(|a| *a == "-t").and_then(|i| args.get(i + 1)).and_then(|t| t.strip_prefix('=')).unwrap_or("");
+        let target = args
+            .iter()
+            .position(|a| *a == "-t")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|t| t.strip_prefix('='))
+            .unwrap_or("");
         if args.contains(&"list-windows") {
-            let names: Vec<String> = self.windows.lock().unwrap().iter().filter(|(s, _)| s == target).map(|(_, w)| format!("{w}\n")).collect();
+            let names: Vec<String> = self
+                .windows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(s, _)| s == target)
+                .map(|(_, w)| format!("{w}\n"))
+                .collect();
             return Reply::ok(&names.concat());
         }
         if args.contains(&"kill-window") {
@@ -136,7 +158,10 @@ impl Handler for Tmux {
                 Kill::AlreadyGone => {
                     self.old.release_at(now, now);
                     let (session, window) = target.split_once(':').unwrap_or((target, ""));
-                    self.windows.lock().unwrap().retain(|(s, w)| !(s == session && w == window));
+                    self.windows
+                        .lock()
+                        .unwrap()
+                        .retain(|(s, w)| !(s == session && w == window));
                     return Reply::exit(1, "", "no such window");
                 }
                 Kill::EndsTheEngine => self.old.release_at(now, now),
@@ -144,7 +169,10 @@ impl Handler for Tmux {
                 Kill::HoldsForEver => {}
             }
             let (session, window) = target.split_once(':').unwrap_or((target, ""));
-            self.windows.lock().unwrap().retain(|(s, w)| !(s == session && w == window));
+            self.windows
+                .lock()
+                .unwrap()
+                .retain(|(s, w)| !(s == session && w == window));
             return Reply::ok("");
         }
         Reply::ok("")
@@ -187,8 +215,17 @@ impl Handler for NewCpd {
                 Ensure::AnswersOnly => Reply::ok(r#"{"ok":true,"started":true}"#),
                 Ensure::Starts => {
                     fs::create_dir_all(self.lock.parent().unwrap()).unwrap();
-                    let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&self.lock).unwrap();
-                    assert!(crate::lock::try_lock(&file).unwrap(), "the engine's lock was free when `watch --ensure` ran");
+                    let file = fs::OpenOptions::new()
+                        .create(true)
+                        .truncate(false)
+                        .read(true)
+                        .write(true)
+                        .open(&self.lock)
+                        .unwrap();
+                    assert!(
+                        crate::lock::try_lock(&file).unwrap(),
+                        "the engine's lock was free when `watch --ensure` ran"
+                    );
                     self.engine.lock().unwrap().push(file);
                     Reply::ok(r#"{"ok":true,"started":true}"#)
                 }
@@ -257,7 +294,12 @@ impl Rig {
         let home = root.join("home");
         let cpd_home = root.join("cpd-home");
         let target_dir = root.join("target");
-        for dir in [&home, &cpd_home, &root.join("repos"), &target_dir.join("release")] {
+        for dir in [
+            &home,
+            &cpd_home,
+            &root.join("repos"),
+            &target_dir.join("release"),
+        ] {
             fs::create_dir_all(dir).unwrap();
         }
         let built = target_dir.join("release/cpd");
@@ -281,7 +323,12 @@ impl Rig {
             lock_wait: script.lock_wait,
         };
         let old = Arc::new(OldEngine::default());
-        let tmux = Arc::new(Tmux { windows: Mutex::default(), kill: Mutex::new(script.kill), old: old.clone(), clock: fakes.clock.clone() });
+        let tmux = Arc::new(Tmux {
+            windows: Mutex::default(),
+            kill: Mutex::new(script.kill),
+            old: old.clone(),
+            clock: fakes.clock.clone(),
+        });
         let new_cpd = Arc::new(NewCpd {
             lock: install.cpd_home.watch_lock(),
             config: script.config,
@@ -296,19 +343,50 @@ impl Rig {
             let built = built.clone();
             move |c: &Call| Path::new(&c.program) == built && c.args == ["config", "--migrate"]
         };
-        let built_version = move |c: &Call| Path::new(&c.program) == built && c.args == ["--version"];
+        let built_version =
+            move |c: &Call| Path::new(&c.program) == built && c.args == ["--version"];
         let runner = (*fakes.runner).clone().with_git(&route);
-        let runner = if script.refuse_first { runner.once("cpd", built_version.clone(), Reply::ok(REFUSING)) } else { runner };
+        let runner = if script.refuse_first {
+            runner.once("cpd", built_version.clone(), Reply::ok(REFUSING))
+        } else {
+            runner
+        };
         runner
             .on("cpd", built_version, Reply::ok(NO_VERDICT))
             .on("cpd", built_migrate, Reply::ok(MIGRATED))
-            .on("tag-version.sh", move |c| Path::new(&c.program) == tag, script.tag)
+            .on(
+                "tag-version.sh",
+                move |c| Path::new(&c.program) == tag,
+                script.tag,
+            )
             .route("tmux", tmux.clone())
             .route("cpd", new_cpd);
 
-        let ports = Ports { clock: Arc::new(WatchingClock { inner: fakes.clock.clone(), old: old.clone() }), ..fakes.ports.clone() };
-        let rig = Rig { _tmp: tmp, fakes, ports, route, install, old, tmux };
-        let clone = rig.git(&root, &["clone", "-q", origin.dir().to_str().unwrap(), rig.install.root.to_str().unwrap()]);
+        let ports = Ports {
+            clock: Arc::new(WatchingClock {
+                inner: fakes.clock.clone(),
+                old: old.clone(),
+            }),
+            ..fakes.ports.clone()
+        };
+        let rig = Rig {
+            _tmp: tmp,
+            fakes,
+            ports,
+            route,
+            install,
+            old,
+            tmux,
+        };
+        let clone = rig.git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                origin.dir().to_str().unwrap(),
+                rig.install.root.to_str().unwrap(),
+            ],
+        );
         assert_eq!(clone.0, 0, "the fixture's clone: {}", clone.1);
         rig
     }
@@ -316,8 +394,15 @@ impl Rig {
     fn git(&self, dir: &Path, args: &[&str]) -> (i32, String) {
         let mut cmd = Command::new("git");
         cmd.current_dir(dir).args(args);
-        let out = self.ports.runner.output(&mut cmd, "git", Duration::from_secs(60)).unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
-        (std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8, String::from_utf8_lossy(&out.stderr).into_owned())
+        let out = self
+            .ports
+            .runner
+            .output(&mut cmd, "git", Duration::from_secs(60))
+            .unwrap_or_else(|e| panic!("git {args:?}: {e:?}"));
+        (
+            std::os::unix::process::ExitStatusExt::into_raw(out.status) >> 8,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 
     fn installed_cpd(&self) -> PathBuf {
@@ -346,7 +431,10 @@ impl Rig {
         let mut stderr = Vec::new();
         let exit = run(&self.ports, &self.install, &mut stderr);
         self.route.assert_supported();
-        Run { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
+        Run {
+            exit,
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        }
     }
 
     /// The follow-ups the installed `cpd` was asked for, in order.
@@ -383,24 +471,50 @@ impl Rig {
 
     fn tagger_runs(&self) -> usize {
         let tagger = self.tagger();
-        self.fakes.runner.calls().iter().filter(|c| Path::new(&c.program) == tagger).count()
+        self.fakes
+            .runner
+            .calls()
+            .iter()
+            .filter(|c| Path::new(&c.program) == tagger)
+            .count()
     }
 
     /// Whether some other open file description holds the engine's lock.
     fn lock_held(&self) -> bool {
         let lock = self.install.cpd_home.watch_lock();
         fs::create_dir_all(lock.parent().unwrap()).unwrap();
-        let file = fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock).unwrap();
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock)
+            .unwrap();
         !crate::lock::try_lock(&file).unwrap()
     }
 
     fn work_windows(&self) -> Vec<String> {
-        self.tmux.windows.lock().unwrap().iter().filter(|(s, _)| s == "work").map(|(_, w)| w.clone()).collect()
+        self.tmux
+            .windows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(s, _)| s == "work")
+            .map(|(_, w)| w.clone())
+            .collect()
     }
 
     fn assert_old_engine_runs(&self, run: &Run) {
-        assert!(self.work_windows().iter().any(|w| w == "watch"), "the old engine's window was killed: {}", run.stderr);
-        assert!(self.lock_held(), "the old engine's process was stopped: {}", run.stderr);
+        assert!(
+            self.work_windows().iter().any(|w| w == "watch"),
+            "the old engine's window was killed: {}",
+            run.stderr
+        );
+        assert!(
+            self.lock_held(),
+            "the old engine's process was stopped: {}",
+            run.stderr
+        );
     }
 }
 
@@ -408,38 +522,66 @@ fn lines_with<'a>(log: &'a [String], word: &str) -> Vec<&'a String> {
     log.iter().filter(|l| l.contains(word)).collect()
 }
 
-const ALL_FOUR: [&str; 4] = ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"];
+const ALL_FOUR: [&str; 4] = [
+    "watch --check",
+    "tui --respawn",
+    "watch --mark-restart",
+    "watch --ensure",
+];
 
 #[test]
 fn a_failing_config_is_printed_and_makes_the_script_exit_non_zero() {
-    let rig = Rig::with(Script { config: Reply::exit(1, r#"{"ok":false,"error":{"code":"lock_timeout"}}"#, "waiting"), ..Script::default() });
+    let rig = Rig::with(Script {
+        config: Reply::exit(
+            1,
+            r#"{"ok":false,"error":{"code":"lock_timeout"}}"#,
+            "waiting",
+        ),
+        ..Script::default()
+    });
     rig.cockpit_and_work_windows();
 
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(rig.installed_cpd().exists());
-    assert!(run.stderr.contains("cpd install follow-up failed: cpd config: "), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: cpd config: "),
+        "{}",
+        run.stderr
+    );
     assert!(run.stderr.contains("lock_timeout"), "{}", run.stderr);
     assert!(rig.follow_ups().is_empty());
 }
 
 #[test]
 fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
-    let rig = Rig::with(Script { respawn: Reply::exit(3, "", "no cockpit"), ..Script::default() });
+    let rig = Rig::with(Script {
+        respawn: Reply::exit(3, "", "no cockpit"),
+        ..Script::default()
+    });
     rig.cockpit_and_work_windows();
 
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: cpd tui --respawn exited 3"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: cpd tui --respawn exited 3"),
+        "{}",
+        run.stderr
+    );
     assert_eq!(rig.follow_ups(), ALL_FOUR);
 }
 
 #[test]
 fn the_follow_ups_run_after_a_slow_config() {
     // A migration holds the setup lock: cpd config answers only after a while (virtual time).
-    let rig = Rig::with(Script { config: Reply::ok(CONFIG).takes(Duration::from_secs(2)), ..Script::default() });
+    let rig = Rig::with(Script {
+        config: Reply::ok(CONFIG).takes(Duration::from_secs(2)),
+        ..Script::default()
+    });
     rig.cockpit_and_work_windows();
 
     let run = rig.run();
@@ -451,7 +593,10 @@ fn the_follow_ups_run_after_a_slow_config() {
 #[test]
 fn an_old_engine_that_holds_its_lock_for_longer_than_ten_seconds_is_waited_for() {
     // time-claim: the old engine outlives the former 10 s give-up: it lets go twelve virtual seconds after the kill.
-    let rig = Rig::with(Script { kill: Kill::HoldsFor(Duration::from_secs(12)), ..Script::default() });
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsFor(Duration::from_secs(12)),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
@@ -459,34 +604,66 @@ fn an_old_engine_that_holds_its_lock_for_longer_than_ten_seconds_is_waited_for()
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert_eq!(rig.follow_ups(), ALL_FOUR);
     assert!(rig.lock_held(), "the new engine holds the lock");
-    assert!(rig.fakes.clock.elapsed() >= Duration::from_secs(12), "the install waited for the old engine's lock: {:?}", rig.fakes.clock.elapsed());
+    assert!(
+        rig.fakes.clock.elapsed() >= Duration::from_secs(12),
+        "the install waited for the old engine's lock: {:?}",
+        rig.fakes.clock.elapsed()
+    );
 }
 
 #[test]
 fn an_old_engine_that_never_frees_its_lock_fails_the_install_with_the_reason() {
     // time-claim: the bound is 2 s here; the old engine holds well past it (120 virtual seconds).
-    let rig = Rig::with(Script { kill: Kill::HoldsFor(Duration::from_secs(120)), lock_wait: Duration::from_secs(2), ..Script::default() });
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsFor(Duration::from_secs(120)),
+        lock_wait: Duration::from_secs(2),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
-    assert!(run.stderr.contains("after 2s: it was told to stop and has not; the new engine was not started"), "{}", run.stderr);
-    assert_eq!(rig.follow_ups(), ["watch --check", "tui --respawn", "watch --mark-restart"]);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: the old engine still holds "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("after 2s: it was told to stop and has not; the new engine was not started"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        rig.follow_ups(),
+        ["watch --check", "tui --respawn", "watch --mark-restart"]
+    );
 }
 
 #[test]
 fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
     // --ensure answers, but no process holds the lock.
-    let rig = Rig::with(Script { ensure: Ensure::AnswersOnly, ..Script::default() });
+    let rig = Rig::with(Script {
+        ensure: Ensure::AnswersOnly,
+        ..Script::default()
+    });
     rig.cockpit_and_work_windows();
 
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("but no engine holds "), "{}", run.stderr);
-    assert!(run.stderr.contains("no engine is running"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("but no engine holds "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("no engine is running"),
+        "{}",
+        run.stderr
+    );
 }
 
 // ---- The install's engine order (hs-d463; contract §3.7 "The install's engine order", docs/implementing.md "The install's engine order") ----
@@ -497,41 +674,92 @@ fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
 
 #[test]
 fn a_failing_watch_check_leaves_the_old_engine_and_the_views_alone() {
-    let rig = Rig::with(Script { check: Reply::exit(1, CHECK_FAILS, ""), ..Script::default() });
+    let rig = Rig::with(Script {
+        check: Reply::exit(1, CHECK_FAILS, ""),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     let log = rig.order();
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: cpd watch --check: "), "{}", run.stderr);
-    assert!(run.stderr.contains("tmux_failed"), "the failing step's own code: {}", run.stderr);
-    assert!(run.stderr.contains("the engine was not touched"), "{}", run.stderr);
-    assert!(lines_with(&log, "cpd watch --check").len() == 1, "the new binary's watch --check ran once: {log:?}");
-    assert!(lines_with(&log, "kill-window").is_empty(), "a kill-window ran: {log:?}");
-    assert!(lines_with(&log, "respawn-pane").is_empty() && lines_with(&log, "cpd tui --respawn").is_empty(), "the views were respawned: {log:?}");
-    assert!(lines_with(&log, "cpd watch --ensure").is_empty(), "watch --ensure ran: {log:?}");
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: cpd watch --check: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("tmux_failed"),
+        "the failing step's own code: {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("the engine was not touched"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        lines_with(&log, "cpd watch --check").len() == 1,
+        "the new binary's watch --check ran once: {log:?}"
+    );
+    assert!(
+        lines_with(&log, "kill-window").is_empty(),
+        "a kill-window ran: {log:?}"
+    );
+    assert!(
+        lines_with(&log, "respawn-pane").is_empty()
+            && lines_with(&log, "cpd tui --respawn").is_empty(),
+        "the views were respawned: {log:?}"
+    );
+    assert!(
+        lines_with(&log, "cpd watch --ensure").is_empty(),
+        "watch --ensure ran: {log:?}"
+    );
     rig.assert_old_engine_runs(&run);
 }
 
 #[test]
 fn a_failing_config_leaves_the_old_engine_alone_and_says_so() {
-    let rig = Rig::with(Script { config: Reply::exit(1, r#"{"ok":false,"error":{"code":"config_invalid","message":"bad"}}"#, ""), ..Script::default() });
+    let rig = Rig::with(Script {
+        config: Reply::exit(
+            1,
+            r#"{"ok":false,"error":{"code":"config_invalid","message":"bad"}}"#,
+            "",
+        ),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     let log = rig.order();
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: cpd config: "), "{}", run.stderr);
-    assert!(run.stderr.contains("the engine was not touched"), "{}", run.stderr);
-    assert!(lines_with(&log, "kill-window").is_empty() && lines_with(&log, "watch --ensure").is_empty(), "{log:?}");
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: cpd config: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("the engine was not touched"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        lines_with(&log, "kill-window").is_empty() && lines_with(&log, "watch --ensure").is_empty(),
+        "{log:?}"
+    );
     rig.assert_old_engine_runs(&run);
 }
 
 #[test]
 fn a_new_engine_that_cannot_start_after_the_retirement_says_the_old_one_was_stopped() {
-    let rig = Rig::with(Script { ensure: Ensure::Fails, ..Script::default() });
+    let rig = Rig::with(Script {
+        ensure: Ensure::Fails,
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
@@ -540,59 +768,112 @@ fn a_new_engine_that_cannot_start_after_the_retirement_says_the_old_one_was_stop
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert_eq!(lines_with(&log, "kill-window").len(), 1, "{log:?}");
     assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
-    assert!(run.stderr.contains("cpd install follow-up failed: cpd watch --ensure: "), "{}", run.stderr);
-    assert!(run.stderr.contains("the old engine was stopped and no engine is running"), "{}", run.stderr);
-    assert!(!run.stderr.contains("still runs"), "a failure after the retirement cannot say the old engine runs: {}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: cpd watch --ensure: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("the old engine was stopped and no engine is running"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("still runs"),
+        "a failure after the retirement cannot say the old engine runs: {}",
+        run.stderr
+    );
 }
 
 #[test]
 fn a_lock_the_old_engine_keeps_past_the_wait_means_the_new_engine_is_never_started() {
     // The window is killed, but its process is not the one holding the lock: another process does, for longer than the wait.
     // time-claim: the bound is 1 s here; the lock is held for ever (virtual time).
-    let rig = Rig::with(Script { kill: Kill::HoldsForEver, lock_wait: Duration::from_secs(1), ..Script::default() });
+    let rig = Rig::with(Script {
+        kill: Kill::HoldsForEver,
+        lock_wait: Duration::from_secs(1),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     let log = rig.order();
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
-    assert!(run.stderr.contains("after 1s: it was told to stop and has not; the new engine was not started"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: the old engine still holds "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("after 1s: it was told to stop and has not; the new engine was not started"),
+        "{}",
+        run.stderr
+    );
     assert!(lines_with(&log, "cpd watch --ensure").is_empty(), "{log:?}");
 }
 
 #[test]
 fn a_kill_window_that_fails_says_the_engine_was_not_stopped_and_still_runs_the_old_binary() {
-    let rig = Rig::with(Script { kill: Kill::Fails, ..Script::default() });
+    let rig = Rig::with(Script {
+        kill: Kill::Fails,
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(run.stderr.contains("cpd install follow-up failed: tmux kill-window work:watch failed: "), "{}", run.stderr);
-    assert!(run.stderr.contains("the engine was not stopped and still runs the old binary"), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("cpd install follow-up failed: tmux kill-window work:watch failed: "),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("the engine was not stopped and still runs the old binary"),
+        "{}",
+        run.stderr
+    );
     rig.assert_old_engine_runs(&run);
 }
 
 #[test]
 fn a_kill_window_that_fails_because_the_engine_already_left_is_not_a_failure() {
-    let rig = Rig::with(Script { kill: Kill::AlreadyGone, ..Script::default() });
+    let rig = Rig::with(Script {
+        kill: Kill::AlreadyGone,
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
 
     let log = rig.order();
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(!run.stderr.contains("cpd install follow-up failed"), "{}", run.stderr);
+    assert!(
+        !run.stderr.contains("cpd install follow-up failed"),
+        "{}",
+        run.stderr
+    );
     let ensures = lines_with(&log, "cpd watch --ensure");
     assert_eq!(ensures.len(), 1, "{log:?}");
-    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
+    let at = |word: &str| {
+        log.iter()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no `{word}` in {log:?}"))
+    };
     assert!(at("kill-window") < at("cpd watch --ensure"), "{log:?}");
     assert!(rig.lock_held(), "the new engine holds the lock");
 }
 
 #[test]
-fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_and_starts_the_new_one() {
+fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_and_starts_the_new_one()
+ {
     let rig = Rig::new();
     rig.running_old_engine();
 
@@ -602,10 +883,25 @@ fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_a
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert_eq!(lines_with(&log, "kill-window").len(), 1, "{log:?}");
     assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
-    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
-    let steps = [at("cpd watch --check"), at("cpd tui --respawn"), at("kill-window"), at("cpd watch --ensure")];
-    assert!(steps.windows(2).all(|w| w[0] < w[1]), "the order is --check, --respawn, kill-window, --ensure: {steps:?} in {log:?}");
-    assert!(!rig.work_windows().iter().any(|w| w == "watch"), "the old engine's window is gone");
+    let at = |word: &str| {
+        log.iter()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no `{word}` in {log:?}"))
+    };
+    let steps = [
+        at("cpd watch --check"),
+        at("cpd tui --respawn"),
+        at("kill-window"),
+        at("cpd watch --ensure"),
+    ];
+    assert!(
+        steps.windows(2).all(|w| w[0] < w[1]),
+        "the order is --check, --respawn, kill-window, --ensure: {steps:?} in {log:?}"
+    );
+    assert!(
+        !rig.work_windows().iter().any(|w| w == "watch"),
+        "the old engine's window is gone"
+    );
     assert!(rig.lock_held(), "the new engine holds the lock");
 }
 
@@ -624,7 +920,10 @@ fn a_successful_install_runs_tag_version_once_at_the_end() {
 
 #[test]
 fn a_failing_tag_step_warns_and_does_not_fail_the_install() {
-    let rig = Rig::with(Script { tag: Reply::exit(1, "", "tag-version: boom"), ..Script::default() });
+    let rig = Rig::with(Script {
+        tag: Reply::exit(1, "", "tag-version: boom"),
+        ..Script::default()
+    });
 
     let run = rig.run();
 
@@ -637,16 +936,27 @@ fn a_failing_tag_step_warns_and_does_not_fail_the_install() {
 #[test]
 fn a_refused_install_does_not_run_tag_version() {
     // The built binary refuses its first `--version`, and answers a store that does not exist after that.
-    let rig = Rig::with(Script { refuse_first: true, ..Script::default() });
+    let rig = Rig::with(Script {
+        refuse_first: true,
+        ..Script::default()
+    });
 
     let refused = rig.run();
 
     assert_eq!(refused.exit, 1, "{}", refused.stderr);
-    assert_eq!(rig.tagger_runs(), 0, "the tag step ran in a refused install");
+    assert_eq!(
+        rig.tagger_runs(),
+        0,
+        "the tag step ran in a refused install"
+    );
     // Control: the same recorder runs in an install that is not refused.
     let accepted = rig.run();
     assert_eq!(accepted.exit, 0, "{}", accepted.stderr);
-    assert_eq!(rig.tagger_runs(), 1, "the recorder is wired: an accepted install runs it once");
+    assert_eq!(
+        rig.tagger_runs(),
+        1,
+        "the recorder is wired: an accepted install runs it once"
+    );
 }
 
 // ---------- the install marks the engine restart as planned (hs-d471, contract §3.7 "The install's engine order", step 3) ----------
@@ -660,17 +970,41 @@ fn a_good_install_marks_the_restart_after_the_check_and_right_before_the_kill_wi
 
     let log = rig.order();
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert_eq!(lines_with(&log, "cpd watch --mark-restart").len(), 1, "{log:?}");
-    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
-    let steps = [at("cpd watch --check"), at("cpd watch --mark-restart"), at("kill-window"), at("cpd watch --ensure")];
-    assert!(steps.windows(2).all(|w| w[0] < w[1]), "the order is --check, --mark-restart, kill-window, --ensure: {steps:?} in {log:?}");
+    assert_eq!(
+        lines_with(&log, "cpd watch --mark-restart").len(),
+        1,
+        "{log:?}"
+    );
+    let at = |word: &str| {
+        log.iter()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no `{word}` in {log:?}"))
+    };
+    let steps = [
+        at("cpd watch --check"),
+        at("cpd watch --mark-restart"),
+        at("kill-window"),
+        at("cpd watch --ensure"),
+    ];
+    assert!(
+        steps.windows(2).all(|w| w[0] < w[1]),
+        "the order is --check, --mark-restart, kill-window, --ensure: {steps:?} in {log:?}"
+    );
     let between = &log[at("cpd watch --mark-restart") + 1..at("kill-window")];
-    assert!(between.iter().all(|l| l.starts_with("tmux ") && !l.contains("respawn-pane")), "nothing but the retirement's own lookups between the mark and the kill: {between:?}");
+    assert!(
+        between
+            .iter()
+            .all(|l| l.starts_with("tmux ") && !l.contains("respawn-pane")),
+        "nothing but the retirement's own lookups between the mark and the kill: {between:?}"
+    );
 }
 
 #[test]
 fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
-    let rig = Rig::with(Script { mark: Reply::exit(3, MARK_FAILS, ""), ..Script::default() });
+    let rig = Rig::with(Script {
+        mark: Reply::exit(3, MARK_FAILS, ""),
+        ..Script::default()
+    });
     rig.running_old_engine();
 
     let run = rig.run();
@@ -678,10 +1012,18 @@ fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
     let log = rig.order();
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(
-        run.stderr.contains("cpd install follow-up failed: cpd watch --mark-restart: ") && run.stderr.contains("the engine restart is not marked as planned"),
+        run.stderr
+            .contains("cpd install follow-up failed: cpd watch --mark-restart: ")
+            && run
+                .stderr
+                .contains("the engine restart is not marked as planned"),
         "{}",
         run.stderr
     );
-    assert_eq!(lines_with(&log, "kill-window").len(), 1, "the retirement went on: {log:?}");
+    assert_eq!(
+        lines_with(&log, "kill-window").len(),
+        1,
+        "the retirement went on: {log:?}"
+    );
     assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
 }

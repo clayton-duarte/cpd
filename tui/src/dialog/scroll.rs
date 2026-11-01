@@ -3,7 +3,9 @@
 //! nothing: the view reads [`Scroll::offset`] and [`Scroll::page`]. The `text` and `confirm` kinds use it, and so do
 //! the logs and the legend popups.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::text::{Line, Span};
 
 use crate::cells;
@@ -28,7 +30,10 @@ pub(crate) fn cue(which: Cue, n: usize, width: usize) -> Line<'static> {
     };
     let text: String = cells::take(&format!("{arrow} {n} more"), width).to_string();
     let pad = " ".repeat(width - cells::width(&text));
-    Line::from(vec![Span::raw(pad), Span::styled(text, crate::palette::muted_text())])
+    Line::from(vec![
+        Span::raw(pad),
+        Span::styled(text, crate::palette::muted_text()),
+    ])
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,14 +76,22 @@ impl Scroll {
 
     /// Moves by `delta` rows, clamped.
     pub(crate) fn by(&mut self, delta: isize) {
-        let moved = if delta < 0 { self.offset.saturating_sub(delta.unsigned_abs()) } else { self.offset.saturating_add(delta.unsigned_abs()) };
+        let moved = if delta < 0 {
+            self.offset.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.offset.saturating_add(delta.unsigned_abs())
+        };
         self.offset = moved.min(self.max_offset());
     }
 
     /// A key press: ↑ or k one row up, ↓ or j one down, PgUp and PgDn a page, End or G to the last page (tui-G1).
     /// Whether the key was one of these.
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
-        if key.kind != KeyEventKind::Press || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        if key.kind != KeyEventKind::Press
+            || key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             return false;
         }
         let page = isize::try_from(self.page.max(1)).unwrap_or(isize::MAX);
@@ -121,7 +134,12 @@ mod tests {
     }
 
     fn wheel(kind: MouseEventKind) -> MouseEvent {
-        MouseEvent { kind, column: 3, row: 3, modifiers: KeyModifiers::NONE }
+        MouseEvent {
+            kind,
+            column: 3,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     #[test]
@@ -178,7 +196,13 @@ mod tests {
     #[test]
     fn other_keys_releases_and_modified_keys_are_not_scrolling() {
         let mut s = new(40, 10);
-        for code in [KeyCode::Enter, KeyCode::Char('y'), KeyCode::Esc, KeyCode::Char('J'), KeyCode::Home] {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char('y'),
+            KeyCode::Esc,
+            KeyCode::Char('J'),
+            KeyCode::Home,
+        ] {
             assert!(!s.key(press(code)), "{code:?}");
         }
         assert!(!s.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)));
@@ -221,8 +245,15 @@ mod tests {
     #[test]
     fn a_cue_is_right_aligned_in_its_row_with_the_count() {
         assert_eq!(flat(&cue(Cue::Above, 3, 20)), format!("{:>20}", "▲ 3 more"));
-        assert_eq!(flat(&cue(Cue::Below, 33, 30)), format!("{:>30}", "▼ 33 more"));
-        assert_eq!(flat(&cue(Cue::Below, 1, 8)), "▼ 1 more", "a row exactly as wide as the cue");
+        assert_eq!(
+            flat(&cue(Cue::Below, 33, 30)),
+            format!("{:>30}", "▼ 33 more")
+        );
+        assert_eq!(
+            flat(&cue(Cue::Below, 1, 8)),
+            "▼ 1 more",
+            "a row exactly as wide as the cue"
+        );
     }
 
     #[test]
@@ -238,7 +269,11 @@ mod tests {
     #[test]
     fn a_cue_is_muted() {
         let line = cue(Cue::Below, 2, 20);
-        let cue_span = line.spans.iter().find(|s| s.content.contains("more")).expect("the cue's text");
+        let cue_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("more"))
+            .expect("the cue's text");
         assert_eq!(cue_span.style, crate::palette::muted_text(), "{cue_span:?}");
     }
 }

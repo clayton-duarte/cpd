@@ -29,7 +29,11 @@ fn fixture() -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
-    let mut f = Fx { _dir: dir, home, store };
+    let mut f = Fx {
+        _dir: dir,
+        home,
+        store,
+    };
     f.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -85,9 +89,21 @@ impl Fx {
 
     /// A Job of `kind` and `status` of the Workflow `p<n>` of Plan `pay`.
     fn job(&mut self, n: i64, key: &str, kind: &str, status: &str) {
-        let cause = if status == "failed" { "'crashed'" } else { "NULL" };
-        let sha = if status == "merged" { "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'" } else { "NULL" };
-        let (reason, requested) = if status == "cancelled" { ("'t'", format!("'{T}'")) } else { ("NULL", "NULL".to_owned()) };
+        let cause = if status == "failed" {
+            "'crashed'"
+        } else {
+            "NULL"
+        };
+        let sha = if status == "merged" {
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+        } else {
+            "NULL"
+        };
+        let (reason, requested) = if status == "cancelled" {
+            ("'t'", format!("'{T}'"))
+        } else {
+            ("NULL", "NULL".to_owned())
+        };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, kind, merged_sha, cancel_reason, cancel_requested_at)
@@ -103,13 +119,19 @@ impl Fx {
 
     fn rows(&mut self) -> Vec<Condition> {
         let all = conditions_with(&mut self.store, &self.home, NOW, 20, 1, None).unwrap();
-        all.into_iter().filter(|c| c.kind == Kind::PrReady).collect()
+        all.into_iter()
+            .filter(|c| c.kind == Kind::PrReady)
+            .collect()
     }
 
     /// The one row of pull request `n`.
     fn row(&mut self, n: i64) -> Condition {
         let subject = format!("pr:acme/shop#{n}");
-        let mut found: Vec<Condition> = self.rows().into_iter().filter(|c| c.subject == subject).collect();
+        let mut found: Vec<Condition> = self
+            .rows()
+            .into_iter()
+            .filter(|c| c.subject == subject)
+            .collect();
         assert_eq!(found.len(), 1, "{subject}: {found:?}");
         found.remove(0)
     }
@@ -118,13 +140,20 @@ impl Fx {
     fn status(&mut self, n: i64) -> (Urgency, String) {
         let c = self.row(n);
         let row1 = c.label.split('\n').next().unwrap();
-        let status = row1.strip_prefix(&format!("shop#{n} ")).unwrap_or_else(|| panic!("label {:?}", c.label)).to_owned();
+        let status = row1
+            .strip_prefix(&format!("shop#{n} "))
+            .unwrap_or_else(|| panic!("label {:?}", c.label))
+            .to_owned();
         (c.urgency, status)
     }
 }
 
 fn is(f: &mut Fx, n: i64, urgency: Urgency, status: &str) {
-    assert_eq!(f.status(n), (urgency, status.to_owned()), "pull request {n}");
+    assert_eq!(
+        f.status(n),
+        (urgency, status.to_owned()),
+        "pull request {n}"
+    );
 }
 
 fn bot_comment() -> String {
@@ -140,7 +169,10 @@ fn an_authored_draft_pr_is_a_white_draft_row() {
     let c = f.row(3);
     assert_eq!((c.urgency, c.label.as_str()), (White, "shop#3 draft\nT"));
     assert_eq!(c.subject, "pr:acme/shop#3");
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/shop/pull/3")
+    );
 }
 
 #[test]
@@ -172,15 +204,30 @@ fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested(
     is(&mut f, 2, Red, "failing");
 }
 
+/// A Job as (kind, status).
+type JobKindStatus<'a> = (&'a str, &'a str);
+
 #[test]
 fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_live() {
     let broken = [
-        ("mergeable = 'conflicting', merge_state = 'dirty'", "conflict", "updating"),
-        ("checks = 'failed', merge_state = 'blocked'", "failing", "fixing"),
-        ("review_decision = 'changes_requested', merge_state = 'blocked'", "changes requested", "fixing"),
+        (
+            "mergeable = 'conflicting', merge_state = 'dirty'",
+            "conflict",
+            "updating",
+        ),
+        (
+            "checks = 'failed', merge_state = 'blocked'",
+            "failing",
+            "fixing",
+        ),
+        (
+            "review_decision = 'changes_requested', merge_state = 'blocked'",
+            "changes requested",
+            "fixing",
+        ),
     ];
     // (Lead working, a Job of (kind, status), handled)
-    let cases: [(bool, Option<(&str, &str)>, bool); 10] = [
+    let cases: [(bool, Option<JobKindStatus>, bool); 10] = [
         (true, None, true),
         (false, Some(("update", "queued")), true),
         (false, Some(("update", "running")), true),
@@ -233,7 +280,10 @@ fn an_unposted_owned_postable_pr_of_a_post_owner_is_a_yellow_ready_for_review_ro
     f.workflow(1, "checks = 'passed'");
     f.own("pay", 1);
     let c = f.row(1);
-    assert_eq!((c.urgency, c.label.as_str()), (Yellow, "shop#1 ready for user review\nT"));
+    assert_eq!(
+        (c.urgency, c.label.as_str()),
+        (Yellow, "shop#1 ready for user review\nT")
+    );
     assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
     assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
     assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
@@ -272,7 +322,11 @@ fn ready_for_review_needs_every_condition() {
     }
 
     // Not postable: comments unread, an open bot comment, no green checks.
-    for set in ["feedback = NULL".to_owned(), format!("feedback = '{}'", bot_comment()), "checks = 'none'".to_owned()] {
+    for set in [
+        "feedback = NULL".to_owned(),
+        format!("feedback = '{}'", bot_comment()),
+        "checks = 'none'".to_owned(),
+    ] {
         let mut f = fixture();
         f.policy(POST);
         f.workflow(1, "checks = 'passed'");
@@ -388,13 +442,19 @@ fn every_row_links_its_owner_and_carries_the_pull_request_url() {
     let red_after = f.row(1);
     assert_eq!((red.urgency, red_after.urgency), (Cyan, Red)); // the Lead working, then idle
     for (c, n) in [(red_after, 1), (f.row(2), 2)] {
-        assert_eq!(c.url.as_deref(), Some(format!("https://github.com/acme/shop/pull/{n}").as_str()));
+        assert_eq!(
+            c.url.as_deref(),
+            Some(format!("https://github.com/acme/shop/pull/{n}").as_str())
+        );
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
         assert_eq!(c.context.as_ref().map(|p| p.as_str()), Some("ctx"));
         assert_eq!(c.session.as_ref().map(|p| p.as_str()), Some("l-pay"));
     }
     let c = f.row(3);
-    assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
+    assert_eq!(
+        c.url.as_deref(),
+        Some("https://github.com/acme/shop/pull/3")
+    );
     assert_eq!((c.plan, c.context, c.session), (None, None, None));
 }
 
@@ -455,7 +515,10 @@ fn stack_review_a_stacked_postable_pr_is_ready_for_review() {
     f.own("pay", 1);
     is(&mut f, 1, Yellow, "ready for user review");
     // With an open bot comment it is not postable, so it stays stacked.
-    f.sql(&format!("UPDATE pull_requests SET feedback = '{}' WHERE number = 1", bot_comment()));
+    f.sql(&format!(
+        "UPDATE pull_requests SET feedback = '{}' WHERE number = 1",
+        bot_comment()
+    ));
     is(&mut f, 1, White, "stacked pr pending base merge");
 }
 

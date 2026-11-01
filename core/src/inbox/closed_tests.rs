@@ -24,9 +24,21 @@ fn fixture_of(state: &str, status: &str) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
     let store = Store::open(&home, 5000).unwrap();
-    let mut f = Fixture { _dir: dir, home, store };
-    let merged = if state == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
-    let pr_merged = if status == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
+    let mut f = Fixture {
+        _dir: dir,
+        home,
+        store,
+    };
+    let merged = if state == "merged" {
+        format!("'{T}'")
+    } else {
+        "NULL".to_owned()
+    };
+    let pr_merged = if status == "merged" {
+        format!("'{T}'")
+    } else {
+        "NULL".to_owned()
+    };
     f.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -64,7 +76,15 @@ impl Fixture {
 
     /// One tick: the rules, then the reconcile. The open items of kind `pr-closed` afterwards.
     fn tick(&mut self) -> Vec<Item> {
-        let found = conditions_with(&mut self.store, &self.home, datetime!(2026-01-02 00:00 UTC), 20, 1, None).unwrap();
+        let found = conditions_with(
+            &mut self.store,
+            &self.home,
+            datetime!(2026-01-02 00:00 UTC),
+            20,
+            1,
+            None,
+        )
+        .unwrap();
         reconcile(&mut self.store, &found, T).unwrap();
         self.store
             .read(super::model::open_items)
@@ -79,11 +99,16 @@ impl Fixture {
 fn an_open_pr_whose_pull_request_is_closed_opens_a_red_pr_closed_item() {
     let mut f = fixture("closed");
     let items = f.tick();
-    let [item] = &items[..] else { panic!("one pr-closed item: {items:?}") };
+    let [item] = &items[..] else {
+        panic!("one pr-closed item: {items:?}")
+    };
     assert_eq!(item.urgency, Urgency::Red);
     assert_eq!(item.subject, "pr:acme/api#7");
     assert_eq!(item.label, "api#7 closed without a merge\nTitle 7");
-    assert_eq!(item.url.as_deref(), Some("https://github.com/acme/api/pull/7"));
+    assert_eq!(
+        item.url.as_deref(),
+        Some("https://github.com/acme/api/pull/7")
+    );
     assert_eq!(item.plan.as_ref().map(|p| p.as_str()), Some("pay"));
     assert_eq!(item.context.as_ref().map(|c| c.as_str()), Some("ctx"));
     assert_eq!(item.session.as_ref().map(|s| s.as_str()), Some("l-pay"));
@@ -119,5 +144,8 @@ fn the_pr_closed_item_is_the_same_item_after_two_reconcile_runs() {
     let first = f.tick();
     let second = f.tick();
     assert_eq!(first.len(), 1, "the item opens");
-    assert_eq!(first.iter().map(|i| i.id).collect::<Vec<_>>(), second.iter().map(|i| i.id).collect::<Vec<_>>());
+    assert_eq!(
+        first.iter().map(|i| i.id).collect::<Vec<_>>(),
+        second.iter().map(|i| i.id).collect::<Vec<_>>()
+    );
 }

@@ -27,13 +27,22 @@ impl Handler for Gh {
     fn handle(&self, call: &Call) -> Reply {
         let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
         let view = |state: &str, merge_state: &str, merged_at: Option<&str>| {
-            Reply::ok(&format!("{}\n", json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": SHA, "title": "Add", "mergedAt": merged_at})))
+            Reply::ok(&format!(
+                "{}\n",
+                json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": SHA, "title": "Add", "mergedAt": merged_at})
+            ))
         };
         match args[..2] {
-            ["pr", "view"] if *self.merged.lock().unwrap() => view("MERGED", "UNKNOWN", Some(MERGED_AT)),
+            ["pr", "view"] if *self.merged.lock().unwrap() => {
+                view("MERGED", "UNKNOWN", Some(MERGED_AT))
+            }
             ["pr", "view"] => view("OPEN", "CLEAN", None),
-            ["repo", "view"] if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") => {
-                Reply::ok("{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n")
+            ["repo", "view"]
+                if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") =>
+            {
+                Reply::ok(
+                    "{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n",
+                )
             }
             ["pr", "merge"] => {
                 *self.merged.lock().unwrap() = true;
@@ -51,7 +60,12 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
     let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    let _ = (*fx.fakes.runner).clone().route("gh", std::sync::Arc::new(Gh { merged: Mutex::new(false) }));
+    let _ = (*fx.fakes.runner).clone().route(
+        "gh",
+        std::sync::Arc::new(Gh {
+            merged: Mutex::new(false),
+        }),
+    );
     env.sql(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored)
            VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add', 0, 'open', 'none', 'none', 't', 't', 'clean', 1);
@@ -78,7 +92,11 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
 /// How many queue rows there are: 0 while the table does not exist.
 fn queued(env: &TestEnv) -> i64 {
     let table: i64 = env.query("SELECT count(*) FROM sqlite_master WHERE name = 'slack_reactions'");
-    if table == 0 { 0 } else { env.query("SELECT count(*) FROM slack_reactions") }
+    if table == 0 {
+        0
+    } else {
+        env.query("SELECT count(*) FROM slack_reactions")
+    }
 }
 
 pub(super) fn merge(fx: &Fx) {
@@ -96,8 +114,15 @@ fn a_merge_queues_the_posts_reaction() {
         "SELECT json_object('channel', channel, 'ts', ts, 'emoji', emoji, 'reacted_at', reacted_at, 'queued', json(CASE WHEN queued_at IS NOT NULL THEN 'true' END)) FROM slack_reactions",
     );
     let row: serde_json::Value = serde_json::from_str(&row).unwrap();
-    assert_eq!(row, json!({"channel": CHANNEL, "ts": TS, "emoji": "git-merge", "reacted_at": null, "queued": true}));
-    assert_eq!(env.query::<Option<String>>("SELECT reacted_at FROM pr_posts"), None, "pr_posts.reacted_at is no longer written");
+    assert_eq!(
+        row,
+        json!({"channel": CHANNEL, "ts": TS, "emoji": "git-merge", "reacted_at": null, "queued": true})
+    );
+    assert_eq!(
+        env.query::<Option<String>>("SELECT reacted_at FROM pr_posts"),
+        None,
+        "pr_posts.reacted_at is no longer written"
+    );
 }
 
 #[test]
@@ -135,8 +160,18 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
 
     let none = fixture(Some(None));
     merge(&none);
-    assert_eq!(queued(&none.env), 0, "a post with no reaction queues no row");
-    assert_eq!(none.env.query::<i64>("SELECT count(*) FROM pragma_table_info('slack_reactions') WHERE name = 'plan'"), 1, "the table has plan");
+    assert_eq!(
+        queued(&none.env),
+        0,
+        "a post with no reaction queues no row"
+    );
+    assert_eq!(
+        none.env.query::<i64>(
+            "SELECT count(*) FROM pragma_table_info('slack_reactions') WHERE name = 'plan'"
+        ),
+        1,
+        "the table has plan"
+    );
 }
 
 #[test]
@@ -150,18 +185,26 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
     let view = || pay.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
 
     let out = view();
-    assert_eq!(out["post"]["reaction"], "git-merge", "no queue row yet: pr_posts.reaction: {out}");
+    assert_eq!(
+        out["post"]["reaction"], "git-merge",
+        "no queue row yet: pr_posts.reaction: {out}"
+    );
     assert!(out["post"]["refusal"].is_null(), "{out}");
 
     env.sql(&format!(
         "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at, plan, workflow) VALUES ('{CHANNEL}', '{TS}', 'git-merged', 'q', 'fresh', 'pay', 'repo');"
     ));
     let out = view();
-    assert_eq!(out["post"]["reaction"], "git-merged", "the emoji of the row, not of the post: {out}");
+    assert_eq!(
+        out["post"]["reaction"], "git-merged",
+        "the emoji of the row, not of the post: {out}"
+    );
     assert_eq!(out["post"]["reacted_at"], "fresh", "{out}");
     assert!(out["post"]["refusal"].is_null(), "{out}");
 
-    env.sql("UPDATE slack_reactions SET reacted_at = NULL, refused_at = 'r', refusal = 'invalid_name';");
+    env.sql(
+        "UPDATE slack_reactions SET reacted_at = NULL, refused_at = 'r', refusal = 'invalid_name';",
+    );
     let out = view();
     assert_eq!(out["post"]["reaction"], "git-merged", "{out}");
     assert!(out["post"]["reacted_at"].is_null(), "{out}");

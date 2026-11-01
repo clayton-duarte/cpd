@@ -17,7 +17,9 @@ use crate::pr::pulls::PullRequest;
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let (plans, cursor) = env.store.read(|conn| snapshot(conn, &args))?;
-    Ok(Output::success(json!({"plans": plans, "events_cursor": cursor})))
+    Ok(Output::success(
+        json!({"plans": plans, "events_cursor": cursor}),
+    ))
 }
 
 /// The Plans and the cursor, read through `conn` with four statements whatever
@@ -26,7 +28,11 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), CpdError> {
     let context = args.context.as_ref().map(|c| c.as_str().to_owned());
     let phase = args.phase.map(|p| p.as_str());
-    let heads = row::query(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
+    let heads = row::query(
+        conn,
+        "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)",
+        &[&context, &phase],
+    )?;
     let mut counts = job_counts(conn)?;
     let mut workflows = workflows(conn)?;
     let out = heads
@@ -47,7 +53,13 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
 fn job_counts(conn: &Connection) -> Result<BTreeMap<String, BTreeMap<String, i64>>, CpdError> {
     let mut stmt = conn.prepare("SELECT plan, status, count(*) FROM jobs GROUP BY plan, status")?;
     let mut by_plan: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
-    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))? {
+    for row in stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })? {
         let (plan, status, n) = row?;
         by_plan.entry(plan).or_default().insert(status, n);
     }
@@ -56,7 +68,17 @@ fn job_counts(conn: &Connection) -> Result<BTreeMap<String, BTreeMap<String, i64
 
 /// Every status listed, as `jobs::counts` prints it.
 fn counts_value(by_status: &BTreeMap<String, i64>) -> Value {
-    Value::Object(STATUSES.iter().map(|s| ((*s).to_owned(), json!(by_status.get(*s).copied().unwrap_or(0)))).collect())
+    Value::Object(
+        STATUSES
+            .iter()
+            .map(|s| {
+                (
+                    (*s).to_owned(),
+                    json!(by_status.get(*s).copied().unwrap_or(0)),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// What the Dispatch column shows of every Workflow (§13.2, §17), by Plan, in key order:
@@ -121,8 +143,13 @@ mod tests {
     fn run(plans: usize) -> (Vec<Value>, Vec<String>) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = ledger(dir.path(), plans);
-        let args = ListArgs { context: None, phase: None };
-        let (result, seen) = store.read(|conn| Ok(statements(conn, || snapshot(conn, &args)))).unwrap();
+        let args = ListArgs {
+            context: None,
+            phase: None,
+        };
+        let (result, seen) = store
+            .read(|conn| Ok(statements(conn, || snapshot(conn, &args))))
+            .unwrap();
         (result.unwrap().0, seen)
     }
 
@@ -131,14 +158,22 @@ mod tests {
         let (_, one) = run(1);
         let (plans, many) = run(6);
         assert_eq!(plans.len(), 6);
-        assert_eq!(many.len(), one.len(), "statements for 6 Plans:\n{}", many.join("\n"));
+        assert_eq!(
+            many.len(),
+            one.len(),
+            "statements for 6 Plans:\n{}",
+            many.join("\n")
+        );
     }
 
     #[test]
     fn plan_list_prints_the_counts_and_the_prs_of_every_plan() {
         let (plans, _) = run(2);
         assert_eq!(plans[1]["id"], "plan-2");
-        assert_eq!(plans[1]["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 0}));
+        assert_eq!(
+            plans[1]["counts"],
+            json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 0})
+        );
         assert_eq!(
             plans[1]["workflows"],
             json!([

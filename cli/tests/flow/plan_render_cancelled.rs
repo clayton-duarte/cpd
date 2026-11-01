@@ -27,7 +27,11 @@ pub(crate) fn env() -> TestEnv {
 }
 
 fn seed(env: &TestEnv) {
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"t\"\n").unwrap();
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"t\"\n",
+    )
+    .unwrap();
     env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -39,7 +43,11 @@ fn seed(env: &TestEnv) {
 
 /// A PR of `pay`: `waiting` (not started) or `dispatch` (started); `base` is a branch, or the Lead Branch of a PR it is stacked on.
 pub(crate) fn pr(env: &TestEnv, key: &str, status: &str, base: &str, needs: &[&str]) {
-    let started = if status == "waiting" { "NULL, NULL" } else { "'/w', 't'" };
+    let started = if status == "waiting" {
+        "NULL, NULL"
+    } else {
+        "'/w', 't'"
+    };
     // the needs are written in the transaction that creates the PR: after it they are Locked
     let needs: String =
         needs.iter().map(|n| format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{key}', '{n}');")).collect();
@@ -51,16 +59,27 @@ pub(crate) fn pr(env: &TestEnv, key: &str, status: &str, base: &str, needs: &[&s
 
 /// A Job of `pay`'s PR `pr` in `status`, of `kind`, needing `needs`: written as a draft, given its Dependencies (a Locked Job
 /// takes none), then moved to its status one legal step at a time.
-pub(crate) fn job_of_kind(env: &TestEnv, pr: &str, key: &str, kind: &str, status: &str, needs: &[&str]) {
+pub(crate) fn job_of_kind(
+    env: &TestEnv,
+    pr: &str,
+    key: &str,
+    kind: &str,
+    status: &str,
+    needs: &[&str],
+) {
     env.sql(&format!(
         "INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', '{pr}', '{key}', '{kind}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]',
                  'draft', 0, cpd_txn(), 't');"
     ));
     for need in needs {
-        env.sql(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"));
+        env.sql(&format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"
+        ));
     }
-    let to = |status: &str| format!("UPDATE jobs SET status = '{status}' WHERE plan = 'pay' AND key = '{key}';");
+    let to = |status: &str| {
+        format!("UPDATE jobs SET status = '{status}' WHERE plan = 'pay' AND key = '{key}';")
+    };
     match status {
         "draft" => {}
         "queued" => env.sql(&format!("UPDATE jobs SET status = 'queued', fingerprint = printf('%064d', 1) WHERE plan = 'pay' AND key = '{key}';")),
@@ -86,7 +105,11 @@ pub(crate) fn render(fx: &Fx) -> (Value, String) {
 /// The lines of `text` that mention `` `key` `` (or the bare key) as a table row's first cell.
 pub(crate) fn row<'a>(text: &'a str, key: &str) -> &'a str {
     text.lines()
-        .find(|l| l.starts_with(&format!("| `{key}` |")) || l.starts_with(&format!("| {key} |")) || l.starts_with(&format!("| [`{key}`]")))
+        .find(|l| {
+            l.starts_with(&format!("| `{key}` |"))
+                || l.starts_with(&format!("| {key} |"))
+                || l.starts_with(&format!("| [`{key}`]"))
+        })
         .unwrap_or_else(|| panic!("no table row for {key}:\n{text}"))
 }
 
@@ -96,7 +119,16 @@ fn with_cancelled_job() -> Fx {
     pr(&fx.env, "api", "dispatch", "main", &[]);
     job(&fx.env, "api", "a", "queued", &[]);
     job(&fx.env, "api", "gone", "queued", &[]);
-    fx.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "gone",
+        "--reason",
+        "not needed any more",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     fx
 }
 
@@ -108,9 +140,15 @@ fn cancelled_job_row_shows_status_and_reason() {
     assert!(gone.contains("cancelled"), "the status: {gone}");
     assert!(gone.contains("not needed any more"), "the reason: {gone}");
     // it keeps its place, in creation order, beside the live Job
-    assert!(text.find(row(&text, "a")).unwrap() < text.find(gone).unwrap(), "{text}");
+    assert!(
+        text.find(row(&text, "a")).unwrap() < text.find(gone).unwrap(),
+        "{text}"
+    );
     // it is drawn in no graph, and has no Spec section
-    assert!(!text.contains("[\"gone\"]"), "not in the Mermaid graph:\n{text}");
+    assert!(
+        !text.contains("[\"gone\"]"),
+        "not in the Mermaid graph:\n{text}"
+    );
     assert!(!text.contains("### `gone`"), "no Spec section:\n{text}");
 }
 
@@ -135,11 +173,20 @@ fn cancelled_pr_is_listed_with_its_jobs() {
     let fx = with_cancelled_pr(None);
     let (_, text) = render(&fx);
     let old = row(&text, "old");
-    assert!(old.contains("cancelled"), "the PR's status in its row: {old}");
-    assert!(text.find(row(&text, "api")).unwrap() < text.find(old).unwrap(), "after the live PRs:\n{text}");
+    assert!(
+        old.contains("cancelled"),
+        "the PR's status in its row: {old}"
+    );
+    assert!(
+        text.find(row(&text, "api")).unwrap() < text.find(old).unwrap(),
+        "after the live PRs:\n{text}"
+    );
     // its Job is shown, cancelled, with its reason
     let job = row(&text, "o1");
-    assert!(job.contains("cancelled") && job.contains("dropped with its PR"), "{job}");
+    assert!(
+        job.contains("cancelled") && job.contains("dropped with its PR"),
+        "{job}"
+    );
     // it is in no graph of needs: with one live PR there is no graph at all
     assert!(!text.contains("[\"old\"]"), "{text}");
 }
@@ -157,9 +204,18 @@ fn superseded_pr_names_its_superseder() {
 fn summary_counts_leave_cancelled_out() {
     let fx = with_cancelled_pr(None);
     job(&fx.env, "api", "gone", "queued", &[]);
-    fx.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
+    fx.cpd(&[
+        "job",
+        "cancel",
+        "gone",
+        "--reason",
+        "not needed any more",
+        "--plan",
+        "pay",
+    ])
+    .ok();
     let before = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
-    let (out, text) = render(&fx);
+    let (out, _text) = render(&fx);
     // the PRs counted are those that are not cancelled; the fingerprint is the one of the Plan as before
     assert_eq!(out["workflows"], 1, "{out}");
     assert_eq!(out["draft_jobs"], 0, "{out}");
@@ -167,6 +223,13 @@ fn summary_counts_leave_cancelled_out() {
     assert_eq!(before["counts"]["queued"], 1, "{before}");
     let summary = fs::read_to_string(out["summary"].as_str().unwrap()).unwrap();
     // the "Full plan (<path>)" line holds a random temp dir that may contain "o1"; only the other lines are checked
-    let body: String = summary.lines().filter(|l| !l.starts_with("Full plan (")).collect::<Vec<_>>().join("\n");
-    assert!(!body.contains("o1") && !body.contains("gone"), "the summary does not count them: {summary}");
+    let body: String = summary
+        .lines()
+        .filter(|l| !l.starts_with("Full plan ("))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body.contains("o1") && !body.contains("gone"),
+        "the summary does not count them: {summary}"
+    );
 }

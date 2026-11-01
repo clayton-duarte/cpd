@@ -26,7 +26,11 @@ fn post_with_node(node: Reply) -> Pay {
         env.tmux_socket()
     ));
     pay.fx.install_pi();
-    env.repo_policy("acme", "owner", "[pr.post]\nenabled = true\nchannel = \"C0POLICY1\"\n");
+    env.repo_policy(
+        "acme",
+        "owner",
+        "[pr.post]\nenabled = true\nchannel = \"C0POLICY1\"\n",
+    );
     env.repo_policy("acme", "pay", "");
     sql(
         &pay,
@@ -44,7 +48,9 @@ fn post() -> Pay {
 }
 
 fn sql(pay: &Pay, sql: &str) {
-    pay.store().write("fixture", |tx| tx.execute_batch(sql).map_err(Into::into)).unwrap();
+    pay.store()
+        .write("fixture", |tx| tx.execute_batch(sql).map_err(Into::into))
+        .unwrap();
 }
 
 /// The `pr_posts` row's `(auto_merge, auto_merge_at)`; `None` when there is no row.
@@ -59,7 +65,9 @@ fn row(pay: &Pay) -> Option<(String, Option<String>)> {
 }
 
 fn posts(pay: &Pay) -> i64 {
-    pay.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pr_posts", [], |r| r.get(0))?)).unwrap()
+    pay.store()
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pr_posts", [], |r| r.get(0))?))
+        .unwrap()
 }
 
 fn post_cmd(pay: &Pay) -> crate::common::Run {
@@ -68,11 +76,18 @@ fn post_cmd(pay: &Pay) -> crate::common::Run {
 
 /// Every recorded `gh` call, its argv joined.
 fn gh(pay: &Pay) -> Vec<String> {
-    pay.fx.calls("gh").into_iter().map(|call| call.args.join(" ")).collect()
+    pay.fx
+        .calls("gh")
+        .into_iter()
+        .map(|call| call.args.join(" "))
+        .collect()
 }
 
 fn mutations(pay: &Pay) -> Vec<String> {
-    gh(pay).into_iter().filter(|c| c.contains("enablePullRequestAutoMerge")).collect()
+    gh(pay)
+        .into_iter()
+        .filter(|c| c.contains("enablePullRequestAutoMerge"))
+        .collect()
 }
 
 #[test]
@@ -83,12 +98,28 @@ fn enables_squash_auto_merge_on_an_unstacked_pr_after_posting() {
 
     let calls = gh(&pay);
     assert_eq!(calls.len(), 2, "{calls:?}");
-    assert!(calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"), "the read query first: {calls:?}");
-    for field in ["squashMergeAllowed", "mergeCommitAllowed", "rebaseMergeAllowed"] {
-        assert!(calls[0].contains(field), "the read query asks {field}: {calls:?}");
+    assert!(
+        calls[0].contains("autoMergeAllowed") && calls[0].contains("autoMergeRequest"),
+        "the read query first: {calls:?}"
+    );
+    for field in [
+        "squashMergeAllowed",
+        "mergeCommitAllowed",
+        "rebaseMergeAllowed",
+    ] {
+        assert!(
+            calls[0].contains(field),
+            "the read query asks {field}: {calls:?}"
+        );
     }
-    assert!(calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"), "then the mutation: {calls:?}");
-    assert_eq!(out["auto_merge"], json!({"state": "enabled", "reason": null}));
+    assert!(
+        calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"),
+        "then the mutation: {calls:?}"
+    );
+    assert_eq!(
+        out["auto_merge"],
+        json!({"state": "enabled", "reason": null})
+    );
     let (state, at) = row(&pay).expect("the post row");
     assert_eq!(state, "enabled");
     assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
@@ -101,10 +132,30 @@ fn uses_the_graphql_mutation_and_never_gh_pr_merge() {
 
     post_cmd(&pay).ok();
 
-    let calls: Vec<Vec<String>> = pay.fx.calls("gh").into_iter().map(|call| call.args).collect();
-    assert!(calls.iter().any(|a| a.join(" ").contains("enablePullRequestAutoMerge")), "the mutation is sent: {calls:?}");
-    assert!(calls.iter().all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]), "only `gh api graphql`: {calls:?}");
-    assert!(calls.iter().all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))), "never `gh pr merge`: {calls:?}");
+    let calls: Vec<Vec<String>> = pay
+        .fx
+        .calls("gh")
+        .into_iter()
+        .map(|call| call.args)
+        .collect();
+    assert!(
+        calls
+            .iter()
+            .any(|a| a.join(" ").contains("enablePullRequestAutoMerge")),
+        "the mutation is sent: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|a| a[..2] == ["api".to_owned(), "graphql".to_owned()]),
+        "only `gh api graphql`: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|a| !(a.iter().any(|w| w == "pr") && a.iter().any(|w| w == "merge"))),
+        "never `gh pr merge`: {calls:?}"
+    );
 }
 
 #[test]
@@ -116,7 +167,10 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
 
     assert_eq!(out["auto_merge"]["state"], "not_allowed");
     let reason = out["auto_merge"]["reason"].as_str().unwrap_or_default();
-    assert!(reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"), "{out}");
+    assert!(
+        reason.contains("does not allow auto-merge") && reason.contains("cpd pr merge"),
+        "{out}"
+    );
     assert!(mutations(&pay).is_empty(), "nothing is requested");
     assert_eq!(row(&pay), Some(("none".to_owned(), None)));
     assert_eq!(pay.fx.calls("node").len(), 1);
@@ -133,7 +187,15 @@ fn stack(pay: &Pay) {
 }
 
 fn events(pay: &Pay, kind: &str) -> i64 {
-    pay.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = ?1", [kind], |r| r.get(0))?)).unwrap()
+    pay.store()
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT count(*) FROM events WHERE kind = ?1", [kind], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
 }
 
 fn methods(pay: &Pay, squash: bool, merge: bool, rebase: bool) {
@@ -152,7 +214,10 @@ fn a_repo_that_allows_only_rebase_enables_rebase_auto_merge() {
 
     let sent = mutations(&pay);
     assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
-    assert!(sent[0].contains("REBASE") && !sent[0].contains("SQUASH"), "{sent:?}");
+    assert!(
+        sent[0].contains("REBASE") && !sent[0].contains("SQUASH"),
+        "{sent:?}"
+    );
     assert_eq!(out["auto_merge"]["state"], "enabled");
 }
 
@@ -165,7 +230,10 @@ fn a_repo_that_allows_merge_commit_and_rebase_enables_merge_auto_merge() {
 
     let sent = mutations(&pay);
     assert_eq!(sent.len(), 1, "{:?}", gh(&pay));
-    assert!(sent[0].contains("MERGE") && !sent[0].contains("SQUASH") && !sent[0].contains("REBASE"), "{sent:?}");
+    assert!(
+        sent[0].contains("MERGE") && !sent[0].contains("SQUASH") && !sent[0].contains("REBASE"),
+        "{sent:?}"
+    );
 }
 
 #[test]
@@ -203,8 +271,16 @@ fn a_repo_that_allows_no_merge_method_refuses_before_the_send() {
     let run = post_cmd(&pay);
 
     let error = refused(&run, "no_merge_method", 3);
-    assert_eq!(error["details"], json!({"repo": "acme/pay", "number": 812, "squash": false, "merge": false, "rebase": false}));
-    assert!(error["message"].as_str().is_some_and(|m| m.contains("acme/pay")), "{error}");
+    assert_eq!(
+        error["details"],
+        json!({"repo": "acme/pay", "number": 812, "squash": false, "merge": false, "rebase": false})
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("acme/pay")),
+        "{error}"
+    );
     assert_eq!(pay.fx.calls("node").len(), 0, "nothing is sent");
     assert_eq!(posts(&pay), 0);
     assert_eq!(row(&pay), None);
@@ -230,7 +306,13 @@ fn a_github_refusal_of_the_mutation_is_stored_refused_and_reported() {
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "refused");
-    assert!(out["auto_merge"]["reason"].as_str().unwrap().contains("Pull request is in clean status"), "{out}");
+    assert!(
+        out["auto_merge"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Pull request is in clean status"),
+        "{out}"
+    );
     let (state, at) = row(&pay).expect("the post row");
     assert_eq!(state, "refused");
     assert!(at.is_some(), "auto_merge_at is set");
@@ -245,7 +327,12 @@ fn a_gh_failure_of_the_mutation_leaves_the_request_pending_and_the_post_stands()
     let out = post_cmd(&pay).ok();
 
     assert_eq!(out["auto_merge"]["state"], "failed");
-    assert!(out["auto_merge"]["reason"].as_str().is_some_and(|r| !r.is_empty()), "{out}");
+    assert!(
+        out["auto_merge"]["reason"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty()),
+        "{out}"
+    );
     assert_eq!(row(&pay), Some(("pending".to_owned(), None)));
     assert_eq!(pay.fx.calls("node").len(), 1, "the Slack message was sent");
     assert_eq!(posts(&pay), 1);
@@ -272,7 +359,11 @@ fn a_failed_slack_send_makes_only_the_read_call_and_writes_no_row() {
     assert_eq!(gh(&pay).len(), 1, "only the read: {:?}", gh(&pay));
     assert!(mutations(&pay).is_empty());
     assert_eq!(posts(&pay), 0);
-    assert_eq!(row(&pay), None, "no pr_posts row, auto_merge column included");
+    assert_eq!(
+        row(&pay),
+        None,
+        "no pr_posts row, auto_merge column included"
+    );
 }
 
 #[test]
@@ -284,7 +375,10 @@ fn auto_merge_adds_no_readiness_check_of_its_own() {
     drop(pay);
 
     let unready = post();
-    sql(&unready, "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;");
+    sql(
+        &unready,
+        "UPDATE pull_requests SET checks = 'failed' WHERE number = 812;",
+    );
     let error = refused(&post_cmd(&unready), "pr_not_ready", 3);
     assert_eq!(error["details"]["reasons"], json!(["checks_failed"]));
     assert!(gh(&unready).is_empty(), "{:?}", gh(&unready));

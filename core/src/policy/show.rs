@@ -4,14 +4,18 @@ use std::path::PathBuf;
 
 use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::resolve::{machine_path, owner_path, repo_path};
 use super::domain::{
-    BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, POST_CHANNEL, POST_ENABLED, JIRA_DONE, JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, HUMAN_GATED_CONTEXTS, EXCUSED_LABELS, REQUIRED_CHECKS, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT,
-    PRE_MERGE, PRE_START, RUN, WORKFLOWS,
+    BUILD, EXCUSED_LABELS, FEEDBACK_CHECKS, GATE_PR, HUMAN_GATED_CONTEXTS, JIRA_DONE,
+    JIRA_ESTIMATE_FIELDS, JIRA_IN_PROGRESS, JIRA_IN_REVIEW, JIRA_REQUIRED, LIST, MERGE, PATHS,
+    POST_CHANNEL, POST_ENABLED, POST_MERGED_REACTION, POST_TEMPLATE, PRE_COMMIT, PRE_MERGE,
+    PRE_START, REQUIRED_CHECKS, RUN, WORKFLOWS,
 };
-use super::{audience, check_file_names, load_machine, resolve, Domain, DomainSource, Machine, PolicyKey};
+use super::resolve::{machine_path, owner_path, repo_path};
+use super::{
+    Domain, DomainSource, Machine, PolicyKey, audience, check_file_names, load_machine, resolve,
+};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName, SessionId};
@@ -48,15 +52,23 @@ impl KeyArgs {
     /// The key the flags select: `None` when none is given. `--repo` without `--owner` is `usage`.
     pub fn select(&self, store: &mut Store) -> Result<Option<PolicyKey>, CpdError> {
         if self.repo.is_some() && self.owner.is_none() {
-            return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                "--repo goes with --owner only.",
+            ));
         }
         if let Some(workflow) = &self.workflow {
             let plan = self.plan.as_ref().ok_or_else(|| {
-                CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
+                CpdError::new(
+                    ErrorCode::PlanRequired,
+                    "No Plan selected: pass --plan <id> or set CPD_PLAN.",
+                )
             })?;
             Ok(Some(store.read(|conn| key_of_workflow(conn, plan.as_str(), workflow.as_str()))?))
         } else if let Some(context) = &self.context {
-            Ok(Some(store.read(|conn| context_owner(conn, context.as_str()).map(PolicyKey::Owner))?))
+            Ok(Some(store.read(|conn| {
+                context_owner(conn, context.as_str()).map(PolicyKey::Owner)
+            })?))
         } else if let Some(owner) = &self.owner {
             Ok(Some(match &self.repo {
                 Some(name) => PolicyKey::Repo(owner.clone(), name.clone()),
@@ -74,10 +86,17 @@ fn not_found(code: ErrorCode, what: &str, field: &str, id: &str) -> CpdError {
 
 fn context_owner(conn: &Connection, context: &str) -> Result<OwnerLogin, CpdError> {
     let owner: Option<Option<String>> = conn
-        .query_row("SELECT owner FROM contexts WHERE id = ?1", [context], |r| r.get(0))
+        .query_row("SELECT owner FROM contexts WHERE id = ?1", [context], |r| {
+            r.get(0)
+        })
         .optional()?;
     match owner {
-        None => Err(not_found(ErrorCode::ContextNotFound, "Context", "context", context)),
+        None => Err(not_found(
+            ErrorCode::ContextNotFound,
+            "Context",
+            "context",
+            context,
+        )),
         Some(None) => Err(super::owner_unset(&ContextId::parse(context)?)),
         Some(Some(owner)) => OwnerLogin::parse(&owner),
     }
@@ -108,12 +127,20 @@ fn key_of_workflow(conn: &Connection, plan: &str, workflow: &str) -> Result<Poli
 /// The Session's role and key (no flag): a Manager or a Lead its Context's owner, a Worker its Job's Workflow (an explore Job has none: its Context's owner, as a Lead's).
 pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(&'static str, PolicyKey), CpdError> {
     let row: Option<(String, String, Option<String>, Option<String>)> = conn
-        .query_row("SELECT role, context, plan, attempt FROM sessions WHERE id = ?1", [session.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })
+        .query_row(
+            "SELECT role, context, plan, attempt FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
         .optional()?;
-    let (role, context, plan, attempt) =
-        row.ok_or_else(|| not_found(ErrorCode::SessionNotFound, "Session", "session", session.as_str()))?;
+    let (role, context, plan, attempt) = row.ok_or_else(|| {
+        not_found(
+            ErrorCode::SessionNotFound,
+            "Session",
+            "session",
+            session.as_str(),
+        )
+    })?;
     let owner = context_owner(conn, &context)?;
     match (role.as_str(), plan, attempt) {
         ("manager", ..) => Ok(("manager", PolicyKey::Owner(owner))),
@@ -127,7 +154,10 @@ pub(crate) fn key_of_session(conn: &Connection, session: &SessionId) -> Result<(
             )?;
             Ok(("worker", workflow_key(owner, name)?))
         }
-        _ => Err(CpdError::new(ErrorCode::SessionMalformed, format!("Session {session} has role {role} and no Attempt."))),
+        _ => Err(CpdError::new(
+            ErrorCode::SessionMalformed,
+            format!("Session {session} has role {role} and no Attempt."),
+        )),
     }
 }
 
@@ -138,12 +168,20 @@ fn session_from_env() -> Result<SessionId, CpdError> {
         .map(|v| SessionId::parse(&v))
         .transpose()?
         .ok_or_else(|| {
-            CpdError::new(ErrorCode::SessionRequired, "No Session selected: pass a flag, or set CPD_SESSION.")
+            CpdError::new(
+                ErrorCode::SessionRequired,
+                "No Session selected: pass a flag, or set CPD_SESSION.",
+            )
         })
 }
 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, config, .. } = Env::open()?;
+    let Env {
+        home,
+        mut store,
+        config,
+        ..
+    } = Env::open()?;
     let (role, key) = match args.key.select(&mut store)? {
         Some(key) => (None, key),
         None => {
@@ -161,7 +199,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let PolicyKey::Repo(owner, name) = &key {
         files.push(repo_path(&home, owner, name));
     }
-    let files: Vec<PathBuf> = files.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect();
+    let files: Vec<PathBuf> = files
+        .iter()
+        .filter_map(|f| std::fs::canonicalize(f).ok())
+        .collect();
 
     let mut policy = Map::new();
     for &domain in Domain::ALL {
@@ -198,7 +239,11 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 /// The typed keys of `domain` with value and source; a key the winning file leaves out has
 /// the domain's source followed by ` (key default)` (contract §8.3 "Precedence and replace").
 /// The left-out keys come from [`super::domain::Set::fill`], so no file is read again.
-pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource) -> Value {
+pub(super) fn typed_keys(
+    domain: Domain,
+    resolved: &super::Resolved,
+    source: &DomainSource,
+) -> Value {
     fn value(v: &impl serde::Serialize) -> Value {
         serde_json::to_value(v).expect("a policy value serializes")
     }
@@ -230,7 +275,11 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
         }
         Domain::Hooks => {
             let h = &resolved.policy.hooks;
-            vec![(PRE_START, value(&h.pre_start)), (PRE_COMMIT, value(&h.pre_commit)), (PRE_MERGE, value(&h.pre_merge))]
+            vec![
+                (PRE_START, value(&h.pre_start)),
+                (PRE_COMMIT, value(&h.pre_commit)),
+                (PRE_MERGE, value(&h.pre_merge)),
+            ]
         }
         Domain::TestCommands => {
             let t = resolved.policy.test_commands.as_ref();
@@ -242,10 +291,19 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
         }
         Domain::Model => {
             let m = &resolved.policy.model;
-            vec![("O", value(&m.o)), ("S", value(&m.s)), ("H", value(&m.h)), ("G", value(&m.g))]
+            vec![
+                ("O", value(&m.o)),
+                ("S", value(&m.s)),
+                ("H", value(&m.h)),
+                ("G", value(&m.g)),
+            ]
         }
         Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
-        Domain::Resources => vec![("names", value(&resolved.policy.resources.names)), ("declared", value(&resolved.policy.resources.declared))],
+        Domain::Generated => vec![(PATHS, value(&resolved.policy.generated.paths))],
+        Domain::Resources => vec![
+            ("names", value(&resolved.policy.resources.names)),
+            ("declared", value(&resolved.policy.resources.declared)),
+        ],
         Domain::Deploys => vec![(WORKFLOWS, value(&resolved.policy.deploys.workflows))],
         _ => Vec::new(),
     };
@@ -269,7 +327,13 @@ fn machine_markdown(name: &str, machine: &Machine) -> String {
     }
     for (server, entry) in &machine.servers {
         let exposure = entry.exposure.map_or(String::new(), |e| {
-            format!(", exposure {}", serde_json::to_value(e).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default())
+            format!(
+                ", exposure {}",
+                serde_json::to_value(e)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            )
         });
         md.push_str(&format!("- {server}: {}{exposure}\n", entry.url));
     }

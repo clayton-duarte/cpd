@@ -6,7 +6,10 @@ mod tests {
     use super::*;
 
     fn model(name: &str, efforts: &[u8]) -> TierModel {
-        TierModel { model: format!("p/{name}"), efforts: efforts.to_vec() }
+        TierModel {
+            model: format!("p/{name}"),
+            efforts: efforts.to_vec(),
+        }
     }
 
     /// O supports 0–5, S 1–5, H 0–3.
@@ -33,7 +36,9 @@ mod tests {
         for good in ["O0", "S3", "H5", "GX"] {
             assert_eq!(t(good).to_string(), good);
         }
-        for bad in ["", "O", "O6", "o3", "X1", "S33", "S-1", " S3", "S3 ", "minimal", "G0", "gx"] {
+        for bad in [
+            "", "O", "O6", "o3", "X1", "S33", "S-1", " S3", "S3 ", "minimal", "G0", "gx",
+        ] {
             let err = Tier::parse(bad).unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierInvalid, "{bad:?}");
         }
@@ -41,7 +46,9 @@ mod tests {
 
     #[test]
     fn levels_never_use_minimal() {
-        let levels: Vec<_> = (0..=5).map(|e| Tier::new(Letter::O, e).unwrap().level()).collect();
+        let levels: Vec<_> = (0..=5)
+            .map(|e| Tier::new(Letter::O, e).unwrap().level())
+            .collect();
         assert_eq!(levels, ["off", "low", "medium", "high", "xhigh", "max"]);
         assert_eq!(effort_of_level("minimal"), Some(None));
         assert_eq!(effort_of_level("xhigh"), Some(Some(4)));
@@ -69,11 +76,27 @@ mod tests {
             g: model("gemini", &[]),
         };
         let nx = |from: &str| gappy.next(t(from)).unwrap().map(|t| t.to_string());
-        assert_eq!(nx("H1").as_deref(), Some("H3"), "H2 is not a valid effort: the ladder skips to H3, not S1");
-        assert_eq!(nx("H3").as_deref(), Some("S1"), "H5 is not a Worker's Tier: the ladder leaves H for S1");
-        assert_eq!(nx("S1").as_deref(), Some("S3"), "S2 is not a valid effort: the ladder skips to S3");
+        assert_eq!(
+            nx("H1").as_deref(),
+            Some("H3"),
+            "H2 is not a valid effort: the ladder skips to H3, not S1"
+        );
+        assert_eq!(
+            nx("H3").as_deref(),
+            Some("S1"),
+            "H5 is not a Worker's Tier: the ladder leaves H for S1"
+        );
+        assert_eq!(
+            nx("S1").as_deref(),
+            Some("S3"),
+            "S2 is not a valid effort: the ladder skips to S3"
+        );
         assert_eq!(nx("S0").as_deref(), Some("S1"));
-        assert_eq!(nx("S3"), None, "S5 is not a Worker's Tier and no letter is above S");
+        assert_eq!(
+            nx("S3"),
+            None,
+            "S5 is not a Worker's Tier and no letter is above S"
+        );
         // A catalog-VALID Tier outside the Worker range has no ladder (pro-d82); a Tier the
         // catalog refuses is tier_invalid, as an_invalid_tier_is_refused_not_stepped pins.
         for name in ["S5", "O3"] {
@@ -111,7 +134,10 @@ mod tests {
         let err = catalog().next(t("H4")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::TierInvalid);
         assert_eq!(err.details()["model"], "p/haiku");
-        assert_eq!(catalog().model_arg(t("S0")).unwrap_err().code(), ErrorCode::TierInvalid);
+        assert_eq!(
+            catalog().model_arg(t("S0")).unwrap_err().code(),
+            ErrorCode::TierInvalid
+        );
     }
 
     #[test]
@@ -157,7 +183,11 @@ mod tier_g {
             assert!(m.contains("GX") && m.contains("hs-d562"), "{name}: {m}");
         }
         for name in ["gx", "G", "GXX", "OX", "SX", "HX"] {
-            assert_eq!(Tier::parse(name).unwrap_err().code(), ErrorCode::TierInvalid, "{name}");
+            assert_eq!(
+                Tier::parse(name).unwrap_err().code(),
+                ErrorCode::TierInvalid,
+                "{name}"
+            );
         }
         for name in ["H5", "S3", "O1"] {
             assert_eq!(Tier::parse(name).unwrap().to_string(), name);
@@ -183,10 +213,22 @@ mod worker_tiers {
     fn catalog() -> Catalog {
         Catalog {
             pi_version: "1.3.0".into(),
-            o: TierModel { model: "p/opus".into(), efforts: vec![1, 2, 3, 4, 5] },
-            s: TierModel { model: "p/sonnet".into(), efforts: vec![0, 1, 2, 3, 4, 5] },
-            g: TierModel { model: "p/gemini".into(), efforts: vec![] },
-            h: TierModel { model: "p/haiku".into(), efforts: vec![0, 1, 2, 3] },
+            o: TierModel {
+                model: "p/opus".into(),
+                efforts: vec![1, 2, 3, 4, 5],
+            },
+            s: TierModel {
+                model: "p/sonnet".into(),
+                efforts: vec![0, 1, 2, 3, 4, 5],
+            },
+            g: TierModel {
+                model: "p/gemini".into(),
+                efforts: vec![],
+            },
+            h: TierModel {
+                model: "p/haiku".into(),
+                efforts: vec![0, 1, 2, 3],
+            },
         }
     }
 
@@ -199,7 +241,10 @@ mod worker_tiers {
         for letter in [Letter::O, Letter::S, Letter::H] {
             for effort in 0..=5 {
                 let tier = Tier::new(letter, effort).unwrap();
-                let expected = matches!(tier.to_string().as_str(), "H0" | "H1" | "H2" | "H3" | "S0" | "S1" | "S2" | "S3");
+                let expected = matches!(
+                    tier.to_string().as_str(),
+                    "H0" | "H1" | "H2" | "H3" | "S0" | "S1" | "S2" | "S3"
+                );
                 assert_eq!(tier.is_worker_allowed(), expected, "{tier}");
                 assert_eq!(tier.check_worker().is_ok(), expected, "{tier}");
             }
@@ -215,7 +260,10 @@ mod worker_tiers {
             assert_eq!(err.details()["allowed"], "H0-H3, S0-S3");
             assert_eq!(err.details()["rule"], "pro-d82");
             let m = err.message();
-            assert!(m.starts_with(&format!("Tier {name} is not allowed for a Worker")), "{m}");
+            assert!(
+                m.starts_with(&format!("Tier {name} is not allowed for a Worker")),
+                "{m}"
+            );
             for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
                 assert!(m.contains(part), "{part} in {m}");
             }
@@ -251,8 +299,20 @@ mod worker_tiers {
         let at = |job: &str, n| c.attempt_tier(t(job), n).unwrap();
         assert_eq!(
             [1, 2, 3, 4, 5, 6, 7, 8].map(|n| at("H0", n)),
-            [Some(t("H0")), Some(t("H1")), Some(t("H2")), Some(t("H3")), Some(t("S1")), Some(t("S2")), Some(t("S3")), None]
+            [
+                Some(t("H0")),
+                Some(t("H1")),
+                Some(t("H2")),
+                Some(t("H3")),
+                Some(t("S1")),
+                Some(t("S2")),
+                Some(t("S3")),
+                None
+            ]
         );
-        assert_eq!([1, 2, 3, 4].map(|n| at("S1", n)), [Some(t("S1")), Some(t("S2")), Some(t("S3")), None]);
+        assert_eq!(
+            [1, 2, 3, 4].map(|n| at("S1", n)),
+            [Some(t("S1")), Some(t("S2")), Some(t("S3")), None]
+        );
     }
 }

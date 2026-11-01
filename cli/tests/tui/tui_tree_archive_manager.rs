@@ -32,13 +32,35 @@ fn context(id: &str, plan: &str, lead: &str) -> String {
 /// Context `alpha` (Plan `ship`, Lead `l-ship`) whose Manager `m-alpha` holds the chat slot; with `with_beta`, a Context `beta`
 /// after it (Plan `rel`, Lead `l-rel`): the next live Session.
 fn populate(env: &TestEnv, with_beta: bool) {
-    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
+    let mut store = Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap();
     let mut s = context("alpha", "ship", "l-ship");
-    s += &session("l-ship", "lead", "alpha", Some("ship"), "2026-01-02T00:00:00.000Z");
-    s += &session("m-alpha", "manager", "alpha", None, "2026-01-02T00:00:07.000Z");
+    s += &session(
+        "l-ship",
+        "lead",
+        "alpha",
+        Some("ship"),
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session(
+        "m-alpha",
+        "manager",
+        "alpha",
+        None,
+        "2026-01-02T00:00:07.000Z",
+    );
     if with_beta {
         s += &context("beta", "rel", "l-rel");
-        s += &session("l-rel", "lead", "beta", Some("rel"), "2026-01-02T00:00:02.000Z");
+        s += &session(
+            "l-rel",
+            "lead",
+            "beta",
+            Some("rel"),
+            "2026-01-02T00:00:02.000Z",
+        );
     }
     s += "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
           VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'session-moved', 'alpha', NULL, 'm-alpha', 'fixture',
@@ -56,7 +78,13 @@ struct Slot {
 
 impl Handler for Slot {
     fn handle(&self, call: &Call) -> Reply {
-        match call.args.iter().take(2).map(String::as_str).collect::<Vec<_>>()[..] {
+        match call
+            .args
+            .iter()
+            .take(2)
+            .map(String::as_str)
+            .collect::<Vec<_>>()[..]
+        {
             ["session", "open" | "park"] => {
                 self.freed.store(true, Ordering::SeqCst);
                 Reply::ok(r#"{"ok":true}"#)
@@ -81,7 +109,11 @@ fn archive_alpha(fx: &crate::common::fx::Fx, tree: &mut Tree) {
     tree.right_click(5, 1); // the Context `alpha`: Archive is the fourth item of its menu
     tree.until("the menu", |s| s.iter().any(|r| r.contains("New Plan…")));
     tree.click(7, 5);
-    tree.until_that("the archive call", |_| drive::calls(fx).iter().any(|c| c[..2] == drive::words(&["context", "archive"])[..]));
+    tree.until_that("the archive call", |_| {
+        drive::calls(fx)
+            .iter()
+            .any(|c| c[..2] == drive::words(&["context", "archive"])[..])
+    });
 }
 
 /// Archives `alpha` (with a Context `beta` after it when `with_beta`) in a tree with the [`Slot`] for `cpd` and a confirming
@@ -96,8 +128,14 @@ fn archived_alpha(with_beta: bool) -> (Vec<Vec<String>>, bool, String) {
     dialogs.confirm();
     let mut tree = Tree::start(&fx, 60, 14);
     archive_alpha(&fx, &mut tree);
-    tree.until_that("the Context to be archived", |_| slot.archived.load(Ordering::SeqCst));
-    (drive::calls(&fx), slot.archived.load(Ordering::SeqCst), tree.log())
+    tree.until_that("the Context to be archived", |_| {
+        slot.archived.load(Ordering::SeqCst)
+    });
+    (
+        drive::calls(&fx),
+        slot.archived.load(Ordering::SeqCst),
+        tree.log(),
+    )
 }
 
 #[test]
@@ -105,10 +143,16 @@ fn context_archive_frees_the_slot_held_by_its_manager() {
     let (calls, archived, log) = archived_alpha(true);
     assert_eq!(
         calls,
-        [drive::words(&["session", "open", "l-rel"]), drive::words(&["context", "archive", "alpha"])],
+        [
+            drive::words(&["session", "open", "l-rel"]),
+            drive::words(&["context", "archive", "alpha"])
+        ],
         "the next live Session after the Context, then the archive; log: {log}"
     );
-    assert!(archived, "the Context ends archived (not refused in_chat_slot); log: {log}");
+    assert!(
+        archived,
+        "the Context ends archived (not refused in_chat_slot); log: {log}"
+    );
 }
 
 #[test]
@@ -116,8 +160,14 @@ fn context_archive_parks_when_no_other_session_is_live() {
     let (calls, archived, log) = archived_alpha(false);
     assert_eq!(
         calls,
-        [drive::words(&["session", "park"]), drive::words(&["context", "archive", "alpha"])],
+        [
+            drive::words(&["session", "park"]),
+            drive::words(&["context", "archive", "alpha"])
+        ],
         "no other live Session: the slot is parked, then the archive; log: {log}"
     );
-    assert!(archived, "the Context ends archived (not refused in_chat_slot); log: {log}");
+    assert!(
+        archived,
+        "the Context ends archived (not refused in_chat_slot); log: {log}"
+    );
 }

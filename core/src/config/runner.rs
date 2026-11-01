@@ -8,7 +8,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
 /// `pi` (pi in a tmux pane, the default) or `durable` (the durable runner, `pi/durable-worker/`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkerRunner {
     Pi,
@@ -66,7 +66,11 @@ pub fn set_in_text(text: &str, to: WorkerRunner) -> String {
         }
     }
     let (head, tail) = text.split_at(at);
-    let sep = if head.is_empty() || head.ends_with('\n') { "" } else { "\n" };
+    let sep = if head.is_empty() || head.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
     format!("{head}{sep}{line}\n{tail}")
 }
 
@@ -74,15 +78,24 @@ pub fn set_in_text(text: &str, to: WorkerRunner) -> String {
 pub fn toggle(home: &CpdHome) -> Result<WorkerRunner, CpdError> {
     let path = home.config();
     let text = std::fs::read_to_string(&path).map_err(|e| {
-        let code = if e.kind() == std::io::ErrorKind::NotFound { ErrorCode::ConfigMissing } else { ErrorCode::ConfigInvalid };
-        CpdError::new(code, format!("cannot read config.toml: {e}.")).with("path", path.display().to_string())
+        let code = if e.kind() == std::io::ErrorKind::NotFound {
+            ErrorCode::ConfigMissing
+        } else {
+            ErrorCode::ConfigInvalid
+        };
+        CpdError::new(code, format!("cannot read config.toml: {e}."))
+            .with("path", path.display().to_string())
     })?;
     let (config, _) = Config::parse(&text, &path)?;
     let to = config.worker_runner.flipped();
     let new = set_in_text(&text, to);
     Config::parse(&new, &path)?;
     crate::atomic::write_atomic(&path, &new).map_err(|e| {
-        CpdError::new(ErrorCode::ConfigInvalid, format!("cannot write config.toml: {e}.")).with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::ConfigInvalid,
+            format!("cannot write config.toml: {e}."),
+        )
+        .with("path", path.display().to_string())
     })?;
     Ok(to)
 }

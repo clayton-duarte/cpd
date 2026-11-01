@@ -25,7 +25,8 @@ const LEAD: &str = "lead1";
 /// neither legacy nor its own.
 const NEWER_SCHEMA: i64 = cpd_core::store::VERSION + 1;
 /// The `--version` of a cpd whose verdict opens the store (commands.md §1.2).
-const OPENS: &str = r#"{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}"#;
+const OPENS: &str =
+    r#"{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}"#;
 /// The `--version` of a cpd that cannot open the store: a refusing verdict (`store.opens` false).
 const OLDER: &str = r#"{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}"#;
 
@@ -62,7 +63,11 @@ impl Fixture {
     fn execed(&mut self) -> Launch {
         self.w.finish();
         let launch = self.w.exec().clone();
-        assert_eq!(launch.program, self.installed.display().to_string(), "the installed cpd is what is exec'd");
+        assert_eq!(
+            launch.program,
+            self.installed.display().to_string(),
+            "the installed cpd is what is exec'd"
+        );
         launch
     }
 
@@ -73,7 +78,13 @@ impl Fixture {
 
     /// The arguments of an `exec` that adopts `pi`: `session run <id> --adopt <pid>`, `--pi-stale` when its pi changed.
     fn adopting(pi: Pid, stale: bool) -> Vec<String> {
-        let mut args = vec!["session".to_owned(), "run".to_owned(), LEAD.to_owned(), "--adopt".to_owned(), pi.0.to_string()];
+        let mut args = vec![
+            "session".to_owned(),
+            "run".to_owned(),
+            LEAD.to_owned(),
+            "--adopt".to_owned(),
+            pi.0.to_string(),
+        ];
         if stale {
             args.push("--pi-stale".to_owned());
         }
@@ -150,7 +161,9 @@ impl Fixture {
     }
 
     fn state(&self) -> String {
-        self.fx.env.query(&format!("SELECT state FROM sessions WHERE id = '{LEAD}'"))
+        self.fx
+            .env
+            .query(&format!("SELECT state FROM sessions WHERE id = '{LEAD}'"))
     }
 }
 
@@ -187,7 +200,12 @@ fn prepare(state: &str, store_busy_ms: u32) -> Fixture {
     fs::write(&session_file, FINISHED).unwrap();
     // Quiet for `fork_quiet_seconds` already, on the wrapper's clock: a restart at idle need not wait for it.
     let hour_ago = SystemTime::from(fx.fakes.clock.utc()) - Duration::from_secs(3600);
-    fs::File::options().write(true).open(&session_file).unwrap().set_modified(hour_ago).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&session_file)
+        .unwrap()
+        .set_modified(hour_ago)
+        .unwrap();
     let current_version = fx.env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current_version.parent().unwrap()).unwrap();
     fs::write(&current_version, "1.2.0\n").unwrap();
@@ -198,7 +216,13 @@ fn prepare(state: &str, store_busy_ms: u32) -> Fixture {
 
     let pane = Pane::new(&fx, LEAD, &installed);
     let w = pane.run(&["session", "run", LEAD]);
-    Fixture { w, pane, fx, installed, session_file }
+    Fixture {
+        w,
+        pane,
+        fx,
+        installed,
+        session_file,
+    }
 }
 
 #[test]
@@ -206,24 +230,43 @@ fn an_install_re_execs_an_idle_wrapper_at_once_keeping_pi_and_a_new_pi_then_rest
     let mut f = prepare("idle", 5000);
     let session_file = f.session_file.display().to_string();
     // The session file is recorded already, so the first wrapper writes nothing (see below).
-    f.fx.env.sql(&format!("UPDATE sessions SET file = '{session_file}' WHERE id = '{LEAD}'"));
+    f.fx.env.sql(&format!(
+        "UPDATE sessions SET file = '{session_file}' WHERE id = '{LEAD}'"
+    ));
     f.until_pis("the first pi", 1);
     let old_pi = f.pi();
-    assert!(f.pane.spawn.pis()[0].args.windows(2).any(|w| w == ["--session", &session_file]), "the first start resumes");
+    assert!(
+        f.pane.spawn.pis()[0]
+            .args
+            .windows(2)
+            .any(|w| w == ["--session", &session_file]),
+        "the first start resumes"
+    );
     assert!(f.signals().is_empty());
 
     // Cleared, the file is recorded again by the next wrapper to read the Session: the new one, in its loop, once it
     // has read pi's install. Only then is a new pi a change to it.
-    f.fx.env.sql(&format!("UPDATE sessions SET file = NULL WHERE id = '{LEAD}'"));
+    f.fx.env.sql(&format!(
+        "UPDATE sessions SET file = NULL WHERE id = '{LEAD}'"
+    ));
     f.install();
 
     let exec = f.execed();
-    assert_eq!(exec.args, Fixture::adopting(old_pi, false), "the wrapper re-execed the new file, adopting pi");
-    assert!(f.signals().is_empty(), "pi was signalled by the old wrapper");
+    assert_eq!(
+        exec.args,
+        Fixture::adopting(old_pi, false),
+        "the wrapper re-execed the new file, adopting pi"
+    );
+    assert!(
+        f.signals().is_empty(),
+        "pi was signalled by the old wrapper"
+    );
     f.resume(&exec);
     let (fx, w) = (&f.fx, &mut f.w);
     w.until("the new wrapper to record the session file", || {
-        fx.env.query::<Option<String>>(&format!("SELECT file FROM sessions WHERE id = '{LEAD}'")).is_some()
+        fx.env
+            .query::<Option<String>>(&format!("SELECT file FROM sessions WHERE id = '{LEAD}'"))
+            .is_some()
     });
     // Several polls: pi runs on, untouched, under the new wrapper.
     f.w.steps(5);
@@ -235,12 +278,27 @@ fn an_install_re_execs_an_idle_wrapper_at_once_keeping_pi_and_a_new_pi_then_rest
     // The new wrapper still reacts: a new pi restarts the adopted one (it can signal and wait for it).
     f.activate_pi("1.3.0");
     let restart = f.execed();
-    assert_eq!(restart.args, ["session", "run", LEAD], "no pi runs for the new process to adopt");
-    assert_eq!(f.signals(), [(old_pi, Signal::Term)], "the adopted pi got SIGTERM once");
+    assert_eq!(
+        restart.args,
+        ["session", "run", LEAD],
+        "no pi runs for the new process to adopt"
+    );
+    assert_eq!(
+        f.signals(),
+        [(old_pi, Signal::Term)],
+        "the adopted pi got SIGTERM once"
+    );
     assert!(!f.pane.spawn.alive(old_pi), "the adopted pi is dead");
     f.resume(&restart);
     f.until_pis("pi restarted", 2);
-    assert!(f.pane.spawn.pis()[1].args.windows(2).any(|w| w == ["--session", &session_file]), "{:?}", f.pane.spawn.pis()[1]);
+    assert!(
+        f.pane.spawn.pis()[1]
+            .args
+            .windows(2)
+            .any(|w| w == ["--session", &session_file]),
+        "{:?}",
+        f.pane.spawn.pis()[1]
+    );
     assert_eq!(f.signals(), [(old_pi, Signal::Term)]);
 }
 
@@ -259,10 +317,21 @@ fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_pi_changes() {
 
     let restart = f.execed();
     assert_eq!(restart.args, ["session", "run", LEAD]);
-    assert_eq!(f.signals(), [(old_pi, Signal::Term)], "the old pi got SIGTERM once");
+    assert_eq!(
+        f.signals(),
+        [(old_pi, Signal::Term)],
+        "the old pi got SIGTERM once"
+    );
     f.resume(&restart);
     f.until_pis("pi restarted", 2);
-    assert!(f.pane.spawn.pis()[1].args.windows(2).any(|w| w == ["--session", &session_file]), "{:?}", f.pane.spawn.pis()[1]);
+    assert!(
+        f.pane.spawn.pis()[1]
+            .args
+            .windows(2)
+            .any(|w| w == ["--session", &session_file]),
+        "{:?}",
+        f.pane.spawn.pis()[1]
+    );
     assert_eq!(f.pane.spawn.execs().len(), 1, "cpd was not reinstalled");
 }
 
@@ -321,7 +390,8 @@ fn a_pi_that_changed_before_the_install_is_restarted_at_idle_by_the_new_wrapper(
 }
 
 #[test]
-fn a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi() {
+fn a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi()
+ {
     let mut f = start("idle");
     f.pane.spawn.ignore_term();
     let old_pi = f.pi();
@@ -340,11 +410,20 @@ fn a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_sta
     // `pi_stop_seconds` (1) of the clock after the SIGTERM, the SIGKILL: not a step before.
     f.fx.advance(Duration::from_millis(900));
     f.w.steps(1);
-    assert_eq!(f.signals(), [(old_pi, Signal::Term)], "killed {:?} after SIGTERM", f.fx.fakes.clock.elapsed() - signalled_at);
+    assert_eq!(
+        f.signals(),
+        [(old_pi, Signal::Term)],
+        "killed {:?} after SIGTERM",
+        f.fx.fakes.clock.elapsed() - signalled_at
+    );
     f.fx.advance(Duration::from_millis(100));
     let restart = f.execed();
     assert!(f.fx.fakes.clock.elapsed() - changed_at >= Duration::from_secs(1));
-    assert_eq!(f.signals(), [(old_pi, Signal::Term), (old_pi, Signal::Kill)], "SIGTERM once, then SIGKILL");
+    assert_eq!(
+        f.signals(),
+        [(old_pi, Signal::Term), (old_pi, Signal::Kill)],
+        "SIGTERM once, then SIGKILL"
+    );
     assert!(!f.pane.spawn.alive(old_pi), "the old pi is dead");
     assert_eq!(restart.args, ["session", "run", LEAD]);
     f.resume(&restart);
@@ -362,11 +441,18 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     let old_pi = f.pi();
 
     f.migrate_store();
-    f.until_screen("the wrapper to say its read failed", "Retrying at the next poll");
+    f.until_screen(
+        "the wrapper to say its read failed",
+        "Retrying at the next poll",
+    );
     // Several polls: said once, nothing ended, nothing signalled.
     f.w.steps(9);
     let screen = f.screen();
-    assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
+    assert_eq!(
+        screen.matches("Retrying at the next poll").count(),
+        1,
+        "{screen}"
+    );
     assert!(f.pane.spawn.alive(old_pi), "pi was ended: {screen}");
     assert!(f.signals().is_empty());
     assert!(f.w.ended().is_none(), "the wrapper ended: {screen}");
@@ -379,7 +465,10 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     assert_eq!(exec.args, Fixture::adopting(old_pi, false));
     f.resume(&exec);
     f.w.steps(5);
-    assert!(f.pane.spawn.alive(old_pi) && f.signals().is_empty(), "pi was touched");
+    assert!(
+        f.pane.spawn.alive(old_pi) && f.signals().is_empty(),
+        "pi was touched"
+    );
     assert_eq!(f.pis(), 1);
     assert_eq!(f.pane.spawn.execs().len(), 1);
 }
@@ -391,11 +480,21 @@ fn a_failing_store_read_is_said_once_and_retried_with_pi_untouched() {
     let old_pi = f.pi();
 
     f.migrate_store();
-    f.until_screen("the wrapper to say its read failed", "Retrying at the next poll");
+    f.until_screen(
+        "the wrapper to say its read failed",
+        "Retrying at the next poll",
+    );
     f.w.steps(9);
     let screen = f.screen();
-    assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
-    assert!(f.pane.spawn.alive(old_pi) && f.signals().is_empty(), "pi was touched: {screen}");
+    assert_eq!(
+        screen.matches("Retrying at the next poll").count(),
+        1,
+        "{screen}"
+    );
+    assert!(
+        f.pane.spawn.alive(old_pi) && f.signals().is_empty(),
+        "pi was touched: {screen}"
+    );
     assert!(f.w.ended().is_none(), "the wrapper ended: {screen}");
     assert!(f.pane.spawn.execs().is_empty());
 
@@ -411,7 +510,8 @@ fn a_failing_store_read_is_said_once_and_retried_with_pi_untouched() {
 /// pi, does not `exec` it and says so once; a cpd that can open the store,
 /// installed next, is exec'd, and adopts pi.
 #[test]
-fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it() {
+fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it()
+ {
     let mut f = start("working");
     let old_pi = f.pi();
 
@@ -421,15 +521,29 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
     f.w.steps(3);
     let screen = f.screen();
     assert_eq!(screen.matches("reload skipped").count(), 1, "{screen}");
-    assert!(screen.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", f.installed.display())), "{screen}");
+    assert!(
+        screen.contains(&format!(
+            "reload skipped: {} cannot open the store: The database was migrated by a newer cpd.",
+            f.installed.display()
+        )),
+        "{screen}"
+    );
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(f.pane.spawn.alive(old_pi));
-    assert!(f.pane.spawn.execs().is_empty(), "the older cpd was exec'd: {:?}", f.pane.spawn.execs());
+    assert!(
+        f.pane.spawn.execs().is_empty(),
+        "the older cpd was exec'd: {:?}",
+        f.pane.spawn.execs()
+    );
     assert_eq!(f.pis(), 1);
 
     f.install();
     let exec = f.execed();
-    assert_eq!(exec.args, Fixture::adopting(old_pi, false), "the wrapper re-execed the new file");
+    assert_eq!(
+        exec.args,
+        Fixture::adopting(old_pi, false),
+        "the wrapper re-execed the new file"
+    );
     f.resume(&exec);
     f.w.steps(5);
     assert!(f.signals().is_empty(), "pi was signalled");
@@ -446,7 +560,11 @@ fn a_lead_wrapper_whose_pi_exits_does_not_exec_a_cpd_older_than_the_store() {
     f.pane.spawn.killed(f.pi());
     f.until_screen("the wrapper to refuse the reload", "reload skipped");
     f.until_screen("the wrapper to carry on", "pi exited. Press Enter");
-    assert!(f.pane.spawn.execs().is_empty(), "the older cpd was exec'd: {:?}", f.pane.spawn.execs());
+    assert!(
+        f.pane.spawn.execs().is_empty(),
+        "the older cpd was exec'd: {:?}",
+        f.pane.spawn.execs()
+    );
     assert_eq!(f.pis(), 1);
 }
 
@@ -460,20 +578,36 @@ fn a_wrapper_whose_first_write_meets_a_held_write_lock_waits_and_starts_pi_when_
     let holder = rusqlite::Connection::open(f.fx.env.cpd_home().join("cpd.db")).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
 
-    f.until_screen("the wrapper to say it waits for the store", "Waiting for the store");
+    f.until_screen(
+        "the wrapper to say it waits for the store",
+        "Waiting for the store",
+    );
     // Over several tries of the wrapper (a 0.5 s, 1 s, 2 s wait on its clock), it neither ended nor started pi.
     f.w.steps(8);
     let screen = f.screen();
-    assert_eq!(screen.matches("Waiting for the store").count(), 1, "said once: {screen}");
-    assert!(screen.contains("recording the session file") && screen.contains("store_busy"), "{screen}");
+    assert_eq!(
+        screen.matches("Waiting for the store").count(),
+        1,
+        "said once: {screen}"
+    );
+    assert!(
+        screen.contains("recording the session file") && screen.contains("store_busy"),
+        "{screen}"
+    );
     assert!(f.w.ended().is_none(), "the wrapper ended: {screen}");
     assert_eq!(f.pis(), 0, "pi started under the lock");
 
     holder.execute_batch("COMMIT").unwrap();
     f.until_pis("pi", 1);
     assert!(f.w.ended().is_none());
-    let recorded: String = f.fx.env.query("SELECT file FROM sessions WHERE id = 'lead1'");
-    assert_eq!(recorded, f.session_file.display().to_string(), "the write that waited was made");
+    let recorded: String =
+        f.fx.env
+            .query("SELECT file FROM sessions WHERE id = 'lead1'");
+    assert_eq!(
+        recorded,
+        f.session_file.display().to_string(),
+        "the write that waited was made"
+    );
 }
 
 /// What does not heal still ends a wrapper, as before: a Session that does not exist.
@@ -482,7 +616,9 @@ fn a_wrapper_whose_session_does_not_exist_still_ends_with_that_error() {
     let mut f = prepare("idle", 100);
 
     f.w = f.pane.run(&["session", "run", "nosuch"]);
-    let Ended::Returned { code, .. } = f.w.finish() else { panic!("the wrapper did not end with an error") };
+    let Ended::Returned { code, .. } = f.w.finish() else {
+        panic!("the wrapper did not end with an error")
+    };
     assert_ne!(*code, 0);
     let screen = f.screen();
     assert!(screen.contains("session_not_found"), "{screen}");
@@ -499,8 +635,11 @@ fn a_lead_wrapper_follows_the_real_verdict_of_the_new_binary() {
     let mut f = start("idle");
     {
         let conn = Connection::open(f.fx.env.cpd_home().join("cpd.db")).unwrap();
-        let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
-        conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+        let txn: i64 = conn
+            .query_row("SELECT max(id) FROM txns", [], |r| r.get(0))
+            .unwrap();
+        conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn))
+            .unwrap();
         conn.execute(
             "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
              VALUES ('29991231T2359-breaking', 'breaking', lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?1, 0)",
@@ -512,8 +651,18 @@ fn a_lead_wrapper_follows_the_real_verdict_of_the_new_binary() {
     f.install();
     f.until_screen("the wrapper to refuse the reload", "reload skipped");
     let screen = f.screen();
-    assert!(screen.contains(&format!("reload skipped: {} cannot open the store: ", f.installed.display())), "{screen}");
+    assert!(
+        screen.contains(&format!(
+            "reload skipped: {} cannot open the store: ",
+            f.installed.display()
+        )),
+        "{screen}"
+    );
     assert!(f.signals().is_empty(), "pi was signalled");
-    assert!(f.pane.spawn.execs().is_empty(), "the new cpd was exec'd: {:?}", f.pane.spawn.execs());
+    assert!(
+        f.pane.spawn.execs().is_empty(),
+        "the new cpd was exec'd: {:?}",
+        f.pane.spawn.execs()
+    );
     assert!(f.w.ended().is_none());
 }

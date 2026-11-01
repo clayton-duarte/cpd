@@ -12,7 +12,12 @@ use crate::common::refused;
 
 /// The keys of the JSON object `value`.
 fn keys(value: &Value) -> BTreeSet<&str> {
-    value.as_object().unwrap_or_else(|| panic!("not an object: {value}")).keys().map(String::as_str).collect()
+    value
+        .as_object()
+        .unwrap_or_else(|| panic!("not an object: {value}"))
+        .keys()
+        .map(String::as_str)
+        .collect()
 }
 
 fn set(names: &[&'static str]) -> BTreeSet<&'static str> {
@@ -25,28 +30,57 @@ fn job_add_refuses_the_review_flag_and_writes_nothing() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let before = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let before = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
-    let run = fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--review", "--plan", "pl"]);
+    let run = fx.cpd(&[
+        "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--review", "--plan",
+        "pl",
+    ]);
     refused(&run, "usage", 2);
 
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), before, "a refusal writes nothing");
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        before,
+        "a refusal writes nothing"
+    );
 }
 
 #[test]
 fn job_add_and_its_job_added_event_carry_no_review_field() {
-    let output = set(&["key", "pr", "kind", "status", "appended", "tier", "needs", "urgent"]);
-    let data = set(&["pr", "kind", "status", "appended", "tier", "needs", "urgent"]);
+    let output = set(&[
+        "key", "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+    ]);
+    let data = set(&[
+        "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+    ]);
     for (phase, status) in [("plan", "draft"), ("dispatch", "queued")] {
         let fx = Fx::new();
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         let out = job_add(&fx, "pl", "k", "S2", &[]).ok();
         assert_eq!(out["job"]["status"], status, "{phase}");
-        assert_eq!(keys(&out["job"]), output, "{phase}: the job object of `job add`");
+        assert_eq!(
+            keys(&out["job"]),
+            output,
+            "{phase}: the job object of `job add`"
+        );
         let added = events(&fx, "job-added");
-        let event = added.last().unwrap_or_else(|| panic!("{phase}: no job-added Event"));
-        assert_eq!(keys(&event["data"]), data, "{phase}: the data of the job-added Event");
+        let event = added
+            .last()
+            .unwrap_or_else(|| panic!("{phase}: no job-added Event"));
+        assert_eq!(
+            keys(&event["data"]),
+            data,
+            "{phase}: the data of the job-added Event"
+        );
     }
 }
 
@@ -57,7 +91,11 @@ fn job_show_and_plan_show_carry_no_review_field() {
     lock(&fx.env, "pl");
 
     let shown = job(&fx, &["show", "b"], "pl").ok();
-    assert!(!keys(&shown["job"]).contains("review"), "job show: {}", shown["job"]);
+    assert!(
+        !keys(&shown["job"]).contains("review"),
+        "job show: {}",
+        shown["job"]
+    );
 
     let plan_show = fx.cpd(&["plan", "show", "--plan", "pl"]).ok();
     let jobs = plan_show["jobs"].as_array().unwrap();

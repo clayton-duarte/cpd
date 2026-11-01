@@ -42,7 +42,8 @@ fn contains(r: Rect, x: i32, y: i32) -> bool {
 
 fn on_border(boxes: &[Rect], x: u16, y: u16) -> bool {
     boxes.iter().any(|b| {
-        contains(*b, x as i32, y as i32) && (x == b.x || x == b.right() - 1 || y == b.y || y == b.bottom() - 1)
+        contains(*b, x as i32, y as i32)
+            && (x == b.x || x == b.right() - 1 || y == b.y || y == b.bottom() - 1)
     })
 }
 
@@ -59,7 +60,12 @@ fn step(x: u16, y: u16, d: u8) -> (i32, i32, u8) {
 
 /// Every cell of `window` whose line glyph has an arm that leads nowhere, and why. A cell inside a pill is not a line; a cell
 /// on a box border is checked only when it is a `┬` (arm down) or a `┴` (arm up).
-pub(super) fn violations(buf: &Buffer, pills: &[Rect], boxes: &[Rect], window: Rect) -> Vec<String> {
+pub(super) fn violations(
+    buf: &Buffer,
+    pills: &[Rect],
+    boxes: &[Rect],
+    window: Rect,
+) -> Vec<String> {
     let mut found = Vec::new();
     for y in window.y..window.bottom() {
         for x in window.x..window.right() {
@@ -108,7 +114,13 @@ fn name(d: u8) -> &'static str {
 /// Whether a path of matched arms leads from the cell right after pill `from` to the cell left of pill `to`, through other
 /// pills left to right (entered at the left cap, left at the right cap).
 pub(super) fn reaches(buf: &Buffer, pills: &[Pill], from: &str, to: &str) -> bool {
-    let rect = |key: &str| pills.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("no pill {key}")).rect;
+    let rect = |key: &str| {
+        pills
+            .iter()
+            .find(|p| p.key == key)
+            .unwrap_or_else(|| panic!("no pill {key}"))
+            .rect
+    };
     let (from, to) = (rect(from), rect(to));
     let (start, goal) = ((from.right(), from.y), (to.x.wrapping_sub(1), to.y));
     let inside = |x: u16, y: u16| x < buf.area.width && y < buf.area.height;
@@ -132,7 +144,10 @@ pub(super) fn reaches(buf: &Buffer, pills: &[Pill], from: &str, to: &str) -> boo
                 todo.push_back(next);
             } else if d == R {
                 // a pill entered at its left cap is left at its right cap
-                if let Some(p) = pills.iter().find(|p| p.rect.x == next.0 && p.rect.y == next.1) {
+                if let Some(p) = pills
+                    .iter()
+                    .find(|p| p.rect.x == next.0 && p.rect.y == next.1)
+                {
                     let out = (p.rect.right(), p.rect.y);
                     if inside(out.0, out.1) && seen.insert(out) {
                         todo.push_back(out);
@@ -146,6 +161,7 @@ pub(super) fn reaches(buf: &Buffer, pills: &[Pill], from: &str, to: &str) -> boo
 
 fn node(key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse(key).unwrap(),
         workflow: Some(WorkflowKey::parse("p").unwrap()),
         seq: 0,
@@ -170,7 +186,11 @@ fn chart_of(nodes: &[JobNode]) -> Chart {
 
 /// A pill as drawn: caps, icon, key, `pad` blanks, the bar and the tier.
 fn pill(live: Live, key: &str, pad: usize, tier: &str) -> String {
-    format!("{CAP_L}{} {key}{}│{tier}{CAP_R}", live.icon(0).0, " ".repeat(pad))
+    format!(
+        "{CAP_L}{} {key}{}│{tier}{CAP_R}",
+        live.icon(0).0,
+        " ".repeat(pad)
+    )
 }
 
 fn rep(s: &str, n: usize) -> String {
@@ -184,8 +204,19 @@ fn check(c: &Chart) -> Vec<String> {
 
 fn assert_chart(c: &Chart, want: &[String]) {
     let got = rows(&c.buf);
-    assert_eq!(got, want, "\ngot:\n{}\nwant:\n{}", got.join("\n"), want.join("\n"));
-    assert!(check(c).is_empty(), "a connector does not touch what it joins: {:#?}\n{}", check(c), got.join("\n"));
+    assert_eq!(
+        got,
+        want,
+        "\ngot:\n{}\nwant:\n{}",
+        got.join("\n"),
+        want.join("\n")
+    );
+    assert!(
+        check(c).is_empty(),
+        "a connector does not touch what it joins: {:#?}\n{}",
+        check(c),
+        got.join("\n")
+    );
 }
 
 #[test]
@@ -196,12 +227,36 @@ fn the_checker_flags_a_gap_before_a_line_and_a_line_that_ends_in_the_air() {
     buf.set_string(3, 2, "│", ratatui::style::Style::default()); // a vertical with nothing above or below
     let pills = [Rect::new(0, 0, 4, 1)];
     let found = violations(&buf, &pills, &[], buf.area);
-    assert!(found.iter().any(|f| f.starts_with("(6,0)") && f.contains("left")), "{found:#?}");
-    assert!(found.iter().any(|f| f.starts_with("(3,2)") && f.contains("up")), "{found:#?}");
-    assert!(found.iter().any(|f| f.starts_with("(3,2)") && f.contains("down")), "{found:#?}");
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("(6,0)") && f.contains("left")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("(3,2)") && f.contains("up")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("(3,2)") && f.contains("down")),
+        "{found:#?}"
+    );
     // a right end in the air is flagged inside the window, and not outside it
-    assert!(found.iter().any(|f| f.starts_with("(8,0)") && f.contains("right")), "{found:#?}");
-    assert!(violations(&buf, &pills, &[], Rect::new(0, 0, 9, 1)).iter().all(|f| !f.starts_with("(8,0)")));
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("(8,0)") && f.contains("right")),
+        "{found:#?}"
+    );
+    assert!(
+        violations(&buf, &pills, &[], Rect::new(0, 0, 9, 1))
+            .iter()
+            .all(|f| !f.starts_with("(8,0)"))
+    );
 }
 
 #[test]
@@ -215,12 +270,25 @@ fn the_checker_accepts_a_line_that_touches_pills_and_a_box_junction() {
     buf.set_string(2, 4, "╰─────╯", plain);
     let pills = [Rect::new(0, 0, 4, 1)];
     let boxes = [Rect::new(2, 2, 7, 3)];
-    assert_eq!(violations(&buf, &pills, &boxes, buf.area), Vec::<String>::new());
+    assert_eq!(
+        violations(&buf, &pills, &boxes, buf.area),
+        Vec::<String>::new()
+    );
     // the same junction with no line above it is flagged, and its border `─` never is
     buf.set_string(5, 1, " ", plain);
     let found = violations(&buf, &pills, &boxes, buf.area);
-    assert!(found.iter().any(|f| f.starts_with("(5,2)") && f.contains("up")), "{found:#?}");
-    assert!(found.iter().all(|f| !f.starts_with("(3,2)") && !f.starts_with("(4,2)")), "{found:#?}");
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("(5,2)") && f.contains("up")),
+        "{found:#?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|f| !f.starts_with("(3,2)") && !f.starts_with("(4,2)")),
+        "{found:#?}"
+    );
 }
 
 #[test]
@@ -229,15 +297,32 @@ fn a_job_line_starts_at_its_own_pill_when_a_cancelled_pill_widens_its_column() {
     let c = chart_of(&[
         node("leakflake-config", JobStatus::Cancelled, None, &[]),
         node("leakflake-fix", JobStatus::Merged, Some("S2"), &[]),
-        node("open-leakflake", JobStatus::Queued, Some("S1"), &["leakflake-config", "leakflake-fix"]),
+        node(
+            "open-leakflake",
+            JobStatus::Queued,
+            Some("S1"),
+            &["leakflake-config", "leakflake-fix"],
+        ),
     ]);
     let want = [
         pill(Live::Cancelled, "leakflake-config", 0, "—"),
-        format!("{}╭──{}", " ".repeat(24), pill(Live::Queued, "open-leakflake", 0, "S1")),
-        format!("{}{}╯", pill(Live::Merged, "leakflake-fix", 0, "S2"), rep("─", 4)),
+        format!(
+            "{}╭──{}",
+            " ".repeat(24),
+            pill(Live::Queued, "open-leakflake", 0, "S1")
+        ),
+        format!(
+            "{}{}╯",
+            pill(Live::Merged, "leakflake-fix", 0, "S2"),
+            rep("─", 4)
+        ),
     ];
     assert_chart(&c, &want);
-    assert!(reaches(&c.buf, &c.pills, "leakflake-fix", "open-leakflake"), "\n{}", rows(&c.buf).join("\n"));
+    assert!(
+        reaches(&c.buf, &c.pills, "leakflake-fix", "open-leakflake"),
+        "\n{}",
+        rows(&c.buf).join("\n")
+    );
 }
 
 #[test]
@@ -254,14 +339,28 @@ fn a_line_that_skips_a_column_touches_both_pills() {
     let want = [
         format!("{}{}╮", pill(q, "a", 3, "S1"), rep("─", 7)),
         format!("{}├{}╮", " ".repeat(18), rep("─", 12)),
-        format!("{}{}┴──{}──┴──{}", pill(q, "xray", 0, "S1"), rep("─", 7), pill(q, "b", 0, "S1"), pill(q, "c", 0, "S1")),
+        format!(
+            "{}{}┴──{}──┴──{}",
+            pill(q, "xray", 0, "S1"),
+            rep("─", 7),
+            pill(q, "b", 0, "S1"),
+            pill(q, "c", 0, "S1")
+        ),
         String::new(),
         pill(Live::Cancelled, "zulu-long", 0, "S1"),
     ];
     // the first row is `a`'s pill, 7 cells of line and the bus corner; the bus is at column 18
     assert_chart(&c, &want);
-    assert!(reaches(&c.buf, &c.pills, "xray", "c"), "\n{}", rows(&c.buf).join("\n"));
-    assert!(reaches(&c.buf, &c.pills, "a", "b"), "\n{}", rows(&c.buf).join("\n"));
+    assert!(
+        reaches(&c.buf, &c.pills, "xray", "c"),
+        "\n{}",
+        rows(&c.buf).join("\n")
+    );
+    assert!(
+        reaches(&c.buf, &c.pills, "a", "b"),
+        "\n{}",
+        rows(&c.buf).join("\n")
+    );
 }
 
 #[test]
@@ -277,8 +376,21 @@ fn a_card_of_several_jobs_is_held_by_brackets_that_touch_every_pill() {
     let q = Live::Queued;
     // the cancelled `zulu-long` (16 cells) widens column 0: `a`'s line starts at its own right cap, 8 cells in
     let want = [
-        format!("{}{}┬{}┬{}┬{}╮", pill(q, "a", 0, "S1"), rep("─", 12), pill(q, "b", 0, "S1"), rep("─", 3), pill(q, "d", 0, "S1")),
-        format!("{}╰{}╯{}╰{}╯", " ".repeat(20), pill(q, "c", 0, "S1"), " ".repeat(3), pill(q, "e", 0, "S1")),
+        format!(
+            "{}{}┬{}┬{}┬{}╮",
+            pill(q, "a", 0, "S1"),
+            rep("─", 12),
+            pill(q, "b", 0, "S1"),
+            rep("─", 3),
+            pill(q, "d", 0, "S1")
+        ),
+        format!(
+            "{}╰{}╯{}╰{}╯",
+            " ".repeat(20),
+            pill(q, "c", 0, "S1"),
+            " ".repeat(3),
+            pill(q, "e", 0, "S1")
+        ),
         pill(Live::Cancelled, "zulu-long", 0, "S1"),
     ];
     assert_chart(&c, &want);
@@ -286,7 +398,10 @@ fn a_card_of_several_jobs_is_held_by_brackets_that_touch_every_pill() {
 
 #[test]
 fn every_job_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
-    let key_sets = [["a", "b", "c", "d"], ["k", "key-two", "k3", "key-number-four"]];
+    let key_sets = [
+        ["a", "b", "c", "d"],
+        ["k", "key-two", "k3", "key-number-four"],
+    ];
     let pairs: Vec<(usize, usize)> = (1..4).flat_map(|k| (0..k).map(move |i| (i, k))).collect();
     let mut layouts = 0;
     for keys in key_sets {
@@ -294,8 +409,17 @@ fn every_job_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
             for cancelled in 0..16u32 {
                 let nodes: Vec<JobNode> = (0..4)
                     .map(|k| {
-                        let status = if cancelled >> k & 1 == 1 { JobStatus::Cancelled } else { JobStatus::Queued };
-                        let n: Vec<&str> = pairs.iter().enumerate().filter(|(b, (_, kk))| *kk == k && needs >> b & 1 == 1).map(|(_, (i, _))| keys[*i]).collect();
+                        let status = if cancelled >> k & 1 == 1 {
+                            JobStatus::Cancelled
+                        } else {
+                            JobStatus::Queued
+                        };
+                        let n: Vec<&str> = pairs
+                            .iter()
+                            .enumerate()
+                            .filter(|(b, (_, kk))| *kk == k && needs >> b & 1 == 1)
+                            .map(|(_, (i, _))| keys[*i])
+                            .collect();
                         node(keys[k], status, Some("S1"), &n)
                     })
                     .collect();
@@ -304,10 +428,19 @@ fn every_job_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
                 layouts += 1;
                 let case = format!("keys {keys:?}, needs {needs:06b}, cancelled {cancelled:04b}");
                 let found = check(&c);
-                assert!(found.is_empty(), "{case}: {found:#?}\n{}", rows(&c.buf).join("\n"));
+                assert!(
+                    found.is_empty(),
+                    "{case}: {found:#?}\n{}",
+                    rows(&c.buf).join("\n")
+                );
                 for j in &flow {
                     for n in &j.needs {
-                        assert!(reaches(&c.buf, &c.pills, n, &j.key), "{case}: no line from {n} to {}\n{}", j.key, rows(&c.buf).join("\n"));
+                        assert!(
+                            reaches(&c.buf, &c.pills, n, &j.key),
+                            "{case}: no line from {n} to {}\n{}",
+                            j.key,
+                            rows(&c.buf).join("\n")
+                        );
                     }
                 }
             }

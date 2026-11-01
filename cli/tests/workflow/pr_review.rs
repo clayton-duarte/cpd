@@ -3,7 +3,7 @@
 
 use crate::common;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use common::fx::Fx;
 use common::refused;
@@ -20,7 +20,14 @@ const REVIEW_URL: &str = "https://github.com/acme/api/pull/7#pullrequestreview-4
 
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const MOVED: &str = "fedcba9876543210fedcba9876543210fedcba98";
-const POST: [&str; 6] = ["api", "--method", "POST", "repos/acme/api/pulls/7/reviews", "--input", "-"];
+const POST: [&str; 6] = [
+    "api",
+    "--method",
+    "POST",
+    "repos/acme/api/pulls/7/reviews",
+    "--input",
+    "-",
+];
 const GET: [&str; 2] = ["api", "repos/acme/api/pulls/7"];
 
 /// The in-process `gh`: an `api` call with `POST` answers `post`, any other `api` call (the head read) answers `head`;
@@ -45,7 +52,10 @@ fn answer() -> Reply {
 }
 
 fn head_at(sha: &str) -> Reply {
-    Reply::ok(&json!({"number": 7, "state": "open", "title": "t", "head": {"ref": "topic", "sha": sha}}).to_string())
+    Reply::ok(
+        &json!({"number": 7, "state": "open", "title": "t", "head": {"ref": "topic", "sha": sha}})
+            .to_string(),
+    )
 }
 
 fn head() -> Reply {
@@ -58,7 +68,9 @@ fn fixture(head: Reply, post: Reply) -> Fx {
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     fx.env.sql("SELECT 1");
-    let _ = (*fx.fakes.runner).clone().route("gh", Arc::new(Gh { head, post }));
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(Gh { head, post }));
     fx
 }
 
@@ -74,8 +86,17 @@ fn review() -> Value {
            "comments": [{"path": "src/a.rs", "line": 3, "side": "RIGHT", "body": "nit"}]})
 }
 
-fn submit(fx: &Fx, pr: &str, head: &str, event: &str, file: &str, slack: Option<&str>) -> common::Run {
-    let mut args = vec!["review", "submit", "--pr", pr, "--head", head, "--event", event, "--input", file];
+fn submit(
+    fx: &Fx,
+    pr: &str,
+    head: &str,
+    event: &str,
+    file: &str,
+    slack: Option<&str>,
+) -> common::Run {
+    let mut args = vec![
+        "review", "submit", "--pr", pr, "--head", head, "--event", event, "--input", file,
+    ];
     if let Some(slack) = slack {
         args.extend(["--slack", slack]);
     }
@@ -108,17 +129,36 @@ fn approve_posts_the_review_and_queues_the_check_mark() {
         json!({"ok": true, "review": {"id": 4242, "url": REVIEW_URL, "state": "APPROVED", "commit_id": HEAD},
                "reaction": {"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "already": false}})
     );
-    assert_eq!(rows(&fx), [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]);
+    assert_eq!(
+        rows(&fx),
+        [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]
+    );
 }
 
 #[test]
 fn request_changes_posts_the_review_and_queues_changes_requested() {
-    let fx = fixture(head(), Reply::ok(&json!({"id": 4242, "html_url": REVIEW_URL, "state": "CHANGES_REQUESTED"}).to_string()));
+    let fx = fixture(
+        head(),
+        Reply::ok(
+            &json!({"id": 4242, "html_url": REVIEW_URL, "state": "CHANGES_REQUESTED"}).to_string(),
+        ),
+    );
     let file = input(&fx, &review().to_string());
     let out = submit(&fx, REF, HEAD, "REQUEST_CHANGES", &file, Some(SLACK)).ok();
-    assert_eq!(out["review"], json!({"id": 4242, "url": REVIEW_URL, "state": "CHANGES_REQUESTED", "commit_id": HEAD}));
-    assert_eq!(out["reaction"], json!({"channel": CHANNEL, "ts": TS, "emoji": "github-changes-requested", "already": false}));
-    assert_eq!(rows(&fx), [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-changes-requested", "reacted_at": null})]);
+    assert_eq!(
+        out["review"],
+        json!({"id": 4242, "url": REVIEW_URL, "state": "CHANGES_REQUESTED", "commit_id": HEAD})
+    );
+    assert_eq!(
+        out["reaction"],
+        json!({"channel": CHANNEL, "ts": TS, "emoji": "github-changes-requested", "already": false})
+    );
+    assert_eq!(
+        rows(&fx),
+        [
+            json!({"channel": CHANNEL, "ts": TS, "emoji": "github-changes-requested", "reacted_at": null})
+        ]
+    );
 }
 
 #[test]
@@ -133,7 +173,8 @@ fn the_input_is_sent_with_the_event_and_commit_id_added_after_the_head_read() {
     let mut want = review();
     want["event"] = json!("APPROVE");
     want["commit_id"] = json!(HEAD);
-    let sent: Value = serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
+    let sent: Value =
+        serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
     assert_eq!(sent, want);
 }
 
@@ -158,7 +199,11 @@ fn a_second_submit_posts_a_second_review_and_queues_one_row() {
     let second = submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)).ok();
     assert_eq!(first["reaction"]["already"], false);
     assert_eq!(second["reaction"]["already"], true);
-    assert_eq!(gh_calls(&fx).len(), 4, "a rerun reads the head and posts a second review");
+    assert_eq!(
+        gh_calls(&fx).len(),
+        4,
+        "a rerun reads the head and posts a second review"
+    );
     assert_eq!(rows(&fx).len(), 1);
 }
 
@@ -176,7 +221,11 @@ fn without_slack_nothing_is_queued_and_reaction_is_null() {
 fn an_input_carrying_an_event_is_refused_before_any_call() {
     let fx = fixture(head(), answer());
     let file = input(&fx, &json!({"body": "x", "event": "COMMENT"}).to_string());
-    let error = refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "usage", 2);
+    let error = refused(
+        &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+        "usage",
+        2,
+    );
     assert!(message(&error).contains("event"), "{error}");
     assert!(message(&error).contains("--input"), "{error}");
     assert!(gh_calls(&fx).is_empty());
@@ -193,7 +242,11 @@ fn an_input_that_is_not_a_json_object_is_refused_before_any_call() {
     }
     let fx = fixture(head(), answer());
     let missing = fx.env.cpd_home().join("missing.json").display().to_string();
-    let error = refused(&submit(&fx, REF, HEAD, "APPROVE", &missing, None), "usage", 2);
+    let error = refused(
+        &submit(&fx, REF, HEAD, "APPROVE", &missing, None),
+        "usage",
+        2,
+    );
     assert!(message(&error).contains("--input"), "{error}");
     assert!(gh_calls(&fx).is_empty());
 }
@@ -207,27 +260,62 @@ fn a_malformed_pr_event_or_slack_target_is_refused_before_any_call() {
         (REF, "approve", None, "--event"),
         (REF, "", None, "--event"),
         (REF, "APPROVE", Some("C02JU6C2Z1D"), "--slack"),
-        (REF, "APPROVE", Some("c02JU6C2Z1D/1793040197.490209"), "--slack"),
+        (
+            REF,
+            "APPROVE",
+            Some("c02JU6C2Z1D/1793040197.490209"),
+            "--slack",
+        ),
         (REF, "APPROVE", Some("C02JU6C/1793040197.490209"), "--slack"),
-        (REF, "APPROVE", Some("C02JU6C2Z1D/179304019.490209"), "--slack"),
-        (REF, "APPROVE", Some("C02JU6C2Z1D/1793040197490209"), "--slack"),
-        (REF, "APPROVE", Some("C02JU6C2Z1D/1793040197.49020"), "--slack"),
-        (REF, "APPROVE", Some("C02JU6C2Z1D/1793040197.490209/x"), "--slack"),
+        (
+            REF,
+            "APPROVE",
+            Some("C02JU6C2Z1D/179304019.490209"),
+            "--slack",
+        ),
+        (
+            REF,
+            "APPROVE",
+            Some("C02JU6C2Z1D/1793040197490209"),
+            "--slack",
+        ),
+        (
+            REF,
+            "APPROVE",
+            Some("C02JU6C2Z1D/1793040197.49020"),
+            "--slack",
+        ),
+        (
+            REF,
+            "APPROVE",
+            Some("C02JU6C2Z1D/1793040197.490209/x"),
+            "--slack",
+        ),
     ];
     for (pr, event, slack, flag) in cases {
         let fx = fixture(head(), answer());
         let file = input(&fx, &review().to_string());
         let error = refused(&submit(&fx, pr, HEAD, event, &file, slack), "usage", 2);
-        assert!(message(&error).contains(flag), "{pr} {event} {slack:?}: {error}");
+        assert!(
+            message(&error).contains(flag),
+            "{pr} {event} {slack:?}: {error}"
+        );
         assert!(gh_calls(&fx).is_empty(), "{pr} {event} {slack:?}");
     }
 }
 
 #[test]
 fn a_failed_post_queues_nothing_and_is_gh_failed() {
-    let fx = fixture(head(), Reply::exit(1, "", "HTTP 422: Unprocessable Entity\n"));
+    let fx = fixture(
+        head(),
+        Reply::exit(1, "", "HTTP 422: Unprocessable Entity\n"),
+    );
     let file = input(&fx, &review().to_string());
-    let error = refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "gh_failed", 1);
+    let error = refused(
+        &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+        "gh_failed",
+        1,
+    );
     assert_eq!(error["details"]["stderr"], "HTTP 422: Unprocessable Entity");
     assert_eq!(gh_calls(&fx).len(), 2);
     assert!(rows(&fx).is_empty());
@@ -235,11 +323,21 @@ fn a_failed_post_queues_nothing_and_is_gh_failed() {
 
 #[test]
 fn an_answer_without_a_review_id_is_gh_failed_and_queues_nothing() {
-    for body in [json!({"html_url": REVIEW_URL, "state": "APPROVED"}), json!({"id": 4242, "state": "APPROVED"})] {
+    for body in [
+        json!({"html_url": REVIEW_URL, "state": "APPROVED"}),
+        json!({"id": 4242, "state": "APPROVED"}),
+    ] {
         let fx = fixture(head(), Reply::ok(&body.to_string()));
         let file = input(&fx, &review().to_string());
-        let error = refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "gh_failed", 1);
-        assert!(message(&error).contains("review may have been posted"), "{error}");
+        let error = refused(
+            &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+            "gh_failed",
+            1,
+        );
+        assert!(
+            message(&error).contains("review may have been posted"),
+            "{error}"
+        );
         assert!(rows(&fx).is_empty());
     }
 }
@@ -248,7 +346,9 @@ fn an_answer_without_a_review_id_is_gh_failed_and_queues_nothing() {
 fn a_missing_head_is_refused_usage_before_any_call() {
     let fx = fixture(head(), answer());
     let file = input(&fx, &review().to_string());
-    let run = fx.cpd(&["review", "submit", "--pr", REF, "--event", "APPROVE", "--input", &file, "--slack", SLACK]);
+    let run = fx.cpd(&[
+        "review", "submit", "--pr", REF, "--event", "APPROVE", "--input", &file, "--slack", SLACK,
+    ]);
     refused(&run, "usage", 2);
     assert!(gh_calls(&fx).is_empty());
     assert!(rows(&fx).is_empty());
@@ -269,7 +369,11 @@ fn a_head_that_is_not_forty_hex_digits_is_refused_usage_before_any_call() {
     for value in bad {
         let fx = fixture(head(), answer());
         let file = input(&fx, &review().to_string());
-        let error = refused(&submit(&fx, REF, &value, "APPROVE", &file, Some(SLACK)), "usage", 2);
+        let error = refused(
+            &submit(&fx, REF, &value, "APPROVE", &file, Some(SLACK)),
+            "usage",
+            2,
+        );
         assert!(message(&error).contains("--head"), "{value:?}: {error}");
         assert!(message(&error).contains("40"), "{value:?}: {error}");
         assert!(gh_calls(&fx).is_empty(), "{value:?}");
@@ -281,7 +385,11 @@ fn a_head_that_is_not_forty_hex_digits_is_refused_usage_before_any_call() {
 fn an_input_carrying_a_commit_id_is_refused_usage_before_any_call() {
     let fx = fixture(head(), answer());
     let file = input(&fx, &json!({"body": "x", "commit_id": HEAD}).to_string());
-    let error = refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "usage", 2);
+    let error = refused(
+        &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+        "usage",
+        2,
+    );
     for word in ["commit_id", "--input", "--head"] {
         assert!(message(&error).contains(word), "{word}: {error}");
     }
@@ -294,7 +402,10 @@ fn a_matching_head_reads_the_head_then_posts_the_review_pinned_to_it() {
     let fx = fixture(head(), answer());
     let file = input(&fx, &review().to_string());
     let out = submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)).ok();
-    assert_eq!(out["review"], json!({"id": 4242, "url": REVIEW_URL, "state": "APPROVED", "commit_id": HEAD}));
+    assert_eq!(
+        out["review"],
+        json!({"id": 4242, "url": REVIEW_URL, "state": "APPROVED", "commit_id": HEAD})
+    );
     let calls = gh_calls(&fx);
     assert_eq!(calls.len(), 2, "{calls:?}");
     assert_eq!(calls[0].args, GET);
@@ -302,9 +413,13 @@ fn a_matching_head_reads_the_head_then_posts_the_review_pinned_to_it() {
     let mut want = review();
     want["event"] = json!("APPROVE");
     want["commit_id"] = json!(HEAD);
-    let sent: Value = serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
+    let sent: Value =
+        serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
     assert_eq!(sent, want);
-    assert_eq!(rows(&fx), [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]);
+    assert_eq!(
+        rows(&fx),
+        [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]
+    );
 }
 
 #[test]
@@ -315,7 +430,8 @@ fn an_upper_case_head_is_accepted_and_used_as_lowercase() {
     assert_eq!(out["review"]["commit_id"], HEAD);
     let calls = gh_calls(&fx);
     assert_eq!(calls.len(), 2, "{calls:?}");
-    let sent: Value = serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
+    let sent: Value =
+        serde_json::from_slice(calls[1].stdin.as_deref().expect("the review on stdin")).unwrap();
     assert_eq!(sent["commit_id"], HEAD);
     drop(fx);
 
@@ -328,11 +444,23 @@ fn an_upper_case_head_is_accepted_and_used_as_lowercase() {
 
 #[test]
 fn a_moved_head_is_refused_head_moved_and_nothing_is_posted_or_queued() {
-    for (pr, given) in [(REF, HEAD.to_owned()), (URL, HEAD.to_owned()), (REF, HEAD.to_uppercase())] {
+    for (pr, given) in [
+        (REF, HEAD.to_owned()),
+        (URL, HEAD.to_owned()),
+        (REF, HEAD.to_uppercase()),
+    ] {
         let fx = fixture(head_at(MOVED), answer());
         let file = input(&fx, &review().to_string());
-        let error = refused(&submit(&fx, pr, &given, "APPROVE", &file, Some(SLACK)), "head_moved", 3);
-        assert_eq!(error["details"], json!({"pr": REF, "expected": HEAD, "actual": MOVED}), "{pr} {given}");
+        let error = refused(
+            &submit(&fx, pr, &given, "APPROVE", &file, Some(SLACK)),
+            "head_moved",
+            3,
+        );
+        assert_eq!(
+            error["details"],
+            json!({"pr": REF, "expected": HEAD, "actual": MOVED}),
+            "{pr} {given}"
+        );
         assert!(message(&error).contains(HEAD), "{error}");
         assert!(message(&error).contains(MOVED), "{error}");
         let calls = gh_calls(&fx);
@@ -346,17 +474,31 @@ fn a_moved_head_is_refused_head_moved_and_nothing_is_posted_or_queued() {
 fn a_head_read_that_fails_is_gh_failed_and_nothing_is_posted() {
     let fx = fixture(Reply::exit(1, "", "HTTP 404: Not Found\n"), answer());
     let file = input(&fx, &review().to_string());
-    refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "gh_failed", 1);
+    refused(
+        &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+        "gh_failed",
+        1,
+    );
     assert_eq!(gh_calls(&fx).len(), 1);
     assert!(rows(&fx).is_empty());
 }
 
 #[test]
 fn a_head_answer_without_a_head_sha_is_gh_failed_and_nothing_is_posted() {
-    for stdout in ["not json", "{}", "{\"head\":{}}", "{\"head\":{\"sha\":7}}", "[]"] {
+    for stdout in [
+        "not json",
+        "{}",
+        "{\"head\":{}}",
+        "{\"head\":{\"sha\":7}}",
+        "[]",
+    ] {
         let fx = fixture(Reply::ok(stdout), answer());
         let file = input(&fx, &review().to_string());
-        refused(&submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)), "gh_failed", 1);
+        refused(
+            &submit(&fx, REF, HEAD, "APPROVE", &file, Some(SLACK)),
+            "gh_failed",
+            1,
+        );
         assert_eq!(gh_calls(&fx).len(), 1, "{stdout}");
         assert!(rows(&fx).is_empty(), "{stdout}");
     }

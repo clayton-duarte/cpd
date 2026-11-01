@@ -46,10 +46,15 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
     // 2. Reviews: a pending Plan review is superseded, nobody decides it now.
     let pending = env.store.read(|conn| {
-        Ok(conn.query_row("SELECT EXISTS (SELECT 1 FROM plan_reviews WHERE plan = ?1 AND status = 'pending')", [plan.as_str()], |r| r.get::<_, bool>(0))?)
+        Ok(conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM plan_reviews WHERE plan = ?1 AND status = 'pending')",
+            [plan.as_str()],
+            |r| r.get::<_, bool>(0),
+        )?)
     })?;
     if pending {
-        env.store.write(COMMAND, |tx| close_reviews(tx, &plan, &Closing::Cancelled))?;
+        env.store
+            .write(COMMAND, |tx| close_reviews(tx, &plan, &Closing::Cancelled))?;
     }
 
     // 3. Jobs.
@@ -64,9 +69,15 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
     // 6. tmux. The Lead that runs this command, if it is one of the Plan's, is closed last: its
     // pane dies with the process, and the rows of step 7 are written by then.
-    let own = env::var("CPD_SESSION").ok().and_then(|id| objects.sessions.iter().find(|s| s.as_str() == id).cloned());
+    let own = env::var("CPD_SESSION")
+        .ok()
+        .and_then(|id| objects.sessions.iter().find(|s| s.as_str() == id).cloned());
     let mut closed = Vec::new();
-    for id in objects.sessions.iter().filter(|id| Some(*id) != own.as_ref()) {
+    for id in objects
+        .sessions
+        .iter()
+        .filter(|id| Some(*id) != own.as_ref())
+    {
         let lead = close_lead(&mut env.store, &tmux, &cockpit, id, COMMAND)?;
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
@@ -78,7 +89,12 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
 
-    let already = cancelled.is_empty() && !expired && closed_prs.is_empty() && left_open.is_empty() && closed.is_empty() && archived.is_empty();
+    let already = cancelled.is_empty()
+        && !expired
+        && closed_prs.is_empty()
+        && left_open.is_empty()
+        && closed.is_empty()
+        && archived.is_empty();
     let mut out = json!({"cancelled": cancelled, "closed_prs": closed_prs, "left_open": left_open, "closed": closed, "archived": archived});
     if already {
         out["already"] = json!(true);
@@ -88,11 +104,22 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
 /// Step 3: `job cancel`, without its shape check, for every Job that is not `merged` and not `cancelled`. The keys it newly
 /// cancelled, or asked the engine to stop.
-pub(super) fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<String>, CpdError> {
+pub(super) fn cancel_jobs(
+    store: &mut Store,
+    plan: &PlanId,
+    reason: &str,
+) -> Result<Vec<String>, CpdError> {
     let all = store.read(|conn| jobs::load(conn, plan))?;
     let mut keys = Vec::new();
-    for job in all.iter().filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")) {
-        let Output::Success(out) = job::cancel::cancel_without_shape(plan, JobKey::parse(&job.key)?, reason)? else { continue };
+    for job in all
+        .iter()
+        .filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled"))
+    {
+        let Output::Success(out) =
+            job::cancel::cancel_without_shape(plan, JobKey::parse(&job.key)?, reason)?
+        else {
+            continue;
+        };
         if !out.contains_key("already") {
             keys.push(job.key.clone());
         }
@@ -102,19 +129,33 @@ pub(super) fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Res
 
 /// The Attempts of `plan` that are not `ended`.
 fn live_attempts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT id FROM attempts WHERE plan = ?1 AND status <> 'ended' ORDER BY id")?;
-    Ok(stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+    let mut stmt =
+        conn.prepare("SELECT id FROM attempts WHERE plan = ?1 AND status <> 'ended' ORDER BY id")?;
+    Ok(stmt
+        .query_map([plan.as_str()], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?)
 }
 
 /// [`wait_until_ended_with`] on the real ports.
 #[cfg(test)]
-fn wait_until_ended(store: &mut Store, plan: &PlanId, limit: Duration, every: Duration) -> Result<(), CpdError> {
+fn wait_until_ended(
+    store: &mut Store,
+    plan: &PlanId,
+    limit: Duration,
+    every: Duration,
+) -> Result<(), CpdError> {
     wait_until_ended_with(&Ports::real(), store, plan, limit, every)
 }
 
 /// Polls, up to `limit`, until no Attempt of `plan` is left that is not `ended`; else `cancel_timeout`. The deadline is
 /// read and the naps are taken on `ports.clock`.
-pub(crate) fn wait_until_ended_with(ports: &Ports, store: &mut Store, plan: &PlanId, limit: Duration, every: Duration) -> Result<(), CpdError> {
+pub(crate) fn wait_until_ended_with(
+    ports: &Ports,
+    store: &mut Store,
+    plan: &PlanId,
+    limit: Duration,
+    every: Duration,
+) -> Result<(), CpdError> {
     let deadline = ports.clock.now() + limit;
     loop {
         let live = store.read(|conn| live_attempts(conn, plan))?;
@@ -177,7 +218,11 @@ fn close_prs(env: &mut Env, plan: &PlanId) -> Result<(Vec<Value>, Vec<Value>), C
 
 /// Step 7: `archived_at` on the Plan and its Sessions, one transaction, with the Events of
 /// `plan archive` (§4.10). The objects it changed.
-fn archive_rows(store: &mut Store, plan: &PlanId, sessions: &[SessionId]) -> Result<Vec<Value>, CpdError> {
+fn archive_rows(
+    store: &mut Store,
+    plan: &PlanId,
+    sessions: &[SessionId],
+) -> Result<Vec<Value>, CpdError> {
     store.write(COMMAND, |tx| {
         let set = "SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND archived_at IS NULL";
         let mut changed = Vec::new();
@@ -227,7 +272,13 @@ mod tests {
             })
             .unwrap();
         let plan = PlanId::parse("pay").unwrap();
-        let err = wait_until_ended(&mut store, &plan, Duration::from_millis(30), Duration::from_millis(5)).unwrap_err();
+        let err = wait_until_ended(
+            &mut store,
+            &plan,
+            Duration::from_millis(30),
+            Duration::from_millis(5),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), ErrorCode::CancelTimeout);
         assert_eq!(err.details()["attempts"], json!(["a-a1"]));
     }

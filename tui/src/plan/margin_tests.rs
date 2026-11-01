@@ -43,7 +43,10 @@ fn centre() -> Centre {
             Ok::<(), CpdError>(())
         })
         .unwrap();
-    snapshot(&mut store, 40, 1_792_336_050_000).unwrap().centre.expect("the Lead is in the slot")
+    snapshot(&mut store, 40, 1_792_336_050_000)
+        .unwrap()
+        .centre
+        .expect("the Lead is in the slot")
 }
 
 #[test]
@@ -55,5 +58,8 @@ fn the_chart_boxes_are_drawn_one_column_from_the_edge_of_the_plan_view() {
     let buf = terminal.backend().buffer();
     // row 0 is the chart's blank row of vertical margin; the first box's top starts one column in and ends one before the edge
     assert_eq!(row(buf, 0).trim_end(), "");
-    assert_eq!(row(buf, 1).trim_end(), " ╭─ api · api-repo 󱦰 main · dispatch ─╮");
+    assert_eq!(
+        row(buf, 1).trim_end(),
+        " ╭─ api · api-repo 󱦰 main · dispatch ─╮"
+    );
 }

@@ -31,7 +31,10 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
     let repo_file = fs::canonicalize(fx.env.cpd_home().join("policy/acme/cpd.toml")).unwrap().display().to_string();
     let out = fx.cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"]).ok();
     let domain = &out["policy"]["resources"];
-    assert_eq!(domain["keys"]["names"], json!({"value": ["db", "e2e-port"], "source": format!("repo:{repo_file}")}));
+    assert_eq!(
+        domain["keys"]["names"],
+        json!({"value": ["db", "e2e-port"], "source": format!("repo:{repo_file}")})
+    );
     assert_eq!(domain["source"], format!("repo:{repo_file}"));
     assert_eq!(domain["text"], "");
     assert_eq!(domain["audience"], json!([]));
@@ -45,15 +48,27 @@ fn resource_decl_policy_show_lists_the_declared_names_sorted() {
 fn policy_show_resources_lists_names_with_scope_slots_and_source() {
     let fx = world("[resources.staging]\nslots = 3\n\n[resources.okta-port]\n");
     let home = fx.env.cpd_home();
-    fs::write(home.join("policy/host.toml"), "[resources.shared-port]\nslots = 2\n").unwrap();
+    fs::write(
+        home.join("policy/host.toml"),
+        "[resources.shared-port]\nslots = 2\n",
+    )
+    .unwrap();
     fs::write(home.join("policy/acme/owner.toml"), "[resources.staging]\n").unwrap();
-    let real = |rel: &str| fs::canonicalize(home.join(rel)).unwrap().display().to_string();
+    let real = |rel: &str| {
+        fs::canonicalize(home.join(rel))
+            .unwrap()
+            .display()
+            .to_string()
+    };
     let (host, repo) = (real("policy/host.toml"), real("policy/acme/cpd.toml"));
 
     let out = fx.cpd(&["policy", "show", "--workflow", "named", "--plan", "pl"]).ok();
 
     let domain = &out["policy"]["resources"];
-    assert_eq!(domain["keys"]["names"], json!({"value": ["okta-port", "shared-port", "staging"], "source": format!("repo:{repo}")}));
+    assert_eq!(
+        domain["keys"]["names"],
+        json!({"value": ["okta-port", "shared-port", "staging"], "source": format!("repo:{repo}")})
+    );
     assert_eq!(
         domain["keys"]["declared"],
         json!({

@@ -120,6 +120,9 @@ error_codes! {
     InstallFailed = "install_failed" => Failure,
     // The holographic engine rail (contract §4.6, hs-d677).
     EngineFailed = "engine_failed" => Failure,
+    // A `durable` Worker's transcript has not grown for `timeouts.stall_minutes` (contract §3.4 A4, hs-d798):
+    // the code of the driver's informational `error` Event. Never a command's failure (like `cleanup_failed`).
+    WorkerStalled = "worker_stalled" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,
@@ -214,6 +217,7 @@ error_codes! {
     DirtyTree = "dirty_tree" => Refused,
     NoCommits = "no_commits" => Refused,
     GateTampered = "gate_tampered" => Refused,
+    TouchesViolation = "touches_violation" => Refused,
     NotAwaitingReview = "not_awaiting_review" => Refused,
     EscalationAnswered = "escalation_answered" => Refused,
     EscalationExpired = "escalation_expired" => Refused,
@@ -281,6 +285,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     ToolTimeout = "tool_timeout" => Timeout,
+    HostTimeout = "host_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
@@ -310,6 +315,7 @@ error_codes! {
     WorkflowNotOpen = "workflow_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
     DurableSession = "durable_session" => Refused,
+    HostRunning = "host_running" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
     AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
@@ -366,24 +372,35 @@ pub struct CpdError {
 impl CpdError {
     /// An error with empty `details`.
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        CpdError { code, message: message.into(), details: Map::new() }
+        CpdError {
+            code,
+            message: message.into(),
+            details: Map::new(),
+        }
     }
 
     /// `plan_not_found` (exit 4): no Plan `plan`.
     pub fn plan_not_found(plan: &crate::ids::PlanId) -> Self {
-        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}."))
+            .with("plan", plan.as_str())
     }
 
     /// A row the database holds in a shape the binary does not accept: it was
     /// changed outside cpd, or by a bug (`store_failed`).
     pub fn bad_row(what: impl fmt::Display) -> Self {
-        CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The database holds an invalid row: {what}."),
+        )
     }
 
     /// `file_unreadable` (exit 2): `path` cannot be read as UTF-8 text because of `cause`.
     pub fn file_unreadable(path: &std::path::Path, cause: impl fmt::Display) -> Self {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {cause}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::FileUnreadable,
+            format!("Cannot read {} as UTF-8 text: {cause}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     }
 
     /// Adds one `details` field (replacing a field of the same name).
@@ -502,6 +519,7 @@ mod tests {
             (ErrorCode::IllegalTransition, 3),
             (ErrorCode::DirtyTree, 3),
             (ErrorCode::GateFailed, 3),
+            (ErrorCode::TouchesViolation, 3),
             (ErrorCode::CasLost, 3),
             (ErrorCode::LockedJobTampered, 3),
             (ErrorCode::RecordNotFound, 3),
@@ -555,6 +573,7 @@ mod tests {
             (ErrorCode::NoFailedRun, 3),
             (ErrorCode::AlreadyPosted, 3),
             (ErrorCode::DurableSession, 3),
+            (ErrorCode::HostRunning, 3),
             (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),
@@ -594,6 +613,7 @@ mod tests {
             (ErrorCode::LeadBranchMoved, 3),
             (ErrorCode::WorkflowNotFound, 4),
             (ErrorCode::TitleFailed, 1),
+            (ErrorCode::WorkerStalled, 1),
             (ErrorCode::PolicyInvalid, 1),
             (ErrorCode::OwnerUnconfirmed, 1),
             (ErrorCode::FallbackMissing, 1),
@@ -640,10 +660,23 @@ mod tests {
             serde_json::json!({"ok": false, "error": {"code": "plan_not_found", "message": "No Plan api-schema.", "details": {"plan": "api-schema"}}})
         );
         let bad = CpdError::bad_row("Plan x has phase \"y\"");
-        assert_eq!((bad.code(), bad.message()), (ErrorCode::StoreFailed, "The database holds an invalid row: Plan x has phase \"y\"."));
+        assert_eq!(
+            (bad.code(), bad.message()),
+            (
+                ErrorCode::StoreFailed,
+                "The database holds an invalid row: Plan x has phase \"y\"."
+            )
+        );
         assert!(bad.details().is_empty());
-        let unreadable = CpdError::file_unreadable(std::path::Path::new("/tmp/brief.md"), "not UTF-8");
-        assert_eq!((unreadable.code(), unreadable.message()), (ErrorCode::FileUnreadable, "Cannot read /tmp/brief.md as UTF-8 text: not UTF-8."));
+        let unreadable =
+            CpdError::file_unreadable(std::path::Path::new("/tmp/brief.md"), "not UTF-8");
+        assert_eq!(
+            (unreadable.code(), unreadable.message()),
+            (
+                ErrorCode::FileUnreadable,
+                "Cannot read /tmp/brief.md as UTF-8 text: not UTF-8."
+            )
+        );
         assert_eq!(unreadable.details()["path"], "/tmp/brief.md");
     }
 }

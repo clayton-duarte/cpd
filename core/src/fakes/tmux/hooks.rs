@@ -5,8 +5,8 @@
 //! fake is available to a hook) after a small tokenizer and a format expansion of every word. A hook fired
 //! while a hook runs is queued and drained before the outer call returns; the drain is capped.
 
-use super::target::{resolve, Kind, Loc};
-use super::{dispatch, format, variable, Cx, Opts, R};
+use super::target::{Kind, Loc, resolve};
+use super::{Cx, Opts, R, dispatch, format, variable};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -22,8 +22,12 @@ const DRAIN_LIMIT: usize = 64;
 
 /// Fires the hook `name` with `loc` as target and `vars` as extra format variables. At the top it runs
 /// the hook and drains what the hooks fired; inside a hook it only queues.
-pub fn fire(cx: &mut Cx, name: &str, loc: Loc, vars: Vec<(String, String)>) {
-    cx.queue.push(Pending { name: name.to_string(), loc, vars });
+pub(super) fn fire(cx: &mut Cx, name: &str, loc: Loc, vars: Vec<(String, String)>) {
+    cx.queue.push(Pending {
+        name: name.to_string(),
+        loc,
+        vars,
+    });
     if cx.depth > 0 {
         return;
     }
@@ -32,7 +36,8 @@ pub fn fire(cx: &mut Cx, name: &str, loc: Loc, vars: Vec<(String, String)>) {
     while ran < DRAIN_LIMIT && !cx.queue.is_empty() {
         let p = cx.queue.remove(0);
         ran += 1;
-        let cmd: Option<String> = super::s(cx.db, "SELECT cmd FROM hooks WHERE name = ?1", [&p.name]);
+        let cmd: Option<String> =
+            super::s(cx.db, "SELECT cmd FROM hooks WHERE name = ?1", [&p.name]);
         if let Some(cmd) = cmd {
             // As in tmux, a failing hook command does not fail the command that fired it.
             let _ = run_string(cx, &cmd, p.loc, &p.vars);
@@ -47,7 +52,8 @@ pub fn fire(cx: &mut Cx, name: &str, loc: Loc, vars: Vec<(String, String)>) {
 fn tokenize(src: &str) -> R<Vec<Vec<String>>> {
     let chars: Vec<char> = src.chars().collect();
     let closes = |j: usize| chars.get(j).is_none_or(|c| c.is_whitespace() || *c == ';');
-    let (mut cmds, mut cur, mut word, mut in_word, mut i) = (Vec::new(), Vec::new(), String::new(), false, 0);
+    let (mut cmds, mut cur, mut word, mut in_word, mut i) =
+        (Vec::new(), Vec::new(), String::new(), false, 0);
     while i < chars.len() {
         let c = chars[i];
         match c {
@@ -102,7 +108,7 @@ fn expand(cx: &Cx, loc: Loc, w: &str) -> String {
 
 /// Runs a command string with `loc` as the target of commands that name none and `vars` as extra format
 /// variables; every word is format-expanded first. Stops at the first failing command.
-pub fn run_string(cx: &mut Cx, src: &str, loc: Loc, vars: &[(String, String)]) -> R<()> {
+pub(super) fn run_string(cx: &mut Cx, src: &str, loc: Loc, vars: &[(String, String)]) -> R<()> {
     let cmds = tokenize(src)?;
     let (saved_loc, saved_vars) = (cx.loc, cx.vars.len());
     cx.loc = Some(loc);
@@ -121,21 +127,31 @@ pub fn run_string(cx: &mut Cx, src: &str, loc: Loc, vars: &[(String, String)]) -
 }
 
 /// The target a command string runs against: the hook's, else the default pane.
-pub fn current_loc(cx: &Cx) -> Loc {
+pub(super) fn current_loc(cx: &Cx) -> Loc {
     cx.loc
         .or_else(|| resolve(cx.db, None, Kind::Pane).ok())
-        .unwrap_or(Loc { session: -1, window: None, pane: None })
+        .unwrap_or(Loc {
+            session: -1,
+            window: None,
+            pane: None,
+        })
 }
 
 /// `if -F format then [else]`. The shell form of `if-shell` is not modelled.
-pub fn if_cmd(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn if_cmd(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("if", args, "bFnt:")?;
     if !o.has('F') {
         return Err("if: only -F is supported by the fake tmux".into());
     }
-    let [cond, then, rest @ ..] = &o.rest[..] else { return Err("usage: if [-bF] [-t target-pane] shell-command command [command]".into()) };
+    let [cond, then, rest @ ..] = &o.rest[..] else {
+        return Err("usage: if [-bF] [-t target-pane] shell-command command [command]".into());
+    };
     let loc = current_loc(cx);
-    let branch = if format::truthy(&expand(cx, loc, cond)) { Some(then) } else { rest.first() };
+    let branch = if format::truthy(&expand(cx, loc, cond)) {
+        Some(then)
+    } else {
+        rest.first()
+    };
     match branch {
         Some(b) => run_string(cx, b, loc, &[]),
         None => Ok(()),
@@ -150,10 +166,14 @@ const RUN_SHELL_DEADLINE: Duration = Duration::from_secs(60);
 /// call the fake again, so the transaction is committed before it starts and a new one opened after it
 /// ends, otherwise the child's call would wait on the lock. Its output, its exit status and a `Runner`
 /// that could not run it are not modelled: tmux ignores them too.
-pub fn run_shell(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn run_shell(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("run-shell", args, "bCEc:d:t:")?;
-    let cmd = o.rest.first().ok_or("usage: run-shell [-bC] [-c start-directory] [-d delay] [-t target-pane] [shell-command]")?;
-    let runner = cx.runner.ok_or("run-shell: this fake tmux has no Runner (FakeTmux::with_runner)")?;
+    let cmd = o.rest.first().ok_or(
+        "usage: run-shell [-bC] [-c start-directory] [-d delay] [-t target-pane] [shell-command]",
+    )?;
+    let runner = cx
+        .runner
+        .ok_or("run-shell: this fake tmux has no Runner (FakeTmux::with_runner)")?;
     let fail = |e: rusqlite::Error| e.to_string();
     cx.db.execute_batch("COMMIT").map_err(fail)?;
     let mut sh = Command::new("/bin/sh");
@@ -167,19 +187,25 @@ pub fn run_shell(cx: &mut Cx, args: &[String]) -> R<()> {
     cx.db.execute_batch("BEGIN IMMEDIATE").map_err(fail)
 }
 
-pub fn set_hook(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn set_hook(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("set-hook", args, "agpRuwt:")?;
-    let name = o.rest.first().ok_or("usage: set-hook [-agpRuw] [-t target-pane] hook [command]")?;
+    let name = o
+        .rest
+        .first()
+        .ok_or("usage: set-hook [-agpRuw] [-t target-pane] hook [command]")?;
     let fail = |e: rusqlite::Error| e.to_string();
     if o.has('u') {
-        cx.db.execute("DELETE FROM hooks WHERE name = ?1", [name]).map_err(fail)?;
+        cx.db
+            .execute("DELETE FROM hooks WHERE name = ?1", [name])
+            .map_err(fail)?;
         return Ok(());
     }
     let mut cmd = o.rest.get(1).cloned().ok_or("set-hook: command expected")?;
-    if o.has('a') {
-        if let Some(old) = super::s::<String>(cx.db, "SELECT cmd FROM hooks WHERE name = ?1", [name]) {
-            cmd = format!("{old} ; {cmd}");
-        }
+    if o.has('a')
+        && let Some(old) =
+            super::s::<String>(cx.db, "SELECT cmd FROM hooks WHERE name = ?1", [name])
+    {
+        cmd = format!("{old} ; {cmd}");
     }
     cx.db
         .execute("INSERT INTO hooks (name, cmd) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET cmd = excluded.cmd", (name, cmd))
@@ -187,11 +213,17 @@ pub fn set_hook(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-pub fn show_hooks(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn show_hooks(cx: &mut Cx, args: &[String]) -> R<()> {
     Opts::parse("show-hooks", args, "gpwt:")?;
-    let mut st = cx.db.prepare("SELECT name, cmd FROM hooks ORDER BY rowid").expect("prepare");
-    let rows: Vec<(String, String)> =
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("query").map(|r| r.expect("row")).collect();
+    let mut st = cx
+        .db
+        .prepare("SELECT name, cmd FROM hooks ORDER BY rowid")
+        .expect("prepare");
+    let rows: Vec<(String, String)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("query")
+        .map(|r| r.expect("row"))
+        .collect();
     for (name, cmd) in rows {
         cx.out.push_str(&format!("{name} {cmd}\n"));
     }
@@ -199,10 +231,16 @@ pub fn show_hooks(cx: &mut Cx, args: &[String]) -> R<()> {
 }
 
 /// `bind [-nr] [-T table] key command...`; `-n` is the root table.
-pub fn bind(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn bind(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("bind", args, "nrN:T:")?;
-    let [key, cmd @ ..] = &o.rest[..] else { return Err("usage: bind-key [-nr] [-T key-table] key [command [argument ...]]".into()) };
-    let table = if o.has('n') { "root" } else { o.val('T').unwrap_or("prefix") };
+    let [key, cmd @ ..] = &o.rest[..] else {
+        return Err("usage: bind-key [-nr] [-T key-table] key [command [argument ...]]".into());
+    };
+    let table = if o.has('n') {
+        "root"
+    } else {
+        o.val('T').unwrap_or("prefix")
+    };
     cx.db
         .execute(
             "INSERT INTO bindings (key, tbl, cmd) VALUES (?1, ?2, ?3) ON CONFLICT (key) DO UPDATE SET tbl = excluded.tbl, cmd = excluded.cmd",
@@ -212,13 +250,20 @@ pub fn bind(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-pub fn list_keys(cx: &mut Cx, args: &[String]) -> R<()> {
+pub(super) fn list_keys(cx: &mut Cx, args: &[String]) -> R<()> {
     Opts::parse("list-keys", args, "1aNP:T:")?;
-    let mut st = cx.db.prepare("SELECT key, tbl, cmd FROM bindings ORDER BY rowid").expect("prepare");
-    let rows: Vec<(String, String, String)> =
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("query").map(|r| r.expect("row")).collect();
+    let mut st = cx
+        .db
+        .prepare("SELECT key, tbl, cmd FROM bindings ORDER BY rowid")
+        .expect("prepare");
+    let rows: Vec<(String, String, String)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .expect("query")
+        .map(|r| r.expect("row"))
+        .collect();
     for (key, table, cmd) in rows {
-        cx.out.push_str(&format!("bind-key -T {table} {key} {cmd}\n"));
+        cx.out
+            .push_str(&format!("bind-key -T {table} {key} {cmd}\n"));
     }
     Ok(())
 }

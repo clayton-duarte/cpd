@@ -30,7 +30,9 @@ const GRACE: Duration = Duration::from_secs(10);
 pub fn in_tool_call(text: &str) -> bool {
     let mut results: HashSet<String> = HashSet::new();
     for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else { return false };
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
         if entry["type"] != "message" {
             continue;
         }
@@ -42,7 +44,9 @@ pub fn in_tool_call(text: &str) -> bool {
                 }
             }
             Some("assistant") => {
-                let Some(content) = message["content"].as_array() else { return false };
+                let Some(content) = message["content"].as_array() else {
+                    return false;
+                };
                 return content
                     .iter()
                     .filter(|c| c["type"] == "toolCall")
@@ -69,7 +73,11 @@ pub struct Watch {
 
 impl Watch {
     pub fn new(stall_seconds: u32) -> Watch {
-        Watch { limit: Duration::from_secs(u64::from(stall_seconds)), killed_at: None, span_seen_at: None }
+        Watch {
+            limit: Duration::from_secs(u64::from(stall_seconds)),
+            killed_at: None,
+            span_seen_at: None,
+        }
     }
 
     /// One tick: when `file` has been quiet for the limit and pi (`pi`) is
@@ -96,7 +104,9 @@ impl Watch {
             return None;
         }
         let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
-        let modified = self.span_seen_at.map_or(modified, |seen| modified.max(seen));
+        let modified = self
+            .span_seen_at
+            .map_or(modified, |seen| modified.max(seen));
         let quiet = now.duration_since(modified).unwrap_or_default();
         if quiet < self.limit || self.killed_at == Some(modified) {
             return None;
@@ -109,8 +119,15 @@ impl Watch {
             return None;
         }
         self.killed_at = Some(modified);
-        let named: Vec<String> =
-            pids.iter().map(|&p| format!("{p} ({})", ports.spawn.cmdline(SpawnPid(p)).unwrap_or_default())).collect();
+        let named: Vec<String> = pids
+            .iter()
+            .map(|&p| {
+                format!(
+                    "{p} ({})",
+                    ports.spawn.cmdline(SpawnPid(p)).unwrap_or_default()
+                )
+            })
+            .collect();
         let forced = terminate_with(ports, &pids);
         let mut line = format!(
             "A4: stall: the Worker's tool call has been idle {} s; killed pid {}",
@@ -119,7 +136,11 @@ impl Watch {
         );
         if !forced.is_empty() {
             let forced: Vec<String> = forced.iter().map(u32::to_string).collect();
-            line += &format!("; SIGKILL after {} s to pid {}", GRACE.as_secs(), forced.join(", "));
+            line += &format!(
+                "; SIGKILL after {} s to pid {}",
+                GRACE.as_secs(),
+                forced.join(", ")
+            );
         }
         Some(line)
     }
@@ -130,8 +151,13 @@ impl Watch {
 pub(crate) fn stat(pid: u32) -> Option<(u32, char)> {
     // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
     const SZOMB: u32 = 5;
-    let info = libproc::proc_pid::pidinfo::<libproc::bsd_info::BSDInfo>(i32::try_from(pid).ok()?, 0).ok()?;
-    Some((info.pbi_ppid, if info.pbi_status == SZOMB { 'Z' } else { 'R' }))
+    let info =
+        libproc::proc_pid::pidinfo::<libproc::bsd_info::BSDInfo>(i32::try_from(pid).ok()?, 0)
+            .ok()?;
+    Some((
+        info.pbi_ppid,
+        if info.pbi_status == SZOMB { 'Z' } else { 'R' },
+    ))
 }
 
 /// `pid`'s parent and state from `/proc/<pid>/stat`.
@@ -154,13 +180,22 @@ pub(crate) fn all_pids() -> Vec<u32> {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn all_pids() -> Vec<u32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
-    entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()).collect()
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .collect()
 }
 
 /// Every live descendant of `root`, not `root` itself, in pid order.
 pub(crate) fn descendants(root: u32) -> Vec<u32> {
-    descendants_in(root, all_pids().into_iter().filter_map(|pid| stat(pid).map(|(ppid, state)| (pid, ppid, state))))
+    descendants_in(
+        root,
+        all_pids()
+            .into_iter()
+            .filter_map(|pid| stat(pid).map(|(ppid, state)| (pid, ppid, state))),
+    )
 }
 
 /// [`descendants`] over a table of `(pid, parent pid, state)`: a zombie is not a descendant, and nothing under it is
@@ -200,7 +235,11 @@ fn terminate_with(ports: &Ports, pids: &[u32]) -> Vec<u32> {
         }
         clock.sleep(Duration::from_millis(100));
     }
-    let left: Vec<u32> = pids.iter().copied().filter(|&p| spawn.alive(SpawnPid(p))).collect();
+    let left: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|&p| spawn.alive(SpawnPid(p)))
+        .collect();
     for &pid in &left {
         let _ = spawn.signal(SpawnPid(pid), Signal::Kill);
     }
@@ -217,16 +256,21 @@ mod tests {
 
     const SESSION: &str = r#"{"type":"session"}"#;
     const CALL: &str = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"toolCall","id":"c1","name":"bash"}],"stopReason":"toolUse"}}"#;
-    const RESULT: &str = r#"{"type":"message","message":{"role":"toolResult","toolCallId":"c1","content":[]}}"#;
+    const RESULT: &str =
+        r#"{"type":"message","message":{"role":"toolResult","toolCallId":"c1","content":[]}}"#;
     const TEXT: &str = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}"#;
     const TWO: &str = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1"},{"type":"toolCall","id":"c2"}]}}"#;
-    const RESULT_2: &str = r#"{"type":"message","message":{"role":"toolResult","toolCallId":"c2","content":[]}}"#;
+    const RESULT_2: &str =
+        r#"{"type":"message","message":{"role":"toolResult","toolCallId":"c2","content":[]}}"#;
     const OTHER: &str = r#"{"type":"session_info","name":"x"}"#;
 
     #[test]
     fn a_tool_call_without_its_result_is_inside_a_call() {
         assert!(in_tool_call(&[SESSION, CALL].join("\n")));
-        assert!(in_tool_call(&[SESSION, CALL, OTHER, ""].join("\n")), "other entries after it do not count");
+        assert!(
+            in_tool_call(&[SESSION, CALL, OTHER, ""].join("\n")),
+            "other entries after it do not count"
+        );
     }
 
     #[test]
@@ -245,7 +289,9 @@ mod tests {
         assert!(!in_tool_call(&[SESSION, CALL, RESULT, TEXT].join("\n")));
         assert!(!in_tool_call(""));
         assert!(!in_tool_call(SESSION));
-        assert!(!in_tool_call(&[SESSION, CALL, r#"{"type":"mess"#].join("\n")));
+        assert!(!in_tool_call(
+            &[SESSION, CALL, r#"{"type":"mess"#].join("\n")
+        ));
     }
 
     /// A session file that has been inside a tool call for an hour of virtual time, and a stand-in for pi on the fake: a process
@@ -263,7 +309,11 @@ mod tests {
 
     /// The process table of that stand-in: `sh` (pi) with the `sleep` it forked, and what is no descendant.
     fn table(pi: SpawnPid, child: SpawnPid) -> Vec<(u32, u32, char)> {
-        vec![(pi.0, 1, 'S'), (child.0, pi.0, 'S'), (child.0 + 1000, 1, 'S')]
+        vec![
+            (pi.0, 1, 'S'),
+            (child.0, pi.0, 'S'),
+            (child.0 + 1000, 1, 'S'),
+        ]
     }
 
     #[test]
@@ -273,13 +323,22 @@ mod tests {
         let kids = |root: u32| descendants_in(root, table(pi, child));
         assert_eq!(kids(pi.0), [child.0]);
         let mut watch = Watch::new(60);
-        assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, true), None, "an open span is not a stall");
+        assert_eq!(
+            watch.check_with(&fakes.ports, &kids, &file, pi.0, true),
+            None,
+            "an open span is not a stall"
+        );
         assert!(fakes.spawn.alive(child));
         // The span ended a moment ago: the quiet counts from the last tick that saw it, not from the file.
-        assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+        assert_eq!(
+            watch.check_with(&fakes.ports, &kids, &file, pi.0, false),
+            None
+        );
         assert!(fakes.spawn.alive(child));
         // With no span ever seen, the same file is a stall.
-        let line = Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false).expect("killed");
+        let line = Watch::new(60)
+            .check_with(&fakes.ports, &kids, &file, pi.0, false)
+            .expect("killed");
         assert!(line.contains(&child.0.to_string()), "{line}");
         assert!(line.contains("(sleep 30)"), "{line}");
         assert!(!fakes.spawn.alive(child), "the descendant was terminated");
@@ -299,7 +358,11 @@ mod tests {
             (stranger, 1, 'S'),
         ];
         let found = descendants_in(root.0, procs.clone());
-        assert_eq!(found, [child.0, grandchild], "the whole subtree, in pid order, with no zombie and no stranger");
+        assert_eq!(
+            found,
+            [child.0, grandchild],
+            "the whole subtree, in pid order, with no zombie and no stranger"
+        );
         assert!(!found.contains(&root.0));
         assert_eq!(descendants_in(child.0, procs), [grandchild]);
         fakes.spawn.set_cmdline(child, "sleep 30");

@@ -20,8 +20,22 @@ fn fx() -> Fx {
     let env = Ip::with_ports();
     env.engine_config_on_tmux("[timeouts]\nsleep_seconds = 1\n");
     env.engine_routes_on_tmux();
-    let out = env.tmux(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = env.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "x",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "sleep",
+        "600",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     let fx = Fx { env, pane };
     fx.fixture(
@@ -43,7 +57,14 @@ impl Fx {
     /// Plan `plan` of `context`, in `phase` (`done`: finished two hours ago), its Lead `<plan>-lead` (`stopped`, no pane,
     /// since two hours) and one `merged` PR.
     fn plan(&self, context: &str, plan: &str, phase: &str) {
-        let (done_at, locked_at) = (if phase == "done" { format!("'{}'", ago(self)) } else { "NULL".into() }, "'t'");
+        let (done_at, locked_at) = (
+            if phase == "done" {
+                format!("'{}'", ago(self))
+            } else {
+                "NULL".into()
+            },
+            "'t'",
+        );
         self.fixture(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('{plan}-lead', 'lead', '{context}', '{plan}', 'Lead {plan}', '/', 'O3', 'stopped', '{at}', 't');
@@ -84,14 +105,21 @@ impl Fx {
     }
 
     fn asleep(&self, session: &str) -> bool {
-        self.env.env.query::<Option<String>>(&format!("SELECT asleep_at FROM sessions WHERE id = '{session}'")).is_some()
+        self.env
+            .env
+            .query::<Option<String>>(&format!(
+                "SELECT asleep_at FROM sessions WHERE id = '{session}'"
+            ))
+            .is_some()
     }
 
     /// The Sessions E13 put to sleep, in order.
     fn slept(&self) -> Vec<String> {
         self.env.env.read(|conn| {
-            let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-asleep' ORDER BY id")?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+            let mut stmt = conn
+                .prepare("SELECT session FROM events WHERE kind = 'session-asleep' ORDER BY id")?;
+            stmt.query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()
         })
     }
 }
@@ -103,11 +131,18 @@ fn done_plan_lead_sleeps_after_the_timeout() {
     fx.run(1);
     assert!(fx.asleep("pay-lead"));
     assert_eq!(fx.slept(), ["pay-lead"]);
-    let row: (String, String, Option<String>) = fx
-        .env
-        .env
-        .read(|c| c.query_row("SELECT state, asleep_at, archived_at FROM sessions WHERE id = 'pay-lead'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))));
-    assert_eq!((row.0.as_str(), row.2.as_deref()), ("stopped", None), "asleep is no state and no archive: {row:?}");
+    let row: (String, String, Option<String>) = fx.env.env.read(|c| {
+        c.query_row(
+            "SELECT state, asleep_at, archived_at FROM sessions WHERE id = 'pay-lead'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+    });
+    assert_eq!(
+        (row.0.as_str(), row.2.as_deref()),
+        ("stopped", None),
+        "asleep is no state and no archive: {row:?}"
+    );
 
     // Idempotent: a later tick writes nothing more.
     fx.run(LATER_TICKS);
@@ -128,7 +163,10 @@ fn lead_with_an_open_inbox_item_stays_awake() {
     fx.run(1);
     assert!(fx.asleep("ctl-lead"));
     fx.run(LATER_TICKS);
-    assert!(!fx.asleep("pay-lead"), "an open Inbox item keeps its Session awake");
+    assert!(
+        !fx.asleep("pay-lead"),
+        "an open Inbox item keeps its Session awake"
+    );
     assert_eq!(fx.slept(), ["ctl-lead"]);
 }
 
@@ -150,7 +188,10 @@ fn lead_with_a_live_or_draft_job_stays_awake() {
     fx.run(1);
     assert!(fx.asleep("ctl-lead"));
     fx.run(LATER_TICKS);
-    assert!(!fx.asleep("draft-lead") && !fx.asleep("queued-lead"), "a draft or queued Job keeps its Lead awake");
+    assert!(
+        !fx.asleep("draft-lead") && !fx.asleep("queued-lead"),
+        "a draft or queued Job keeps its Lead awake"
+    );
     assert_eq!(fx.slept(), ["ctl-lead"]);
 }
 
@@ -160,15 +201,39 @@ fn lead_in_the_chat_slot_stays_awake() {
     fx.plan("other", "ctl", "done");
     fx.plan("ctx", "pay", "done");
     // The cockpit session is `cpd`: its `main` window holds `pay-lead`'s pane, the chat slot.
-    let out = fx.env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = fx.env.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "sleep",
+        "600",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
-    assert!(fx.env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", "pay-lead"]).status.success());
+    assert!(
+        fx.env
+            .tmux(&["set", "-p", "-t", &pane, "@cpd_session", "pay-lead"])
+            .status
+            .success()
+    );
     fx.fixture(&format!("UPDATE sessions SET tmux_pane = '{pane}', state = 'idle', state_at = '{}' WHERE id = 'pay-lead';", ago(&fx)));
     fx.run(1);
     assert!(fx.asleep("ctl-lead"));
     fx.run(LATER_TICKS);
-    assert!(!fx.asleep("pay-lead"), "the Lead the User is looking at stays awake");
+    assert!(
+        !fx.asleep("pay-lead"),
+        "the Lead the User is looking at stays awake"
+    );
     assert_eq!(fx.slept(), ["ctl-lead"]);
 }
 
@@ -182,7 +247,11 @@ fn manager_sleeps_when_every_plan_is_done() {
     assert!(fx.asleep("mgr-ctx"));
     let slept = fx.slept();
     assert!(slept.contains(&"mgr-ctx".to_owned()), "{slept:?}");
-    assert_eq!(slept.iter().filter(|s| *s == "mgr-ctx").count(), 1, "put to sleep once");
+    assert_eq!(
+        slept.iter().filter(|s| *s == "mgr-ctx").count(),
+        1,
+        "put to sleep once"
+    );
 }
 
 #[test]
@@ -196,5 +265,8 @@ fn manager_with_a_plan_not_done_stays_awake() {
     fx.run(1);
     assert!(fx.asleep("mgr-other"));
     fx.run(LATER_TICKS);
-    assert!(!fx.asleep("mgr-ctx"), "a Plan in dispatch keeps the Manager awake");
+    assert!(
+        !fx.asleep("mgr-ctx"),
+        "a Plan in dispatch keeps the Manager awake"
+    );
 }

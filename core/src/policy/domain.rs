@@ -251,6 +251,27 @@ impl HasText for Protected {
     }
 }
 
+/// The `generated` domain (repo scope only, no `text`): the repo's generated paths (§7.5, hs-n641), which the Job
+/// `touches` check allows a change to without an approval. A generated path is not protected; changing it is allowed.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Generated {
+    pub paths: Vec<String>,
+}
+
+impl HasText for Generated {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[generated]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedSet {
+    pub paths: Option<Vec<String>>,
+}
+
 /// The `resources` domain (any scope, no `text`): the visible resources, resolved per name over host, owner and repo
 /// (contract §8.3 "The `resources` domain"); `names` is sorted.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -323,7 +344,13 @@ impl<'de> Deserialize<'de> for ResourceName {
         let ok = chars.next().is_some_and(|c| c.is_ascii_lowercase())
             && name.len() <= 32
             && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-        if ok { Ok(ResourceName(name)) } else { Err(serde::de::Error::custom(format!("`{name}` is not a resource name (^[a-z][a-z0-9-]{{0,31}}$)"))) }
+        if ok {
+            Ok(ResourceName(name))
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "`{name}` is not a resource name (^[a-z][a-z0-9-]{{0,31}}$)"
+            )))
+        }
     }
 }
 
@@ -350,7 +377,9 @@ pub struct HooksSet {
 
 impl<'de> Deserialize<'de> for HooksSet {
     fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
-        Err(serde::de::Error::custom("[hooks] is read from the file text, not from a value"))
+        Err(serde::de::Error::custom(
+            "[hooks] is read from the file text, not from a value",
+        ))
     }
 }
 
@@ -373,8 +402,14 @@ impl TestCommandsSet {
             (None, _) => return Err("[test-commands] has no `build`".to_owned()),
             (_, None) => return Err("[test-commands] has no `run`".to_owned()),
         };
-        let tests = RepoTests { build: build.clone(), run: run.clone(), list: self.list.clone() };
-        tests.validate().map_err(|e| e.replace("[tests]", "[test-commands]"))?;
+        let tests = RepoTests {
+            build: build.clone(),
+            run: run.clone(),
+            list: self.list.clone(),
+        };
+        tests
+            .validate()
+            .map_err(|e| e.replace("[tests]", "[test-commands]"))?;
         Ok(Some(tests))
     }
 }
@@ -449,25 +484,44 @@ impl Set for PrSet {
             (HUMAN_GATED_CONTEXTS, self.human_gated_contexts.is_none()),
             (EXCUSED_LABELS, self.excused_labels.is_none()),
             (REQUIRED_CHECKS, self.required_checks.is_none()),
-            (JIRA_IN_PROGRESS, jira.and_then(|j| j.in_progress.as_ref()).is_none()),
-            (JIRA_IN_REVIEW, jira.and_then(|j| j.in_review.as_ref()).is_none()),
+            (
+                JIRA_IN_PROGRESS,
+                jira.and_then(|j| j.in_progress.as_ref()).is_none(),
+            ),
+            (
+                JIRA_IN_REVIEW,
+                jira.and_then(|j| j.in_review.as_ref()).is_none(),
+            ),
             (JIRA_DONE, jira.and_then(|j| j.done.as_ref()).is_none()),
-            (JIRA_ESTIMATE_FIELDS, jira.and_then(|j| j.estimate_fields.as_ref()).is_none()),
+            (
+                JIRA_ESTIMATE_FIELDS,
+                jira.and_then(|j| j.estimate_fields.as_ref()).is_none(),
+            ),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
         let value = Pr {
-            feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
+            feedback: Feedback {
+                checks: checks.unwrap_or(base.feedback.checks),
+            },
             post: Post {
                 enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
                 channel: pick(post.and_then(|p| p.channel.clone()), &base.post.channel),
                 template: pick(post.and_then(|p| p.template.clone()), &base.post.template),
-                merged_reaction: pick(post.and_then(|p| p.merged_reaction.clone()), &base.post.merged_reaction),
+                merged_reaction: pick(
+                    post.and_then(|p| p.merged_reaction.clone()),
+                    &base.post.merged_reaction,
+                ),
             },
             jira: Jira {
-                in_progress: pick(jira.and_then(|j| j.in_progress.clone()), &base.jira.in_progress),
+                in_progress: pick(
+                    jira.and_then(|j| j.in_progress.clone()),
+                    &base.jira.in_progress,
+                ),
                 in_review: pick(jira.and_then(|j| j.in_review.clone()), &base.jira.in_review),
                 done: pick(jira.and_then(|j| j.done.clone()), &base.jira.done),
-                estimate_fields: jira.and_then(|j| j.estimate_fields.clone()).unwrap_or_else(|| base.jira.estimate_fields.clone()),
+                estimate_fields: jira
+                    .and_then(|j| j.estimate_fields.clone())
+                    .unwrap_or_else(|| base.jira.estimate_fields.clone()),
             },
             human_gated_contexts: self.human_gated_contexts.clone().unwrap_or_else(|| base.human_gated_contexts.clone()),
             excused_labels: self.excused_labels.clone().unwrap_or_else(|| base.excused_labels.clone()),
@@ -479,7 +533,9 @@ impl Set for PrSet {
 
     fn complete(&self) -> Option<Pr> {
         Some(Pr {
-            feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
+            feedback: Feedback {
+                checks: self.feedback.as_ref()?.checks?,
+            },
             post: {
                 let p = self.post.as_ref()?;
                 Post {
@@ -491,7 +547,12 @@ impl Set for PrSet {
             },
             jira: {
                 let j = self.jira.as_ref()?;
-                Jira { in_progress: j.in_progress.clone()?, in_review: j.in_review.clone()?, done: j.done.clone()?, estimate_fields: j.estimate_fields.clone()? }
+                Jira {
+                    in_progress: j.in_progress.clone()?,
+                    in_review: j.in_review.clone()?,
+                    done: j.done.clone()?,
+                    estimate_fields: j.estimate_fields.clone()?,
+                }
             },
             human_gated_contexts: self.human_gated_contexts.clone()?,
             excused_labels: self.excused_labels.clone()?,
@@ -522,11 +583,18 @@ impl Set for TextSet {
     type Value = Text;
 
     fn fill(&self, base: &Text) -> (Text, Vec<&'static str>) {
-        (Text { text: self.text.clone().unwrap_or_else(|| base.text.clone()) }, Vec::new())
+        (
+            Text {
+                text: self.text.clone().unwrap_or_else(|| base.text.clone()),
+            },
+            Vec::new(),
+        )
     }
 
     fn complete(&self) -> Option<Text> {
-        Some(Text { text: self.text.clone()? })
+        Some(Text {
+            text: self.text.clone()?,
+        })
     }
 }
 
@@ -541,7 +609,9 @@ pub const PATHS: &str = "paths";
 pub const WORKFLOWS: &str = "workflows";
 
 fn left_out<const N: usize>(keys: [(&'static str, bool); N]) -> Vec<&'static str> {
-    keys.into_iter().filter_map(|(name, out)| out.then_some(name)).collect()
+    keys.into_iter()
+        .filter_map(|(name, out)| out.then_some(name))
+        .collect()
 }
 
 impl Set for HooksSet {
@@ -554,9 +624,18 @@ impl Set for HooksSet {
             (PRE_MERGE, self.pre_merge.is_none()),
         ]);
         let value = Hooks {
-            pre_start: self.pre_start.clone().unwrap_or_else(|| base.pre_start.clone()),
-            pre_commit: self.pre_commit.clone().unwrap_or_else(|| base.pre_commit.clone()),
-            pre_merge: self.pre_merge.clone().unwrap_or_else(|| base.pre_merge.clone()),
+            pre_start: self
+                .pre_start
+                .clone()
+                .unwrap_or_else(|| base.pre_start.clone()),
+            pre_commit: self
+                .pre_commit
+                .clone()
+                .unwrap_or_else(|| base.pre_commit.clone()),
+            pre_merge: self
+                .pre_merge
+                .clone()
+                .unwrap_or_else(|| base.pre_merge.clone()),
         };
         (value, out)
     }
@@ -591,11 +670,37 @@ impl Set for ProtectedSet {
     type Value = Protected;
 
     fn fill(&self, base: &Protected) -> (Protected, Vec<&'static str>) {
-        (Protected { paths: self.paths.clone().unwrap_or_else(|| base.paths.clone()) }, left_out([(PATHS, self.paths.is_none())]))
+        (
+            Protected {
+                paths: self.paths.clone().unwrap_or_else(|| base.paths.clone()),
+            },
+            left_out([(PATHS, self.paths.is_none())]),
+        )
     }
 
     fn complete(&self) -> Option<Protected> {
-        Some(Protected { paths: self.paths.clone()? })
+        Some(Protected {
+            paths: self.paths.clone()?,
+        })
+    }
+}
+
+impl Set for GeneratedSet {
+    type Value = Generated;
+
+    fn fill(&self, base: &Generated) -> (Generated, Vec<&'static str>) {
+        (
+            Generated {
+                paths: self.paths.clone().unwrap_or_else(|| base.paths.clone()),
+            },
+            left_out([(PATHS, self.paths.is_none())]),
+        )
+    }
+
+    fn complete(&self) -> Option<Generated> {
+        Some(Generated {
+            paths: self.paths.clone()?,
+        })
     }
 }
 
@@ -603,12 +708,20 @@ impl Set for DeploysSet {
     type Value = Deploys;
 
     fn fill(&self, base: &Deploys) -> (Deploys, Vec<&'static str>) {
-        let workflows = self.workflows.as_ref().map_or_else(|| base.workflows.clone(), |w| sorted(w));
-        (Deploys { workflows }, left_out([(WORKFLOWS, self.workflows.is_none())]))
+        let workflows = self
+            .workflows
+            .as_ref()
+            .map_or_else(|| base.workflows.clone(), |w| sorted(w));
+        (
+            Deploys { workflows },
+            left_out([(WORKFLOWS, self.workflows.is_none())]),
+        )
     }
 
     fn complete(&self) -> Option<Deploys> {
-        Some(Deploys { workflows: sorted(self.workflows.as_ref()?) })
+        Some(Deploys {
+            workflows: sorted(self.workflows.as_ref()?),
+        })
     }
 }
 
@@ -623,13 +736,18 @@ impl DeploysSet {
     pub(super) fn check(&self) -> Result<(), String> {
         let names = self.workflows.as_deref().unwrap_or_default();
         for (i, name) in names.iter().enumerate() {
-            let stem = name.strip_suffix(".yml").or_else(|| name.strip_suffix(".yaml"));
+            let stem = name
+                .strip_suffix(".yml")
+                .or_else(|| name.strip_suffix(".yaml"));
             let ok = stem.is_some_and(|s| {
                 s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-                    && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                    && s.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
             });
             if !ok {
-                return Err(format!("workflow name `{name}` must match ^[A-Za-z0-9][A-Za-z0-9._-]*\\.ya?ml$"));
+                return Err(format!(
+                    "workflow name `{name}` must match ^[A-Za-z0-9][A-Za-z0-9._-]*\\.ya?ml$"
+                ));
             }
             if names[..i].contains(name) {
                 return Err(format!("workflow `{name}` is listed twice"));
@@ -643,11 +761,20 @@ impl Set for ResourcesSet {
     type Value = Resources;
 
     fn fill(&self, _base: &Resources) -> (Resources, Vec<&'static str>) {
-        (Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() }, Vec::new())
+        (
+            Resources {
+                names: self.0.keys().map(|n| n.0.clone()).collect(),
+                declared: Vec::new(),
+            },
+            Vec::new(),
+        )
     }
 
     fn complete(&self) -> Option<Resources> {
-        Some(Resources { names: self.0.keys().map(|n| n.0.clone()).collect(), declared: Vec::new() })
+        Some(Resources {
+            names: self.0.keys().map(|n| n.0.clone()).collect(),
+            declared: Vec::new(),
+        })
     }
 }
 
@@ -662,13 +789,28 @@ pub(super) fn resources_union(layers: &[(Source, &Scope)]) -> Resources {
             Source::Repo(p) => (ResourceScope::Repo, p),
             Source::Default | Source::DefaultNoOwnerFile => continue,
         };
-        let Some(set) = &scope.resources else { continue };
+        let Some(set) = &scope.resources else {
+            continue;
+        };
         for (name, decl) in &set.0 {
-            let slots = decl.slots.map_or(1, |n| u8::try_from(n).expect("the loader checked slots to 1..=64"));
-            by_name.insert(name.0.clone(), Declared { name: name.0.clone(), scope: level, slots, source: path.display().to_string() });
+            let slots = decl.slots.map_or(1, |n| {
+                u8::try_from(n).expect("the loader checked slots to 1..=64")
+            });
+            by_name.insert(
+                name.0.clone(),
+                Declared {
+                    name: name.0.clone(),
+                    scope: level,
+                    slots,
+                    source: path.display().to_string(),
+                },
+            );
         }
     }
-    Resources { names: by_name.keys().cloned().collect(), declared: by_name.into_values().collect() }
+    Resources {
+        names: by_name.keys().cloned().collect(),
+        declared: by_name.into_values().collect(),
+    }
 }
 
 /// Where a domain's value came from (contract §8.3 "Model").
@@ -853,6 +995,7 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
+    generated, Generated, [], [Repo], Generated, GeneratedSet;
     resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
     deploys, Deploys, [], [Repo], Deploys, DeploysSet;
 }
@@ -860,6 +1003,9 @@ domains! {
 impl Sources {
     /// All sources with one value (the default, or a missing owner file).
     pub(super) fn all(source: Source) -> Sources {
-        Sources(std::array::from_fn(|_| DomainSource { source: source.clone(), left_out: Vec::new() }))
+        Sources(std::array::from_fn(|_| DomainSource {
+            source: source.clone(),
+            left_out: Vec::new(),
+        }))
     }
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 use crate::clock::{Clock, ManualClock, SystemClock};
-use crate::host::runner::{Call, Reply, Runner};
+use crate::host::runner::{Call, Reply};
 use crate::host::spawn::{Launch, Spawn};
 use crate::ports::{Fakes, Ports};
 
@@ -71,9 +71,15 @@ fn fakes_share_one_clock_between_the_ports_and_the_typed_handle() {
 fn a_fake_runner_reply_that_takes_time_moves_the_clock_of_the_ports() {
     let fakes = Fakes::new();
     // A clone of the runner shares its script: this scripts the one inside `fakes.ports`.
-    let _ = (*fakes.runner).clone().on("gh", |_| true, Reply::ok("done").takes(SECS(2)));
+    let _ = (*fakes.runner)
+        .clone()
+        .on("gh", |_| true, Reply::ok("done").takes(SECS(2)));
     let before = fakes.ports.clock.now();
-    let out = fakes.ports.runner.run(&call("gh", SECS(30))).expect("the scripted reply");
+    let out = fakes
+        .ports
+        .runner
+        .run(&call("gh", SECS(30)))
+        .expect("the scripted reply");
     assert_eq!(out.stdout, b"done");
     assert_eq!(fakes.clock.elapsed(), SECS(2));
     assert_eq!(fakes.ports.clock.now() - before, SECS(2));
@@ -82,7 +88,11 @@ fn a_fake_runner_reply_that_takes_time_moves_the_clock_of_the_ports() {
 #[test]
 fn the_runner_of_the_ports_is_the_typed_runner() {
     let fakes = Fakes::new();
-    fakes.ports.runner.run(&call("tmux", SECS(1))).expect_err("no route for tmux");
+    fakes
+        .ports
+        .runner
+        .run(&call("tmux", SECS(1)))
+        .expect_err("no route for tmux");
     assert_eq!(fakes.runner.calls().len(), 1);
     assert_eq!(fakes.runner.calls()[0].program, "tmux");
 }
@@ -90,8 +100,16 @@ fn the_runner_of_the_ports_is_the_typed_runner() {
 #[test]
 fn the_spawn_of_the_ports_is_the_typed_spawn() {
     let fakes = Fakes::new();
-    let launch = Launch { program: "cpd".into(), args: vec!["watch".into()], ..Launch::default() };
-    let pid = fakes.ports.spawn.spawn(&launch).expect("the fake starts nothing and cannot fail");
+    let launch = Launch {
+        program: "cpd".into(),
+        args: vec!["watch".into()],
+        ..Launch::default()
+    };
+    let pid = fakes
+        .ports
+        .spawn
+        .spawn(&launch)
+        .expect("the fake starts nothing and cannot fail");
     assert_eq!(fakes.spawn.launches(), vec![launch]);
     assert!(fakes.spawn.alive(pid));
 }
@@ -123,7 +141,10 @@ fn a_manual_clock_utc_does_not_move_by_itself() {
 fn a_manual_clock_utc_is_not_the_wall_clock() {
     let wall = OffsetDateTime::now_utc();
     let utc = ManualClock::new().utc();
-    assert!((wall - utc).abs() > time::Duration::days(1), "a fixed epoch, not now: {utc}");
+    assert!(
+        (wall - utc).abs() > time::Duration::days(1),
+        "a fixed epoch, not now: {utc}"
+    );
 }
 
 #[test]
@@ -157,12 +178,18 @@ fn a_manual_clock_clone_shares_utc() {
     let other = clock.clone();
     other.advance(SECS(4));
     assert_eq!(clock.utc(), other.utc());
-    assert_eq!(clock.utc() - ManualClock::new().utc(), time::Duration::seconds(4));
+    assert_eq!(
+        clock.utc() - ManualClock::new().utc(),
+        time::Duration::seconds(4)
+    );
 }
 
 #[test]
 fn the_system_clock_utc_is_within_a_minute_of_now_utc() {
     let utc = SystemClock.utc();
     let wall = OffsetDateTime::now_utc();
-    assert!((wall - utc).abs() < time::Duration::minutes(1), "{utc} against {wall}");
+    assert!(
+        (wall - utc).abs() < time::Duration::minutes(1),
+        "{utc} against {wall}"
+    );
 }

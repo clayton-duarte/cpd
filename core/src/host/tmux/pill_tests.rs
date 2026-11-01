@@ -2,9 +2,6 @@
 
 use super::pill::{fg, fg_if, pill, range};
 
-const LEFT: char = '\u{e0b6}';
-const RIGHT: char = '\u{e0b4}';
-
 #[test]
 fn tmux_fg_prints_the_colour_number() {
     assert_eq!(fg(4), "#[fg=colour4]");
@@ -13,13 +10,22 @@ fn tmux_fg_prints_the_colour_number() {
 
 #[test]
 fn tmux_fg_if_wraps_two_colours_in_a_condition() {
-    assert_eq!(fg_if("pane_active", 4, 7), "#{?pane_active,#[fg=colour4],#[fg=colour7]}");
+    assert_eq!(
+        fg_if("pane_active", 4, 7),
+        "#{?pane_active,#[fg=colour4],#[fg=colour7]}"
+    );
 }
 
 #[test]
 fn tmux_pill_is_lead_cap_reverse_text_noreverse_cap() {
-    assert_eq!(pill("#[fg=colour3]", "", "x"), "#[fg=colour3]\u{e0b6}#[reverse]x#[noreverse]\u{e0b4}");
-    assert_eq!(pill("#[fg=colour7]", "━", "#{@t}"), "#[fg=colour7]━\u{e0b6}#[reverse]#{@t}#[noreverse]\u{e0b4}");
+    assert_eq!(
+        pill("#[fg=colour3]", "", "x"),
+        "#[fg=colour3]\u{e0b6}#[reverse]x#[noreverse]\u{e0b4}"
+    );
+    assert_eq!(
+        pill("#[fg=colour7]", "━", "#{@t}"),
+        "#[fg=colour7]━\u{e0b6}#[reverse]#{@t}#[noreverse]\u{e0b4}"
+    );
 }
 
 #[test]

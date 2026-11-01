@@ -14,11 +14,21 @@ fn cpd_slot_is_an_unknown_command() {
     let env = TestEnv::new();
     env.write_config("version = 1\nmachine = \"t\"\n");
     let out = output(env.command(CPD).args(["slot", "--", "true"])).unwrap();
-    assert_eq!(out.status.code(), Some(2), "cpd slot must be a usage error: {out:?}");
-    assert!(out.stderr.is_empty(), "cpd prints its one JSON value on stdout: {out:?}");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "cpd slot must be a usage error: {out:?}"
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "cpd prints its one JSON value on stdout: {out:?}"
+    );
     let err: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(err["error"]["code"], "usage", "{err}");
-    assert!(err["error"]["message"].as_str().unwrap().contains("slot"), "the command is gone: {err}");
+    assert!(
+        err["error"]["message"].as_str().unwrap().contains("slot"),
+        "the command is gone: {err}"
+    );
 }
 
 fn repo_root() -> PathBuf {
@@ -50,7 +60,11 @@ fn fake_cpd(dir: &Path) -> (PathBuf, PathBuf) {
 /// Runs `sh <args…>` with only `bin` (and the system's `sh` tools) on `PATH`.
 fn run_sh(bin: &Path, args: &[&str], cwd: &Path) -> Output {
     let mut cmd = Command::new("/bin/sh");
-    cmd.args(args).current_dir(cwd).env_clear().env("PATH", bin).env("CARGO", bin.join("cargo"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", bin)
+        .env("CARGO", bin.join("cargo"));
     output(&mut cmd).unwrap()
 }
 
@@ -59,14 +73,27 @@ fn run_sh(bin: &Path, args: &[&str], cwd: &Path) -> Output {
 fn cargo_sh_takes_a_cargo_resource_slot_never_a_cpd_slot() {
     let tmp = tempfile::tempdir().unwrap();
     let (bin, calls) = fake_cpd(tmp.path());
-    write_executable(&bin.join("cargo"), &format!("#!/bin/sh\necho cargo \"$@\" >> {}\n", calls.display()));
+    write_executable(
+        &bin.join("cargo"),
+        &format!("#!/bin/sh\necho cargo \"$@\" >> {}\n", calls.display()),
+    );
     let script = repo_root().join("scripts/cargo.sh");
-    let out = run_sh(&bin, &[script.to_str().unwrap(), "nextest", "run", "--workspace"], tmp.path());
+    let out = run_sh(
+        &bin,
+        &[script.to_str().unwrap(), "nextest", "run", "--workspace"],
+        tmp.path(),
+    );
     assert!(out.status.success(), "{out:?}");
     let ran = fs::read_to_string(&calls).unwrap_or_default();
-    let wrapped = format!("cpd resource run cargo --wait 30 -- {} nextest run --workspace", bin.join("cargo").display());
+    let wrapped = format!(
+        "cpd resource run cargo --wait 30 -- {} nextest run --workspace",
+        bin.join("cargo").display()
+    );
     assert!(ran.lines().any(|l| l == wrapped), "{ran:?}");
-    assert!(ran.lines().any(|l| l == "cargo nextest run --workspace"), "{ran:?}");
+    assert!(
+        ran.lines().any(|l| l == "cargo nextest run --workspace"),
+        "{ran:?}"
+    );
     assert!(!ran.lines().any(|l| l.starts_with("cpd slot")), "{ran:?}");
 }
 
@@ -75,12 +102,20 @@ fn cargo_sh_takes_a_cargo_resource_slot_never_a_cpd_slot() {
 fn package_json_test_runs_node_without_cpd() {
     let tmp = tempfile::tempdir().unwrap();
     let (bin, calls) = fake_cpd(tmp.path());
-    write_executable(&bin.join("node"), &format!("#!/bin/sh\necho node \"$@\" >> {}\n", calls.display()));
-    let package: serde_json::Value = serde_json::from_str(&fs::read_to_string(repo_root().join("package.json")).unwrap()).unwrap();
+    write_executable(
+        &bin.join("node"),
+        &format!("#!/bin/sh\necho node \"$@\" >> {}\n", calls.display()),
+    );
+    let package: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(repo_root().join("package.json")).unwrap())
+            .unwrap();
     let script = package["scripts"]["test"].as_str().unwrap();
     let out = run_sh(&bin, &["-c", script], &repo_root());
     assert!(out.status.success(), "{out:?}");
     let ran = fs::read_to_string(&calls).unwrap_or_default();
-    assert!(!ran.contains("cpd"), "package.json's test called cpd: {ran:?}");
+    assert!(
+        !ran.contains("cpd"),
+        "package.json's test called cpd: {ran:?}"
+    );
     assert!(ran.starts_with("node --test"), "{ran:?}");
 }

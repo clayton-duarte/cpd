@@ -5,8 +5,13 @@
 use crate::guard_tests::product_sources;
 
 /// The calls only `runner.rs` and `view_ports.rs` may make: `run_view`'s setup and its `Restore` guard.
-const FORBIDDEN: [&str; 5] =
-    ["ratatui::init", "ratatui::try_init", "ratatui::restore", "EnableMouseCapture", "DisableMouseCapture"];
+const FORBIDDEN: [&str; 5] = [
+    "ratatui::init",
+    "ratatui::try_init",
+    "ratatui::restore",
+    "EnableMouseCapture",
+    "DisableMouseCapture",
+];
 
 /// A view never starts the terminal: `run_view` does, and only its `Restore` guard may stop it. The failure lists
 /// every file that does it by hand.

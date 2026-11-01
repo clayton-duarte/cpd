@@ -12,8 +12,8 @@ export const PROTOCOL = 20;
 export const KINDS = [
   "context-created", "context-record", "context-grounded",
   "plan-created", "plan-phase", "plan-review", "plan-outlined", "plan-done",
-  "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled",
-  "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
+  "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled", "job-addendum", "job-blocked",
+  "attempt-started", "attempt-status", "attempt-retry", "attempt-aborted", "attempt-nudge", "attempt-ended",
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed", "session-titled", "session-retiered", "session-model-changed",

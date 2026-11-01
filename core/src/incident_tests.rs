@@ -127,7 +127,12 @@ fn incident_row(store: &mut Store) -> Option<(String, String, String, i64)> {
 fn incident_lead(store: &mut Store) -> Option<String> {
     store
         .read(|c| {
-            Ok(c.query_row("SELECT lead FROM incident WHERE id = 1", [], |r| r.get::<_, Option<String>>(0)).optional()?)
+            Ok(
+                c.query_row("SELECT lead FROM incident WHERE id = 1", [], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+                .optional()?,
+            )
         })
         .unwrap()
         .flatten()
@@ -148,7 +153,9 @@ fn incident_plans(store: &mut Store) -> BTreeMap<String, i64> {
     store
         .read(|c| {
             let mut stmt = c.prepare("SELECT plan, started_txn FROM incident_plans")?;
-            Ok(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
+            Ok(stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                .collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
         })
         .unwrap()
 }
@@ -161,7 +168,10 @@ fn events(store: &mut Store) -> Vec<(String, Value)> {
             Ok(stmt
                 .query_map([], |r| {
                     let data: String = r.get(1)?;
-                    Ok((r.get::<_, String>(0)?, serde_json::from_str(&data).expect("data is JSON")))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        serde_json::from_str(&data).expect("data is JSON"),
+                    ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
         })
@@ -174,7 +184,9 @@ fn stop_requests(store: &mut Store) -> BTreeMap<String, Option<String>> {
         .read(|c| {
             let mut stmt = c.prepare("SELECT id, stop_request FROM attempts")?;
             Ok(stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })?
                 .collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
         })
         .unwrap()
@@ -182,7 +194,12 @@ fn stop_requests(store: &mut Store) -> BTreeMap<String, Option<String>> {
 
 /// The Plan ids of a `plans` array, sorted: the tests never pin the order the set is reported in.
 fn plan_array(value: &Value) -> Vec<String> {
-    let mut plans: Vec<String> = value.as_array().expect("plans is an array").iter().map(|p| p.as_str().expect("a Plan id").to_owned()).collect();
+    let mut plans: Vec<String> = value
+        .as_array()
+        .expect("plans is an array")
+        .iter()
+        .map(|p| p.as_str().expect("a Plan id").to_owned())
+        .collect();
     plans.sort();
     plans
 }
@@ -194,7 +211,14 @@ fn held(store: &mut Store, plan: &PlanId) -> bool {
 
 /// `incident::plans` in a read transaction, sorted.
 fn plan_set(store: &mut Store) -> Vec<String> {
-    let mut plans = store.read(|c| Ok(incident::plans(c)?.into_iter().map(|p| p.as_str().to_owned()).collect::<Vec<_>>())).unwrap();
+    let mut plans = store
+        .read(|c| {
+            Ok(incident::plans(c)?
+                .into_iter()
+                .map(|p| p.as_str().to_owned())
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
     plans.sort();
     plans
 }
@@ -205,11 +229,18 @@ fn incident_start_requires_at_least_one_plan() {
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    let err = incident::start(&mut f.store, Some(&mgr), &[], "why", None).expect_err("no Plan is usage");
+    let err =
+        incident::start(&mut f.store, Some(&mgr), &[], "why", None).expect_err("no Plan is usage");
     assert_eq!(err.code(), ErrorCode::Usage, "no --plan is usage");
     assert_eq!(err.exit().code(), 2, "usage is exit 2");
-    assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
-    assert!(events(&mut f.store).is_empty(), "a refused start appends no Event");
+    assert!(
+        incident_row(&mut f.store).is_none(),
+        "a refused start writes no row"
+    );
+    assert!(
+        events(&mut f.store).is_empty(),
+        "a refused start appends no Event"
+    );
 
     // One Plan is enough.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay], "why", None).unwrap());
@@ -225,30 +256,81 @@ fn incident_start_records_the_plan_set_and_status_reports_it() {
 
     // A well-formed Plan that does not exist is plan_not_found (exit 4), and writes nothing.
     let missing = PlanId::parse("gone").unwrap();
-    let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone(), missing], "why", None).expect_err("an unknown Plan is refused");
+    let err = incident::start(
+        &mut f.store,
+        Some(&mgr),
+        &[pay.clone(), missing],
+        "why",
+        None,
+    )
+    .expect_err("an unknown Plan is refused");
     assert_eq!(err.code(), ErrorCode::PlanNotFound);
     assert_eq!(err.exit().code(), 4);
-    assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
-    assert!(incident_plans(&mut f.store).is_empty(), "a refused start writes no incident_plans row");
+    assert!(
+        incident_row(&mut f.store).is_none(),
+        "a refused start writes no row"
+    );
+    assert!(
+        incident_plans(&mut f.store).is_empty(),
+        "a refused start writes no incident_plans row"
+    );
 
-    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap());
+    let out = fields(
+        incident::start(
+            &mut f.store,
+            Some(&mgr),
+            &[pay.clone(), ops.clone()],
+            "why",
+            None,
+        )
+        .unwrap(),
+    );
     assert_eq!(out["changed"], json!(true));
-    assert_eq!(plan_array(&out["incident"]["plans"]), ["ops", "pay"], "the named Plans are reported");
-    assert_eq!(out["incident"]["until_pr"], json!(null), "no until_pr by default");
-    let started_at = out["incident"]["started_at"].as_str().expect("started_at is a string").to_owned();
+    assert_eq!(
+        plan_array(&out["incident"]["plans"]),
+        ["ops", "pay"],
+        "the named Plans are reported"
+    );
+    assert_eq!(
+        out["incident"]["until_pr"],
+        json!(null),
+        "no until_pr by default"
+    );
+    let started_at = out["incident"]["started_at"]
+        .as_str()
+        .expect("started_at is a string")
+        .to_owned();
 
     let (_, by, reason, started_txn) = incident_row(&mut f.store).expect("one incident row");
     assert_eq!((by.as_str(), reason.as_str()), ("mgr", "why"));
     let set = incident_plans(&mut f.store);
-    assert_eq!(set.keys().cloned().collect::<Vec<_>>(), ["ops", "pay"], "one incident_plans row per named Plan");
-    assert!(set.values().all(|txn| *txn == started_txn), "each incident_plans row names the start transaction ({started_txn})");
+    assert_eq!(
+        set.keys().cloned().collect::<Vec<_>>(),
+        ["ops", "pay"],
+        "one incident_plans row per named Plan"
+    );
+    assert!(
+        set.values().all(|txn| *txn == started_txn),
+        "each incident_plans row names the start transaction ({started_txn})"
+    );
 
-    let started = events(&mut f.store).into_iter().find(|(kind, _)| kind == "incident-started").expect("one incident-started Event");
-    assert_eq!(plan_array(&started.1["plans"]), ["ops", "pay"], "incident-started data carries plans");
+    let started = events(&mut f.store)
+        .into_iter()
+        .find(|(kind, _)| kind == "incident-started")
+        .expect("one incident-started Event");
+    assert_eq!(
+        plan_array(&started.1["plans"]),
+        ["ops", "pay"],
+        "incident-started data carries plans"
+    );
 
     let on = fields(incident::status(&mut f.store).unwrap());
     assert_eq!(on["on"], json!(true));
-    assert_eq!(plan_array(&on["incident"]["plans"]), ["ops", "pay"], "status reports the Plan set");
+    assert_eq!(
+        plan_array(&on["incident"]["plans"]),
+        ["ops", "pay"],
+        "status reports the Plan set"
+    );
     assert_eq!(on["incident"]["until_pr"], json!(null));
     assert_eq!(on["incident"]["started_at"], json!(started_at));
     assert_eq!(on["incident"]["by"], json!("mgr"));
@@ -266,11 +348,28 @@ fn incident_is_held_for_plans_outside_the_set_only() {
     assert!(!held(&mut f.store, &ops), "off holds nothing");
     assert!(plan_set(&mut f.store).is_empty());
 
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "why",
+        None,
+    )
+    .unwrap();
 
-    assert!(!held(&mut f.store, &pay), "a Plan in the incident is not held");
-    assert!(held(&mut f.store, &ops), "a Plan outside the incident is held");
-    assert_eq!(plan_set(&mut f.store), ["pay"], "incident::plans returns the set");
+    assert!(
+        !held(&mut f.store, &pay),
+        "a Plan in the incident is not held"
+    );
+    assert!(
+        held(&mut f.store, &ops),
+        "a Plan outside the incident is held"
+    );
+    assert_eq!(
+        plan_set(&mut f.store),
+        ["pay"],
+        "incident::plans returns the set"
+    );
 }
 
 #[test]
@@ -282,9 +381,17 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     // A Workflow of a named Plan is stored and reported.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/ship")).unwrap());
     assert_eq!(out["incident"]["until_pr"], json!("pay/ship"));
-    assert_eq!(incident_until(&mut f.store), Some((Some("pay".to_owned()), Some("pay/ship".to_owned()))), "until_plan and until_pr are stored");
+    assert_eq!(
+        incident_until(&mut f.store),
+        Some((Some("pay".to_owned()), Some("pay/ship".to_owned()))),
+        "until_plan and until_pr are stored"
+    );
     let on = fields(incident::status(&mut f.store).unwrap());
-    assert_eq!(on["incident"]["until_pr"], json!("pay/ship"), "status reports until_pr");
+    assert_eq!(
+        on["incident"]["until_pr"],
+        json!("pay/ship"),
+        "status reports until_pr"
+    );
 
     incident::end(&mut f.store, Some(&mgr)).unwrap();
     assert!(incident_row(&mut f.store).is_none());
@@ -293,7 +400,10 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
     let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("ops/web")).expect_err("a foreign Plan's Workflow is refused");
     assert_eq!(err.code(), ErrorCode::UntilWorkflowNotIncident);
     assert_eq!(err.exit().code(), 3);
-    assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
+    assert!(
+        incident_row(&mut f.store).is_none(),
+        "a refused start writes no row"
+    );
 
     // A Workflow of a named Plan that does not exist is pr_not_found (exit 4).
     let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/nope")).expect_err("an unknown Workflow is refused");
@@ -306,7 +416,10 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
         assert_eq!(err.code(), ErrorCode::Usage, "{bad:?}");
         assert_eq!(err.exit().code(), 2, "{bad:?}");
     }
-    assert!(incident_row(&mut f.store).is_none(), "every refusal writes no row");
+    assert!(
+        incident_row(&mut f.store).is_none(),
+        "every refusal writes no row"
+    );
 }
 
 #[test]
@@ -315,7 +428,14 @@ fn incident_ends_when_the_until_pr_merges() {
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/ship")).unwrap();
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "why",
+        Some("pay/ship"),
+    )
+    .unwrap();
 
     // The until-Workflow is not merged: the auto-end does nothing.
     let merged = f.store.write("test", |tx| incident::end_if_until_workflow_merged(tx)).unwrap();
@@ -343,7 +463,11 @@ fn incident_ends_when_the_until_pr_merges() {
     let before = events(&mut f.store).len();
     let again = f.store.write("test", |tx| incident::end_if_until_workflow_merged(tx)).unwrap();
     assert!(!again);
-    assert_eq!(events(&mut f.store).len(), before, "no second incident-ended Event");
+    assert_eq!(
+        events(&mut f.store).len(),
+        before,
+        "no second incident-ended Event"
+    );
 }
 
 #[test]
@@ -352,17 +476,33 @@ fn incident_start_turns_it_on_and_writes_the_row() {
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    let out = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "database migration in progress", None).unwrap();
+    let out = incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "database migration in progress",
+        None,
+    )
+    .unwrap();
     let out = fields(out);
     assert_eq!(out["changed"], json!(true));
     assert_eq!(out["incident"]["by"], json!("mgr"));
-    assert_eq!(out["incident"]["reason"], json!("database migration in progress"));
+    assert_eq!(
+        out["incident"]["reason"],
+        json!("database migration in progress")
+    );
     assert_eq!(plan_array(&out["incident"]["plans"]), ["pay"]);
-    let started_at = out["incident"]["started_at"].as_str().expect("started_at is a string").to_owned();
+    let started_at = out["incident"]["started_at"]
+        .as_str()
+        .expect("started_at is a string")
+        .to_owned();
     assert!(!started_at.is_empty(), "started_at is set");
 
     let row = incident_row(&mut f.store).expect("one incident row");
-    assert_eq!((row.0.as_str(), row.1.as_str(), row.2.as_str()), (started_at.as_str(), "mgr", "database migration in progress"));
+    assert_eq!(
+        (row.0.as_str(), row.1.as_str(), row.2.as_str()),
+        (started_at.as_str(), "mgr", "database migration in progress")
+    );
     assert!(row.3 >= 1, "started_txn is the inserting transaction");
 
     assert_eq!(
@@ -375,12 +515,22 @@ fn incident_start_turns_it_on_and_writes_the_row() {
     );
 
     // Idempotent: a second start while on writes nothing and reports `changed` false.
-    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay], "a different reason", None).unwrap());
+    let out = fields(
+        incident::start(&mut f.store, Some(&mgr), &[pay], "a different reason", None).unwrap(),
+    );
     assert_eq!(out["changed"], json!(false));
     assert_eq!(out["incident"]["started_at"], json!(started_at));
     assert_eq!(out["incident"]["by"], json!("mgr"));
-    assert_eq!(out["incident"]["reason"], json!("database migration in progress"), "the first reason stays");
-    assert_eq!(events(&mut f.store).len(), 1, "no second incident-started Event");
+    assert_eq!(
+        out["incident"]["reason"],
+        json!("database migration in progress"),
+        "the first reason stays"
+    );
+    assert_eq!(
+        events(&mut f.store).len(),
+        1,
+        "no second incident-started Event"
+    );
 }
 
 #[test]
@@ -393,13 +543,32 @@ fn incident_start_refuses_a_non_manager() {
     let unknown = SessionId::parse("nope").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    for caller in [None, Some(&lead), Some(&worker), Some(&archived), Some(&unknown)] {
-        let err = incident::start(&mut f.store, caller, &[pay.clone()], "why", None).expect_err("only a live Manager may start incident mode");
+    for caller in [
+        None,
+        Some(&lead),
+        Some(&worker),
+        Some(&archived),
+        Some(&unknown),
+    ] {
+        let err = incident::start(
+            &mut f.store,
+            caller,
+            std::slice::from_ref(&pay),
+            "why",
+            None,
+        )
+        .expect_err("only a live Manager may start incident mode");
         assert_eq!(err.code(), ErrorCode::ManagerOnly, "caller {caller:?}");
         assert_eq!(err.exit().code(), 3, "manager_only is exit 3");
     }
-    assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
-    assert!(events(&mut f.store).is_empty(), "a refused start appends no Event");
+    assert!(
+        incident_row(&mut f.store).is_none(),
+        "a refused start writes no row"
+    );
+    assert!(
+        events(&mut f.store).is_empty(),
+        "a refused start appends no Event"
+    );
 
     // A live Manager is allowed.
     assert!(incident::start(&mut f.store, Some(&mgr), &[pay], "why", None).is_ok());
@@ -424,29 +593,46 @@ fn incident_end_clears_it_and_is_idempotent() {
         .unwrap();
 
     // Only a live Manager may end it.
-    let err = incident::end(&mut f.store, Some(&lead)).expect_err("a Lead may not end incident mode");
+    let err =
+        incident::end(&mut f.store, Some(&lead)).expect_err("a Lead may not end incident mode");
     assert_eq!(err.code(), ErrorCode::ManagerOnly);
-    assert!(incident_row(&mut f.store).is_some(), "a refused end deletes nothing");
+    assert!(
+        incident_row(&mut f.store).is_some(),
+        "a refused end deletes nothing"
+    );
 
     let out = fields(incident::end(&mut f.store, Some(&mgr)).unwrap());
     assert_eq!(out["changed"], json!(true));
     assert_eq!(out["incident"], json!(null));
     assert!(incident_row(&mut f.store).is_none(), "the row is deleted");
-    assert!(incident_plans(&mut f.store).is_empty(), "every incident_plans row is deleted");
+    assert!(
+        incident_plans(&mut f.store).is_empty(),
+        "every incident_plans row is deleted"
+    );
 
     let ended = events(&mut f.store);
     assert_eq!(ended.len(), 1);
     assert_eq!(ended[0].0, "incident-ended");
     assert_eq!(ended[0].1["by"], json!("mgr"));
-    assert_eq!(ended[0].1["cause"], json!("manual"), "a commanded end names its cause");
-    let ended_at = ended[0].1["ended_at"].as_str().expect("ended_at is a string");
+    assert_eq!(
+        ended[0].1["cause"],
+        json!("manual"),
+        "a commanded end names its cause"
+    );
+    let ended_at = ended[0].1["ended_at"]
+        .as_str()
+        .expect("ended_at is a string");
     assert!(!ended_at.is_empty(), "ended_at is set");
 
     // Idempotent: ending an off incident writes nothing and reports `changed` false.
     let out = fields(incident::end(&mut f.store, Some(&mgr)).unwrap());
     assert_eq!(out["changed"], json!(false));
     assert_eq!(out["incident"], json!(null));
-    assert_eq!(events(&mut f.store).len(), 1, "no second incident-ended Event");
+    assert_eq!(
+        events(&mut f.store).len(),
+        1,
+        "no second incident-ended Event"
+    );
 }
 
 #[test]
@@ -458,11 +644,31 @@ fn incident_start_requests_stop_on_running_and_leaves_merging() {
     incident::start(&mut f.store, Some(&mgr), &[pay], "why", None).unwrap();
 
     let stops = stop_requests(&mut f.store);
-    assert_eq!(stops.get("a-a1").and_then(|v| v.as_deref()), Some("cancelled"), "a running Attempt is asked to stop");
-    assert_eq!(stops.get("b-a1").and_then(|v| v.as_deref()), Some("cancelled"), "a starting Attempt is asked to stop");
-    assert_eq!(stops.get("c-a1").and_then(|v| v.as_deref()), None, "a merging Attempt is untouched");
-    assert_eq!(stops.get("d-a1").and_then(|v| v.as_deref()), Some("timed_out"), "an existing stop_request stays");
-    assert_eq!(stops.get("e-a1").and_then(|v| v.as_deref()), Some("cancelled"), "an existing cancelled stays");
+    assert_eq!(
+        stops.get("a-a1").and_then(|v| v.as_deref()),
+        Some("cancelled"),
+        "a running Attempt is asked to stop"
+    );
+    assert_eq!(
+        stops.get("b-a1").and_then(|v| v.as_deref()),
+        Some("cancelled"),
+        "a starting Attempt is asked to stop"
+    );
+    assert_eq!(
+        stops.get("c-a1").and_then(|v| v.as_deref()),
+        None,
+        "a merging Attempt is untouched"
+    );
+    assert_eq!(
+        stops.get("d-a1").and_then(|v| v.as_deref()),
+        Some("timed_out"),
+        "an existing stop_request stays"
+    );
+    assert_eq!(
+        stops.get("e-a1").and_then(|v| v.as_deref()),
+        Some("cancelled"),
+        "an existing cancelled stays"
+    );
 }
 
 #[test]
@@ -486,34 +692,67 @@ fn incident_status_reports_on_and_off() {
 
     let on = fields(incident::status(&mut f.store).unwrap());
     assert_eq!(on["on"], json!(true));
-    assert_eq!(on["incident"]["started_at"], json!("2026-10-14T21:10:00.000Z"));
+    assert_eq!(
+        on["incident"]["started_at"],
+        json!("2026-10-14T21:10:00.000Z")
+    );
     assert_eq!(on["incident"]["by"], json!("mgr"));
-    assert_eq!(on["incident"]["reason"], json!("database migration in progress"));
+    assert_eq!(
+        on["incident"]["reason"],
+        json!("database migration in progress")
+    );
     assert_eq!(plan_array(&on["incident"]["plans"]), ["pay"]);
     assert!(events(&mut f.store).is_empty(), "status writes nothing");
 }
 
 #[test]
 fn incident_started_and_ended_events_are_known_kinds() {
-    let started: Kind = "incident-started".parse().expect("incident-started is a known kind");
-    let ended: Kind = "incident-ended".parse().expect("incident-ended is a known kind");
+    let started: Kind = "incident-started"
+        .parse()
+        .expect("incident-started is a known kind");
+    let ended: Kind = "incident-ended"
+        .parse()
+        .expect("incident-ended is a known kind");
     for (kind, required, optional) in [
-        (started, ["by", "reason", "started_at", "plans"].as_slice(), ["until_pr"].as_slice()),
+        (
+            started,
+            ["by", "reason", "started_at", "plans"].as_slice(),
+            ["until_pr"].as_slice(),
+        ),
         (ended, ["by", "ended_at", "cause"].as_slice(), [].as_slice()),
     ] {
         let spec = kind.spec();
         assert_eq!(
-            (spec.context, spec.plan, spec.job, spec.attempt, spec.session),
+            (
+                spec.context,
+                spec.plan,
+                spec.job,
+                spec.attempt,
+                spec.session
+            ),
             (Set::No, Set::No, Set::No, Set::No, Set::No),
             "{kind} is about no scope column"
         );
         assert_eq!(spec.required, required, "{kind} requires its data fields");
-        assert_eq!(spec.optional, optional, "{kind} may carry its optional fields");
+        assert_eq!(
+            spec.optional, optional,
+            "{kind} may carry its optional fields"
+        );
     }
-    assert!(PROTOCOL >= 14, "hs-d634 raised the protocol to 14 for the two incident kinds, and it only goes up");
+    let protocol = PROTOCOL;
+    assert!(
+        protocol >= 14,
+        "hs-d634 raised the protocol to 14 for the two incident kinds, and it only goes up"
+    );
 
-    let started_event =
-        NewEvent::incident_started("Incident mode on.", "mgr", "database migration in progress", "2026-10-14T21:10:00.000Z", ["pay"], None);
+    let started_event = NewEvent::incident_started(
+        "Incident mode on.",
+        "mgr",
+        "database migration in progress",
+        "2026-10-14T21:10:00.000Z",
+        ["pay"],
+        None,
+    );
     assert_eq!(started_event.kind(), Kind::IncidentStarted);
     assert_eq!(
         started_event.data(),
@@ -527,9 +766,17 @@ fn incident_started_and_ended_events_are_known_kinds() {
         &json!({"by": "mgr", "reason": "fixing Workflow ci", "started_at": "2026-10-14T21:10:00.000Z", "plans": ["pay"], "until_pr": "pay/ship"})
     );
 
-    let ended_event = NewEvent::incident_ended("Incident mode off.", "mgr", "2026-10-14T22:00:00.000Z", "manual");
+    let ended_event = NewEvent::incident_ended(
+        "Incident mode off.",
+        "mgr",
+        "2026-10-14T22:00:00.000Z",
+        "manual",
+    );
     assert_eq!(ended_event.kind(), Kind::IncidentEnded);
-    assert_eq!(ended_event.data(), &json!({"by": "mgr", "ended_at": "2026-10-14T22:00:00.000Z", "cause": "manual"}));
+    assert_eq!(
+        ended_event.data(),
+        &json!({"by": "mgr", "ended_at": "2026-10-14T22:00:00.000Z", "cause": "manual"})
+    );
 }
 
 /// `incident::elapsed` (hs-d640, contract §6.1): the coarse human duration from the row's
@@ -556,7 +803,11 @@ fn elapsed_is_a_coarse_human_duration() {
         (Duration::seconds(-1), "0s"),
     ];
     for (i, (ago, want)) in cases.into_iter().enumerate() {
-        assert_eq!(incident::elapsed(started, base + ago).unwrap(), want, "case {i}");
+        assert_eq!(
+            incident::elapsed(started, base + ago).unwrap(),
+            want,
+            "case {i}"
+        );
     }
 }
 
@@ -569,21 +820,55 @@ fn incident_start_on_a_live_incident_replaces_the_plan_set() {
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "why",
+        None,
+    )
+    .unwrap();
     assert_eq!(plan_set(&mut f.store), ["pay"], "the fresh start names pay");
 
     // `ops` joins and `pay` leaves: the named list replaces the set exactly.
-    let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops.clone()], "why", None).unwrap());
-    assert_eq!(out["changed"], json!(true), "a changed set is not idempotent");
-    assert_eq!(plan_array(&out["incident"]["plans"]), ["ops"], "the output reports the new set only");
-    assert_eq!(plan_set(&mut f.store), ["ops"], "incident::plans returns exactly the named Plans");
+    let out = fields(
+        incident::start(
+            &mut f.store,
+            Some(&mgr),
+            std::slice::from_ref(&ops),
+            "why",
+            None,
+        )
+        .unwrap(),
+    );
     assert_eq!(
-        incident_plans(&mut f.store).keys().cloned().collect::<Vec<_>>(),
+        out["changed"],
+        json!(true),
+        "a changed set is not idempotent"
+    );
+    assert_eq!(
+        plan_array(&out["incident"]["plans"]),
+        ["ops"],
+        "the output reports the new set only"
+    );
+    assert_eq!(
+        plan_set(&mut f.store),
+        ["ops"],
+        "incident::plans returns exactly the named Plans"
+    );
+    assert_eq!(
+        incident_plans(&mut f.store)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
         ["ops"],
         "one incident_plans row per named Plan, and pay's is gone"
     );
     assert!(!held(&mut f.store, &ops), "the named Plan is not held");
-    assert!(held(&mut f.store, &pay), "the Plan that left the incident is held");
+    assert!(
+        held(&mut f.store, &pay),
+        "the Plan that left the incident is held"
+    );
 }
 
 /// Assumption A2 (hs-d664): an update with `--reason` omitted (the empty string) leaves the
@@ -595,15 +880,35 @@ fn incident_start_on_a_live_incident_keeps_started_at_by_and_reason() {
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
-    let first = fields(incident::start(&mut f.store, Some(&mgr), &[pay], "database migration in progress", None).unwrap());
-    let started_at = first["incident"]["started_at"].as_str().expect("started_at is a string").to_owned();
+    let first = fields(
+        incident::start(
+            &mut f.store,
+            Some(&mgr),
+            &[pay],
+            "database migration in progress",
+            None,
+        )
+        .unwrap(),
+    );
+    let started_at = first["incident"]["started_at"]
+        .as_str()
+        .expect("started_at is a string")
+        .to_owned();
 
     // An update names `ops` and gives no --reason ("" means omitted).
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "", None).unwrap());
     assert_eq!(out["changed"], json!(true), "the set changed");
-    assert_eq!(out["incident"]["started_at"], json!(started_at), "started_at stays");
+    assert_eq!(
+        out["incident"]["started_at"],
+        json!(started_at),
+        "started_at stays"
+    );
     assert_eq!(out["incident"]["by"], json!("mgr"), "started_by stays");
-    assert_eq!(out["incident"]["reason"], json!("database migration in progress"), "the stored reason stays");
+    assert_eq!(
+        out["incident"]["reason"],
+        json!("database migration in progress"),
+        "the stored reason stays"
+    );
     assert_eq!(plan_set(&mut f.store), ["ops"], "the set did change");
 
     let (row_at, by, reason, _) = incident_row(&mut f.store).expect("the live incident row");
@@ -622,16 +927,30 @@ fn incident_start_on_a_live_incident_is_idempotent() {
     let mgr = SessionId::parse("mgr").unwrap();
     let pay = PlanId::parse("pay").unwrap();
 
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "why",
+        None,
+    )
+    .unwrap();
     let before = events(&mut f.store).len();
-    assert_eq!(before, 1, "the fresh start appends one incident-started Event");
+    assert_eq!(
+        before, 1,
+        "the fresh start appends one incident-started Event"
+    );
 
     // The same Plan, no --reason and no --until-workflow: nothing changed.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "", None).unwrap());
     assert_eq!(out["changed"], json!(false), "an unchanged update reports changed false");
     assert_eq!(plan_array(&out["incident"]["plans"]), ["pay"]);
     assert_eq!(plan_set(&mut f.store), ["pay"]);
-    assert_eq!(events(&mut f.store).len(), before, "an unchanged update appends no Event");
+    assert_eq!(
+        events(&mut f.store).len(),
+        before,
+        "an unchanged update appends no Event"
+    );
 }
 
 /// Assumption A2 (hs-d664): a new `--until-workflow` replaces the stored one, and an absent
@@ -654,7 +973,11 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     // A new --until-workflow replaces the stored one.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", Some("pay/api")).unwrap());
     assert_eq!(out["changed"], json!(true));
-    assert_eq!(out["incident"]["until_pr"], json!("pay/api"), "the output reports the new until_pr");
+    assert_eq!(
+        out["incident"]["until_pr"],
+        json!("pay/api"),
+        "the output reports the new until_pr"
+    );
     assert_eq!(
         incident_until(&mut f.store),
         Some((Some("pay".to_owned()), Some("pay/api".to_owned()))),
@@ -664,7 +987,11 @@ fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
     // `ops` leaves; with no --until-workflow its stored until_plan is not in the new set, so both clear.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap());
     assert_eq!(out["changed"], json!(true));
-    assert_eq!(out["incident"]["until_pr"], json!(null), "the output reports no until_pr");
+    assert_eq!(
+        out["incident"]["until_pr"],
+        json!(null),
+        "the output reports no until_pr"
+    );
     assert_eq!(
         incident_until(&mut f.store),
         Some((None, None)),
@@ -684,18 +1011,33 @@ fn incident_start_on_a_live_incident_appends_an_incident_plans_event() {
 
     incident::start(&mut f.store, Some(&mgr), &[pay], "why", None).unwrap();
     let before = events(&mut f.store);
-    assert_eq!(before.len(), 1, "the fresh start appends one incident-started Event");
+    assert_eq!(
+        before.len(),
+        1,
+        "the fresh start appends one incident-started Event"
+    );
     assert_eq!(before[0].0, "incident-started");
 
     // The set changes: one incident-plans Event, after the incident-started one.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "why", None).unwrap());
     assert_eq!(out["changed"], json!(true));
     let after = events(&mut f.store);
-    assert_eq!(after.len(), 2, "exactly one incident-plans Event is appended");
-    let (kind, data) = after.into_iter().find(|(kind, _)| kind == "incident-plans").expect("one incident-plans Event");
+    assert_eq!(
+        after.len(),
+        2,
+        "exactly one incident-plans Event is appended"
+    );
+    let (kind, data) = after
+        .into_iter()
+        .find(|(kind, _)| kind == "incident-plans")
+        .expect("one incident-plans Event");
     assert_eq!(kind, "incident-plans");
     assert_eq!(data["by"], json!("mgr"), "incident-plans data carries by");
-    assert_eq!(plan_array(&data["plans"]), ["ops"], "incident-plans data carries the new plans");
+    assert_eq!(
+        plan_array(&data["plans"]),
+        ["ops"],
+        "incident-plans data carries the new plans"
+    );
 }
 
 /// Assumption A3 (hs-d664): an update runs no stop-request sweep, so a running or merging Attempt
@@ -722,8 +1064,16 @@ fn incident_start_on_a_live_incident_does_not_interrupt_running_attempts() {
     // The update changes the set but runs no stop-request sweep.
     let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "why", None).unwrap());
     assert_eq!(out["changed"], json!(true));
-    assert_eq!(plan_set(&mut f.store), ["ops"], "the update replaced the set");
-    assert_eq!(stop_requests(&mut f.store), before, "an update requests no stop");
+    assert_eq!(
+        plan_set(&mut f.store),
+        ["ops"],
+        "the update replaced the set"
+    );
+    assert_eq!(
+        stop_requests(&mut f.store),
+        before,
+        "an update requests no stop"
+    );
 }
 
 /// Assumption A3 (hs-d664): a non-Manager is refused even when incident mode is already live, and
@@ -736,14 +1086,30 @@ fn incident_start_on_a_live_incident_refuses_a_non_manager() {
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&pay),
+        "why",
+        None,
+    )
+    .unwrap();
     let before = events(&mut f.store).len();
 
-    let err = incident::start(&mut f.store, Some(&lead), &[ops], "", None).expect_err("only a live Manager may update incident mode");
+    let err = incident::start(&mut f.store, Some(&lead), &[ops], "", None)
+        .expect_err("only a live Manager may update incident mode");
     assert_eq!(err.code(), ErrorCode::ManagerOnly);
     assert_eq!(err.exit().code(), 3, "manager_only is exit 3");
-    assert_eq!(plan_set(&mut f.store), ["pay"], "a refused update leaves the set");
-    assert_eq!(events(&mut f.store).len(), before, "a refused update appends no Event");
+    assert_eq!(
+        plan_set(&mut f.store),
+        ["pay"],
+        "a refused update leaves the set"
+    );
+    assert_eq!(
+        events(&mut f.store).len(),
+        before,
+        "a refused update appends no Event"
+    );
 }
 
 /// D1 (hs-d678): a fresh start stores the `lead_session` of the first `--plan` argument's Plan in
@@ -756,12 +1122,27 @@ fn incident_start_stores_the_first_plans_lead() {
     let ops = PlanId::parse("ops").unwrap();
 
     // The first named Plan is `pay` (`lead_session` `lead1`).
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the first --plan's lead_session");
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        &[pay.clone(), ops.clone()],
+        "why",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead1"),
+        "the first --plan's lead_session"
+    );
 
     // The same set reordered is no set change: the stored lead stays.
     incident::start(&mut f.store, Some(&mgr), &[ops, pay], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "a reordered set is unchanged");
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead1"),
+        "a reordered set is unchanged"
+    );
 }
 
 /// D1 (hs-d678): a live start whose set changes recomputes `lead` from the new first `--plan`
@@ -774,18 +1155,55 @@ fn incident_start_on_a_live_incident_recomputes_the_lead_when_the_set_changes() 
     let ops = PlanId::parse("ops").unwrap();
 
     // `pay` leaves, `ops` stays: the new first Plan is `ops` (`lead_session` `lead2`).
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the fresh start's lead");
-    incident::start(&mut f.store, Some(&mgr), &[ops.clone()], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead2"), "the changed set recomputes the lead");
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        &[pay.clone(), ops.clone()],
+        "why",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead1"),
+        "the fresh start's lead"
+    );
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        std::slice::from_ref(&ops),
+        "why",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead2"),
+        "the changed set recomputes the lead"
+    );
 
     // `pay` joins again: the set changed, and its first Plan is `pay` (`lead1`).
-    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the changed set recomputes the lead again");
+    incident::start(
+        &mut f.store,
+        Some(&mgr),
+        &[pay.clone(), ops.clone()],
+        "why",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead1"),
+        "the changed set recomputes the lead again"
+    );
 
     // The same set reordered is not a change: the stored lead stays.
     incident::start(&mut f.store, Some(&mgr), &[ops, pay], "why", None).unwrap();
-    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "a reordered set is unchanged");
+    assert_eq!(
+        incident_lead(&mut f.store).as_deref(),
+        Some("lead1"),
+        "a reordered set is unchanged"
+    );
 }
 
 /// A2 (hs-d678): a row written before the migration has a null `lead`; the click resolves the
@@ -807,8 +1225,12 @@ fn the_incident_lead_falls_back_to_the_alphabetically_first_plan() {
         .unwrap();
 
     // `ops` sorts before `pay`, so its `lead_session` `lead2` is the fallback (`pay`'s is `lead1`).
-    let lead = f.store.read(|c| incident::lead(c)).unwrap();
-    assert_eq!(lead.map(|s| s.as_str().to_owned()).as_deref(), Some("lead2"), "the alphabetically first Plan's Lead");
+    let lead = f.store.read(incident::lead).unwrap();
+    assert_eq!(
+        lead.map(|s| s.as_str().to_owned()).as_deref(),
+        Some("lead2"),
+        "the alphabetically first Plan's Lead"
+    );
 
     // With no incident row there is no Lead to resolve.
     f.store
@@ -818,6 +1240,9 @@ fn the_incident_lead_falls_back_to_the_alphabetically_first_plan() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(f.store.read(|c| incident::lead(c)).unwrap(), None, "no incident row, no Lead");
+    assert_eq!(
+        f.store.read(incident::lead).unwrap(),
+        None,
+        "no incident row, no Lead"
+    );
 }
-

@@ -16,5 +16,9 @@ pub fn cap_style(block: Style) -> Style {
 pub fn pill<'a>(text: impl Into<Cow<'a, str>>, block: Style) -> Vec<Span<'a>> {
     let caps = &spec().caps;
     let cap = cap_style(block);
-    vec![Span::styled(caps.left.as_str(), cap), Span::styled(text, block), Span::styled(caps.right.as_str(), cap)]
+    vec![
+        Span::styled(caps.left.as_str(), cap),
+        Span::styled(text, block),
+        Span::styled(caps.right.as_str(), cap),
+    ]
 }

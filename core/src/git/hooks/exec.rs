@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
+#[cfg(test)]
+use crate::clock::SystemClock;
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, HOOK_TOOL, Runner};
 
@@ -55,10 +57,10 @@ struct Output {
 
 impl Output {
     fn push(&mut self, line: String) {
-        if self.log_error.is_none() {
-            if let Err(e) = writeln!(self.log, "{line}") {
-                self.log_error = Some(e.to_string());
-            }
+        if self.log_error.is_none()
+            && let Err(e) = writeln!(self.log, "{line}")
+        {
+            self.log_error = Some(e.to_string());
         }
         if self.tail.len() == self.keep {
             self.tail.pop_front();
@@ -73,11 +75,8 @@ pub fn is_withheld(key: &str) -> bool {
     key == "TMUX" || key == "TMUX_PANE" || key.starts_with("PI_") || key.starts_with("CPD_")
 }
 
-/// Runs the blocks in order in `cwd` over `runner`, each hook with `env` added to its environment: one
-/// `Runner::run` per hook, `sh -c <hook>` with the context as stdin, the hooks of a block on a thread each; a
-/// failing block stops the pipeline. A hook's output (stdout, then stderr) reaches the log and the tail when the
-/// hook ends; only the last `tail_lines` lines are kept. One `timeout` for the whole run: each call's deadline is
-/// what is left of it.
+/// [`run_on`] on the system clock.
+#[cfg(test)]
 pub fn run_with(
     runner: &dyn Runner,
     blocks: &[Vec<Rendered>],
@@ -87,11 +86,26 @@ pub fn run_with(
     log: File,
     tail_lines: usize,
 ) -> Executed {
-    run_on(runner, &SystemClock, blocks, cwd, timeout, env, log, tail_lines)
+    run_on(
+        runner,
+        &SystemClock,
+        blocks,
+        cwd,
+        timeout,
+        env,
+        log,
+        tail_lines,
+    )
 }
 
-/// [`run_with`] with the time `timeout` is measured on read from `clock`: what a block takes (a reply's `takes` on a
+/// Runs the blocks in order in `cwd` over `runner`, each hook with `env` added to its environment: one
+/// `Runner::run` per hook, `sh -c <hook>` with the context as stdin, the hooks of a block on a thread each; a
+/// failing block stops the pipeline. A hook's output (stdout, then stderr) reaches the log and the tail when the
+/// hook ends; only the last `tail_lines` lines are kept. One `timeout` for the whole run: each call's deadline is
+/// what is left of it, with the time measured on read from `clock`: what a block takes (a reply's `takes` on a
 /// `FakeRunner` is virtual) is what the blocks after it have left.
+// Each argument is a distinct input of the run; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 pub fn run_on(
     runner: &dyn Runner,
     clock: &dyn Clock,
@@ -103,15 +117,24 @@ pub fn run_on(
     tail_lines: usize,
 ) -> Executed {
     let mut started: Option<Instant> = None;
-    let mut output = Output { log, tail: VecDeque::new(), keep: tail_lines, log_error: None };
-    let removed: Vec<String> =
-        std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).filter(|k| is_withheld(k)).collect();
+    let mut output = Output {
+        log,
+        tail: VecDeque::new(),
+        keep: tail_lines,
+        log_error: None,
+    };
+    let removed: Vec<String> = std::env::vars_os()
+        .map(|(k, _)| k.to_string_lossy().into_owned())
+        .filter(|k| is_withheld(k))
+        .collect();
     let mut failure = None;
     let mut failed_command = None;
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
         // The first block has all of it: the clock starts with it.
-        let left = started.map_or(timeout, |at| timeout.saturating_sub(clock.now().saturating_duration_since(at)));
+        let left = started.map_or(timeout, |at| {
+            timeout.saturating_sub(clock.now().saturating_duration_since(at))
+        });
         started.get_or_insert_with(|| clock.now());
         let ended: Vec<(Ended, Vec<u8>)> = std::thread::scope(|scope| {
             let threads: Vec<_> = block
@@ -121,7 +144,10 @@ pub fn run_on(
                     scope.spawn(move || ran(runner.run(&call)))
                 })
                 .collect();
-            threads.into_iter().map(|t| t.join().expect("a hook's thread does not panic")).collect()
+            threads
+                .into_iter()
+                .map(|t| t.join().expect("a hook's thread does not panic"))
+                .collect()
         });
         failure = None;
         failed_command = None;
@@ -142,17 +168,33 @@ pub fn run_on(
             break;
         }
     }
-    Executed { failure, failed_command, tail: output.tail.drain(..).collect(), log_error: output.log_error.take() }
+    Executed {
+        failure,
+        failed_command,
+        tail: output.tail.drain(..).collect(),
+        log_error: output.log_error.take(),
+    }
 }
 
 /// The call of one hook: `TMUX`, `TMUX_PANE` and the other withheld variables removed, then `env` added.
-fn call_of(hook: &Rendered, cwd: &Path, deadline: Duration, env: &[(&str, &str)], removed: &[String]) -> Call {
+fn call_of(
+    hook: &Rendered,
+    cwd: &Path,
+    deadline: Duration,
+    env: &[(&str, &str)],
+    removed: &[String],
+) -> Call {
     let named = ["TMUX", "TMUX_PANE"].map(str::to_owned);
-    let gone = named.iter().chain(removed.iter().filter(|k| !named.contains(k)));
+    let gone = named
+        .iter()
+        .chain(removed.iter().filter(|k| !named.contains(k)));
     let envs = gone
         .map(|k| (k.clone(), None))
         // After the removal: only the variables the caller names pass, an inherited `CPD_*` never does.
-        .chain(env.iter().map(|(k, v)| ((*k).to_owned(), Some((*v).to_owned()))))
+        .chain(
+            env.iter()
+                .map(|(k, v)| ((*k).to_owned(), Some((*v).to_owned()))),
+        )
         .collect();
     Call {
         tool: HOOK_TOOL.to_owned(),
@@ -178,7 +220,10 @@ fn ran(result: Result<std::process::Output, Failed>) -> (Ended, Vec<u8>) {
             (ended, [out.stdout, out.stderr].concat())
         }
         Err(Failed::Timeout(_)) => (Ended::TimedOut, Vec::new()),
-        Err(Failed::Io(e)) => (Ended::NotStarted(format!("Cannot start sh: {e}.")), Vec::new()),
+        Err(Failed::Io(e)) => (
+            Ended::NotStarted(format!("Cannot start sh: {e}.")),
+            Vec::new(),
+        ),
     }
 }
 
@@ -196,7 +241,9 @@ mod tests {
         for k in ["TMUX", "TMUX_PANE", "PI_SESSION", "CPD_HOME", "CPD_PLAN"] {
             assert!(is_withheld(k), "{k}");
         }
-        for k in ["PATH", "HOME", "TMUXX", "PIPE", "CPDX", "GIT_DIR", "MY_CPD_X"] {
+        for k in [
+            "PATH", "HOME", "TMUXX", "PIPE", "CPDX", "GIT_DIR", "MY_CPD_X",
+        ] {
             assert!(!is_withheld(k), "{k}");
         }
     }

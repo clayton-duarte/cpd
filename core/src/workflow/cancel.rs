@@ -35,7 +35,11 @@ struct Released {
 
 enum Decision {
     /// Cancel it from `from` (`waiting`, `dispatch` or `open`); `released` only for `open`.
-    Cancel { from: &'static str, released: Option<Released>, superseded_by: Option<String> },
+    Cancel {
+        from: &'static str,
+        released: Option<Released>,
+        superseded_by: Option<String>,
+    },
     /// It was already `cancelled`.
     Already,
 }
@@ -144,7 +148,9 @@ pub fn archived_with_drafts(conn: &Connection) -> Result<Vec<PlanId>, CpdError> 
         "SELECT p.id FROM plans p WHERE p.archived_at IS NOT NULL
             AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'draft') ORDER BY p.id",
     )?;
-    let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     ids.iter().map(|id| PlanId::parse(id)).collect()
 }
 
@@ -179,7 +185,11 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option
             .with("plan", plan.as_str())
             .with("workflow", key.as_str())
     };
-    if tx.execute("UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'", [plan.as_str()])? == 0 {
+    if tx.execute(
+        "UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'",
+        [plan.as_str()],
+    )? == 0
+    {
         return Err(lost());
     }
     let text = format!("Every Workflow of Plan {plan} that is not cancelled is open or merged. The engine polls them; to follow them by hand: cpd pr poll --plan {plan}");
@@ -274,7 +284,11 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
     if let Some(by) = superseded {
         check_superseding(conn, plan, key, by)?;
     }
-    Ok(Decision::Cancel { from, released: None, superseded_by: superseded.map(str::to_owned) })
+    Ok(Decision::Cancel {
+        from,
+        released: None,
+        superseded_by: superseded.map(str::to_owned),
+    })
 }
 
 /// The superseding Workflow `by` (a reference of `plan`, §2.2: a bare key, or `<plan>/<key>`): a Workflow of a Plan of the same
@@ -354,7 +368,11 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, workflow: &W
         lead_worktree: worktree.display().to_string(),
         lead_branch: workflow.lead_branch.clone(),
     };
-    Ok(Decision::Cancel { from: "open", released: Some(released), superseded_by: None })
+    Ok(Decision::Cancel {
+        from: "open",
+        released: Some(released),
+        superseded_by: None,
+    })
 }
 
 #[cfg(test)]
@@ -408,7 +426,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        store.write("fixture", |tx| cancel_jobs(tx, &plan, &key)).unwrap();
+        store
+            .write("fixture", |tx| cancel_jobs(tx, &plan, &key))
+            .unwrap();
         let others: i64 = store
             .read(|conn| Ok(conn.query_row("SELECT count(*) FROM jobs WHERE status = 'cancelled' AND cancel_reason = 'pr cancelled'", [], |r| r.get(0))?))
             .unwrap();
@@ -422,7 +442,10 @@ mod tests {
                 )?)
             })
             .unwrap();
-        assert_eq!((status.as_str(), reason.as_str(), events), ("cancelled", "pr cancelled", 1));
+        assert_eq!(
+            (status.as_str(), reason.as_str(), events),
+            ("cancelled", "pr cancelled", 1)
+        );
 
         let (_dir, mut store) = fixture();
         store.write("fixture", |tx| Ok(tx.execute_batch("UPDATE jobs SET status = 'running' WHERE key = 'open-api';")?)).unwrap();

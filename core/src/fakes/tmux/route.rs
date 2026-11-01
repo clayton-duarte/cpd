@@ -50,7 +50,11 @@ pub struct TmuxRoute {
 impl TmuxRoute {
     /// A route over a fresh [`FakeTmux`] with no scripted reply and no nested `Runner`.
     pub fn new() -> TmuxRoute {
-        TmuxRoute { fake: FakeTmux::new(), scripted: Vec::new(), new_panes_end: None }
+        TmuxRoute {
+            fake: FakeTmux::new(),
+            scripted: Vec::new(),
+            new_panes_end: None,
+        }
     }
     /// The `Runner` that `run-shell`, a hook or a binding calls with `/bin/sh -c <command>`.
     pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> TmuxRoute {
@@ -59,7 +63,11 @@ impl TmuxRoute {
     }
     /// A scripted reply: a call whose argv `matches` is answered with `reply`, before the fake sees it (the
     /// first match answers).
-    pub fn script(mut self, matches: impl Fn(&[String]) -> bool + Send + Sync + 'static, reply: Reply) -> TmuxRoute {
+    pub fn script(
+        mut self,
+        matches: impl Fn(&[String]) -> bool + Send + Sync + 'static,
+        reply: Reply,
+    ) -> TmuxRoute {
         self.scripted.push((Box::new(matches), reply));
         self
     }
@@ -87,13 +95,21 @@ const NO_TMPDIR: &str = "error creating /tmp/tmux-<uid> (TMUX_TMPDIR is not set)
 /// The `TMUX_TMPDIR` a real tmux would see: the call's own entry (`None` is a removed variable), else the one the
 /// process `inherited`, as a child does. Empty is unset.
 pub(super) fn tmux_tmpdir(call: &Call, inherited: Option<String>) -> Option<String> {
-    let own = call.envs.iter().find(|(k, _)| k == "TMUX_TMPDIR").map(|(_, v)| v.clone());
+    let own = call
+        .envs
+        .iter()
+        .find(|(k, _)| k == "TMUX_TMPDIR")
+        .map(|(_, v)| v.clone());
     own.unwrap_or(inherited).filter(|d| !d.is_empty())
 }
 
 impl Handler for TmuxRoute {
     fn handle(&self, call: &Call) -> Reply {
-        if let Some((_, reply)) = self.scripted.iter().find(|(matches, _)| matches(&call.args)) {
+        if let Some((_, reply)) = self
+            .scripted
+            .iter()
+            .find(|(matches, _)| matches(&call.args))
+        {
             return reply.clone();
         }
         if call.args == ["-u", "-V"] {
@@ -104,9 +120,21 @@ impl Handler for TmuxRoute {
             return Reply::exit(1, "", NO_TMPDIR);
         };
         // A command with no directory of its own runs in the process's.
-        let cwd = call.cwd.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
-        let env = call.envs.iter().filter_map(|(k, v)| v.clone().map(|v| (k.clone(), v))).collect();
-        let inv = Invocation { argv: call.args.clone(), tmux_tmpdir: tmux_tmpdir.into(), cwd, env };
+        let cwd = call
+            .cwd
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+        let env = call
+            .envs
+            .iter()
+            .filter_map(|(k, v)| v.clone().map(|v| (k.clone(), v)))
+            .collect();
+        let inv = Invocation {
+            argv: call.args.clone(),
+            tmux_tmpdir: tmux_tmpdir.into(),
+            cwd,
+            env,
+        };
         let out = self.fake.run(&inv);
         if let (0, Some(end)) = (out.code, self.new_panes_end) {
             self.end_new_pane(&inv, end);
@@ -119,7 +147,11 @@ impl TmuxRoute {
     /// Ends the pane `inv` made (`new_panes_end`): the newest pane of its server, or the one a `respawn-pane` names.
     fn end_new_pane(&self, inv: &Invocation, end: PaneEnd) {
         let args = &inv.argv;
-        let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1));
+        let value = |flag: &str| {
+            args.iter()
+                .position(|a| a == flag)
+                .and_then(|i| args.get(i + 1))
+        };
         let Some(socket) = value("-L") else { return };
         // The commands of a call are split on `;`: the last one that makes a pane is the call's.
         let makes = |name: &str| args.iter().any(|a| a == name);
@@ -142,10 +174,25 @@ impl TmuxRoute {
             PaneEnd::Status(n) => vec!["--status".to_owned(), n.to_string()],
             PaneEnd::Signal => vec!["--signal".to_owned()],
         };
-        let mut argv = vec!["-L".to_owned(), socket.clone(), "__ctl".to_owned(), "pane-exit".to_owned(), pane];
+        let mut argv = vec![
+            "-L".to_owned(),
+            socket.clone(),
+            "__ctl".to_owned(),
+            "pane-exit".to_owned(),
+            pane,
+        ];
         argv.extend(how);
-        let out = self.fake.run(&Invocation { argv, tmux_tmpdir: inv.tmux_tmpdir.clone(), cwd: inv.cwd.clone(), env: inv.env.clone() });
-        assert_eq!(out.code, 0, "the fake could not end the new pane: {}", out.stderr);
+        let out = self.fake.run(&Invocation {
+            argv,
+            tmux_tmpdir: inv.tmux_tmpdir.clone(),
+            cwd: inv.cwd.clone(),
+            env: inv.env.clone(),
+        });
+        assert_eq!(
+            out.code, 0,
+            "the fake could not end the new pane: {}",
+            out.stderr
+        );
     }
 }
 

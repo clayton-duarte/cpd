@@ -22,7 +22,11 @@ use serde_json::{Value, json};
 // ---------- fixtures ----------
 
 pub(super) fn store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 pub(super) fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
@@ -45,7 +49,11 @@ pub(super) fn fixture(env: &TestEnv, sql: &str) {
 }
 
 /// O supports efforts 0–5, S 0–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[0,1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
+const EFFORTS: [(&str, &str, &str); 3] = [
+    ("O", "p/opus", "[0,1,2,3,4,5]"),
+    ("S", "p/sonnet", "[0,1,2,3,4,5]"),
+    ("H", "p/haiku", "[0,1,2,3]"),
+];
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.
 pub(super) fn setup(env: &TestEnv) {
@@ -58,7 +66,9 @@ pub(super) fn setup(env: &TestEnv) {
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -72,7 +82,10 @@ pub(super) fn setup(env: &TestEnv) {
     fixture(env, &rows);
     // The Context's owner is the key of the PRs' policy, where a Job's Tier models are set: its file is empty.
     env.owner_policy("acme", "");
-    fixture(env, "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Context', 'acme', 't', 'm1');");
+    fixture(
+        env,
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Context', 'acme', 't', 'm1');",
+    );
 }
 
 /// Plan `id` in `phase`, with its Lead session, moved there one phase at a time.
@@ -80,8 +93,18 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
     // (phase, what else the Plan gets, its PR's status and what else the PR gets)
     const STEPS: [(&str, &str, &str, &str); 4] = [
         ("plan", "", "waiting", ""),
-        ("dispatch", ", locked_at = 't'", "dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("deploy", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
+        (
+            "dispatch",
+            ", locked_at = 't'",
+            "dispatch",
+            ", lead_worktree = '/wt', started_at = 't'",
+        ),
+        (
+            "deploy",
+            "",
+            "open",
+            ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')",
+        ),
         ("done", ", done_at = 't'", "merged", ", merged_at = 't'"),
     ];
     let mut sql = format!(
@@ -93,7 +116,10 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
          VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/repo', 'O3', 'stopped', 't', 't');"
     );
     if phase != "grounding" {
-        let last = STEPS.iter().position(|(p, ..)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
+        let last = STEPS
+            .iter()
+            .position(|(p, ..)| *p == phase)
+            .unwrap_or_else(|| panic!("{phase}"));
         for (step, set, status, pr_set) in &STEPS[..=last] {
             sql += &format!("UPDATE plans SET phase = '{step}'{set} WHERE id = '{id}';");
             if *step == "deploy" {
@@ -101,7 +127,9 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
             }
             sql += &format!("UPDATE workflows SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
             if *step == "done" {
-                sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{id}';");
+                sql += &format!(
+                    "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{id}';"
+                );
             }
         }
     }
@@ -126,7 +154,9 @@ pub(super) fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]
     let spec = spec_file(&fx.env);
     let title = format!("Title of {key}");
     let needs = needs.join(",");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", tier, "--spec", &spec, "--plan", plan];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", tier, "--spec", &spec, "--plan", plan,
+    ];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -141,7 +171,10 @@ pub(super) fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
 }
 
 pub(super) fn events(fx: &Fx, kind: &str) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 pub(super) fn count(env: &TestEnv, table: &str) -> i64 {
@@ -180,9 +213,12 @@ pub(super) fn engine(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     let attempt = format!("INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
         VALUES ('{plan_id}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{plan_id}--{key}-a1', '/w', 't');");
     let ended = |outcome: &str, cause: &str| {
-        format!("UPDATE attempts SET status = 'ended', outcome = '{outcome}', cause = '{cause}', ended_at = 't' WHERE plan = '{plan_id}' AND id = '{key}-a1';")
+        format!(
+            "UPDATE attempts SET status = 'ended', outcome = '{outcome}', cause = '{cause}', ended_at = 't' WHERE plan = '{plan_id}' AND id = '{key}-a1';"
+        )
     };
-    let set = |sql: &str| format!("UPDATE jobs SET {sql} WHERE plan = '{plan_id}' AND key = '{key}';");
+    let set =
+        |sql: &str| format!("UPDATE jobs SET {sql} WHERE plan = '{plan_id}' AND key = '{key}';");
     let sql = match status {
         "running" => format!("{}{}", set("status = 'running'"), attempt),
         "failed" => format!(
@@ -209,12 +245,14 @@ pub(super) fn job_row(env: &TestEnv, plan_id: &str, key: &str, column: &str) -> 
             Ok(conn.query_row(
                 &format!("SELECT {column} FROM jobs WHERE plan = ?1 AND key = ?2"),
                 [plan_id, key],
-                |r| Ok(match r.get_ref(0)? {
-                    rusqlite::types::ValueRef::Null => Value::Null,
-                    rusqlite::types::ValueRef::Integer(i) => json!(i),
-                    rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
-                    other => panic!("{other:?}"),
-                }),
+                |r| {
+                    Ok(match r.get_ref(0)? {
+                        rusqlite::types::ValueRef::Null => Value::Null,
+                        rusqlite::types::ValueRef::Integer(i) => json!(i),
+                        rusqlite::types::ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
+                        other => panic!("{other:?}"),
+                    })
+                },
             )?)
         })
         .unwrap()
@@ -228,30 +266,55 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let out = job_add(&fx, "pl", "a", "S2", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": false}));
+    assert_eq!(
+        out["job"],
+        json!({"key": "a", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": false})
+    );
     let out = job_add(&fx, "pl", "b", "S3", &["a"]).ok();
-    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false}));
+    assert_eq!(
+        out["job"],
+        json!({"key": "b", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false})
+    );
     assert!(out.get("already").is_none());
 
     assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
     assert_eq!(job_row(&fx.env, "pl", "b", "goal"), "Do it.");
     assert_eq!(job_row(&fx.env, "pl", "b", "context"), "Because.");
     assert_eq!(job_row(&fx.env, "pl", "b", "touches"), "[\"src/a.rs\"]");
-    assert_eq!(job_row(&fx.env, "pl", "b", "acceptance"), "[\"cargo test\"]");
-    assert_eq!(job_row(&fx.env, "pl", "b", "out_of_scope"), "[\"Everything else.\"]");
+    assert_eq!(
+        job_row(&fx.env, "pl", "b", "acceptance"),
+        "[\"cargo test\"]"
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "b", "out_of_scope"),
+        "[\"Everything else.\"]"
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "status"), "draft");
     assert_eq!(job_row(&fx.env, "pl", "b", "appended"), 0);
     assert_eq!(job_row(&fx.env, "pl", "b", "fingerprint"), Value::Null);
-    assert!(job_row(&fx.env, "pl", "b", "seq").as_i64() > job_row(&fx.env, "pl", "a", "seq").as_i64());
-    assert_eq!(fx.env.query::<String>("SELECT needs FROM dependencies WHERE job = 'b'"), "a");
+    assert!(
+        job_row(&fx.env, "pl", "b", "seq").as_i64() > job_row(&fx.env, "pl", "a", "seq").as_i64()
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT needs FROM dependencies WHERE job = 'b'"),
+        "a"
+    );
 
     let added = events(&fx, "job-added");
     assert_eq!(added.len(), 2);
     assert_eq!(added[1]["job"], "b");
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
-    assert_eq!(added[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false}));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
+    assert_eq!(
+        added[1]["data"],
+        json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S3", "needs": ["a"], "urgent": false})
+    );
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"),
+        2
+    );
 }
 
 #[test]
@@ -275,15 +338,29 @@ fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
             );
         }
         let out = job_add(&fx, "pl", "late", "H3", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H3", "needs": ["a"], "urgent": false}), "{phase}");
+        assert_eq!(
+            out["job"],
+            json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H3", "needs": ["a"], "urgent": false}),
+            "{phase}"
+        );
         assert_eq!(job_row(&fx.env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&fx.env).read(|conn| jobs::load(conn, &id)).unwrap();
         let late = all.iter().find(|j| j.key == "late").unwrap();
-        assert_eq!(late.fingerprint.as_deref(), Some(locked_fingerprint(late).as_str()), "{phase}");
-        assert_eq!(events(&fx, "job-added").last().unwrap()["data"]["status"], "queued");
+        assert_eq!(
+            late.fingerprint.as_deref(),
+            Some(locked_fingerprint(late).as_str()),
+            "{phase}"
+        );
+        assert_eq!(
+            events(&fx, "job-added").last().unwrap()["data"]["status"],
+            "queued"
+        );
         // It is Locked from its first transaction: nothing can change it.
-        assert_eq!(job(&fx, &["edit", "late", "--title", "x"], "pl").error()["code"], "job_locked");
+        assert_eq!(
+            job(&fx, &["edit", "late", "--title", "x"], "pl").error()["code"],
+            "job_locked"
+        );
     }
 }
 
@@ -295,16 +372,36 @@ fn add_again_with_the_same_fields_is_already_and_writes_nothing() {
     let out = job_add(&fx, "pl", "b", "S2", &["a"]).ok();
     assert_eq!(out["already"], true);
     assert_eq!(out["job"]["key"], "b");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 
     let run = job_add(&fx, "pl", "b", "S3", &["a"]);
     refused(&run, "job_key_exists", 3);
     let run = job_add(&fx, "pl", "b", "S2", &[]);
     refused(&run, "job_key_exists", 3);
     let other_spec = write_spec(&fx.env, "other.json", &json!({"goal": "Else.", "context": "c", "touches": ["x"], "acceptance": ["y"], "out_of_scope": []}).to_string());
-    let run = fx.cpd(&["job", "add", "b", "--title", "Title of b", "--tier", "S2", "--spec", &other_spec, "--needs", "a", "--plan", "pl"]);
+    let run = fx.cpd(&[
+        "job",
+        "add",
+        "b",
+        "--title",
+        "Title of b",
+        "--tier",
+        "S2",
+        "--spec",
+        &other_spec,
+        "--needs",
+        "a",
+        "--plan",
+        "pl",
+    ]);
     refused(&run, "job_key_exists", 3);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -320,32 +417,123 @@ fn add_refusals_write_nothing() {
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "x", "failed");
     job(&fx, &["cancel", "y", "--reason", "No."], "pl").ok();
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
     // The phase.
     for plan_id in ["gr", "dn"] {
         let e = refused(&job_add(&fx, plan_id, "k", "S2", &[]), "illegal_phase", 3);
-        assert_eq!(e["details"]["phase"], if plan_id == "gr" { "grounding" } else { "done" });
+        assert_eq!(
+            e["details"]["phase"],
+            if plan_id == "gr" { "grounding" } else { "done" }
+        );
     }
     refused(&job_add(&fx, "nope", "k", "S2", &[]), "plan_not_found", 4);
     // The needs.
-    let e = refused(&job_add(&fx, "pl", "k", "S2", &["a", "ghost", "ghost2"]), "needs_unknown", 3);
+    let e = refused(
+        &job_add(&fx, "pl", "k", "S2", &["a", "ghost", "ghost2"]),
+        "needs_unknown",
+        3,
+    );
     assert_eq!(e["details"]["needs"], json!(["ghost", "ghost2"]));
-    let e = refused(&job_add(&fx, "pl", "k", "S2", &["x", "y", "a"]), "needs_unavailable", 3);
-    assert_eq!(e["details"]["needs"], json!([{"key": "x", "status": "failed"}, {"key": "y", "status": "cancelled"}]));
+    let e = refused(
+        &job_add(&fx, "pl", "k", "S2", &["x", "y", "a"]),
+        "needs_unavailable",
+        3,
+    );
+    assert_eq!(
+        e["details"]["needs"],
+        json!([{"key": "x", "status": "failed"}, {"key": "y", "status": "cancelled"}])
+    );
     // The flags.
     let spec = spec_file(&fx.env);
-    let e = refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
+    let e = refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl",
+        ]),
+        "tier_invalid",
+        2,
+    );
     assert_eq!(e["details"]["efforts"], json!([0, 1, 2, 3]));
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S9", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", "/no/such/file", "--plan", "pl"]), "file_unreadable", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "a,a", "--plan", "pl"]), "usage", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "A", "--plan", "pl"]), "invalid_job_id", 2);
-    refused(&fx.cpd(&["job", "add", "K", "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "invalid_job_id", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "usage", 2);
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]), "plan_required", 2);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl",
+        ]),
+        "tier_invalid",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "S9", "--spec", &spec, "--plan", "pl",
+        ]),
+        "tier_invalid",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job",
+            "add",
+            "k",
+            "--title",
+            "T",
+            "--tier",
+            "S2",
+            "--spec",
+            "/no/such/file",
+            "--plan",
+            "pl",
+        ]),
+        "file_unreadable",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "a,a",
+            "--plan", "pl",
+        ]),
+        "usage",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "A",
+            "--plan", "pl",
+        ]),
+        "invalid_job_id",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "K", "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+        ]),
+        "invalid_job_id",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+        ]),
+        "usage",
+        2,
+    );
+    refused(
+        &fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec,
+        ]),
+        "plan_required",
+        2,
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
 }
 
 #[test]
@@ -384,14 +572,19 @@ fn add_refuses_a_spec_that_is_not_complete_naming_the_json_path() {
     ];
     for (text, path) in cases {
         let file = write_spec(&fx.env, "bad.json", &text);
-        let run = fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]);
+        let run = fx.cpd(&[
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl",
+        ]);
         let e = refused(&run, "spec_invalid", 2);
         assert_eq!(e["details"]["path"], path, "{text}");
     }
     assert_eq!(count(&fx.env, "jobs"), 0);
     // An empty out_of_scope is fine.
     let file = write_spec(&fx.env, "ok.json", &with("out_of_scope", json!([])));
-    fx.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl",
+    ])
+    .ok();
 }
 
 #[test]
@@ -400,8 +593,21 @@ fn the_plan_comes_from_cpd_plan_when_no_flag_names_it() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let out = fx.env.command(common::CPD).env("CPD_PLAN", "pl").args(["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stdout));
+    let out = fx
+        .env
+        .command(common::CPD)
+        .env("CPD_PLAN", "pl")
+        .args([
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
     assert_eq!(count(&fx.env, "jobs"), 1);
 }
 
@@ -414,14 +620,32 @@ fn edit_changes_the_given_fields_and_lists_only_those_that_changed() {
     job_add(&fx, "pl", "c", "S2", &[]).ok();
     let spec = write_spec(&fx.env, "new.json", &json!({"goal": "New goal.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []}).to_string());
 
-    let run = job(&fx, &["edit", "b", "--tier", "S3", "--needs", "a,c", "--title", "Title of b"], "pl");
+    let run = job(
+        &fx,
+        &[
+            "edit",
+            "b",
+            "--tier",
+            "S3",
+            "--needs",
+            "a,c",
+            "--title",
+            "Title of b",
+        ],
+        "pl",
+    );
     let out = run.ok();
     assert_eq!(out["job"], json!({"key": "b", "status": "draft"}));
     assert_eq!(out["fields"], json!(["tier", "needs"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
     assert_eq!(fx.env.query::<String>("SELECT group_concat(needs) FROM (SELECT needs FROM dependencies WHERE job = 'b' ORDER BY needs)"), "a,c");
 
-    let out = job(&fx, &["edit", "b", "--spec", &spec, "--title", "New title"], "pl").ok();
+    let out = job(
+        &fx,
+        &["edit", "b", "--spec", &spec, "--title", "New title"],
+        "pl",
+    )
+    .ok();
     assert_eq!(out["fields"], json!(["title", "goal", "out_of_scope"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "goal"), "New goal.");
     assert_eq!(job_row(&fx.env, "pl", "b", "out_of_scope"), "[]");
@@ -429,7 +653,11 @@ fn edit_changes_the_given_fields_and_lists_only_those_that_changed() {
 
     let out = job(&fx, &["edit", "b", "--no-needs"], "pl").ok();
     assert_eq!(out["fields"], json!(["needs"]));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE job = 'b'"), 0);
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM dependencies WHERE job = 'b'"),
+        0
+    );
 
     let edited = events(&fx, "job-edited");
     assert_eq!(edited.len(), 3);
@@ -446,12 +674,31 @@ fn edit_that_changes_nothing_is_already_and_writes_nothing() {
     drafted(&fx);
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let spec = spec_file(&fx.env);
-    let out = job(&fx, &["edit", "b", "--tier", "S2", "--needs", "a", "--spec", &spec, "--title", "Title of b"], "pl").ok();
+    let out = job(
+        &fx,
+        &[
+            "edit",
+            "b",
+            "--tier",
+            "S2",
+            "--needs",
+            "a",
+            "--spec",
+            &spec,
+            "--title",
+            "Title of b",
+        ],
+        "pl",
+    )
+    .ok();
     assert_eq!(out["already"], true);
     assert_eq!(out["fields"], json!([]));
     let out = job(&fx, &["edit", "a", "--no-needs"], "pl").ok();
     assert_eq!(out["already"], true);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -465,19 +712,65 @@ fn edit_refusals_write_nothing() {
 
     let run = job(&fx, &["edit", "b"], "pl");
     refused(&run, "nothing_to_edit", 2);
-    refused(&job(&fx, &["edit", "b", "--needs", "a", "--no-needs"], "pl"), "usage", 2);
-    refused(&job(&fx, &["edit", "ghost", "--tier", "S3"], "pl"), "job_not_found", 4);
-    refused(&job(&fx, &["edit", "b", "--tier", "S3"], "nope"), "plan_not_found", 4);
-    refused(&job(&fx, &["edit", "b", "--needs", "ghost"], "pl"), "needs_unknown", 3);
-    let e = refused(&job(&fx, &["edit", "b", "--needs", "gone"], "pl"), "needs_unavailable", 3);
-    assert_eq!(e["details"]["needs"], json!([{"key": "gone", "status": "cancelled"}]));
-    let e = refused(&job(&fx, &["edit", "a", "--needs", "c"], "pl"), "dependency_cycle", 3);
+    refused(
+        &job(&fx, &["edit", "b", "--needs", "a", "--no-needs"], "pl"),
+        "usage",
+        2,
+    );
+    refused(
+        &job(&fx, &["edit", "ghost", "--tier", "S3"], "pl"),
+        "job_not_found",
+        4,
+    );
+    refused(
+        &job(&fx, &["edit", "b", "--tier", "S3"], "nope"),
+        "plan_not_found",
+        4,
+    );
+    refused(
+        &job(&fx, &["edit", "b", "--needs", "ghost"], "pl"),
+        "needs_unknown",
+        3,
+    );
+    let e = refused(
+        &job(&fx, &["edit", "b", "--needs", "gone"], "pl"),
+        "needs_unavailable",
+        3,
+    );
+    assert_eq!(
+        e["details"]["needs"],
+        json!([{"key": "gone", "status": "cancelled"}])
+    );
+    let e = refused(
+        &job(&fx, &["edit", "a", "--needs", "c"], "pl"),
+        "dependency_cycle",
+        3,
+    );
     assert_eq!(e["details"]["cycle"], json!(["a", "c", "b", "a"]));
-    refused(&job(&fx, &["edit", "a", "--needs", "b"], "pl"), "dependency_cycle", 3);
-    refused(&job(&fx, &["edit", "a", "--needs", "a"], "pl"), "dependency_cycle", 3);
-    refused(&job(&fx, &["edit", "b", "--tier", "S6"], "pl"), "tier_invalid", 2);
-    refused(&job(&fx, &["edit", "b", "--spec", "/no/such/file"], "pl"), "file_unreadable", 2);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    refused(
+        &job(&fx, &["edit", "a", "--needs", "b"], "pl"),
+        "dependency_cycle",
+        3,
+    );
+    refused(
+        &job(&fx, &["edit", "a", "--needs", "a"], "pl"),
+        "dependency_cycle",
+        3,
+    );
+    refused(
+        &job(&fx, &["edit", "b", "--tier", "S6"], "pl"),
+        "tier_invalid",
+        2,
+    );
+    refused(
+        &job(&fx, &["edit", "b", "--spec", "/no/such/file"], "pl"),
+        "file_unreadable",
+        2,
+    );
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies"), 2);
 }
 
@@ -487,19 +780,41 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     drafted(&fx);
     lock(&fx.env, "pl");
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for args in [&["edit", "a", "--title", "New"][..], &["edit", "b", "--no-needs"], &["edit", "b", "--needs", "a"], &["edit", "a", "--tier", "S3"]] {
+    for args in [
+        &["edit", "a", "--title", "New"][..],
+        &["edit", "b", "--no-needs"],
+        &["edit", "b", "--needs", "a"],
+        &["edit", "a", "--tier", "S3"],
+    ] {
         let e = refused(&job(&fx, args, "pl"), "job_locked", 3);
         assert_eq!(e["details"]["status"], "queued", "{args:?}");
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     // The trigger of §4.4 refuses the same writes.
-    let result = store(&fx.env).write("fixture", |tx| exec(tx, "UPDATE jobs SET title = 'Else.' WHERE key = 'a';"));
-    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
-    let result = store(&fx.env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE job = 'b';"));
-    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
+    let result = store(&fx.env).write("fixture", |tx| {
+        exec(tx, "UPDATE jobs SET title = 'Else.' WHERE key = 'a';")
+    });
+    assert_eq!(
+        result.unwrap_err().code(),
+        cpd_core::error::ErrorCode::JobLocked
+    );
+    let result = store(&fx.env).write("fixture", |tx| {
+        exec(tx, "DELETE FROM dependencies WHERE job = 'b';")
+    });
+    assert_eq!(
+        result.unwrap_err().code(),
+        cpd_core::error::ErrorCode::JobLocked
+    );
     // Other statuses are Locked too.
     engine(&fx.env, "pl", "a", "running");
-    refused(&job(&fx, &["edit", "a", "--title", "New"], "pl"), "job_locked", 3);
+    refused(
+        &job(&fx, &["edit", "a", "--title", "New"], "pl"),
+        "job_locked",
+        3,
+    );
 }
 
 /// B1 (hs-d573 O5): an `open` or `update` Job is cpd's, so `job edit` is refused `job_locked`, also while the `open` Job is a `draft`.
@@ -520,12 +835,26 @@ fn job_edit_refuses_an_open_job_even_while_it_is_a_draft() {
     );
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     for key in ["open-x", "update-x"] {
-        refused(&job(&fx, &["edit", key, "--title", "Changed"], "pl"), "job_locked", 3);
-        assert_ne!(job_row(&fx.env, "pl", key, "title"), json!("Changed"), "{key}");
+        refused(
+            &job(&fx, &["edit", key, "--title", "Changed"], "pl"),
+            "job_locked",
+            3,
+        );
+        assert_ne!(
+            job_row(&fx.env, "pl", key, "title"),
+            json!("Changed"),
+            "{key}"
+        );
     }
     assert_eq!(job_row(&fx.env, "pl", "open-x", "title"), json!("Open it"));
-    assert_eq!(job_row(&fx.env, "pl", "update-x", "title"), json!("Update it"));
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        job_row(&fx.env, "pl", "update-x", "title"),
+        json!("Update it")
+    );
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 // ---------- job cancel ----------
@@ -537,7 +866,10 @@ fn cancel_ends_a_draft_queued_or_failed_job_at_once() {
     plan(&fx.env, "pl", "plan");
     job_add(&fx, "pl", "d", "S2", &[]).ok();
     let out = job(&fx, &["cancel", "d", "--reason", "Not needed."], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "d", "status": "cancelled", "cancel_requested": false}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "d", "status": "cancelled", "cancel_requested": false})
+    );
     assert_eq!(job_row(&fx.env, "pl", "d", "status"), "cancelled");
     assert_eq!(job_row(&fx.env, "pl", "d", "cancel_reason"), "Not needed.");
     assert!(job_row(&fx.env, "pl", "d", "cancel_requested_at").is_string());
@@ -554,7 +886,10 @@ fn cancel_ends_a_draft_queued_or_failed_job_at_once() {
     assert_eq!(job_row(&fx.env, "pl", "f", "failed_cause"), Value::Null);
     // Its queued dependent fails in the same transaction (contract §3.2 "Cancel", hs-d647).
     assert_eq!(job_row(&fx.env, "pl", "dep", "status"), "failed");
-    assert_eq!(job_row(&fx.env, "pl", "dep", "failed_cause"), "its need f was cancelled");
+    assert_eq!(
+        job_row(&fx.env, "pl", "dep", "failed_cause"),
+        "its need f was cancelled"
+    );
     let failed = events(&fx, "job-failed");
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0]["job"], "dep");
@@ -581,7 +916,11 @@ fn cancel_fails_its_dependents_directly_and_transitively() {
     assert_eq!(out["failed"], json!(["b", "c"]));
     for key in ["b", "c"] {
         assert_eq!(job_row(&fx.env, "pl", key, "status"), "failed", "{key}");
-        assert_eq!(job_row(&fx.env, "pl", key, "failed_cause"), "its need a was cancelled", "{key}");
+        assert_eq!(
+            job_row(&fx.env, "pl", key, "failed_cause"),
+            "its need a was cancelled",
+            "{key}"
+        );
     }
     let failed = events(&fx, "job-failed");
     assert_eq!(failed.len(), 2);
@@ -593,7 +932,10 @@ fn cancel_fails_its_dependents_directly_and_transitively() {
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = job(&fx, &["cancel", "a", "--reason", "Again."], "pl").ok();
     assert_eq!(out["already"], true);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "status"), "failed");
     assert_eq!(job_row(&fx.env, "pl", "c", "status"), "failed");
 }
@@ -607,7 +949,10 @@ fn cancel_cancels_a_draft_dependent() {
     lock(&fx.env, "pl");
     // A draft appended after the lock, needing the queued Job `q`.
     let spec = spec_file(&fx.env);
-    let run = fx.cpd(&["job", "add", "dd", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "q", "--draft", "--plan", "pl"]);
+    let run = fx.cpd(&[
+        "job", "add", "dd", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "q",
+        "--draft", "--plan", "pl",
+    ]);
     run.ok();
     assert_eq!(job_row(&fx.env, "pl", "dd", "status"), "draft");
 
@@ -615,10 +960,15 @@ fn cancel_cancels_a_draft_dependent() {
     assert_eq!(out["status"], "cancelled");
     assert_eq!(out["cancelled"], json!(["dd"]));
     assert_eq!(job_row(&fx.env, "pl", "dd", "status"), "cancelled");
-    assert_eq!(job_row(&fx.env, "pl", "dd", "cancel_reason"), "its need q was cancelled");
+    assert_eq!(
+        job_row(&fx.env, "pl", "dd", "cancel_reason"),
+        "its need q was cancelled"
+    );
     let cancelled = events(&fx, "job-cancelled");
     assert!(
-        cancelled.iter().any(|e| e["job"] == "dd" && e["data"]["reason"] == "its need q was cancelled"),
+        cancelled
+            .iter()
+            .any(|e| e["job"] == "dd" && e["data"]["reason"] == "its need q was cancelled"),
         "one job-cancelled Event for dd: {cancelled:?}"
     );
 }
@@ -635,8 +985,15 @@ fn retry_refuses_a_job_whose_need_was_cancelled() {
     job(&fx, &["cancel", "a", "--reason", "Gave up."], "pl").ok();
     assert_eq!(job_row(&fx.env, "pl", "b", "status"), "failed");
 
-    let e = refused(&job(&fx, &["retry", "b", "--tier", "S2"], "pl"), "needs_unavailable", 3);
-    assert_eq!(e["details"]["needs"], json!([{"key": "a", "status": "cancelled"}]));
+    let e = refused(
+        &job(&fx, &["retry", "b", "--tier", "S2"], "pl"),
+        "needs_unavailable",
+        3,
+    );
+    assert_eq!(
+        e["details"]["needs"],
+        json!([{"key": "a", "status": "cancelled"}])
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "status"), "failed");
 
     // Control: a `failed` need is legal, so its failed dependent retries (contract §5.4).
@@ -664,11 +1021,22 @@ fn cancel_of_a_running_job_only_records_the_request() {
     engine(&fx.env, "pl", "w", "running");
 
     let out = job(&fx, &["cancel", "w", "--reason", "Wrong approach."], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "w", "status": "running", "cancel_requested": true}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "w", "status": "running", "cancel_requested": true})
+    );
     assert_eq!(job_row(&fx.env, "pl", "w", "status"), "running");
-    assert_eq!(job_row(&fx.env, "pl", "w", "cancel_reason"), "Wrong approach.");
+    assert_eq!(
+        job_row(&fx.env, "pl", "w", "cancel_reason"),
+        "Wrong approach."
+    );
     assert!(job_row(&fx.env, "pl", "w", "cancel_requested_at").is_string());
-    assert_eq!(fx.env.query::<Option<String>>("SELECT stop_request FROM attempts WHERE id = 'w-a1'"), None, "E2 sets the stop request, not the command");
+    assert_eq!(
+        fx.env
+            .query::<Option<String>>("SELECT stop_request FROM attempts WHERE id = 'w-a1'"),
+        None,
+        "E2 sets the stop request, not the command"
+    );
     assert_eq!(events(&fx, "job-cancelled").len(), 0);
     let requested = events(&fx, "job-cancel-requested");
     assert_eq!(requested.len(), 1);
@@ -678,9 +1046,18 @@ fn cancel_of_a_running_job_only_records_the_request() {
     // A second request keeps the first reason.
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = job(&fx, &["cancel", "w", "--reason", "Another reason."], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "w", "status": "running", "cancel_requested": true, "already": true}));
-    assert_eq!(job_row(&fx.env, "pl", "w", "cancel_reason"), "Wrong approach.");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "w", "status": "running", "cancel_requested": true, "already": true})
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "w", "cancel_reason"),
+        "Wrong approach."
+    );
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -693,16 +1070,34 @@ fn cancel_again_is_already_and_a_merged_job_is_refused() {
     job(&fx, &["cancel", "d", "--reason", "First."], "pl").ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = job(&fx, &["cancel", "d", "--reason", "Second."], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "d", "status": "cancelled", "cancel_requested": false, "already": true}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "d", "status": "cancelled", "cancel_requested": false, "already": true})
+    );
     assert_eq!(job_row(&fx.env, "pl", "d", "cancel_reason"), "First.");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "m", "merged");
-    let e = refused(&job(&fx, &["cancel", "m", "--reason", "Too late."], "pl"), "job_merged", 3);
+    let e = refused(
+        &job(&fx, &["cancel", "m", "--reason", "Too late."], "pl"),
+        "job_merged",
+        3,
+    );
     assert_eq!(e["details"]["job"], "m");
-    refused(&job(&fx, &["cancel", "ghost", "--reason", "x"], "pl"), "job_not_found", 4);
-    refused(&job(&fx, &["cancel", "m", "--reason", "x"], "nope"), "plan_not_found", 4);
+    refused(
+        &job(&fx, &["cancel", "ghost", "--reason", "x"], "pl"),
+        "job_not_found",
+        4,
+    );
+    refused(
+        &job(&fx, &["cancel", "m", "--reason", "x"], "nope"),
+        "plan_not_found",
+        4,
+    );
     refused(&job(&fx, &["cancel", "m"], "pl"), "usage", 2);
     assert_eq!(job_row(&fx.env, "pl", "m", "status"), "merged");
 }
@@ -716,11 +1111,18 @@ fn retry_queues_a_failed_job_at_the_given_tier() {
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     let out = job(&fx, &["retry", "a", "--tier", "S3"], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "a", "status": "queued", "tier": "S3"}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "a", "status": "queued", "tier": "S3"})
+    );
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), "S3");
     assert_eq!(job_row(&fx.env, "pl", "a", "failed_cause"), Value::Null);
-    assert_eq!(job_row(&fx.env, "pl", "a", "tier"), "S2", "the Job's own Tier is Locked");
+    assert_eq!(
+        job_row(&fx.env, "pl", "a", "tier"),
+        "S2",
+        "the Job's own Tier is Locked"
+    );
     let retried = events(&fx, "job-retried");
     assert_eq!(retried.len(), 1);
     assert_eq!(retried[0]["data"], json!({"tier": "S3"}));
@@ -730,16 +1132,27 @@ fn retry_queues_a_failed_job_at_the_given_tier() {
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = job(&fx, &["retry", "a", "--tier", "S3"], "pl").ok();
     assert_eq!(out["already"], true);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     // Another Tier is not the same retry.
-    refused(&job(&fx, &["retry", "a", "--tier", "S1"], "pl"), "job_not_failed", 3);
+    refused(
+        &job(&fx, &["retry", "a", "--tier", "S1"], "pl"),
+        "job_not_failed",
+        3,
+    );
     // Once an Attempt has started since, the retry is spent: the Job is only queued again by the ladder.
     fixture(
         &fx.env,
         "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
          SELECT id, at, 'attempt-started', 'ctx', 'pl', 'a', 'a-a2', 'Started.', '{}' FROM txns WHERE id = cpd_txn();",
     );
-    refused(&job(&fx, &["retry", "a", "--tier", "S3"], "pl"), "job_not_failed", 3);
+    refused(
+        &job(&fx, &["retry", "a", "--tier", "S3"], "pl"),
+        "job_not_failed",
+        3,
+    );
 }
 
 #[test]
@@ -752,18 +1165,49 @@ fn retry_refusals_write_nothing() {
     job(&fx, &["cancel", "c", "--reason", "No."], "pl").ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
 
-    let e = refused(&job(&fx, &["retry", "b", "--tier", "S2"], "pl"), "job_not_failed", 3);
+    let e = refused(
+        &job(&fx, &["retry", "b", "--tier", "S2"], "pl"),
+        "job_not_failed",
+        3,
+    );
     assert_eq!(e["details"]["status"], "queued");
-    let e = refused(&job(&fx, &["retry", "a", "--tier", "S2"], "pl"), "job_not_failed", 3);
+    let e = refused(
+        &job(&fx, &["retry", "a", "--tier", "S2"], "pl"),
+        "job_not_failed",
+        3,
+    );
     assert_eq!(e["details"]["status"], "running");
-    refused(&job(&fx, &["retry", "c", "--tier", "S2"], "pl"), "job_not_failed", 3);
-    refused(&job(&fx, &["retry", "ghost", "--tier", "S2"], "pl"), "job_not_found", 4);
-    refused(&job(&fx, &["retry", "b", "--tier", "S2"], "nope"), "plan_not_found", 4);
-    let e = refused(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "tier_invalid", 2);
+    refused(
+        &job(&fx, &["retry", "c", "--tier", "S2"], "pl"),
+        "job_not_failed",
+        3,
+    );
+    refused(
+        &job(&fx, &["retry", "ghost", "--tier", "S2"], "pl"),
+        "job_not_found",
+        4,
+    );
+    refused(
+        &job(&fx, &["retry", "b", "--tier", "S2"], "nope"),
+        "plan_not_found",
+        4,
+    );
+    let e = refused(
+        &job(&fx, &["retry", "a", "--tier", "H4"], "pl"),
+        "tier_invalid",
+        2,
+    );
     assert_eq!(e["details"]["efforts"], json!([0, 1, 2, 3]));
-    refused(&job(&fx, &["retry", "a", "--tier", "Z1"], "pl"), "tier_invalid", 2);
+    refused(
+        &job(&fx, &["retry", "a", "--tier", "Z1"], "pl"),
+        "tier_invalid",
+        2,
+    );
     refused(&job(&fx, &["retry", "a"], "pl"), "usage", 2);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -773,9 +1217,20 @@ fn retry_refuses_a_job_whose_fingerprint_does_not_match() {
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     // Written around the trigger, the way a tamper would be; the schema is whole again afterwards.
-    let trigger: String = fx.env.query("SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'");
-    fixture(&fx.env, &format!("DROP TRIGGER jobs_locked; UPDATE jobs SET goal = 'Changed.' WHERE key = 'a'; {trigger};"));
-    let e = refused(&job(&fx, &["retry", "a", "--tier", "S3"], "pl"), "locked_job_tampered", 3);
+    let trigger: String = fx
+        .env
+        .query("SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'");
+    fixture(
+        &fx.env,
+        &format!(
+            "DROP TRIGGER jobs_locked; UPDATE jobs SET goal = 'Changed.' WHERE key = 'a'; {trigger};"
+        ),
+    );
+    let e = refused(
+        &job(&fx, &["retry", "a", "--tier", "S3"], "pl"),
+        "locked_job_tampered",
+        3,
+    );
     assert_eq!(e["details"]["job"], "a");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
     let shown = job(&fx, &["show", "a"], "pl").ok();
@@ -804,15 +1259,31 @@ fn list_shows_every_job_in_creation_order_and_filters_by_status() {
         jobs[0],
         json!({"key": "a", "title": "Title of a", "kind": "work", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "urgent": false})
     );
-    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "kind": "work", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "urgent": false}));
+    assert_eq!(
+        jobs[1],
+        json!({"key": "b", "title": "Title of b", "kind": "work", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "urgent": false})
+    );
     assert_eq!(jobs[2]["attempts"], 1);
 
     let out = job(&fx, &["list", "--status", "queued"], "pl").ok();
     assert_eq!(out["jobs"].as_array().unwrap().len(), 1);
-    let out = job(&fx, &["list", "--status", "queued", "--status", "failed"], "pl").ok();
-    let keys: Vec<&str> = out["jobs"].as_array().unwrap().iter().map(|j| j["key"].as_str().unwrap()).collect();
+    let out = job(
+        &fx,
+        &["list", "--status", "queued", "--status", "failed"],
+        "pl",
+    )
+    .ok();
+    let keys: Vec<&str> = out["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["key"].as_str().unwrap())
+        .collect();
     assert_eq!(keys, ["b", "c"]);
-    assert_eq!(job(&fx, &["list", "--status", "draft"], "pl").ok()["jobs"], json!([]));
+    assert_eq!(
+        job(&fx, &["list", "--status", "draft"], "pl").ok()["jobs"],
+        json!([])
+    );
     refused(&job(&fx, &["list", "--status", "done"], "pl"), "usage", 2);
     refused(&job(&fx, &["list"], "nope"), "plan_not_found", 4);
     refused(&fx.cpd(&["job", "list"]), "plan_required", 2);
@@ -825,7 +1296,10 @@ fn list_and_show_write_nothing() {
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     job(&fx, &["list"], "pl").ok();
     job(&fx, &["show", "a"], "pl").ok();
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 // ---------- job show ----------
@@ -856,7 +1330,19 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     assert_eq!(job_json["goal"], "Do it.");
     assert_eq!(job_json["touches"], json!(["src/a.rs"]));
     assert_eq!(job_json["fingerprint"].as_str().unwrap().len(), 64);
-    for field in ["seq", "title", "context", "acceptance", "out_of_scope", "appended", "retry_tier", "cancel_reason", "cancel_requested_at", "merged_sha", "created_at"] {
+    for field in [
+        "seq",
+        "title",
+        "context",
+        "acceptance",
+        "out_of_scope",
+        "appended",
+        "retry_tier",
+        "cancel_reason",
+        "cancel_requested_at",
+        "merged_sha",
+        "created_at",
+    ] {
         assert!(job_json.get(field).is_some(), "{field}");
     }
     assert_eq!(out["needs"], json!([]));
@@ -867,15 +1353,50 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     assert_eq!(attempts.len(), 1);
     let attempt = &attempts[0];
     assert_eq!(attempt["id"], "a-a1");
-    assert_eq!((attempt["status"].as_str(), attempt["outcome"].as_str(), attempt["cause"].as_str()), (Some("ended"), Some("failed"), Some("timed_out")));
+    assert_eq!(
+        (
+            attempt["status"].as_str(),
+            attempt["outcome"].as_str(),
+            attempt["cause"].as_str()
+        ),
+        (Some("ended"), Some("failed"), Some("timed_out"))
+    );
     assert_eq!(attempt["check_tail"], "tail");
     assert_eq!(attempt["metrics"], json!({"turns": 3}));
-    for field in ["number", "tier", "origin", "branch", "worktree", "base_sha", "driver_pid", "worker_session", "spec_path", "submitted_sha", "submitted_at", "merged_sha", "gate_hook", "gate_command", "gate_exit", "nudged", "stop_request", "started_at", "ended_at"] {
+    for field in [
+        "number",
+        "tier",
+        "origin",
+        "branch",
+        "worktree",
+        "base_sha",
+        "driver_pid",
+        "worker_session",
+        "spec_path",
+        "submitted_sha",
+        "submitted_at",
+        "merged_sha",
+        "gate_hook",
+        "gate_command",
+        "gate_exit",
+        "nudged",
+        "stop_request",
+        "started_at",
+        "ended_at",
+        "actual_files",
+    ] {
         assert!(attempt.get(field).is_some(), "{field}");
     }
     let escalations = attempt["escalations"].as_array().unwrap();
     assert_eq!(escalations.len(), 2);
-    assert_eq!((escalations[0]["id"].as_str(), escalations[0]["status"].as_str(), escalations[0]["answer"].as_str()), (Some("a-a1-q1"), Some("answered"), Some("That.")));
+    assert_eq!(
+        (
+            escalations[0]["id"].as_str(),
+            escalations[0]["status"].as_str(),
+            escalations[0]["answer"].as_str()
+        ),
+        (Some("a-a1-q1"), Some("answered"), Some("That."))
+    );
     assert_eq!(escalations[1]["status"], "open");
 
     let out = job(&fx, &["show", "b"], "pl").ok();
@@ -885,7 +1406,29 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     refused(&job(&fx, &["show", "ghost"], "pl"), "job_not_found", 4);
     refused(&job(&fx, &["show", "b"], "nope"), "plan_not_found", 4);
     refused(&fx.cpd(&["job", "show", "b"]), "plan_required", 2);
-    refused(&fx.cpd(&["job", "show", "B", "--plan", "pl"]), "invalid_job_id", 2);
+    refused(
+        &fx.cpd(&["job", "show", "B", "--plan", "pl"]),
+        "invalid_job_id",
+        2,
+    );
+}
+
+#[test]
+fn show_prints_the_same_actual_files_as_attempt_show() {
+    let fx = Fx::new();
+    drafted(&fx);
+    lock(&fx.env, "pl");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'running' WHERE key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
+         VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', '[\"a.rs\",\"docs/x.md\"]', 't');",
+    );
+    let out = job(&fx, &["show", "a"], "pl").ok();
+    let printed = out["attempts"][0]["actual_files"].clone();
+    assert_eq!(printed, json!(["a.rs", "docs/x.md"]));
+    let shown = fx.cpd(&["attempt", "show", "a-a1", "--plan", "pl"]).ok();
+    assert_eq!(shown["attempt"]["actual_files"], printed);
 }
 
 // ---------- --pr (R34, commands.md §1.3, §5.1, §5.2) ----------
@@ -894,7 +1437,10 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
 fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     const STEPS: [(&str, &str); 3] = [
         ("dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("open", ", pr_number = 1, pr_url = 'https://github.com/acme/{repo}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{repo}')"),
+        (
+            "open",
+            ", pr_number = 1, pr_url = 'https://github.com/acme/{repo}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{repo}')",
+        ),
         ("merged", ", merged_at = 't'"),
     ];
     let repo = format!("{plan_id}-{key}");
@@ -906,14 +1452,19 @@ fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
         "waiting" => {}
         "cancelled" => sql += &format!("UPDATE workflows SET status = 'cancelled' WHERE plan = '{plan_id}' AND key = '{key}';"),
         _ => {
-            let last = STEPS.iter().position(|(s, _)| *s == status).unwrap_or_else(|| panic!("{status}"));
+            let last = STEPS
+                .iter()
+                .position(|(s, _)| *s == status)
+                .unwrap_or_else(|| panic!("{status}"));
             for (step, set) in &STEPS[..=last] {
                 if *step == "open" {
                     sql += &pull_request(&repo, 1, "open");
                 }
                 sql += &format!("UPDATE workflows SET status = '{step}'{} WHERE plan = '{plan_id}' AND key = '{key}';", set.replace("{repo}", &repo));
                 if *step == "merged" {
-                    sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{repo}';");
+                    sql += &format!(
+                        "UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{repo}';"
+                    );
                 }
             }
         }
@@ -925,7 +1476,9 @@ fn job_add_in(fx: &Fx, plan_id: &str, key: &str, pr: Option<&str>, needs: &[&str
     let spec = spec_file(&fx.env);
     let title = format!("Title of {key}");
     let needs = needs.join(",");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan_id];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan_id,
+    ];
     if let Some(pr) = pr {
         args.extend(["--workflow", pr]);
     }
@@ -949,11 +1502,20 @@ fn add_defaults_to_the_one_pr_and_names_the_pr_it_was_given() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     // One PR: `--pr` may be omitted or given.
-    assert_eq!(job_add_in(&fx, "pl", "a", None, &[]).ok()["job"]["pr"], "repo");
-    assert_eq!(job_add_in(&fx, "pl", "b", Some("repo"), &["a"]).ok()["job"]["pr"], "repo");
+    assert_eq!(
+        job_add_in(&fx, "pl", "a", None, &[]).ok()["job"]["pr"],
+        "repo"
+    );
+    assert_eq!(
+        job_add_in(&fx, "pl", "b", Some("repo"), &["a"]).ok()["job"]["pr"],
+        "repo"
+    );
     // A cancelled PR does not count: the one that is not cancelled is the default.
     add_pr(&fx.env, "pl", "old", "cancelled");
-    assert_eq!(job_add_in(&fx, "pl", "c", None, &[]).ok()["job"]["pr"], "repo");
+    assert_eq!(
+        job_add_in(&fx, "pl", "c", None, &[]).ok()["job"]["pr"],
+        "repo"
+    );
 
     add_pr(&fx.env, "pl", "web", "waiting");
     let out = job_add_in(&fx, "pl", "w", Some("web"), &[]).ok();
@@ -964,9 +1526,19 @@ fn add_defaults_to_the_one_pr_and_names_the_pr_it_was_given() {
 
     // Rerun: the same PR is `already`, another PR is `job_key_exists`.
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    assert_eq!(job_add_in(&fx, "pl", "w", Some("web"), &[]).ok()["already"], true);
-    refused(&job_add_in(&fx, "pl", "w", Some("repo"), &[]), "job_key_exists", 3);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        job_add_in(&fx, "pl", "w", Some("web"), &[]).ok()["already"],
+        true
+    );
+    refused(
+        &job_add_in(&fx, "pl", "w", Some("repo"), &[]),
+        "job_key_exists",
+        3,
+    );
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -974,7 +1546,11 @@ fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
     let fx = Fx::new();
     two_prs(&fx);
     add_pr(&fx.env, "pl", "gone", "cancelled");
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
     // Two PRs that are not cancelled: `--pr` is required.
     let e = refused(&job_add_in(&fx, "pl", "k", None, &[]), "workflow_required", 2);
@@ -1029,15 +1605,30 @@ fn add_needs_must_be_jobs_of_the_same_pr() {
     two_prs(&fx);
     job_add_in(&fx, "pl", "w", Some("web"), &[]).ok();
     job_add_in(&fx, "pl", "a2", Some("repo"), &["a"]).ok();
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
     let e = refused(&job_add_in(&fx, "pl", "k", Some("web"), &["w", "a"]), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["a"]));
     let e = refused(&job_add_in(&fx, "pl", "k", Some("repo"), &["w", "a", "a2"]), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["w"]));
     // An unknown need is reported first.
-    refused(&job_add_in(&fx, "pl", "k", Some("web"), &["a", "ghost"]), "needs_unknown", 3);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    refused(
+        &job_add_in(&fx, "pl", "k", Some("web"), &["a", "ghost"]),
+        "needs_unknown",
+        3,
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
     job_add_in(&fx, "pl", "w2", Some("web"), &["w"]).ok();
 }
 
@@ -1068,7 +1659,10 @@ fn edit_moves_a_draft_job_to_another_pr() {
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = job(&fx, &["edit", "b", "--workflow", "web"], "pl").ok();
     assert_eq!(out["already"], true);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -1097,7 +1691,10 @@ fn edit_pr_refusals_write_nothing() {
     assert_eq!(e["details"]["jobs"], json!(["b"]));
     let e = refused(&job(&fx, &["edit", "a", "--workflow", "web", "--no-needs"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["b"]));
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     // The new needs are Jobs of the new PR.
     job_add_in(&fx, "pl", "w2", Some("web"), &[]).ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
@@ -1126,7 +1723,10 @@ fn job_add_draft(fx: &Fx, plan_id: &str, key: &str, needs: &[&str], extra: &[&st
     let spec = spec_file(&fx.env);
     let title = format!("Title of {key}");
     let needs = needs.join(",");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--draft", "--plan", plan_id];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--draft", "--plan",
+        plan_id,
+    ];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -1143,8 +1743,18 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         job_add(&fx, "pl", "a", "S2", &[]).ok();
 
         let out = job_add_draft(&fx, "pl", "d", &["a"], &[]).ok();
-        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false}), "{phase}");
-        assert_eq!((job_row(&fx.env, "pl", "d", "status"), job_row(&fx.env, "pl", "d", "appended")), (json!("draft"), json!(1)));
+        assert_eq!(
+            out["job"],
+            json!({"key": "d", "pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "urgent": false}),
+            "{phase}"
+        );
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "d", "status"),
+                job_row(&fx.env, "pl", "d", "appended")
+            ),
+            (json!("draft"), json!(1))
+        );
         assert_eq!(job_row(&fx.env, "pl", "d", "fingerprint"), Value::Null);
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
@@ -1153,16 +1763,34 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         // Its needs may be drafts; an identical rerun is `already`, as for any add.
         job_add_draft(&fx, "pl", "e", &["d"], &[]).ok();
         let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(job_add_draft(&fx, "pl", "e", &["d"], &[]).ok()["already"], true);
-        assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+        assert_eq!(
+            job_add_draft(&fx, "pl", "e", &["d"], &[]).ok()["already"],
+            true
+        );
+        assert_eq!(
+            (count(&fx.env, "txns"), count(&fx.env, "events")),
+            (txns, evs)
+        );
 
         // Editable and cancellable in this phase.
-        let out = job(&fx, &["edit", "d", "--title", "New title", "--tier", "S3"], "pl").ok();
-        assert_eq!((&out["job"]["status"], &out["fields"]), (&json!("draft"), &json!(["title", "tier"])), "{phase}");
+        let out = job(
+            &fx,
+            &["edit", "d", "--title", "New title", "--tier", "S3"],
+            "pl",
+        )
+        .ok();
+        assert_eq!(
+            (&out["job"]["status"], &out["fields"]),
+            (&json!("draft"), &json!(["title", "tier"])),
+            "{phase}"
+        );
         job(&fx, &["edit", "e", "--needs", "a,d"], "pl").ok();
         assert_eq!(job_row(&fx.env, "pl", "d", "fingerprint"), Value::Null);
         let out = job(&fx, &["cancel", "e", "--reason", "Not this batch."], "pl").ok();
-        assert_eq!((&out["status"], &out["cancel_requested"]), (&json!("cancelled"), &json!(false)));
+        assert_eq!(
+            (&out["status"], &out["cancel_requested"]),
+            (&json!("cancelled"), &json!(false))
+        );
         assert_eq!(job_row(&fx.env, "pl", "e", "fingerprint"), Value::Null);
     }
 
@@ -1171,7 +1799,10 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let out = job_add_draft(&fx, "pl", "a", &[], &[]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["appended"]), (&json!("draft"), &json!(false)));
+    assert_eq!(
+        (&out["job"]["status"], &out["job"]["appended"]),
+        (&json!("draft"), &json!(false))
+    );
     assert_eq!(job_row(&fx.env, "pl", "a", "appended"), 0);
 
     // In phase done --draft passes the phase, and finds every PR ended until `pr add` reopens the Plan;
@@ -1189,15 +1820,33 @@ fn a_queued_job_may_not_need_a_draft() {
     plan(&fx.env, "pl", "dispatch");
     job_add(&fx, "pl", "a", "S2", &[]).ok();
     job_add_draft(&fx, "pl", "d", &[], &[]).ok();
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
-    let e = refused(&job_add(&fx, "pl", "q", "S2", &["a", "d"]), "needs_unavailable", 3);
+    let e = refused(
+        &job_add(&fx, "pl", "q", "S2", &["a", "d"]),
+        "needs_unavailable",
+        3,
+    );
     assert_eq!(e["details"]["jobs"], json!(["d"]));
     assert!(e["message"].as_str().unwrap().contains("--draft"), "{e}");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
 
     // As drafts both are added: they are queued together when the review of the drafts is approved.
-    assert_eq!(job_add_draft(&fx, "pl", "q", &["a", "d"], &[]).ok()["job"]["status"], "draft");
+    assert_eq!(
+        job_add_draft(&fx, "pl", "q", &["a", "d"], &[]).ok()["job"]["status"],
+        "draft"
+    );
 }
 
 // ---------- stub drafts (hs-d241, R1; commands.md §5.1, §5.2) ----------
@@ -1205,7 +1854,9 @@ fn a_queued_job_may_not_need_a_draft() {
 /// `job add <key> --draft --title <t>` with `extra` flags (`--tier`, `--spec`), in Plan `plan_id`.
 fn stub_add(fx: &Fx, plan_id: &str, key: &str, extra: &[&str]) -> Run {
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", plan_id];
+    let mut args = vec![
+        "job", "add", key, "--draft", "--title", &title, "--plan", plan_id,
+    ];
     args.extend(extra);
     fx.cpd(&args)
 }
@@ -1221,11 +1872,33 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
 
         let out = stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
         let appended = phase != "plan";
-        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false}), "{phase}");
-        for column in ["tier", "goal", "context", "touches", "acceptance", "out_of_scope", "fingerprint"] {
-            assert_eq!(job_row(&fx.env, "pl", "k", column), Value::Null, "{phase}: {column}");
+        assert_eq!(
+            out["job"],
+            json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false}),
+            "{phase}"
+        );
+        for column in [
+            "tier",
+            "goal",
+            "context",
+            "touches",
+            "acceptance",
+            "out_of_scope",
+            "fingerprint",
+        ] {
+            assert_eq!(
+                job_row(&fx.env, "pl", "k", column),
+                Value::Null,
+                "{phase}: {column}"
+            );
         }
-        assert_eq!((job_row(&fx.env, "pl", "k", "title"), job_row(&fx.env, "pl", "k", "status")), (json!("Title of k"), json!("draft")));
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "k", "title"),
+                job_row(&fx.env, "pl", "k", "status")
+            ),
+            (json!("Title of k"), json!("draft"))
+        );
         assert_eq!(
             events(&fx, "job-added").last().unwrap()["data"],
             json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": ["a"], "urgent": false})
@@ -1234,27 +1907,79 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
         let spec = spec_file(&fx.env);
         let out = stub_add(&fx, "pl", "t", &["--tier", "S3", "--needs", "a"]).ok();
-        assert_eq!((&out["job"]["tier"], &out["job"]["needs"]), (&json!("S3"), &json!(["a"])), "{phase}");
-        assert_eq!((job_row(&fx.env, "pl", "t", "tier"), job_row(&fx.env, "pl", "t", "goal")), (json!("S3"), Value::Null));
+        assert_eq!(
+            (&out["job"]["tier"], &out["job"]["needs"]),
+            (&json!("S3"), &json!(["a"])),
+            "{phase}"
+        );
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "t", "tier"),
+                job_row(&fx.env, "pl", "t", "goal")
+            ),
+            (json!("S3"), Value::Null)
+        );
         stub_add(&fx, "pl", "s", &["--spec", &spec, "--needs", "a"]).ok();
-        assert_eq!((job_row(&fx.env, "pl", "s", "tier"), job_row(&fx.env, "pl", "s", "goal")), (Value::Null, json!("Do it.")));
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "s", "tier"),
+                job_row(&fx.env, "pl", "s", "goal")
+            ),
+            (Value::Null, json!("Do it."))
+        );
         assert_eq!(job_row(&fx.env, "pl", "s", "touches"), "[\"src/a.rs\"]");
 
         // An identical rerun is `already` and writes nothing; the same key with other fields is a clash.
         let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(stub_add(&fx, "pl", "k", &["--needs", "a"]).ok()["already"], true);
-        assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
-        refused(&stub_add(&fx, "pl", "k", &["--tier", "S2", "--needs", "a"]), "job_key_exists", 3);
+        assert_eq!(
+            stub_add(&fx, "pl", "k", &["--needs", "a"]).ok()["already"],
+            true
+        );
+        assert_eq!(
+            (count(&fx.env, "txns"), count(&fx.env, "events")),
+            (txns, evs)
+        );
+        refused(
+            &stub_add(&fx, "pl", "k", &["--tier", "S2", "--needs", "a"]),
+            "job_key_exists",
+            3,
+        );
 
         // The stub is shown as it is, and can be cancelled.
         let shown = job(&fx, &["show", "k"], "pl").ok();
-        assert_eq!((&shown["job"]["tier"], &shown["job"]["goal"], &shown["job"]["touches"]), (&Value::Null, &Value::Null, &Value::Null), "{phase}");
+        assert_eq!(
+            (
+                &shown["job"]["tier"],
+                &shown["job"]["goal"],
+                &shown["job"]["touches"]
+            ),
+            (&Value::Null, &Value::Null, &Value::Null),
+            "{phase}"
+        );
         let listed = job(&fx, &["list"], "pl").ok();
-        let stub = listed["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "k").unwrap().clone();
-        assert_eq!((&stub["tier"], &stub["status"]), (&Value::Null, &json!("draft")));
+        let stub = listed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["key"] == "k")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (&stub["tier"], &stub["status"]),
+            (&Value::Null, &json!("draft"))
+        );
         let out = job(&fx, &["cancel", "k", "--reason", "Not needed."], "pl").ok();
-        assert_eq!((&out["status"], &out["cancel_requested"]), (&json!("cancelled"), &json!(false)));
-        assert_eq!((job_row(&fx.env, "pl", "k", "status"), job_row(&fx.env, "pl", "k", "tier")), (json!("cancelled"), Value::Null));
+        assert_eq!(
+            (&out["status"], &out["cancel_requested"]),
+            (&json!("cancelled"), &json!(false))
+        );
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "k", "status"),
+                job_row(&fx.env, "pl", "k", "tier")
+            ),
+            (json!("cancelled"), Value::Null)
+        );
     }
 }
 
@@ -1265,21 +1990,63 @@ fn add_without_draft_still_needs_the_tier_and_the_spec() {
     plan(&fx.env, "pl", "plan");
     job_add(&fx, "pl", "a", "S2", &[]).ok();
     let spec = spec_file(&fx.env);
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
     for args in [
         vec!["job", "add", "k", "--title", "T", "--plan", "pl"],
-        vec!["job", "add", "k", "--title", "T", "--tier", "S2", "--plan", "pl"],
-        vec!["job", "add", "k", "--title", "T", "--spec", spec.as_str(), "--plan", "pl"],
+        vec![
+            "job", "add", "k", "--title", "T", "--tier", "S2", "--plan", "pl",
+        ],
+        vec![
+            "job",
+            "add",
+            "k",
+            "--title",
+            "T",
+            "--spec",
+            spec.as_str(),
+            "--plan",
+            "pl",
+        ],
     ] {
         let e = refused(&fx.cpd(&args), "usage", 2);
-        assert!(e["message"].as_str().unwrap().contains("--draft"), "{args:?}: {e}");
+        assert!(
+            e["message"].as_str().unwrap().contains("--draft"),
+            "{args:?}: {e}"
+        );
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows), "nothing is written");
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows),
+        "nothing is written"
+    );
     // After the lock too: a Job that is not a draft needs both.
     lock(&fx.env, "pl");
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
-    refused(&fx.cpd(&["job", "add", "k", "--title", "T", "--plan", "pl"]), "usage", 2);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    refused(
+        &fx.cpd(&["job", "add", "k", "--title", "T", "--plan", "pl"]),
+        "usage",
+        2,
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
 }
 
 #[test]
@@ -1294,33 +2061,83 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
 
         let out = job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
-        assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "k", "status": "draft"}), &json!(["tier", "spec"])), "{phase}");
+        assert_eq!(
+            (&out["job"], &out["fields"]),
+            (
+                &json!({"key": "k", "status": "draft"}),
+                &json!(["tier", "spec"])
+            ),
+            "{phase}"
+        );
         assert_eq!(job_row(&fx.env, "pl", "k", "tier"), "S2");
         assert_eq!(job_row(&fx.env, "pl", "k", "goal"), "Do it.");
         assert_eq!(job_row(&fx.env, "pl", "k", "context"), "Because.");
         assert_eq!(job_row(&fx.env, "pl", "k", "touches"), "[\"src/a.rs\"]");
-        assert_eq!(job_row(&fx.env, "pl", "k", "acceptance"), "[\"cargo test\"]");
-        assert_eq!(job_row(&fx.env, "pl", "k", "out_of_scope"), "[\"Everything else.\"]");
-        assert_eq!(events(&fx, "job-edited").last().unwrap()["data"], json!({"fields": ["tier", "spec"]}), "{phase}");
+        assert_eq!(
+            job_row(&fx.env, "pl", "k", "acceptance"),
+            "[\"cargo test\"]"
+        );
+        assert_eq!(
+            job_row(&fx.env, "pl", "k", "out_of_scope"),
+            "[\"Everything else.\"]"
+        );
+        assert_eq!(
+            events(&fx, "job-edited").last().unwrap()["data"],
+            json!({"fields": ["tier", "spec"]}),
+            "{phase}"
+        );
         assert_eq!(job_row(&fx.env, "pl", "k", "fingerprint"), Value::Null);
 
         // A rerun changes nothing; the Spec is replaced as a whole, so its fields are listed one by one again.
         let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-        assert_eq!(job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok()["already"], true);
-        assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+        assert_eq!(
+            job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok()["already"],
+            true
+        );
+        assert_eq!(
+            (count(&fx.env, "txns"), count(&fx.env, "events")),
+            (txns, evs)
+        );
         let other = write_spec(&fx.env, "other.json", &json!({"goal": "Other.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []}).to_string());
-        assert_eq!(job(&fx, &["edit", "k", "--spec", &other], "pl").ok()["fields"], json!(["goal", "out_of_scope"]), "{phase}");
+        assert_eq!(
+            job(&fx, &["edit", "k", "--spec", &other], "pl").ok()["fields"],
+            json!(["goal", "out_of_scope"]),
+            "{phase}"
+        );
 
         // The Tier alone, then the Spec alone, complete a stub in two edits.
         stub_add(&fx, "pl", "two", &["--needs", "a"]).ok();
-        assert_eq!(job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]), "{phase}");
-        assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), Value::Null));
-        assert_eq!(job(&fx, &["edit", "two", "--spec", &spec], "pl").ok()["fields"], json!(["spec"]), "{phase}");
-        assert_eq!((job_row(&fx.env, "pl", "two", "tier"), job_row(&fx.env, "pl", "two", "goal")), (json!("S3"), json!("Do it.")));
+        assert_eq!(
+            job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"],
+            json!(["tier"]),
+            "{phase}"
+        );
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "two", "tier"),
+                job_row(&fx.env, "pl", "two", "goal")
+            ),
+            (json!("S3"), Value::Null)
+        );
+        assert_eq!(
+            job(&fx, &["edit", "two", "--spec", &spec], "pl").ok()["fields"],
+            json!(["spec"]),
+            "{phase}"
+        );
+        assert_eq!(
+            (
+                job_row(&fx.env, "pl", "two", "tier"),
+                job_row(&fx.env, "pl", "two", "goal")
+            ),
+            (json!("S3"), json!("Do it."))
+        );
 
         // A title edit leaves a stub a stub.
         stub_add(&fx, "pl", "three", &["--needs", "a"]).ok();
-        assert_eq!(job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
+        assert_eq!(
+            job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"],
+            json!(["title"])
+        );
         assert_eq!(job_row(&fx.env, "pl", "three", "tier"), Value::Null);
     }
 }
@@ -1331,7 +2148,10 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
 fn job_add_urgent(fx: &Fx, plan: &str, key: &str, extra: &[&str]) -> Run {
     let spec = spec_file(&fx.env);
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan, "--urgent"];
+    let mut args = vec![
+        "job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan,
+        "--urgent",
+    ];
     args.extend(extra);
     fx.cpd(&args)
 }
@@ -1347,23 +2167,39 @@ fn a_job_is_not_urgent_unless_added_with_urgent() {
     assert_eq!(events(&fx, "job-added")[0]["data"]["urgent"], false);
 
     let out = job_add_urgent(&fx, "pl", "hot", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true}));
+    assert_eq!(
+        out["job"],
+        json!({"key": "hot", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true})
+    );
     assert_eq!(job_row(&fx.env, "pl", "hot", "urgent"), 1);
-    assert_eq!(events(&fx, "job-added")[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true}));
+    assert_eq!(
+        events(&fx, "job-added")[1]["data"],
+        json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "urgent": true})
+    );
 
     // The flag is not a Locked field: the same add with or without it is `already`, as for `--draft`.
     assert_eq!(job_add_urgent(&fx, "pl", "calm", &[]).ok()["already"], true);
-    assert_eq!(job_row(&fx.env, "pl", "calm", "urgent"), 0, "an add that found the Job changes nothing");
+    assert_eq!(
+        job_row(&fx.env, "pl", "calm", "urgent"),
+        0,
+        "an add that found the Job changes nothing"
+    );
     assert_eq!(job_add(&fx, "pl", "hot", "S2", &[]).ok()["already"], true);
 
     // After the lock the appended Job is `queued` and urgent at once, its fingerprint stored.
     lock(&fx.env, "pl");
     let out = job_add_urgent(&fx, "pl", "late", &[]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["urgent"]), (&json!("queued"), &json!(true)));
+    assert_eq!(
+        (&out["job"]["status"], &out["job"]["urgent"]),
+        (&json!("queued"), &json!(true))
+    );
     assert_eq!(job_row(&fx.env, "pl", "late", "urgent"), 1);
     // `--draft` and `--urgent` together: a draft, urgent.
     let out = job_add_urgent(&fx, "pl", "later", &["--draft"]).ok();
-    assert_eq!((&out["job"]["status"], &out["job"]["urgent"]), (&json!("draft"), &json!(true)));
+    assert_eq!(
+        (&out["job"]["status"], &out["job"]["urgent"]),
+        (&json!("draft"), &json!(true))
+    );
 }
 
 #[test]
@@ -1376,14 +2212,33 @@ fn urgent_marks_a_queued_job_once_with_one_job_edited_and_changes_no_fingerprint
     let edited = events(&fx, "job-edited").len();
 
     let out = job(&fx, &["urgent", "a"], "pl").ok();
-    assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "a", "status": "queued", "urgent": true}), &json!(["urgent"])));
+    assert_eq!(
+        (&out["job"], &out["fields"]),
+        (
+            &json!({"key": "a", "status": "queued", "urgent": true}),
+            &json!(["urgent"])
+        )
+    );
     assert!(out.get("already").is_none());
     assert_eq!(job_row(&fx.env, "pl", "a", "urgent"), 1);
-    assert_eq!((job_row(&fx.env, "pl", "a", "status"), job_row(&fx.env, "pl", "a", "fingerprint")), (json!("queued"), fingerprint));
-    assert_eq!(job_row(&fx.env, "pl", "b", "urgent"), 0, "only the named Job");
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "a", "status"),
+            job_row(&fx.env, "pl", "a", "fingerprint")
+        ),
+        (json!("queued"), fingerprint)
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "b", "urgent"),
+        0,
+        "only the named Job"
+    );
     let all = events(&fx, "job-edited");
     assert_eq!(all.len(), edited + 1);
-    assert_eq!((&all.last().unwrap()["job"], &all.last().unwrap()["data"]), (&json!("a"), &json!({"fields": ["urgent"]})));
+    assert_eq!(
+        (&all.last().unwrap()["job"], &all.last().unwrap()["data"]),
+        (&json!("a"), &json!({"fields": ["urgent"]}))
+    );
     // The Locked Job still matches its fingerprint: the flag is in none.
     assert_eq!(job(&fx, &["show", "a"], "pl").ok()["tamper"], json!([]));
 
@@ -1392,7 +2247,10 @@ fn urgent_marks_a_queued_job_once_with_one_job_edited_and_changes_no_fingerprint
     let again = job(&fx, &["urgent", "a"], "pl").ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["job"]["urgent"], true);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
 }
 
 #[test]
@@ -1400,8 +2258,14 @@ fn urgent_does_not_change_the_plan_fingerprint_of_a_draft() {
     let fx = Fx::new();
     drafted(&fx);
     let before = fx.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"].clone();
-    assert_eq!(job(&fx, &["urgent", "a"], "pl").ok()["job"], json!({"key": "a", "status": "draft", "urgent": true}));
-    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"], before);
+    assert_eq!(
+        job(&fx, &["urgent", "a"], "pl").ok()["job"],
+        json!({"key": "a", "status": "draft", "urgent": true})
+    );
+    assert_eq!(
+        fx.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"],
+        before
+    );
 }
 
 #[test]
@@ -1417,13 +2281,22 @@ fn urgent_is_refused_for_a_job_that_is_not_queued_or_draft_and_for_an_unknown_on
     engine(&fx.env, "pl", "d", "failed");
     job(&fx, &["cancel", "e", "--reason", "No."], "pl").ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for (key, status) in [("a", "merged"), ("c", "running"), ("d", "failed"), ("e", "cancelled")] {
+    for (key, status) in [
+        ("a", "merged"),
+        ("c", "running"),
+        ("d", "failed"),
+        ("e", "cancelled"),
+    ] {
         let error = refused(&job(&fx, &["urgent", key], "pl"), "illegal_transition", 3);
         assert_eq!(error["details"]["status"], status, "{key}");
         assert_eq!(job_row(&fx.env, "pl", key, "urgent"), 0, "{key}");
     }
     refused(&job(&fx, &["urgent", "ghost"], "pl"), "job_not_found", 4);
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs), "refusals write nothing");
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs),
+        "refusals write nothing"
+    );
 }
 
 #[test]
@@ -1432,12 +2305,25 @@ fn list_and_show_carry_urgent() {
     drafted(&fx);
     job(&fx, &["urgent", "b"], "pl").ok();
     let listed = job(&fx, &["list"], "pl").ok();
-    let flags: Vec<(&Value, &Value)> = listed["jobs"].as_array().unwrap().iter().map(|j| (&j["key"], &j["urgent"])).collect();
-    assert_eq!(flags, [(&json!("a"), &json!(false)), (&json!("b"), &json!(true))]);
+    let flags: Vec<(&Value, &Value)> = listed["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| (&j["key"], &j["urgent"]))
+        .collect();
+    assert_eq!(
+        flags,
+        [(&json!("a"), &json!(false)), (&json!("b"), &json!(true))]
+    );
     assert_eq!(job(&fx, &["show", "b"], "pl").ok()["job"]["urgent"], true);
     assert_eq!(job(&fx, &["show", "a"], "pl").ok()["job"]["urgent"], false);
     let shown = fx.cpd(&["plan", "show", "--plan", "pl"]).ok();
-    let flags: Vec<&Value> = shown["jobs"].as_array().unwrap().iter().map(|j| &j["urgent"]).collect();
+    let flags: Vec<&Value> = shown["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| &j["urgent"])
+        .collect();
     assert_eq!(flags, [&json!(false), &json!(true)]);
 }
 
@@ -1473,37 +2359,104 @@ fn add_kind_stores_the_kind_and_a_test_jobs_tests_and_shows_them() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["pr_open_job::merges_the_base", "pr_open_job::opens"]), json!(["cli/tests/pr_open_job.rs", "core/src/pr/"]));
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["pr_open_job::merges_the_base", "pr_open_job::opens"]),
+        json!(["cli/tests/pr_open_job.rs", "core/src/pr/"]),
+    );
     // The default is `work`; the kinds are the Lead's: `docs`, `test` and `impl`.
-    assert_eq!(job_add(&fx, "pl", "w", "S2", &[]).ok()["job"]["kind"], "work");
+    assert_eq!(
+        job_add(&fx, "pl", "w", "S2", &[]).ok()["job"]["kind"],
+        "work"
+    );
     let docs = add_kind(&fx, "pl", "d", "docs", &spec, "repo").ok();
-    assert_eq!((&docs["job"]["kind"], &docs["job"]["status"]), (&json!("docs"), &json!("draft")));
+    assert_eq!(
+        (&docs["job"]["kind"], &docs["job"]["status"]),
+        (&json!("docs"), &json!("draft"))
+    );
     let test = add_kind(&fx, "pl", "t", "test", &tests, "repo").ok();
     assert_eq!(test["job"]["kind"], "test");
-    assert_eq!(add_kind(&fx, "pl", "i", "impl", &spec, "repo").ok()["job"]["kind"], "impl");
-    assert_eq!(job(&fx, &["add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--kind", "work"], "pl").ok()["job"]["kind"], "work");
+    assert_eq!(
+        add_kind(&fx, "pl", "i", "impl", &spec, "repo").ok()["job"]["kind"],
+        "impl"
+    );
+    assert_eq!(
+        job(
+            &fx,
+            &[
+                "add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--kind", "work"
+            ],
+            "pl"
+        )
+        .ok()["job"]["kind"],
+        "work"
+    );
     assert_eq!(
         job_row(&fx.env, "pl", "t", "tests"),
         json!("[\"pr_open_job::merges_the_base\",\"pr_open_job::opens\"]")
     );
-    assert_eq!(job_row(&fx.env, "pl", "t", "test_files"), json!("[\"cli/tests/pr_open_job.rs\",\"core/src/pr/\"]"));
+    assert_eq!(
+        job_row(&fx.env, "pl", "t", "test_files"),
+        json!("[\"cli/tests/pr_open_job.rs\",\"core/src/pr/\"]")
+    );
     assert_eq!(job_row(&fx.env, "pl", "d", "tests"), Value::Null);
     assert_eq!(job_row(&fx.env, "pl", "i", "kind"), json!("impl"));
 
     // The Event carries the kind; `job list` and `job show` show it, and a `test` Job's tests and files.
     let added = events(&fx, "job-added");
-    let kinds: Vec<(&Value, &Value)> = added.iter().map(|e| (&e["job"], &e["data"]["kind"])).collect();
-    assert_eq!(kinds, [(&json!("w"), &json!("work")), (&json!("d"), &json!("docs")), (&json!("t"), &json!("test")), (&json!("i"), &json!("impl")), (&json!("c"), &json!("work"))]);
+    let kinds: Vec<(&Value, &Value)> = added
+        .iter()
+        .map(|e| (&e["job"], &e["data"]["kind"]))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (&json!("w"), &json!("work")),
+            (&json!("d"), &json!("docs")),
+            (&json!("t"), &json!("test")),
+            (&json!("i"), &json!("impl")),
+            (&json!("c"), &json!("work"))
+        ]
+    );
     let listed = job(&fx, &["list"], "pl").ok();
-    let by_key: Vec<(&str, &str)> = listed["jobs"].as_array().unwrap().iter().map(|j| (j["key"].as_str().unwrap(), j["kind"].as_str().unwrap())).collect();
-    assert_eq!(by_key, [("w", "work"), ("d", "docs"), ("t", "test"), ("i", "impl"), ("c", "work")]);
+    let by_key: Vec<(&str, &str)> = listed["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| (j["key"].as_str().unwrap(), j["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        by_key,
+        [
+            ("w", "work"),
+            ("d", "docs"),
+            ("t", "test"),
+            ("i", "impl"),
+            ("c", "work")
+        ]
+    );
     let shown = job(&fx, &["show", "t"], "pl").ok();
     assert_eq!(shown["job"]["kind"], "test");
-    assert_eq!(shown["job"]["tests"], json!(["pr_open_job::merges_the_base", "pr_open_job::opens"]));
-    assert_eq!(shown["job"]["test_files"], json!(["cli/tests/pr_open_job.rs", "core/src/pr/"]));
+    assert_eq!(
+        shown["job"]["tests"],
+        json!(["pr_open_job::merges_the_base", "pr_open_job::opens"])
+    );
+    assert_eq!(
+        shown["job"]["test_files"],
+        json!(["cli/tests/pr_open_job.rs", "core/src/pr/"])
+    );
     let shown = job(&fx, &["show", "i"], "pl").ok();
-    assert_eq!((&shown["job"]["kind"], &shown["job"]["test_approved"]), (&json!("impl"), &Value::Null));
-    assert!(job(&fx, &["show", "d"], "pl").ok()["job"].get("tests").is_none(), "a `docs` Job has no tests");
+    assert_eq!(
+        (&shown["job"]["kind"], &shown["job"]["test_approved"]),
+        (&json!("impl"), &Value::Null)
+    );
+    assert!(
+        job(&fx, &["show", "d"], "pl").ok()["job"]
+            .get("tests")
+            .is_none(),
+        "a `docs` Job has no tests"
+    );
 }
 
 #[test]
@@ -1514,9 +2467,16 @@ fn the_kind_is_part_of_the_locked_fields_of_an_add_that_repeats() {
     let spec = spec_file(&fx.env);
     add_kind(&fx, "pl", "d", "docs", &spec, "repo").ok();
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    assert_eq!(add_kind(&fx, "pl", "d", "docs", &spec, "repo").ok()["already"], true);
+    assert_eq!(
+        add_kind(&fx, "pl", "d", "docs", &spec, "repo").ok()["already"],
+        true
+    );
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
-    refused(&add_kind(&fx, "pl", "d", "impl", &spec, "repo"), "job_key_exists", 3);
+    refused(
+        &add_kind(&fx, "pl", "d", "impl", &spec, "repo"),
+        "job_key_exists",
+        3,
+    );
     refused(&job_add(&fx, "pl", "d", "S2", &[]), "job_key_exists", 3);
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
 }
@@ -1527,28 +2487,79 @@ fn add_kind_refusals_write_nothing() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
-    let writes = || (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs"]),
+    );
+    let writes = || {
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs"),
+        )
+    };
     let before = writes();
 
     // `open` and `update` are cpd's (exit 3, `details.kind`).
     for kind in ["open", "update"] {
-        let e = refused(&add_kind(&fx, "pl", "k", kind, &spec, "repo"), "kind_reserved", 3);
+        let e = refused(
+            &add_kind(&fx, "pl", "k", kind, &spec, "repo"),
+            "kind_reserved",
+            3,
+        );
         assert_eq!(e["details"]["kind"], kind);
     }
     // Not a kind (clap).
-    refused(&add_kind(&fx, "pl", "k", "other", &spec, "repo"), "usage", 2);
+    refused(
+        &add_kind(&fx, "pl", "k", "other", &spec, "repo"),
+        "usage",
+        2,
+    );
     // The Spec fits the kind: a `test` Job names its tests and files, every other kind neither.
-    let e = refused(&add_kind(&fx, "pl", "k", "test", &spec, "repo"), "spec_invalid", 2);
+    let e = refused(
+        &add_kind(&fx, "pl", "k", "test", &spec, "repo"),
+        "spec_invalid",
+        2,
+    );
     assert_eq!(e["details"]["path"], "$.tests");
     for kind in ["work", "docs", "impl"] {
-        let e = refused(&add_kind(&fx, "pl", "k", kind, &tests, "repo"), "spec_invalid", 2);
+        let e = refused(
+            &add_kind(&fx, "pl", "k", kind, &tests, "repo"),
+            "spec_invalid",
+            2,
+        );
         assert_eq!(e["details"]["path"], "$.tests", "{kind}");
     }
-    let bad = test_spec_file(&fx.env, "bad.json", json!(["t::one"]), json!(["../escape.rs"]));
-    assert_eq!(refused(&add_kind(&fx, "pl", "k", "test", &bad, "repo"), "spec_invalid", 2)["details"]["path"], "$.test_files[0]");
-    let bad = test_spec_file(&fx.env, "bad.json", json!(["t::one", "t::one"]), json!(["tests/t.rs"]));
-    assert_eq!(refused(&add_kind(&fx, "pl", "k", "test", &bad, "repo"), "spec_invalid", 2)["details"]["path"], "$.tests[1]");
+    let bad = test_spec_file(
+        &fx.env,
+        "bad.json",
+        json!(["t::one"]),
+        json!(["../escape.rs"]),
+    );
+    assert_eq!(
+        refused(
+            &add_kind(&fx, "pl", "k", "test", &bad, "repo"),
+            "spec_invalid",
+            2
+        )["details"]["path"],
+        "$.test_files[0]"
+    );
+    let bad = test_spec_file(
+        &fx.env,
+        "bad.json",
+        json!(["t::one", "t::one"]),
+        json!(["tests/t.rs"]),
+    );
+    assert_eq!(
+        refused(
+            &add_kind(&fx, "pl", "k", "test", &bad, "repo"),
+            "spec_invalid",
+            2
+        )["details"]["path"],
+        "$.tests[1]"
+    );
     assert_eq!(writes(), before);
 }
 
@@ -1569,7 +2580,11 @@ fn a_job_cannot_need_an_open_or_an_update_job() {
         ),
     );
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    let e = refused(&job_add(&fx, "pl", "k", "S2", &["open-repo"]), "needs_unavailable", 3);
+    let e = refused(
+        &job_add(&fx, "pl", "k", "S2", &["open-repo"]),
+        "needs_unavailable",
+        3,
+    );
     assert_eq!(e["details"]["jobs"], json!(["open-repo"]));
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
 }
@@ -1583,8 +2598,19 @@ fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
         shaped_pr(&fx.env, "pl", shape, shape);
     }
     let spec = spec_file(&fx.env);
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
-    let spec_of = |kind: &str| if kind == "test" { tests.clone() } else { spec.clone() };
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs"]),
+    );
+    let spec_of = |kind: &str| {
+        if kind == "test" {
+            tests.clone()
+        } else {
+            spec.clone()
+        }
+    };
     let allowed = |shape: &str| match shape {
         "tdd" => vec!["docs", "test", "impl", "verify"],
         "docs" => vec!["docs"],
@@ -1609,7 +2635,18 @@ fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
     }
     // A PR from before the migration (`free`) allows every kind.
     for kind in ["work", "docs", "test", "impl"] {
-        assert_eq!(add_kind(&fx, "pl", &format!("free-{kind}"), kind, &spec_of(kind), "repo").ok()["job"]["kind"], kind);
+        assert_eq!(
+            add_kind(
+                &fx,
+                "pl",
+                &format!("free-{kind}"),
+                kind,
+                &spec_of(kind),
+                "repo"
+            )
+            .ok()["job"]["kind"],
+            kind
+        );
     }
 }
 
@@ -1619,14 +2656,22 @@ fn an_impl_job_that_is_not_a_draft_needs_a_test_job_of_its_pr() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs"]),
+    );
     add_kind(&fx, "pl", "t", "test", &tests, "repo").ok();
     add_kind(&fx, "pl", "d", "docs", &spec, "repo").ok();
     lock(&fx.env, "pl");
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
     // Appended and queued with no Dependency, or with one that is no test Job: refused, naming the test Jobs of the PR.
     let impl_job = |key: &str, needs: &str, draft: bool| {
-        let mut args = vec!["job", "add", key, "--title", "I", "--tier", "S2", "--spec", &spec, "--kind", "impl", "--plan", "pl"];
+        let mut args = vec![
+            "job", "add", key, "--title", "I", "--tier", "S2", "--spec", &spec, "--kind", "impl",
+            "--plan", "pl",
+        ];
         if !needs.is_empty() {
             args.extend(["--needs", needs]);
         }
@@ -1636,7 +2681,10 @@ fn an_impl_job_that_is_not_a_draft_needs_a_test_job_of_its_pr() {
         fx.cpd(&args)
     };
     let e = refused(&impl_job("i", "", false), "test_job_required", 3);
-    assert_eq!((&e["details"]["job"], &e["details"]["jobs"]), (&json!("i"), &json!(["t"])));
+    assert_eq!(
+        (&e["details"]["job"], &e["details"]["jobs"]),
+        (&json!("i"), &json!(["t"]))
+    );
     refused(&impl_job("i", "d", false), "test_job_required", 3);
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
     // A draft is checked where it stops being one; a Job that needs the test Job is queued.
@@ -1650,7 +2698,12 @@ fn edit_kind_changes_a_drafts_kind_and_its_spec_must_fit() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let spec = spec_file(&fx.env);
-    let tests = test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    let tests = test_spec_file(
+        &fx.env,
+        "tests.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs"]),
+    );
     for key in ["a", "b", "c"] {
         job_add(&fx, "pl", key, "S2", &[]).ok();
     }
@@ -1659,28 +2712,64 @@ fn edit_kind_changes_a_drafts_kind_and_its_spec_must_fit() {
     let out = job(&fx, &["edit", "a", "--kind", "docs"], "pl").ok();
     assert_eq!(out["fields"], json!(["kind"]));
     assert_eq!(job_row(&fx.env, "pl", "a", "kind"), json!("docs"));
-    assert_eq!(events(&fx, "job-edited").last().unwrap()["data"], json!({"fields": ["kind"]}));
+    assert_eq!(
+        events(&fx, "job-edited").last().unwrap()["data"],
+        json!({"fields": ["kind"]})
+    );
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    assert_eq!(job(&fx, &["edit", "a", "--kind", "docs"], "pl").ok()["already"], true);
+    assert_eq!(
+        job(&fx, &["edit", "a", "--kind", "docs"], "pl").ok()["already"],
+        true
+    );
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
 
     // To `test`, the Spec it has names no tests: refused; with a Spec that does, it changes together.
-    let e = refused(&job(&fx, &["edit", "a", "--kind", "test"], "pl"), "spec_invalid", 2);
+    let e = refused(
+        &job(&fx, &["edit", "a", "--kind", "test"], "pl"),
+        "spec_invalid",
+        2,
+    );
     assert_eq!(e["details"]["path"], "$.tests");
-    let out = job(&fx, &["edit", "a", "--kind", "test", "--spec", &tests], "pl").ok();
+    let out = job(
+        &fx,
+        &["edit", "a", "--kind", "test", "--spec", &tests],
+        "pl",
+    )
+    .ok();
     assert_eq!(out["fields"], json!(["kind", "tests", "test_files"]));
     assert_eq!(job_row(&fx.env, "pl", "a", "tests"), json!("[\"t::one\"]"));
     // Out of `test`, the Spec still names tests: refused, and given a Spec that does not, it goes.
-    refused(&job(&fx, &["edit", "a", "--kind", "impl"], "pl"), "spec_invalid", 2);
+    refused(
+        &job(&fx, &["edit", "a", "--kind", "impl"], "pl"),
+        "spec_invalid",
+        2,
+    );
     let out = job(&fx, &["edit", "a", "--kind", "impl", "--spec", &spec], "pl").ok();
     assert_eq!(out["fields"], json!(["kind", "tests", "test_files"]));
-    assert_eq!((job_row(&fx.env, "pl", "a", "tests"), job_row(&fx.env, "pl", "a", "test_files")), (Value::Null, Value::Null));
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "a", "tests"),
+            job_row(&fx.env, "pl", "a", "test_files")
+        ),
+        (Value::Null, Value::Null)
+    );
     // A Spec with tests for a Job that stays `impl` is refused too.
-    refused(&job(&fx, &["edit", "a", "--spec", &tests], "pl"), "spec_invalid", 2);
+    refused(
+        &job(&fx, &["edit", "a", "--spec", &tests], "pl"),
+        "spec_invalid",
+        2,
+    );
 
     // `open` and `update` are cpd's; the stored shape of the PR holds for an edit as for an add.
     for kind in ["open", "update"] {
-        assert_eq!(refused(&job(&fx, &["edit", "a", "--kind", kind], "pl"), "kind_reserved", 3)["details"]["kind"], kind);
+        assert_eq!(
+            refused(
+                &job(&fx, &["edit", "a", "--kind", kind], "pl"),
+                "kind_reserved",
+                3
+            )["details"]["kind"],
+            kind
+        );
     }
     // Moving a Job to a PR whose shape does not allow its kind is the same refusal.
     let e = refused(&job(&fx, &["edit", "c", "--workflow", "docs"], "pl"), "shape_violation", 3);
@@ -1696,7 +2785,11 @@ fn a_locked_jobs_kind_cannot_be_edited() {
     plan(&fx.env, "pl", "plan");
     job_add(&fx, "pl", "a", "S2", &[]).ok();
     lock(&fx.env, "pl");
-    refused(&job(&fx, &["edit", "a", "--kind", "docs"], "pl"), "job_locked", 3);
+    refused(
+        &job(&fx, &["edit", "a", "--kind", "docs"], "pl"),
+        "job_locked",
+        3,
+    );
     assert_eq!(job_row(&fx.env, "pl", "a", "kind"), json!("work"));
     // Nor by the database: the column is in `jobs_locked`.
     let e = fixture_error(&fx.env, "UPDATE jobs SET kind = 'docs' WHERE key = 'a'");
@@ -1705,7 +2798,10 @@ fn a_locked_jobs_kind_cannot_be_edited() {
 
 /// The message of the error `sql` fails with.
 fn fixture_error(env: &TestEnv, sql: &str) -> String {
-    store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
+    store(env)
+        .write("fixture", |tx| exec(tx, sql))
+        .unwrap_err()
+        .to_string()
 }
 
 // ---------- Tier rules (pro-d82, hs-d554): Workers use only H0-H3 and S0-S3 ----------
@@ -1727,8 +2823,15 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    fixture(
+        &fx.env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
+    ); // H4 reaches the Worker range check
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
     for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
@@ -1736,7 +2839,14 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
 }
 
 #[test]
@@ -1746,7 +2856,10 @@ fn add_accepts_h0_to_h3_and_s0_to_s3() {
     plan(&fx.env, "pl", "plan");
     for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
         let key = format!("j-{}", tier.to_lowercase());
-        assert_eq!(job_add(&fx, "pl", &key, tier, &[]).ok()["job"]["tier"], tier);
+        assert_eq!(
+            job_add(&fx, "pl", &key, tier, &[]).ok()["job"]["tier"],
+            tier
+        );
         assert_eq!(job_row(&fx.env, "pl", &key, "tier"), tier);
     }
 }
@@ -1784,7 +2897,10 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
 
     // The Lead cancels the wrong-Tier `update` Job and adds its replacement at the chosen Tier.
     let out = job(&fx, &["cancel", "up-p", "--reason", "wrong Tier"], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "up-p", "status": "cancelled", "cancel_requested": false}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": "up-p", "status": "cancelled", "cancel_requested": false})
+    );
     let spec = spec_file(&fx.env);
     let out = fx.cpd(&[
         "job", "add", "up-p-r1", "--title", "Bring the pull request up to date", "--tier", "S1", "--spec", &spec, "--workflow", "p", "--plan", "pl",
@@ -1794,10 +2910,15 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
         json!({"key": "up-p-r1", "pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false})
     );
     assert_eq!(job_row(&fx.env, "pl", "up-p-r1", "tier"), "S1");
-    assert_eq!(events(&fx, "job-added").last().unwrap()["data"], json!({"pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false}));
+    assert_eq!(
+        events(&fx, "job-added").last().unwrap()["data"],
+        json!({"pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false})
+    );
     // E3 does not re-queue an `update` Job on the cancel (hs-d797).
     assert_eq!(
-        fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE kind = 'update' AND status IN ('queued', 'running')"),
+        fx.env.query::<i64>(
+            "SELECT count(*) FROM jobs WHERE kind = 'update' AND status IN ('queued', 'running')"
+        ),
         0
     );
     assert_eq!(job_row(&fx.env, "pl", "up-p", "status"), json!("cancelled"));
@@ -1807,13 +2928,22 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
 fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     drafted(&fx);
-    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
+    fixture(
+        &fx.env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
+    ); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     for tier in ["H4", "O1", "O3", "S4", "S5"] {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
-        not_allowed(&job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"), tier);
+        not_allowed(
+            &job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"),
+            tier,
+        );
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
 }
@@ -1823,7 +2953,11 @@ fn edit_accepts_h0_to_h3_and_s0_to_s3() {
     let fx = Fx::new();
     drafted(&fx);
     for tier in ["H0", "H1", "H2", "S0", "S1", "S2", "H3", "S3"] {
-        assert_eq!(job(&fx, &["edit", "b", "--tier", tier], "pl").ok()["fields"], json!(["tier"]), "{tier}");
+        assert_eq!(
+            job(&fx, &["edit", "b", "--tier", tier], "pl").ok()["fields"],
+            json!(["tier"]),
+            "{tier}"
+        );
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), tier);
     }
 }
@@ -1833,18 +2967,46 @@ fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_
     let fx = Fx::new();
     drafted(&fx);
     // A store written before hs-d554.
-    fixture(&fx.env, "UPDATE jobs SET tier = 'O3' WHERE plan = 'pl' AND key = 'b';");
-    assert_eq!(job(&fx, &["edit", "b", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
-    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "O3", "no migration and no edit rewrites it");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET tier = 'O3' WHERE plan = 'pl' AND key = 'b';",
+    );
+    assert_eq!(
+        job(&fx, &["edit", "b", "--title", "Renamed"], "pl").ok()["fields"],
+        json!(["title"])
+    );
+    assert_eq!(
+        job_row(&fx.env, "pl", "b", "tier"),
+        "O3",
+        "no migration and no edit rewrites it"
+    );
     not_allowed(&job(&fx, &["edit", "b", "--tier", "O4"], "pl"), "O4");
-    assert_eq!(job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
+    assert_eq!(
+        job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"],
+        json!(["tier"])
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
     // Second pass: Tiers that were allowed before hs-d554.
-    for stored in ["S4"] {
-        fixture(&fx.env, &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"));
-        assert_eq!(job(&fx, &["edit", "b", "--title", &format!("Renamed {stored}")], "pl").ok()["fields"], json!(["title"]));
+    {
+        let stored = "S4";
+        fixture(
+            &fx.env,
+            &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"),
+        );
+        assert_eq!(
+            job(
+                &fx,
+                &["edit", "b", "--title", &format!("Renamed {stored}")],
+                "pl"
+            )
+            .ok()["fields"],
+            json!(["title"])
+        );
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), stored);
-        assert_eq!(job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
+        assert_eq!(
+            job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"],
+            json!(["tier"])
+        );
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
     }
 }
@@ -1857,14 +3019,20 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
-    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';"); // H4 reaches the Worker range check
+    fixture(
+        &fx.env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
+    ); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     for tier in ["H4", "O1", "O3", "O5", "S4", "S5"] {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
     not_allowed(&job(&fx, &["retry", "c", "--tier", "O4"], "pl"), "O4");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs)
+    );
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
 }
@@ -1877,13 +3045,30 @@ fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
     job_add(&fx, "pl", "c", "S2", &[]).ok();
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
-    fixture(&fx.env, "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';");
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    fixture(
+        &fx.env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
+    );
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
     not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "H4", "--needs", "c"]), "H4");
+    not_allowed(
+        &stub_add(&fx, "pl", "k", &["--tier", "H4", "--needs", "c"]),
+        "H4",
+    );
     not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
     not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
@@ -1898,15 +3083,32 @@ fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
-    let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
     not_allowed(&job_add(&fx, "pl", "k", "GX", &[]), "GX");
-    not_allowed(&stub_add(&fx, "pl", "k", &["--tier", "GX", "--needs", "c"]), "GX");
+    not_allowed(
+        &stub_add(&fx, "pl", "k", &["--tier", "GX", "--needs", "c"]),
+        "GX",
+    );
     not_allowed(&job(&fx, &["edit", "b", "--tier", "GX"], "pl"), "GX");
-    not_allowed(&job(&fx, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"), "GX");
+    not_allowed(
+        &job(&fx, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"),
+        "GX",
+    );
     not_allowed(&job(&fx, &["retry", "a", "--tier", "GX"], "pl"), "GX");
     // Checked first: a Job that is not failed still gets the Tier refusal.
     not_allowed(&job(&fx, &["retry", "c", "--tier", "GX"], "pl"), "GX");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
@@ -1933,7 +3135,10 @@ fn retry_accepts_h0_to_h3_and_s0_to_s3() {
         lock(&fx.env, "pl");
         engine(&fx.env, "pl", "a", "failed");
         let out = job(&fx, &["retry", "a", "--tier", tier], "pl").ok();
-        assert_eq!(out, json!({"ok": true, "job": "a", "status": "queued", "tier": tier}));
+        assert_eq!(
+            out,
+            json!({"ok": true, "job": "a", "status": "queued", "tier": tier})
+        );
         assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), tier);
     }
 }
@@ -1952,9 +3157,21 @@ pub(super) fn plan_lock(fx: &Fx, plan: &str) -> Run {
 }
 
 /// `job add <key> --kind <kind> --needs <needs>` into PR `pr`, with the Spec of the kind (a `test` Job names `t::<key>` in `tests/<key>.rs`).
-pub(super) fn add_needing(fx: &Fx, plan: &str, key: &str, kind: &str, needs: &[&str], pr: &str) -> Run {
+pub(super) fn add_needing(
+    fx: &Fx,
+    plan: &str,
+    key: &str,
+    kind: &str,
+    needs: &[&str],
+    pr: &str,
+) -> Run {
     let spec = if kind == "test" {
-        test_spec_file(&fx.env, &format!("{key}.json"), json!([format!("t::{key}")]), json!([format!("tests/{key}.rs")]))
+        test_spec_file(
+            &fx.env,
+            &format!("{key}.json"),
+            json!([format!("t::{key}")]),
+            json!([format!("tests/{key}.rs")]),
+        )
     } else {
         spec_file(&fx.env)
     };
@@ -1972,7 +3189,15 @@ fn plan_review_and_plan_lock_refuse_an_impl_draft_that_needs_no_test_job_of_its_
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    add_kind(&fx, "pl", "t", "test", &test_spec_file(&fx.env, "t.json", json!(["t::one"]), json!(["tests/t.rs"])), "repo").ok();
+    add_kind(
+        &fx,
+        "pl",
+        "t",
+        "test",
+        &test_spec_file(&fx.env, "t.json", json!(["t::one"]), json!(["tests/t.rs"])),
+        "repo",
+    )
+    .ok();
     // A draft is added; it is checked where it stops being one. It needs a Job of its PR that is no test Job.
     job_add(&fx, "pl", "w", "S2", &[]).ok();
     add_needing(&fx, "pl", "i", "impl", &["w"], "repo").ok();
@@ -1984,7 +3209,15 @@ fn plan_review_and_plan_lock_refuse_an_impl_draft_that_needs_no_test_job_of_its_
     // `plan lock` refuses it before it looks at the review (which does not exist).
     let e = refused(&plan_lock(&fx, "pl"), "test_job_required", 3);
     assert_eq!(e["details"]["jobs"], json!(["i"]));
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "plan_reviews")), (writes.0, writes.1, 0), "a refusal writes nothing");
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "plan_reviews")
+        ),
+        (writes.0, writes.1, 0),
+        "a refusal writes nothing"
+    );
 
     // It needs the test Job: the review is requested.
     job(&fx, &["edit", "i", "--needs", "t"], "pl").ok();
@@ -2010,10 +3243,23 @@ fn plan_review_and_plan_lock_refuse_a_tdd_pr_with_no_test_or_no_impl_job() {
     fx.env.outline_for_review("pl");
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let e = refused(&review(&fx, "pl"), "shape_incomplete", 3);
-    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test", "impl"])));
+    assert_eq!(
+        (&e["details"]["pr"], &e["details"]["missing"]),
+        (&json!("api"), &json!(["test", "impl"]))
+    );
     let e = refused(&plan_lock(&fx, "pl"), "shape_incomplete", 3);
-    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test", "impl"])));
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "plan_reviews")), (writes.0, writes.1, 0));
+    assert_eq!(
+        (&e["details"]["pr"], &e["details"]["missing"]),
+        (&json!("api"), &json!(["test", "impl"]))
+    );
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "plan_reviews")
+        ),
+        (writes.0, writes.1, 0)
+    );
 
     // A test Job but no impl Job.
     add_needing(&fx, "pl", "api-t", "test", &["api-d"], "api").ok();
@@ -2021,8 +3267,14 @@ fn plan_review_and_plan_lock_refuse_a_tdd_pr_with_no_test_or_no_impl_job() {
     assert_eq!(e["details"]["missing"], json!(["impl"]));
     // A cancelled one does not count.
     add_needing(&fx, "pl", "api-i", "impl", &["api-t"], "api").ok();
-    fixture(&fx.env, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api-i'");
-    assert_eq!(refused(&review(&fx, "pl"), "shape_incomplete", 3)["details"]["missing"], json!(["impl"]));
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api-i'",
+    );
+    assert_eq!(
+        refused(&review(&fx, "pl"), "shape_incomplete", 3)["details"]["missing"],
+        json!(["impl"])
+    );
     // A live one completes the PR: the review is requested, and `plan lock` goes on to the review it lacks.
     add_needing(&fx, "pl", "api-i2", "impl", &["api-t"], "api").ok();
     assert_eq!(review(&fx, "pl").ok()["review"]["status"], "pending");
@@ -2044,22 +3296,50 @@ fn job_cancel_keeps_the_last_test_and_the_last_impl_job_of_a_tdd_pr_that_has_not
     job(&fx, &["cancel", "d", "--reason", "No docs."], "pl").ok();
     // The last `impl` and the last `test` Job do not: `details` `{pr, missing}`, nothing written.
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    let e = refused(&job(&fx, &["cancel", "i", "--reason", "No."], "pl"), "shape_incomplete", 3);
-    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["impl"])));
-    let e = refused(&job(&fx, &["cancel", "t", "--reason", "No."], "pl"), "shape_incomplete", 3);
-    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test"])));
+    let e = refused(
+        &job(&fx, &["cancel", "i", "--reason", "No."], "pl"),
+        "shape_incomplete",
+        3,
+    );
+    assert_eq!(
+        (&e["details"]["pr"], &e["details"]["missing"]),
+        (&json!("api"), &json!(["impl"]))
+    );
+    let e = refused(
+        &job(&fx, &["cancel", "t", "--reason", "No."], "pl"),
+        "shape_incomplete",
+        3,
+    );
+    assert_eq!(
+        (&e["details"]["pr"], &e["details"]["missing"]),
+        (&json!("api"), &json!(["test"]))
+    );
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
-    assert_eq!((job_row(&fx.env, "pl", "i", "status"), job_row(&fx.env, "pl", "t", "status")), (json!("draft"), json!("draft")));
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "i", "status"),
+            job_row(&fx.env, "pl", "t", "status")
+        ),
+        (json!("draft"), json!("draft"))
+    );
     // A replacement is added first; then the first one goes, and the replacement is the last.
     add_needing(&fx, "pl", "i2", "impl", &["t"], "api").ok();
     job(&fx, &["cancel", "i", "--reason", "Replaced."], "pl").ok();
     assert_eq!(job_row(&fx.env, "pl", "i", "status"), json!("cancelled"));
-    let e = refused(&job(&fx, &["cancel", "i2", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    let e = refused(
+        &job(&fx, &["cancel", "i2", "--reason", "No."], "pl"),
+        "shape_incomplete",
+        3,
+    );
     assert_eq!(e["details"]["missing"], json!(["impl"]));
 
     // After the lock (a `queued` Job) it is the same while the PR has not opened.
     lock(&fx.env, "pl");
-    let e = refused(&job(&fx, &["cancel", "i2", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    let e = refused(
+        &job(&fx, &["cancel", "i2", "--reason", "No."], "pl"),
+        "shape_incomplete",
+        3,
+    );
     assert_eq!(e["details"]["missing"], json!(["impl"]));
     assert_eq!(job_row(&fx.env, "pl", "i2", "status"), json!("queued"));
 }
@@ -2079,11 +3359,19 @@ fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
     // The contrast: the lone `docs` Job of a `tdd` PR goes, its lone `impl` Job does not.
     add_kind(&fx, "pl", "tdd-d", "docs", &spec_file(&fx.env), "tdd").ok();
     add_kind(&fx, "pl", "tdd-i", "impl", &spec_file(&fx.env), "tdd").ok();
-    refused(&job(&fx, &["cancel", "tdd-i", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    refused(
+        &job(&fx, &["cancel", "tdd-i", "--reason", "No."], "pl"),
+        "shape_incomplete",
+        3,
+    );
     job(&fx, &["cancel", "tdd-d", "--reason", "No."], "pl").ok();
     for key in ["d", "c", "free-i"] {
         job(&fx, &["cancel", key, "--reason", "No."], "pl").ok();
-        assert_eq!(job_row(&fx.env, "pl", key, "status"), json!("cancelled"), "{key}");
+        assert_eq!(
+            job_row(&fx.env, "pl", key, "status"),
+            json!("cancelled"),
+            "{key}"
+        );
     }
 
     // A `tdd` PR that has opened its pull request: a fix is whatever it is, and the last `impl` Job may go.
@@ -2111,14 +3399,25 @@ fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
     );
     job(&fx, &["cancel", "fix-i", "--reason", "Not needed."], "pl").ok();
     job(&fx, &["cancel", "fix-t", "--reason", "Not needed."], "pl").ok();
-    assert_eq!((job_row(&fx.env, "pl", "fix-i", "status"), job_row(&fx.env, "pl", "fix-t", "status")), (json!("cancelled"), json!("cancelled")));
+    assert_eq!(
+        (
+            job_row(&fx.env, "pl", "fix-i", "status"),
+            job_row(&fx.env, "pl", "fix-t", "status")
+        ),
+        (json!("cancelled"), json!("cancelled"))
+    );
 }
 
 /// A Plan `pl` locked with the test Job `t` (`tests/t.rs`, `tests/more/`) and the impl Job `i` that needs it, both queued.
 pub(super) fn locked_tdd(fx: &Fx) {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    let tests = test_spec_file(&fx.env, "t.json", json!(["t::one"]), json!(["tests/t.rs", "tests/more/"]));
+    let tests = test_spec_file(
+        &fx.env,
+        "t.json",
+        json!(["t::one"]),
+        json!(["tests/t.rs", "tests/more/"]),
+    );
     add_kind(fx, "pl", "t", "test", &tests, "repo").ok();
     add_needing(fx, "pl", "i", "impl", &["t"], "repo").ok();
 }
@@ -2135,37 +3434,87 @@ fn approve_tests_records_the_paths_the_impl_job_may_change_and_tells_the_event()
     let fx = Fx::new();
     locked_tdd(&fx);
     // A draft is not a Job that can be checked yet.
-    refused(&approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]), "illegal_transition", 3);
+    refused(
+        &approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]),
+        "illegal_transition",
+        3,
+    );
     lock(&fx.env, "pl");
-    let out = approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "The assertion is wrong."]).ok();
+    let out = approve(
+        &fx,
+        &[
+            "i",
+            "--path",
+            "tests/t.rs",
+            "--reason",
+            "The assertion is wrong.",
+        ],
+    )
+    .ok();
     assert_eq!(
         out,
         json!({"ok": true, "job": {"key": "i", "status": "queued", "kind": "impl"}, "approved": ["tests/t.rs"], "fields": ["test_approved"]})
     );
-    assert_eq!(job_row(&fx.env, "pl", "i", "test_approved"), json!("[\"tests/t.rs\"]"));
+    assert_eq!(
+        job_row(&fx.env, "pl", "i", "test_approved"),
+        json!("[\"tests/t.rs\"]")
+    );
     let edited = events(&fx, "job-edited");
     let last = edited.last().unwrap();
-    assert_eq!((&last["job"], &last["data"]), (&json!("i"), &json!({"fields": ["test_approved"]})));
+    assert_eq!(
+        (&last["job"], &last["data"]),
+        (&json!("i"), &json!({"fields": ["test_approved"]}))
+    );
     let text = last["text"].as_str().unwrap();
-    assert!(text.contains("tests/t.rs") && text.contains("The assertion is wrong."), "{text}");
+    assert!(
+        text.contains("tests/t.rs") && text.contains("The assertion is wrong."),
+        "{text}"
+    );
 
     // The union of what was approved; a path inside a guarded directory counts; paths already approved write nothing.
-    let out = approve(&fx, &["i", "--path", "tests/more/m.rs", "--path", "tests/t.rs", "--reason", "More."]).ok();
+    let out = approve(
+        &fx,
+        &[
+            "i",
+            "--path",
+            "tests/more/m.rs",
+            "--path",
+            "tests/t.rs",
+            "--reason",
+            "More.",
+        ],
+    )
+    .ok();
     let sorted = |v: &Value| {
         let mut all: Vec<String> = serde_json::from_value(v.clone()).unwrap();
         all.sort();
         all
     };
-    assert_eq!(sorted(&out["approved"]), ["tests/more/m.rs", "tests/t.rs"], "`approved` is what the Job has now: the union");
-    let stored: Value = serde_json::from_str(job_row(&fx.env, "pl", "i", "test_approved").as_str().unwrap()).unwrap();
+    assert_eq!(
+        sorted(&out["approved"]),
+        ["tests/more/m.rs", "tests/t.rs"],
+        "`approved` is what the Job has now: the union"
+    );
+    let stored: Value = serde_json::from_str(
+        job_row(&fx.env, "pl", "i", "test_approved")
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(sorted(&stored), ["tests/more/m.rs", "tests/t.rs"]);
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let out = approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "Again."]).ok();
-    assert_eq!((&out["already"], &out["fields"]), (&json!(true), &json!([])));
+    assert_eq!(
+        (&out["already"], &out["fields"]),
+        (&json!(true), &json!([]))
+    );
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
 
     // Not a Locked field: the Job's fingerprint is what it was.
-    assert_eq!(job_row(&fx.env, "pl", "i", "fingerprint"), json!(locked_fingerprint_of(&fx.env, "i")));
+    assert_eq!(
+        job_row(&fx.env, "pl", "i", "fingerprint"),
+        json!(locked_fingerprint_of(&fx.env, "i"))
+    );
 }
 
 /// The Locked-Job fingerprint of Job `key` of Plan `pl`, recomputed.
@@ -2180,9 +3529,23 @@ fn approve_tests_is_the_leads_and_not_a_workers() {
     let fx = Fx::new();
     locked_tdd(&fx);
     lock(&fx.env, "pl");
-    let args = ["job", "approve-tests", "i", "--path", "tests/t.rs", "--reason", "Wrong.", "--plan", "pl"];
+    let args = [
+        "job",
+        "approve-tests",
+        "i",
+        "--path",
+        "tests/t.rs",
+        "--reason",
+        "Wrong.",
+        "--plan",
+        "pl",
+    ];
     let writes = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    refused(&fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "i-a1")]), "not_a_lead", 3);
+    refused(
+        &fx.cpd_with(fx.env.root(), &args, &[("CPD_ATTEMPT", "i-a1")]),
+        "not_a_lead",
+        3,
+    );
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), writes);
     assert_eq!(job_row(&fx.env, "pl", "i", "test_approved"), Value::Null);
     fx.cpd_with(fx.env.root(), &args, &[]).ok();
@@ -2195,12 +3558,43 @@ fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
     lock(&fx.env, "pl");
     let writes = || (count(&fx.env, "txns"), count(&fx.env, "events"));
     let before = writes();
-    refused(&approve(&fx, &["ghost", "--path", "tests/t.rs", "--reason", "Wrong."]), "job_not_found", 4);
+    refused(
+        &approve(
+            &fx,
+            &["ghost", "--path", "tests/t.rs", "--reason", "Wrong."],
+        ),
+        "job_not_found",
+        4,
+    );
     // Only an `impl` Job is approved for; a `test` Job guards its own files.
-    refused(&approve(&fx, &["t", "--path", "tests/t.rs", "--reason", "Wrong."]), "not_an_impl_job", 3);
+    refused(
+        &approve(&fx, &["t", "--path", "tests/t.rs", "--reason", "Wrong."]),
+        "not_an_impl_job",
+        3,
+    );
     // Every path must be guarded by the `test_files` of a `test` Job it needs; the unguarded are listed and nothing is approved.
-    let e = refused(&approve(&fx, &["i", "--path", "tests/t.rs", "--path", "src/lib.rs", "--path", "tests/other.rs", "--reason", "Wrong."]), "path_not_guarded", 3);
-    assert_eq!(e["details"]["paths"], json!(["src/lib.rs", "tests/other.rs"]));
+    let e = refused(
+        &approve(
+            &fx,
+            &[
+                "i",
+                "--path",
+                "tests/t.rs",
+                "--path",
+                "src/lib.rs",
+                "--path",
+                "tests/other.rs",
+                "--reason",
+                "Wrong.",
+            ],
+        ),
+        "path_not_guarded",
+        3,
+    );
+    assert_eq!(
+        e["details"]["paths"],
+        json!(["src/lib.rs", "tests/other.rs"])
+    );
     assert_eq!(job_row(&fx.env, "pl", "i", "test_approved"), Value::Null);
     // A path and a reason are required.
     refused(&approve(&fx, &["i", "--reason", "Wrong."]), "usage", 2);
@@ -2208,7 +3602,11 @@ fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
     assert_eq!(writes(), before);
     // A Job that has ended is not approved for.
     engine(&fx.env, "pl", "i", "merged");
-    refused(&approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]), "illegal_transition", 3);
+    refused(
+        &approve(&fx, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]),
+        "illegal_transition",
+        3,
+    );
 }
 
 // ---------- the touches check (hs-d512; commands.md §5.1, §5.3) ----------
@@ -2230,17 +3628,37 @@ pub(super) fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
     let mut spec = spec_json();
     spec["touches"] = json!(touches);
     let spec = write_spec(&fx.env, &format!("{key}.json"), &spec.to_string());
-    fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", &spec, "--plan", "pl"])
+    fx.cpd(&[
+        "job",
+        "add",
+        key,
+        "--title",
+        &format!("Title of {key}"),
+        "--tier",
+        "S2",
+        "--spec",
+        &spec,
+        "--plan",
+        "pl",
+    ])
 }
 
 #[test]
 fn job_add_refuses_a_touches_path_missing_from_the_tree() {
     let fx = touches_fx();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    let error = refused(&add_touching(&fx, "a", &["src/a.rs", "nope/x.rs"]), "touches_missing", 3);
+    let error = refused(
+        &add_touching(&fx, "a", &["src/a.rs", "nope/x.rs"]),
+        "touches_missing",
+        3,
+    );
     assert_eq!(error["details"]["missing"], json!(["nope/x.rs"]), "{error}");
     assert!(error["details"]["tree"].is_string(), "{error}");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs), "a refusal writes nothing");
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs),
+        "a refusal writes nothing"
+    );
     assert_eq!(count(&fx.env, "jobs"), 0);
 }
 
@@ -2248,7 +3666,11 @@ fn job_add_refuses_a_touches_path_missing_from_the_tree() {
 fn job_add_accepts_a_new_file_in_an_existing_directory() {
     let fx = touches_fx();
     // The check is on: a path whose directory is missing too is refused, while the entries below pass.
-    refused(&add_touching(&fx, "bad", &["nope/x.rs"]), "touches_missing", 3);
+    refused(
+        &add_touching(&fx, "bad", &["nope/x.rs"]),
+        "touches_missing",
+        3,
+    );
     add_touching(&fx, "a", &["src/new.rs"]).ok();
     assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/new.rs\"]");
 }
@@ -2257,7 +3679,11 @@ fn job_add_accepts_a_new_file_in_an_existing_directory() {
 fn job_add_accepts_a_glob_that_matches() {
     let fx = touches_fx();
     // The check is on: a path whose directory is missing too is refused, while the entries below pass.
-    refused(&add_touching(&fx, "bad", &["nope/x.rs"]), "touches_missing", 3);
+    refused(
+        &add_touching(&fx, "bad", &["nope/x.rs"]),
+        "touches_missing",
+        3,
+    );
     add_touching(&fx, "a", &["src/*.rs"]).ok();
     assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/*.rs\"]");
 }
@@ -2270,9 +3696,17 @@ fn job_edit_refuses_a_touches_path_missing_from_the_tree() {
     let mut spec = spec_json();
     spec["touches"] = json!(["nope/x.rs"]);
     let spec = write_spec(&fx.env, "edit.json", &spec.to_string());
-    let error = refused(&job(&fx, &["edit", "a", "--spec", &spec], "pl"), "touches_missing", 3);
+    let error = refused(
+        &job(&fx, &["edit", "a", "--spec", &spec], "pl"),
+        "touches_missing",
+        3,
+    );
     assert_eq!(error["details"]["missing"], json!(["nope/x.rs"]), "{error}");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs), "a refusal writes nothing");
+    assert_eq!(
+        (count(&fx.env, "txns"), count(&fx.env, "events")),
+        (txns, evs),
+        "a refusal writes nothing"
+    );
     assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/a.rs\"]");
 }
 
@@ -2293,11 +3727,19 @@ fn job_add_refuses_a_spec_that_names_a_primary_checkout_in_any_field() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let root = primary(&fx.env, fx.env.root().join("repos/primary"));
-    let writes = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let writes = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
     // `goal` is `<root>` followed by a space; every other field holds `<root>/docs/x.md`.
     let with_root = |field: &str| {
-        let value = if field == "goal" { format!("{root} is the checkout.") } else { format!("{root}/docs/x.md") };
+        let value = if field == "goal" {
+            format!("{root} is the checkout.")
+        } else {
+            format!("{root}/docs/x.md")
+        };
         let mut spec = spec_json();
         match field {
             "goal" => spec["goal"] = json!(value),
@@ -2330,13 +3772,27 @@ fn job_add_refuses_a_spec_that_names_a_primary_checkout_in_any_field() {
     for (i, (field, kind, path)) in cases.into_iter().enumerate() {
         let spec = with_root(field);
         let key = format!("k{i}");
-        let run = fx.cpd(&["job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--kind", kind, "--plan", "pl"]);
+        let run = fx.cpd(&[
+            "job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--kind", kind,
+            "--plan", "pl",
+        ]);
         let error = refused(&run, "spec_invalid", 2);
         assert_eq!(error["details"]["path"].as_str(), Some(path), "{field}");
-        assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()), "{field}");
+        assert_eq!(
+            error["details"]["primary"].as_str(),
+            Some(root.as_str()),
+            "{field}"
+        );
         assert_eq!(error["details"]["pr"].as_str(), Some("repo"), "{field}");
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), writes);
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        writes
+    );
 }
 
 #[test]
@@ -2345,20 +3801,44 @@ fn job_add_refuses_the_tilde_and_home_forms_of_the_root() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let root = primary(&fx.env, fx.env.home().join("repos/primary"));
-    let writes = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let writes = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
-    for (i, value) in ["~/repos/primary/docs/x.md", "$HOME/repos/primary", "${HOME}/repos/primary"].into_iter().enumerate() {
+    for (i, value) in [
+        "~/repos/primary/docs/x.md",
+        "$HOME/repos/primary",
+        "${HOME}/repos/primary",
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut spec = spec_json();
         spec["goal"] = json!(value);
         let spec = write_spec(&fx.env, "home.json", &spec.to_string());
         let key = format!("k{i}");
-        let run = fx.cpd(&["job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl"]);
+        let run = fx.cpd(&[
+            "job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+        ]);
         let error = refused(&run, "spec_invalid", 2);
         assert_eq!(error["details"]["path"].as_str(), Some("$.goal"), "{value}");
-        assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()), "{value}");
+        assert_eq!(
+            error["details"]["primary"].as_str(),
+            Some(root.as_str()),
+            "{value}"
+        );
         assert_eq!(error["details"]["pr"].as_str(), Some("repo"), "{value}");
     }
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), writes);
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        writes
+    );
 }
 
 #[test]
@@ -2376,22 +3856,36 @@ fn job_add_accepts_repo_relative_paths_a_sibling_directory_and_a_worktree_path()
     spec["acceptance"] = json!(["docs/x.md"]);
     spec["out_of_scope"] = json!(["docs/x.md"]);
     let spec = write_spec(&fx.env, "relative.json", &spec.to_string());
-    fx.cpd(&["job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+    ])
+    .ok();
 
     // A sibling directory, a linked worktree and a numbered one merely begin with the root string.
     let mut spec = spec_json();
-    spec["goal"] = json!(format!("{root}-old/x, {root}.wt/x and {root}2 are other checkouts."));
+    spec["goal"] = json!(format!(
+        "{root}-old/x, {root}.wt/x and {root}2 are other checkouts."
+    ));
     spec["touches"] = json!(["docs/x.md"]);
     let spec = write_spec(&fx.env, "sibling.json", &spec.to_string());
-    fx.cpd(&["job", "add", "b", "--title", "B", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job", "add", "b", "--title", "B", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+    ])
+    .ok();
 
     // The root of a repo that is not a PR of this Plan.
     let other = fx.env.root().join("repos/other");
     let mut spec = spec_json();
-    spec["goal"] = json!(format!("{} is not one of the Plan's repos.", other.display()));
+    spec["goal"] = json!(format!(
+        "{} is not one of the Plan's repos.",
+        other.display()
+    ));
     spec["touches"] = json!(["docs/x.md"]);
     let spec = write_spec(&fx.env, "other.json", &spec.to_string());
-    fx.cpd(&["job", "add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job", "add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--plan", "pl",
+    ])
+    .ok();
     assert_eq!(count(&fx.env, "jobs"), 3);
 }
 
@@ -2410,7 +3904,11 @@ fn job_add_checks_the_repo_of_every_pr_of_the_plan() {
             second.display()
         ),
     );
-    let writes = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
+    let writes = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
 
     let mut spec = spec_json();
     spec["goal"] = json!(format!("{} is the other checkout.", second.display()));
@@ -2420,7 +3918,14 @@ fn job_add_checks_the_repo_of_every_pr_of_the_plan() {
     assert_eq!(error["details"]["path"].as_str(), Some("$.goal"));
     assert_eq!(error["details"]["primary"].as_str(), second.to_str());
     assert_eq!(error["details"]["pr"].as_str(), Some("two"));
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), writes);
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        writes
+    );
 }
 
 #[test]
@@ -2435,7 +3940,11 @@ fn job_edit_refuses_a_spec_that_names_a_primary_checkout() {
     let mut bad = spec_json();
     bad["goal"] = json!(format!("{root}/docs/x.md"));
     let bad = write_spec(&fx.env, "bad.json", &bad.to_string());
-    let error = refused(&job(&fx, &["edit", "a", "--spec", &bad], "pl"), "spec_invalid", 2);
+    let error = refused(
+        &job(&fx, &["edit", "a", "--spec", &bad], "pl"),
+        "spec_invalid",
+        2,
+    );
     assert_eq!(error["details"]["path"].as_str(), Some("$.goal"));
     assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()));
     assert_eq!(error["details"]["pr"].as_str(), Some("repo"));
@@ -2460,7 +3969,10 @@ fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
     let root = primary(&fx.env, fx.env.root().join("repos/primary"));
 
     // A stub draft needs only a title.
-    fx.cpd(&["job", "add", "stub", "--title", "Stub", "--draft", "--plan", "pl"]).ok();
+    fx.cpd(&[
+        "job", "add", "stub", "--title", "Stub", "--draft", "--plan", "pl",
+    ])
+    .ok();
     assert_eq!(job_row(&fx.env, "pl", "stub", "goal"), Value::Null);
 
     // A draft whose stored Spec names the root (a fixture row) can still be edited with `--title` and cancelled.
@@ -2474,6 +3986,11 @@ fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
     let out = job(&fx, &["edit", "stored", "--title", "Renamed"], "pl").ok();
     assert_eq!(out["fields"], json!(["title"]));
     assert_eq!(job_row(&fx.env, "pl", "stored", "title"), "Renamed");
-    job(&fx, &["cancel", "stored", "--reason", "No longer needed."], "pl").ok();
+    job(
+        &fx,
+        &["cancel", "stored", "--reason", "No longer needed."],
+        "pl",
+    )
+    .ok();
     assert_eq!(job_row(&fx.env, "pl", "stored", "status"), "cancelled");
 }

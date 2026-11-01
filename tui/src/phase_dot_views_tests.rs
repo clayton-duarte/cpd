@@ -32,8 +32,14 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     let (_dir, mut store) = fixture();
     for (phase, plan, _) in PHASES {
         let boxes = read::plan_boxes(&mut store, &PlanId::parse(plan).unwrap()).unwrap();
-        assert!(boxes.needs_user.lead_working, "Plan {plan}: its Lead is working");
-        assert_eq!(boxes.needs_user.lead_work.is_some(), true, "Plan {plan} {phase:?}");
+        assert!(
+            boxes.needs_user.lead_working,
+            "Plan {plan}: its Lead is working"
+        );
+        assert!(
+            boxes.needs_user.lead_work.is_some(),
+            "Plan {plan} {phase:?}"
+        );
     }
 }
 
@@ -89,6 +95,7 @@ fn workflow_node(lead_dot: Option<Dot>) -> WorkflowNode {
 /// A failed Job of `api`, so the box title's Lead dot is the red loader.
 fn failed_job() -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse("j1").unwrap(),
         workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
@@ -113,7 +120,11 @@ fn title_dot(workflow: &WorkflowNode, jobs: &[JobNode], needs: &NeedsUser, frame
     let chart = boxes::layout(std::slice::from_ref(workflow), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
-        .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
+        .find(|cell| {
+            palette::SPINNER
+                .iter()
+                .any(|glyph| cell.symbol().contains(glyph))
+        })
         .map(|cell| cell.fg)
 }
 
@@ -129,8 +140,16 @@ fn fixture() -> (tempfile::TempDir, Store) {
     for (i, (phase, plan, lead)) in PHASES.iter().enumerate() {
         let number = i as i64 + 1;
         let at = format!("'2026-01-0{}T00:00:00.000Z'", i + 2);
-        let locked = if matches!(phase, Phase::Grounding | Phase::Plan) { "NULL".to_owned() } else { at.clone() };
-        let done = if *phase == Phase::Done { at.clone() } else { "NULL".to_owned() };
+        let locked = if matches!(phase, Phase::Grounding | Phase::Plan) {
+            "NULL".to_owned()
+        } else {
+            at.clone()
+        };
+        let done = if *phase == Phase::Done {
+            at.clone()
+        } else {
+            "NULL".to_owned()
+        };
         let phase = phase.as_str();
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)

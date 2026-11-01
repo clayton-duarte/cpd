@@ -136,7 +136,10 @@ mod tests {
 
     #[test]
     fn changes_requested() {
-        only(|r| r.review_decision = "changes_requested".into(), Unready::ChangesRequested);
+        only(
+            |r| r.review_decision = "changes_requested".into(),
+            Unready::ChangesRequested,
+        );
     }
 
     #[test]
@@ -157,7 +160,10 @@ mod tests {
 
     #[test]
     fn bot_comments_but_not_human_ones() {
-        only(|r| r.feedback = Some(vec![item(false), item(true)]), Unready::BotComments);
+        only(
+            |r| r.feedback = Some(vec![item(false), item(true)]),
+            Unready::BotComments,
+        );
         let mut row = ready();
         row.feedback = Some(vec![item(false)]);
         assert_eq!(unready(&row), []);
@@ -173,6 +179,16 @@ mod tests {
         row.checks = "failed".into();
         row.feedback = Some(vec![item(true)]);
         let names: Vec<&str> = unready(&row).into_iter().map(Unready::as_str).collect();
-        assert_eq!(names, ["not_open", "draft", "conflicting", "changes_requested", "checks_failed", "bot_comments"]);
+        assert_eq!(
+            names,
+            [
+                "not_open",
+                "draft",
+                "conflicting",
+                "changes_requested",
+                "checks_failed",
+                "bot_comments"
+            ]
+        );
     }
 }

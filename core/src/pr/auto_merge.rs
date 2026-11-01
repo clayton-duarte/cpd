@@ -73,7 +73,11 @@ mod tests {
 
     #[test]
     fn a_pr_based_on_a_lead_branch_of_any_plan_is_stacked() {
-        let conn = conn(&[("a", "one", "main"), ("b", "two", "cpd/a/one"), ("b", "three", "main")]);
+        let conn = conn(&[
+            ("a", "one", "main"),
+            ("b", "two", "cpd/a/one"),
+            ("b", "three", "main"),
+        ]);
         assert!(stacked(&conn, "b", "two").unwrap());
         assert!(!stacked(&conn, "a", "one").unwrap());
         assert!(!stacked(&conn, "b", "three").unwrap());

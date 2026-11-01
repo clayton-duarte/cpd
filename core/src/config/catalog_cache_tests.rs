@@ -22,8 +22,7 @@ const UP_TO_HIGH: [&str; 4] = ["off", "low", "medium", "high"];
 const UP_TO_MAX: [&str; 6] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 const SONNET_UP_TO_HIGH: &str = r#"{"providers":{"bifrost":{"modelOverrides":{"claude-sonnet-5-5":{"thinkingLevelMap":{"minimal":null}}}}}}"#;
-const SONNET_UP_TO_MAX: &str =
-    r#"{"providers":{"bifrost":{"modelOverrides":{"claude-sonnet-5-5":{"thinkingLevelMap":{"minimal":null,"xhigh":"xhigh","max":"max"}}}}}}"#;
+const SONNET_UP_TO_MAX: &str = r#"{"providers":{"bifrost":{"modelOverrides":{"claude-sonnet-5-5":{"thinkingLevelMap":{"minimal":null,"xhigh":"xhigh","max":"max"}}}}}}"#;
 
 struct Rig {
     _dir: tempfile::TempDir,
@@ -39,7 +38,12 @@ impl Rig {
         let agent_dir = dir.path().join("agent");
         fs::create_dir_all(&agent_dir).unwrap();
         let store = Store::open(&home, 5000).unwrap();
-        Rig { _dir: dir, agent_dir, store, models: crate::policy::default_policy().model.clone() }
+        Rig {
+            _dir: dir,
+            agent_dir,
+            store,
+            models: crate::policy::default_policy().model.clone(),
+        }
     }
 
     fn pi(&self) -> PiInstall {
@@ -62,29 +66,47 @@ impl Rig {
         for reply in replies {
             runner = runner.once("node", |_| true, reply);
         }
-        let ports = Ports { runner: std::sync::Arc::new(runner.clone()), ..Ports::real() };
+        let ports = Ports {
+            runner: std::sync::Arc::new(runner.clone()),
+            ..Ports::real()
+        };
         let pi = self.pi();
         let result = Ports::scope(&ports, || load_from(&pi, &self.models, &mut self.store));
         (runner, result)
     }
 
     fn rows(&mut self) -> i64 {
-        self.store.read(|c| Ok(c.query_row("SELECT count(*) FROM tier_catalog WHERE pi_version = '1.3.0'", [], |r| r.get(0))?)).unwrap()
+        self.store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM tier_catalog WHERE pi_version = '1.3.0'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
     }
 
     /// The distinct `models_sha` values, oldest first.
     fn shas(&mut self) -> Vec<String> {
         self.store
             .read(|c| {
-                let mut stmt = c.prepare("SELECT models_sha FROM tier_catalog GROUP BY models_sha ORDER BY min(rowid)")?;
-                Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+                let mut stmt = c.prepare(
+                    "SELECT models_sha FROM tier_catalog GROUP BY models_sha ORDER BY min(rowid)",
+                )?;
+                Ok(stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?)
             })
             .unwrap()
     }
 }
 
 fn is_hex_sha256(text: &str) -> bool {
-    text.len() == 64 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn efforts_of_s(catalog: &Catalog) -> Vec<u8> {
@@ -119,11 +141,18 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
 
     fs::write(rig.models_json(), SONNET_UP_TO_MAX).unwrap();
     let (runner, second) = rig.load(vec![levels(&UP_TO_MAX)]);
-    assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3, 4, 5], "the new thinkingLevelMap is seen");
+    assert_eq!(
+        efforts_of_s(&second.unwrap()),
+        [0, 1, 2, 3, 4, 5],
+        "the new thinkingLevelMap is seen"
+    );
     assert_eq!(runner.calls().len(), 1, "the catalog module ran again");
     assert_eq!(rig.rows(), 6, "append-only: 3 + 3, not 3");
     let shas = rig.shas();
-    assert!(shas.len() == 2 && shas.iter().all(|s| is_hex_sha256(s)) && shas[0] != shas[1], "{shas:?}");
+    assert!(
+        shas.len() == 2 && shas.iter().all(|s| is_hex_sha256(s)) && shas[0] != shas[1],
+        "{shas:?}"
+    );
 
     // And the new bytes are warm, the old ones too (a file put back is a hit on its own rows).
     let (runner, third) = rig.load(vec![]);
@@ -131,7 +160,11 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
     assert_eq!(runner.calls().len(), 0);
     fs::write(rig.models_json(), SONNET_UP_TO_HIGH).unwrap();
     let (runner, back) = rig.load(vec![]);
-    assert_eq!(efforts_of_s(&back.unwrap()), [0, 1, 2, 3], "the first bytes' rows are still there");
+    assert_eq!(
+        efforts_of_s(&back.unwrap()),
+        [0, 1, 2, 3],
+        "the first bytes' rows are still there"
+    );
     assert_eq!(runner.calls().len(), 0);
     assert_eq!(rig.rows(), 6);
 }
@@ -178,7 +211,10 @@ fn tier_catalog_an_unreadable_models_json_is_catalog_failed_with_its_path() {
     assert_eq!(err.code(), ErrorCode::CatalogFailed, "{err:?}");
     let path = rig.models_json();
     let details = serde_json::Value::Object(err.details().clone()).to_string();
-    assert!(details.contains(Path::new(&path).to_str().unwrap()), "the path is in the details: {details}");
+    assert!(
+        details.contains(Path::new(&path).to_str().unwrap()),
+        "the path is in the details: {details}"
+    );
     assert_eq!(runner.calls().len(), 0, "no fallback: pi was not asked");
     assert_eq!(rig.rows(), 0);
 }

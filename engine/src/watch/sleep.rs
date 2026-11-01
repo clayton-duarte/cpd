@@ -61,7 +61,9 @@ pub(super) fn run(engine: &mut Engine) {
                 let about = About::Session(r.session.clone());
                 match sleep(engine, &r) {
                     Ok(true) => {
-                        engine.log.line(&format!("E13: put Session {} to sleep", r.session));
+                        engine
+                            .log
+                            .line(&format!("E13: put Session {} to sleep", r.session));
                         engine.clear(Step::E13, &about);
                     }
                     Ok(false) => {}
@@ -80,11 +82,21 @@ fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&ready_sql())?;
         let rows = stmt
-            .query_map([&now, &cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .query_map([&now, &cutoff], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(|(session, context, plan)| {
-                Ok(Ready { session: SessionId::parse(&session)?, context: ContextId::parse(&context)?, plan: plan.map(|p| PlanId::parse(&p)).transpose()? })
+                Ok(Ready {
+                    session: SessionId::parse(&session)?,
+                    context: ContextId::parse(&context)?,
+                    plan: plan.map(|p| PlanId::parse(&p)).transpose()?,
+                })
             })
             .collect()
     })
@@ -93,14 +105,29 @@ fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
 /// Puts one Session to sleep. False when the User is looking at it (the chat slot) or it changed meanwhile.
 fn sleep(engine: &mut Engine, r: &Ready) -> Result<bool, CpdError> {
     let cockpit = engine.config.tmux.cockpit_session.clone();
-    // A durable Session has no pane (contract §3.6): no tmux call, only the two writes.
-    let durable = engine.store.read(|conn| Ok(conn.query_row("SELECT runner = 'durable' FROM sessions WHERE id = ?1", [r.session.as_str()], |row| row.get::<_, bool>(0))?))?;
-    if !durable {
+    // A durable Session has no pane (contract §3.6): no tmux call, only the two writes, and its host is stopped
+    // first (P1.10, §6.19).
+    let durable = engine.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT runner = 'durable' FROM sessions WHERE id = ?1",
+            [r.session.as_str()],
+            |row| row.get::<_, bool>(0),
+        )?)
+    })?;
+    if durable {
+        super::hosts::stop(engine, &r.session);
+    } else {
         let panes = engine.tmux.list_panes()?;
         if chat_slot(&panes, &cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&r.session)) {
             return Ok(false);
         }
-        match close_lead(&mut engine.store, &engine.tmux, &cockpit, &r.session, SOURCE) {
+        match close_lead(
+            &mut engine.store,
+            &engine.tmux,
+            &cockpit,
+            &r.session,
+            SOURCE,
+        ) {
             Ok(_) => {}
             Err(e) if e.code() == ErrorCode::InChatSlot => return Ok(false),
             Err(e) => return Err(e),

@@ -32,7 +32,10 @@ fn built_cpd() -> PathBuf {
 }
 
 fn entries(dir: &Path) -> Vec<String> {
-    fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
 }
 
 #[test]
@@ -42,11 +45,19 @@ fn a_clean_run_of_true_prints_nothing_and_exits_0() {
     let out = gate_run(tmp.path(), &built_cpd(), &["true"]);
 
     assert_eq!(
-        (out.status.code(), String::from_utf8_lossy(&out.stdout).as_ref(), String::from_utf8_lossy(&out.stderr).as_ref()),
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).as_ref(),
+            String::from_utf8_lossy(&out.stderr).as_ref()
+        ),
         (Some(0), "", ""),
         "{out:?}"
     );
-    assert_eq!(entries(tmp.path()), Vec::<String>::new(), "a clean run removes its empty directory");
+    assert_eq!(
+        entries(tmp.path()),
+        Vec::<String>::new(),
+        "a clean run removes its empty directory"
+    );
 }
 
 #[test]
@@ -54,9 +65,25 @@ fn the_command_sees_a_six_character_run_id_and_a_tmpdir_of_its_own() {
     let tmp = tempfile::tempdir().unwrap();
     let ids = tmp.path().join("ids");
 
-    let out = gate_run(tmp.path(), &built_cpd(), &["sh", "-c", &format!("echo \"$GATE_RUN $TMPDIR\" > '{}'; exit 3", ids.display())]);
+    let out = gate_run(
+        tmp.path(),
+        &built_cpd(),
+        &[
+            "sh",
+            "-c",
+            &format!("echo \"$GATE_RUN $TMPDIR\" > '{}'; exit 3", ids.display()),
+        ],
+    );
 
-    assert_eq!((out.status.code(), out.stdout.as_slice(), out.stderr.as_slice()), (Some(3), &b""[..], &b""[..]), "{out:?}");
+    assert_eq!(
+        (
+            out.status.code(),
+            out.stdout.as_slice(),
+            out.stderr.as_slice()
+        ),
+        (Some(3), &b""[..], &b""[..]),
+        "{out:?}"
+    );
     let seen = fs::read_to_string(&ids).unwrap();
     let (id, dir) = seen.trim().split_once(' ').unwrap();
     assert_eq!(id.len(), 6, "{seen:?}");
@@ -72,7 +99,11 @@ fn a_missing_cpd_binary_returns_the_commands_status() {
 
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
-    assert_eq!(entries(tmp.path()), Vec::<String>::new(), "no gate-run.* directory is left: nothing else can check it");
+    assert_eq!(
+        entries(tmp.path()),
+        Vec::<String>::new(),
+        "no gate-run.* directory is left: nothing else can check it"
+    );
 }
 
 /// A `cpd` that records its arguments and whether the command was still alive, then hands over to the built one.
@@ -108,7 +139,10 @@ fn cancelled_run(signal: nix::sys::signal::Signal) -> (Option<i32>, String, Vec<
     let pid_file = work.path().join("pid");
     let record = work.path().join("record");
     let cpd = recording_cpd(work.path(), &pid_file, &record);
-    let command = format!("echo $$ > '{}'; : > \"$TMPDIR/leftover\"; echo ready; read line", pid_file.display());
+    let command = format!(
+        "echo $$ > '{}'; : > \"$TMPDIR/leftover\"; echo ready; read line",
+        pid_file.display()
+    );
 
     let mut child = Command::new("sh")
         .arg(script())
@@ -121,13 +155,19 @@ fn cancelled_run(signal: nix::sys::signal::Signal) -> (Option<i32>, String, Vec<
         .spawn()
         .expect("run sh");
     let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
     assert_eq!(line, "ready\n");
 
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(child.id() as i32), signal).unwrap();
     let status = child.wait().unwrap();
     drop(child.stdin.take()); // lets a command that was not stopped end: nothing is left behind
-    (status.code(), fs::read_to_string(&record).unwrap_or_default(), entries(tmp.path()))
+    (
+        status.code(),
+        fs::read_to_string(&record).unwrap_or_default(),
+        entries(tmp.path()),
+    )
 }
 
 #[test]
@@ -135,8 +175,14 @@ fn a_term_stops_the_command_runs_the_leak_check_with_143_and_removes_the_run_dir
     let (code, record, left) = cancelled_run(nix::sys::signal::Signal::SIGTERM);
 
     assert_eq!(code, Some(143), "{record:?}");
-    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 143\n"), "{record:?}");
-    assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
+    assert!(
+        record.starts_with("gate finish --run ") && record.contains(" --status 143\n"),
+        "{record:?}"
+    );
+    assert!(
+        !record.contains("alive"),
+        "the command was waited for before the check: {record:?}"
+    );
     assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
 }
 
@@ -145,8 +191,14 @@ fn an_int_stops_the_command_runs_the_leak_check_with_130_and_removes_the_run_dir
     let (code, record, left) = cancelled_run(nix::sys::signal::Signal::SIGINT);
 
     assert_eq!(code, Some(130), "{record:?}");
-    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 130\n"), "{record:?}");
-    assert!(!record.contains("alive"), "the command was waited for before the check: {record:?}");
+    assert!(
+        record.starts_with("gate finish --run ") && record.contains(" --status 130\n"),
+        "{record:?}"
+    );
+    assert!(
+        !record.contains("alive"),
+        "the command was waited for before the check: {record:?}"
+    );
     assert_eq!(left, Vec::<String>::new(), "the run's directory is removed");
 }
 
@@ -160,12 +212,26 @@ fn a_term_sent_by_the_command_as_its_first_act_still_runs_the_leak_check_with_14
     let work = tempfile::tempdir().unwrap();
     let record = work.path().join("record");
     let cpd = work.path().join("cpd");
-    write_stub(&cpd, &format!("#!/bin/sh\necho \"$@\" >> '{rec}'\nexec '{real}' \"$@\"\n", rec = record.display(), real = built_cpd().display()));
+    write_stub(
+        &cpd,
+        &format!(
+            "#!/bin/sh\necho \"$@\" >> '{rec}'\nexec '{real}' \"$@\"\n",
+            rec = record.display(),
+            real = built_cpd().display()
+        ),
+    );
 
     let out = gate_run(tmp.path(), &cpd, &["eval", "kill -s TERM \"$$\""]);
 
     let record = fs::read_to_string(&record).unwrap_or_default();
     assert_eq!(out.status.code(), Some(143), "{out:?} {record:?}");
-    assert!(record.starts_with("gate finish --run ") && record.contains(" --status 143\n"), "{record:?}");
-    assert_eq!(entries(tmp.path()), Vec::<String>::new(), "the run's directory is removed");
+    assert!(
+        record.starts_with("gate finish --run ") && record.contains(" --status 143\n"),
+        "{record:?}"
+    );
+    assert_eq!(
+        entries(tmp.path()),
+        Vec::<String>::new(),
+        "the run's directory is removed"
+    );
 }

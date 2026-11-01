@@ -148,11 +148,22 @@ mod tests {
         let (_dir, mut store) = store();
         add(&mut store, "a", "open", "", None);
         let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
-        assert_eq!((post.auto_merge.as_str(), post.auto_merge_at), ("pending", None));
-        assert!(store.write("set", |tx| set_auto_merge(tx, "pay", "a", "enabled")).unwrap());
+        assert_eq!(
+            (post.auto_merge.as_str(), post.auto_merge_at),
+            ("pending", None)
+        );
+        assert!(
+            store
+                .write("set", |tx| set_auto_merge(tx, "pay", "a", "enabled"))
+                .unwrap()
+        );
         let post = store.read(|c| find(c, "pay", "a")).unwrap().unwrap();
         assert_eq!(post.auto_merge, "enabled");
         assert!(post.auto_merge_at.is_some());
-        assert!(!store.write("set", |tx| set_auto_merge(tx, "pay", "a", "refused")).unwrap());
+        assert!(
+            !store
+                .write("set", |tx| set_auto_merge(tx, "pay", "a", "refused"))
+                .unwrap()
+        );
     }
 }

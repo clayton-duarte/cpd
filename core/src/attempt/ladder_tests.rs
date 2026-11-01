@@ -13,7 +13,7 @@ use super::ledger::{self, Cause, End, Ladder, Stage};
 /// Inserts the Attempt `<job>-a<number>`: `running` with a driver, or ended `failed` / `cause` and counted.
 fn add(f: &mut Fixture, job: &str, number: u32, tier: &str, ended: Option<&str>) {
     let (status, outcome, cause) = match ended {
-        Some(cause) => ("ended", format!("'failed'"), format!("'{cause}'")),
+        Some(cause) => ("ended", "'failed'".to_string(), format!("'{cause}'")),
         None => ("running", "NULL".to_owned(), "NULL".to_owned()),
     };
     let ended_at = if ended.is_some() { "'t'" } else { "NULL" };
@@ -29,28 +29,64 @@ fn add(f: &mut Fixture, job: &str, number: u32, tier: &str, ended: Option<&str>)
 }
 
 /// Ends `<job>-a<number>` with `cause` through the ledger and returns the Job's `(status, failed_cause)`.
-fn end(f: &mut Fixture, job: &str, number: u32, cause: Cause, retry_cap: u32) -> (String, Option<String>) {
+fn end(
+    f: &mut Fixture,
+    job: &str,
+    number: u32,
+    cause: Cause,
+    retry_cap: u32,
+) -> (String, Option<String>) {
     end_on(f, job, number, cause, retry_cap, &catalog())
 }
 
 /// [`end`] on a caller's Catalog: the explore test pins `next_tier` on the gappy catalog of
 /// contract §9 "Ladder" (hs-d791) without touching `incident_tests::catalog`.
-fn end_on(f: &mut Fixture, job: &str, number: u32, cause: Cause, retry_cap: u32, cat: &Catalog) -> (String, Option<String>) {
+fn end_on(
+    f: &mut Fixture,
+    job: &str,
+    number: u32,
+    cause: Cause,
+    retry_cap: u32,
+    cat: &Catalog,
+) -> (String, Option<String>) {
     let attempt = f
         .store
         .read(|conn| {
-            ledger::load(conn, &PlanId::parse("pay").unwrap(), &AttemptId::parse(&format!("{job}-a{number}")).unwrap())
+            ledger::load(
+                conn,
+                &PlanId::parse("pay").unwrap(),
+                &AttemptId::parse(&format!("{job}-a{number}")).unwrap(),
+            )
         })
         .unwrap();
-    let ladder = Ladder { catalog: cat, retry_cap };
+    let ladder = Ladder {
+        catalog: cat,
+        retry_cap,
+    };
     f.store
-        .write("test", |tx| ledger::end(tx, &attempt, &End::Failed { cause, detail: "It failed.".into() }, None, &ladder, Stage::Driver))
+        .write("test", |tx| {
+            ledger::end(
+                tx,
+                &attempt,
+                &End::Failed {
+                    cause,
+                    detail: "It failed.".into(),
+                },
+                None,
+                &ladder,
+                Stage::Driver,
+            )
+        })
         .unwrap();
     f.store
         .read(|conn| {
-            Ok(conn.query_row(&format!("SELECT status, failed_cause FROM jobs WHERE plan = 'pay' AND key = '{job}'"), [], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-            })?)
+            Ok(conn.query_row(
+                &format!(
+                    "SELECT status, failed_cause FROM jobs WHERE plan = 'pay' AND key = '{job}'"
+                ),
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )?)
         })
         .unwrap()
 }
@@ -59,7 +95,8 @@ fn end_on(f: &mut Fixture, job: &str, number: u32, cause: Cause, retry_cap: u32,
 fn next_tiers(f: &mut Fixture) -> Vec<String> {
     f.store
         .read(|conn| {
-            let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = 'attempt-retry' ORDER BY id")?;
+            let mut stmt =
+                conn.prepare("SELECT data FROM events WHERE kind = 'attempt-retry' ORDER BY id")?;
             Ok(stmt
                 .query_map([], |r| {
                     let data: String = r.get(0)?;
@@ -76,7 +113,11 @@ fn retried_at(cause: Cause, tier: &str, retry_cap: u32) {
     add(&mut f, "a", 1, tier, None);
     let (status, _) = end(&mut f, "a", 1, cause, retry_cap);
     assert_eq!(status, "queued", "{cause:?} at {tier} requeues the Job");
-    assert_eq!(next_tiers(&mut f), [tier], "{cause:?} is retried at the same Tier");
+    assert_eq!(
+        next_tiers(&mut f),
+        [tier],
+        "{cause:?} is retried at the same Tier"
+    );
 }
 
 #[test]
@@ -109,7 +150,10 @@ fn retry_cap_still_bounds_automatic_attempts() {
         add(&mut f, "a", 1, "S2", Some(cause.as_str()));
         add(&mut f, "a", 2, "S2", None);
         let (status, failed_cause) = end(&mut f, "a", 2, cause, 1);
-        assert_eq!(status, "failed", "{cause:?}: 1 + retry_cap Attempts at most");
+        assert_eq!(
+            status, "failed",
+            "{cause:?}: 1 + retry_cap Attempts at most"
+        );
         assert_eq!(failed_cause.as_deref(), Some(cause.as_str()));
         assert!(next_tiers(&mut f).is_empty(), "no attempt-retry at the cap");
     }
@@ -120,10 +164,22 @@ fn retry_cap_still_bounds_automatic_attempts() {
 fn gappy_catalog() -> Catalog {
     Catalog {
         pi_version: "1.0.0".into(),
-        o: TierModel { model: "o/m".into(), efforts: vec![1, 2, 3] },
-        s: TierModel { model: "s/m".into(), efforts: vec![0, 1, 3, 5] },
-        h: TierModel { model: "h/m".into(), efforts: vec![1, 3, 5] },
-        g: TierModel { model: "g/m".into(), efforts: vec![] },
+        o: TierModel {
+            model: "o/m".into(),
+            efforts: vec![1, 2, 3],
+        },
+        s: TierModel {
+            model: "s/m".into(),
+            efforts: vec![0, 1, 3, 5],
+        },
+        h: TierModel {
+            model: "h/m".into(),
+            efforts: vec![1, 3, 5],
+        },
+        g: TierModel {
+            model: "g/m".into(),
+            efforts: vec![],
+        },
     }
 }
 
@@ -155,7 +211,11 @@ fn explore_kinds_stay_in_their_letter() {
     add(&mut f, "b", 1, "H1", None);
     let (status, _) = end_on(&mut f, "b", 1, Cause::NoSubmit, 2, &gappy);
     assert_eq!(status, "queued", "a scout's no_submit climbs within H");
-    assert_eq!(next_tiers(&mut f), ["H3"], "the scout's ladder skips the invalid H2 and stays in H");
+    assert_eq!(
+        next_tiers(&mut f),
+        ["H3"],
+        "the scout's ladder skips the invalid H2 and stays in H"
+    );
 
     // A `scout` at H3 has no rung above it in H (H5 is not a Worker's Tier): the Job fails.
     let mut f = fixture();
@@ -164,7 +224,10 @@ fn explore_kinds_stay_in_their_letter() {
     let (status, failed_cause) = end_on(&mut f, "b", 1, Cause::NoSubmit, 2, &gappy);
     assert_eq!(status, "failed", "the scout's ladder never leaves H for S1");
     assert_eq!(failed_cause.as_deref(), Some("no_submit"));
-    assert!(next_tiers(&mut f).is_empty(), "no attempt-retry when the scout's ladder runs out");
+    assert!(
+        next_tiers(&mut f).is_empty(),
+        "no attempt-retry when the scout's ladder runs out"
+    );
 
     // A `research` at S1 with `no_submit` retries at S3: S2 is not a valid effort, and S is its last letter.
     let mut f = fixture();
@@ -172,7 +235,11 @@ fn explore_kinds_stay_in_their_letter() {
     add(&mut f, "b", 1, "S1", None);
     let (status, _) = end_on(&mut f, "b", 1, Cause::NoSubmit, 2, &gappy);
     assert_eq!(status, "queued", "a research's no_submit climbs within S");
-    assert_eq!(next_tiers(&mut f), ["S3"], "the research's ladder skips the invalid S2 and stays in S");
+    assert_eq!(
+        next_tiers(&mut f),
+        ["S3"],
+        "the research's ladder skips the invalid S2 and stays in S"
+    );
 }
 
 #[test]

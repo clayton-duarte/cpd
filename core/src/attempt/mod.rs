@@ -8,6 +8,7 @@
 //!
 //! `attempt run` belongs to the driver (`crate::driver`).
 
+mod abort;
 mod kind;
 pub mod ledger;
 mod read;
@@ -31,6 +32,10 @@ pub(crate) mod explore_tests;
 #[cfg(test)]
 mod submit_tests;
 
+#[cfg(test)]
+#[path = "touches_tests.rs"]
+mod touches_tests;
+
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;
@@ -48,6 +53,8 @@ pub enum Command {
     Show(ShowArgs),
     /// List Attempts (§6.3)
     List(ListArgs),
+    /// End a running Attempt failed/aborted (Lead) (§6.5)
+    Abort(AbortArgs),
     /// The Attempt driver (internal) (§6.4)
     #[command(hide = true)]
     Run(driver::RunArgs),
@@ -98,13 +105,22 @@ pub struct ListArgs {
     plan: PlanArg,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct AbortArgs {
+    /// The Attempt id
+    #[arg(value_name = "attempt")]
+    attempt: AttemptId,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Submit(args) => submit::submit(args),
         Command::Read(args) => read::read(args),
         Command::Show(args) => show::show(args),
         Command::List(args) => show::list(args),
+        Command::Abort(args) => abort::abort(args),
         Command::Run(args) => driver::run(args),
     }
 }
-

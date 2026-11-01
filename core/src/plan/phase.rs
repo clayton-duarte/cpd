@@ -15,7 +15,12 @@ const COMMAND: &str = "plan phase";
 fn illegal(plan: &PlanRow, to: Phase) -> CpdError {
     CpdError::new(
         ErrorCode::IllegalTransition,
-        format!("Plan {} cannot move from {} to {} by hand: only grounding → plan is (§3.1).", plan.id, plan.phase.as_str(), to.as_str()),
+        format!(
+            "Plan {} cannot move from {} to {} by hand: only grounding → plan is (§3.1).",
+            plan.id,
+            plan.phase.as_str(),
+            to.as_str()
+        ),
     )
     .with("plan", plan.id.as_str())
     .with("from", plan.phase.as_str())
@@ -31,7 +36,11 @@ pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
     }
     match plan.phase {
         Phase::Grounding => {}
-        Phase::Plan => return Ok(Output::success(json!({"plan": plan.id, "phase": "plan", "already": true}))),
+        Phase::Plan => {
+            return Ok(Output::success(
+                json!({"plan": plan.id, "phase": "plan", "already": true}),
+            ));
+        }
         _ => return Err(illegal(&plan, Phase::Plan)),
     }
     env.store.write(COMMAND, |tx| {

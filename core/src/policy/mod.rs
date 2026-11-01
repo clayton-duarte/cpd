@@ -9,12 +9,12 @@
 
 mod domain;
 mod exposure;
+mod jira;
 mod known;
 mod load;
 mod machine;
 pub mod model;
 mod origin;
-mod jira;
 mod post;
 mod resolve;
 pub(crate) mod show;
@@ -41,14 +41,19 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
     }
 }
 
-pub use machine::{name_ok, load_machine, parse_machine, Exposure, Machine, MachineSource, McpOauth, McpServer};
-pub use show::KeyArgs;
-pub use origin::{parse_origin, repo_key};
 pub use exposure::ScopeKind;
-pub use load::{load_scope_file, parse_scope, policy_invalid};
-pub use post::render_post;
 pub use known::known_owners;
-pub use resolve::{check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve, resolve_machine, resolve_unowned_row};
+pub use load::{load_scope_file, parse_scope, policy_invalid};
+pub use machine::{
+    Exposure, Machine, MachineSource, McpOauth, McpServer, load_machine, name_ok, parse_machine,
+};
+pub use origin::{parse_origin, repo_key};
+pub use post::render_post;
+pub use resolve::{
+    check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve,
+    resolve_machine, resolve_unowned_row,
+};
+pub use show::KeyArgs;
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -132,7 +137,10 @@ pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Resu
     if std::fs::metadata(&source).is_err() {
         return Err(CpdError::new(
             ErrorCode::FallbackMissing,
-            format!("The fallback owner's policy file {} does not exist: nothing was created.", source.display()),
+            format!(
+                "The fallback owner's policy file {} does not exist: nothing was created.",
+                source.display()
+            ),
         )
         .with("file", source.display().to_string()));
     }
@@ -140,7 +148,11 @@ pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Resu
     let target = format!("../{FALLBACK_OWNER}/{}", resolve::OWNER_FILE);
     let tmp = dir.join(format!(".{}.tmp", resolve::OWNER_FILE));
     let io = |e: std::io::Error| {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot link {}: {e}.", file.display())).with("file", file.display().to_string())
+        CpdError::new(
+            ErrorCode::FileUnreadable,
+            format!("Cannot link {}: {e}.", file.display()),
+        )
+        .with("file", file.display().to_string())
     };
     std::fs::create_dir_all(dir).map_err(io)?;
     let _ = std::fs::remove_file(&tmp);
@@ -190,7 +202,6 @@ pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, workflows: &[String
     .with("prs", workflows)
 }
 
-
 #[cfg(test)]
 #[path = "resources_tests.rs"]
 mod resources_tests;
@@ -198,6 +209,10 @@ mod resources_tests;
 #[cfg(test)]
 #[path = "deploys_tests.rs"]
 mod deploys_tests;
+
+#[cfg(test)]
+#[path = "generated_tests.rs"]
+mod generated_tests;
 
 #[cfg(test)]
 mod tests {
@@ -246,20 +261,36 @@ mod tests {
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(&r.policy, default_policy());
         for d in Domain::ALL {
-            assert_eq!(r.sources.get(*d), &DomainSource { source: Source::Default, left_out: vec![] });
+            assert_eq!(
+                r.sources.get(*d),
+                &DomainSource {
+                    source: Source::Default,
+                    left_out: vec![]
+                }
+            );
         }
     }
 
     #[test]
     fn precedence_is_repo_over_owner_over_default_per_domain() {
         let (_d, home) = home();
-        write(&home, "acme/owner.toml", "[code]\ntext = \"owner code\"\n[tests]\ntext = \"owner tests\"\n");
+        write(
+            &home,
+            "acme/owner.toml",
+            "[code]\ntext = \"owner code\"\n[tests]\ntext = \"owner tests\"\n",
+        );
         write(&home, "acme/cpd.toml", "[tests]\ntext = \"repo tests\"\n");
         let r = resolve(&home, &repo_key("Acme", "CPD")).unwrap();
         assert_eq!(r.policy.code.text, "owner code");
-        assert_eq!(r.sources.get(Domain::Code).source, Source::Owner(real(&home, "acme/owner.toml")));
+        assert_eq!(
+            r.sources.get(Domain::Code).source,
+            Source::Owner(real(&home, "acme/owner.toml"))
+        );
         assert_eq!(r.policy.tests.text, "repo tests");
-        assert_eq!(r.sources.get(Domain::Tests).source, Source::Repo(real(&home, "acme/cpd.toml")));
+        assert_eq!(
+            r.sources.get(Domain::Tests).source,
+            Source::Repo(real(&home, "acme/cpd.toml"))
+        );
         assert_eq!(r.policy.deploy.text, "");
         assert_eq!(r.sources.get(Domain::Deploy).source, Source::Default);
         // The owner key resolves without the repo file.
@@ -280,7 +311,11 @@ mod tests {
     fn a_repo_without_a_file_resolves_from_its_owner_and_the_owner_is_still_checked_first() {
         let (_d, home) = home();
         let err = resolve(&home, &repo_key("acme", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
+        assert_eq!(
+            err.code(),
+            ErrorCode::OwnerUnconfirmed,
+            "the owner is checked first"
+        );
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
         let r = resolve(&home, &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.gate.workflow, Gate::Local);
@@ -291,8 +326,12 @@ mod tests {
     fn the_repo_only_domains_are_policy_invalid_in_an_owner_file() {
         for (domain, text) in [
             ("hooks", "[hooks]\npre-start = \"x\"\n"),
-            ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n"),
+            (
+                "test-commands",
+                "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n",
+            ),
             ("protected", "[protected]\npaths = []\n"),
+            ("generated", "[generated]\npaths = []\n"),
         ] {
             let err = invalid(text);
             assert_eq!(err.details()["key"], domain);
@@ -304,11 +343,40 @@ mod tests {
     fn required_checks_defaults_to_empty_and_the_repo_file_wins_over_the_owner_file() {
         let (_d, home) = home();
         write(&home, "acme/owner.toml", "");
-        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, Vec::<String>::new());
-        write(&home, "acme/owner.toml", "[pr]\nrequired_checks = [\"owner-gate\"]\n");
-        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["owner-gate"]);
-        write(&home, "acme/cpd.toml", "[pr]\nrequired_checks = [\"gate\"]\n");
-        assert_eq!(resolve(&home, &repo_key("acme", "cpd")).unwrap().policy.pr.required_checks, ["gate"]);
+        assert_eq!(
+            resolve(&home, &repo_key("acme", "cpd"))
+                .unwrap()
+                .policy
+                .pr
+                .required_checks,
+            Vec::<String>::new()
+        );
+        write(
+            &home,
+            "acme/owner.toml",
+            "[pr]\nrequired_checks = [\"owner-gate\"]\n",
+        );
+        assert_eq!(
+            resolve(&home, &repo_key("acme", "cpd"))
+                .unwrap()
+                .policy
+                .pr
+                .required_checks,
+            ["owner-gate"]
+        );
+        write(
+            &home,
+            "acme/cpd.toml",
+            "[pr]\nrequired_checks = [\"gate\"]\n",
+        );
+        assert_eq!(
+            resolve(&home, &repo_key("acme", "cpd"))
+                .unwrap()
+                .policy
+                .pr
+                .required_checks,
+            ["gate"]
+        );
     }
 
     #[test]
@@ -321,7 +389,11 @@ mod tests {
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
-        assert_eq!(r.policy.pr.feedback.checks, Checks::Any, "cpd's default, not the owner's none");
+        assert_eq!(
+            r.policy.pr.feedback.checks,
+            Checks::Any,
+            "cpd's default, not the owner's none"
+        );
         assert_eq!(r.policy.pr.text, "", "the text is replaced, not inherited");
         let src = r.sources.get(Domain::Pr);
         assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
@@ -348,7 +420,11 @@ mod tests {
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!((r.policy.gate.merge, r.policy.gate.workflow), (Gate::None, Gate::None));
         // An explicit `[gate]` table wins over the alias.
-        write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n");
+        write(
+            &home,
+            "acme/owner.toml",
+            "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n",
+        );
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!((r.policy.gate.merge, r.policy.gate.workflow), (Gate::None, Gate::Local));
     }
@@ -356,7 +432,11 @@ mod tests {
     #[test]
     fn an_empty_table_is_cpds_default_for_the_whole_domain() {
         let (_d, home) = home();
-        write(&home, "acme/owner.toml", "[pr]\nfeedback.checks = \"none\"\ntext = \"t\"\n");
+        write(
+            &home,
+            "acme/owner.toml",
+            "[pr]\nfeedback.checks = \"none\"\ntext = \"t\"\n",
+        );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.pr, default_policy().pr);
@@ -370,7 +450,12 @@ mod tests {
         let err = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap_err();
         assert_eq!(err.code(), ErrorCode::PolicyInvalid);
         assert_eq!(err.exit().code(), 1);
-        assert!(err.details()["file"].as_str().unwrap().ends_with("acme/owner.toml"));
+        assert!(
+            err.details()["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("acme/owner.toml")
+        );
         err
     }
 
@@ -378,15 +463,34 @@ mod tests {
     fn invalid_files_are_policy_invalid_with_file_and_key() {
         let key = |text: &str| invalid(text).details()["key"].clone();
         assert_eq!(key("[mcp]\n"), serde_json::json!("mcp"));
-        assert_eq!(key("[hooks]\ntext = \"x\"\n"), serde_json::json!("hooks.text"), "no `text` in a repo-only domain");
-        assert_eq!(key("[protected]\ntext = \"x\"\n"), serde_json::json!("protected.text"));
+        assert_eq!(
+            key("[hooks]\ntext = \"x\"\n"),
+            serde_json::json!("hooks.text"),
+            "no `text` in a repo-only domain"
+        );
+        assert_eq!(
+            key("[protected]\ntext = \"x\"\n"),
+            serde_json::json!("protected.text")
+        );
         assert_eq!(key("[bogus]\n"), serde_json::json!("bogus"));
         assert_eq!(key("[pr]\nbogus = 1\n"), serde_json::json!("pr.bogus"));
-        assert_eq!(key("[pr.feedback]\nbogus = 1\n"), serde_json::json!("pr.feedback.bogus"));
-        assert_eq!(key("[pr]\ngate = \"maybe\"\n"), serde_json::json!("pr.gate"));
-        assert_eq!(key("[pr]\nfeedback.checks = \"some\"\n"), serde_json::json!("pr.feedback.checks"));
+        assert_eq!(
+            key("[pr.feedback]\nbogus = 1\n"),
+            serde_json::json!("pr.feedback.bogus")
+        );
+        assert_eq!(
+            key("[pr]\ngate = \"maybe\"\n"),
+            serde_json::json!("pr.gate")
+        );
+        assert_eq!(
+            key("[pr]\nfeedback.checks = \"some\"\n"),
+            serde_json::json!("pr.feedback.checks")
+        );
         assert_eq!(key("[code]\ntext = 5\n"), serde_json::json!("code.text"));
-        assert_eq!(key("[deploy]\ngate = \"ci\"\n"), serde_json::json!("deploy.gate"));
+        assert_eq!(
+            key("[deploy]\ngate = \"ci\"\n"),
+            serde_json::json!("deploy.gate")
+        );
         assert_eq!(key("pr = 5\n"), serde_json::json!("pr"));
         assert_eq!(key("not toml ["), serde_json::Value::Null);
     }
@@ -398,21 +502,42 @@ mod tests {
         write(&home, "acme/cpd.toml", "[pr]\ngate = 1\n");
         let err = resolve(&home, &repo_key("acme", "cpd")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-        assert!(err.details()["file"].as_str().unwrap().ends_with("acme/cpd.toml"));
+        assert!(
+            err.details()["file"]
+                .as_str()
+                .unwrap()
+                .ends_with("acme/cpd.toml")
+        );
     }
 
     #[test]
     fn a_file_name_that_is_not_a_login_or_name_is_policy_invalid() {
         let (_d, home) = home();
         let p = |rel: &str| home.root().join("policy").join(rel);
-        for bad in ["-bad/owner.toml", "a--b/owner.toml", "acme/a b.toml", "-x/y.toml", "acme/x.txt", "stray.toml", "Clayton-Duarte/owner.toml", "clayton_duarte/owner.toml", "acme/Cpd.toml"] {
+        for bad in [
+            "-bad/owner.toml",
+            "a--b/owner.toml",
+            "acme/a b.toml",
+            "-x/y.toml",
+            "acme/x.txt",
+            "stray.toml",
+            "Clayton-Duarte/owner.toml",
+            "clayton_duarte/owner.toml",
+            "acme/Cpd.toml",
+        ] {
             let err = key_of_scope_file(&home, &p(bad)).unwrap_err();
             assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{bad}");
             assert_eq!(err.details()["key"], serde_json::Value::Null);
             assert!(err.details()["file"].as_str().unwrap().ends_with(bad));
         }
-        assert_eq!(key_of_scope_file(&home, &p("acme/owner.toml")).unwrap(), PolicyKey::Owner(owner("acme")));
-        assert_eq!(key_of_scope_file(&home, &p("acme/cpd.toml")).unwrap(), repo_key("acme", "cpd"));
+        assert_eq!(
+            key_of_scope_file(&home, &p("acme/owner.toml")).unwrap(),
+            PolicyKey::Owner(owner("acme"))
+        );
+        assert_eq!(
+            key_of_scope_file(&home, &p("acme/cpd.toml")).unwrap(),
+            repo_key("acme", "cpd")
+        );
     }
 
     #[test]
@@ -458,8 +583,14 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let r = resolve(&home, &PolicyKey::Owner(owner("clayton-duarte"))).unwrap();
         let expected = std::fs::canonicalize(&target).unwrap();
-        assert_eq!(r.sources.get(Domain::Code).source, Source::Owner(expected.clone()));
-        assert_eq!(r.sources.get(Domain::Code).to_string(), format!("owner:{}", expected.display()));
+        assert_eq!(
+            r.sources.get(Domain::Code).source,
+            Source::Owner(expected.clone())
+        );
+        assert_eq!(
+            r.sources.get(Domain::Code).to_string(),
+            format!("owner:{}", expected.display())
+        );
     }
 
     #[test]
@@ -476,7 +607,10 @@ mod tests {
     fn audience_is_fixed_in_code_and_texts_for_filters_by_role() {
         assert_eq!(audience(Domain::Pr), &[Role::Lead, Role::Worker]);
         assert_eq!(audience(Domain::Deploy), &[Role::Lead]);
-        assert_eq!(audience(Domain::Instructions), &[Role::Manager, Role::Lead, Role::Worker]);
+        assert_eq!(
+            audience(Domain::Instructions),
+            &[Role::Manager, Role::Lead, Role::Worker]
+        );
         let (_d, home) = home();
         write(
             &home,
@@ -484,7 +618,12 @@ mod tests {
             "[pr]\ntext = \"p\"\n[deploy]\ntext = \"d\"\n[instructions]\ntext = \"i\"\n[code]\ntext = \"\"\n",
         );
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
-        let names = |role| r.texts_for(role).iter().map(|(d, _, t)| format!("{}={t}", d.name())).collect::<Vec<_>>();
+        let names = |role| {
+            r.texts_for(role)
+                .iter()
+                .map(|(d, _, t)| format!("{}={t}", d.name()))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(names(Role::Manager), ["instructions=i"]);
         assert_eq!(names(Role::Lead), ["pr=p", "deploy=d", "instructions=i"]);
         assert_eq!(names(Role::Worker), ["pr=p", "instructions=i"]);
@@ -507,7 +646,11 @@ mod tests {
         let e = owner_unset(&ctx);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerUnset, 3));
         assert_eq!(e.details()["context"], "ctx");
-        assert!(e.details().get("next").is_none() && e.message().contains("cpd context owner <login> --context ctx"));
+        assert!(
+            e.details().get("next").is_none()
+                && e.message()
+                    .contains("cpd context owner <login> --context ctx")
+        );
 
         let e = owner_in_use(&ctx, &acme, &["p/a".to_string()]);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerInUse, 3));
@@ -529,7 +672,9 @@ mod tests {
     fn contract_rows() -> Vec<Row> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md");
         let doc = std::fs::read_to_string(path).unwrap();
-        let start = doc.find("**The domains** of the first build.").expect("domains table");
+        let start = doc
+            .find("**The domains** of the first build.")
+            .expect("domains table");
         let mut rows = Vec::new();
         let mut in_table = false;
         for line in doc[start..].lines() {
@@ -537,15 +682,27 @@ mod tests {
                 in_table = true;
                 // Cells may contain `|` inside code spans (`"local" \| "ci"`): rejoin on the escape.
                 let line = line.replace("\\|", "\u{1}");
-                let cells: Vec<String> =
-                    line.trim().trim_matches('|').split('|').map(|c| c.replace('\u{1}', "|").trim().to_owned()).collect();
+                let cells: Vec<String> = line
+                    .trim()
+                    .trim_matches('|')
+                    .split('|')
+                    .map(|c| c.replace('\u{1}', "|").trim().to_owned())
+                    .collect();
                 if cells[0] == "Domain" || cells[0].starts_with("---") {
                     continue;
                 }
                 let domain = cells[0].trim_matches('`').to_owned();
                 let keys = parse_keys(&cells[1]);
-                let audience = cells[cells.len() - 1].split(',').map(|r| r.trim().to_owned()).collect();
-                rows.push(Row { cell: cells[1].clone(), domain, keys, audience });
+                let audience = cells[cells.len() - 1]
+                    .split(',')
+                    .map(|r| r.trim().to_owned())
+                    .collect();
+                rows.push(Row {
+                    cell: cells[1].clone(),
+                    domain,
+                    keys,
+                    audience,
+                });
             } else if in_table {
                 break;
             }
@@ -561,13 +718,22 @@ mod tests {
         while i < parts.len() {
             let span = parts[i];
             if let Some((name, values)) = span.split_once(" = ") {
-                let allowed: Vec<String> = if values.starts_with('[') { Vec::new() } else { values.split('|').map(|v| v.trim().trim_matches('"').to_owned()).collect() };
-                let default = (i + 2 < parts.len() && parts[i + 1].trim_end().ends_with('(')).then(|| parts[i + 2].to_owned());
+                let allowed: Vec<String> = if values.starts_with('[') {
+                    Vec::new()
+                } else {
+                    values
+                        .split('|')
+                        .map(|v| v.trim().trim_matches('"').to_owned())
+                        .collect()
+                };
+                let default = (i + 2 < parts.len() && parts[i + 1].trim_end().ends_with('('))
+                    .then(|| parts[i + 2].to_owned());
                 // A list default is compared as compact JSON, the form `leaves` gives.
-                let default = default.map(|d| match serde_json::from_str::<serde_json::Value>(&d) {
-                    Ok(list @ serde_json::Value::Array(_)) => list.to_string(),
-                    _ => d,
-                });
+                let default =
+                    default.map(|d| match serde_json::from_str::<serde_json::Value>(&d) {
+                        Ok(list @ serde_json::Value::Array(_)) => list.to_string(),
+                        _ => d,
+                    });
                 keys.push((name.to_owned(), default, allowed));
             }
             i += 2;
@@ -579,7 +745,11 @@ mod tests {
         match v {
             serde_json::Value::Object(m) => {
                 for (k, v) in m {
-                    let p = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+                    let p = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
                     leaves(&p, v, out);
                 }
             }
@@ -596,27 +766,49 @@ mod tests {
         let doc_domains: Vec<&str> = rows.iter().map(|r| r.domain.as_str()).collect();
         let code_domains: Vec<&str> = Domain::ALL.iter().map(|d| d.name()).collect();
         // `model` is documented in §8.3 "Models", not in the table (its key rows are pinned by policy::model).
-        let table_domains: Vec<&str> = code_domains.iter().copied().filter(|d| *d != "model").collect();
-        assert_eq!(doc_domains, table_domains, "the table's domains are Domain::ALL but model");
+        let table_domains: Vec<&str> = code_domains
+            .iter()
+            .copied()
+            .filter(|d| *d != "model")
+            .collect();
+        assert_eq!(
+            doc_domains, table_domains,
+            "the table's domains are Domain::ALL but model"
+        );
 
         let policy_json = serde_json::to_value(default_policy()).unwrap();
-        let mut policy_fields: Vec<&str> = policy_json.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut policy_fields: Vec<&str> = policy_json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         let mut sorted = code_domains.clone();
         sorted.sort();
         policy_fields.sort();
-        assert_eq!(policy_fields, sorted, "the table's domains are Policy's fields");
+        assert_eq!(
+            policy_fields, sorted,
+            "the table's domains are Policy's fields"
+        );
 
         let default_table: toml::Table = include_str!("default.toml").parse().unwrap();
         let mut tables: Vec<&str> = default_table.keys().map(String::as_str).collect();
         tables.sort();
-        assert_eq!(tables, sorted, "the table's domains are default.toml's tables");
+        assert_eq!(
+            tables, sorted,
+            "the table's domains are default.toml's tables"
+        );
 
         for row in &rows {
             let domain = Domain::from_name(&row.domain).unwrap();
             // A repo-only domain (empty audience) has list and optional values, documented in prose: no table
             // of `key = value` spans to compare, and the repo-only tests pin their defaults.
             if audience(domain).is_empty() {
-                assert!(row.keys.is_empty(), "{} documents no `key = value` spans", row.domain);
+                assert!(
+                    row.keys.is_empty(),
+                    "{} documents no `key = value` spans",
+                    row.domain
+                );
                 continue;
             }
             // Typed keys and their defaults.
@@ -632,17 +824,32 @@ mod tests {
             let spanned: Vec<&str> = row.keys.iter().map(|(k, _, _)| k.as_str()).collect();
             typed.retain(|(k, _)| {
                 spanned.contains(&k.as_str()) || {
-                    assert!(row.cell.contains(&format!("`{k}`")), "{}.{k} is not documented", row.domain);
+                    assert!(
+                        row.cell.contains(&format!("`{k}`")),
+                        "{}.{k} is not documented",
+                        row.domain
+                    );
                     false
                 }
             });
             let mut documented: Vec<(String, String)> = row
                 .keys
                 .iter()
-                .map(|(k, d, _)| (k.clone(), d.clone().unwrap_or_else(|| panic!("{}.{k} has no documented default", row.domain))))
+                .map(|(k, d, _)| {
+                    (
+                        k.clone(),
+                        d.clone().unwrap_or_else(|| {
+                            panic!("{}.{k} has no documented default", row.domain)
+                        }),
+                    )
+                })
                 .collect();
             documented.sort();
-            assert_eq!(documented, typed, "typed keys and defaults of {}", row.domain);
+            assert_eq!(
+                documented, typed,
+                "typed keys and defaults of {}",
+                row.domain
+            );
             // Every allowed value of a documented key is accepted by the loader.
             for (key, _, allowed) in &row.keys {
                 for value in allowed {
@@ -652,19 +859,24 @@ mod tests {
                         _ => toml::Value::String(value.clone()),
                     };
                     for part in key.split('.').rev() {
-                        leaf = toml::Value::Table(toml::Table::from_iter([(part.to_owned(), leaf)]));
+                        leaf =
+                            toml::Value::Table(toml::Table::from_iter([(part.to_owned(), leaf)]));
                     }
                     table.insert(row.domain.clone(), leaf);
-                    parse_scope(Path::new("t.toml"), &table.to_string())
-                        .unwrap_or_else(|e| panic!("{}.{key} = {value:?} is refused: {e}", row.domain));
+                    parse_scope(Path::new("t.toml"), &table.to_string()).unwrap_or_else(|e| {
+                        panic!("{}.{key} = {value:?} is refused: {e}", row.domain)
+                    });
                 }
             }
             // Audience.
-            let roles: Vec<&str> = audience(domain).iter().map(|r| match r {
-                Role::Manager => "Manager",
-                Role::Lead => "Lead",
-                Role::Worker => "Worker",
-            }).collect();
+            let roles: Vec<&str> = audience(domain)
+                .iter()
+                .map(|r| match r {
+                    Role::Manager => "Manager",
+                    Role::Lead => "Lead",
+                    Role::Worker => "Worker",
+                })
+                .collect();
             assert_eq!(row.audience, roles, "audience of {}", row.domain);
         }
     }

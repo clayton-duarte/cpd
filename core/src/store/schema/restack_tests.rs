@@ -44,7 +44,11 @@ const LOCK: &str = "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE i
 fn locked(keys: &[&str], needs: &[(&str, &str)]) -> (tempfile::TempDir, Store) {
     let (dir, home) = crate::store::tests::tmp_home();
     let mut store = Store::open(&home, 5000).unwrap();
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert!(
+        store.schema_mismatch().is_none(),
+        "{:?}",
+        store.schema_mismatch()
+    );
     let mut sql = plan_sql("pay");
     for key in keys {
         sql += &workflow("pay", key, "/r");

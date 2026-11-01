@@ -53,7 +53,10 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("status", workflow.status.as_str()));
     }
     // (b)
-    if let Some(done) = env.store.read(|conn| posts::find(conn, id.as_str(), key.as_str()))? {
+    if let Some(done) = env
+        .store
+        .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?
+    {
         return Err(already_posted(&key, &done));
     }
     // (c)
@@ -73,14 +76,20 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("number", pull.number));
     }
     // (f)
-    let channel = [policy.pr.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
-        .into_iter()
-        .find(|c| !c.is_empty())
-        .ok_or_else(|| {
-            CpdError::new(ErrorCode::PostUnconfigured, "No Slack channel is configured to post to.")
-                .with("keys", json!(["pr.post.channel", "inbox.team_channel"]))
-        })?
-        .to_owned();
+    let channel = [
+        policy.pr.post.channel.as_str(),
+        env.config.inbox.team_channel.as_str(),
+    ]
+    .into_iter()
+    .find(|c| !c.is_empty())
+    .ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::PostUnconfigured,
+            "No Slack channel is configured to post to.",
+        )
+        .with("keys", json!(["pr.post.channel", "inbox.team_channel"]))
+    })?
+    .to_owned();
     // (g)
     let why = unready(&pull);
     if !why.is_empty() {
@@ -95,7 +104,8 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("reasons", json!(names)));
     }
     // (g2) one read of the repo and the pull request: a repo with no merge method refuses before the send
-    let read = super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
+    let read =
+        super::gh::auto_merge_read(&*env.ports.runner, Path::new("."), &pull.repo, pull.number)?;
     if read.methods.choose().is_none() {
         let m = read.methods;
         return Err(CpdError::new(
@@ -112,17 +122,33 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("rebase", m.rebase));
     }
     // (h)
-    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url).map_err(|e| {
-        CpdError::new(ErrorCode::PolicyInvalid, format!("The pr.post.template does not render: {e}."))
+    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url)
+        .map_err(|e| {
+            CpdError::new(
+                ErrorCode::PolicyInvalid,
+                format!("The pr.post.template does not render: {e}."),
+            )
             .with("key", "pr.post.template")
-    })?;
+        })?;
     // (i)
-    let call = slack::call(&env.config, "slack-post.ts", &[("channel", &channel)], Some(message.clone().into_bytes()), DEADLINE)?;
-    let argv: Vec<String> = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).collect();
+    let call = slack::call(
+        &env.config,
+        "slack-post.ts",
+        &[("channel", &channel)],
+        Some(message.clone().into_bytes()),
+        DEADLINE,
+    )?;
+    let argv: Vec<String> = std::iter::once(call.program.clone())
+        .chain(call.args.iter().cloned())
+        .collect();
     let out = match env.ports.runner.run(&call) {
         Ok(out) => out,
         Err(Failed::Io(e)) => {
-            return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)));
+            return Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Cannot run {}: {e}.", argv.join(" ")),
+            )
+            .with("argv", json!(argv)));
         }
         Err(Failed::Timeout(e)) => return Err(e),
     };
@@ -142,14 +168,21 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     let stored = env.store.write("pr post", |tx| {
         let new = posts::insert(tx, id.as_str(), key.as_str(), &record)?;
         if new {
-            super::jira_sync::queue(tx, id.as_str(), key.as_str(), super::jira_sync::Target::InReview)?;
+            super::jira_sync::queue(
+                tx,
+                id.as_str(),
+                key.as_str(),
+                super::jira_sync::Target::InReview,
+            )?;
         }
         Ok(new)
     });
     match stored {
         Ok(true) => {}
         Ok(false) => {
-            let done = env.store.read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
+            let done = env
+                .store
+                .read(|conn| posts::find(conn, id.as_str(), key.as_str()))?;
             return Err(match done {
                 Some(done) => already_posted(&key, &done),
                 None => CpdError::bad_row(format!("Workflow {key} has no post after its insert was refused")),
@@ -158,7 +191,11 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         Err(e) => {
             return Err(CpdError::new(
                 ErrorCode::StoreFailed,
-                format!("The message WAS posted ({}) but recording it failed: {}", record.link, e.message()),
+                format!(
+                    "The message WAS posted ({}) but recording it failed: {}",
+                    record.link,
+                    e.message()
+                ),
             )
             .with("link", record.link.as_str())
             .with("channel", record.channel.as_str())
@@ -196,11 +233,16 @@ fn request_auto_merge(env: &mut Env, id: &PlanId, key: &WorkflowKey, read: &supe
     };
     if let Some(stored) = stored {
         env.store
-            .write("pr post", |tx| posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored))
+            .write("pr post", |tx| {
+                posts::set_auto_merge(tx, id.as_str(), key.as_str(), stored)
+            })
             .map_err(|e| {
                 CpdError::new(
                     ErrorCode::StoreFailed,
-                    format!("The message WAS posted but recording its auto-merge outcome failed: {}", e.message()),
+                    format!(
+                        "The message WAS posted but recording its auto-merge outcome failed: {}",
+                        e.message()
+                    ),
                 )
             })?;
     }

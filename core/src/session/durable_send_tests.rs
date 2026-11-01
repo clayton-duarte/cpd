@@ -37,7 +37,11 @@ fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"t\"\n").unwrap();
+    fs::write(
+        home.config(),
+        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"t\"\n",
+    )
+    .unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     store
         .write("fixture", |tx| {
@@ -53,7 +57,12 @@ fn world() -> World {
         .unwrap();
     let clock = ManualClock::new();
     let runner = FakeRunner::with_tmux();
-    let ports = Ports { clock: Arc::new(clock), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()) };
+    let ports = Ports {
+        clock: Arc::new(clock),
+        runner: Arc::new(runner.clone()),
+        spawn: Arc::new(FakeSpawn::new()),
+        ..Ports::real()
+    };
     // The fake tmux keys its server by `$TMUX_TMPDIR` and the socket: the same directory for every `Tmux` of this process.
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")
@@ -66,11 +75,18 @@ fn world() -> World {
         std::env::remove_var("CPD_SESSION");
         std::env::remove_var("PI_SESSION_ID");
     }
-    World { _dir: dir, store, ports, runner }
+    World {
+        _dir: dir,
+        store,
+        ports,
+        runner,
+    }
 }
 
 fn cpd(world: &World, words: &[&str]) -> Value {
-    let command = Cli::try_parse_from(["cpd"].into_iter().chain(words.iter().copied())).unwrap().command;
+    let command = Cli::try_parse_from(["cpd"].into_iter().chain(words.iter().copied()))
+        .unwrap()
+        .command;
     match Ports::scope(&world.ports, || run(command)).unwrap() {
         Output::Success(fields) => Value::Object(fields),
         _ => panic!("a success"),
@@ -80,12 +96,23 @@ fn cpd(world: &World, words: &[&str]) -> Value {
 fn messages(world: &mut World, session: &str) -> i64 {
     world
         .store
-        .read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = 'session-message' AND session = ?1", [session], |r| r.get(0))?))
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM events WHERE kind = 'session-message' AND session = ?1",
+                [session],
+                |r| r.get(0),
+            )?)
+        })
         .unwrap()
 }
 
 fn new_windows(world: &World) -> usize {
-    world.runner.calls().iter().filter(|c| c.args.iter().any(|a| a == "new-window")).count()
+    world
+        .runner
+        .calls()
+        .iter()
+        .filter(|c| c.args.iter().any(|a| a == "new-window"))
+        .count()
 }
 
 #[test]
@@ -94,9 +121,21 @@ fn send_to_a_stopped_durable_lead_appends_the_event_and_starts_no_pane() {
     let out = cpd(&w, &["send", "dlead", "wake up", "--unblocks", "u"]);
     assert_eq!(messages(&mut w, "dlead"), 1, "the Event is appended");
     assert_eq!(new_windows(&w), 0, "no window");
-    assert_eq!((&out["started"], &out["pane"]), (&Value::Bool(false), &Value::Null), "{out}");
-    let pane: Option<String> =
-        w.store.read(|c| Ok(c.query_row("SELECT tmux_pane FROM sessions WHERE id = 'dlead'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(
+        (&out["started"], &out["pane"]),
+        (&Value::Bool(false), &Value::Null),
+        "{out}"
+    );
+    let pane: Option<String> = w
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT tmux_pane FROM sessions WHERE id = 'dlead'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
     assert_eq!(pane, None);
 }
 
@@ -115,9 +154,18 @@ fn session_show_and_list_carry_the_runner() {
     let w = world();
     let list = cpd(&w, &["list"]);
     let runner_of = |id: &str| {
-        list["sessions"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap_or_else(|| panic!("{id} in {list}"))["runner"].clone()
+        list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap_or_else(|| panic!("{id} in {list}"))["runner"]
+            .clone()
     };
-    assert_eq!((runner_of("dlead"), runner_of("plead")), (Value::from("durable"), Value::from("pi")));
+    assert_eq!(
+        (runner_of("dlead"), runner_of("plead")),
+        (Value::from("durable"), Value::from("pi"))
+    );
     for (id, runner) in [("dlead", "durable"), ("plead", "pi")] {
         let shown = cpd(&w, &["show", id]);
         assert_eq!(shown["session"]["runner"], Value::from(runner), "{shown}");

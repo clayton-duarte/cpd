@@ -22,95 +22,98 @@ mod background_tests;
 pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
+mod buffer;
+mod cells;
+mod chat;
+mod cockpit;
+pub mod dialog;
 #[cfg(test)]
-mod inbox_link_tests;
-#[cfg(test)]
-mod link_widget_tests;
-#[cfg(test)]
-mod osc_8_guard_tests;
-#[cfg(test)]
-mod guard_tests;
+mod failed_pill_tests;
+pub mod fold;
 #[cfg(test)]
 mod guard_popup_tests;
 #[cfg(test)]
 mod guard_terminal_tests;
 #[cfg(test)]
-mod section_title_tests;
-#[cfg(test)]
-mod section_flush_tests;
-mod buffer;
-mod cells;
-mod chat;
-mod cockpit;
-mod host_click;
-mod incident_click;
-pub mod dialog;
-pub mod fold;
+mod guard_tests;
 pub mod history;
+mod host_click;
+#[cfg(test)]
+mod icons_tests;
+#[cfg(test)]
+mod inbox_link_tests;
+mod incident_click;
 mod input_box;
 #[cfg(test)]
-mod layout_dialog_tests;
+mod input_box_tests;
 #[cfg(test)]
-mod layout_section_tests;
+mod input_box_width_tests;
+#[cfg(test)]
+mod landing_tests;
+#[cfg(test)]
+mod layout_dialog_tests;
 #[cfg(test)]
 mod layout_plan_tests;
 #[cfg(test)]
 mod layout_popup_tests;
 #[cfg(test)]
+mod layout_section_tests;
+#[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
 mod layout_tree_tests;
-#[cfg(test)]
-mod input_box_tests;
-#[cfg(test)]
-mod input_box_width_tests;
 pub mod link;
 #[cfg(test)]
-mod read_source_tests;
+mod link_widget_tests;
 pub mod logs;
 pub mod menu;
 #[cfg(test)]
 mod menu_width_tests;
-#[cfg(test)]
-mod failed_pill_tests;
-#[cfg(test)]
-mod landing_tests;
+pub mod merge;
 #[cfg(test)]
 mod moon_tests;
 #[cfg(test)]
+mod osc_8_guard_tests;
+pub mod pace;
+#[cfg(test)]
+mod pace_tests;
+pub mod palette;
+#[cfg(test)]
 mod phase_dot_tests;
 #[cfg(test)]
-mod zone_tests;
-#[cfg(test)]
 mod phase_dot_views_tests;
+pub mod phi;
+pub mod pill;
 #[cfg(test)]
-mod worked_on_tests;
+mod pill_colours;
+#[cfg(test)]
+mod pill_tests;
+pub mod plan;
+pub mod pump;
+#[cfg(test)]
+mod pump_scripted_tests;
+#[cfg(test)]
+mod pump_tests;
+#[cfg(test)]
+mod read_source_tests;
+#[cfg(test)]
+mod section_flush_tests;
+#[cfg(test)]
+mod section_title_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;
 #[cfg(test)]
-mod icons_tests;
-pub mod merge;
-pub mod pace;
-pub mod pump;
-#[cfg(test)]
-mod pump_tests;
-#[cfg(test)]
-mod pump_scripted_tests;
-#[cfg(test)]
-mod pace_tests;
-pub mod palette;
-pub mod phi;
-pub mod pill;
-#[cfg(test)]
-mod pill_tests;
-#[cfg(test)]
 mod updating_label;
 #[cfg(test)]
-mod pill_colours;
-pub mod plan;
-pub use plan::draw_first_frame;
+mod worked_on_tests;
+#[cfg(test)]
+mod zone_tests;
 pub use history::{draw_history, show_with as show_history_with};
+pub use plan::draw_first_frame;
+#[cfg(test)]
+mod merge_at_once_tests;
+mod no_notes;
 mod popup;
 pub mod read;
 mod runner;
@@ -122,18 +125,15 @@ mod scroll_width_tests;
 pub mod section;
 #[cfg(test)]
 mod section_width_tests;
-mod no_notes;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;
 pub mod tree;
-mod viewlog;
-pub mod widgets;
 pub mod view_ports;
 #[cfg(test)]
 mod view_ports_tests;
-#[cfg(test)]
-mod merge_at_once_tests;
+mod viewlog;
+pub mod widgets;
 
 pub use runner::{Capture, ViewError, run_view, run_view_on};
 
@@ -244,20 +244,37 @@ pub enum View {
 
 /// `cpd tui …` on `ports`: the views the ports reach wait through their clock and read their time from it, and the merge
 /// action runs its commands through `run_on`.
-pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunCommand, run_on: RunOn, restart: Restart) -> Result<Output, CpdError> {
+pub fn run_with(
+    ports: &Ports,
+    args: Args,
+    version: &str,
+    run_command: RunCommand,
+    run_on: RunOn,
+    restart: Restart,
+) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, version, run_command, restart),
-        Some(Command::View(view)) => backed_off(ports, match view {
-            View::Tree => tree::run(ports),
-            View::Plan => plan::run(ports, run_command),
-            View::Widgets => widgets::run(ports, run_command),
-            View::History(args) => history::run(ports, args),
-            View::Legend => widgets::legend::run(ports),
-            View::Logs(args) => logs::run(ports, args),
-            View::Dialog(args) => dialog::run(ports, args),
-            View::Chat => chat::run(),
-        }),
-        Some(Command::Action(a)) => Ok(cockpit::action(ports, a.action.as_deref(), a.pull.as_deref(), &a.client, run_command, run_on)),
+        Some(Command::View(view)) => backed_off(
+            ports,
+            match view {
+                View::Tree => tree::run(ports),
+                View::Plan => plan::run(ports, run_command),
+                View::Widgets => widgets::run(ports, run_command),
+                View::History(args) => history::run(ports, args),
+                View::Legend => widgets::legend::run(ports),
+                View::Logs(args) => logs::run(ports, args),
+                View::Dialog(args) => dialog::run(ports, args),
+                View::Chat => chat::run(),
+            },
+        ),
+        Some(Command::Action(a)) => Ok(cockpit::action(
+            ports,
+            a.action.as_deref(),
+            a.pull.as_deref(),
+            &a.client,
+            run_command,
+            run_on,
+        )),
     }
 }
 
@@ -275,8 +292,11 @@ pub fn bare(version: &str, run_command: RunCommand, restart: Restart) -> Result<
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.
 fn not_a_terminal(command: &str) -> CpdError {
-    CpdError::new(ErrorCode::NotATerminal, format!("cpd {command} needs a terminal on stdin and stdout."))
-        .with("command", command)
+    CpdError::new(
+        ErrorCode::NotATerminal,
+        format!("cpd {command} needs a terminal on stdin and stdout."),
+    )
+    .with("command", command)
 }
 
 /// Whether stdin and stdout are both a terminal.

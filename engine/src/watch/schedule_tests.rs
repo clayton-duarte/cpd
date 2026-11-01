@@ -26,7 +26,9 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
         .store
         .read(|conn| {
             let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            Ok(stmt
+                .query_map([kind], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -36,7 +38,13 @@ fn attempts(fx: &mut Fx) -> i64 {
 }
 
 /// SQL for Attempt `<key>-a<number>` ended `failed` / `crashed` at `ended_at`; `driver_pid` is null when its driver never started.
-fn ended_attempt(key: &str, number: u32, tier: &str, driver_pid: Option<i64>, ended_at: &str) -> String {
+fn ended_attempt(
+    key: &str,
+    number: u32,
+    tier: &str,
+    driver_pid: Option<i64>,
+    ended_at: &str,
+) -> String {
     let pid = driver_pid.map_or("NULL".to_owned(), |p| p.to_string());
     format!(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, driver_pid)
@@ -48,16 +56,33 @@ fn ended_attempt(key: &str, number: u32, tier: &str, driver_pid: Option<i64>, en
 #[test]
 fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let mut fx = Fx::with_plan("");
-    fx.add_job("api", &[], &format!("UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';", "0".repeat(64)));
+    fx.add_job(
+        "api",
+        &[],
+        &format!(
+            "UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';",
+            "0".repeat(64)
+        ),
+    );
 
     ticks(&mut fx, 3);
 
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     let (plan, job, attempt, data) = &errors[0];
-    assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("api"), None));
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("locked_job_tampered")));
-    assert!(texts(&mut fx, "error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", texts(&mut fx, "error"));
+    assert_eq!(
+        (plan.as_deref(), job.as_deref(), attempt.as_deref()),
+        (Some("pay"), Some("api"), None)
+    );
+    assert_eq!(
+        (&data["source"], &data["code"]),
+        (&json!("watch"), &json!("locked_job_tampered"))
+    );
+    assert!(
+        texts(&mut fx, "error")[0].ends_with("See: cpd job show api --plan pay"),
+        "{:?}",
+        texts(&mut fx, "error")
+    );
     assert_eq!(attempts(&mut fx), 0);
     assert_eq!(fx.job_status("api"), "queued");
 }
@@ -67,7 +92,13 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
 #[test]
 fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
     let mut fx = Fx::with_plan("");
-    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H5"), ("cli", "H4")] {
+    for (key, tier) in [
+        ("api", "O3"),
+        ("web", "S5"),
+        ("app", "S4"),
+        ("ui", "H5"),
+        ("cli", "H4"),
+    ] {
         fx.add_job_on(tier, "repo", key, &[], "");
     }
 
@@ -75,16 +106,40 @@ fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_err
 
     let errors = fx.events("error");
     assert_eq!(errors.len(), 5, "{errors:?}");
-    let mut jobs_named: Vec<_> = errors.iter().map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone())).collect();
+    let mut jobs_named: Vec<_> = errors
+        .iter()
+        .map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone()))
+        .collect();
     jobs_named.sort();
     assert_eq!(
         jobs_named,
-        [("api", None), ("app", None), ("cli", None), ("ui", None), ("web", None)].map(|(job, attempt): (&str, Option<String>)| (Some("pay".to_string()), job.to_string(), attempt))
+        [
+            ("api", None),
+            ("app", None),
+            ("cli", None),
+            ("ui", None),
+            ("web", None)
+        ]
+        .map(|(job, attempt): (&str, Option<String>)| (
+            Some("pay".to_string()),
+            job.to_string(),
+            attempt
+        ))
     );
     for (_, _, _, data) in &errors {
-        assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
+        assert_eq!(
+            (&data["source"], &data["code"]),
+            (&json!("watch"), &json!("tier_not_allowed")),
+            "{data}"
+        );
     }
-    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("pro-d82")), "{:?}", texts(&mut fx, "error"));
+    assert!(
+        texts(&mut fx, "error")
+            .iter()
+            .all(|t| t.contains("pro-d82")),
+        "{:?}",
+        texts(&mut fx, "error")
+    );
     assert_eq!(attempts(&mut fx), 0);
     for key in ["api", "web", "app", "ui", "cli"] {
         assert_eq!(fx.job_status(key), "queued", "{key}");
@@ -104,7 +159,11 @@ fn an_engine_error_sends_no_message_to_a_manager() {
     ticks(&mut fx, 3);
 
     assert_eq!(fx.events("error").len(), 1);
-    assert_eq!(fx.count("session-message"), 0, "an engine error is an Event only (hs-d514)");
+    assert_eq!(
+        fx.count("session-message"),
+        0,
+        "an engine error is an Event only (hs-d514)"
+    );
 }
 
 /// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
@@ -112,7 +171,9 @@ fn an_engine_error_sends_no_message_to_a_manager() {
 fn e3_does_not_start_a_job_in_its_backoff() {
     let mut fx = Fx::with_plan("");
     let now = ago(0);
-    let ended: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
+    let ended: String = (1..=9)
+        .map(|n| ended_attempt("api", n, "S2", None, &now))
+        .collect();
     fx.add_job("api", &[], &ended);
 
     ticks(&mut fx, 3);
@@ -134,7 +195,13 @@ fn tick_on_fake_ports(fx: &mut Fx) {
 fn allocated(fx: &mut Fx, id: &str) -> (String, String) {
     fx.engine
         .store
-        .read(|conn| Ok(conn.query_row("SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
         .unwrap()
 }
 
@@ -163,7 +230,10 @@ fn new_plan() -> Fx {
 
 /// The branch `cpd_core::git::attempt_branch` gives parallel Attempt `id` of Plan `pay`.
 fn parallel_branch(id: &str) -> String {
-    cpd_core::git::attempt_branch(&cpd_core::ids::PlanId::parse("pay").unwrap(), &cpd_core::ids::AttemptId::parse(id).unwrap())
+    cpd_core::git::attempt_branch(
+        &cpd_core::ids::PlanId::parse("pay").unwrap(),
+        &cpd_core::ids::AttemptId::parse(id).unwrap(),
+    )
 }
 
 /// A live linear Attempt `lin-a1` of the Workflow `repo`: on its Lead Branch, in its Lead worktree.
@@ -194,12 +264,20 @@ fn e3_holds_a_ready_job_while_a_linear_attempt_of_its_pr_is_live() {
     let (lead_branch, lead_worktree, _) = lead(&mut fx);
     tick_on_fake_ports(&mut fx);
     assert_eq!(fx.job_status("api"), "queued", "held");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "no Attempt row");
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"),
+        0,
+        "no Attempt row"
+    );
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 
     fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'lin-a1'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'lin';");
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "alone, it starts linear");
+    assert_eq!(
+        allocated(&mut fx, "api-a1"),
+        (lead_branch, lead_worktree),
+        "alone, it starts linear"
+    );
 }
 
 #[test]
@@ -210,7 +288,11 @@ fn e3_holds_an_urgent_ready_job_while_a_linear_attempt_of_its_pr_is_live() {
     fx.add_job("api", &[], "UPDATE jobs SET urgent = 1 WHERE key = 'api';");
     tick_on_fake_ports(&mut fx);
     assert_eq!(fx.job_status("api"), "queued", "held");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "no Attempt row");
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"),
+        0,
+        "no Attempt row"
+    );
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 }
 
@@ -220,7 +302,11 @@ fn e3_starts_a_lone_ready_job_linear() {
     fx.add_job("api", &[], "");
     let (lead_branch, lead_worktree, _) = lead(&mut fx);
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "a Job started alone is linear");
+    assert_eq!(
+        allocated(&mut fx, "api-a1"),
+        (lead_branch, lead_worktree),
+        "a Job started alone is linear"
+    );
 }
 
 #[test]
@@ -229,7 +315,11 @@ fn e3_starts_a_ready_job_parallel_beside_a_live_parallel_attempt() {
     fx.add_running("busy", "running", &ago(1));
     fx.add_job("api", &[], "");
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "api-a1").0, parallel_branch("api-a1"), "a sibling of a live parallel Attempt is parallel");
+    assert_eq!(
+        allocated(&mut fx, "api-a1").0,
+        parallel_branch("api-a1"),
+        "a sibling of a live parallel Attempt is parallel"
+    );
 }
 
 #[test]
@@ -247,7 +337,9 @@ fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
 
 /// A config.toml whose `worker_runner` is `line` (a whole TOML line, or none), written over the engine's home after it started.
 fn write_config(fx: &Fx, line: &str) {
-    let text = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{line}\n\n[tmux]\nsocket = \"testkit\"\n");
+    let text = format!(
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{line}\n\n[tmux]\nsocket = \"testkit\"\n"
+    );
     std::fs::write(fx.engine.home.config(), text).unwrap();
 }
 
@@ -257,7 +349,9 @@ fn runners(fx: &mut Fx) -> Vec<(String, String)> {
         .store
         .read(|conn| {
             let mut stmt = conn.prepare("SELECT id, runner FROM attempts ORDER BY id")?;
-            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            Ok(stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -269,7 +363,10 @@ fn e3_starts_an_attempt_with_the_runner_the_config_names_now() {
     fx.add_job("api", &[], "");
     write_config(&fx, "worker_runner = \"durable\"");
     tick_on_fake_ports(&mut fx);
-    assert_eq!(runners(&mut fx), [("api-a1".to_owned(), "durable".to_owned())]);
+    assert_eq!(
+        runners(&mut fx),
+        [("api-a1".to_owned(), "durable".to_owned())]
+    );
 }
 
 /// pro-d199: a running Attempt keeps its stored runner and its driver; only the Attempt started after the change is `durable`.
@@ -282,11 +379,20 @@ fn e3_leaves_a_running_attempts_runner_and_process_alone_when_the_config_changes
     tick_on_fake_ports(&mut fx);
     assert_eq!(
         runners(&mut fx),
-        [("api-a1".to_owned(), "durable".to_owned()), ("busy-a1".to_owned(), "pi".to_owned())],
+        [
+            ("api-a1".to_owned(), "durable".to_owned()),
+            ("busy-a1".to_owned(), "pi".to_owned())
+        ],
         "the new Worker follows the file, the running one keeps `pi`"
     );
-    assert_eq!(fx.query::<String>("SELECT status FROM attempts WHERE id = 'busy-a1'"), "running");
-    assert_eq!(fx.query::<i64>("SELECT driver_pid FROM attempts WHERE id = 'busy-a1'"), 4242);
+    assert_eq!(
+        fx.query::<String>("SELECT status FROM attempts WHERE id = 'busy-a1'"),
+        "running"
+    );
+    assert_eq!(
+        fx.query::<i64>("SELECT driver_pid FROM attempts WHERE id = 'busy-a1'"),
+        4242
+    );
 }
 
 /// pro-d199: a config that does not parse starts no Attempt this tick and is reported (`engine.fail`), no stale value.

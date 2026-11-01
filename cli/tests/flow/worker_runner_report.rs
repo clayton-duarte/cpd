@@ -24,34 +24,60 @@ use super::worker_runner_durable::{durable_live, report, write_report};
 /// tests' concern (`worker_runner_durable`), not this file's: with no runner launched there is nothing to register.
 fn register_runner(live: &Live) {
     if let Some(runner) = live.fx.fakes.spawn.launches().get(1) {
-        let line = std::iter::once(runner.program.as_str()).chain(runner.args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
+        let line = std::iter::once(runner.program.as_str())
+            .chain(runner.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
         live.fx.fakes.spawn.set_cmdline(Pid(1001), &line);
     }
 }
 
 /// The Worker's Session of Attempt `id`.
 fn session_of(live: &Live, id: &str) -> String {
-    live.value(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"))
+    live.value(&format!(
+        "SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"
+    ))
 }
 
 /// What the runner's adapter does: `cpd session state <state>` with the Worker's Session.
 fn state(live: &Live, id: &str, state: &str) {
-    live.fx.cpd(&["session", "state", state, "--session", &session_of(live, id)]).ok();
+    live.fx
+        .cpd(&[
+            "session",
+            "state",
+            state,
+            "--session",
+            &session_of(live, id),
+        ])
+        .ok();
 }
 
 /// The report file of Attempt `id`.
 fn report_file(live: &Live, id: &str) -> PathBuf {
-    live.fx.env.cpd_home().join("run").join(PLAN).join("attempts").join(format!("{id}.report.json"))
+    live.fx
+        .env
+        .cpd_home()
+        .join("run")
+        .join(PLAN)
+        .join("attempts")
+        .join(format!("{id}.report.json"))
 }
 
 /// The nudges the driver sent for Job `api`.
 fn nudges(live: &Live) -> i64 {
-    live.value("SELECT count(*) FROM events WHERE plan = 'pay' AND job = 'api' AND kind = 'attempt-nudge'")
+    live.value(
+        "SELECT count(*) FROM events WHERE plan = 'pay' AND job = 'api' AND kind = 'attempt-nudge'",
+    )
 }
 
 fn assert_ended(live: &Live, id: &str, outcome: &str, cause: &str) {
     let attempt = live.attempt(id);
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!(outcome), &json!(cause)), "{attempt}\nevents: {:#?}", live.events(id));
+    assert_eq!(
+        (&attempt["outcome"], &attempt["cause"]),
+        (&json!(outcome), &json!(cause)),
+        "{attempt}\nevents: {:#?}",
+        live.events(id)
+    );
 }
 
 /// Every Event about Attempt `id`, as text: where the detail of an end is, whichever Event carries it.
@@ -87,10 +113,20 @@ fn a_durable_worker_that_submits_ends_merged_with_metrics_from_its_report() {
 
     assert_ended(&live, &id, "merged", "merged");
     let metrics = live.attempt(&id)["metrics"].clone();
-    assert!(metrics.is_object(), "A9 records the metrics of the report: {metrics}");
-    let duration = metrics["duration_s"].as_f64().unwrap_or_else(|| panic!("no duration_s in {metrics}"));
+    assert!(
+        metrics.is_object(),
+        "A9 records the metrics of the report: {metrics}"
+    );
+    let duration = metrics["duration_s"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no duration_s in {metrics}"));
     // The wall seconds of the Attempt on the ManualClock: at least the 10 minutes the test let pass, at most all the clock moved.
-    assert!(duration >= long.as_secs_f64() && duration <= waited.as_secs_f64(), "duration_s {duration} is not within [{}, {}]: {metrics}", long.as_secs(), waited.as_secs());
+    assert!(
+        duration >= long.as_secs_f64() && duration <= waited.as_secs_f64(),
+        "duration_s {duration} is not within [{}, {}]: {metrics}",
+        long.as_secs(),
+        waited.as_secs()
+    );
     let mut rest = metrics.clone();
     rest.as_object_mut().unwrap().remove("duration_s");
     assert_eq!(
@@ -115,8 +151,17 @@ fn an_idle_durable_worker_is_nudged_once_by_its_report_then_ends_no_submit() {
         }
         // Still no report: no nudge, the Attempt runs on. Then the turn's report lands (one turn, `stop`, no submit).
         2 => {
-            assert_eq!(nudges(live), 0, "an absent report while idle is waited for, not judged");
-            assert_eq!(live.attempt(id)["status"], "running", "{}", live.attempt(id));
+            assert_eq!(
+                nudges(live),
+                0,
+                "an absent report while idle is waited for, not judged"
+            );
+            assert_eq!(
+                live.attempt(id)["status"],
+                "running",
+                "{}",
+                live.attempt(id)
+            );
             write_report(live, id, &report("stop", 1));
         }
         // The nudge came; the Worker answers it with a second turn and is idle again.
@@ -132,11 +177,25 @@ fn an_idle_durable_worker_is_nudged_once_by_its_report_then_ends_no_submit() {
     assert_ended(&live, &id, "failed", "no_submit");
     let attempt = live.attempt(&id);
     assert_eq!(attempt["nudged"], true, "{attempt}");
-    let nudge = live.events(&id).into_iter().find(|e| e["kind"] == "attempt-nudge").expect("an attempt-nudge Event");
+    let nudge = live
+        .events(&id)
+        .into_iter()
+        .find(|e| e["kind"] == "attempt-nudge")
+        .expect("an attempt-nudge Event");
     assert_eq!(nudge["session"], attempt["worker_session"], "{nudge}");
-    assert!(nudge["data"]["prompt"].as_str().unwrap().starts_with("You ended your turn without running cpd attempt submit api-a1."), "{nudge}");
+    assert!(
+        nudge["data"]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("You ended your turn without running cpd attempt submit api-a1."),
+        "{nudge}"
+    );
     assert_eq!(nudges(&live), 1, "nudged once");
-    let retry = live.events(&id).into_iter().find(|e| e["kind"] == "attempt-retry").expect("an attempt-retry Event");
+    let retry = live
+        .events(&id)
+        .into_iter()
+        .find(|e| e["kind"] == "attempt-retry")
+        .expect("an attempt-retry Event");
     assert_eq!(retry["data"]["cause"], "no_submit", "{retry}");
 }
 
@@ -160,7 +219,11 @@ fn a_provider_error_in_the_end_report_ends_the_attempt_provider_error() {
     assert_eq!(nudges(&live), 0, "a provider error is not nudged");
     assert_eq!(live.job_status(JOB), "queued");
     let tier = live.attempt(&id)["tier"].clone();
-    let retry = live.events(&id).into_iter().find(|e| e["kind"] == "attempt-retry").expect("an attempt-retry Event");
+    let retry = live
+        .events(&id)
+        .into_iter()
+        .find(|e| e["kind"] == "attempt-retry")
+        .expect("an attempt-retry Event");
     assert_eq!(retry["data"]["cause"], "provider_error", "{retry}");
     assert_eq!(retry["data"]["next_tier"], tier, "{retry}");
 }
@@ -185,7 +248,17 @@ fn a_malformed_end_report_ends_the_attempt_crashed_and_names_the_file() {
     assert_ended(&live, &id, "failed", "crashed");
     let file = report_file(&live, &id).display().to_string();
     let detail = events_text(&live, &id);
-    assert!(detail.contains(&file), "the detail names the report file {file}: {detail}");
-    assert!(detail.contains(&parse_error), "the detail holds the parse error `{parse_error}`: {detail}");
-    assert_eq!(nudges(&live), 0, "a malformed report is not judged, so nothing is nudged");
+    assert!(
+        detail.contains(&file),
+        "the detail names the report file {file}: {detail}"
+    );
+    assert!(
+        detail.contains(&parse_error),
+        "the detail holds the parse error `{parse_error}`: {detail}"
+    );
+    assert_eq!(
+        nudges(&live),
+        0,
+        "a malformed report is not judged, so nothing is nudged"
+    );
 }

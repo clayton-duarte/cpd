@@ -31,7 +31,13 @@ fn explore_job(key: &str, status: &str) -> String {
 /// Attempt `<key>-a1` of explore Job `key` (`metrics` JSON stored: ended; `None`: running).
 fn explore_attempt(key: &str, metrics: Option<&str>) -> String {
     let (status, outcome, cause, ended, metrics) = match metrics {
-        Some(m) => ("ended", "'failed'", "'crashed'", "'2026-01-02T02:00:00.000Z'", format!("'{m}'")),
+        Some(m) => (
+            "ended",
+            "'failed'",
+            "'crashed'",
+            "'2026-01-02T02:00:00.000Z'",
+            format!("'{m}'"),
+        ),
         None => ("running", "NULL", "NULL", "NULL", "NULL".to_owned()),
     };
     format!(
@@ -57,7 +63,10 @@ fn work() -> String {
 /// Plan `pay` with Workflow `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
 fn mixed() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))));
+    run(
+        &mut store,
+        &(work() + &explore("look", Some(r#"{"cost_usd":0.40}"#))),
+    );
     (dir, store)
 }
 
@@ -96,7 +105,12 @@ fn an_explore_attempts_cost_is_in_no_workflow() {
 fn an_explore_attempts_cost_is_in_the_plans_cost() {
     let (_dir, mut store) = mixed();
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
-    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
+    let plan = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .find(|p| p.head.id.as_str() == "pay")
+        .unwrap();
     near(plan.cost_usd, 0.65);
 }
 
@@ -111,11 +125,17 @@ fn assert_every_cockpit_read_is_ok(store: &mut Store) {
     let context = ContextId::parse("ctx").unwrap();
     let reads: Vec<(&str, Result<(), CpdError>)> = vec![
         ("read::flow", read::flow(store, &pay()).map(drop)),
-        ("read::plan_boxes_at", read::plan_boxes_at(store, &pay(), NOW_MS).map(drop)),
+        (
+            "read::plan_boxes_at",
+            read::plan_boxes_at(store, &pay(), NOW_MS).map(drop),
+        ),
         ("read::tree_at", read::tree_at(store, Some(NOW)).map(drop)),
         ("read::widgets", read::widgets(store, 3, 5).map(drop)),
         ("read::slots", read::slots(store, 3).map(drop)),
-        ("read::pulse", read::pulse(store, &context, NOW_MS, 12).map(drop)),
+        (
+            "read::pulse",
+            read::pulse(store, &context, NOW_MS, 12).map(drop),
+        ),
     ];
     for (name, result) in reads {
         assert!(result.is_ok(), "{name} failed: {result:?}");
@@ -172,11 +192,21 @@ fn a_queued_explore_job_with_no_attempt_is_a_node_beside_the_pr_job() {
 #[test]
 fn a_queued_explore_job_with_an_ended_attempt_is_read_by_every_cockpit_read() {
     let (_dir, mut store) = store_with(&["api"]);
-    run(&mut store, &(work() + &explore_job("look", "queued") + &explore_attempt("look", Some(r#"{"cost_usd":0.40}"#))));
+    run(
+        &mut store,
+        &(work()
+            + &explore_job("look", "queued")
+            + &explore_attempt("look", Some(r#"{"cost_usd":0.40}"#))),
+    );
     assert_every_cockpit_read_is_ok(&mut store);
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     near(boxes.workflows[0].cost_usd, 0.25);
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
-    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
+    let plan = tree
+        .contexts
+        .iter()
+        .flat_map(|c| &c.plans)
+        .find(|p| p.head.id.as_str() == "pay")
+        .unwrap();
     near(plan.cost_usd, 0.65);
 }

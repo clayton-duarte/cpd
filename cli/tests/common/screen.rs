@@ -26,7 +26,9 @@ use cpd_core::clock::Clock;
 use cpd_tui::view_ports::{Input, Tty};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
 use ratatui::buffer::{Buffer, Cell as BufferCell, CellDiffOption};
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
@@ -66,7 +68,11 @@ impl Screen {
                 },
             })
             .collect();
-        Screen { width: buffer.area.width, height: buffer.area.height, cells }
+        Screen {
+            width: buffer.area.width,
+            height: buffer.area.height,
+            cells,
+        }
     }
 
     pub fn width(&self) -> u16 {
@@ -79,7 +85,12 @@ impl Screen {
 
     /// The cell at column `x`, row `y`; panics outside the screen.
     pub fn cell(&self, x: u16, y: u16) -> &Cell {
-        assert!(x < self.width && y < self.height, "cell ({x}, {y}) is outside the {}x{} screen", self.width, self.height);
+        assert!(
+            x < self.width && y < self.height,
+            "cell ({x}, {y}) is outside the {}x{} screen",
+            self.width,
+            self.height
+        );
         &self.cells[usize::from(y) * usize::from(self.width) + usize::from(x)]
     }
 
@@ -90,7 +101,10 @@ impl Screen {
         let (mut pieces, mut x) = (Vec::new(), 0);
         while x < self.width {
             let symbol = self.cell(x, y).symbol.as_str();
-            let link = symbol.strip_prefix("\x1b]8;;").and_then(|s| s.split_once('\x07')).map(|(_, text)| text.trim_end_matches("\x1b]8;;\x07"));
+            let link = symbol
+                .strip_prefix("\x1b]8;;")
+                .and_then(|s| s.split_once('\x07'))
+                .map(|(_, text)| text.trim_end_matches("\x1b]8;;\x07"));
             pieces.push((x, link.unwrap_or(symbol)));
             x += link.map_or(1, |text| text.chars().count().max(1) as u16);
         }
@@ -135,7 +149,13 @@ impl Screen {
         (0..self.height).find_map(|y| {
             let pieces = self.pieces(y);
             (0..pieces.len())
-                .find(|&i| pieces[i..].iter().map(|(_, piece)| *piece).collect::<String>().starts_with(text))
+                .find(|&i| {
+                    pieces[i..]
+                        .iter()
+                        .map(|(_, piece)| *piece)
+                        .collect::<String>()
+                        .starts_with(text)
+                })
                 .map(|i| (pieces[i].0, y))
         })
     }
@@ -147,7 +167,9 @@ impl Screen {
 
     /// The cell of the first character of `text`; panics when the screen does not show it.
     pub fn cell_of(&self, text: &str) -> &Cell {
-        let (x, y) = self.find(text).unwrap_or_else(|| panic!("{text:?} is not on the screen:\n{}", self.text()));
+        let (x, y) = self
+            .find(text)
+            .unwrap_or_else(|| panic!("{text:?} is not on the screen:\n{}", self.text()));
         self.cell(x, y)
     }
 }
@@ -195,7 +217,9 @@ pub struct Keys {
 impl Keys {
     /// An input that hands out `events` in order.
     pub fn script(events: impl IntoIterator<Item = Event>) -> Keys {
-        Keys { events: events.into_iter().collect() }
+        Keys {
+            events: events.into_iter().collect(),
+        }
     }
 
     /// How many events no `read` took yet.
@@ -206,12 +230,18 @@ impl Keys {
 
 impl Input for Keys {
     fn poll(&mut self, _wait: Duration) -> io::Result<bool> {
-        assert!(!self.events.is_empty(), "the script is over and the loop still polls");
+        assert!(
+            !self.events.is_empty(),
+            "the script is over and the loop still polls"
+        );
         Ok(true)
     }
 
     fn read(&mut self) -> io::Result<Event> {
-        Ok(self.events.pop_front().expect("the script is over and the loop still reads"))
+        Ok(self
+            .events
+            .pop_front()
+            .expect("the script is over and the loop still reads"))
     }
 }
 
@@ -229,7 +259,12 @@ impl Input for NoInput {
 
 /// One notch of the wheel (`ScrollUp` or `ScrollDown`) at 0-based `column`, `row` of the screen.
 pub fn wheel(kind: MouseEventKind, column: u16, row: u16) -> Event {
-    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    Event::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
 }
 
 /// A [`TestBackend`] the test keeps a handle to while the view owns the terminal: both read and write the same buffer.
@@ -242,7 +277,10 @@ type FrameHook = Box<dyn FnMut(&Screen)>;
 impl SharedBackend {
     /// A blank `width` x `height` screen.
     pub fn new(width: u16, height: u16) -> SharedBackend {
-        SharedBackend(Rc::new(RefCell::new(TestBackend::new(width, height))), Rc::default())
+        SharedBackend(
+            Rc::new(RefCell::new(TestBackend::new(width, height))),
+            Rc::default(),
+        )
     }
 
     /// The screen as the view drew it last.
@@ -313,9 +351,16 @@ impl Backend for SharedBackend {
 /// step; one step at most per frame, so a step's action is always seen by the frames after it. No sleep and no poll: a
 /// frame is what the view draws, and the signals of the scripted pump decide when. A script of signals that is over before
 /// the last step ran is a test that did not do what it says: [`Steps::finish`] fails and names the step.
+/// A scripted step: (name, is the screen ready, what to do then).
+type ScreenStep = (
+    String,
+    Box<dyn Fn(&Screen) -> bool>,
+    Box<dyn FnMut(&Screen)>,
+);
+
 #[derive(Clone, Default)]
 pub struct Steps {
-    todo: Rc<RefCell<VecDeque<(String, Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut(&Screen)>)>>>,
+    todo: Rc<RefCell<VecDeque<ScreenStep>>>,
 }
 
 impl Steps {
@@ -324,8 +369,15 @@ impl Steps {
     }
 
     /// At the first frame whose screen satisfies `when`: `then` runs.
-    pub fn at(self, what: &str, when: impl Fn(&Screen) -> bool + 'static, then: impl FnMut(&Screen) + 'static) -> Steps {
-        self.todo.borrow_mut().push_back((what.to_owned(), Box::new(when), Box::new(then)));
+    pub fn at(
+        self,
+        what: &str,
+        when: impl Fn(&Screen) -> bool + 'static,
+        then: impl FnMut(&Screen) + 'static,
+    ) -> Steps {
+        self.todo
+            .borrow_mut()
+            .push_back((what.to_owned(), Box::new(when), Box::new(then)));
         self
     }
 
@@ -354,13 +406,20 @@ impl Steps {
 
     /// The steps no frame reached yet, by what they wait for.
     pub fn pending(&self) -> Vec<String> {
-        self.todo.borrow().iter().map(|(what, ..)| what.clone()).collect()
+        self.todo
+            .borrow()
+            .iter()
+            .map(|(what, ..)| what.clone())
+            .collect()
     }
 
     /// Fails when a step was not reached: the view ended first.
     pub fn finish(&self) {
         let pending = self.pending();
-        assert!(pending.is_empty(), "the view ended before the steps {pending:?}");
+        assert!(
+            pending.is_empty(),
+            "the view ended before the steps {pending:?}"
+        );
     }
 }
 
@@ -375,7 +434,12 @@ pub fn right_click(column: u16, row: u16) -> Event {
 }
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
-    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    Event::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
 }
 
 /// One thing a [`Script`] does at a poll or a read.
@@ -433,12 +497,24 @@ pub struct Script {
 impl Script {
     /// An input that does `steps` in order; its idle polls nap on `clock` (the view's own).
     pub fn new(clock: Arc<dyn Clock>, steps: impl IntoIterator<Item = Step>) -> Script {
-        Script { clock, screen: None, steps: steps.into_iter().collect() }
+        Script {
+            clock,
+            screen: None,
+            steps: steps.into_iter().collect(),
+        }
     }
 
     /// As [`Script::new`], for a view drawing on `screen`: a [`Step::look`] is given what it drew so far.
-    pub fn on_screen(clock: Arc<dyn Clock>, screen: &SharedBackend, steps: impl IntoIterator<Item = Step>) -> Script {
-        Script { clock, screen: Some(screen.clone()), steps: steps.into_iter().collect() }
+    pub fn on_screen(
+        clock: Arc<dyn Clock>,
+        screen: &SharedBackend,
+        steps: impl IntoIterator<Item = Step>,
+    ) -> Script {
+        Script {
+            clock,
+            screen: Some(screen.clone()),
+            steps: steps.into_iter().collect(),
+        }
     }
 
     /// How many steps the loop did not reach.
@@ -452,7 +528,13 @@ impl Script {
             match self.steps.front_mut() {
                 Some(Step::Do(change)) => change(),
                 Some(Step::Look(look)) => {
-                    look(&self.screen.as_ref().expect("a Step::look needs Script::on_screen").screen());
+                    look(
+                        &self
+                            .screen
+                            .as_ref()
+                            .expect("a Step::look needs Script::on_screen")
+                            .screen(),
+                    );
                 }
                 _ => return,
             }
@@ -479,7 +561,9 @@ impl Input for Script {
         self.settle();
         match self.steps.pop_front() {
             Some(Step::Event(event)) => Ok(event),
-            Some(Step::Idle) => panic!("a read cannot be idle: the loop reads only what a poll said is there"),
+            Some(Step::Idle) => {
+                panic!("a read cannot be idle: the loop reads only what a poll said is there")
+            }
             Some(Step::Do(_) | Step::Look(_)) => unreachable!("settled above"),
             None => panic!("the script is over and the loop still reads"),
         }
@@ -498,7 +582,10 @@ pub struct Display {
 impl Display {
     /// A `width` x `height` display.
     pub fn new(width: u16, height: u16) -> Display {
-        Display { backend: Arc::new(Mutex::new(TestBackend::new(width, height))), flushes: Arc::default() }
+        Display {
+            backend: Arc::new(Mutex::new(TestBackend::new(width, height))),
+            flushes: Arc::default(),
+        }
     }
 
     fn backend(&self) -> std::sync::MutexGuard<'_, TestBackend> {
@@ -571,7 +658,10 @@ pub struct FakeTty {
 impl FakeTty {
     /// A terminal that is there (`terminal`) or not.
     pub fn new(terminal: bool) -> FakeTty {
-        FakeTty { terminal, log: Rc::default() }
+        FakeTty {
+            terminal,
+            log: Rc::default(),
+        }
     }
 }
 
@@ -595,7 +685,10 @@ pub struct Bytes(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Bytes {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -606,6 +699,9 @@ impl Write for Bytes {
 impl Bytes {
     /// Everything written so far.
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }

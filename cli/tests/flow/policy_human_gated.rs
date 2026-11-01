@@ -11,7 +11,11 @@ const KEY: &str = "pr.human_gated_contexts";
 fn human_gated_contexts_default_is_the_chromatic_pair() {
     let fx = world("");
     let out = show(&fx, false).ok();
-    assert_eq!(keys(&out)[KEY], json!({"value": ["UI Review", "UI Tests"], "source": "default"}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": ["UI Review", "UI Tests"], "source": "default"}),
+        "{out}"
+    );
 }
 
 #[test]
@@ -19,12 +23,24 @@ fn human_gated_contexts_is_set_by_an_owner_file_and_overridden_by_a_repo_file() 
     let fx = world("[pr]\nhuman_gated_contexts = [\"ci/review\"]\n");
     let out = show(&fx, false).ok();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": ["ci/review"], "source": owner}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": ["ci/review"], "source": owner}),
+        "{out}"
+    );
 
-    write(&fx, "acme/r.toml", "[pr]\nhuman_gated_contexts = [\"a\", \"b\"]\n");
+    write(
+        &fx,
+        "acme/r.toml",
+        "[pr]\nhuman_gated_contexts = [\"a\", \"b\"]\n",
+    );
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": ["a", "b"], "source": repo}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": ["a", "b"], "source": repo}),
+        "{out}"
+    );
 }
 
 #[test]
@@ -32,7 +48,11 @@ fn human_gated_contexts_empty_list_turns_it_off() {
     let fx = world("[pr]\nhuman_gated_contexts = []\n");
     let out = show(&fx, false).ok();
     let owner = format!("owner:{}", real(&fx, "acme/owner.toml"));
-    assert_eq!(keys(&out)[KEY], json!({"value": [], "source": owner}), "{out}");
+    assert_eq!(
+        keys(&out)[KEY],
+        json!({"value": [], "source": owner}),
+        "{out}"
+    );
 }
 
 #[test]

@@ -59,14 +59,20 @@ mod tests {
     #[test]
     fn the_longest_value_is_the_checks_limit() {
         assert_eq!(Validator::PlanId.max_len(), 24);
-        assert!(Validator::PlanId.check(&"a".repeat(24)).is_ok() && Validator::PlanId.check(&"a".repeat(25)).is_err());
+        assert!(
+            Validator::PlanId.check(&"a".repeat(24)).is_ok()
+                && Validator::PlanId.check(&"a".repeat(25)).is_err()
+        );
         assert_eq!(Validator::Title.max_len(), 200);
         assert_eq!(Validator::Name.max_len(), 80);
     }
 
     #[test]
     fn a_plan_id_is_the_contracts() {
-        assert_eq!(Validator::PlanId.check("  pay-4521 "), Ok("pay-4521".to_owned()));
+        assert_eq!(
+            Validator::PlanId.check("  pay-4521 "),
+            Ok("pay-4521".to_owned())
+        );
         for bad in ["", "a", "Pay", "1abc", "has space", &"a".repeat(25)] {
             assert!(Validator::PlanId.check(bad).is_err(), "{bad:?}");
         }
@@ -76,7 +82,10 @@ mod tests {
 
     #[test]
     fn a_title_is_1_to_200_characters_and_a_name_1_to_80() {
-        assert_eq!(Validator::Title.check(" A title "), Ok("A title".to_owned()));
+        assert_eq!(
+            Validator::Title.check(" A title "),
+            Ok("A title".to_owned())
+        );
         assert!(Validator::Title.check(&"é".repeat(200)).is_ok());
         for bad in ["", "   ", &"a".repeat(201), "a\tb"] {
             assert!(Validator::Title.check(bad).is_err(), "{bad:?}");
@@ -91,7 +100,12 @@ mod tests {
     fn a_refusal_carries_the_commands_reason() {
         assert!(Validator::Title.check("").unwrap_err().contains("1 to 200"));
         assert!(Validator::Name.check("").unwrap_err().contains("1 to 80"));
-        assert!(Validator::PlanId.check("Bad").unwrap_err().contains("Plan id"));
+        assert!(
+            Validator::PlanId
+                .check("Bad")
+                .unwrap_err()
+                .contains("Plan id")
+        );
     }
 
     #[test]

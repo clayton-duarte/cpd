@@ -20,7 +20,9 @@ fn stacked_fx(base_status: &str, branch: bool) -> (Fx, PathBuf) {
     let set = match base_status {
         "waiting" => "",
         "dispatch" => ", lead_worktree = '/wt', started_at = 't'",
-        "open" => ", lead_worktree = '/wt', started_at = 't', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pl')",
+        "open" => {
+            ", lead_worktree = '/wt', started_at = 't', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pl')"
+        }
         other => panic!("{other}"),
     };
     let mut sql = String::new();
@@ -51,7 +53,11 @@ fn job_add_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_op
     add_into(&fx, "web", "w1", &["nope/x.rs"]).ok();
     assert_eq!(job_row(&fx.env, "pl", "w1", "touches"), "[\"nope/x.rs\"]");
     // The check of an unstacked PR is still on.
-    refused(&add_into(&fx, "repo", "r1", &["nope/x.rs"]), "touches_missing", 3);
+    refused(
+        &add_into(&fx, "repo", "r1", &["nope/x.rs"]),
+        "touches_missing",
+        3,
+    );
     drop(fx);
 
     // The base PR is dispatch and its Lead Branch exists, without the path.
@@ -74,10 +80,25 @@ fn job_edit_skips_the_touches_check_for_a_pr_stacked_on_a_base_pr_that_has_not_o
 #[test]
 fn job_add_checks_the_touches_of_a_pr_stacked_on_an_open_base_pr_against_its_branch() {
     let (fx, _) = stacked_fx("open", true);
-    let (txns, evs, jobs) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
-    let error = refused(&add_into(&fx, "web", "w1", &["nope/x.rs"]), "touches_missing", 3);
+    let (txns, evs, jobs) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    let error = refused(
+        &add_into(&fx, "web", "w1", &["nope/x.rs"]),
+        "touches_missing",
+        3,
+    );
     assert_eq!(error["details"]["tree"], json!("cpd/pl"), "{error}");
     assert_eq!(error["details"]["missing"], json!(["nope/x.rs"]), "{error}");
-    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, jobs));
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, jobs)
+    );
     add_into(&fx, "web", "w2", &["src/a.rs", "src/new.rs"]).ok();
 }

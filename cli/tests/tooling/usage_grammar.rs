@@ -3,12 +3,15 @@
 
 use clap::{Arg, Command, CommandFactory};
 use cpd::cli::Cli;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const REGENERATE: &str = "CPD_BLESS=1 scripts/cargo.sh test -p cpd --test tooling usage_grammar";
 
 fn is_required_flag(cmd: &Command, arg: &Arg) -> bool {
-    arg.is_required_set() && !cmd.get_groups().any(|g| g.get_args().any(|id| id == arg.get_id()))
+    arg.is_required_set()
+        && !cmd
+            .get_groups()
+            .any(|g| g.get_args().any(|id| id == arg.get_id()))
 }
 
 fn usage(path: &str, cmd: &Command) -> Value {
@@ -21,7 +24,9 @@ fn usage(path: &str, cmd: &Command) -> Value {
             let takes = match (range.min_values(), range.max_values()) {
                 (0, 0) => false,
                 (1, 1) => true,
-                (lo, hi) => panic!("`{path}` argument '--{long}' takes {lo}..{hi} values; the grammar file cannot express it"),
+                (lo, hi) => panic!(
+                    "`{path}` argument '--{long}' takes {lo}..{hi} values; the grammar file cannot express it"
+                ),
             };
             flags.insert(format!("--{long}"), Value::Bool(takes));
             if is_required_flag(cmd, arg) {
@@ -46,12 +51,19 @@ fn usage(path: &str, cmd: &Command) -> Value {
 }
 
 fn walk(cmd: &Command, path: &str, out: &mut Map<String, Value>) {
-    let subs: Vec<&Command> = cmd.get_subcommands().filter(|c| c.get_name() != "help").collect();
+    let subs: Vec<&Command> = cmd
+        .get_subcommands()
+        .filter(|c| c.get_name() != "help")
+        .collect();
     if path.is_empty() || subs.is_empty() || !cmd.is_subcommand_required_set() {
         out.insert(path.to_owned(), usage(path, cmd));
     }
     for c in subs {
-        let p = if path.is_empty() { c.get_name().to_owned() } else { format!("{path} {}", c.get_name()) };
+        let p = if path.is_empty() {
+            c.get_name().to_owned()
+        } else {
+            format!("{path} {}", c.get_name())
+        };
         walk(c, &p, out);
     }
 }
@@ -82,7 +94,9 @@ fn usage_file_is_generated_from_the_binary() {
             n += 1;
             let (x, y) = (a.next(), b.next());
             if x != y {
-                panic!("pi/test/cpd-usage.json differs from the clap tree at line {n}:\n  file:   {x:?}\n  binary: {y:?}\nRegenerate: {REGENERATE}");
+                panic!(
+                    "pi/test/cpd-usage.json differs from the clap tree at line {n}:\n  file:   {x:?}\n  binary: {y:?}\nRegenerate: {REGENERATE}"
+                );
             }
             if x.is_none() {
                 break;

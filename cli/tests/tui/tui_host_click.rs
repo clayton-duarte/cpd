@@ -45,7 +45,10 @@ fn fixture(manager: bool) -> TestEnv {
 /// A `tmux` on `PATH` that records its argv (env.calls) and then runs the built fake tmux, so no real
 /// tmux server ever starts.
 fn recording_fake_tmux(env: &TestEnv) {
-    env.fake("tmux", &format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_fake-tmux")));
+    env.fake(
+        "tmux",
+        &format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_fake-tmux")),
+    );
 }
 
 /// Context `host` and its stopped, by-user Manager: the row the install script creates.
@@ -67,12 +70,40 @@ fn register_manager(env: &TestEnv) {
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", MAIN_WINDOW, "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let tree = ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        MAIN_WINDOW,
+        "-x",
+        "215",
+        "-y",
+        "62",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        &format!("sleep {SLEEP_SECONDS}"),
+    ]);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let chat = ok(&[
+        "split-window",
+        "-d",
+        "-t",
+        &tree,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        &format!("sleep {SLEEP_SECONDS}"),
+    ]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
 }
 
@@ -102,12 +133,22 @@ fn action(env: &TestEnv) -> Run {
 
 /// The `session-message` Events, in order.
 fn messages(env: &TestEnv) -> Vec<Value> {
-    env.cpd(&["events", "list", "--kind", "session-message"]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", "session-message"])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 /// The `@cpd_session` of the chat slot of `cpd:main` (empty while the placeholder holds it).
 fn chat_slot_session(env: &TestEnv) -> String {
-    let out = env.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}\t#{@cpd_view}"]);
+    let out = env.tmux(&[
+        "list-panes",
+        "-t",
+        "=cpd:main",
+        "-F",
+        "#{@cpd_session}\t#{@cpd_view}",
+    ]);
     let text = String::from_utf8(out.stdout).unwrap();
     for line in text.lines() {
         let (session, view) = line.split_once('\t').expect("session and view");
@@ -120,7 +161,10 @@ fn chat_slot_session(env: &TestEnv) -> String {
 
 /// The recorded `display-message` calls.
 fn display_messages(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-message")).collect()
+    env.calls("tmux")
+        .into_iter()
+        .filter(|c| c.iter().any(|a| a == "display-message"))
+        .collect()
 }
 
 #[test]
@@ -129,19 +173,40 @@ fn a_click_opens_the_host_manager_and_sends_the_incident_once() {
     write_state(&env, "skipped", Some("dirty"), "2026-10-24T10:00:00Z");
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
     let events = messages(&env);
     assert_eq!(events.len(), 1, "{events:?}");
     let event = &events[0];
-    assert_eq!((&event["kind"], &event["session"]), (&json!("session-message"), &json!(MANAGER)));
-    assert_eq!(event["data"]["from"], Value::Null, "the User's side, not an agent: {event}");
+    assert_eq!(
+        (&event["kind"], &event["session"]),
+        (&json!("session-message"), &json!(MANAGER))
+    );
+    assert_eq!(
+        event["data"]["from"],
+        Value::Null,
+        "the User's side, not an agent: {event}"
+    );
     assert_eq!(event["data"]["unblocks"], "cpd install skipped", "{event}");
     let text = event["data"]["text"].as_str().expect("a message text");
-    assert!(text.contains("dirty") && text.contains(CHECKOUT) && text.contains("2026-10-24T10:00:00Z"), "{text}");
+    assert!(
+        text.contains("dirty") && text.contains(CHECKOUT) && text.contains("2026-10-24T10:00:00Z"),
+        "{text}"
+    );
 
-    assert_eq!(chat_slot_session(&env), MANAGER, "the Manager is in the chat slot");
-    assert_eq!(fs::read_to_string(marker_path(&env)).unwrap(), "2026-10-24T10:00:00Z\n");
+    assert_eq!(
+        chat_slot_session(&env),
+        MANAGER,
+        "the Manager is in the chat slot"
+    );
+    assert_eq!(
+        fs::read_to_string(marker_path(&env)).unwrap(),
+        "2026-10-24T10:00:00Z\n"
+    );
 }
 
 #[test]
@@ -150,12 +215,20 @@ fn a_click_when_the_state_is_ok_does_nothing() {
     write_state(&env, "ok", None, "2026-10-24T10:00:00Z");
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
     assert!(messages(&env).is_empty(), "{:?}", messages(&env));
     assert!(!marker_path(&env).exists(), "no incident, no marker");
     assert_eq!(chat_slot_session(&env), "", "the Manager is not opened");
-    assert!(display_messages(&env).is_empty(), "{:?}", display_messages(&env));
+    assert!(
+        display_messages(&env).is_empty(),
+        "{:?}",
+        display_messages(&env)
+    );
 }
 
 #[test]
@@ -164,11 +237,18 @@ fn a_click_without_a_host_manager_reports_on_the_client_and_exits_0() {
     write_state(&env, "skipped", Some("dirty"), "2026-10-24T10:00:00Z");
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
     assert!(messages(&env).is_empty(), "no Manager to wake");
     let displays = display_messages(&env);
-    let call = displays.iter().find(|c| c.iter().any(|a| a == NO_MANAGER)).unwrap_or_else(|| panic!("no {NO_MANAGER:?}: {displays:?}"));
+    let call = displays
+        .iter()
+        .find(|c| c.iter().any(|a| a == NO_MANAGER))
+        .unwrap_or_else(|| panic!("no {NO_MANAGER:?}: {displays:?}"));
     assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
 }
 
@@ -178,11 +258,18 @@ fn a_new_incident_is_announced_again() {
     write_state(&env, "skipped", Some("dirty"), "2026-10-24T10:00:00Z");
     action(&env);
     assert_eq!(messages(&env).len(), 1, "{:?}", messages(&env));
-    assert_eq!(fs::read_to_string(marker_path(&env)).unwrap(), "2026-10-24T10:00:00Z\n");
+    assert_eq!(
+        fs::read_to_string(marker_path(&env)).unwrap(),
+        "2026-10-24T10:00:00Z\n"
+    );
 
     // The same incident again: the click only opens the Manager.
     action(&env);
-    assert_eq!(messages(&env).len(), 1, "the same incident is announced once");
+    assert_eq!(
+        messages(&env).len(),
+        1,
+        "the same incident is announced once"
+    );
     assert_eq!(chat_slot_session(&env), MANAGER);
 
     // A new incident is a new `since`: it is announced again.
@@ -193,5 +280,8 @@ fn a_new_incident_is_announced_again() {
     assert_eq!(events.len(), 2, "{events:?}");
     let text = events[1]["data"]["text"].as_str().expect("a message text");
     assert!(text.contains("branch") && text.contains(next), "{text}");
-    assert_eq!(fs::read_to_string(marker_path(&env)).unwrap(), format!("{next}\n"));
+    assert_eq!(
+        fs::read_to_string(marker_path(&env)).unwrap(),
+        format!("{next}\n")
+    );
 }

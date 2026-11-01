@@ -18,7 +18,13 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 5] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Deploy, Phase::Done];
+    pub const ALL: [Phase; 5] = [
+        Phase::Grounding,
+        Phase::Plan,
+        Phase::Dispatch,
+        Phase::Deploy,
+        Phase::Done,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -57,22 +63,62 @@ pub struct PlanRow {
 const COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline";
 
 /// The columns as SQLite returns them, before parsing.
-type Raw = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+type Raw = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?))
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
+    ))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline) = raw;
+        let (
+            id,
+            context,
+            title,
+            jira,
+            phase,
+            lead_session,
+            created_at,
+            locked_at,
+            done_at,
+            archived_at,
+            outline,
+        ) = raw;
         let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
-        let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
+        let field =
+            |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
-            lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
-            outline: outline.map(|text| Outline::stored(id.as_str(), &text)).transpose()?,
+            lead_session: SessionId::parse(&lead_session)
+                .map_err(|_| field("lead_session", &lead_session))?,
+            outline: outline
+                .map(|text| Outline::stored(id.as_str(), &text))
+                .transpose()?,
             title,
             jira,
             created_at,
@@ -94,15 +140,27 @@ impl PlanRow {
 }
 
 /// Every Plan matching `filter` (SQL after `WHERE`), oldest first; a deleted Plan is no Plan (contract §2.2 "Deleted").
-pub(super) fn query(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<PlanRow>, CpdError> {
+pub(super) fn query(
+    conn: &Connection,
+    filter: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<PlanRow>, CpdError> {
     let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM plans WHERE deleted_at IS NULL AND ({filter}) ORDER BY created_at, id"))?;
-    let rows = stmt.query_map(params, raw)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = stmt
+        .query_map(params, raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(PlanRow::parse).collect()
 }
 
 /// The Plan `id`, if it exists and is not deleted.
 pub fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, CpdError> {
-    let raw = conn.query_row(&format!("SELECT {COLUMNS} FROM plans WHERE id = ?1 AND deleted_at IS NULL"), [id.as_str()], raw).optional()?;
+    let raw = conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM plans WHERE id = ?1 AND deleted_at IS NULL"),
+            [id.as_str()],
+            raw,
+        )
+        .optional()?;
     raw.map(PlanRow::parse).transpose()
 }
 
@@ -143,7 +201,9 @@ mod tests {
             json!({"id": "pay", "context": "ctx", "title": "Pay", "jira": "PAY-1", "phase": "grounding", "lead_session": "lead1",
                    "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null})
         );
-        let all = store.read(|conn| query(conn, "context = ?1", &[&"ctx"])).unwrap();
+        let all = store
+            .read(|conn| query(conn, "context = ?1", &[&"ctx"]))
+            .unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].to_json(), plan.to_json());
     }

@@ -36,7 +36,10 @@ fn vars() -> BTreeMap<OsString, OsString> {
 fn message(payload: Box<dyn Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(text) => *text,
-        Err(payload) => payload.downcast::<&str>().map(|text| (*text).to_owned()).unwrap_or_default(),
+        Err(payload) => payload
+            .downcast::<&str>()
+            .map(|text| (*text).to_owned())
+            .unwrap_or_default(),
     }
 }
 
@@ -50,7 +53,13 @@ fn panics(f: impl FnOnce()) -> String {
 
 /// The `txns` row the newest write left: (`cwd`, `session`), what the product read from the process when it wrote.
 fn last_txn(fx: &Fx) -> (String, Option<String>) {
-    fx.env.read(|conn| conn.query_row("SELECT cwd, session FROM txns ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?))))
+    fx.env.read(|conn| {
+        conn.query_row(
+            "SELECT cwd, session FROM txns ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    })
 }
 
 /// The Lead worktree of PR `repo` in `open_pr`: a plain directory, where `gh` runs.
@@ -96,7 +105,11 @@ fn call(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Call {
 
 /// A launch of `cpd <args>`, as a command that starts a `cpd` child hands it to `Spawn`.
 fn launch(args: &[&str]) -> Launch {
-    Launch { program: "/opt/cpd/bin/cpd".to_owned(), args: args.iter().map(|a| (*a).to_owned()).collect(), ..Launch::default() }
+    Launch {
+        program: "/opt/cpd/bin/cpd".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        ..Launch::default()
+    }
 }
 
 // ---- Fx::cpd through run_with
@@ -111,8 +124,15 @@ fn cpd_config_on_fake_ports_returns_the_config_json_with_no_process() {
     let json = run.ok();
     assert_eq!(json["config"]["machine"], "m1");
     assert_eq!(json["sources"]["machine"], "file");
-    assert_eq!(json["path"], fx.env.cpd_home().join("config.toml").display().to_string());
-    assert_eq!(waitpid(None, Some(WaitPidFlag::WNOHANG)), Err(Errno::ECHILD), "a child process lived while the command ran");
+    assert_eq!(
+        json["path"],
+        fx.env.cpd_home().join("config.toml").display().to_string()
+    );
+    assert_eq!(
+        waitpid(None, Some(WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD),
+        "a child process lived while the command ran"
+    );
 }
 
 #[test]
@@ -121,7 +141,10 @@ fn cpd_on_fake_ports_returns_the_json_of_a_store_command() {
 
     let run = fx.cpd_with(fx.env.root(), &["events", "list"], &[("PATH", "")]);
 
-    assert_eq!((run.exit, run.json()), (0, json!({"ok": true, "events": [], "next": 0})));
+    assert_eq!(
+        (run.exit, run.json()),
+        (0, json!({"ok": true, "events": [], "next": 0}))
+    );
 }
 
 #[test]
@@ -141,20 +164,46 @@ fn cpd_in_on_fake_ports_runs_in_the_directory_and_restores_it() {
     let elsewhere = fx.env.root().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
 
-    fx.cpd_in(&elsewhere, &["context", "new", "c1", "--title", "T", "--owner", "acme"]).ok();
+    fx.cpd_in(
+        &elsewhere,
+        &["context", "new", "c1", "--title", "T", "--owner", "acme"],
+    )
+    .ok();
 
-    assert_eq!(std::path::PathBuf::from(last_txn(&fx).0).canonicalize().unwrap(), elsewhere.canonicalize().unwrap());
-    assert_eq!(std::env::current_dir().unwrap(), before, "the directory is put back after the call");
+    assert_eq!(
+        std::path::PathBuf::from(last_txn(&fx).0)
+            .canonicalize()
+            .unwrap(),
+        elsewhere.canonicalize().unwrap()
+    );
+    assert_eq!(
+        std::env::current_dir().unwrap(),
+        before,
+        "the directory is put back after the call"
+    );
 }
 
 #[test]
 fn cpd_with_on_fake_ports_sets_the_variables_for_the_call_and_restores_them() {
     let fx = fx();
 
-    fx.cpd_with(fx.env.root(), &["context", "new", "c1", "--title", "T", "--owner", "acme"], &[("CPD_SESSION", "s1")]).ok();
+    fx.cpd_with(
+        fx.env.root(),
+        &["context", "new", "c1", "--title", "T", "--owner", "acme"],
+        &[("CPD_SESSION", "s1")],
+    )
+    .ok();
 
-    assert_eq!(last_txn(&fx).1.as_deref(), Some("s1"), "the call saw the variable");
-    assert_eq!(std::env::var_os("CPD_SESSION"), None, "the variable is gone after the call");
+    assert_eq!(
+        last_txn(&fx).1.as_deref(),
+        Some("s1"),
+        "the call saw the variable"
+    );
+    assert_eq!(
+        std::env::var_os("CPD_SESSION"),
+        None,
+        "the variable is gone after the call"
+    );
 }
 
 // ---- Fx::fake and calls
@@ -167,9 +216,18 @@ fn a_command_that_runs_gh_reaches_the_scripted_reply() {
 
     let run = fx.cpd(&["pr", "view", "--plan", "pay"]);
 
-    assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("gh_failed", 1));
+    assert_eq!(
+        (run.error()["code"].as_str().unwrap(), run.exit),
+        ("gh_failed", 1)
+    );
     let details = &run.error()["details"];
-    assert!(details["stderr"].as_str().unwrap().contains("bad credentials"), "{details}");
+    assert!(
+        details["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("bad credentials"),
+        "{details}"
+    );
 }
 
 #[test]
@@ -185,10 +243,28 @@ fn calls_shows_the_argv_environment_and_directory_of_a_gh_call() {
     assert_eq!(calls[0].tool, "gh");
     assert_eq!(
         calls[0].args,
-        ["pr", "view", "812", "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"]
+        [
+            "pr",
+            "view",
+            "812",
+            "--json",
+            "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"
+        ]
     );
-    assert!(calls[0].envs.contains(&("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned()))), "{:?}", calls[0].envs);
-    assert!(calls[0].envs.contains(&("NO_COLOR".to_owned(), Some("1".to_owned()))), "{:?}", calls[0].envs);
+    assert!(
+        calls[0]
+            .envs
+            .contains(&("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned()))),
+        "{:?}",
+        calls[0].envs
+    );
+    assert!(
+        calls[0]
+            .envs
+            .contains(&("NO_COLOR".to_owned(), Some("1".to_owned()))),
+        "{:?}",
+        calls[0].envs
+    );
     assert_eq!(calls[0].cwd.as_deref(), Some(lead(&fx).as_path()));
 }
 
@@ -205,7 +281,16 @@ fn fake_answers_a_program_by_its_file_name() {
     let fx = fx();
     fx.fake("curl", Reply::ok("body"));
 
-    let out = fx.fakes.ports.runner.run(&call("/usr/bin/curl", &["-s", "https://example.test/x"], None)).expect("the scripted reply");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call(
+            "/usr/bin/curl",
+            &["-s", "https://example.test/x"],
+            None,
+        ))
+        .expect("the scripted reply");
 
     assert_eq!((out.status.code(), out.stdout), (Some(0), b"body".to_vec()));
     assert_eq!(fx.calls("curl").len(), 1);
@@ -216,7 +301,16 @@ fn fake_pi_answers_a_call_fed_on_stdin_and_exposes_the_stdin_it_got() {
     let fx = fx();
     fx.fake_pi(Reply::ok("{\"type\":\"agent_end\"}\n"));
 
-    let out = fx.fakes.ports.runner.run(&call("pi", &["--mode", "json", "--no-session"], Some(b"the prompt"))).expect("the scripted reply");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call(
+            "pi",
+            &["--mode", "json", "--no-session"],
+            Some(b"the prompt"),
+        ))
+        .expect("the scripted reply");
 
     assert_eq!(out.stdout, b"{\"type\":\"agent_end\"}\n");
     let calls = fx.calls("pi");
@@ -230,7 +324,12 @@ fn fake_op_answers_a_call_of_op() {
     let fx = fx();
     fx.fake_op(Reply::ok("s3cret\n"));
 
-    let out = fx.fakes.ports.runner.run(&call("op", &["read", "op://vault/item/field"], None)).expect("the scripted reply");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("op", &["read", "op://vault/item/field"], None))
+        .expect("the scripted reply");
 
     assert_eq!(out.stdout, b"s3cret\n");
     assert_eq!(fx.calls("op").len(), 1);
@@ -241,7 +340,12 @@ fn fake_node_answers_a_call_of_node() {
     let fx = fx();
     fx.fake_node(Reply::exit(3, "", "boom"));
 
-    let out = fx.fakes.ports.runner.run(&call("node", &["script.js"], None)).expect("the scripted reply");
+    let out = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("node", &["script.js"], None))
+        .expect("the scripted reply");
 
     assert_eq!((out.status.code(), out.stderr), (Some(3), b"boom".to_vec()));
     assert_eq!(fx.calls("node").len(), 1);
@@ -256,7 +360,10 @@ fn cpd_silent_passes_for_a_command_that_writes_nothing_and_refuses_one_that_does
     fx.cpd_silent(&["tui", "action", "logs", "--client", "c1"]);
 
     let text = panics(|| fx.cpd_silent(&["events", "list"]));
-    assert!(text.contains("events") && text.contains("expected exit 0 and nothing"), "{text}");
+    assert!(
+        text.contains("events") && text.contains("expected exit 0 and nothing"),
+        "{text}"
+    );
 }
 
 // ---- unscripted calls
@@ -271,28 +378,45 @@ fn an_unscripted_external_call_is_refused_at_drop_naming_the_program_and_argv() 
     let text = panics(|| drop(fx));
 
     assert!(text.contains("gh"), "{text}");
-    assert!(text.contains("pr") && text.contains("view") && text.contains("812"), "the message names the argv: {text}");
+    assert!(
+        text.contains("pr") && text.contains("view") && text.contains("812"),
+        "the message names the argv: {text}"
+    );
 }
 
 #[test]
 fn an_unscripted_call_of_another_program_is_refused_though_gh_is_scripted() {
     let fx = fx();
     fx.fake_gh(Reply::ok("{}"));
-    let _ = fx.fakes.ports.runner.run(&call("curl", &["--silent", "https://example.test/x"], None));
+    let _ = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("curl", &["--silent", "https://example.test/x"], None));
 
     let text = panics(|| drop(fx));
 
     assert!(text.contains("curl"), "{text}");
-    assert!(text.contains("--silent") && text.contains("https://example.test/x"), "the message names the argv: {text}");
+    assert!(
+        text.contains("--silent") && text.contains("https://example.test/x"),
+        "the message names the argv: {text}"
+    );
 }
 
 #[test]
 fn allow_unscripted_lifts_the_refusal_at_drop() {
     let fx = fx();
     fx.allow_unscripted();
-    let _ = fx.fakes.ports.runner.run(&call("curl", &["--silent", "https://example.test/x"], None));
+    let _ = fx
+        .fakes
+        .ports
+        .runner
+        .run(&call("curl", &["--silent", "https://example.test/x"], None));
 
-    assert!(catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(), "drop refused a call that was allowed");
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(),
+        "drop refused a call that was allowed"
+    );
 }
 
 #[test]
@@ -301,7 +425,10 @@ fn scripted_calls_alone_are_not_refused_at_drop() {
     fx.fake_op(Reply::ok("x"));
     let _ = fx.fakes.ports.runner.run(&call("op", &["whoami"], None));
 
-    assert!(catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(), "drop refused a scripted call");
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| drop(fx))).is_ok(),
+        "drop refused a scripted call"
+    );
 }
 
 #[test]
@@ -330,7 +457,10 @@ fn advance_adds_up_and_is_no_nap() {
     fx.advance(Duration::from_millis(500));
 
     assert_eq!(fx.fakes.clock.elapsed(), Duration::from_millis(5500));
-    assert!(fx.fakes.clock.naps().is_empty(), "an advance is time passing, not a caller sleeping");
+    assert!(
+        fx.fakes.clock.naps().is_empty(),
+        "an advance is time passing, not a caller sleeping"
+    );
 }
 
 #[test]
@@ -357,12 +487,24 @@ fn until_returns_as_soon_as_the_condition_holds_and_advances_in_equal_steps() {
         seen.len() == 4
     });
 
-    assert_eq!(seen.len(), 4, "it looked again after each step, and stopped at the first true: {seen:?}");
+    assert_eq!(
+        seen.len(),
+        4,
+        "it looked again after each step, and stopped at the first true: {seen:?}"
+    );
     assert_eq!(seen[0], Duration::ZERO, "the first look is before any step");
     let step = seen[1] - seen[0];
     assert!(step > Duration::ZERO, "{seen:?}");
-    assert_eq!([seen[2] - seen[1], seen[3] - seen[2]], [step, step], "a step is the clock's tick every time: {seen:?}");
-    assert_eq!(fx.fakes.clock.elapsed(), seen[3], "it advanced no further once the condition held");
+    assert_eq!(
+        [seen[2] - seen[1], seen[3] - seen[2]],
+        [step, step],
+        "a step is the clock's tick every time: {seen:?}"
+    );
+    assert_eq!(
+        fx.fakes.clock.elapsed(),
+        seen[3],
+        "it advanced no further once the condition held"
+    );
 }
 
 #[test]
@@ -387,10 +529,19 @@ fn until_fails_with_the_virtual_time_it_waited_when_the_condition_never_holds() 
         })
     });
 
-    let waited = text.split_once("waited ").and_then(|(_, rest)| rest.split_once(" virtual time")).map(|(limit, _)| limit.to_owned());
-    assert!(waited.is_some_and(|limit| !limit.trim().is_empty()), "the text is `waited <limit> virtual time`: {text}");
+    let waited = text
+        .split_once("waited ")
+        .and_then(|(_, rest)| rest.split_once(" virtual time"))
+        .map(|(limit, _)| limit.to_owned());
+    assert!(
+        waited.is_some_and(|limit| !limit.trim().is_empty()),
+        "the text is `waited <limit> virtual time`: {text}"
+    );
     assert!(looks > 1, "it looked again after each step: {looks}");
-    assert!(fx.fakes.clock.elapsed() > Duration::ZERO, "the limit is virtual time that passed");
+    assert!(
+        fx.fakes.clock.elapsed() > Duration::ZERO,
+        "the limit is virtual time that passed"
+    );
 }
 
 // ---- launched children
@@ -400,8 +551,16 @@ fn take_launch_returns_the_launch_the_fake_spawn_recorded() {
     let fx = fx();
     let first = launch(&["attempt", "run", "a1", "--plan", "pay"]);
     let second = launch(&["pr", "poll"]);
-    fx.fakes.ports.spawn.spawn(&first).expect("the fake records it");
-    fx.fakes.ports.spawn.spawn(&second).expect("the fake records it");
+    fx.fakes
+        .ports
+        .spawn
+        .spawn(&first)
+        .expect("the fake records it");
+    fx.fakes
+        .ports
+        .spawn
+        .spawn(&second)
+        .expect("the fake records it");
 
     assert_eq!(fx.take_launch(0), first);
     assert_eq!(fx.take_launch(1), second);
@@ -410,13 +569,24 @@ fn take_launch_returns_the_launch_the_fake_spawn_recorded() {
 #[test]
 fn run_launch_runs_the_recorded_cpd_through_run_with_and_returns_its_run() {
     let fx = fx();
-    fx.fakes.ports.spawn.spawn(&launch(&["events", "list"])).expect("the fake records it");
+    fx.fakes
+        .ports
+        .spawn
+        .spawn(&launch(&["events", "list"]))
+        .expect("the fake records it");
     let recorded = fx.take_launch(0);
 
     let run = fx.run_launch(&recorded);
 
-    assert_eq!((run.exit, run.json()), (0, json!({"ok": true, "events": [], "next": 0})));
-    assert_eq!(waitpid(None, Some(WaitPidFlag::WNOHANG)), Err(Errno::ECHILD), "a child process lived while the launch ran");
+    assert_eq!(
+        (run.exit, run.json()),
+        (0, json!({"ok": true, "events": [], "next": 0}))
+    );
+    assert_eq!(
+        waitpid(None, Some(WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD),
+        "a child process lived while the launch ran"
+    );
 }
 
 #[test]
@@ -429,8 +599,16 @@ fn run_launch_sets_the_launch_variables_for_the_run_and_restores_them() {
 
     fx.run_launch(&launch).ok();
 
-    assert_eq!(last_txn(&fx).1.as_deref(), Some("s1"), "the launched cpd saw the variable");
-    assert_eq!(std::env::var_os("CPD_SESSION"), None, "the variable is gone after the run");
+    assert_eq!(
+        last_txn(&fx).1.as_deref(),
+        Some("s1"),
+        "the launched cpd saw the variable"
+    );
+    assert_eq!(
+        std::env::var_os("CPD_SESSION"),
+        None,
+        "the variable is gone after the run"
+    );
 }
 
 #[test]
@@ -447,7 +625,11 @@ fn run_launch_removes_the_variables_the_launch_removes_for_the_run() {
     fx.run_launch(&launch).ok();
 
     assert_eq!(last_txn(&fx).1, None, "the launched cpd saw no CPD_SESSION");
-    assert_eq!(std::env::var_os("CPD_SESSION"), Some("outer".into()), "the variable is put back after the run");
+    assert_eq!(
+        std::env::var_os("CPD_SESSION"),
+        Some("outer".into()),
+        "the variable is put back after the run"
+    );
 }
 
 #[test]
@@ -456,11 +638,19 @@ fn run_launch_runs_in_the_launch_directory_and_restores_the_directory() {
     let before = std::env::current_dir().unwrap();
     let there = fx.env.root().join("there");
     std::fs::create_dir_all(&there).unwrap();
-    let launch = Launch { cwd: Some(there.clone()), ..launch(&["context", "new", "c1", "--title", "T", "--owner", "acme"]) };
+    let launch = Launch {
+        cwd: Some(there.clone()),
+        ..launch(&["context", "new", "c1", "--title", "T", "--owner", "acme"])
+    };
 
     fx.run_launch(&launch).ok();
 
-    assert_eq!(std::path::PathBuf::from(last_txn(&fx).0).canonicalize().unwrap(), there.canonicalize().unwrap());
+    assert_eq!(
+        std::path::PathBuf::from(last_txn(&fx).0)
+            .canonicalize()
+            .unwrap(),
+        there.canonicalize().unwrap()
+    );
     assert_eq!(std::env::current_dir().unwrap(), before);
 }
 
@@ -470,7 +660,10 @@ fn run_launch_runs_in_the_launch_directory_and_restores_the_directory() {
 fn two_fx_in_one_process_do_not_overlap() {
     let fx = fx();
 
-    assert!(Fx::try_new().is_none(), "another Fx lived while this one did");
+    assert!(
+        Fx::try_new().is_none(),
+        "another Fx lived while this one did"
+    );
     drop(fx);
     assert!(Fx::try_new().is_some(), "the lock was not released at drop");
 }
@@ -480,7 +673,11 @@ fn the_environment_is_restored_when_an_fx_on_fake_ports_drops() {
     let before = vars();
     let cwd = std::env::current_dir().unwrap();
     let fx = fx();
-    assert_eq!(std::env::var_os("CPD_HOME"), Some(fx.env.cpd_home().into()), "the environment is set once, at the start");
+    assert_eq!(
+        std::env::var_os("CPD_HOME"),
+        Some(fx.env.cpd_home().into()),
+        "the environment is set once, at the start"
+    );
     fx.cpd(&["config"]).ok();
 
     drop(fx);

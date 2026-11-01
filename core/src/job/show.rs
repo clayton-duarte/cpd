@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ListArgs, ShowArgs, Env, find, plan_phase};
+use super::{Env, ListArgs, ShowArgs, find, plan_phase};
 use crate::error::CpdError;
 use crate::ids::PlanId;
 use crate::output::Output;
@@ -33,8 +33,11 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 }
 
 fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>, CpdError> {
-    let mut stmt = conn.prepare("SELECT job, count(*) FROM attempts WHERE plan = ?1 GROUP BY job")?;
-    let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt =
+        conn.prepare("SELECT job, count(*) FROM attempts WHERE plan = ?1 GROUP BY job")?;
+    let rows = stmt
+        .query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
@@ -49,7 +52,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
     let plan = args.plan.require()?.clone();
     let home = env.home.clone();
     let concurrency = env.config.concurrency;
-    let (job, needed_by, attempts, needs, waiting_for, summary) = env.store.read(|conn| {
+    let (job, needed_by, attempts, needs, waiting_for, summary, addenda) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
@@ -94,7 +97,14 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
         };
         let summary: Option<String> =
             conn.query_row("SELECT summary FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        Ok((job, needed_by, attempts, needs, waiting_for, summary))
+        let mut stmt = conn.prepare("SELECT number, attempt, session, created_at, text FROM job_addenda WHERE plan = ?1 AND job = ?2 ORDER BY number")?;
+        let addenda = stmt
+            .query_map([plan.as_str(), job.key.as_str()], |r| {
+                Ok(json!({"number": r.get::<_, i64>(0)?, "attempt": r.get::<_, Option<String>>(1)?, "session": r.get::<_, Option<String>>(2)?,
+                          "created_at": r.get::<_, String>(3)?, "text": r.get::<_, String>(4)?}))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((job, needed_by, attempts, needs, waiting_for, summary, addenda))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
@@ -108,7 +118,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
         fields["waiting_for"] = json!(waiting_for);
     }
     Ok(Output::success(json!({
-        "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
+        "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper, "addenda": addenda,
     })))
 }
 
@@ -116,7 +126,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
 fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid, worker_session,
-                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit
+                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit, actual_files
            FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number",
     )?;
     let rows = stmt
@@ -124,6 +134,7 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(19)?,
+                r.get::<_, Option<String>>(27)?,
                 json!({
                     "id": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "tier": r.get::<_, String>(2)?,
                     "origin": r.get::<_, String>(3)?, "status": r.get::<_, String>(4)?,
@@ -143,10 +154,18 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
-    for (id, metrics, mut attempt) in rows {
+    for (id, metrics, files, mut attempt) in rows {
         attempt["metrics"] = match metrics {
             None => Value::Null,
-            Some(text) => serde_json::from_str(&text).map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
+            Some(text) => serde_json::from_str(&text).map_err(|_| {
+                CpdError::bad_row(format!("Attempt {plan}/{id} has metrics {text:?}"))
+            })?,
+        };
+        attempt["actual_files"] = match files {
+            None => Value::Null,
+            Some(text) => serde_json::from_str(&text).map_err(|_| {
+                CpdError::bad_row(format!("Attempt {plan}/{id} has actual_files {text:?}"))
+            })?,
         };
         attempt["escalations"] = json!(escalations(conn, plan, &id)?);
         out.push(attempt);

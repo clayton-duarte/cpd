@@ -18,7 +18,6 @@ use crate::plan::WorkflowRow;
 use super::open::{agent, hold_refused, require_jobs_done};
 use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, workflow_policy, short};
 use crate::config::{self, Catalog};
-use crate::policy::Policy;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, Push, RebaseWorktree, TAIL_LINES, tail};
@@ -27,6 +26,7 @@ use crate::ids::{AttemptId, PlanId, WorkflowKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::policy::Policy;
 use crate::ports::Ports;
 
 const COMMAND: &str = "pr rebase";
@@ -104,14 +104,16 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         // 5. Guard U: no merge in S that the Ledger has not recorded.
         // The lease X0, what cpd last saw of the remote branch: read after guard U,
         // so that the pushes of the merges in S, which it waited for or ran R for, are seen.
-        let lease = match guard_u(&mut env, &id, &key, repo, &old).and_then(|()| last_seen(repo, branch)) {
-            Ok(lease) => lease,
-            Err(e) => return Err(removing(worktree, e)),
-        };
+        let lease =
+            match guard_u(&mut env, &id, &key, repo, &old).and_then(|()| last_seen(repo, branch)) {
+                Ok(lease) => lease,
+                Err(e) => return Err(removing(worktree, e)),
+            };
         // 6. The compare-and-swap of the Lead Branch, S to R'.
         let message = format!("cpd: pr rebase {id}/{key}");
         let lead_ref = format!("refs/heads/{branch}");
-        let out = match git::run::run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old]) {
+        let out = match git::run::run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])
+        {
             Ok(out) => out,
             Err(e) => return Err(removing(worktree, e)),
         };
@@ -120,9 +122,12 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         }
         worktree.remove()?;
         if git::run::rev_parse(repo, &lead_ref)? == old {
-            return Err(CpdError::new(ErrorCode::GitFailed, "git update-ref failed, and the Lead Branch did not move.")
-                .with("exit", out.code)
-                .with("stderr", tail(&out.stderr, TAIL_LINES)));
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "git update-ref failed, and the Lead Branch did not move.",
+            )
+            .with("exit", out.code)
+            .with("stderr", tail(&out.stderr, TAIL_LINES)));
         }
         // The ref moved (a merge landed, or another `pr rebase` won): back to step 2.
         retries += 1;
@@ -137,10 +142,10 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     };
 
     // 7. Rule S on the Lead worktree; a stop is reported and fails nothing.
-    if let Err(stale) = git::sync_lead(&lead, branch) {
-        if let Err(e) = report_stale(&mut env, &id, &key, &lead, "rebased", &stale) {
-            return Err(removing(worktree, e));
-        }
+    if let Err(stale) = git::sync_lead(&lead, branch)
+        && let Err(e) = report_stale(&mut env, &id, &key, &lead, "rebased", &stale)
+    {
+        return Err(removing(worktree, e));
     }
 
     // 8. The Gate on R' in the temporary worktree, `pre-start` then `pre-merge`; it is removed whatever the result.
@@ -154,14 +159,19 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
 
 /// A running Attempt of any Job of the Workflow refuses `attempt_running`: that Worker does the rebase, steered by the Lead.
 fn refuse_running(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
-    let running: Vec<(String, String)> = env.store.read(|conn| {
+    env.store.read(|conn| refuse_running_conn(conn, plan, key, "do the rebase"))
+}
+
+/// [`refuse_running`] on a connection, with `what` naming the work the running Attempt's Worker should do instead.
+pub(super) fn refuse_running_conn(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey, what: &str) -> Result<(), CpdError> {
+    let running: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
             "SELECT j.key, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'running' ORDER BY j.key, a.id",
         )?;
         let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })?;
+        rows
+    };
     if running.is_empty() {
         return Ok(());
     }
@@ -170,7 +180,7 @@ fn refuse_running(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<(),
     let attempts: Vec<String> = running.into_iter().map(|(_, a)| a).collect();
     Err(CpdError::new(
         ErrorCode::AttemptRunning,
-        format!("Job {} of Workflow {key} has a running Attempt: steer that Worker to do the rebase (message it with `cpd session send`) instead.", jobs.join(", ")),
+        format!("Job {} of Workflow {key} has a running Attempt: steer that Worker to {what} (message it with `cpd session send`) instead.", jobs.join(", ")),
     )
     .with("pr", key.as_str())
     .with("jobs", jobs)
@@ -201,7 +211,10 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     // C2.
     let files = unresolved(&lead)?;
     if !files.is_empty() {
-        let message = format!("{branch} still has conflicts in {} files: resolve them and `git add` them (no commit, no push), then run the command again.", files.len());
+        let message = format!(
+            "{branch} still has conflicts in {} files: resolve them and `git add` them (no commit, no push), then run the command again.",
+            files.len()
+        );
         return Err(conflict(&id, &key, &lead, message, files));
     }
     // C3.
@@ -213,7 +226,10 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     guard_u(&mut env, &id, &key, repo, &old)?;
     let lease = last_seen(repo, branch)?;
     // C4.
-    let out = git::run::run(&lead, &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat())?;
+    let out = git::run::run(
+        &lead,
+        &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat(),
+    )?;
     if out.code != 0 {
         let files = unmerged(&*Ports::current().runner, &lead)?;
         if !files.is_empty() {
@@ -223,9 +239,12 @@ fn resume(args: Args) -> Result<Output, CpdError> {
         if tip != old && !in_progress(&lead)? {
             return Err(moved(&id, &key, &tip));
         }
-        return Err(CpdError::new(ErrorCode::GitFailed, "git rebase --continue failed: the rebase stays in progress.")
-            .with("exit", out.code)
-            .with("stderr", tail(&out.stderr, TAIL_LINES)));
+        return Err(CpdError::new(
+            ErrorCode::GitFailed,
+            "git rebase --continue failed: the rebase stays in progress.",
+        )
+        .with("exit", out.code)
+        .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
     let new = git::run::rev_parse(&lead, "HEAD")?;
     // C5 and C6: no rule S, the Lead worktree is the one that was rebased.
@@ -287,9 +306,12 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, workflow: &WorkflowRo
             files = listed;
         }
         if files.is_empty() {
-            return Err(CpdError::new(ErrorCode::GitFailed, "git rebase failed without a conflict.")
-                .with("exit", out.code)
-                .with("stderr", tail(&out.stderr, TAIL_LINES)));
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                "git rebase failed without a conflict.",
+            )
+            .with("exit", out.code)
+            .with("stderr", tail(&out.stderr, TAIL_LINES)));
         }
         return Err(stopped(id, &workflow.key, lead, branch, files));
     }
@@ -323,19 +345,34 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, workflow: &WorkflowRow,
     // race inside the remote (Escalation nl-pr-a1-q2).
     let lease_arg = format!("--force-with-lease={lead_ref}:{lease}");
     let refspec = format!("{new}:{lead_ref}");
-    let push = ["push", "--porcelain", lease_arg.as_str(), "origin", refspec.as_str()];
+    let push = [
+        "push",
+        "--porcelain",
+        lease_arg.as_str(),
+        "origin",
+        refspec.as_str(),
+    ];
     let out = git::run::run(lead, &push)?;
     if out.code != 0 && !remote_contains(lead, &lead_ref, new)? {
-        let argv: Vec<String> = ["git", "-C", &lead.to_string_lossy()].into_iter().chain(push).map(str::to_owned).collect();
-        return Err(CpdError::new(ErrorCode::GitFailed, format!("git push exited {}.", out.code))
-            .with("argv", argv)
-            .with("exit", out.code)
-            .with("stderr", tail(&out.stderr, TAIL_LINES)));
+        let argv: Vec<String> = ["git", "-C", &lead.to_string_lossy()]
+            .into_iter()
+            .chain(push)
+            .map(str::to_owned)
+            .collect();
+        return Err(CpdError::new(
+            ErrorCode::GitFailed,
+            format!("git push exited {}.", out.code),
+        )
+        .with("argv", argv)
+        .with("exit", out.code)
+        .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
-    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
-        if let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)? {
-            return Err(CpdError::new(
+    if tip != new
+        && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0
+        && let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)?
+    {
+        return Err(CpdError::new(
                 ErrorCode::GitFailed,
                 format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --workflow {key}.", short(new), short(&tip)),
             )
@@ -343,10 +380,11 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, workflow: &WorkflowRow,
             .with("pr", key.as_str())
             .with("sha", tip.as_str())
             .with("stderr", stderr));
-        }
     }
 
-    Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
+    Ok(Output::success(
+        json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true}),
+    ))
 }
 
 /// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted Workflow (pro-d15).
@@ -408,7 +446,11 @@ pub(crate) fn in_progress_with(runner: &dyn Runner, lead: &Path) -> Result<bool,
 }
 
 fn git_path(runner: &dyn Runner, lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
-    let path = git::run::ok_with(runner, lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
+    let path = git::run::ok_with(
+        runner,
+        lead,
+        &["rev-parse", "--path-format=absolute", "--git-path", name],
+    )?;
     Ok(std::path::PathBuf::from(path.trim()))
 }
 
@@ -419,13 +461,23 @@ fn orig_head(lead: &Path) -> Result<String, CpdError> {
             return Ok(sha.trim().to_owned());
         }
     }
-    Err(CpdError::new(ErrorCode::GitFailed, format!("The rebase in {} has no orig-head: its starting tip is unknown.", lead.display())))
+    Err(CpdError::new(
+        ErrorCode::GitFailed,
+        format!(
+            "The rebase in {} has no orig-head: its starting tip is unknown.",
+            lead.display()
+        ),
+    ))
 }
 
 /// The paths git has not merged (`git diff --name-only --diff-filter=U`).
 fn unmerged(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
     let out = git::run::ok_with(runner, lead, &["diff", "--name-only", "--diff-filter=U"])?;
-    Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect())
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// What keeps `--continue` from going on (C2): the unmerged paths, and the changed files
@@ -441,8 +493,13 @@ pub(crate) fn unresolved_with(runner: &dyn Runner, lead: &Path) -> Result<Vec<St
     let changed = git::run::ok_with(runner, lead, &["diff", "--name-only", "-z", "HEAD"])?;
     for name in changed.split('\0').filter(|n| !n.is_empty()) {
         // A deleted file has no markers.
-        let Ok(bytes) = std::fs::read(lead.join(name)) else { continue };
-        if bytes.split(|b| *b == b'\n').any(|line| line.starts_with(b"<<<<<<< ") || line.starts_with(b">>>>>>> ")) {
+        let Ok(bytes) = std::fs::read(lead.join(name)) else {
+            continue;
+        };
+        if bytes
+            .split(|b| *b == b'\n')
+            .any(|line| line.starts_with(b"<<<<<<< ") || line.starts_with(b">>>>>>> "))
+        {
             files.insert(name.to_owned());
         }
     }
@@ -519,9 +576,12 @@ fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
     match out.code {
         0 => Ok(out.stdout.trim().to_owned()),
         1 => Ok(String::new()),
-        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git rev-parse --verify {tracking} exited {code}."))
-            .with("exit", code)
-            .with("stderr", tail(&out.stderr, TAIL_LINES))),
+        code => Err(CpdError::new(
+            ErrorCode::GitFailed,
+            format!("git rev-parse --verify {tracking} exited {code}."),
+        )
+        .with("exit", code)
+        .with("stderr", tail(&out.stderr, TAIL_LINES))),
     }
 }
 
@@ -532,12 +592,27 @@ fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdE
 }
 
 /// [`remote_contains`] on `runner` (a test passes a `FakeRunner`).
-pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
+pub(crate) fn remote_contains_with(
+    runner: &dyn Runner,
+    lead: &Path,
+    reference: &str,
+    sha: &str,
+) -> Result<bool, CpdError> {
     let listed = git::run::ok_with(runner, lead, &["ls-remote", "origin", reference])?;
-    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
+    let tip = listed
+        .lines()
+        .find(|l| l.split_whitespace().nth(1) == Some(reference))
+        .and_then(|l| l.split_whitespace().next());
     let Some(tip) = tip else { return Ok(false) };
-    let known = git::run::run_with(runner, lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
-    Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
+    let known = git::run::run_with(
+        runner,
+        lead,
+        &["cat-file", "-e", &format!("{tip}^{{commit}}")],
+    )?
+    .code
+        == 0;
+    Ok(known
+        && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
 }
 
 /// `error`, after removing the temporary rebase worktree; the removal's own failure is
@@ -558,22 +633,30 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &WorkflowKey, repo: &Path, snapsho
             "SELECT a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status = 'merging' ORDER BY a.id",
         )?;
-        let rows = stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([plan.as_str(), key.as_str()], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
     let mut catalog = None;
     for attempt in merging {
         let attempt = AttemptId::parse(&attempt)?;
-        let branch = env.store.read(|conn| merge::load(conn, plan, &attempt))?.branch;
+        let branch = env
+            .store
+            .read(|conn| merge::load(conn, plan, &attempt))?
+            .branch;
         let tip = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
         let contained = git::run::run(repo, &["merge-base", "--is-ancestor", &tip, snapshot])?;
         match contained.code {
             0 => settle_in(env, &mut catalog, plan, key, &attempt)?,
             1 => {}
             code => {
-                return Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
-                    .with("exit", code)
-                    .with("stderr", tail(&contained.stderr, TAIL_LINES)));
+                return Err(CpdError::new(
+                    ErrorCode::GitFailed,
+                    format!("git merge-base --is-ancestor exited {code}."),
+                )
+                .with("exit", code)
+                .with("stderr", tail(&contained.stderr, TAIL_LINES)));
             }
         }
     }
@@ -596,10 +679,19 @@ pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &Pla
                 *catalog = Some(config::load_catalog(&env.config, &models)?);
             }
             let catalog = catalog.as_ref().expect("loaded above");
-            let ctx = merge::Ctx { home: &env.home, config: &env.config, catalog, source: COMMAND, metrics: &|_| None };
+            let ctx = merge::Ctx {
+                home: &env.home,
+                config: &env.config,
+                catalog,
+                source: COMMAND,
+                metrics: &|_| None,
+            };
             merge::recover_attempt(&mut env.store, &ctx, plan, attempt)?;
         }
-        let status = env.store.read(|conn| merge::load(conn, plan, attempt))?.status;
+        let status = env
+            .store
+            .read(|conn| merge::load(conn, plan, attempt))?
+            .status;
         if status != "merging" {
             return Ok(());
         }
@@ -630,7 +722,17 @@ fn report_stale(env: &mut Env, plan: &PlanId, key: &WorkflowKey, lead: &Path, wh
     let mut details = stale.details().clone();
     details.insert("pr".to_owned(), json!(key));
     env.store.write(COMMAND, |tx| {
-        append(tx, NewEvent::error(text, COMMAND, stale.code().as_str(), stale.message(), &details).plan(plan.clone()))?;
+        append(
+            tx,
+            NewEvent::error(
+                text,
+                COMMAND,
+                stale.code().as_str(),
+                stale.message(),
+                &details,
+            )
+            .plan(plan.clone()),
+        )?;
         Ok(())
     })
 }
@@ -660,13 +762,25 @@ fn rebase_onto(worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdEr
 }
 
 /// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`).
-pub(crate) fn rebase_onto_with(runner: &dyn Runner, worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+pub(crate) fn rebase_onto_with(
+    runner: &dyn Runner,
+    worktree: &Path,
+    onto: &str,
+) -> Result<Option<Vec<String>>, CpdError> {
     let out = git::run::run_with(runner, worktree, &["rebase", onto])?;
     if out.code == 0 {
         return Ok(None);
     }
-    let conflicts = git::run::ok_with(runner, worktree, &["diff", "--name-only", "--diff-filter=U"])?;
-    let files: Vec<String> = conflicts.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
+    let conflicts = git::run::ok_with(
+        runner,
+        worktree,
+        &["diff", "--name-only", "--diff-filter=U"],
+    )?;
+    let files: Vec<String> = conflicts
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
     let abort = git::run::run_with(runner, worktree, &["rebase", "--abort"])?;
     if files.is_empty() || abort.code != 0 {
         let (what, failed) = if files.is_empty() {

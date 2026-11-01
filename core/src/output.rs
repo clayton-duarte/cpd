@@ -34,7 +34,10 @@ impl Output {
     pub fn success(fields: Value) -> Output {
         match fields {
             Value::Object(map) => {
-                assert!(!map.contains_key("ok"), "a success field may not be named \"ok\"");
+                assert!(
+                    !map.contains_key("ok"),
+                    "a success field may not be named \"ok\""
+                );
                 Output::Success(map)
             }
             other => panic!("a success envelope needs a JSON object, got {other}"),
@@ -64,11 +67,13 @@ pub fn emit(result: Result<Output, CpdError>, stdout: &mut impl Write) -> ExitCo
         Ok(Output::Owned) => (None, Exit::Ok),
         Err(err) => (Some(to_line(err)), err.exit()),
     };
-    if let Some(line) = line {
-        if let Err(io) = stdout.write_all(line.as_bytes()).and_then(|()| stdout.flush()) {
-            eprintln!("cpd: cannot write the result to stdout: {io}");
-            return ExitCode::from(exit.code().max(Exit::Failure.code()));
-        }
+    if let Some(line) = line
+        && let Err(io) = stdout
+            .write_all(line.as_bytes())
+            .and_then(|()| stdout.flush())
+    {
+        eprintln!("cpd: cannot write the result to stdout: {io}");
+        return ExitCode::from(exit.code().max(Exit::Failure.code()));
     }
     ExitCode::from(exit.code())
 }
@@ -94,8 +99,13 @@ mod tests {
 
     #[test]
     fn success_prints_one_value_with_ok_first() {
-        let (out, code) = run(Ok(Output::success(json!({"plan": "pay-4521", "already": true}))));
-        assert_eq!(out, "{\"ok\":true,\"already\":true,\"plan\":\"pay-4521\"}\n");
+        let (out, code) = run(Ok(Output::success(
+            json!({"plan": "pay-4521", "already": true}),
+        )));
+        assert_eq!(
+            out,
+            "{\"ok\":true,\"already\":true,\"plan\":\"pay-4521\"}\n"
+        );
         assert_eq!(code, ExitCode::from(0));
     }
 
@@ -114,7 +124,9 @@ mod tests {
             (ErrorCode::PlanNotFound, 4),
             (ErrorCode::StoreBusy, 5),
         ] {
-            let (out, status) = run(Err(CpdError::new(code, "Nope.").with("argv", json!(["git"]))));
+            let (out, status) = run(Err(
+                CpdError::new(code, "Nope.").with("argv", json!(["git"]))
+            ));
             assert_eq!(status, ExitCode::from(exit), "{code}");
             assert_eq!(out.lines().count(), 1);
             let value: Value = serde_json::from_str(&out).unwrap();
@@ -158,7 +170,10 @@ mod tests {
     fn unwritable_stdout_is_a_failure() {
         let code = emit(Ok(Output::success(json!({}))), &mut BrokenPipe);
         assert_eq!(code, ExitCode::from(1));
-        let code = emit(Err(CpdError::new(ErrorCode::StoreBusy, "Busy.")), &mut BrokenPipe);
+        let code = emit(
+            Err(CpdError::new(ErrorCode::StoreBusy, "Busy.")),
+            &mut BrokenPipe,
+        );
         assert_eq!(code, ExitCode::from(5));
     }
 }

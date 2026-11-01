@@ -70,7 +70,10 @@ impl Object {
     }
 
     fn archived(&self, conn: &Connection) -> Result<bool, CpdError> {
-        let sql = format!("SELECT archived_at IS NOT NULL FROM {} WHERE id = ?1", self.table());
+        let sql = format!(
+            "SELECT archived_at IS NOT NULL FROM {} WHERE id = ?1",
+            self.table()
+        );
         Ok(conn.query_row(&sql, [self.id()], |r| r.get(0))?)
     }
 
@@ -78,8 +81,13 @@ impl Object {
     fn event(&self, conn: &Connection, archived: bool) -> Result<NewEvent, CpdError> {
         let verb = if archived { "archived" } else { "unarchived" };
         Ok(match self {
-            Object::Context(id) => NewEvent::context_archived(format!("Context {id} {verb}."), archived).context(id.clone()),
-            Object::Plan(id) => NewEvent::plan_archived(format!("Plan {id} {verb}."), archived).plan(id.clone()),
+            Object::Context(id) => {
+                NewEvent::context_archived(format!("Context {id} {verb}."), archived)
+                    .context(id.clone())
+            }
+            Object::Plan(id) => {
+                NewEvent::plan_archived(format!("Plan {id} {verb}."), archived).plan(id.clone())
+            }
             Object::Session(id) => {
                 let (name, context, plan): (String, String, Option<String>) = conn.query_row(
                     "SELECT name, context, plan FROM sessions WHERE id = ?1",
@@ -102,8 +110,16 @@ impl Objects {
     /// The Plan, its Lead and its side forks; `plan_not_found`.
     pub fn of_plan(conn: &Connection, plan: &PlanId) -> Result<Objects, CpdError> {
         row::load(conn, plan)?;
-        let sessions = session_ids(conn, "SELECT id FROM sessions WHERE role = 'lead' AND plan = ?1 ORDER BY created_at, id", plan.as_str())?;
-        Ok(Objects { context: None, plans: vec![plan.clone()], sessions })
+        let sessions = session_ids(
+            conn,
+            "SELECT id FROM sessions WHERE role = 'lead' AND plan = ?1 ORDER BY created_at, id",
+            plan.as_str(),
+        )?;
+        Ok(Objects {
+            context: None,
+            plans: vec![plan.clone()],
+            sessions,
+        })
     }
 
     /// The Context, its Plans, and every Lead and Manager Session of it.
@@ -121,19 +137,28 @@ impl Objects {
             "SELECT id FROM sessions WHERE role IN ('lead', 'manager') AND context = ?1 ORDER BY created_at, id",
             context.as_str(),
         )?;
-        Ok(Objects { context: Some(context.clone()), plans, sessions })
+        Ok(Objects {
+            context: Some(context.clone()),
+            plans,
+            sessions,
+        })
     }
 
     /// The Context, then the Plans, then the Sessions.
     fn all(&self) -> Vec<Object> {
         let context = self.context.iter().cloned().map(Object::Context);
-        context.chain(self.plans.iter().cloned().map(Object::Plan)).chain(self.sessions.iter().cloned().map(Object::Session)).collect()
+        context
+            .chain(self.plans.iter().cloned().map(Object::Plan))
+            .chain(self.sessions.iter().cloned().map(Object::Session))
+            .collect()
     }
 }
 
 fn session_ids(conn: &Connection, sql: &str, id: &str) -> Result<Vec<SessionId>, CpdError> {
     let mut stmt = conn.prepare(sql)?;
-    let ids = stmt.query_map([id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let ids = stmt
+        .query_map([id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     ids.iter().map(|id| SessionId::parse(id)).collect()
 }
 
@@ -148,7 +173,12 @@ fn result(changed: &[Object], closed: Vec<String>) -> Output {
 
 /// `in_chat_slot` when a Lead of `sessions` holds the chat slot: checked
 /// before any pane is closed, so a refusal leaves everything as it was.
-pub(crate) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
+pub(crate) fn refuse_chat_slot(
+    store: &mut Store,
+    tmux: &Tmux,
+    cockpit: &str,
+    sessions: &[SessionId],
+) -> Result<(), CpdError> {
     // The rows are read first, then the panes, as `close_lead` does.
     let leads = store.read(|conn| {
         let mut found = Vec::new();
@@ -182,7 +212,12 @@ pub(crate) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, se
 /// The archive of `objects`, all or nothing (commands.md §3.8, §4.10): check
 /// every object, close every live Lead pane, then write the rows and Events
 /// in one transaction that checks the rule again.
-pub fn archive(store: &mut Store, config: &Config, command: &str, objects: &Objects) -> Result<Output, CpdError> {
+pub fn archive(
+    store: &mut Store,
+    config: &Config,
+    command: &str,
+    objects: &Objects,
+) -> Result<Output, CpdError> {
     archive_keeping(store, config, command, objects, None)
 }
 
@@ -244,7 +279,12 @@ pub fn archive_keeping(
 /// The unarchive of `objects` (commands.md §3.9, §4.11): clears `archived_at`
 /// with one Event per object changed, and touches no pane. With `parent`, that
 /// Context must not be archived (`archived`) when anything is to change.
-pub fn unarchive(store: &mut Store, command: &str, objects: &Objects, parent: Option<&ContextId>) -> Result<Output, CpdError> {
+pub fn unarchive(
+    store: &mut Store,
+    command: &str,
+    objects: &Objects,
+    parent: Option<&ContextId>,
+) -> Result<Output, CpdError> {
     let all = objects.all();
     let changed = store.write(command, |tx| {
         let mut archived = Vec::new();
@@ -257,16 +297,30 @@ pub fn unarchive(store: &mut Store, command: &str, objects: &Objects, parent: Op
             return Ok(Vec::new());
         }
         if let Some(context) = parent {
-            let at: Option<String> = tx.query_row("SELECT archived_at FROM contexts WHERE id = ?1", [context.as_str()], |r| r.get(0))?;
+            let at: Option<String> = tx.query_row(
+                "SELECT archived_at FROM contexts WHERE id = ?1",
+                [context.as_str()],
+                |r| r.get(0),
+            )?;
             if at.is_some() {
-                return Err(CpdError::new(ErrorCode::Archived, format!("Context {context} is archived: unarchive it first."))
-                    .with("context", context.as_str())
-                    .with("next", format!("cpd context unarchive {context}")));
+                return Err(CpdError::new(
+                    ErrorCode::Archived,
+                    format!("Context {context} is archived: unarchive it first."),
+                )
+                .with("context", context.as_str())
+                .with("next", format!("cpd context unarchive {context}")));
             }
         }
         let mut changed = Vec::new();
         for object in archived {
-            tx.execute(&format!("UPDATE {} SET archived_at = NULL{} WHERE id = ?1", object.table(), object.wakes()), [object.id()])?;
+            tx.execute(
+                &format!(
+                    "UPDATE {} SET archived_at = NULL{} WHERE id = ?1",
+                    object.table(),
+                    object.wakes()
+                ),
+                [object.id()],
+            )?;
             append(tx, object.event(tx, false)?)?;
             changed.push(object.clone());
         }
@@ -287,6 +341,8 @@ pub(super) fn plan_archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 pub(super) fn plan_unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (objects, context) = env.store.read(|conn| Ok((Objects::of_plan(conn, &id)?, row::load(conn, &id)?.context)))?;
+    let (objects, context) = env
+        .store
+        .read(|conn| Ok((Objects::of_plan(conn, &id)?, row::load(conn, &id)?.context)))?;
     unarchive(&mut env.store, "plan unarchive", &objects, Some(&context))
 }

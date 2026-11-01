@@ -31,7 +31,7 @@ This is an **update Job** of a Workflow whose pull request is open: you bring th
 {% if explore %}
 - Write only the artefact named under "Deliverable" (and temporary files in the OS temp directory); change no git repository.
 {% else %}
-- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
+- Work only in this worktree, and touch the files listed under "Files you may touch". A diff outside those files is refused `touches_violation`; the repo's generated paths (listed in the Spec) are exempt; a path the Lead approved with `job approve-touches` is exempt; otherwise ask the Lead (`cpd ask`) or revert the file. Never a guarded or protected path.
 {% endif %}
 {% if kind == "open" or kind == "update" %}
 - Fetch the base (`git fetch origin <base>`, the base is named under "Context") and merge it as the Context says: a conflict always (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1); with no conflict, merge it **only if the Lead Branch conflicts with it** or the Context tells you the base Workflow's pull request merged and the default branch holds commits the Lead Branch lacks. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict and no such cause there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
@@ -142,6 +142,21 @@ The Lead receives the summary, not the artefact: put the answer first. You may r
 {% for item in touches %}
 - `{{ item }}`
 {% endfor %}
+{% if generated %}
+### Generated paths (may change without listing)
+
+{% for item in generated %}
+- `{{ item }}`
+{% endfor %}
+
+{% endif %}{% if approved_touches %}
+### Approved paths (the Lead allowed)
+
+{% for item in approved_touches %}
+- `{{ item }}`
+{% endfor %}
+
+{% endif %}
 {% endif %}
 
 ### Acceptance
@@ -169,6 +184,18 @@ Nothing is listed. Still do only what the Goal and Acceptance require.
 
 This Attempt holds these exclusive resources: {% for item in resources %}`{{ item }}`{% if not loop.last %}, {% endif %}{% endfor %}. No other Job and no `cpd resource run` can take them until this Attempt ends.
 
+{% endif %}
+{% if addenda %}
+## Addenda from the Lead
+
+The Lead added these to your Job after its Spec was locked. Each one adds information; none replaces your Goal, Files you may touch, Acceptance or Out of scope, which stand as written.
+
+{% for a in addenda %}
+### Addendum {{ a.number }}
+
+{{ a.text }}
+
+{% endfor %}
 {% endif %}
 {% if previous %}
 ## Previous Attempts
@@ -234,6 +261,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 {% endif %}
 - `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
+- `touches_violation`: your diff touches a path outside the files you may touch, and it is neither generated nor approved. Revert those files or ask the Lead (`cpd ask`), then submit again.
 {% if kind == "test" %}
 - `test_files_missing`: a file of "Tests" matches nothing you changed. Write the tests in those files (`details.paths`), commit, then submit again.
 - `tests_unconfigured`: the repo's policy has no `[test-commands]`. Ask the Lead.

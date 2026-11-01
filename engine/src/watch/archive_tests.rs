@@ -16,7 +16,11 @@ use super::testkit::Fx;
 fn fx() -> (Fx, Flock<File>) {
     let mut fx = Fx::with_plan("");
     fx.add_job("done", &[], "UPDATE jobs SET status = 'running' WHERE key = 'done'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'done';");
-    fx.add_job("live", &[], "UPDATE jobs SET status = 'running' WHERE key = 'live';");
+    fx.add_job(
+        "live",
+        &[],
+        "UPDATE jobs SET status = 'running' WHERE key = 'live';",
+    );
     fx.fixture(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at) VALUES
            ('w-done', 'worker', 'ctx', 'pay', 'done-a1', 'pay done a1', NULL, '/', 'S2', 'stopped', 't', 't'),
@@ -26,10 +30,21 @@ fn fx() -> (Fx, Flock<File>) {
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid, worker_session)
            VALUES ('pay', 'live-a1', 'live', 1, 'S2', 'ladder', 'running', 'cpd/pay--live-a1', '/w2', 't', 4242, 'w-live');",
     );
-    let path = fx.engine.home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("live-a1").unwrap());
+    let path = fx.engine.home.attempt_lock(
+        &PlanId::parse("pay").unwrap(),
+        &AttemptId::parse("live-a1").unwrap(),
+    );
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .unwrap();
+    let lock = Flock::lock(lock, FlockArg::LockExclusiveNonblock)
+        .map_err(|(_, e)| e)
+        .unwrap();
     (fx, lock)
 }
 
@@ -38,16 +53,25 @@ fn tick(fx: &mut Fx) {
 }
 
 fn archived_at(fx: &mut Fx, id: &str) -> Option<String> {
-    fx.query(&format!("SELECT archived_at FROM sessions WHERE id = '{id}'"))
+    fx.query(&format!(
+        "SELECT archived_at FROM sessions WHERE id = '{id}'"
+    ))
 }
 
 fn archive_events(fx: &mut Fx) -> Vec<(String, Value)> {
     fx.engine
         .store
         .read(|conn| {
-            let mut stmt = conn.prepare("SELECT session, data FROM events WHERE kind = 'session-archived' ORDER BY id")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows.into_iter().map(|(s, d)| (s, serde_json::from_str(&d).unwrap())).collect())
+            let mut stmt = conn.prepare(
+                "SELECT session, data FROM events WHERE kind = 'session-archived' ORDER BY id",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows
+                .into_iter()
+                .map(|(s, d)| (s, serde_json::from_str(&d).unwrap()))
+                .collect())
         })
         .unwrap()
 }
@@ -59,7 +83,11 @@ fn ended_attempt_archives_its_worker_session() {
         tick(&mut fx);
     }
     assert!(archived_at(&mut fx, "w-done").is_some());
-    assert_eq!(archive_events(&mut fx), [("w-done".to_owned(), json!({"archived": true}))], "one Event, though many ticks ran");
+    assert_eq!(
+        archive_events(&mut fx),
+        [("w-done".to_owned(), json!({"archived": true}))],
+        "one Event, though many ticks ran"
+    );
 }
 
 #[test]

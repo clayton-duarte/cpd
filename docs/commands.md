@@ -63,6 +63,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd session tail` (§10.19) | one line per completed transcript message, the grammar of contract §6.20 (§10.19) | a read-only tail of a durable Session's host socket: it streams live frames as they complete, as the socket tail of Q33 is |
 | `cpd gate finish` (§26) | the run's report on stderr and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
@@ -197,6 +198,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `draft_parked` | 3 | a draft that contract §2.2 "A parked draft" calls illegal would be written after the lock: `job add --draft` or `job edit` (§5.1, §5.2) of a stub that waits for nothing, or `workflow add --shape` (§9.4) with no `--jobs` for a Workflow that would start at once (hs-d731); `details` `{plan, job, workflow, needs}` (`{plan, workflow, jobs}` for `workflow add`, `jobs` the stub keys). The message names the legal forms |
 | `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[test-commands]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`; `list` included); the Worker asks the Lead. `details` as above |
 | `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
+| `touches_violation` | 3 | a Job's submit (§6.1) changed a path outside its Spec `touches` (§7.5), unless the repo's `[generated] paths` (§8.3), a base merge, or the Lead approved it (§5.9a); `details.paths`, `details.touches`, `details.generated` |
 | `lead_branch_moved` | 3 | a merge detail, not a code any command returns: the merge of an `open` or `update` Job (contract §7.4 step 5) found the Lead Branch's tip not in HEAD and ends the Attempt `failed` / `merge_conflict` with the detail `lead_branch_moved: <message>` (a ladder cause: the next Attempt starts from the newer tip). Still declared, so it stays in this table; submit never refuses with it |
 | `head_moved` | 3 | `review submit` (§31.1) found the pull request's current head is not `--head`; `details` `{workflow, expected, actual}`, both SHAs lowercase; nothing was posted (pro-d169) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the Workflow's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
@@ -206,7 +208,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
-| `durable_session` | 3 | `session open` (§10.4), `session park` (§10.5), `session history` (§10.12) or `session fork` (§10.3) named a Session whose `runner` is `durable` (contract §3.6): it has no pane, so there is nothing to open, park, show or fork. A state error, as `archived` and `in_chat_slot` are; refused before any write or tmux call. Message: `Session <id> runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.`; `details: {session}` |
+| `durable_session` | 3 | `session park` (§10.5), `session history` (§10.12) or `session fork` (§10.3) named a Session whose `runner` is `durable` (contract §3.6): it has no pane, so there is nothing to park, show or fork. (`session open` no longer refuses a durable Session: it resumes it and waits for its host's socket, §10.4.) A state error, as `archived` and `in_chat_slot` are; refused before any write or tmux call. Message: `Session <id> runs on durable: it has no pane. Send it a message with cpd session send; cpd chat will open it.`; `details: {session}` |
 | `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
@@ -215,7 +217,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 | File | Written by | Read by |
 |---|---|---|
-| `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` (its first message) |
+| `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` and durable host startup (their first message, hs-d812) |
 | `run/<context>/manager-message.md` | `context manager` (B3-A2) | the Manager's `session run` (its first message) |
 | `run/<plan>/summary.md` | `plan render` (§4.5, hs-d502): the Plan summary of the Plan as it is, without a review | the User, the Lead |
 | `run/<plan>/summary-<review>.md` | `plan review` (§4.6, hs-d502): a copy of the summary that a later render cannot change | the pi adapter, which shows it in the Lead's chat (§15.5) |
@@ -248,6 +250,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
+| `cpd job approve-touches` (§5.9a) | Lead | no | no |
+| `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
@@ -511,12 +515,13 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 ### 3.11 `context manager`
 
 ```
-cpd context manager [--context <c>] [--by-user]
+cpd context manager [--context <c>] [--by-user] [--runner <pi|durable>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--by-user` | (hs-d542 A2) when registering a new Manager, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§4.1); omit it and the Manager starts with its first message, as today |
+| `--runner <pi|durable>` | the new Manager's runner; default the config key `manager_runner`, default `pi` (contract §6.19). Only on registration: a resume keeps the stored `sessions.runner` and a `--runner` that differs from it is refused (`usage`, exit 2) |
 
 Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers and starts it when the Context has none, starts it again when it is stopped. The Context is `--context`, else the selected Plan's (§1.3).
 
@@ -525,10 +530,11 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | the Context exists | `context_not_found` | 4 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+| `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw.
-- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
 The command never moves the chat slot (hs-d103); `session open <manager>` does (§10.4).
@@ -812,7 +818,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
 ```
 
 A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the caller's cwd, the directory `plan new` runs from (usually `~`; §6.4). `--repo` and `--base` are gone: either is `usage` (exit 2).
@@ -827,6 +833,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.11); omit it and the Lead starts with its first message, as today |
 | `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5: `O`, `S` or `H` with an effort, or `GX`), checked by the Lead rule (below). Omitted, the Tier is `review_lead_tier` when `--context` is the non-empty `inbox.review_context` (contract §8.2), else `lead_tier` (Effects, step 1) |
+| `--runner <pi|durable>` | the new Lead's runner; default the config key `lead_runner`, default `pi` (contract §6.19) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -836,6 +843,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--tier` is letter G (`GX`) or effort 5, the Lead rule (contract §9); `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}`, message `Tier <T> is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562).` | `tier_not_allowed` | 2 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+| `--runner` is neither `pi` nor `durable` | `usage` | 2 |
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is the non-empty `inbox.review_context`; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
@@ -845,8 +853,8 @@ Effects, in this order:
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
    ```
    The Lead gets on-demand access to the Context through these commands. The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
-4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>` and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
-5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2).
+4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>` and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11). **For a durable Lead** (`runner` `durable`, contract §6.19) this step and its `session-moved` are skipped: no tmux, no pane. The Session is left live and `stopped`, and the engine's hosts step starts its host at the next tick (contract §6.19); the output `lead.pane` and `lead.window` are null.
+5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2). A durable Lead has no pane and no `session run`: its host is the engine's (§6.19).
 
 When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd tui builds main later.
 
@@ -856,7 +864,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
 ### 4.2 `plan list`
 
@@ -1578,7 +1586,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by E3 (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `urgent`, a boolean; `kind` and `tests`, `test_files` and `test_approved` where the kind has them; `resources`, the Spec's list (null when it has none); `waiting_for`, present only for a `queued` Job that is not a tenant (contract §3.4 "Tenancy": it has no Attempt yet) and that lists resources, or whose Ready turn finds no free Worker slot (it then has the entry for `workers`, contract §8.3): an array of `{"resource":"<name>","scope":"host"|"owner"|"repo","slots":<n>,"holders":[…]}` for each pool it needs that has no free slot right now, `scope` and `slots` those of the resolved declaration (contract §8.3) and `holders` the holders of contract §1.4 of the pool (`{slot, holder}`, command slots then Job tenants with `slot` null; `[]` when every pool has a free slot; the key is absent for every other Job, a retried Job included, which holds its resources). A Job in `waiting_for` is skipped, in order, by E3 (contract §3.7 "the skip order"): it waits without holding anything; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by` and every Attempt with all its fields (`check_tail`, `gate_hook`, `gate_command`, `gate_exit`, `metrics`, and `actual_files`, the value `attempt show` prints, §6.3) and its Escalations (cpd 1 §11, kept). It also has `addenda`, the addenda of `job addendum` (§5.10), oldest first: `[{"number", "attempt", "session", "created_at", "text"}]`, with `attempt` and `session` null when none was addressed, and `[]` when there are none (contract §3.4 "Addenda").
 
 ```json
 {"ok": true, "job": {"key": "worker", "workflow": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -1640,6 +1648,77 @@ Effects: **rows**, one transaction: `jobs.test_approved` becomes the union of it
 
 Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
 
+### 5.9a `job approve-touches`
+
+```
+cpd job approve-touches <job> --path <p> [--path <p> …] --reason <text> [--plan <id>]
+```
+
+The Lead's approval for a Job to change a path outside its Spec `touches` (hs-n641; contract §2.2 "Job kinds", §7.5). The `touches` guard refuses a submit (§6.1) that changes a path outside the Job's Spec `touches`; a Worker that needs an out-of-touches file changed asks the Lead (`cpd ask`), who decides and, to allow it, runs this. **The Lead only**, through `CPD_ATTEMPT` (hs-d497): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). That is all the check there is: the command is **unauthenticated, like `cpd answer`** (a Worker that unsets the variable gets through) and the approval is visible afterwards in the `job-edited` Event (`fields: ["touches_approved"]`, with the `--reason`).
+
+| Flag | Meaning |
+|---|---|
+| `<job>` | the Job |
+| `--path <p>` | repeated: a path, or a directory prefix, that the check (§7.5) refuses. The command validates no path against the touches list: what the check refuses is what the Lead approves |
+| `--reason <text>` | why (§1.5); it is in the Event's `text` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Job exists | `job_not_found` | 4 |
+| its status is `queued`, `running` or `failed` (a draft is not checked, an ended one never will be) | `illegal_transition` | 3 |
+
+Effects: **rows**, one transaction: `jobs.touches_approved` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["touches_approved"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `touches_approved` is not a Locked field and is in no fingerprint (§2.3). And, when the Plan's working Lead runs it, it names the PR as the Lead's Workflow (§1.3).
+
+```json
+{"ok": true, "job": {"key": "api-work", "status": "running", "kind": "work"}, "approved": ["cli/src/"], "fields": ["touches_approved"]}
+```
+
+Idempotent: yes; paths already approved write nothing and a call with none new returns `"already": true`.
+
+### 5.10 `job addendum`
+
+```
+cpd job addendum <job> (<text> | --file <path>) [--plan <id>]
+```
+
+The Lead adds information to a Job after its Spec was locked: a fact, a decision, a constraint or a pointer that the Job's Worker lacks (contract §3.4 "Addenda"). A running Worker gets it as a steered message and its Attempt is not stopped; the Spec of every later Attempt of the Job lists it (§16.1). An addendum is **additive only**: it never changes the Goal, Files you may touch, Acceptance or Out of scope. A Job that must deliver something else is cancelled and re-added (§5.3). **The Lead only**, through `CPD_ATTEMPT` (as §5.9): the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5). Like `cpd answer`, it is **unauthenticated**: nothing else checks the caller. A `draft` Job is not locked: its Spec is edited with `job edit --spec` (§5.2).
+
+| Flag | Meaning |
+|---|---|
+| `<job>` | the Job, of any kind (`open`, `update` and explore Jobs too) |
+| `<text>` | the addendum, a `Text` (1–20 000 characters, no NUL, §1.5), kept verbatim |
+| `--file <path>` | the addendum read whole from a file, as UTF-8, kept verbatim, with the same limits; exactly one of `<text>` and `--file` is given (both or neither is `usage`) |
+| `--plan <id>` | the Plan (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is set and not empty | `not_a_lead` | 3 |
+| exactly one of `<text>` and `--file` is given; the text is not 1–20 000 characters or has a NUL | `usage` | 2 |
+| `--file` cannot be read as UTF-8 | `file_unreadable` | 2 |
+| the Plan exists | `plan_not_found` | 4 |
+| the Job exists in the Plan | `job_not_found` | 4 |
+| the Job is `draft`, `merged` or `cancelled`: a draft is not locked (`job edit --spec`); an ended Job takes no new information | `illegal_transition` | 3 |
+| the Job is `running` and its latest Attempt is `starting` (its Spec is being rendered), `merging` (the Worker has submitted) or `ended` (the next Attempt is about to start); nothing is written, and the Lead runs the command again in a moment | `attempt_not_running` | 3 |
+
+The checks run in this order and the first that fails is the result. The Plan's phase is not checked. A `running` Attempt always has its Worker Session; a row without one is a store defect, not a refusal.
+
+Effects: **rows**, one transaction: one `job_addenda` row (§4.4, append-only): `number` = the Job's highest addendum number + 1 (1 for the first); `attempt` and `session` = the running Attempt and its Worker Session, both null when the Job is `queued` or `failed` (no Attempt runs); `text` verbatim; `created_at`. **Event** `job-addendum`, always appended: `plan` and `job` set; `attempt` and `session` set exactly when the row's are; `data` = `{"text": <the addendum text, verbatim>}`. Its `text` has two shapes. When addressed to a running Attempt: `Addendum <n> from the Lead on Job <job> (Attempt <attempt>). It adds to your Spec and replaces nothing in it: your Goal, Files you may touch, Acceptance and Out of scope stand as written.`, then a blank line, then the addendum text verbatim. When not addressed: `Addendum <n> added to Job <job>: no Attempt is running, so it reaches the next Attempt's Spec. Next: cpd job show <job> --plan <plan>`, then a blank line, then the text verbatim. **Untouched**: the `jobs` row (every Spec column and `fingerprint`), the Locked-Job fingerprint, the Plan fingerprint, an approved Plan review, the Job's status and Tier, and every Attempt: a running Attempt is never stopped or restarted. And, when the Plan's working Lead runs it, it names the Job's PR as the Lead's Workflow (§1.3); a Job with no PR (an explore Job) names none.
+
+**Delivery** (§15.3; §11.2 for `--session`): a Worker's follower gets the Event once, as a steered message (`deliverAs: "steer"`, which starts a turn when the Worker is idle); a Plan Lead's adapter ignores it, since the Lead sent it; the Manager is never addressed. A `--session` follower drops it once a later `attempt-started`, `job-merged`, `job-failed` or `job-cancelled` of its Job exists (contract §5.4). Nothing waits on the Worker: cpd does not know whether it read the addendum, so there is no read receipt and no submit refusal. `delivered` means sent, never read; check the Attempt with `cpd attempt read` before relying on it.
+
+```json
+{"ok": true, "job": {"key": "api-impl", "status": "running", "kind": "impl"}, "addendum": {"number": 2, "attempt": "api-impl-a1", "delivered": true}}
+```
+
+```json
+{"ok": true, "job": {"key": "ui", "status": "queued", "kind": "work"}, "addendum": {"number": 1, "attempt": null, "delivered": false}}
+```
+
+`delivered` is true exactly when the Event is addressed to a Worker Session. A `queued` or `failed` Job's addendum is read when its next Attempt starts (§16.1).
+
+Idempotent: no; each `job addendum` call is a new addendum, with its own row and Event.
+
 ## 6. `attempt`
 
 ### 6.1 `attempt submit`
@@ -1653,10 +1732,12 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | Precondition | Code | Exit |
 |---|---|---|
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
+| the Attempt was ended by `attempt abort` | `attempt_aborted` | 3 |
 | the caller's cwd is inside the Attempt worktree, on the Attempt branch; for a linear Attempt, the worktree is the Lead worktree and the branch is the Lead Branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
+| the touches guard passes (§7.5): a path outside the Job's Spec `touches` is refused, unless a base merge brought it, the repo's `[generated] paths` (§8.3) match it, or the Lead approved it with `job approve-touches` (§5.9a); `details.paths`, `details.touches`, `details.generated` (contract §7.5, §7.7) | `touches_violation` | 3 |
 | (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
 | (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
 | (kinds `test`, `impl`) the Workflow's repo policy has `[test-commands]` (none when there is no repo file or the file lacks the table) | `tests_unconfigured` | 3 |
@@ -1691,7 +1772,7 @@ Idempotent: yes, as stated; a HEAD that moved after a successful submit is refus
 
 Effects, for an explore Attempt that passes:
 - **Checks that do not run:** the quick check, the tamper check, the red-test check, the kind check and the Gate. There is no worktree and no commit to check.
-- **The atomic end** (one transaction, no compare-and-swap, so no merge-recovery case): the Attempt `ended` / `merged`; the Job `merged` with `jobs.summary` the summary; the SHA-256 (hex) of the artefact in the Job's `merged_sha`, the Attempt's `merged_sha` and `submitted_sha` and the `job-merged` Event's `sha` (no commit exists, so the existing CHECKs on merged rows hold). The `job-merged` Event's `data` is `{sha, tier, kind, summary, artefact, turn}` (text in §15.3).
+- **The atomic end** (one transaction, no compare-and-swap, so no merge-recovery case): the Attempt `ended` / `merged`; the Job `merged` with `jobs.summary` the summary; the SHA-256 (hex) of the artefact in the Job's `merged_sha`, the Attempt's `merged_sha` and `submitted_sha` and the `job-merged` Event's `sha` (no commit exists, so the existing CHECKs on merged rows hold); the Attempt's `actual_files` = `[]` (no repo file is written). The `job-merged` Event's `data` is `{sha, tier, kind, summary, artefact, turn}` (text in §15.3).
 - **A driver that died before the transaction** leaves an ordinary dead Attempt, which E2 ends `crashed`; the submit never stops the Worker (the driver's A9 does, or E2 for a dead driver).
 
 ### 6.2 `attempt read`
@@ -1721,7 +1802,7 @@ cpd attempt show <attempt> [--plan <id>]
 cpd attempt list [--job <key>] [--active] [--plan <id>]
 ```
 
-`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
+`show` returns every field of the Attempt (§2.2), its Escalations and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`) and the Worker's session file. Its `attempt` carries `runner` (`pi` or `durable`) and `worker_pid` (null for `pi` and before a `durable` Worker starts) and so do the attempts of `job show` (contract §3.4 "The Worker runner and its seam", §4.4). Its `attempt` carries `actual_files` (an array of the repo-relative paths the Attempt wrote, or null; contract §2.2, §7.3); `list` does not. The Gate fields `check_tail`, `gate_hook`, `gate_command` and `gate_exit` are set exactly when the Attempt ended `gate_failed` and are null otherwise, `gate_error` included (contract §2.2, §7.4 step 6). An Attempt ended `aborted` (hs-a8, `attempt abort`, §6.5, contract §3.4) has `outcome` `failed` and `cause` `aborted` in both `show` and `list`. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
 ```json
 {"ok": true, "attempts": [{"id": "api-schema-a1", "job": "api-schema", "number": 1, "tier": "S2", "origin": "ladder", "status": "ended", "outcome": "merged", "cause": "merged", "started_at": "…", "ended_at": "…"}]}
@@ -1751,7 +1832,31 @@ The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispa
 
 Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker, started by the Attempt's `runner` (contract §3.4 "The Worker runner and its seam"): for `pi` its window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`) and the Session rows (`session-registered`, `session-moved` `{place: "work"}`); for `durable` a child process with no window and no `session-moved`, its `worker_pid` stored, restarted and stopped as that section says; the nudge (`attempt-nudge`); the stall kill (a Worker's session file idle for `timeouts.stall_seconds` inside one tool call: pi's descendant processes are killed, pi is not, the Attempt goes on; one driver-log line, no Event; contract §3.4 A4); the merge, with no lock (hs-d243: rule S and rule P, contract §7.4); the end (`metrics` from the end report, the Worker's stop by runner, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4.
 
-Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
+Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. An error with the same `code` and `message` as one appended for the same Plan less than `watch.error_repeat_seconds` ago appends nothing (contract §3.7). Idempotent: no; a second driver cannot get fd 3.
+
+### 6.5 `attempt abort` (hs-a8, the User, 2026-10-31)
+
+```
+cpd attempt abort <attempt> [--plan <id>]
+```
+
+The Lead's abort of a running Attempt (hs-a8, the User, 2026-10-31; contract §3.4 "attempt abort"): the Lead ends a `running` Attempt `failed` / `aborted` in ONE write transaction (contract §3.4). It refuses a Worker that types it (`not_a_lead` exit 3), the same `CPD_ATTEMPT` check as `job approve-tests` (§5.9); the Attempt must be `running` (`attempt_not_running` exit 3). A Worker that needs a stopped Attempt talks to the Lead, or runs `cpd ask`.
+
+The command refuses a `starting` Attempt: its setup failure is `setup_failed` (contract §3.4), and the abort never touches it. A `merging` or `ended` Attempt is refused `attempt_not_running`: the natural ending stands, and the abort never rewrites its cause. The command re-reads the Attempt's status in its write transaction (ADR-0014): if the Attempt ended between the command's read and write, the transaction ends with the natural ending, refused `attempt_not_running`, nothing written.
+
+Effects (contract §3.4): in one transaction the Attempt goes `running` → `ended` / `failed` / `aborted` (a no-ladder cause: the engine requeues nothing and climbs nothing), the Job goes `running` → `failed`, `stop_request = aborted` is set when a merge step of the Attempt is running (the merge unwinds per its own rules, never torn down mid-write), and two Events are appended: `attempt-aborted` (§5.2) and `job-failed` (§5.2), whose text names the abort and the Tier-fix route `cpd job retry <key> --tier <T>`. The Worker is stopped by the existing teardown (contract §3.4 "attempt abort"): the `runner`'s stop seam (`core/src/driver/runner.rs::stop`, through the driver's A9, `core/src/driver/run.rs`) when the driver is live; when it is dead, the crash-recovery teardown (`core/src/merge/recover.rs::recover_attempt`, its `rest_of_a9`/`kill_worker`, the E2/R path). Exactly one command writes the two Events; no second command writes them again.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Attempt exists | `attempt_not_found` | 4 |
+| the Attempt is `running` | `attempt_not_running` | 3 |
+
+```json
+{"ok": true, "attempt": "api-schema-a1", "outcome": "failed", "cause": "aborted"}
+```
+
+Idempotent: no; a second call finds the Attempt not `running` and is refused `attempt_not_running`.
 
 ## 7. `review`
 
@@ -2539,7 +2644,7 @@ Effects: none; one read transaction.
  "events_cursor": 48213}
 ```
 
-`runner` is `pi` or `durable` (contract §2.2): how the Session runs, `pi` for every Session that exists today; a `durable` Lead or Manager has a null `tmux_pane` and `place` `none` by design (contract §3.6). `role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
+`runner` is `pi` or `durable` (contract §2.2): how the Session runs, set at creation from `lead_runner` or `manager_runner` (contract §6.19); a `durable` Lead or Manager has a null `tmux_pane` and `place` `none` by design (contract §3.6). `role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
 
 ### 10.2 `session show`
 
@@ -2605,11 +2710,11 @@ Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accept
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session is a `lead` or a `manager` (B3-A2) | `not_a_lead` | 3 |
-| its `runner` is `pi`; a `durable` Session has no pane (contract §3.6), refused before any write or tmux call (§1.3). Send it a message with `session send` (§10.13) instead | `durable_session` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
-| the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+| its `runner` is `pi` and the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui`. A `durable` Session has no pane and skips the chat slot and this check (contract §6.19) | `no_cockpit` | 3 |
 
 Effects:
+- **Durable** (`runner` `durable`, contract §6.19): no pane and never the chat slot, so `require_pane` is not applied. When the Session is asleep or labelled `host crash loop`, one transaction clears `asleep_at` and `state_label`; the command then waits for the host's socket at `$CPD_HOME/run/host/<id>.sock` to accept (retrying on ENOENT/ECONNREFUSED with a back-off, a 30 s deadline, else `host_timeout`, exit 5) and returns `{"session": <id>, "pane": null}`. The engine's hosts step starts the host; the command starts nothing and writes no `session-moved`.
 - In the chat slot already: nothing; `"already": true`.
 - **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5) and `tmux_pane` is recorded; the pane's `@cpd_title` is set by the precedence of contract §6.1 (the dynamic `title`, else the Plan's title or the name). Then `swap-pane -d -s <its pane> -t <chat slot pane>` and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
 - If a step after the new window is created fails (`set-option -p @cpd_session`, the swap, the row or the `session-moved` write), that new window is killed (`kill-window`) before the error is returned (teardown G11).
@@ -2734,7 +2839,7 @@ Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the S
 | its place is not `chat`: the Lead in the chat slot is never closed; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects:
-- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`. A `durable` Session (`runner` `durable`, contract §3.6) has no pane to kill and takes this branch: it succeeds with `"already": true` and writes nothing, as a `pi` Session with no pane does. Stopping its host on close is P1.10, not described here.
+- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`. A `durable` Session (`runner` `durable`, contract §3.6) has no pane to kill and takes this branch: it succeeds with `"already": true` and writes nothing, as a `pi` Session with no pane does. It leaves the Session's host running (contract §6.19): the host is stopped when the Session sleeps (E13) or is archived (E14, §10.10), not by close.
 - **tmux:** `kill-pane -t <pane>`. A parked window that held only that pane closes with it.
 - **Rows**, one transaction, compare-and-swap on `tmux_pane` (when engine E2 recorded the pane as gone first, nothing is left to write: `"already": true`): `state = stopped` with **Event** `session-state` `{from, to: "stopped", label: null}` unless it already was `stopped`; `tmux_pane = NULL`; **Event** `session-moved` `{pane: null, window: null, place: "none"}`, the rows E2 writes for a pane that is gone (contract §3.6).
 
@@ -2762,7 +2867,7 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
-2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty; step 3 writes `archived_at` as for any Session.
+2. **tmux:** a live pane is closed as `session close` does (§10.9). A `durable` Session (contract §3.6) has no pane: nothing is closed and `closed` is empty, and its host is stopped (SIGTERM, then SIGKILL after `timeouts.pi_stop_seconds`, contract §6.19); step 3 writes `archived_at` as for any Session.
 3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now, `sessions.asleep_at` = null (hs-d515); **Event** `session-archived` `{archived: true}`.
 
 ```json
@@ -2903,7 +3008,7 @@ pi failing to start or exiting non-zero, or an answer that is empty or does not 
 cpd session first-message [--session <id>]
 ```
 
-**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
+**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3); the durable host runs it too, at startup, for a fresh non-by-user Lead or Manager whose conversation is empty, and submits the returned text as the first turn's input (hs-d812, contract §6.13 "Delivery (P1.4)" 3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2995,13 +3100,15 @@ Reports an adapter error to the Manager (hs-d573, M4). Its callers are: **the ad
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 
-Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+Effects: **Rows**, one transaction: `events` (one `error` Event, none when the same one is in the window (below), source `adapter`; context = the Session's Context; **session = the reporting Session, plan null** (DEFECT 1: so the Manager can identify which Session failed; the follower rule of §11.2 excludes adapter-source errors from any Session's follower, so a Lead does not see its own adapter errors); data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Idempotent inside the window (contract §3.7): a call whose `code` and `message` equal those of an adapter `error` Event of the same Session appended less than `watch.error_repeat_seconds` ago appends nothing and prints that Event's id; any other call appends an Event. `what` and `details` are not compared. The `mcp_register_failed` exemption above is from the adapter's own memory: each refusal is still one call, and its Event follows this window.
 
 Output:
 
 ```json
 {"ok": true, "event": "4823"}
 ```
+
+`event` is the id of the Event that reports the error: the new one, or the earlier identical one of the window.
 
 ### 10.18a `session switch-failed` (internal)
 
@@ -3081,6 +3188,44 @@ Effects:
 ```
 
 `event` is the id of the `session-resumed` Event. Idempotent: no; each call is one Event. A second call finds the Session no longer blocked once the adapter has acted.
+
+### 10.19 `session tail` (P1.11)
+
+```
+cpd session tail <id>
+```
+
+The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14), folds the frames onto the `SnapshotEvent` and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
+
+| Argument | Meaning |
+|---|---|
+| `<id>` | the target Session (the short forms of §1.3 are accepted) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager` | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` (an archived Session has no host: the stop hooks of contract §6.19 stopped it) | `archived` | 3 |
+| its `runner` is `durable`; a `pi` Session has no host socket, and its pane is read in tmux, not over a socket. Message: `Session <id> runs on pi: it has no host socket to tail. Open it with cpd session open.` | `no_host_socket` | 3 |
+| the socket path `$CPD_HOME/run/host/<id>.sock` is at most `SOCKET_PATH_MAX` (107) bytes (contract §6.14 step 1, applied symmetrically) | `usage` (`socket_path_too_long`) | 2 |
+
+Effects:
+- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`client: "cpd session tail"`), attaches without a cursor, and prints the whole transcript from the base `snapshot` frame — one line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
+- **Follow:** every live `events` frame prints the messages it completes, as they complete.
+- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in snapshot mode: the fold replaces its state, one line on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the stream never repeats lines it printed.
+- **End:** exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (none of the host's reasons can reach a tail that never detaches; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
+- **Rows / Events / tmux:** none.
+
+Output: plain lines on stdout, one per transcript line, nothing else (§1.2's exception list gains the row; diagnostics go to stderr). Example:
+
+```
+user: run the checks
+assistant: Running them now.
+tool bash: all checks pass
+assistant: All green. Ready for review.
+```
+
+Idempotent: reading only; the same transcript renders the same lines (the first snapshot's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
 
 ## 10a. `board` (hs-d514)
 
@@ -3180,6 +3325,8 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 - for any other Session (Workers, side forks): Events with `session` = itself;
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7).
 
+The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled` (hs-d798, contract §5.2, §3.4) are read like any other kind: `--kind attempt-ended`, `--kind job-blocked`, `--kind error`. `attempt-ended` carries the `attempts.metrics` blob that `cpd metrics` (§14.7) aggregates.
+
 ### 11.1 `events list`
 
 ```
@@ -3237,6 +3384,8 @@ The engine, one per machine (§3.7, §6.6, D5).
 **Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5, E7, E20, E21 and E8–E14 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the Workflow start, since R34; E20, the parked drafts, after E7 and before E8 (hs-d731, contract §3.7 "Parked drafts"); E21, the closed-pull-request wake, right after E20 (contract §3.7); E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5; E12, the Worker archive, since hs-d516; E13, the Sleep, since hs-d515; E14, archive asleep Sessions, hs-d630) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
+
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3671,7 +3820,7 @@ Rerunning is safe: a restart already pending keeps its time and a server that is
 - **A3** Each follow-up's failure is printed in one line on stderr and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
 - **A4** Nothing new in the store: no table, column or Event kind.
 
-## 14. `doctor`, `config`, `tiers`, `models`, `preset`
+## 14. `doctor`, `config`, `tiers`, `models`, `preset`, `metrics`
 
 ### 14.1 `doctor`
 
@@ -3707,6 +3856,7 @@ Checks, in order:
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms` and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `worker_runner` | error | for `pi`, passes without looking at anything; for `durable`, passes when `<pi_adapter>/durable-worker/main.ts` exists and pi's Node is at least 22.19.0 (the `engines.node` of the runner's package, contract §6.12): `found` is the Node version, `expected` is `>= 22.19.0` (contract §3.4 "The Worker runner and its seam") |
+| `host_runner` | error | when `lead_runner` and `manager_runner` are both `pi` and the store has no live durable Session (a `lead` or `manager` row with `runner = 'durable'` and `archived_at` null), passes without looking at anything; when either key is `durable` or such a live durable Session exists, passes when `<pi_adapter>/durable-host/main.ts` exists and pi's Node is at least 22.19.0 (contract §6.19): `found` is the Node version, `expected` is `>= 22.19.0` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
 | `tmux_restart` | warn | present only while `run/tmux-restart.pending` exists: it passes (`message` "tmux restart pending", `found` the times and versions) while the restart waits, a planned hold of E3 (contract §3.7) and not a failure; it fails, with the reason, when the restart failed (§13.3) |
@@ -3727,7 +3877,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config [--migrate]
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9) and `worker_runner` other than `"pi"` or `"durable"` (contract §8.2: the key is validated and printed, with its source like every key). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9) and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722; the migrations include `distill-tier-gx` and `drop-test-concurrency` (hs-d722, hs-d679) and a third migration (hs-d738)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
@@ -3911,6 +4061,45 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 
 `host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
 
+### 14.7 `metrics`
+
+```
+cpd metrics [--format json|prometheus]
+```
+
+The read-only aggregate of the machine's Ledger (hs-d798). Callers `[Manager, Lead]` (§2). It opens the store read-only, reads the `attempts.metrics` blobs the `attempt-ended` Events carry (contract §5.2) and the queue Events, and prints one aggregate value; it writes nothing, appends nothing and touches nothing but the store file it reads. **Fail-open (hs-d798, quoted): `cpd metrics` reads the local store and `cpd` never depends on the LGTM exporter, Prometheus or the homeserver being up.** Nothing in cpd may depend on the exporter, Prometheus or the homeserver: a dead collector costs a metric, never a workflow.
+
+**The default (`--format json`) is one JSON value** with the keys `store`, `per_tier`, `per_model`, `retries`, `plans`, `queue`:
+
+- `per_tier` and `per_model`: per-Tier and per-model counts — attempts, merged, failed by cause, average and median duration, average cost, total cost.
+- `retries`: the retry-cause histogram (the `cause` of every `attempt-retry`, contract §5.2).
+- `plans`: per Plan, the cost in `$` per merged pull request.
+- `queue`: the queue-wait decomposition — the `job-added` → `attempt-started` wait (average and max, seconds) and the count of `job-blocked` episodes (contract §5.2).
+- `store`: the store the value was read from (its path), so a value can always be traced to what it was read from.
+
+**`--format prometheus` prints the same aggregates in the Prometheus text exposition format, output only**: no scrape server, no daemon, no push in cpd; the caller collects the text. The scheme is stable, all gauges, namespace `cpd_`:
+
+| Metric | Labels |
+|---|---|
+| `cpd_attempts` | `tier`, `model` |
+| `cpd_attempts_merged` | `tier` |
+| `cpd_attempts_failed` | `tier`, `cause` |
+| `cpd_attempt_duration_seconds` | `tier`, `stat="avg\|median"` |
+| `cpd_attempt_cost_usd_total` | `tier` |
+| `cpd_attempt_cost_usd_avg` | `tier` |
+| `cpd_model_attempts` | `model` |
+| `cpd_model_cost_usd_total` | `model` |
+| `cpd_attempt_retries` | `cause` |
+| `cpd_plan_cost_usd_per_merged_pr` | `plan` |
+| `cpd_queue_wait_seconds` | `phase="added_to_started"`, `stat="avg\|max"` |
+| `cpd_job_blocked_episodes` | (none) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--format` is `json` or `prometheus` | `usage` | 2 |
+
+Idempotent: read-only. `job-blocked` episodes are counted from the Events (one per waiting episode, contract §3.7 E3), so a rerun gives the same numbers while the store is unchanged.
+
 ## 15. The pi adapter's protocol
 
 The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review in the Lead's chat (§15.5). It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
@@ -3968,6 +4157,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule 
 | `plan-outlined` | ignored: **no message, no turn** (the Lead wrote the outline itself, §4.13); it only **learns the kind** (`pi/lib/event.ts`, delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` to 10 (contract §5.2) | ignored |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
+| `job-addendum` (`session` = itself) | no message, no turn: the Lead sent it | message with the Event's `text` as content, **turn**, `deliverAs: "steer"` (a Lead's `job addendum`, §5.10), once per Event id as `attempt-nudge` is |
 | `session-message` (`session` = itself) | message, `followUp`, **a turn always, whatever `data.wake`** (hs-d514, hs-n406); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender> (HH:MM ZZZ): <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. The time is the local time when the message was sent (format §1.3): `HH:MM ZZZ`, 24-hour clock, zero-padded, no seconds, one space before ZZZ where ZZZ is the zone abbreviation (letters only) or numeric offset (§1.3); rendered from the stored `at` (UTC, ISO 8601) by the pi adapter from `pi/lib/time.ts`. Example for an instant 2026-10-25T22:29:00.000Z in America/Toronto: `Message from the User (18:29 EDT): ...`. An idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted | |
 | `session-resumed` (`session` = itself) | for its own Session while tripped by the loop guard: the adapter clears the trip (L5), appends the pi session entry `{tripped: false}`, and delivers **one message** with a turn (the Event's text from `session resume`, `followUp`). While not tripped, does nothing (no message, no turn). For every Lead and a Manager. When the Session reloads, the trip survives (L7) | same | **the switch** (hs-d506, §10.15): no message, no turn. The adapter notes that its Session's Tier changed; at its next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) it reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once. Not while `working`, `waiting` or `blocked`. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1, delivered as every adapter error is, with a turn: the Session tells the User; code `model_unavailable`, `details: {model, thinking}`) and sets nothing, not even the level; the next `session-retiered` tries again. The same for a failed `session show`. The adapter names no record id and reads no config: the mapping is `session show`'s. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` | same |
 | `session-model-changed` (`session` = itself) | **the switch of the model** (the tier-preset switch, §14.6), the same path as `session-retiered`'s: no message, no turn. At the Session's next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) the adapter reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once, never while the Session works, waits or is blocked. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1) and nothing is set; the next `session-model-changed` tries again. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` to 18 | same |
@@ -3986,7 +4176,7 @@ Next: cite that path in the Specs that need it; add another explore Job when the
 
 The Event's `data` carries `summary` and `artefact` (the path relative to `$CPD_HOME`) besides `sha`, `tier` and `kind`. The Lead gets the summary and never the file. The adapter renders `event.text` unchanged and reads neither field, so the protocol number does not change.
 
-**Steered and follow-up** (User, hs-d276; evidence hs-n241). Two kinds are urgent and are delivered with `deliverAs: "steer"`: **`pr-feedback`, whatever its `reason`** and a Worker's **`escalation`**. pi injects a steering message after the current tool call instead of after the run (pi 1.3.0 `dist/core/agent-session.d.ts` `sendCustomMessage(…, {deliverAs: "steer" | "followUp" | "nextTurn"})`; `pi.sendMessage` takes the same option, `dist/core/extensions/types.d.ts` `ExtensionAPI.sendMessage`). An idle Lead is unchanged: `triggerTurn` starts a turn. **Every other message the adapter delivers is a `followUp`**: the Event kinds above, the adapter's errors (§15.1), `attempt-nudge` and the `cpd-plan-decision` message. The same rule holds for a Manager, if it is ever sent one of the two urgent kinds (today it gets neither, §11). Why: every Lead message used to be a follow-up and pi's default `followUpMode` `"one-at-a-time"` delivers one follow-up per finished run, oldest first, so a busy Lead got PR #80's conflict notice 19 minutes late and a `job-merged` 56 minutes late (hs-n241).
+**Steered and follow-up** (User, hs-d276; evidence hs-n241). Three kinds are urgent and are delivered with `deliverAs: "steer"`: **`pr-feedback`, whatever its `reason`**, a Worker's **`escalation`** and a Worker's **`job-addendum`** (a Lead's `job addendum` is written to be read now, so the Worker is steered, not queued; §5.10). pi injects a steering message after the current tool call instead of after the run (pi 1.3.0 `dist/core/agent-session.d.ts` `sendCustomMessage(…, {deliverAs: "steer" | "followUp" | "nextTurn"})`; `pi.sendMessage` takes the same option, `dist/core/extensions/types.d.ts` `ExtensionAPI.sendMessage`). An idle Lead is unchanged: `triggerTurn` starts a turn. **Every other message the adapter delivers is a `followUp`**: the Event kinds above, the adapter's errors (§15.1), `attempt-nudge` and the `cpd-plan-decision` message. The same rule holds for a Manager, if it is ever sent one of the urgent kinds (today it gets none, §11). Why: every Lead message used to be a follow-up and pi's default `followUpMode` `"one-at-a-time"` delivers one follow-up per finished run, oldest first, so a busy Lead got PR #80's conflict notice 19 minutes late and a `job-merged` 56 minutes late (hs-n241).
 
 **Other notices** stay follow-ups, delivered as the User's pi settings say: `followUpMode` (and `steeringMode`, for steered ones) `"all"` delivers every queued message together, pi's default `"one-at-a-time"` one per finished run. cpd does not set them (the User set both to `all` in the global pi settings on 2026-10-19; contract §6.5 "Queue modes are the User's").
 
@@ -4407,7 +4597,7 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 **L7 Reload** (L7 of hs-d552). The trip survives a pi reload. At `session_start`, before the follower starts, the adapter reads its pi session's last `cpd-loop-guard` entry; `tripped: true` re-opens the reason and the gate at once. The window is not persisted: a reload empties it.
 
-**Sends that use the gate** (every send of a message with `triggerTurn: true`): `session-message` Events, `attempt-nudge`, the adapter's errors, the Plan review decision message. All of these go through `gated` when the breaker is tripped, so they queue without starting turns.
+**Sends that use the gate** (every send of a message with `triggerTurn: true`): `session-message` Events, `attempt-nudge`, `job-addendum`, the adapter's errors, the Plan review decision message. All of these go through `gated` when the breaker is tripped, so they queue without starting turns.
 
 ### 15.16 A primary checkout stays put (hs-n436, hs-d606, hs-d608)
 
@@ -4614,10 +4804,13 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (cpd 1's name for Plan); attempt id, Tier, worktree path |
 | Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the Workflow's policy (`[hooks]`, contract §7.3), listed verbatim, or, when the policy has no `pre-commit` hook, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.cpd/` and each entry of the Workflow's `protected.paths` (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); run alone, in the foreground, with the bash `timeout` input at 7200 (pro-d274); one blocker at a time; commit a skeleton within 10 minutes, then at least every 20 minutes; run only commands that exit: `timeout` around every test and measurement, no synthetic benchmarks, never `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit (hs-n97, hs-n107); run only the tests the change touches, never the full suite (the Gate's); do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
+| Addenda from the Lead | only when the Job has addenda (`job addendum`, §5.10) at the Spec's rendering: the sentence `The Lead added these to your Job after its Spec was locked. Each one adds information; none replaces your Goal, Files you may touch, Acceptance or Out of scope, which stand as written.`, then for each addendum, oldest first, `### Addendum <n>` and its text verbatim (contract §3.4 "Addenda"); it comes after the Job section and before Previous Attempts, and a Job with none has no such section |
 | Resources | only when the Job's Spec lists `resources`: a line naming each resource the Job is the tenant of (contract §3.4 "Tenancy") and that `cpd resource run <name> -- <command>` run in the Attempt takes nothing more and runs the command at once (§29) |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause and what explains it: the conflicting files (`merge_conflict`), the failed Gate's hook and log (`gate_failed`, `gate_error`), pi stopped on a provider error with its message (`provider_error`); the provider was down or unreachable, the Job was retried at the same Tier, or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
-| Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `attempt_not_running` (the Attempt was stopped: stop) |
+| Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `touches_violation` (revert the files outside your touches, or ask), `attempt_not_running` (the Attempt was stopped: stop) |
+
+**The addenda** (§5.10). The section is rendered with the Spec (A3), so an addendum stored after an Attempt's Spec was rendered reaches that running Attempt only as the steered `job-addendum` message (§15.3); the next Attempt's Spec lists it.
 
 **The `cpd ask` line** (pro-d274). The template adds, right after the sentence `Ask one real blocker at a time. Do not ask what this Spec or the code already answers.` (two spaces of indent, inside the same list item, for every kind of Job including explore), exactly this sentence: "Run `cpd ask` as a call of its own, in the foreground, with the bash tool's `timeout` input set to 7200 (seconds). Never put it under the `timeout` command, in a pipeline or in the background: it ends only when the Lead answers or the wait expires."
 
@@ -4651,7 +4844,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ### 16.4 Worker latitude
 
-A Worker may change a file outside its `touches` when a test named in its acceptance cannot pass without it (hs-d512, contract §16 "The Worker contract"). The Worker lists each such file and why in its commit message, instead of escalating with `cpd ask`. Examples: a migration that only this Job should create, a helper script the test uses, a stub of a new module. The Lead reads the commit message at the Worker's submit and approves or escalates; the test must pass without editing the guide.
+Removed by hs-n641. The Worker latitude that hs-d512 allowed (a file outside `touches` when a test could not pass without it, listed in the commit message) is gone: the enforced `touches` check (contract §7.5) refuses such a path with `touches_violation`. The escape is the Lead's `job approve-touches` (§5.9a): a Worker that needs a path outside its `touches` asks (`cpd ask`) and the Lead approves it.
 
 ## 17. What the TUI reads
 
@@ -5910,6 +6103,7 @@ cpd test build
 ```
 
 `list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a web name when the web package's vitest answers it from collection mode (`pnpm --filter cpd-web-client exec vitest list <file> --json`: an existing test lists as found whether it passes or fails, and only an absent title or a file that does not collect is refused), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and, when `web/package.json` exists, typechecks the web client (it skips the web client when the file does not exist), and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a web name when the web package's vitest answers it (the same runner as `run`, `pnpm --filter cpd-web-client exec vitest run --testNamePattern <title> <file>`), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `pnpm run typecheck` and, when `web/package.json` exists, typechecks the web client (it skips the web client when the file does not exist), and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
 ### 23.4 The `scripts/tests.sh` contract
 

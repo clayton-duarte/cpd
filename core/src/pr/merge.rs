@@ -12,15 +12,15 @@ use super::gh;
 use super::poll;
 use super::pulls;
 use super::status::{Required, required_states};
-use crate::host::runner::Runner;
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::store::Store;
+use crate::host::runner::Runner;
 use crate::ids::{PlanId, WorkflowKey};
 use crate::inbox::model::close_pr_ready;
-use crate::store::WriteTxn;
-use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
+use crate::store::Store;
+use crate::store::WriteTxn;
 
 /// `<owner>/<repo>#<n>`: `owner` and `repo` non-empty, with no `/` or `#`; `n` a positive integer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +33,12 @@ impl FromStr for PullRef {
     type Err = CpdError;
 
     fn from_str(text: &str) -> Result<PullRef, CpdError> {
-        let usage = || CpdError::new(ErrorCode::Usage, format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer."));
+        let usage = || {
+            CpdError::new(
+                ErrorCode::Usage,
+                format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer."),
+            )
+        };
         let (repo, number) = text.split_once('#').ok_or_else(usage)?;
         let (owner, name) = repo.split_once('/').ok_or_else(usage)?;
         let part = |p: &str| !p.is_empty() && !p.contains(['/', '#']);
@@ -47,7 +52,10 @@ impl FromStr for PullRef {
         if !part(owner) || !part(name) {
             return Err(usage());
         }
-        Ok(PullRef { repo: repo.to_owned(), number })
+        Ok(PullRef {
+            repo: repo.to_owned(),
+            number,
+        })
     }
 }
 
@@ -76,7 +84,10 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
     if view.state != "OPEN" || view.merge_state != "CLEAN" {
         return Err(CpdError::new(
             ErrorCode::MergeNotClean,
-            format!("{repo}#{number} is {} and {}: only an OPEN pull request that is CLEAN is merged.", view.state, view.merge_state),
+            format!(
+                "{repo}#{number} is {} and {}: only an OPEN pull request that is CLEAN is merged.",
+                view.state, view.merge_state
+            ),
         )
         .with("repo", repo.as_str())
         .with("number", number)
@@ -112,19 +123,36 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         )})],
         Err(e) => vec![json!({"code": "auto_delete_unread", "text": e.message()})],
     };
-    Ok(Output::success(json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings})))
+    Ok(Output::success(
+        json!({"repo": repo, "number": number, "method": method.as_str(), "stored": stored, "warnings": warnings}),
+    ))
 }
 
 /// `required_check_not_passed` when a name of the repo policy's `pr.required_checks` is missing, pending or failed on the head.
-fn refuse_unless_required_passed(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
+fn refuse_unless_required_passed(
+    runner: &dyn Runner,
+    cwd: &Path,
+    repo: &str,
+    number: i64,
+) -> Result<(), CpdError> {
     let required = poll::repo_required(&CpdHome::from_env()?, repo)?;
     if required.is_empty() {
         return Ok(());
     }
     let checks = gh::checks_for_merge(runner, cwd, repo, number)?;
     let states = required_states(&checks, &required);
-    let named = |wanted: Required| states.iter().filter(|(_, s)| *s == wanted).map(|(n, _)| *n).collect::<Vec<_>>();
-    let (missing, pending, failed) = (named(Required::Missing), named(Required::Pending), named(Required::Failed));
+    let named = |wanted: Required| {
+        states
+            .iter()
+            .filter(|(_, s)| *s == wanted)
+            .map(|(n, _)| *n)
+            .collect::<Vec<_>>()
+    };
+    let (missing, pending, failed) = (
+        named(Required::Missing),
+        named(Required::Pending),
+        named(Required::Failed),
+    );
     if missing.is_empty() && pending.is_empty() && failed.is_empty() {
         return Ok(());
     }
@@ -149,8 +177,15 @@ fn store_merge(repo: &str, number: i64, merged_at: Option<&str>) -> Result<(), C
     store.write("pr merge", |tx| store_merge_in(tx, repo, number, merged_at))
 }
 
-fn store_merge_in(tx: &WriteTxn<'_>, repo: &str, number: i64, merged_at: Option<&str>) -> Result<(), CpdError> {
-    let Some(row) = pulls::find(tx, repo, number)? else { return Ok(()) };
+fn store_merge_in(
+    tx: &WriteTxn<'_>,
+    repo: &str,
+    number: i64,
+    merged_at: Option<&str>,
+) -> Result<(), CpdError> {
+    let Some(row) = pulls::find(tx, repo, number)? else {
+        return Ok(());
+    };
     if row.state == "merged" {
         return Ok(());
     }
@@ -186,8 +221,28 @@ mod tests {
 
     #[test]
     fn anything_else_is_usage() {
-        for bad in ["", "foo", "o/r", "o/r#", "o/r#x", "o/r#0", "o/r#-1", "o/r#+1", "o/r#1#2", "/r#1", "o/#1", "o/r/s#1", "#1", "o#1", "o/r#99999999999999999999"] {
-            assert_eq!(bad.parse::<PullRef>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+        for bad in [
+            "",
+            "foo",
+            "o/r",
+            "o/r#",
+            "o/r#x",
+            "o/r#0",
+            "o/r#-1",
+            "o/r#+1",
+            "o/r#1#2",
+            "/r#1",
+            "o/#1",
+            "o/r/s#1",
+            "#1",
+            "o#1",
+            "o/r#99999999999999999999",
+        ] {
+            assert_eq!(
+                bad.parse::<PullRef>().unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad:?}"
+            );
         }
     }
 }

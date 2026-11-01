@@ -16,13 +16,22 @@ use serde::ser::{Serialize, Serializer};
 use crate::error::{CpdError, ErrorCode};
 
 fn invalid(code: ErrorCode, what: &str, value: &str, expected: &str) -> CpdError {
-    CpdError::new(code, format!("Invalid {what} {value:?}: expected {expected}."))
-        .with("value", value)
-        .with("expected", expected)
+    CpdError::new(
+        code,
+        format!("Invalid {what} {value:?}: expected {expected}."),
+    )
+    .with("value", value)
+    .with("expected", expected)
 }
 
 /// `^[first][rest]{min,max}$` without a regex engine.
-fn matches(s: &str, first: fn(char) -> bool, rest: fn(char) -> bool, min: usize, max: usize) -> bool {
+fn matches(
+    s: &str,
+    first: fn(char) -> bool,
+    rest: fn(char) -> bool,
+    min: usize,
+    max: usize,
+) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if first(c) => {}
@@ -182,7 +191,14 @@ impl AttemptId {
     }
 
     pub fn parse(s: &str) -> Result<AttemptId, CpdError> {
-        let err = || invalid(ErrorCode::InvalidAttemptId, "Attempt id", s, "<job>-a<n>, n from 1");
+        let err = || {
+            invalid(
+                ErrorCode::InvalidAttemptId,
+                "Attempt id",
+                s,
+                "<job>-a<n>, n from 1",
+            )
+        };
         // n has no '-' and no 'a', so the separator is the last "-a".
         let (job, n) = s.rsplit_once("-a").ok_or_else(err)?;
         let number = seq_number(n).ok_or_else(err)?;
@@ -220,7 +236,14 @@ impl EscalationId {
     }
 
     pub fn parse(s: &str) -> Result<EscalationId, CpdError> {
-        let err = || invalid(ErrorCode::InvalidEscalationId, "Escalation id", s, "<attempt>-q<k>, k from 1");
+        let err = || {
+            invalid(
+                ErrorCode::InvalidEscalationId,
+                "Escalation id",
+                s,
+                "<attempt>-q<k>, k from 1",
+            )
+        };
         let (attempt, k) = s.rsplit_once("-q").ok_or_else(err)?;
         let number = seq_number(k).ok_or_else(err)?;
         let attempt = AttemptId::parse(attempt).map_err(|_| err())?;
@@ -256,9 +279,18 @@ impl ReviewId {
     }
 
     pub fn parse(s: &str) -> Result<ReviewId, CpdError> {
-        let err = || invalid(ErrorCode::InvalidReviewId, "Plan review id", s, "r<k>, k from 1");
+        let err = || {
+            invalid(
+                ErrorCode::InvalidReviewId,
+                "Plan review id",
+                s,
+                "r<k>, k from 1",
+            )
+        };
         let k = s.strip_prefix('r').ok_or_else(err)?;
-        Ok(ReviewId { number: seq_number(k).ok_or_else(err)? })
+        Ok(ReviewId {
+            number: seq_number(k).ok_or_else(err)?,
+        })
     }
 
     pub fn number(&self) -> NonZeroU32 {
@@ -286,8 +318,14 @@ pub enum RecordKind {
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 6] =
-        [RecordKind::Decision, RecordKind::Note, RecordKind::Question, RecordKind::Answer, RecordKind::Plan, RecordKind::Brief];
+    pub const ALL: [RecordKind; 6] = [
+        RecordKind::Decision,
+        RecordKind::Note,
+        RecordKind::Question,
+        RecordKind::Answer,
+        RecordKind::Plan,
+        RecordKind::Brief,
+    ];
 
     /// The letter in record ids: `d`, `n`, `q`, `a`, `p`, `b`.
     pub fn letter(self) -> char {
@@ -302,7 +340,9 @@ impl RecordKind {
     }
 
     pub fn from_letter(letter: char) -> Option<RecordKind> {
-        RecordKind::ALL.into_iter().find(|kind| kind.letter() == letter)
+        RecordKind::ALL
+            .into_iter()
+            .find(|kind| kind.letter() == letter)
     }
 
     /// The `kind` field of the record: `decision`, `note`, `question`, `answer`, `plan`, `brief`.
@@ -329,7 +369,11 @@ pub struct RecordId {
 
 impl RecordId {
     pub fn new(machine: MachineName, kind: RecordKind, number: NonZeroU32) -> RecordId {
-        RecordId { machine, kind, number }
+        RecordId {
+            machine,
+            kind,
+            number,
+        }
     }
 
     pub fn parse(s: &str) -> Result<RecordId, CpdError> {
@@ -345,9 +389,16 @@ impl RecordId {
         let (machine, rest) = s.split_once('-').ok_or_else(err)?;
         let machine = MachineName::parse(machine).map_err(|_| err())?;
         let mut chars = rest.chars();
-        let kind = chars.next().and_then(RecordKind::from_letter).ok_or_else(err)?;
+        let kind = chars
+            .next()
+            .and_then(RecordKind::from_letter)
+            .ok_or_else(err)?;
         let number = seq_number(chars.as_str()).ok_or_else(err)?;
-        Ok(RecordId { machine, kind, number })
+        Ok(RecordId {
+            machine,
+            kind,
+            number,
+        })
     }
 
     pub fn machine(&self) -> &MachineName {
@@ -420,9 +471,9 @@ impl RepoName {
     pub fn parse(s: &str) -> Result<Self, CpdError> {
         let lowered = s.to_ascii_lowercase();
         let ok = (1..=100).contains(&lowered.len())
-            && lowered
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
+            && lowered.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
+            });
         if ok && lowered != "owner" {
             Ok(RepoName(lowered))
         } else {
@@ -460,8 +511,21 @@ mod tests {
         for ok in ["building-cpd", "ab", "a1", &format!("a{}", "b".repeat(39))] {
             assert_eq!(ContextId::parse(ok).unwrap().as_str(), ok);
         }
-        for bad in ["", "a", "1ab", "-ab", "Ab", "a_b", "a b", &format!("a{}", "b".repeat(40))] {
-            assert_eq!(code(ContextId::parse(bad)), ErrorCode::InvalidContextId, "{bad:?}");
+        for bad in [
+            "",
+            "a",
+            "1ab",
+            "-ab",
+            "Ab",
+            "a_b",
+            "a b",
+            &format!("a{}", "b".repeat(40)),
+        ] {
+            assert_eq!(
+                code(ContextId::parse(bad)),
+                ErrorCode::InvalidContextId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -470,8 +534,20 @@ mod tests {
         for ok in ["pay-4521", "cpd2", "ab", &format!("a{}", "b".repeat(23))] {
             assert!(PlanId::parse(ok).is_ok(), "{ok:?}");
         }
-        for bad in ["", "a", "2cpd", "Cpd2", "cpd/2", "cpd.2", &format!("a{}", "b".repeat(24))] {
-            assert_eq!(code(PlanId::parse(bad)), ErrorCode::InvalidPlanId, "{bad:?}");
+        for bad in [
+            "",
+            "a",
+            "2cpd",
+            "Cpd2",
+            "cpd/2",
+            "cpd.2",
+            &format!("a{}", "b".repeat(24)),
+        ] {
+            assert_eq!(
+                code(PlanId::parse(bad)),
+                ErrorCode::InvalidPlanId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -509,17 +585,30 @@ mod tests {
             assert!(MachineName::parse(ok).is_ok(), "{ok:?}");
         }
         for bad in ["", "abcdefghi", "h-s", "2h", "Hs"] {
-            assert_eq!(code(MachineName::parse(bad)), ErrorCode::ConfigInvalid, "{bad:?}");
+            assert_eq!(
+                code(MachineName::parse(bad)),
+                ErrorCode::ConfigInvalid,
+                "{bad:?}"
+            );
         }
     }
 
     #[test]
     fn session_ids() {
-        for ok in ["596d007f-6775-4134-b77a-b356cc523842", "A", "a_b-C", &"a".repeat(128)] {
+        for ok in [
+            "596d007f-6775-4134-b77a-b356cc523842",
+            "A",
+            "a_b-C",
+            &"a".repeat(128),
+        ] {
             assert!(SessionId::parse(ok).is_ok(), "{ok:?}");
         }
         for bad in ["", "-a", "_a", "a.b", "a/b", &"a".repeat(129)] {
-            assert_eq!(code(SessionId::parse(bad)), ErrorCode::InvalidSessionId, "{bad:?}");
+            assert_eq!(
+                code(SessionId::parse(bad)),
+                ErrorCode::InvalidSessionId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -544,9 +633,26 @@ mod tests {
         let id = AttemptId::parse("x-a1-a12").unwrap();
         assert_eq!(id.job().as_str(), "x-a1");
         assert_eq!(id.number(), n(12));
-        assert_eq!(AttemptId::new(JobKey::parse("w").unwrap(), n(3)).to_string(), "w-a3");
-        for bad in ["", "api-schema", "api-schema-a", "api-schema-a0", "api-schema-a01", "-a1", "A-a1", "x-a+1", "x-a1x"] {
-            assert_eq!(code(AttemptId::parse(bad)), ErrorCode::InvalidAttemptId, "{bad:?}");
+        assert_eq!(
+            AttemptId::new(JobKey::parse("w").unwrap(), n(3)).to_string(),
+            "w-a3"
+        );
+        for bad in [
+            "",
+            "api-schema",
+            "api-schema-a",
+            "api-schema-a0",
+            "api-schema-a01",
+            "-a1",
+            "A-a1",
+            "x-a+1",
+            "x-a1x",
+        ] {
+            assert_eq!(
+                code(AttemptId::parse(bad)),
+                ErrorCode::InvalidAttemptId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -556,8 +662,18 @@ mod tests {
         assert_eq!(id.attempt().to_string(), "api-schema-a2");
         assert_eq!(id.number(), n(1));
         assert_eq!(id.to_string(), "api-schema-a2-q1");
-        for bad in ["api-schema-a2", "api-schema-q1", "api-schema-a2-q0", "api-schema-a2-q", "x-a1-q1x"] {
-            assert_eq!(code(EscalationId::parse(bad)), ErrorCode::InvalidEscalationId, "{bad:?}");
+        for bad in [
+            "api-schema-a2",
+            "api-schema-q1",
+            "api-schema-a2-q0",
+            "api-schema-a2-q",
+            "x-a1-q1x",
+        ] {
+            assert_eq!(
+                code(EscalationId::parse(bad)),
+                ErrorCode::InvalidEscalationId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -566,7 +682,11 @@ mod tests {
         assert_eq!(ReviewId::parse("r3").unwrap().number(), n(3));
         assert_eq!(ReviewId::new(n(12)).to_string(), "r12");
         for bad in ["", "r", "r0", "r01", "3", "R3", "r-1", "r3a"] {
-            assert_eq!(code(ReviewId::parse(bad)), ErrorCode::InvalidReviewId, "{bad:?}");
+            assert_eq!(
+                code(ReviewId::parse(bad)),
+                ErrorCode::InvalidReviewId,
+                "{bad:?}"
+            );
         }
     }
 
@@ -580,17 +700,38 @@ mod tests {
         for kind in RecordKind::ALL {
             let s = format!("mac2-{}10", kind.letter());
             assert_eq!(RecordId::parse(&s).unwrap().kind(), kind);
-            assert_eq!(RecordId::new(MachineName::parse("mac2").unwrap(), kind, n(10)).to_string(), s);
+            assert_eq!(
+                RecordId::new(MachineName::parse("mac2").unwrap(), kind, n(10)).to_string(),
+                s
+            );
         }
-        for bad in ["", "hs", "hs-", "hs-d", "hs-d0", "hs-x3", "HS-d3", "h-s-d3", "hs-d3x", "abcdefghi-d1"] {
-            assert_eq!(code(RecordId::parse(bad)), ErrorCode::InvalidRecordId, "{bad:?}");
+        for bad in [
+            "",
+            "hs",
+            "hs-",
+            "hs-d",
+            "hs-d0",
+            "hs-x3",
+            "HS-d3",
+            "h-s-d3",
+            "hs-d3x",
+            "abcdefghi-d1",
+        ] {
+            assert_eq!(
+                code(RecordId::parse(bad)),
+                ErrorCode::InvalidRecordId,
+                "{bad:?}"
+            );
         }
     }
 
     #[test]
     fn record_kind_names() {
         let names: Vec<_> = RecordKind::ALL.iter().map(|k| k.as_str()).collect();
-        assert_eq!(names, ["decision", "note", "question", "answer", "plan", "brief"]);
+        assert_eq!(
+            names,
+            ["decision", "note", "question", "answer", "plan", "brief"]
+        );
     }
 
     #[test]
@@ -611,14 +752,28 @@ mod tests {
 
     #[test]
     fn owner_login_and_repo_name_follow_contract_2_1() {
-        assert_eq!(OwnerLogin::parse("Clayton-Duarte").unwrap().as_str(), "clayton-duarte");
+        assert_eq!(
+            OwnerLogin::parse("Clayton-Duarte").unwrap().as_str(),
+            "clayton-duarte"
+        );
         for bad in ["", "-a", "a-", "a--b", "a_b", "a b", &"a".repeat(40)] {
-            assert_eq!(OwnerLogin::parse(bad).unwrap_err().code(), ErrorCode::Usage, "{bad}");
+            assert_eq!(
+                OwnerLogin::parse(bad).unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad}"
+            );
         }
         assert!(OwnerLogin::parse(&"a".repeat(39)).is_ok());
-        assert_eq!(RepoName::parse("My.Repo_x-1").unwrap().as_str(), "my.repo_x-1");
+        assert_eq!(
+            RepoName::parse("My.Repo_x-1").unwrap().as_str(),
+            "my.repo_x-1"
+        );
         for bad in ["", "a/b", "a b", &"a".repeat(101)] {
-            assert_eq!(RepoName::parse(bad).unwrap_err().code(), ErrorCode::Usage, "{bad}");
+            assert_eq!(
+                RepoName::parse(bad).unwrap_err().code(),
+                ErrorCode::Usage,
+                "{bad}"
+            );
         }
         assert!(RepoName::parse(&"a".repeat(100)).is_ok());
     }

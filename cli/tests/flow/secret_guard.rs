@@ -1,9 +1,11 @@
 //! `cpd secret` guard rules (commands.md §24.0, contract §8.4): who may do what, in which vault, and the grants
 //! they need. Op is never reached: the fake `op`'s log stays empty.
 
-use crate::secret::{args, denied, strs, Fx, Who};
+use crate::secret::{Fx, Who, args, denied, strs};
 
-const COMMANDS: [&str; 7] = ["get", "list", "create", "edit", "delete", "allow", "approve"];
+const COMMANDS: [&str; 7] = [
+    "get", "list", "create", "edit", "delete", "allow", "approve",
+];
 
 fn run(fx: &Fx, who: Who, command: &str, vault: &str, stdin: Option<&str>) -> crate::common::Run {
     let a = args(command, vault, "item", "field");
@@ -73,11 +75,17 @@ fn a_lead_in_another_vault_needs_the_users_approval() {
         for command in ["get", "list", "create", "edit", "delete"] {
             let r = run(&fx, who, command, "other", Some("value\n"));
             let e = denied(&r, "secret_grant_required", 3);
-            assert_eq!(e["details"]["grant"], "approval", "{who:?} {command}: {r:?}");
+            assert_eq!(
+                e["details"]["grant"], "approval",
+                "{who:?} {command}: {r:?}"
+            );
             assert_eq!(e["details"]["action"], command, "{who:?} {command}: {r:?}");
             assert_eq!(e["details"]["vault"], "other", "{who:?} {command}: {r:?}");
             let next = e["details"]["next"].as_str().unwrap_or_default();
-            assert!(next.contains("cpd_secret_approve"), "{who:?} {command}: {r:?}");
+            assert!(
+                next.contains("cpd_secret_approve"),
+                "{who:?} {command}: {r:?}"
+            );
             fx.assert_op_not_called(&r);
         }
     }
@@ -114,7 +122,10 @@ fn names_are_validated_before_anything_else() {
             for (command, line) in lines {
                 let r = fx.run(who, &strs(&line), Some("value\n"));
                 let e = denied(&r, "usage", 2);
-                assert!(e["message"].is_string(), "{who:?} {command} {name:?}: {r:?}");
+                assert!(
+                    e["message"].is_string(),
+                    "{who:?} {command} {name:?}: {r:?}"
+                );
                 fx.assert_op_not_called(&r);
             }
         }
@@ -128,7 +139,14 @@ fn a_missing_or_empty_value_is_usage() {
         for stdin in ["", "\n"] {
             let r = run(&fx, Who::Lead, command, "cpd", Some(stdin));
             let e = denied(&r, "usage", 2);
-            assert!(e["message"].as_str().unwrap_or_default().to_lowercase().contains("value"), "{r:?}");
+            assert!(
+                e["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains("value"),
+                "{r:?}"
+            );
             fx.assert_op_not_called(&r);
 
             // the guard comes before the value is read

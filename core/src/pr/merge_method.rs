@@ -61,7 +61,11 @@ mod tests {
     #[test]
     fn the_first_allowed_of_squash_merge_rebase_is_chosen() {
         for bits in 0..8u8 {
-            let m = MergeMethods { squash: bits & 4 != 0, merge: bits & 2 != 0, rebase: bits & 1 != 0 };
+            let m = MergeMethods {
+                squash: bits & 4 != 0,
+                merge: bits & 2 != 0,
+                rebase: bits & 1 != 0,
+            };
             let want = match bits {
                 4..=7 => Some(Method::Squash),
                 2 | 3 => Some(Method::Merge),
@@ -74,7 +78,11 @@ mod tests {
 
     #[test]
     fn a_method_has_a_flag_and_a_graphql_spelling() {
-        let all = [(Method::Squash, "squash", "SQUASH"), (Method::Merge, "merge", "MERGE"), (Method::Rebase, "rebase", "REBASE")];
+        let all = [
+            (Method::Squash, "squash", "SQUASH"),
+            (Method::Merge, "merge", "MERGE"),
+            (Method::Rebase, "rebase", "REBASE"),
+        ];
         for (m, flag, gql) in all {
             assert_eq!((m.as_str(), m.graphql()), (flag, gql));
         }

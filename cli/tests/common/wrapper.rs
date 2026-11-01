@@ -86,7 +86,11 @@ impl PaneSpawn {
 
     /// The `Launch` of each process started (each pi), in order.
     pub fn pis(&self) -> Vec<Launch> {
-        self.log().started.iter().map(|(_, launch)| launch.clone()).collect()
+        self.log()
+            .started
+            .iter()
+            .map(|(_, launch)| launch.clone())
+            .collect()
     }
 
     /// Every `(pid, signal)` the wrapper sent, in order, also the ones pi ignored.
@@ -107,7 +111,10 @@ impl PaneSpawn {
     /// From now on a pi exits with `code` at `SIGTERM`, as pi 1.2.0 does (`shutdown({fromSignal})` ends in
     /// `process.exit(0)`), instead of being ended by the signal.
     pub fn exit_on_term(&self, code: i32) {
-        *self.term_exits.lock().unwrap_or_else(PoisonError::into_inner) = Some(code);
+        *self
+            .term_exits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(code);
     }
 
     /// Whether `pid` runs.
@@ -117,7 +124,9 @@ impl PaneSpawn {
 
     /// Ends `pid` as `SIGKILL` would, from outside (the User, the OOM killer): not a signal of the wrapper's.
     pub fn killed(&self, pid: Pid) {
-        self.inner.signal(pid, Signal::Kill).expect("a pid the spawn started");
+        self.inner
+            .signal(pid, Signal::Kill)
+            .expect("a pid the spawn started");
     }
 }
 
@@ -135,7 +144,12 @@ impl Spawn for PaneSpawn {
         if s == Signal::Term && self.ignore_term.load(Ordering::SeqCst) {
             return Ok(());
         }
-        if s == Signal::Term && let Some(code) = *self.term_exits.lock().unwrap_or_else(PoisonError::into_inner) {
+        if s == Signal::Term
+            && let Some(code) = *self
+                .term_exits
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        {
             if self.inner.alive(p) {
                 self.inner.exit(p, code);
             }
@@ -193,12 +207,20 @@ struct VersionRoute {
 
 impl Handler for VersionRoute {
     fn handle(&self, call: &Call) -> Reply {
-        assert_eq!(call.args, ["--version"], "the wrapper asks the installed cpd for its version, nothing else");
+        assert_eq!(
+            call.args,
+            ["--version"],
+            "the wrapper asks the installed cpd for its version, nothing else"
+        );
         match &*self.verdict.lock().unwrap_or_else(PoisonError::into_inner) {
             Verdict::Says(json) => Reply::ok(json),
             Verdict::Real => {
                 let mut out = Vec::new();
-                let code = cpd::run_with(&self.ports, ["cpd", "--version"].map(OsString::from), &mut out);
+                let code = cpd::run_with(
+                    &self.ports,
+                    ["cpd", "--version"].map(OsString::from),
+                    &mut out,
+                );
                 Reply::exit(exit_code(code), &String::from_utf8_lossy(&out), "")
             }
         }
@@ -210,7 +232,8 @@ impl Handler for VersionRoute {
 pub fn installed_cpd(fx: &Fx) -> PathBuf {
     let installed = fx.env.root().join("installed-bin/cpd");
     if !installed.exists() {
-        std::fs::create_dir_all(installed.parent().expect("a parent")).expect("create installed-bin");
+        std::fs::create_dir_all(installed.parent().expect("a parent"))
+            .expect("create installed-bin");
         std::fs::write(&installed, "").expect("write the installed cpd");
     }
     installed
@@ -240,11 +263,31 @@ impl Pane {
             fx.cockpit();
         }
         let command = format!("{} session run {session}", installed.display());
-        let out = fx.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
-        assert!(out.status.success(), "tmux new-window: {}", String::from_utf8_lossy(&out.stderr));
-        let pane = String::from_utf8(out.stdout).expect("tmux's stdout is UTF-8").trim().to_owned();
+        let out = fx.tmux(&[
+            "new-window",
+            "-d",
+            "-t",
+            "=cpd:",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            &command,
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux new-window: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let pane = String::from_utf8(out.stdout)
+            .expect("tmux's stdout is UTF-8")
+            .trim()
+            .to_owned();
         let set = fx.tmux(&["set", "-p", "-t", &pane, "@cpd_session", session]);
-        assert!(set.status.success(), "tmux set: {}", String::from_utf8_lossy(&set.stderr));
+        assert!(
+            set.status.success(),
+            "tmux set: {}",
+            String::from_utf8_lossy(&set.stderr)
+        );
         Pane::at(fx, &pane, installed)
     }
 
@@ -252,7 +295,14 @@ impl Pane {
     /// [`Pane::new`] for the rest.
     pub fn at(fx: &Fx, pane: &str, installed: &Path) -> Pane {
         let pane = pane.to_owned();
-        fx.export("TMUX", &format!("{}/tmux-0/{},1,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
+        fx.export(
+            "TMUX",
+            &format!(
+                "{}/tmux-0/{},1,0",
+                fx.env.tmux_tmpdir().display(),
+                fx.env.tmux_socket()
+            ),
+        );
         fx.export("TMUX_PANE", &pane);
         fx.fakes.spawn.set_self_exe(installed);
 
@@ -263,29 +313,68 @@ impl Pane {
             term_exits: Mutex::new(None),
         });
         let runner = fx.fakes.runner.weak();
-        let ports = Ports { clock: fx.fakes.clock.clone(), runner: runner.clone(), spawn: fx.fakes.spawn.clone() };
-        let verdict = Arc::new(VersionRoute { ports, verdict: Mutex::new(Verdict::Real) });
-        let program = installed.file_name().expect("the installed cpd has a name").to_string_lossy().into_owned();
+        let ports = Ports {
+            clock: fx.fakes.clock.clone(),
+            runner: runner.clone(),
+            spawn: fx.fakes.spawn.clone(),
+            ..Ports::real()
+        };
+        let verdict = Arc::new(VersionRoute {
+            ports,
+            verdict: Mutex::new(Verdict::Real),
+        });
+        let program = installed
+            .file_name()
+            .expect("the installed cpd has a name")
+            .to_string_lossy()
+            .into_owned();
         let _ = (*fx.fakes.runner).clone().route(&program, verdict.clone());
 
         let screen = fx.env.root().join("screen");
-        let file = OpenOptions::new().create(true).append(true).open(&screen).expect("open the screen file");
-        let null = OpenOptions::new().read(true).open("/dev/null").expect("open /dev/null");
-        let saved = [dup(io::stdin()).expect("dup stdin"), dup(io::stdout()).expect("dup stdout"), dup(io::stderr()).expect("dup stderr")];
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&screen)
+            .expect("open the screen file");
+        let null = OpenOptions::new()
+            .read(true)
+            .open("/dev/null")
+            .expect("open /dev/null");
+        let saved = [
+            dup(io::stdin()).expect("dup stdin"),
+            dup(io::stdout()).expect("dup stdout"),
+            dup(io::stderr()).expect("dup stderr"),
+        ];
         dup2_stdin(&null).expect("point stdin at /dev/null");
         dup2_stdout(&file).expect("point stdout at the screen");
         dup2_stderr(&file).expect("point stderr at the screen");
-        Pane { spawn, pane, clock: fx.fakes.clock.clone(), runner, screen, verdict, saved }
+        Pane {
+            spawn,
+            pane,
+            clock: fx.fakes.clock.clone(),
+            runner,
+            screen,
+            verdict,
+            saved,
+        }
     }
 
     /// From now on `<installed> --version` answers `json`, a line of what `cpd --version` prints.
     pub fn version_says(&self, json: &str) {
-        *self.verdict.verdict.lock().unwrap_or_else(PoisonError::into_inner) = Verdict::Says(json.to_owned());
+        *self
+            .verdict
+            .verdict
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Verdict::Says(json.to_owned());
     }
 
     /// From now on `<installed> --version` answers what the built cpd answers on this env's store.
     pub fn version_is_real(&self) {
-        *self.verdict.verdict.lock().unwrap_or_else(PoisonError::into_inner) = Verdict::Real;
+        *self
+            .verdict
+            .verdict
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Verdict::Real;
     }
 
     /// What the pane shows: what the wrapper printed on stdout and stderr, and what it ended with.
@@ -297,13 +386,30 @@ impl Pane {
     /// Starts `cpd <args>` (a `session run`) as the pane's process; it runs to its first nap at the first `step`. Its
     /// `TMUX_PANE` is this pane's at each `step`.
     pub fn run(&self, args: &[&str]) -> Wrapper {
-        let argv: Vec<OsString> = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from).collect();
+        let argv: Vec<OsString> = std::iter::once("cpd")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
         let (nap_tx, nap_rx) = channel();
         let (go_tx, go_rx) = channel();
-        let stepped = Arc::new(Stepped { inner: self.clock.clone(), nap: Mutex::new(nap_tx.clone()), go: Mutex::new(go_rx) });
+        let stepped = Arc::new(Stepped {
+            inner: self.clock.clone(),
+            nap: Mutex::new(nap_tx.clone()),
+            go: Mutex::new(go_rx),
+        });
         let typed = Arc::new(Mutex::new(Vec::new()));
-        let keys = Keys { stepped: stepped.clone(), typed: typed.clone(), buffer: Vec::new(), at: 0 };
-        let ports = Ports { clock: stepped.clone(), runner: self.runner.clone(), spawn: self.spawn.clone() };
+        let keys = Keys {
+            stepped: stepped.clone(),
+            typed: typed.clone(),
+            buffer: Vec::new(),
+            at: 0,
+        };
+        let ports = Ports {
+            clock: stepped.clone(),
+            runner: self.runner.clone(),
+            spawn: self.spawn.clone(),
+            ..Ports::real()
+        };
         let screen = self.screen.clone();
         let thread = std::thread::spawn(move || {
             // The first `step` starts it; a `Wrapper` dropped before that never runs it.
@@ -311,9 +417,16 @@ impl Pane {
                 return;
             }
             let mut out = Vec::new();
-            let run = || cpd_core::host::input::scope(Box::new(keys), || cpd::run_with(&ports, argv, &mut out));
+            let run = || {
+                cpd_core::host::input::scope(Box::new(keys), || {
+                    cpd::run_with(&ports, argv, &mut out)
+                })
+            };
             let ended = match catch_unwind(AssertUnwindSafe(run)) {
-                Ok(code) => Ended::Returned { code: exit_code(code), stdout: String::from_utf8_lossy(&out).into_owned() },
+                Ok(code) => Ended::Returned {
+                    code: exit_code(code),
+                    stdout: String::from_utf8_lossy(&out).into_owned(),
+                },
                 Err(payload) => match payload.downcast::<Exec>() {
                     Ok(exec) => Ended::Exec(exec.0),
                     Err(payload) => match payload.downcast::<Stopped>() {
@@ -323,11 +436,22 @@ impl Pane {
                 },
             };
             if let Ended::Returned { stdout, .. } = &ended {
-                let _ = OpenOptions::new().append(true).open(&screen).and_then(|mut file| file.write_all(stdout.as_bytes()));
+                let _ = OpenOptions::new()
+                    .append(true)
+                    .open(&screen)
+                    .and_then(|mut file| file.write_all(stdout.as_bytes()));
             }
             let _ = nap_tx.send(Event::Done(ended));
         });
-        Wrapper { go: Some(go_tx), events: nap_rx, thread: Some(thread), ended: None, clock: self.clock.clone(), pane: self.pane.clone(), typed }
+        Wrapper {
+            go: Some(go_tx),
+            events: nap_rx,
+            thread: Some(thread),
+            ended: None,
+            clock: self.clock.clone(),
+            pane: self.pane.clone(),
+            typed,
+        }
     }
 
     /// The new process of an `exec` the wrapper asked for: `cpd` with the launch's arguments, which the old one
@@ -346,7 +470,10 @@ impl Drop for Pane {
         let _ = dup2_stderr(stderr);
         // A failed test's own message went to the screen file with the rest of stderr: say it where it is read.
         if std::thread::panicking() {
-            eprintln!("--- the pane's screen (the wrapper's output and the test's panic message) ---\n{}", self.screen());
+            eprintln!(
+                "--- the pane's screen (the wrapper's output and the test's panic message) ---\n{}",
+                self.screen()
+            );
         }
     }
 }
@@ -389,14 +516,22 @@ struct Stepped {
 impl Stepped {
     /// Waits for the test's next `step`; false when the `Wrapper` is gone.
     fn wait_for_step(&self) -> bool {
-        self.go.lock().unwrap_or_else(PoisonError::into_inner).recv().is_ok()
+        self.go
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .recv()
+            .is_ok()
     }
 }
 
 impl Stepped {
     /// The wrapper stops here until the test's next `step`; unwinds when the `Wrapper` is gone.
     fn pause(&self) {
-        let _ = self.nap.lock().unwrap_or_else(PoisonError::into_inner).send(Event::Napped);
+        let _ = self
+            .nap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .send(Event::Napped);
         if !self.wait_for_step() {
             resume_unwind(Box::new(Stopped));
         }
@@ -438,7 +573,8 @@ impl BufRead for Keys {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         if self.at >= self.buffer.len() {
             self.stepped.pause();
-            self.buffer = std::mem::take(&mut *self.typed.lock().unwrap_or_else(PoisonError::into_inner));
+            self.buffer =
+                std::mem::take(&mut *self.typed.lock().unwrap_or_else(PoisonError::into_inner));
             self.at = 0;
         }
         Ok(&self.buffer[self.at..])
@@ -464,7 +600,10 @@ pub struct Wrapper {
 impl Wrapper {
     /// Types Enter: the wrapper that waits for a line at its next `step` (it paused at the prompt) reads it.
     pub fn enter(&self) {
-        self.typed.lock().unwrap_or_else(PoisonError::into_inner).push(b'\n');
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(b'\n');
     }
 
     /// Lets the wrapper run to its next nap (the clock has moved by it) or to its end. Returns whether it still runs.
@@ -475,12 +614,22 @@ impl Wrapper {
         }
         // SAFETY: under the `Fx`'s lock; the wrapper's thread is parked in a wait for this step, and no other runs.
         unsafe { std::env::set_var("TMUX_PANE", &self.pane) };
-        self.go.as_ref().expect("a running wrapper").send(()).expect("the wrapper waits for its step");
+        self.go
+            .as_ref()
+            .expect("a running wrapper")
+            .send(())
+            .expect("the wrapper waits for its step");
         match self.events.recv().expect("the wrapper ends with an event") {
             Event::Napped => true,
             Event::Done(Ended::Panicked(payload)) => {
                 self.join();
-                resume_unwind(payload.lock().unwrap_or_else(PoisonError::into_inner).take().expect("a payload"))
+                resume_unwind(
+                    payload
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take()
+                        .expect("a payload"),
+                )
             }
             Event::Done(ended) => {
                 self.ended = Some(ended);
@@ -493,7 +642,11 @@ impl Wrapper {
     /// `n` steps; panics when the wrapper ends before them.
     pub fn steps(&mut self, n: usize) {
         for i in 0..n {
-            assert!(self.step(), "the wrapper ended at step {i} of {n}: {:?}", self.ended);
+            assert!(
+                self.step(),
+                "the wrapper ended at step {i} of {n}: {:?}",
+                self.ended
+            );
         }
     }
 
@@ -507,7 +660,10 @@ impl Wrapper {
                 assert!(cond(), "the wrapper ended ({:?}) before {what}", self.ended);
                 return;
             }
-            assert!(self.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} of virtual time for {what}");
+            assert!(
+                self.clock.elapsed() - start < LIMIT,
+                "waited {LIMIT:?} of virtual time for {what}"
+            );
         }
     }
 
@@ -515,7 +671,10 @@ impl Wrapper {
     pub fn finish(&mut self) -> &Ended {
         let start = self.clock.elapsed();
         while self.step() {
-            assert!(self.clock.elapsed() - start < LIMIT, "the wrapper did not end in {LIMIT:?} of virtual time");
+            assert!(
+                self.clock.elapsed() - start < LIMIT,
+                "the wrapper did not end in {LIMIT:?} of virtual time"
+            );
         }
         self.ended.as_ref().expect("ended")
     }
@@ -535,7 +694,9 @@ impl Wrapper {
 
     fn join(&mut self) {
         if let Some(thread) = self.thread.take() {
-            thread.join().expect("the wrapper's thread ended by its event");
+            thread
+                .join()
+                .expect("the wrapper's thread ended by its event");
         }
     }
 }
@@ -551,5 +712,8 @@ impl Drop for Wrapper {
 }
 
 fn exit_code(code: ExitCode) -> i32 {
-    (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
+    (0..=u8::MAX)
+        .find(|n| ExitCode::from(*n) == code)
+        .map(i32::from)
+        .expect("an ExitCode is a byte")
 }

@@ -33,24 +33,36 @@ pub(super) fn run(engine: &mut Engine) {
         let answer = match running.try_recv() {
             Ok(answer) => answer,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Err(CpdError::new(ErrorCode::SpawnFailed, "The model-discovery helper's reader ended without an answer."))
-            }
+            Err(TryRecvError::Disconnected) => Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                "The model-discovery helper's reader ended without an answer.",
+            )),
         };
         engine.models.running = None;
         engine.models.last_end = Some(engine.ports.clock.now());
         let at = engine.ports.clock.utc();
-        match answer.and_then(|answer| apply_at(&engine.home, &engine.config.timeouts, &answer, at)) {
+        match answer.and_then(|answer| apply_at(&engine.home, &engine.config.timeouts, &answer, at))
+        {
             Ok(applied) => report(engine, &applied),
             Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }
         return;
     }
     let repeat = Duration::from_secs(u64::from(engine.config.watch.error_repeat_seconds));
-    if engine.models.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < repeat) {
+    if engine
+        .models
+        .last_end
+        .is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < repeat)
+    {
         return;
     }
-    match due(engine).and_then(|due| if due { start(engine).map(Some) } else { Ok(None) }) {
+    match due(engine).and_then(|due| {
+        if due {
+            start(engine).map(Some)
+        } else {
+            Ok(None)
+        }
+    }) {
         Ok(Some(running)) => engine.models.running = Some(running),
         Ok(None) => {}
         Err(e) => {
@@ -64,7 +76,8 @@ pub(super) fn run(engine: &mut Engine) {
 /// No file, or the newest `polled_at` is at least `watch.models_discovery_seconds` old.
 fn due(engine: &Engine) -> Result<bool, CpdError> {
     let period = time::Duration::seconds(i64::from(engine.config.watch.models_discovery_seconds));
-    Ok(newest_polled_at(&engine.home)?.is_none_or(|newest| engine.ports.clock.utc() - newest >= period))
+    Ok(newest_polled_at(&engine.home)?
+        .is_none_or(|newest| engine.ports.clock.utc() - newest >= period))
 }
 
 /// Starts the helper on its own thread, through the engine's runner (a test's `FakeRunner` sees the call); returns where
@@ -86,8 +99,14 @@ fn report(engine: &mut Engine, applied: &Applied) {
     for outcome in &applied.outcomes {
         match outcome {
             Outcome::Written(w) => {
-                let changed = w.changes.as_ref().map_or(0, |c| c.appeared.len() + c.went_away.len());
-                engine.log.line(&format!("E15: cached {} id(s) of {} ({changed} changed)", w.count, w.provider));
+                let changed = w
+                    .changes
+                    .as_ref()
+                    .map_or(0, |c| c.appeared.len() + c.went_away.len());
+                engine.log.line(&format!(
+                    "E15: cached {} id(s) of {} ({changed} changed)",
+                    w.count, w.provider
+                ));
             }
             Outcome::Failed(failure) => {
                 clean = false;
@@ -99,7 +118,9 @@ fn report(engine: &mut Engine, applied: &Applied) {
         clean = false;
         let failure = Failure {
             code: ErrorCode::ModelsUnparseable.as_str().to_owned(),
-            message: format!("The cached model list of {provider} is not readable and was treated as missing."),
+            message: format!(
+                "The cached model list of {provider} is not readable and was treated as missing."
+            ),
             details: json!({"provider": provider, "file": path.display().to_string()}),
         };
         engine.fail(Step::E15, About::Machine, failure);

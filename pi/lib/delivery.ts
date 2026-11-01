@@ -23,6 +23,7 @@ export const leadRule = (ev: CpdEvent) => (ev.kind === "job-merged" && ev.data.t
 export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions): SendOptions => ((r?.firstPending || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });
+export const STEER = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "steer" });
 
 /** §15.3: `{customType: "cpd", content: event.text, details: {...event, delivered_to}}`. `delivered_to` is what the cursor counts. */
 export function eventMessage(event: CpdEvent, sessionId: string, content: string = event.text): Message {

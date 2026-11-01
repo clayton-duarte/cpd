@@ -11,10 +11,19 @@ use crate::error::CpdError;
 use crate::ids::PlanId;
 
 /// The Job statuses of §3.2, in the order `counts` lists them.
-pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
+pub const STATUSES: [&str; 6] = [
+    "draft",
+    "queued",
+    "running",
+    "merged",
+    "failed",
+    "cancelled",
+];
 
 /// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
-pub const KINDS: [&str; 9] = ["work", "docs", "test", "impl", "verify", "open", "update", "scout", "research"];
+pub const KINDS: [&str; 9] = [
+    "work", "docs", "test", "impl", "verify", "open", "update", "scout", "research",
+];
 
 /// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a Workflow.
 pub fn is_explore(kind: &str) -> bool {
@@ -56,6 +65,9 @@ pub struct Job {
     pub resources: Option<Value>,
     /// An `impl` Job's approved red-test paths (`jobs.test_approved`): not a Locked field, in no fingerprint.
     pub test_approved: Option<Value>,
+    /// The paths the Lead approved a Job to change beyond its Spec `touches` (`jobs.touches_approved`): not a Locked
+    /// field, in no fingerprint (§2.2, §7.5).
+    pub touches_approved: Option<Value>,
     /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
     pub urgent: bool,
     pub fingerprint: Option<String>,
@@ -64,6 +76,8 @@ pub struct Job {
     pub cancel_requested_at: Option<String>,
     pub failed_cause: Option<String>,
     pub merged_sha: Option<String>,
+    /// An explore Job's bounded summary (`jobs.summary`): set exactly when an explore Job is `merged`.
+    pub summary: Option<String>,
     pub created_at: String,
     /// Keys of the Jobs it needs, sorted.
     pub needs: Vec<String>,
@@ -87,17 +101,24 @@ impl Job {
     /// What a stub lacks (`details.jobs[].missing` of `draft_incomplete`, commands.md §4.6):
     /// `tier` and/or `spec`; empty for a Job that has both.
     pub fn missing(&self) -> Vec<&'static str> {
-        [("tier", self.tier.is_none()), ("spec", self.spec.is_none())].into_iter().filter_map(|(name, lacks)| lacks.then_some(name)).collect()
+        [("tier", self.tier.is_none()), ("spec", self.spec.is_none())]
+            .into_iter()
+            .filter_map(|(name, lacks)| lacks.then_some(name))
+            .collect()
     }
 
     /// The Tier, for what runs a Job: a Job that is not a draft always has it (§4.4 CHECK), so its absence is a bad row.
     pub fn require_tier(&self) -> Result<&str, CpdError> {
-        self.tier.as_deref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no tier", self.key)))
+        self.tier
+            .as_deref()
+            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no tier", self.key)))
     }
 
     /// The Spec, for what runs a Job, as [`Job::require_tier`].
     pub fn require_spec(&self) -> Result<&JobSpec, CpdError> {
-        self.spec.as_ref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no Spec", self.key)))
+        self.spec
+            .as_ref()
+            .ok_or_else(|| CpdError::bad_row(format!("Job {} has no Spec", self.key)))
     }
 
     /// `{goal, tier, context, touches, acceptance, out_of_scope}`: what the fingerprints of §2.3
@@ -159,32 +180,69 @@ impl Job {
 /// Every Job of `plan`, in creation order (`seq`).
 pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT job, needs FROM dependencies WHERE plan = ?1 ORDER BY job, needs")?;
-    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+    let mut stmt =
+        conn.prepare("SELECT job, needs FROM dependencies WHERE plan = ?1 ORDER BY job, needs")?;
+    for row in stmt.query_map([plan.as_str()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
         let (job, need) = row?;
         needs.entry(job).or_default().push(need);
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
-                kind, tests, test_files, test_approved, resources
+                kind, tests, test_files, test_approved, resources, summary, touches_approved
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             Ok((
-                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?),
-                (r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
-                (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
-                (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
-                (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
-                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
-                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?),
+                (
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ),
+                (
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                ),
+                (
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                ),
+                (
+                    r.get::<_, String>(10)?,
+                    r.get::<_, bool>(11)?,
+                    r.get::<_, Option<String>>(12)?,
+                    r.get::<_, Option<String>>(13)?,
+                ),
+                (
+                    r.get::<_, Option<String>>(14)?,
+                    r.get::<_, Option<String>>(15)?,
+                    r.get::<_, Option<String>>(16)?,
+                ),
+                (
+                    r.get::<_, Option<String>>(17)?,
+                    r.get::<_, String>(18)?,
+                    r.get::<_, bool>(19)?,
+                ),
+                (
+                    r.get::<_, String>(20)?,
+                    r.get::<_, Option<String>>(21)?,
+                    r.get::<_, Option<String>>(22)?,
+                    r.get::<_, Option<String>>(23)?,
+                    r.get::<_, Option<String>>(24)?,
+                    r.get::<_, Option<String>>(25)?,
+                    r.get::<_, Option<String>>(26)?,
+                ),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, workflow, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources))| {
+        .map(|((seq, key, workflow, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources, summary, touches_approved))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -209,6 +267,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 test_files: optional("test_files", test_files)?,
                 test_approved: optional("test_approved", test_approved)?,
                 resources: optional("resources", resources)?,
+                touches_approved: optional("touches_approved", touches_approved)?,
                 kind,
                 spec,
                 needs: needs.remove(&key).unwrap_or_default(),
@@ -227,6 +286,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 failed_cause,
                 merged_sha,
                 created_at,
+                summary,
             })
         })
         .collect()
@@ -236,7 +296,10 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
 pub fn counts(jobs: &[Job]) -> Value {
     let mut counts = serde_json::Map::new();
     for status in STATUSES {
-        counts.insert(status.to_owned(), json!(jobs.iter().filter(|j| j.status == status).count()));
+        counts.insert(
+            status.to_owned(),
+            json!(jobs.iter().filter(|j| j.status == status).count()),
+        );
     }
     Value::Object(counts)
 }
@@ -274,7 +337,11 @@ pub fn tampered(plan: &PlanId, jobs: &[Job]) -> Vec<Value> {
 /// A cycle among the Dependencies of the `draft` Jobs, as the keys along it
 /// (the first repeated at the end), if there is one.
 pub fn cycle(jobs: &[Job]) -> Option<Vec<String>> {
-    let drafts: BTreeMap<&str, &Job> = jobs.iter().filter(|j| j.is_draft()).map(|j| (j.key.as_str(), j)).collect();
+    let drafts: BTreeMap<&str, &Job> = jobs
+        .iter()
+        .filter(|j| j.is_draft())
+        .map(|j| (j.key.as_str(), j))
+        .collect();
     let mut done: BTreeSet<&str> = BTreeSet::new();
     for start in drafts.keys() {
         let mut path: Vec<&str> = Vec::new();
@@ -322,7 +389,13 @@ mod tests {
             workflow: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
-            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
+            spec: Some(JobSpec {
+                goal: "g".into(),
+                context: "c".into(),
+                touches: json!(["a"]),
+                acceptance: json!(["b"]),
+                out_of_scope: json!([]),
+            }),
             status: status.into(),
             appended: false,
             kind: "work".into(),
@@ -330,6 +403,7 @@ mod tests {
             test_files: None,
             resources: None,
             test_approved: None,
+            touches_approved: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,
@@ -337,6 +411,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
         }
@@ -350,26 +425,57 @@ mod tests {
                 br#"{"acceptance":["b"],"context":"c","goal":"g","needs":["x","y"],"out_of_scope":[],"tier":"S2","touches":["a"]}"#
             )
         );
-        assert_eq!(locked_fingerprint(&job("k", "draft", &["y", "x"])), expected);
-        assert_eq!(locked_fingerprint(&job("k", "draft", &["x", "y"])), expected);
+        assert_eq!(
+            locked_fingerprint(&job("k", "draft", &["y", "x"])),
+            expected
+        );
+        assert_eq!(
+            locked_fingerprint(&job("k", "draft", &["x", "y"])),
+            expected
+        );
         let mut retitled = job("k", "queued", &["x", "y"]);
         retitled.title = "Other".into();
-        assert_eq!(locked_fingerprint(&retitled), expected, "the title is not in the Locked-Job fingerprint");
+        assert_eq!(
+            locked_fingerprint(&retitled),
+            expected,
+            "the title is not in the Locked-Job fingerprint"
+        );
     }
 
     #[test]
     fn finds_a_cycle_among_drafts_only() {
-        assert_eq!(cycle(&[job("a", "draft", &[]), job("b", "draft", &["a"])]), None);
-        let found = cycle(&[job("a", "draft", &["c"]), job("b", "draft", &["a"]), job("c", "draft", &["b"])]).unwrap();
+        assert_eq!(
+            cycle(&[job("a", "draft", &[]), job("b", "draft", &["a"])]),
+            None
+        );
+        let found = cycle(&[
+            job("a", "draft", &["c"]),
+            job("b", "draft", &["a"]),
+            job("c", "draft", &["b"]),
+        ])
+        .unwrap();
         assert_eq!(found.first(), found.last());
         assert_eq!(found.len(), 4);
-        assert_eq!(cycle(&[job("a", "draft", &["a"])]), Some(vec!["a".into(), "a".into()]));
-        assert_eq!(cycle(&[job("a", "draft", &["b"]), job("b", "cancelled", &["a"])]), None);
+        assert_eq!(
+            cycle(&[job("a", "draft", &["a"])]),
+            Some(vec!["a".into(), "a".into()])
+        );
+        assert_eq!(
+            cycle(&[job("a", "draft", &["b"]), job("b", "cancelled", &["a"])]),
+            None
+        );
     }
 
     #[test]
     fn counts_every_status() {
-        let counts = counts(&[job("a", "draft", &[]), job("b", "draft", &[]), job("c", "merged", &[])]);
-        assert_eq!(counts, json!({"draft": 2, "queued": 0, "running": 0, "merged": 1, "failed": 0, "cancelled": 0}));
+        let counts = counts(&[
+            job("a", "draft", &[]),
+            job("b", "draft", &[]),
+            job("c", "merged", &[]),
+        ]);
+        assert_eq!(
+            counts,
+            json!({"draft": 2, "queued": 0, "running": 0, "merged": 1, "failed": 0, "cancelled": 0})
+        );
     }
 }

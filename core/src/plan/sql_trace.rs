@@ -10,13 +10,21 @@ use rusqlite::{Connection, ffi};
 use crate::home::CpdHome;
 use crate::store::Store;
 
-unsafe extern "C" fn on_trace(kind: c_uint, ctx: *mut c_void, stmt: *mut c_void, _sql: *mut c_void) -> c_int {
+unsafe extern "C" fn on_trace(
+    kind: c_uint,
+    ctx: *mut c_void,
+    stmt: *mut c_void,
+    _sql: *mut c_void,
+) -> c_int {
     if kind == ffi::SQLITE_TRACE_STMT as c_uint {
         // SAFETY: `ctx` is the `Mutex` of `statements`, which outlives the registration; `stmt` is a live statement.
         unsafe {
             let sql = ffi::sqlite3_expanded_sql(stmt.cast());
             if !sql.is_null() {
-                (*ctx.cast::<Mutex<Vec<String>>>()).lock().unwrap().push(CStr::from_ptr(sql).to_string_lossy().into_owned());
+                (*ctx.cast::<Mutex<Vec<String>>>())
+                    .lock()
+                    .unwrap()
+                    .push(CStr::from_ptr(sql).to_string_lossy().into_owned());
                 ffi::sqlite3_free(sql.cast());
             }
         }
@@ -29,7 +37,12 @@ pub(super) fn statements<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, Vec
     let seen: Mutex<Vec<String>> = Mutex::new(Vec::new());
     // SAFETY: the callback is removed before `seen` goes out of scope, and `conn` is borrowed throughout.
     unsafe {
-        ffi::sqlite3_trace_v2(conn.handle(), ffi::SQLITE_TRACE_STMT as c_uint, Some(on_trace), std::ptr::addr_of!(seen).cast_mut().cast());
+        ffi::sqlite3_trace_v2(
+            conn.handle(),
+            ffi::SQLITE_TRACE_STMT as c_uint,
+            Some(on_trace),
+            std::ptr::addr_of!(seen).cast_mut().cast(),
+        );
     }
     let value = f();
     unsafe {
@@ -43,7 +56,9 @@ pub(super) fn statements<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, Vec
 pub(super) fn ledger(dir: &std::path::Path, plans: usize) -> Store {
     let home = CpdHome::resolve(Some(dir.into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
-    let mut sql = String::from("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');");
+    let mut sql = String::from(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');",
+    );
     for n in 1..=plans {
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -70,6 +85,8 @@ pub(super) fn ledger(dir: &std::path::Path, plans: usize) -> Store {
             fp = "f".repeat(64)
         ));
     }
-    store.write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    store
+        .write("fixture", |tx| Ok(tx.execute_batch(&sql)?))
+        .unwrap();
     store
 }

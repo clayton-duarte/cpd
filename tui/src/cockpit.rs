@@ -34,9 +34,11 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::widgets::legend;
 use super::view_ports::RunFn;
-use super::{Restart, RestartOutcome, RunCommand, RunOn, logs, merge, not_a_terminal, on_a_terminal};
+use super::widgets::legend;
+use super::{
+    Restart, RestartOutcome, RunCommand, RunOn, logs, merge, not_a_terminal, on_a_terminal,
+};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -54,7 +56,13 @@ use cpd_core::store::Store;
 /// The views of `main`'s layout: a dead one is respawned (amendment 9).
 const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
 
-pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+pub(super) fn run(
+    attach: bool,
+    respawn: bool,
+    version: &str,
+    run_command: RunCommand,
+    restart: Restart,
+) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
         return Err(not_a_terminal("tui --attach"));
     }
@@ -64,26 +72,38 @@ pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCo
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.as_str();
 
-    let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, version, run_command)?;
+    let (built, respawned) = ensure(
+        &tmux,
+        &home,
+        &mut store,
+        cockpit,
+        config.machine.as_str(),
+        respawn,
+        version,
+        run_command,
+    )?;
     let watch = command(&run_command, &["watch", "--ensure"])?;
-    if respawn {
-        if let Some(preview) = tmux.preview()? {
-            eprintln!(
-                "a preview is on ({preview}); its views keep the preview build until 'preview-tui.sh off'"
-            );
-        }
+    if respawn && let Some(preview) = tmux.preview()? {
+        eprintln!(
+            "a preview is on ({preview}); its views keep the preview build until 'preview-tui.sh off'"
+        );
     }
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
     let after = match mark_if_older(&home, &tmux, restart) {
         Ok(Some(why)) => {
             if !attach {
-                eprintln!("cpd tui: the tmux server runs an older tmux than the installed one{why}.");
+                eprintln!(
+                    "cpd tui: the tmux server runs an older tmux than the installed one{why}."
+                );
             }
             why
         }
         Ok(None) => String::new(),
         Err(e) => {
-            eprintln!("cpd tui: cannot compare the tmux server's version with the installed tmux: {}", e.message());
+            eprintln!(
+                "cpd tui: cannot compare the tmux server's version with the installed tmux: {}",
+                e.message()
+            );
             String::new()
         }
     };
@@ -108,6 +128,7 @@ pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCo
 /// status line and `@cpd_machine` again; brings the last chat
 /// Lead into a new chat slot. Returns whether it built `main` and the panes
 /// restarted by `respawn`.
+#[allow(clippy::too_many_arguments)] // takes every input of the ensure step; a signature change is out of scope
 fn ensure(
     tmux: &Tmux,
     home: &CpdHome,
@@ -134,24 +155,36 @@ fn ensure(
     }
     tmux.apply_server_options()?;
     // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
-    tmux.run(&["set".to_owned(), "-g".to_owned(), "@cpd_machine".to_owned(), machine.to_owned()])?;
+    tmux.run(&[
+        "set".to_owned(),
+        "-g".to_owned(),
+        "@cpd_machine".to_owned(),
+        machine.to_owned(),
+    ])?;
     tmux.apply_status_line(cockpit, version)?;
-    if chat_added {
-        if let Some(lead) = store.read(last_chat_lead)? {
-            open_lead(run_command, &lead)?;
-        }
+    if chat_added && let Some(lead) = store.read(last_chat_lead)? {
+        open_lead(run_command, &lead)?;
     }
     Ok((built, respawned))
 }
 
 /// The panes of `<cockpit>:main`.
 fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
-    Ok(tmux.list_panes()?.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
+    Ok(tmux
+        .list_panes()?
+        .into_iter()
+        .filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW)
+        .collect())
 }
 
 /// What a view's pane runs: `cpd tui view <view>` (see [`home_spawn`]).
 fn view_spawn(home: &CpdHome, view: View) -> Spawn {
-    home_spawn(home, [PROGRAM, "tui", "view", view.as_str()].map(str::to_owned).into())
+    home_spawn(
+        home,
+        [PROGRAM, "tui", "view", view.as_str()]
+            .map(str::to_owned)
+            .into(),
+    )
 }
 
 /// `argv` in `$CPD_HOME`, with `CPD_HOME` passed with `-e`, since a server
@@ -183,7 +216,11 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
     tmux.set_pane_view(&chat, View::Chat)?;
     reset_layout(tmux, cockpit)?;
     // The keyboard goes to the chat slot, as in the spike.
-    tmux.run(&["select-pane".to_owned(), "-t".to_owned(), chat.as_str().to_owned()])?;
+    tmux.run(&[
+        "select-pane".to_owned(),
+        "-t".to_owned(),
+        chat.as_str().to_owned(),
+    ])?;
     Ok(())
 }
 
@@ -192,11 +229,22 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
 /// panes added are taken from the layout and the others get their sizes back
 /// (amendment 15). The chat slot counts as present when it holds a Lead. Adds
 /// nothing to a layout that is whole. Returns the views added.
-fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) -> Result<Vec<View>, CpdError> {
-    let Some(any) = main.first() else { return Ok(Vec::new()) };
+fn add_missing_panes(
+    tmux: &Tmux,
+    home: &CpdHome,
+    cockpit: &str,
+    main: &[Pane],
+) -> Result<Vec<View>, CpdError> {
+    let Some(any) = main.first() else {
+        return Ok(Vec::new());
+    };
     let found = |view| view_pane(main, cockpit, view).map(|p| p.pane.clone());
     let mut added = Vec::new();
-    let mut add = |view: View, target: &PaneId, flags: &[&str], size: Option<&str>| -> Result<PaneId, CpdError> {
+    let mut add = |view: View,
+                   target: &PaneId,
+                   flags: &[&str],
+                   size: Option<&str>|
+     -> Result<PaneId, CpdError> {
         let pane = split(tmux, home, view, target, flags, size)?;
         added.push(view);
         Ok(pane)
@@ -209,7 +257,10 @@ fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) 
     if found(View::Widgets).is_none() {
         add(View::Widgets, &any.pane, &["-h", "-f"], Some(WIDGETS_WIDTH))?;
     }
-    let (plan, slot) = (found(View::Plan), chat_slot(main, cockpit).map(|p| p.pane.clone()));
+    let (plan, slot) = (
+        found(View::Plan),
+        chat_slot(main, cockpit).map(|p| p.pane.clone()),
+    );
     match (plan, slot) {
         (Some(_), Some(_)) => {}
         (None, Some(slot)) => drop(add(View::Plan, &slot, &["-v", "-b"], Some(PLAN_HEIGHT))?),
@@ -227,9 +278,18 @@ fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) 
 
 /// `split-window` with the flags the layout needs, which [`Tmux::split_window`] has no [`Split`] for, running
 /// `cpd tui view <view>` as [`view_spawn`] does, with `@cpd_view` set. Returns the new pane.
-fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str], size: Option<&str>) -> Result<PaneId, CpdError> {
+fn split(
+    tmux: &Tmux,
+    home: &CpdHome,
+    view: View,
+    target: &PaneId,
+    flags: &[&str],
+    size: Option<&str>,
+) -> Result<PaneId, CpdError> {
     let spawn = view_spawn(home, view);
-    let mut args: Vec<String> = ["split-window", "-d", "-t", target.as_str()].map(str::to_owned).into();
+    let mut args: Vec<String> = ["split-window", "-d", "-t", target.as_str()]
+        .map(str::to_owned)
+        .into();
     args.extend(flags.iter().map(|f| (*f).to_owned()));
     if let Some(size) = size {
         args.extend(["-l".to_owned(), size.to_owned()]);
@@ -242,7 +302,10 @@ fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str
     args.extend(spawn.argv);
     let out = tmux.run(&args)?;
     let pane = PaneId::parse(out.trim_end_matches('\n')).ok_or_else(|| {
-        CpdError::new(ErrorCode::TmuxFailed, format!("tmux split-window printed {out:?}, not a pane id."))
+        CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("tmux split-window printed {out:?}, not a pane id."),
+        )
     })?;
     tmux.set_pane_view(&pane, view)?;
     Ok(pane)
@@ -252,8 +315,11 @@ fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str
 /// loses it once (`kill-pane`), then gets reset-layout, so the other panes take the
 /// freed row and get their sizes back (commands.md §13.1, amendment 15).
 fn remove_old_panes(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
-    let old: Vec<PaneId> =
-        main_views(tmux, cockpit)?.into_iter().filter(|(_, view)| LEGACY_VIEWS.contains(&view.as_str())).map(|(pane, _)| pane).collect();
+    let old: Vec<PaneId> = main_views(tmux, cockpit)?
+        .into_iter()
+        .filter(|(_, view)| LEGACY_VIEWS.contains(&view.as_str()))
+        .map(|(pane, _)| pane)
+        .collect();
     if old.is_empty() {
         return Ok(());
     }
@@ -268,7 +334,13 @@ fn remove_old_panes(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
 /// (an older cpd's StatusBar, a newer cpd's view), and warns on stderr about a
 /// newer one, which `cpd tui action` must never print.
 fn main_views(tmux: &Tmux, cockpit: &str) -> Result<Vec<(PaneId, String)>, CpdError> {
-    let args = ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{@cpd_view}"].map(str::to_owned);
+    let args = [
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_id}\t#{session_name}\t#{window_name}\t#{@cpd_view}",
+    ]
+    .map(str::to_owned);
     let out = tmux.run(&args)?;
     let mut panes = Vec::new();
     for line in out.lines() {
@@ -277,16 +349,22 @@ fn main_views(tmux: &Tmux, cockpit: &str) -> Result<Vec<(PaneId, String)>, CpdEr
             return Err(unexpected_listing(tmux, line));
         };
         if session == cockpit && window == MAIN_WINDOW {
-            panes.push((PaneId::parse(pane).ok_or_else(|| unexpected_listing(tmux, line))?, view.to_owned()));
+            panes.push((
+                PaneId::parse(pane).ok_or_else(|| unexpected_listing(tmux, line))?,
+                view.to_owned(),
+            ));
         }
     }
     Ok(panes)
 }
 
 fn unexpected_listing(tmux: &Tmux, line: &str) -> CpdError {
-    CpdError::new(ErrorCode::TmuxFailed, "tmux list-panes printed unexpected output.")
-        .with("socket", tmux.socket())
-        .with("stdout", line.to_owned())
+    CpdError::new(
+        ErrorCode::TmuxFailed,
+        "tmux list-panes printed unexpected output.",
+    )
+    .with("socket", tmux.socket())
+    .with("stdout", line.to_owned())
 }
 
 /// The tree's width on reset.
@@ -312,7 +390,11 @@ fn reset_steps(panes: &[(PaneId, View)]) -> Vec<Vec<String>> {
         .iter()
         .filter_map(|(view, flag, size)| {
             let (id, _) = panes.iter().find(|(_, v)| v == view)?;
-            Some(["resize-pane", "-t", id.as_str(), flag, size].map(String::from).to_vec())
+            Some(
+                ["resize-pane", "-t", id.as_str(), flag, size]
+                    .map(String::from)
+                    .to_vec(),
+            )
         })
         .collect()
 }
@@ -320,8 +402,10 @@ fn reset_steps(panes: &[(PaneId, View)]) -> Vec<Vec<String>> {
 /// Resets the layout of `<cockpit>:main`: `cpd tui` runs it after building
 /// `main`, `cpd tui action reset` on the StatusBar's 󰨝 (U+F0A1D) click.
 fn reset_layout(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
-    let panes: Vec<(PaneId, View)> =
-        main_views(tmux, cockpit)?.into_iter().filter_map(|(pane, view)| Some((pane, View::parse(&view)?))).collect();
+    let panes: Vec<(PaneId, View)> = main_views(tmux, cockpit)?
+        .into_iter()
+        .filter_map(|(pane, view)| Some((pane, View::parse(&view)?)))
+        .collect();
     for step in reset_steps(&panes) {
         tmux.run(&step)?;
     }
@@ -366,13 +450,26 @@ impl Action {
 /// or any output. A failure is shown with `display-message -c <client>`
 /// instead, and if even that fails, it is dropped (a failed merge is first
 /// the merge action's own, [`merge::action`]).
-pub(super) fn action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Output {
+pub(super) fn action(
+    ports: &Ports,
+    name: Option<&str>,
+    pull: Option<&str>,
+    client: &str,
+    run_command: RunCommand,
+    run_on: RunOn,
+) -> Output {
     if let Err(e) = run_action(ports, name, pull, client, run_command, run_on) {
         {
             let tmux = failure_tmux(ports);
             let message = format!("cpd tui action: {}", e.message());
             // `-l`: the message is shown as is, not expanded as a format.
-            let _ = tmux.run(&["display-message".to_owned(), "-l".to_owned(), "-c".to_owned(), client.to_owned(), message]);
+            let _ = tmux.run(&[
+                "display-message".to_owned(),
+                "-l".to_owned(),
+                "-c".to_owned(),
+                client.to_owned(),
+                message,
+            ]);
         }
     }
     Output::Owned
@@ -380,17 +477,32 @@ pub(super) fn action(ports: &Ports, name: Option<&str>, pull: Option<&str>, clie
 
 /// The tmux server of the cockpit, from config `tmux.socket`.
 fn action_tmux(ports: &Ports) -> Result<Tmux, CpdError> {
-    Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket).with_runner(ports.runner.clone()))
+    Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket)
+        .with_runner(ports.runner.clone()))
 }
 
 /// The tmux a failure is shown on when the config does not parse (so names no socket): the default socket `cpd`.
 fn failure_tmux(ports: &Ports) -> Tmux {
-    action_tmux(ports).unwrap_or_else(|_| Tmux::new("cpd".to_owned()).with_runner(ports.runner.clone()))
+    action_tmux(ports)
+        .unwrap_or_else(|_| Tmux::new("cpd".to_owned()).with_runner(ports.runner.clone()))
 }
 
-fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Result<(), CpdError> {
+fn run_action(
+    ports: &Ports,
+    name: Option<&str>,
+    pull: Option<&str>,
+    client: &str,
+    run_command: RunCommand,
+    run_on: RunOn,
+) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
-        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, costs, runner, host or incident.", name.unwrap_or("")))
+        CpdError::new(
+            ErrorCode::Usage,
+            format!(
+                "unknown action {:?}: reset, legend, logs, costs, runner, host or incident.",
+                name.unwrap_or("")
+            ),
+        )
     })?;
     let home = CpdHome::from_env()?;
     // The runner click reads the config itself: a config that does not parse is its error, not a failed load here.
@@ -403,12 +515,28 @@ fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &st
     let popup = match (action, pull) {
         (Action::Merge, Some(pull)) => {
             let pull = merge::Pull::parse(pull).map_err(|e| CpdError::new(ErrorCode::Usage, e))?;
-            return merge::action_with(ports, &home, &tmux, &pull, client, &|argv| run_on(ports, argv));
+            return merge::action_with(ports, &home, &tmux, &pull, client, &|argv| {
+                run_on(ports, argv)
+            });
         }
-        (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
-        (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
-        (Action::Host, None) => return super::host_click::run(&home, &config, &tmux, client, run_command),
-        (Action::Incident, None) => return super::incident_click::run(&home, &config, &tmux, run_command),
+        (Action::Merge, None) => {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                "merge needs <owner>/<repo>#<n>.",
+            ));
+        }
+        (_, Some(extra)) => {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("unexpected argument {extra:?}."),
+            ));
+        }
+        (Action::Host, None) => {
+            return super::host_click::run(&home, &config, &tmux, client, run_command);
+        }
+        (Action::Incident, None) => {
+            return super::incident_click::run(&home, &config, &tmux, run_command);
+        }
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Costs, None) => return toggle_costs(&tmux, &config.tmux.cockpit_session),
@@ -421,25 +549,56 @@ fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &st
 /// The runner pill (pro-d199): flips `worker_runner` in config.toml, sets `@cpd_runner` at once and redraws the client.
 fn toggle_runner(home: &CpdHome, tmux: &Tmux, client: &str) -> Result<(), CpdError> {
     let to = cpd_core::config::toggle(home)?;
-    tmux.run(&["set".to_owned(), "-g".to_owned(), cpd_core::host::tmux::RUNNER_OPTION.to_owned(), to.as_str().to_owned()])?;
-    tmux.run(&["refresh-client", "-S", "-c", client].map(str::to_owned)).map(drop)
+    tmux.run(&[
+        "set".to_owned(),
+        "-g".to_owned(),
+        cpd_core::host::tmux::RUNNER_OPTION.to_owned(),
+        to.as_str().to_owned(),
+    ])?;
+    tmux.run(&["refresh-client", "-S", "-c", client].map(str::to_owned))
+        .map(drop)
 }
 
 /// The costs button (pro-d189, pro-d196): sends the literal key `$` to the live tree pane, whose view flips its cost
 /// flag. With no live tree pane it fails like every failed action.
 fn toggle_costs(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
-    let live: Vec<Pane> = main_panes(tmux, cockpit)?.into_iter().filter(|p| !p.dead).collect();
+    let live: Vec<Pane> = main_panes(tmux, cockpit)?
+        .into_iter()
+        .filter(|p| !p.dead)
+        .collect();
     let pane = view_pane(&live, cockpit, View::Tree)
         .ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, "the tree view is not running"))?;
-    tmux.run(&["send-keys".to_owned(), "-t".to_owned(), pane.pane.to_string(), "-l".to_owned(), "$".to_owned()]).map(drop)
+    tmux.run(&[
+        "send-keys".to_owned(),
+        "-t".to_owned(),
+        pane.pane.to_string(),
+        "-l".to_owned(),
+        "$".to_owned(),
+    ])
+    .map(drop)
 }
 
 /// `(columns, rows)` of client `client` (`display -p -c`). tmux prints an
 /// empty line, and exits 0, for a client that does not exist.
 pub(crate) fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdError> {
-    let out = tmux.run(&["display", "-p", "-c", client, "#{client_width} #{client_height}"].map(str::to_owned))?;
-    let size = out.trim().split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
-    size.ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}.")).with("socket", tmux.socket()))
+    let out = tmux.run(
+        &[
+            "display",
+            "-p",
+            "-c",
+            client,
+            "#{client_width} #{client_height}",
+        ]
+        .map(str::to_owned),
+    )?;
+    let size = out
+        .trim()
+        .split_once(' ')
+        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+    size.ok_or_else(|| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}."))
+            .with("socket", tmux.socket())
+    })
 }
 
 /// `display-popup …` aimed at `client` (`-c`), so it opens there only. The popup's argument vector stays as it
@@ -457,7 +616,11 @@ pub(crate) fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
 /// respawn. Returns the panes restarted.
 fn respawn_live_views(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<Vec<PaneId>, CpdError> {
     let rerun = home_spawn(home, Vec::new());
-    let views: Vec<PaneId> = main.iter().filter(|p| !p.dead && p.cpd_view.is_some()).map(|p| p.pane.clone()).collect();
+    let views: Vec<PaneId> = main
+        .iter()
+        .filter(|p| !p.dead && p.cpd_view.is_some())
+        .map(|p| p.pane.clone())
+        .collect();
     // One at a time; a pane that fails does not stop the others (hs-d463): the views that could be restarted
     // are better than views that all keep the old binary. The command then fails after the last.
     let mut restarted = Vec::new();
@@ -476,7 +639,12 @@ fn respawn_live_views(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<Vec<
         None => Ok(views),
         Some(e) => Err(CpdError::new(
             ErrorCode::TmuxFailed,
-            format!("{} of {} views were not restarted: {}", failed.len(), views.len(), e.message()),
+            format!(
+                "{} of {} views were not restarted: {}",
+                failed.len(),
+                views.len(),
+                e.message()
+            ),
         )
         .with("failed", failed)
         .with("respawned", restarted)),
@@ -509,8 +677,12 @@ fn last_chat_lead(conn: &rusqlite::Connection) -> Result<Option<SessionId>, CpdE
         )
         .optional()?;
     id.map(|id| {
-        SessionId::parse(&id)
-            .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid Session id: {}", e.message())))
+        SessionId::parse(&id).map_err(|e| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!("The database holds an invalid Session id: {}", e.message()),
+            )
+        })
     })
     .transpose()
 }
@@ -527,7 +699,10 @@ pub(crate) fn open_lead_with(run: RunFn, lead: &SessionId) -> Result<(), CpdErro
     match command(run, &["session", "open", lead.as_str()]) {
         Ok(_) => Ok(()),
         Err(e) if e.exit() == Exit::Refused => {
-            eprintln!("cpd tui: Lead {lead} stays out of the chat slot: {}", e.message());
+            eprintln!(
+                "cpd tui: Lead {lead} stays out of the chat slot: {}",
+                e.message()
+            );
             Ok(())
         }
         Err(e) => Err(e),
@@ -538,7 +713,10 @@ pub(crate) fn open_lead_with(run: RunFn, lead: &SessionId) -> Result<(), CpdErro
 /// command tree, and returns its success fields: its arguments and its effects
 /// stay that area's own, as with a subprocess.
 fn command(run: RunFn, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
-    let argv = std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect();
+    let argv = std::iter::once(PROGRAM)
+        .chain(words.iter().copied())
+        .map(OsString::from)
+        .collect();
     match run(argv)? {
         Output::Success(fields) => Ok(fields),
         Output::Owned => unreachable!("cpd {words:?} prints one JSON value"),
@@ -552,7 +730,12 @@ fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
 }
 
 /// [`exec_attach`] through `ports.spawn.exec`.
-pub(crate) fn exec_attach_with(ports: &Ports, tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
+pub(crate) fn exec_attach_with(
+    ports: &Ports,
+    tmux: &Tmux,
+    cockpit: &str,
+    program: Option<&Path>,
+) -> CpdError {
     let argv = tmux.argv(&["attach".to_owned(), "-t".to_owned(), cockpit.to_owned()]);
     let program = program.map_or_else(|| PathBuf::from(&argv[0]), Path::to_path_buf);
     // `client` puts `-u` first and removes the variables of the cockpit (hs-d463); `argv` is the same line, for the error.
@@ -561,22 +744,36 @@ pub(crate) fn exec_attach_with(ports: &Ports, tmux: &Tmux, cockpit: &str, progra
     tmux_client.args(&argv[2..]);
     let launch = Launch {
         program: program.to_string_lossy().into_owned(),
-        args: tmux_client.get_args().map(|a| a.to_string_lossy().into_owned()).collect(),
-        env_remove: tmux_client.get_envs().filter(|(_, value)| value.is_none()).map(|(key, _)| key.to_string_lossy().into_owned()).collect(),
+        args: tmux_client
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+        env_remove: tmux_client
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect(),
         ..Launch::default()
     };
     let error = ports.spawn.exec(&launch);
-    CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux attach: {error}."))
-        .with("argv", argv)
-        .with("exit", Value::Null)
-        .with("stderr", error.to_string())
+    CpdError::new(
+        ErrorCode::TmuxFailed,
+        format!("Cannot run tmux attach: {error}."),
+    )
+    .with("argv", argv)
+    .with("exit", Value::Null)
+    .with("stderr", error.to_string())
 }
 
 /// `cpd` with no arguments (commands.md §13.3): the follow-ups of an update,
 /// then attaches this terminal to the cockpit. Each follow-up's failure is one
 /// line on stderr and the attach still happens when the cockpit exists (A3).
 /// Inside the cockpit's own server it attaches nothing (A2).
-pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+pub(super) fn bare(
+    version: &str,
+    run_command: RunCommand,
+    restart: Restart,
+) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
@@ -589,7 +786,16 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
         eprintln!("cpd: the engine did not start: {}", e.message());
     }
     // 2. The cockpit.
-    let built = match ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), false, version, run_command) {
+    let built = match ensure(
+        &tmux,
+        &home,
+        &mut store,
+        cockpit,
+        config.machine.as_str(),
+        false,
+        version,
+        run_command,
+    ) {
         Ok((built, _)) => built,
         Err(e) if matches!(tmux.has_session(cockpit), Ok(true)) => {
             eprintln!("cpd: the cockpit is not complete: {}", e.message());
@@ -599,20 +805,29 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
     };
     // 3. The views on an old binary (a view just built runs the installed one).
     if !built {
-        let own = if inside { std::env::var("TMUX_PANE").ok() } else { None };
+        let own = if inside {
+            std::env::var("TMUX_PANE").ok()
+        } else {
+            None
+        };
         if let Err(e) = respawn_old_views(&tmux, &home, cockpit, own.as_deref()) {
             eprintln!("cpd: the views were not restarted: {}", e.message());
         }
     }
     if inside {
-        eprintln!("cpd: this terminal is inside the cockpit's tmux server: switch to the cockpit with `tmux switch-client -t {cockpit}`.");
+        eprintln!(
+            "cpd: this terminal is inside the cockpit's tmux server: switch to the cockpit with `tmux switch-client -t {cockpit}`."
+        );
         return Ok(Output::Owned);
     }
     // 4. The tmux version: an older server is restarted when it is safe, else the restart is marked
     // pending; the server's own tmux attaches while it runs another version than the installed one.
     let after = tmux_version(&home, &config, &mut store, &tmux, restart);
     let program = server_tmux(&tmux, &after).unwrap_or_else(|e| {
-        eprintln!("cpd: cannot compare the tmux server's version with the installed tmux: {}", e.message());
+        eprintln!(
+            "cpd: cannot compare the tmux server's version with the installed tmux: {}",
+            e.message()
+        );
         None
     });
     Err(exec_attach(&tmux, cockpit, program.as_deref()))
@@ -622,13 +837,29 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
 /// tmux is restarted now when it is safe, else the restart is marked pending (the engine holds new
 /// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
 /// still to come; a failure is one line on stderr.
-fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
+fn tmux_version(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    tmux: &Tmux,
+    restart: Restart,
+) -> String {
     tmux_version_with(&Ports::current(), home, config, store, tmux, restart)
 }
 
 /// [`tmux_version`] with the installed tmux asked of `ports.runner`.
-pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
-    let (server, installed) = match (tmux.server_version(), installed_version_with(&*ports.runner)) {
+pub(crate) fn tmux_version_with(
+    ports: &Ports,
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    tmux: &Tmux,
+    restart: Restart,
+) -> String {
+    let (server, installed) = match (
+        tmux.server_version(),
+        installed_version_with(&*ports.runner),
+    ) {
         (Ok(server), Ok(installed)) => (server, installed),
         // `server_tmux` says why it cannot compare.
         _ => return String::new(),
@@ -649,11 +880,16 @@ pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, 
     }
     match (restart.now)(home, config, store) {
         Ok(RestartOutcome::Restarted { reopened }) => {
-            eprintln!("cpd: restarted the tmux server onto tmux {installed}; {reopened} Session(s) reopened.");
+            eprintln!(
+                "cpd: restarted the tmux server onto tmux {installed}; {reopened} Session(s) reopened."
+            );
             String::new()
         }
         Ok(RestartOutcome::Busy(why)) => match (restart.mark)(home, &server, &installed) {
-            Ok(_) => format!("; the restart happens once nothing is in the way ({})", why.join("; ")),
+            Ok(_) => format!(
+                "; the restart happens once nothing is in the way ({})",
+                why.join("; ")
+            ),
             Err(e) => {
                 eprintln!("cpd: cannot mark the tmux restart pending: {}", e.message());
                 String::new()
@@ -662,7 +898,10 @@ pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, 
         Ok(RestartOutcome::Running) => "; a restart is running".to_owned(),
         Ok(RestartOutcome::NotNeeded) => String::new(),
         Err(e) => {
-            eprintln!("cpd: the tmux restart failed: {} It is tried again at the next cpd.", e.message());
+            eprintln!(
+                "cpd: the tmux restart failed: {} It is tried again at the next cpd.",
+                e.message()
+            );
             String::new()
         }
     }
@@ -670,13 +909,19 @@ pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, 
 
 /// `cpd tui`: when the server runs an older tmux than the installed one, marks a restart pending.
 /// Returns what to say on the attach line.
-fn mark_if_older(home: &CpdHome, tmux: &Tmux, restart: Restart) -> Result<Option<String>, CpdError> {
+fn mark_if_older(
+    home: &CpdHome,
+    tmux: &Tmux,
+    restart: Restart,
+) -> Result<Option<String>, CpdError> {
     let (server, installed) = (tmux.server_version()?, installed_version()?);
     if !older_version(&server, &installed) {
         return Ok(None);
     }
     (restart.mark)(home, &server, &installed)?;
-    Ok(Some("; the restart happens once no Attempt runs".to_owned()))
+    Ok(Some(
+        "; the restart happens once no Attempt runs".to_owned(),
+    ))
 }
 
 /// Whether `$TMUX` (`<socket path>,<server pid>,<session>`) names the server on socket `socket`.
@@ -690,18 +935,32 @@ fn names_socket(tmux_var: &str, socket: &str) -> bool {
 /// (the one that started this process): when any does, every live view is
 /// restarted as `cpd tui --respawn` does it. The pane `skip` (the one this
 /// process runs in, inside the cockpit) is never touched.
-fn respawn_old_views(tmux: &Tmux, home: &CpdHome, cockpit: &str, skip: Option<&str>) -> Result<(), CpdError> {
+fn respawn_old_views(
+    tmux: &Tmux,
+    home: &CpdHome,
+    cockpit: &str,
+    skip: Option<&str>,
+) -> Result<(), CpdError> {
     let installed = std::fs::metadata(started_as()?).map_err(|e| {
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot stat the installed cpd: {e}."))
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot stat the installed cpd: {e}."),
+        )
     })?;
-    let main: Vec<Pane> = main_panes(tmux, cockpit)?.into_iter().filter(|p| Some(p.pane.as_str()) != skip).collect();
-    let old = main.iter().filter(|p| !p.dead && p.cpd_view.is_some()).any(|p| {
-        // A pane whose binary cannot be read (gone) is not known to be old.
-        p.pid
-            .and_then(Tmux::pid_exe)
-            .and_then(|path| std::fs::metadata(path).ok())
-            .is_some_and(|exe| (exe.dev(), exe.ino()) != (installed.dev(), installed.ino()))
-    });
+    let main: Vec<Pane> = main_panes(tmux, cockpit)?
+        .into_iter()
+        .filter(|p| Some(p.pane.as_str()) != skip)
+        .collect();
+    let old = main
+        .iter()
+        .filter(|p| !p.dead && p.cpd_view.is_some())
+        .any(|p| {
+            // A pane whose binary cannot be read (gone) is not known to be old.
+            p.pid
+                .and_then(Tmux::pid_exe)
+                .and_then(|path| std::fs::metadata(path).ok())
+                .is_some_and(|exe| (exe.dev(), exe.ino()) != (installed.dev(), installed.ino()))
+        });
     if old {
         respawn_live_views(tmux, home, &main)?;
     }
@@ -717,7 +976,9 @@ fn server_tmux(tmux: &Tmux, after: &str) -> Result<Option<PathBuf>, CpdError> {
         return Ok(None);
     }
     let exe = tmux.server_exe()?;
-    eprintln!("cpd: the tmux server runs tmux {server}, the installed tmux is {installed}: attaching with the server's own tmux{after}.");
+    eprintln!(
+        "cpd: the tmux server runs tmux {server}, the installed tmux is {installed}: attaching with the server's own tmux{after}."
+    );
     Ok(Some(exe))
 }
 
@@ -726,7 +987,11 @@ mod tests {
     use super::*;
 
     fn panes(views: &[Option<View>]) -> Vec<(PaneId, View)> {
-        views.iter().enumerate().filter_map(|(i, v)| Some((PaneId::parse(&format!("%{i}"))?, (*v)?))).collect()
+        views
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| Some((PaneId::parse(&format!("%{i}"))?, (*v)?)))
+            .collect()
     }
 
     fn joined(steps: Vec<Vec<String>>) -> Vec<String> {
@@ -736,13 +1001,33 @@ mod tests {
     #[test]
     fn the_reset_applies_the_sizes_in_order() {
         // %0 tree, %1 chat, %2 widgets, %3 plan
-        let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
-        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 30%", "resize-pane -t %3 -y 30%"]);
+        let p = panes(&[
+            Some(View::Tree),
+            Some(View::Chat),
+            Some(View::Widgets),
+            Some(View::Plan),
+        ]);
+        assert_eq!(
+            joined(reset_steps(&p)),
+            [
+                "resize-pane -t %0 -x 20%",
+                "resize-pane -t %2 -x 30%",
+                "resize-pane -t %3 -y 30%"
+            ]
+        );
     }
 
     #[test]
     fn the_actions_are_the_status_line_ranges() {
-        assert_eq!(["reset", "legend", "logs", "costs"].map(Action::parse), [Some(Action::Reset), Some(Action::Legend), Some(Action::Logs), Some(Action::Costs)]);
+        assert_eq!(
+            ["reset", "legend", "logs", "costs"].map(Action::parse),
+            [
+                Some(Action::Reset),
+                Some(Action::Legend),
+                Some(Action::Logs),
+                Some(Action::Costs)
+            ]
+        );
         assert_eq!(Action::parse(""), None);
         assert_eq!(Action::parse("Reset"), None);
     }
@@ -750,7 +1035,10 @@ mod tests {
     #[test]
     fn a_popup_opens_on_the_clicking_client() {
         let popup = on_client(legend::popup_args((215, 62)), "/dev/pts/4");
-        assert_eq!(popup[..5], ["display-popup", "-c", "/dev/pts/4", "-E", "-T"]);
+        assert_eq!(
+            popup[..5],
+            ["display-popup", "-c", "/dev/pts/4", "-E", "-T"]
+        );
         assert!(popup.contains(&" legend ".to_owned()));
     }
 

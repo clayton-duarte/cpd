@@ -9,27 +9,37 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::archive::archived;
 use super::row::{self, Role, Row};
 use super::state::scoped;
-use super::archive::archived;
-use super::{CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone};
+use super::{
+    CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone,
+};
 use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::host::host_socket::Reach;
 use crate::host::layout::{context_window, park_window};
 use crate::host::{Pane, PaneId, Spawn, Tmux, View, WindowId, chat_slot};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 
 /// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
 /// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
 /// Context's Manager has no Plan, so no `CPD_PLAN` (§3.10).
-pub(crate) fn lead_spawn(home: &CpdHome, id: &SessionId, plan: Option<&PlanId>, cwd: &Path) -> Spawn {
+pub(crate) fn lead_spawn(
+    home: &CpdHome,
+    id: &SessionId,
+    plan: Option<&PlanId>,
+    cwd: &Path,
+) -> Spawn {
     let mut env = BTreeMap::from([
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), id.to_string()),
@@ -37,7 +47,13 @@ pub(crate) fn lead_spawn(home: &CpdHome, id: &SessionId, plan: Option<&PlanId>, 
     if let Some(plan) = plan {
         env.insert("CPD_PLAN".to_owned(), plan.to_string());
     }
-    Spawn { cwd: Some(cwd.to_path_buf()), env, argv: [PROGRAM, "session", "run", id.as_str()].map(str::to_owned).into() }
+    Spawn {
+        cwd: Some(cwd.to_path_buf()),
+        env,
+        argv: [PROGRAM, "session", "run", id.as_str()]
+            .map(str::to_owned)
+            .into(),
+    }
 }
 
 /// The window a parked Session lives in: `ctx-<context>` for a Manager, else `park-<label>`.
@@ -50,15 +66,32 @@ fn parked_window(row: &Row) -> String {
 
 /// The placeholder's program: `cpd tui view chat` (amendment 2).
 pub(super) fn placeholder_spawn() -> Spawn {
-    Spawn { cwd: None, env: BTreeMap::new(), argv: [PROGRAM, "tui", "view", "chat"].map(str::to_owned).into() }
+    Spawn {
+        cwd: None,
+        env: BTreeMap::new(),
+        argv: [PROGRAM, "tui", "view", "chat"].map(str::to_owned).into(),
+    }
 }
 
 /// Appends `session-moved` for `row`, and records its pane when it changed.
-pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &WindowId, place: &str) -> Result<(), CpdError> {
+pub(super) fn moved(
+    tx: &WriteTxn<'_>,
+    row: &Row,
+    pane: &PaneId,
+    window: &WindowId,
+    place: &str,
+) -> Result<(), CpdError> {
     if row.tmux_pane.as_deref() != Some(pane.as_str()) {
-        tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), row.id.as_str()])?;
+        tx.execute(
+            "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+            [pane.as_str(), row.id.as_str()],
+        )?;
     }
-    let kind = if row.role == Role::Manager { "Manager" } else { "Lead" };
+    let kind = if row.role == Role::Manager {
+        "Manager"
+    } else {
+        "Lead"
+    };
     let text = match place {
         "chat" => format!("{kind} {} is in the chat slot.", row.name),
         _ => format!("{kind} {} is {place}.", row.name),
@@ -100,15 +133,25 @@ fn require_chat_session(row: &Row) -> Result<(), CpdError> {
 
 /// `<source name> (fork)`, cut to 80 characters.
 fn fork_name(source: &str) -> String {
-    format!("{source} (fork)").chars().take(Name::MAX_CHARS).collect()
+    format!("{source} (fork)")
+        .chars()
+        .take(Name::MAX_CHARS)
+        .collect()
 }
 
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
-    std::fs::create_dir_all(path.parent().expect("a file under $CPD_HOME has a directory")).map_err(failed)?;
+    std::fs::create_dir_all(
+        path.parent()
+            .expect("a file under $CPD_HOME has a directory"),
+    )
+    .map_err(failed)?;
     std::fs::write(path, text).map_err(failed)
 }
 
@@ -119,13 +162,17 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let source = env.store.read(|conn| row::load(conn, &source_id))?;
     require_lead(&source)?;
     require_pane(&source)?;
-    let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
-        CpdError::new(
-            ErrorCode::PlanRequired,
-            format!("Session {} has no Plan: pass --plan <id>.", source.id),
-        )
-        .with("source", source.id.as_str())
-    })?;
+    let plan = args
+        .plan
+        .clone()
+        .or_else(|| source.plan.clone())
+        .ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::PlanRequired,
+                format!("Session {} has no Plan: pass --plan <id>.", source.id),
+            )
+            .with("source", source.id.as_str())
+        })?;
     if source.archived_at.is_some() {
         return Err(archived(&source));
     }
@@ -135,7 +182,9 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         .map(|(context, _)| context)
         .ok_or_else(|| CpdError::plan_not_found(&plan))?;
     let message = match &args.message_file {
-        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?),
+        Some(path) => {
+            Some(std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?)
+        }
         None => None,
     };
     let tmux = env.tmux();
@@ -145,7 +194,10 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     }
 
     let id = SessionId::new_v4();
-    let name = args.name.as_ref().map_or_else(|| fork_name(&source.name), |n| n.as_str().to_owned());
+    let name = args
+        .name
+        .as_ref()
+        .map_or_else(|| fork_name(&source.name), |n| n.as_str().to_owned());
     if let Some(message) = &message {
         write_file(&env.home.session_message(&plan, &id), message)?;
     }
@@ -169,7 +221,9 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
         tmux.set_pane_title(&pane, &name)?;
-        env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
+        env.store.write("session fork", |tx| {
+            moved(tx, &row, &pane, &window, "parked")
+        })?;
         // The go signal only once the store knows the pane (contract §6.4). When it fails the window is killed
         // below and the row's pane is gone: engine E2 stops it (§3.6).
         tmux.set_pane_session(&pane, &id)
@@ -181,7 +235,11 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
 
 /// Runs `steps`, the ones after `tmux.new_window` made `window`. When one fails, kills `window`
 /// (a failure of that is ignored) and returns the original error (G11).
-fn kill_window_on_error<T>(tmux: &Tmux, window: &WindowId, steps: impl FnOnce() -> Result<T, CpdError>) -> Result<T, CpdError> {
+fn kill_window_on_error<T>(
+    tmux: &Tmux,
+    window: &WindowId,
+    steps: impl FnOnce() -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
     steps().inspect_err(|_| {
         let _ = tmux.kill_window(window);
     })
@@ -189,7 +247,9 @@ fn kill_window_on_error<T>(tmux: &Tmux, window: &WindowId, steps: impl FnOnce() 
 
 /// The chat slot, else `no_cockpit`.
 pub(super) fn slot(panes: &[Pane], cockpit: &str) -> Result<Pane, CpdError> {
-    chat_slot(panes, cockpit).cloned().ok_or_else(|| no_cockpit(cockpit))
+    chat_slot(panes, cockpit)
+        .cloned()
+        .ok_or_else(|| no_cockpit(cockpit))
 }
 
 /// `session open` (commands.md §10.4, contract §6.4).
@@ -198,41 +258,69 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_chat_session(&lead)?;
-    require_pane(&lead)?;
     if lead.archived_at.is_some() {
         return Err(archived(&lead));
     }
+    // A durable Session has no pane and never enters the chat slot (contract §3.6, §6.19): resume it and wait for
+    // its host's socket. The engine's `hosts` step starts the host; the command starts none and takes no lock (Q14).
+    if lead.runner == row::Runner::Durable {
+        return open_durable(&mut env, &lead);
+    }
+    require_pane(&lead)?;
     // A Lead has a Plan; a Context's Manager has none.
     if (lead.role == Role::Lead) == lead.plan.is_none() {
-        return Err(CpdError::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
+        return Err(CpdError::bad_row(format!(
+            "{} {} has plan {:?}",
+            lead.role.as_str(),
+            lead.id,
+            lead.plan
+        )));
     }
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;
     let slot = slot(&panes, &cockpit)?;
     if slot.cpd_session.as_ref() == Some(&lead.id) && !slot.dead {
-        return Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "already": true})));
+        return Ok(Output::success(
+            json!({"session": lead.id, "pane": slot.pane.as_str(), "already": true}),
+        ));
     }
 
     // The Lead the slot holds now, if not the placeholder: known before any tmux work.
-    let displaced = match &slot.cpd_session {
-        None => None,
-        Some(other) => Some(env.store.read(|conn| row::find(conn, other))?.ok_or_else(|| {
-            CpdError::new(ErrorCode::SessionNotFound, format!("The chat slot runs Session {other}, which cpd does not know."))
-                .with("session", other.as_str())
-        })?),
-    };
+    let displaced =
+        match &slot.cpd_session {
+            None => None,
+            Some(other) => Some(env.store.read(|conn| row::find(conn, other))?.ok_or_else(
+                || {
+                    CpdError::new(
+                        ErrorCode::SessionNotFound,
+                        format!("The chat slot runs Session {other}, which cpd does not know."),
+                    )
+                    .with("session", other.as_str())
+                },
+            )?),
+        };
     // A dead pane of the Lead outside the slot is killed with its window first, so a new window
     // never makes a second one (G2); one in the slot is displaced below, and dies there.
-    for dead in panes.iter().filter(|p| p.dead && p.cpd_session.as_ref() == Some(&lead.id) && p.pane != slot.pane) {
+    for dead in panes
+        .iter()
+        .filter(|p| p.dead && p.cpd_session.as_ref() == Some(&lead.id) && p.pane != slot.pane)
+    {
         tmux.kill_pane(&dead.pane)?;
     }
     // Its live pane (a dead one never hides it), else a new park window resuming it.
-    let live = panes.iter().find(|p| !p.dead && p.cpd_session.as_ref() == Some(&lead.id));
+    let live = panes
+        .iter()
+        .find(|p| !p.dead && p.cpd_session.as_ref() == Some(&lead.id));
     let (pane, from_window) = match live {
         Some(p) => (p.pane.clone(), p.window.clone()),
         None => {
-            let spawn = lead_spawn(&env.home, &lead.id, lead.plan.as_ref(), Path::new(&lead.cwd));
+            let spawn = lead_spawn(
+                &env.home,
+                &lead.id,
+                lead.plan.as_ref(),
+                Path::new(&lead.cwd),
+            );
             let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
             kill_window_on_error(&tmux, &window, || {
                 tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
@@ -240,7 +328,10 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
                 // go signal (contract §6.4). When the signal fails the window is killed here and the row's pane is
                 // gone: engine E2 stops it (§3.6).
                 env.store.write("session open", |tx| {
-                    tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.id.as_str()])?;
+                    tx.execute(
+                        "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
+                        [pane.as_str(), lead.id.as_str()],
+                    )?;
                     Ok(())
                 })?;
                 tmux.set_pane_session(&pane, &lead.id)
@@ -253,10 +344,19 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         if let (Some(other), true) = (&displaced, slot.dead) {
             // Its pane is gone: what E2 writes for it (§3.6), before the Lead's new pane is recorded.
             let why = format!("its pane {} is dead", slot.pane);
-            pane_gone(tx, &other.id, other.state.as_str(), other.tmux_pane.as_deref(), &why)?;
+            pane_gone(
+                tx,
+                &other.id,
+                other.state.as_str(),
+                other.tmux_pane.as_deref(),
+                &why,
+            )?;
         }
         moved(tx, &lead, &pane, &slot.window, "chat")?;
-        tx.execute("UPDATE sessions SET asleep_at = NULL WHERE id = ?1 AND asleep_at IS NOT NULL", [lead.id.as_str()])?;
+        tx.execute(
+            "UPDATE sessions SET asleep_at = NULL WHERE id = ?1 AND asleep_at IS NOT NULL",
+            [lead.id.as_str()],
+        )?;
         if let (Some(other), false) = (&displaced, slot.dead) {
             moved(tx, other, &slot.pane, &from_window, "parked")?;
         }
@@ -268,14 +368,89 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         Some(other) if !slot.dead => tmux.rename_window(&from_window, &parked_window(other))?,
         _ => tmux.kill_pane(&slot.pane)?,
     }
-    let displaced = displaced.filter(|_| !slot.dead).map_or(Value::Null, |d| json!(d.id));
-    Ok(Output::success(json!({"session": lead.id, "pane": pane.as_str(), "displaced": displaced})))
+    let displaced = displaced
+        .filter(|_| !slot.dead)
+        .map_or(Value::Null, |d| json!(d.id));
+    Ok(Output::success(
+        json!({"session": lead.id, "pane": pane.as_str(), "displaced": displaced}),
+    ))
+}
+
+/// The label a crash-looped host leaves on its Session (contract §6.19, hs-d785).
+const HOST_CRASH_LABEL: &str = "host crash loop";
+
+/// The socket wait's back-off: 100 ms doubling to a 1 s cap, over a 30 s deadline (contract §6.19, design defaults).
+const SOCKET_NAP: Duration = Duration::from_millis(100);
+const SOCKET_NAP_MAX: Duration = Duration::from_secs(1);
+const SOCKET_DEADLINE: Duration = Duration::from_secs(30);
+
+/// `$CPD_HOME/run/host/<session>.sock` (contract §6.14).
+fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
+    home.run_dir().join("host").join(format!("{session}.sock"))
+}
+
+/// `session open` of a durable Session (contract §6.19): resume it (clear `asleep_at` and the `host crash loop`
+/// label) and wait for its host's socket through the port. No pane, and never the chat slot.
+fn open_durable(env: &mut Env, lead: &Row) -> Result<Output, CpdError> {
+    let id = lead.id.clone();
+    env.store.write("session open", |tx| {
+        tx.execute(
+            "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label)
+              WHERE id = ?2 AND (asleep_at IS NOT NULL OR state_label = ?1)",
+            rusqlite::params![HOST_CRASH_LABEL, id.as_str()],
+        )?;
+        Ok(())
+    })?;
+    let path = socket_path(&env.home, &id);
+    wait_for_socket(&path, &id)?;
+    Ok(Output::success(json!({"session": id, "pane": Value::Null})))
+}
+
+/// Waits for the host's socket to accept (contract §6.19): `Absent` and `Refused` nap and try again with a
+/// back-off, `Failed` returns at once, and the deadline is `host_timeout` (exit 5).
+fn wait_for_socket(path: &Path, session: &SessionId) -> Result<(), CpdError> {
+    let ports = Ports::current();
+    let mut waited = Duration::ZERO;
+    let mut nap = SOCKET_NAP;
+    loop {
+        match ports.host_socket.reach(path) {
+            Reach::Accepted => return Ok(()),
+            Reach::Failed(e) => {
+                return Err(CpdError::new(
+                    ErrorCode::Internal,
+                    format!("Cannot probe the host socket {}: {e}.", path.display()),
+                )
+                .with("session", session.as_str())
+                .with("socket", path.display().to_string()));
+            }
+            Reach::Absent | Reach::Refused => {}
+        }
+        if waited >= SOCKET_DEADLINE {
+            return Err(CpdError::new(
+                ErrorCode::HostTimeout,
+                format!(
+                    "Session {session}'s host did not accept on {} within {}s: the engine is not running or the host keeps dying.",
+                    path.display(),
+                    SOCKET_DEADLINE.as_secs()
+                ),
+            )
+            .with("session", session.as_str())
+            .with("socket", path.display().to_string()));
+        }
+        ports.clock.sleep(nap);
+        waited += nap;
+        nap = (nap * 2).min(SOCKET_NAP_MAX);
+    }
 }
 
 /// `session park` (commands.md §10.5, contract §6.4 with amendment 3).
 pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let named = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
+    let named = args
+        .id
+        .as_ref()
+        .map(|reference| env.resolve(reference))
+        .transpose()?;
     if let Some(id) = &named {
         require_pane(&env.store.read(|conn| row::load(conn, id))?)?;
     }
@@ -290,11 +465,15 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_chat_session(&lead)?;
     if slot.cpd_session.as_ref() != Some(&lead.id) {
-        return Ok(Output::success(json!({"session": lead.id, "already": true})));
+        return Ok(Output::success(
+            json!({"session": lead.id, "already": true}),
+        ));
     }
 
     let (window, _) = park_lead(&mut env, &tmux, &cockpit, &lead, &slot, "session park")?;
-    Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "window": window.as_str()})))
+    Ok(Output::success(
+        json!({"session": lead.id, "pane": slot.pane.as_str(), "window": window.as_str()}),
+    ))
 }
 
 /// Parks `lead`, which holds the chat slot `slot`: a new `park-<label>` window with a placeholder,
@@ -307,13 +486,15 @@ pub(super) fn park_lead(
     slot: &Pane,
     command: &str,
 ) -> Result<(WindowId, PaneId), CpdError> {
-    let (window, placeholder) = tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
+    let (window, placeholder) =
+        tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
     // Until the swap, the window holds only the placeholder: a failure kills it (G11).
     kill_window_on_error(tmux, &window, || {
         tmux.set_pane_view(&placeholder, View::Chat)?;
         tmux.swap_pane(&placeholder, &slot.pane)
     })?;
-    env.store.write(command, |tx| moved(tx, lead, &slot.pane, &window, "parked"))?;
+    env.store
+        .write(command, |tx| moved(tx, lead, &slot.pane, &window, "parked"))?;
     Ok((window, placeholder))
 }
 
@@ -342,16 +523,27 @@ pub fn placed(store: &mut Store, tmux: &Tmux, cockpit: &str) -> Result<Vec<Place
     let in_slot = chat_slot(&panes, cockpit).and_then(|p| p.cpd_session.clone());
     let mut found: Vec<Placed> = Vec::new();
     for pane in panes.iter().filter(|p| !p.dead) {
-        let Some(id) = &pane.cpd_session else { continue };
+        let Some(id) = &pane.cpd_session else {
+            continue;
+        };
         if found.iter().any(|f| &f.id == id) {
             continue;
         }
-        let Some(row) = store.read(|conn| row::find(conn, id))? else { continue };
+        let Some(row) = store.read(|conn| row::find(conn, id))? else {
+            continue;
+        };
         if row.role == Role::Worker || row.archived_at.is_some() {
             continue;
         }
-        let place = if in_slot.as_ref() == Some(id) { Place::Chat } else { Place::Parked };
-        found.push(Placed { id: id.clone(), place });
+        let place = if in_slot.as_ref() == Some(id) {
+            Place::Chat
+        } else {
+            Place::Parked
+        };
+        found.push(Placed {
+            id: id.clone(),
+            place,
+        });
     }
     let recorded: Vec<String> = store.read(|conn| {
         let mut stmt = conn.prepare(
@@ -360,14 +552,19 @@ pub fn placed(store: &mut Store, tmux: &Tmux, cockpit: &str) -> Result<Vec<Place
         Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
     })?;
     for id in recorded {
-        let id = SessionId::parse(&id).map_err(|_| CpdError::bad_row(format!("session id {id:?}")))?;
+        let id =
+            SessionId::parse(&id).map_err(|_| CpdError::bad_row(format!("session id {id:?}")))?;
         if found.iter().any(|f| f.id == id) {
             continue;
         }
         let row = store.read(|conn| row::load(conn, &id))?;
         // One Session holds the chat slot: the live one when there is one, else the row that says so.
         let slot_taken = found.iter().any(|f| f.place == Place::Chat);
-        let place = if row.place == "chat" && !slot_taken { Place::Chat } else { Place::Parked };
+        let place = if row.place == "chat" && !slot_taken {
+            Place::Chat
+        } else {
+            Place::Parked
+        };
         found.push(Placed { id, place });
     }
     // The chat slot's Session first: reopening the others must not displace it.
@@ -394,13 +591,21 @@ fn gone_one(store: &mut Store, id: &SessionId, command: &str) -> Result<(), CpdE
     // checked against: read again while the pane is still the row's.
     for _ in 0..5 {
         let row = store.read(|conn| row::load(conn, id))?;
-        let Some(pane) = row.tmux_pane.clone() else { return Ok(()) };
+        let Some(pane) = row.tmux_pane.clone() else {
+            return Ok(());
+        };
         let why = format!("its pane {pane} died with the tmux server");
-        if store.write(command, |tx| pane_gone(tx, id, row.state.as_str(), Some(&pane), &why))? {
+        if store.write(command, |tx| {
+            pane_gone(tx, id, row.state.as_str(), Some(&pane), &why)
+        })? {
             return Ok(());
         }
     }
-    Err(CpdError::new(ErrorCode::CasLost, format!("Session {id} kept changing while its pane was recorded gone.")).with("session", id.as_str()))
+    Err(CpdError::new(
+        ErrorCode::CasLost,
+        format!("Session {id} kept changing while its pane was recorded gone."),
+    )
+    .with("session", id.as_str()))
 }
 
 /// Brings back each Session of `placed` in its place on a rebuilt cockpit: the one of the chat slot
@@ -421,10 +626,17 @@ fn reopen_one(item: &Placed) -> Result<(), CpdError> {
     let mut env = Env::open()?;
     let tmux = env.tmux();
     if item.place == Place::Chat {
-        return open(OpenArgs { id: crate::args::SessionRef::Plain(item.id.clone()) }).map(drop);
+        return open(OpenArgs {
+            id: crate::args::SessionRef::Plain(item.id.clone()),
+        })
+        .map(drop);
     }
     let row = env.store.read(|conn| row::load(conn, &item.id))?;
-    if tmux.list_panes()?.iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&item.id)) {
+    if tmux
+        .list_panes()?
+        .iter()
+        .any(|p| !p.dead && p.cpd_session.as_ref() == Some(&item.id))
+    {
         return Ok(());
     }
     start_parked(&mut env, &row, "tmux restart").map(drop)
@@ -434,10 +646,18 @@ fn reopen_one(item: &Placed) -> Result<(), CpdError> {
 /// the Session is killed first (G2), the pane is recorded with a `session-moved` `parked` Event (compare-and-swap on the
 /// pane the row had, so two starters never leave two windows), and the go signal comes last (contract §6.4). The chat slot
 /// never moves. Returns the pane, or none when another process recorded one first (its window made here is killed).
-pub(crate) fn start_parked(env: &mut Env, row: &Row, command: &str) -> Result<Option<PaneId>, CpdError> {
+pub(crate) fn start_parked(
+    env: &mut Env,
+    row: &Row,
+    command: &str,
+) -> Result<Option<PaneId>, CpdError> {
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    for dead in tmux.list_panes()?.iter().filter(|p| p.dead && p.cpd_session.as_ref() == Some(&row.id)) {
+    for dead in tmux
+        .list_panes()?
+        .iter()
+        .filter(|p| p.dead && p.cpd_session.as_ref() == Some(&row.id))
+    {
         tmux.kill_pane(&dead.pane)?;
     }
     let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
@@ -480,7 +700,13 @@ pub struct Closed {
 /// Ends Lead `id`'s pane as `session close` does (commands.md §10.9, contract
 /// §6.4): kills it and writes, as `command`, the rows engine E2 writes for a
 /// pane that is gone. Refuses the Lead in the chat slot (`in_chat_slot`).
-pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId, command: &str) -> Result<Closed, CpdError> {
+pub fn close_lead(
+    store: &mut Store,
+    tmux: &Tmux,
+    cockpit: &str,
+    id: &SessionId,
+    command: &str,
+) -> Result<Closed, CpdError> {
     // The rows are read first, then the panes, so a Lead that reached the slot
     // meanwhile shows in at least one of them.
     let mut lead = store.read(|conn| row::load(conn, id))?;
@@ -490,42 +716,64 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     }
     // A durable Session has no pane to close (contract §3.6): nothing is killed, nothing written.
     if lead.runner == row::Runner::Durable {
-        return Ok(Closed { pane: None, already: true });
+        return Ok(Closed {
+            pane: None,
+            already: true,
+        });
     }
     let panes = tmux.list_panes()?;
-    let in_slot = chat_slot(&panes, cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));
+    let in_slot =
+        chat_slot(&panes, cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));
     if lead.place == "chat" || in_slot {
         return Err(CpdError::new(
             ErrorCode::InChatSlot,
-            format!("Lead {} is in the chat slot: park it or open another Lead first.", lead.name),
+            format!(
+                "Lead {} is in the chat slot: park it or open another Lead first.",
+                lead.name
+            ),
         )
         .with("session", lead.id.as_str())
         .with("next", "cpd session park"));
     }
     let Some(pane) = lead.tmux_pane.clone() else {
-        return Ok(Closed { pane: None, already: true });
+        return Ok(Closed {
+            pane: None,
+            already: true,
+        });
     };
     let live = |panes: &[Pane]| panes.iter().any(|p| p.pane.as_str() == pane);
     if !live(&panes) {
-        return Ok(Closed { pane: Some(pane), already: true });
+        return Ok(Closed {
+            pane: Some(pane),
+            already: true,
+        });
     }
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
+    let pane_id =
+        PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     tmux.kill_pane(&pane_id)?;
 
     // pi's adapter may report `stopped` as the pane dies, which changes the
     // state the write is checked against: read again while the pane is still ours.
     let why = format!("its pane {pane} was closed");
     for _ in 0..3 {
-        let changed = store.write(command, |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
+        let changed = store.write(command, |tx| {
+            pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why)
+        })?;
         if changed {
-            return Ok(Closed { pane: Some(pane), already: false });
+            return Ok(Closed {
+                pane: Some(pane),
+                already: false,
+            });
         }
         lead = store.read(|conn| row::load(conn, id))?;
         if lead.tmux_pane.as_deref() != Some(pane.as_str()) {
             break;
         }
     }
-    Ok(Closed { pane: Some(pane), already: true })
+    Ok(Closed {
+        pane: Some(pane),
+        already: true,
+    })
 }
 
 /// Writes, as `command`, the rows engine E2 writes for the pane of Lead `id` and then kills that
@@ -533,10 +781,15 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
 /// Returns when the pane is not there to kill.
 pub(super) fn close_own(env: &mut Env, id: &SessionId, command: &str) -> Result<(), CpdError> {
     let lead = env.store.read(|conn| row::load(conn, id))?;
-    let Some(pane) = lead.tmux_pane.clone() else { return Ok(()) };
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
+    let Some(pane) = lead.tmux_pane.clone() else {
+        return Ok(());
+    };
+    let pane_id =
+        PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     let why = format!("its pane {pane} was closed");
-    env.store.write(command, |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
+    env.store.write(command, |tx| {
+        pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why)
+    })?;
     env.tmux().kill_pane(&pane_id)
 }
 

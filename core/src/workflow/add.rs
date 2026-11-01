@@ -23,13 +23,13 @@ use crate::git::worktree::list as worktrees;
 use crate::ids::{JobKey, OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::job::open;
 use crate::job::spec::{Spec, parse as parse_spec};
-use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::Job;
 use crate::plan::locked_fingerprint;
+use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "workflow add";
@@ -96,7 +96,12 @@ struct Wanted {
 /// `{"tier", "spec"}`. A fault is the code `job add` uses for the same one (`spec_invalid`, `tier_invalid`, ...), never `usage`.
 fn read_jobs(path: &Path, shape: &str, workflow: &WorkflowKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
     let invalid = |at: &str, why: String| {
-        CpdError::new(ErrorCode::SpecInvalid, format!("The --jobs file is invalid at {at}: {why}.")).with("path", at).with("file", path.display().to_string())
+        CpdError::new(
+            ErrorCode::SpecInvalid,
+            format!("The --jobs file is invalid at {at}: {why}."),
+        )
+        .with("path", at)
+        .with("file", path.display().to_string())
     };
     let text = std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?;
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
@@ -109,18 +114,41 @@ fn read_jobs(path: &Path, shape: &str, workflow: &WorkflowKey, title: &str) -> R
     for stub in &stubs {
         let at = format!("$.{}", stub.suffix);
         let Some(serde_json::Value::Object(mut entry)) = object.remove(stub.suffix) else {
-            return Err(invalid(&at, format!("missing key (or not an object): every key of the {shape} template is required, {}", suffixes(&stubs))));
+            return Err(invalid(
+                &at,
+                format!(
+                    "missing key (or not an object): every key of the {shape} template is required, {}",
+                    suffixes(&stubs)
+                ),
+            ));
         };
-        if let Some(unknown) = entry.keys().find(|k| !matches!(k.as_str(), "tier" | "spec")) {
-            return Err(invalid(&format!("{at}.{unknown}"), "unknown field".to_owned()));
+        if let Some(unknown) = entry
+            .keys()
+            .find(|k| !matches!(k.as_str(), "tier" | "spec"))
+        {
+            return Err(invalid(
+                &format!("{at}.{unknown}"),
+                "unknown field".to_owned(),
+            ));
         }
         let Some(serde_json::Value::String(tier)) = entry.remove("tier") else {
-            return Err(invalid(&format!("{at}.tier"), "missing field: a Tier name".to_owned()));
+            return Err(invalid(
+                &format!("{at}.tier"),
+                "missing field: a Tier name".to_owned(),
+            ));
         };
         let tier = Tier::parse(&tier)?;
         tier.check_worker()?;
-        let spec = entry.remove("spec").ok_or_else(|| invalid(&format!("{at}.spec"), "missing field: the Job's Spec object".to_owned()))?;
-        let spec = parse_spec(&spec.to_string()).map_err(|e| e.with("job", stub.key.as_str()).with("file", path.display().to_string()))?;
+        let spec = entry.remove("spec").ok_or_else(|| {
+            invalid(
+                &format!("{at}.spec"),
+                "missing field: the Job's Spec object".to_owned(),
+            )
+        })?;
+        let spec = parse_spec(&spec.to_string()).map_err(|e| {
+            e.with("job", stub.key.as_str())
+                .with("file", path.display().to_string())
+        })?;
         spec.check_kind(stub.kind)?;
         jobs.insert(stub.suffix, (tier, spec));
     }
@@ -128,7 +156,11 @@ fn read_jobs(path: &Path, shape: &str, workflow: &WorkflowKey, title: &str) -> R
 }
 
 fn suffixes(stubs: &[Stub]) -> String {
-    stubs.iter().map(|s| s.suffix).collect::<Vec<_>>().join(", ")
+    stubs
+        .iter()
+        .map(|s| s.suffix)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The pull request `--adopt` names, read from GitHub, and the author the Lead confirmed.
@@ -196,8 +228,15 @@ pub(super) enum BaseWanted {
 
 /// Reads `--base` (§2.2 "A Workflow reference"): a base Workflow when it is a bare `<key>` of a Workflow of `plan` in `repo`
 /// (it wins over a same-named branch), or has the form `<plan>/<key>` and a Plan `<plan>` exists; else a branch.
-pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base: Option<&str>) -> Result<BaseArg, CpdError> {
-    let Some(value) = base else { return Ok(BaseArg::Branch(None)) };
+pub(super) fn classify_base(
+    conn: &Connection,
+    plan: &PlanId,
+    repo: &Path,
+    base: Option<&str>,
+) -> Result<BaseArg, CpdError> {
+    let Some(value) = base else {
+        return Ok(BaseArg::Branch(None));
+    };
     if !value.contains('/')
         && let Ok(key) = WorkflowKey::parse(value)
     {
@@ -209,7 +248,11 @@ pub(super) fn classify_base(conn: &Connection, plan: &PlanId, repo: &Path, base:
     if let Some((plan, key)) = value.split_once('/')
         && let (Ok(plan), Ok(key)) = (PlanId::parse(plan), WorkflowKey::parse(key))
     {
-        let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
+            [plan.as_str()],
+            |r| r.get(0),
+        )?;
         if exists {
             return Ok(BaseArg::Workflow(plan, key));
         }
@@ -241,7 +284,13 @@ pub(super) fn known_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<Kn
     let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM workflows WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok(Known { key: r.get(0)?, repo: r.get(1)?, base: r.get(2)?, lead_branch: r.get(3)?, status: r.get(4)? })
+            Ok(Known {
+                key: r.get(0)?,
+                repo: r.get(1)?,
+                base: r.get(2)?,
+                lead_branch: r.get(3)?,
+                status: r.get(4)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
@@ -254,7 +303,11 @@ pub(super) fn derived_base_workflow<'a>(known: &'a [Known], repo: &str, base: &s
 
 /// The Workflows of the Plan, not `cancelled`, stacked on the Workflow whose Lead Branch is `lead_branch` in `repo`.
 pub(super) fn stacked_on(known: &[Known], repo: &str, lead_branch: &str) -> Vec<String> {
-    known.iter().filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch).map(|p| p.key.clone()).collect()
+    known
+        .iter()
+        .filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch)
+        .map(|p| p.key.clone())
+        .collect()
 }
 
 /// The Workflow being added or edited.
@@ -334,13 +387,21 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     };
     let base_key = base_workflow.map(|p| p.key.clone());
 
-    let unknown: Vec<String> = needs.iter().filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none()).cloned().collect();
+    let unknown: Vec<String> = needs
+        .iter()
+        .filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none())
+        .cloned()
+        .collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no Workflow {} to need.", unknown.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unknown));
     }
-    let unavailable: Vec<String> = needs.iter().filter(|n| find(n).is_some_and(|p| p.status == "cancelled")).cloned().collect();
+    let unavailable: Vec<String> = needs
+        .iter()
+        .filter(|n| find(n).is_some_and(|p| p.status == "cancelled"))
+        .cloned()
+        .collect();
     if !unavailable.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A Workflow cannot need the cancelled Workflow {}.", unavailable.join(", ")))
             .with("plan", plan.as_str())
@@ -359,9 +420,16 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     let mut out: Vec<String> = needs.to_vec();
     out.extend(base_key);
     if let Some(cycle) = find_cycle(&this, &out, &edges) {
-        return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The needs and base of {} make a cycle: {}.", subject.key, cycle.join(" → ")))
-            .with("plan", plan.as_str())
-            .with("cycle", cycle));
+        return Err(CpdError::new(
+            ErrorCode::DependencyCycle,
+            format!(
+                "The needs and base of {} make a cycle: {}.",
+                subject.key,
+                cycle.join(" → ")
+            ),
+        )
+        .with("plan", plan.as_str())
+        .with("cycle", cycle));
     }
     Ok(Resolved { base: branch, base_workflow: base_workflow.map(|p| format!("{plan}/{}", p.key)) })
 }
@@ -436,7 +504,11 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     } else {
         Some(needs_refs(&plan, &args.needs)?)
     };
-    let jobs = args.jobs.as_deref().map(|file| read_jobs(file, &args.shape, &args.key, args.title.as_str())).transpose()?;
+    let jobs = args
+        .jobs
+        .as_deref()
+        .map(|file| read_jobs(file, &args.shape, &args.key, args.title.as_str()))
+        .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
     let open_tier = env.config.open_tier;
@@ -447,7 +519,9 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let adopt = args.adopt.map(|number| adoptable(&repo, number)).transpose()?;
     let base = match &adopt {
         Some(a) => BaseArg::Branch(Some(a.base.clone())),
-        None => env.store.read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
+        None => env
+            .store
+            .read(|conn| classify_base(conn, &plan, &repo, args.base.as_deref()))?,
     };
     // A branch that is a Workflow's Lead Branch of the Plan and repo is its base Workflow's: it needs no branch yet (that Workflow may be `waiting`).
     let lead_branch_of_workflow = match &base {
@@ -459,7 +533,10 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
             BaseArg::Branch(Some(branch)) if lead_branch_of_workflow => BaseWanted::Branch(branch),
             base => wanted_base(&repo, base)?,
         },
-        adopt: adopt.map(|pull| Adopt { pull, confirm: args.confirm_author }),
+        adopt: adopt.map(|pull| Adopt {
+            pull,
+            confirm: args.confirm_author,
+        }),
         repo: repo.display().to_string(),
         name,
         title: args.title.to_string(),
@@ -547,11 +624,17 @@ pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<Repo
 }
 
 /// [`key_repo`] with the repo's resolved policy and the path of its policy file.
-fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoName, PathBuf, Policy), CpdError> {
+fn key_repo_policy(
+    env: &mut Env,
+    plan: &PlanId,
+    repo: &Path,
+) -> Result<(RepoName, PathBuf, Policy), CpdError> {
     let (context, owner): (String, Option<String>) = env.store.read(|conn| {
-        Ok(conn.query_row("SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1", [plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })?)
+        Ok(conn.query_row(
+            "SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1",
+            [plan.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     })?;
     let Some(owner) = owner else {
         return Err(owner_unset(&crate::ids::ContextId::parse(&context)?));
@@ -569,11 +652,18 @@ fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoNam
 /// `workflow add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
 fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     let phase = plan_phase(conn, plan)?;
-    let archived: bool = conn.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    let archived: bool = conn.query_row(
+        "SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )?;
     if archived {
-        return Err(CpdError::new(ErrorCode::Archived, format!("Plan {plan} is archived: unarchive it first."))
-            .with("plan", plan.as_str())
-            .with("next", format!("cpd plan unarchive --plan {plan}")));
+        return Err(CpdError::new(
+            ErrorCode::Archived,
+            format!("Plan {plan} is archived: unarchive it first."),
+        )
+        .with("plan", plan.as_str())
+        .with("next", format!("cpd plan unarchive --plan {plan}")));
     }
     Ok(phase)
 }
@@ -640,7 +730,16 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
         }
         None => Vec::new(),
     };
-    let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
+    let resolved = resolve_refs(
+        conn,
+        &Subject {
+            plan,
+            key: &wanted.key,
+            repo: &wanted.repo,
+        },
+        &wanted.base,
+        &needs,
+    )?;
     if let Some(error) = unconfigured {
         return Err(error.clone());
     }
@@ -657,15 +756,24 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
     let pull = &adopt.pull;
     let number = pull.number;
     if pull.state != "OPEN" {
-        return Err(CpdError::new(ErrorCode::AdoptNotOpen, format!("Pull request #{number} is {}: only an open pull request is adopted.", pull.state))
-            .with("number", number)
-            .with("url", pull.url.as_str())
-            .with("state", pull.state.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptNotOpen,
+            format!(
+                "Pull request #{number} is {}: only an open pull request is adopted.",
+                pull.state
+            ),
+        )
+        .with("number", number)
+        .with("url", pull.url.as_str())
+        .with("state", pull.state.as_str()));
     }
     if pull.fork {
-        return Err(CpdError::new(ErrorCode::AdoptFork, format!("Pull request #{number} comes from a fork: cpd cannot push to a fork."))
-            .with("number", number)
-            .with("url", pull.url.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptFork,
+            format!("Pull request #{number} comes from a fork: cpd cannot push to a fork."),
+        )
+        .with("number", number)
+        .with("url", pull.url.as_str()));
     }
     let is_lead_branch: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM workflows WHERE repo = ?1 AND lead_branch = ?2)",
@@ -673,9 +781,15 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
         |r| r.get(0),
     )?;
     if is_lead_branch {
-        return Err(CpdError::new(ErrorCode::AdoptCpdBranch, format!("Pull request #{number} has the head branch {}: it is a cpd pull request.", pull.head_ref))
-            .with("number", number)
-            .with("head_ref", pull.head_ref.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::AdoptCpdBranch,
+            format!(
+                "Pull request #{number} has the head branch {}: it is a cpd pull request.",
+                pull.head_ref
+            ),
+        )
+        .with("number", number)
+        .with("head_ref", pull.head_ref.as_str()));
     }
     let holder: Option<(String, String)> = conn
         .query_row(
@@ -694,7 +808,12 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
         .with("workflow", workflow));
     }
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
-    if !same(&pull.author, &pull.user) && !adopt.confirm.as_deref().is_some_and(|c| same(c, &pull.author)) {
+    if !same(&pull.author, &pull.user)
+        && !adopt
+            .confirm
+            .as_deref()
+            .is_some_and(|c| same(c, &pull.author))
+    {
         return Err(CpdError::new(
             ErrorCode::AdoptForeign,
             format!(
@@ -725,10 +844,18 @@ fn tests_unconfigured(repo: &str, file: &Path) -> CpdError {
 }
 
 /// None of the Job keys the shape lays out exists in the Plan (`job_key_exists`, `details.jobs`, §9.4).
-fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<(), CpdError> {
+fn check_template_keys_free(
+    conn: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+) -> Result<(), CpdError> {
     let mut taken: Vec<String> = Vec::new();
     for stub in template(&wanted.shape, &wanted.key, &wanted.title) {
-        let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)", [plan.as_str(), stub.key.as_str()], |r| r.get(0))?;
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)",
+            [plan.as_str(), stub.key.as_str()],
+            |r| r.get(0),
+        )?;
         if exists {
             taken.push(stub.key);
         }
@@ -776,14 +903,28 @@ fn same(existing: &WorkflowRow, title: Option<&str>, wanted: &Wanted, workflows:
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(workflows).contains(n)),
     };
-    (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
+    (
+        existing.repo.as_str(),
+        existing.base.as_str(),
+        existing.shape.as_str(),
+    ) == (wanted.repo.as_str(), base, wanted.shape.as_str())
         && title == Some(wanted.title.as_str())
-        && wanted.jira.as_ref().is_none_or(|j| existing.jira.as_ref() == Some(j))
+        && wanted
+            .jira
+            .as_ref()
+            .is_none_or(|j| existing.jira.as_ref() == Some(j))
         && existing.head_ref.as_deref() == wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
         && needs_match
 }
 
-fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
+fn insert(
+    tx: &Connection,
+    plan: &PlanId,
+    wanted: &Wanted,
+    base: &str,
+    needs: &[String],
+    lead_branch: &str,
+) -> Result<(), CpdError> {
     tx.execute(
         "INSERT INTO workflows (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, jira, created_txn, created_at)
          SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, ?10, id, at FROM txns WHERE id = cpd_txn()",
@@ -806,7 +947,14 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[
 /// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
 /// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template. The opener stub is
 /// the exception: it carries the fixed Spec of [`open::spec`] and the config's `open_tier`, and no Dependency rows.
-fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted, appended: bool, open_tier: Tier) -> Result<Vec<Stub>, CpdError> {
+fn insert_stubs(
+    tx: &Connection,
+    home: &CpdHome,
+    plan: &PlanId,
+    wanted: &Wanted,
+    appended: bool,
+    open_tier: Tier,
+) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
     let workflow = load_workflows(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
         CpdError::bad_row(format!("Workflow {} of Plan {plan} vanished while its template was being written", wanted.key))
@@ -834,7 +982,14 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             let roots: Vec<(String, PathBuf)> = load_workflows(tx, plan)?.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect();
             spec.check_primary_roots(&roots, &std::env::home_dir().unwrap_or_default())?;
             spec.check_files_relative()?;
-            crate::job::add::check_resources_declared(tx, home, plan, wanted.key.as_str(), &stub.key, spec.resources.as_deref())?;
+            crate::job::add::check_resources_declared(
+                tx,
+                home,
+                plan,
+                wanted.key.as_str(),
+                &stub.key,
+                spec.resources.as_deref(),
+            )?;
             let mut job = Job {
                 seq: 0,
                 key: stub.key.clone(),
@@ -849,6 +1004,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 test_files: spec.test_files.as_ref().map(|t| json!(t)),
                 resources: spec.resources.as_ref().map(|r| json!(r)),
                 test_approved: None,
+                touches_approved: None,
                 urgent: false,
                 fingerprint: None,
                 retry_tier: None,
@@ -856,6 +1012,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 cancel_requested_at: None,
                 failed_cause: None,
                 merged_sha: None,
+                summary: None,
                 created_at: String::new(),
                 needs: stub.needs.iter().cloned().collect(),
             };
@@ -886,7 +1043,10 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 ],
             )?;
             if let Some(need) = &stub.needs {
-                tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), stub.key.as_str(), need.as_str()])?;
+                tx.execute(
+                    "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+                    [plan.as_str(), stub.key.as_str(), need.as_str()],
+                )?;
             }
             continue;
         }
@@ -918,7 +1078,10 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             rusqlite::params![plan.as_str(), wanted.key.as_str(), stub.key, stub.title, appended, stub.kind],
         )?;
         if let Some(need) = &stub.needs {
-            tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), stub.key.as_str(), need.as_str()])?;
+            tx.execute(
+                "INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)",
+                [plan.as_str(), stub.key.as_str(), need.as_str()],
+            )?;
         }
     }
     Ok(stubs)
@@ -937,8 +1100,14 @@ pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, workflow: &WorkflowKe
 fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &WorkflowKey) -> Result<(), CpdError> {
     let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;
     if moved == 0 {
-        return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase {} meanwhile: rerun the command.", from.as_str()))
-            .with("plan", plan.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::CasLost,
+            format!(
+                "Plan {plan} left phase {} meanwhile: rerun the command.",
+                from.as_str()
+            ),
+        )
+        .with("plan", plan.as_str()));
     }
     let text = format!("Plan {plan} is back in dispatch: Workflow {key} was added.");
     append(tx, NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()))?;
@@ -954,7 +1123,11 @@ fn workflow_branch(plan: &PlanId, key: &WorkflowKey) -> String {
 /// nor its parent path exists in the repo, else `branch_exists` (exit 3). The parent path is the branch without its last
 /// `/<segment>` (`<plan>` for `<plan>/<key>`, `cpd/<plan>` for `cpd/<plan>/<key>`): git cannot hold both. The legacy
 /// `cpd/<plan>` has no parent check.
-pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, lead_branch: &str) -> Result<(), CpdError> {
+pub(super) fn no_branch_clash(
+    repo: &Path,
+    plan: &PlanId,
+    lead_branch: &str,
+) -> Result<(), CpdError> {
     let mut branches = vec![lead_branch];
     if lead_branch != format!("cpd/{plan}")
         && let Some((parent, _)) = lead_branch.rsplit_once('/')
@@ -963,17 +1136,23 @@ pub(super) fn no_branch_clash(repo: &Path, plan: &PlanId, lead_branch: &str) -> 
     }
     for branch in branches {
         if branch_exists(repo, branch)? {
-            return Err(CpdError::new(ErrorCode::BranchExists, format!("Branch {branch} already exists in {}.", repo.display()))
-                .with("branch", branch)
-                .with("repo", repo.display().to_string()));
+            return Err(CpdError::new(
+                ErrorCode::BranchExists,
+                format!("Branch {branch} already exists in {}.", repo.display()),
+            )
+            .with("branch", branch)
+            .with("repo", repo.display().to_string()));
         }
     }
     Ok(())
 }
 
 fn not_a_git_repo(path: &Path, why: &str) -> CpdError {
-    CpdError::new(ErrorCode::NotAGitRepo, format!("{} is not inside a git repository: {why}", path.display()))
-        .with("repo", path.display().to_string())
+    CpdError::new(
+        ErrorCode::NotAGitRepo,
+        format!("{} is not inside a git repository: {why}", path.display()),
+    )
+    .with("repo", path.display().to_string())
 }
 
 /// The realpath of the main worktree of the repo `path` is in
@@ -982,10 +1161,18 @@ fn not_a_git_repo(path: &Path, why: &str) -> CpdError {
 pub(super) fn main_worktree(path: &Path) -> Result<PathBuf, CpdError> {
     let out = run(path, &["rev-parse", "--git-common-dir"])?;
     if out.code != 0 {
-        return Err(not_a_git_repo(path, out.stderr.lines().next().unwrap_or("git rev-parse failed.")));
+        return Err(not_a_git_repo(
+            path,
+            out.stderr.lines().next().unwrap_or("git rev-parse failed."),
+        ));
     }
-    let main = worktrees(path)?.into_iter().next().ok_or_else(|| not_a_git_repo(path, "it has no worktree."))?;
-    main.path.canonicalize().map_err(|e| not_a_git_repo(&main.path, &format!("{e}.")))
+    let main = worktrees(path)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_a_git_repo(path, "it has no worktree."))?;
+    main.path
+        .canonicalize()
+        .map_err(|e| not_a_git_repo(&main.path, &format!("{e}.")))
 }
 
 /// `--base`, else the repo's `origin` HEAD branch, else `main`; it must exist
@@ -996,7 +1183,15 @@ pub(super) fn resolve_base(repo: &Path, base: Option<&str>) -> Result<String, Cp
     let base = match base {
         Some(base) => base.to_owned(),
         None if origin => {
-            let out = run(repo, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])?;
+            let out = run(
+                repo,
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )?;
             match out.stdout.trim().strip_prefix("origin/") {
                 Some(branch) if out.code == 0 && !branch.is_empty() => branch.to_owned(),
                 _ => "main".to_owned(),
@@ -1004,12 +1199,19 @@ pub(super) fn resolve_base(repo: &Path, base: Option<&str>) -> Result<String, Cp
         }
         None => "main".to_owned(),
     };
-    let reference = if origin { format!("refs/remotes/origin/{base}") } else { format!("refs/heads/{base}") };
+    let reference = if origin {
+        format!("refs/remotes/origin/{base}")
+    } else {
+        format!("refs/heads/{base}")
+    };
     if run(repo, &["rev-parse", "--verify", "--quiet", &reference])?.code != 0 {
-        return Err(CpdError::new(ErrorCode::BaseNotFound, format!("The base {reference} does not exist in {}.", repo.display()))
-            .with("base", base)
-            .with("ref", reference)
-            .with("repo", repo.display().to_string()));
+        return Err(CpdError::new(
+            ErrorCode::BaseNotFound,
+            format!("The base {reference} does not exist in {}.", repo.display()),
+        )
+        .with("base", base)
+        .with("ref", reference)
+        .with("repo", repo.display().to_string()));
     }
     Ok(base)
 }

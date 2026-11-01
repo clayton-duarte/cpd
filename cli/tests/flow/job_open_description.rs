@@ -3,7 +3,7 @@
 
 use crate::common;
 
-use super::driver_open::{open_live, open_pr_live, Live};
+use super::driver_open::{Live, open_live, open_pr_live};
 
 const UNDESCRIBED: &str = "UPDATE workflows SET description = NULL WHERE key = 'repo';";
 
@@ -19,9 +19,19 @@ fn job_dispatch_refuses_an_open_job_whose_pr_has_no_description() {
     let run = live.dispatch("open-repo");
 
     let error = common::refused(&run, "description_required", 3);
-    assert!(error["message"].as_str().unwrap().contains("cpd pr describe --pr repo"), "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("cpd pr describe --pr repo"),
+        "{error}"
+    );
     assert_eq!(attempts(&live), 0, "no Attempt row");
-    assert_eq!(live.fx.fakes.spawn.launches().len(), 0, "no driver launched");
+    assert_eq!(
+        live.fx.fakes.spawn.launches().len(),
+        0,
+        "no driver launched"
+    );
     assert_eq!(live.job_status("open-repo"), "queued");
 }
 

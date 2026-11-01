@@ -17,8 +17,15 @@ fn drain_fx(runner: &str, state: &str) -> (Fx, Arc<FakeSpawn>) {
     let mut fx = Fx::with_plan("");
     let spawn = Arc::new(FakeSpawn::new());
     spawn.set_self_exe("/opt/cpd/bin/cpd");
-    fx.engine.ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(FakeRunner::new(ManualClock::new())), spawn: spawn.clone() };
-    fx.fixture(&format!("UPDATE sessions SET runner = '{runner}', state = '{state}' WHERE id = 'lead1';"));
+    fx.engine.ports = Ports {
+        clock: Arc::new(ManualClock::new()),
+        runner: Arc::new(FakeRunner::new(ManualClock::new())),
+        spawn: spawn.clone(),
+        ..Ports::real()
+    };
+    fx.fixture(&format!(
+        "UPDATE sessions SET runner = '{runner}', state = '{state}' WHERE id = 'lead1';"
+    ));
     restart::mark(&fx.engine.home, "3.4", "3.8").unwrap();
     (fx, spawn)
 }
@@ -27,7 +34,11 @@ fn drain_fx(runner: &str, state: &str) -> (Fx, Arc<FakeSpawn>) {
 fn tmux_restart_drain_ignores_a_working_durable_lead() {
     let (mut fx, spawn) = drain_fx("durable", "working");
     restart::drain(&mut fx.engine);
-    assert_eq!(spawn.launches().len(), 1, "nothing is in the way: the restart starts");
+    assert_eq!(
+        spawn.launches().len(),
+        1,
+        "nothing is in the way: the restart starts"
+    );
     assert!(restart::busy(&mut fx.engine.store).unwrap().is_empty());
 }
 
@@ -35,7 +46,10 @@ fn tmux_restart_drain_ignores_a_working_durable_lead() {
 fn tmux_restart_drain_still_waits_for_a_working_pi_lead() {
     let (mut fx, spawn) = drain_fx("pi", "working");
     restart::drain(&mut fx.engine);
-    assert!(spawn.launches().is_empty(), "a working pi Lead holds the restart");
+    assert!(
+        spawn.launches().is_empty(),
+        "a working pi Lead holds the restart"
+    );
     assert_eq!(restart::busy(&mut fx.engine.store).unwrap().len(), 1);
 }
 
@@ -56,7 +70,8 @@ fn sleep_fx(runner: &str) -> (Fx, FakeRunner) {
 }
 
 fn asleep(fx: &mut Fx) -> bool {
-    fx.query::<i64>("SELECT count(*) FROM sessions WHERE id = 'lead1' AND asleep_at IS NOT NULL") == 1
+    fx.query::<i64>("SELECT count(*) FROM sessions WHERE id = 'lead1' AND asleep_at IS NOT NULL")
+        == 1
 }
 
 #[test]
@@ -66,7 +81,12 @@ fn sleep_marks_a_finished_durable_lead_asleep_and_touches_no_pane() {
     sleep::run(&mut fx.engine);
     assert!(asleep(&mut fx), "asleep_at is written");
     assert_eq!(fx.count("session-asleep"), 1);
-    let calls: Vec<_> = fake.calls().iter().skip(before).map(|c| c.args.join(" ")).collect();
+    let calls: Vec<_> = fake
+        .calls()
+        .iter()
+        .skip(before)
+        .map(|c| c.args.join(" "))
+        .collect();
     assert!(calls.is_empty(), "no tmux call: {calls:?}");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
 }
@@ -78,11 +98,31 @@ fn sleep_still_closes_the_pane_of_a_finished_pi_lead() {
     let pane = fx
         .engine
         .tmux
-        .run(&["new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "keepalive:", "sleep", "600"].map(str::to_owned))
+        .run(
+            &[
+                "new-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                "keepalive:",
+                "sleep",
+                "600",
+            ]
+            .map(str::to_owned),
+        )
         .unwrap();
     let pane = pane.trim().to_owned();
-    fx.fixture(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = 'lead1';"));
+    fx.fixture(&format!(
+        "UPDATE sessions SET tmux_pane = '{pane}' WHERE id = 'lead1';"
+    ));
     sleep::run(&mut fx.engine);
     assert!(asleep(&mut fx), "asleep_at is written");
-    assert!(fake.calls().iter().any(|c| c.args.iter().any(|a| a == "kill-pane")), "the pane was killed");
+    assert!(
+        fake.calls()
+            .iter()
+            .any(|c| c.args.iter().any(|a| a == "kill-pane")),
+        "the pane was killed"
+    );
 }

@@ -14,7 +14,7 @@ use crate::common;
 
 use std::fs;
 
-use common::{refused, Run, TestEnv};
+use common::{Run, TestEnv, refused};
 use serde_json::{Value, json};
 
 /// The registry `apply` lists: `github-copilot` (a built-in) with the four offered ids the presets use.
@@ -45,7 +45,7 @@ impl TestEnv {
                 .query_map([], |r| {
                     let session: Option<String> = r.get(0)?;
                     let data: String = r.get(1)?;
-                    Ok(json!({"session": session, "data": serde_json::from_str::<Value>(&data).unwrap_or_else(|_| Value::Null)}))
+                    Ok(json!({"session": session, "data": serde_json::from_str::<Value>(&data).unwrap_or(Value::Null)}))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
@@ -65,7 +65,9 @@ impl Fx {
         env.fake_pi("exit 0");
         fs::create_dir_all(env.root().join("install")).unwrap();
         fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-        let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+        let scope = env
+            .root()
+            .join("install/releases/1.0.0/node_modules/@earendil-works");
         for package in ["pi-coding-agent", "pi-ai"] {
             fs::create_dir_all(scope.join(package).join("dist")).unwrap();
             fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -75,7 +77,11 @@ impl Fx {
         fs::write(adapter.join("package.json"), "{}").unwrap();
         let root = env.root().display().to_string();
         env.fake("node", &format!("read -r status json < '{root}/registry-answer'\nn=0\nwhile IFS= read -r line; do n=$((n + 1)); [ \"$n\" -eq 1 ] || json=\"$json$line\"; done < '{root}/registry-answer'\necho \"$json\"\nexit \"$status\"\n"));
-        fs::write(env.root().join("registry-answer"), format!("0 {REGISTRY}\n")).unwrap();
+        fs::write(
+            env.root().join("registry-answer"),
+            format!("0 {REGISTRY}\n"),
+        )
+        .unwrap();
         Fx { env }
     }
 
@@ -90,7 +96,11 @@ impl Fx {
     /// The registry answer `apply` uses; `value` is one provider per entry, built-ins included.
     fn registry(&self, value: &Value) {
         let answer = json!({"ok": true, "pi_version": "1.3.0", "providers": value});
-        fs::write(self.env.root().join("registry-answer"), format!("0 {answer}\n")).unwrap();
+        fs::write(
+            self.env.root().join("registry-answer"),
+            format!("0 {answer}\n"),
+        )
+        .unwrap();
     }
 
     fn write(&self, rel: &str, text: &str) {
@@ -137,21 +147,47 @@ fn apply_rewrites_host_toml_model_to_the_preset_s_provider() {
     assert_eq!(out["preset"], "fast");
     assert_eq!(out["already"], false);
     assert_eq!(out["changed"], json!([]));
-    assert!(out["host"].as_str().unwrap().ends_with("policy/host.toml"), "{out}");
+    assert!(
+        out["host"].as_str().unwrap().ends_with("policy/host.toml"),
+        "{out}"
+    );
 
     // The four letters are rewritten to the preset's refs; the comment and the [pr] table are byte-identical.
     let after = fx.host_text();
-    assert!(after.starts_with("# not part of the model\n"), "the comment survives: {after}");
-    assert!(after.contains("[model]\n"), "the [model] header names the section");
+    assert!(
+        after.starts_with("# not part of the model\n"),
+        "the comment survives: {after}"
+    );
+    assert!(
+        after.contains("[model]\n"),
+        "the [model] header names the section"
+    );
     assert!(after.contains("O = \"github-copilot/claude-haiku-4.5\""));
     assert!(after.contains("S = \"github-copilot/claude-sonnet-5.5\""));
     assert!(after.contains("H = \"github-copilot/claude-haiku-4.5\""));
     assert!(after.contains("G = \"github-copilot/gemini-3.8-flash\""));
-    assert!(after.contains("[pr]\nfeedback.checks = \"none\""), "the other table survives: {after}");
-    assert!(!after.contains("claude-opus-5.5"), "the old O is replaced: {after}");
+    assert!(
+        after.contains("[pr]\nfeedback.checks = \"none\""),
+        "the other table survives: {after}"
+    );
+    assert!(
+        !after.contains("claude-opus-5.5"),
+        "the old O is replaced: {after}"
+    );
     // Nothing else is written.
-    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap(), config_before, "config.toml is unchanged");
-    assert!(!fx.env.cpd_home().join("policy").join("host.toml.tmp").exists(), "atomic write leaves no temporary file");
+    assert_eq!(
+        fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap(),
+        config_before,
+        "config.toml is unchanged"
+    );
+    assert!(
+        !fx.env
+            .cpd_home()
+            .join("policy")
+            .join("host.toml.tmp")
+            .exists(),
+        "atomic write leaves no temporary file"
+    );
 }
 
 #[test]
@@ -161,8 +197,16 @@ fn apply_refuses_a_provider_not_in_the_registry_and_writes_nothing() {
     fx.registry(&json!([{"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["fast-o", "fast-s", "fast-h", "fast-g"]}]));
     fx.host(HOST);
 
-    refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_provider_unconfigured", 3);
-    assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
+    refused(
+        &fx.cpd(&["preset", "apply", "ext"]),
+        "preset_provider_unconfigured",
+        3,
+    );
+    assert_eq!(
+        fx.host_text(),
+        HOST,
+        "host.toml is untouched by the refusal"
+    );
     assert!(fx.env.model_changed().is_empty(), "no Event is appended");
 }
 
@@ -174,8 +218,16 @@ fn apply_refuses_a_model_id_not_offered_and_writes_nothing() {
     fx.registry(&json!([{"provider": "github-copilot", "auth": "oauth", "base": null, "ids": ["real-o", "real-s", "real-h", "real-g"]}]));
     fx.host(HOST);
 
-    refused(&fx.cpd(&["preset", "apply", "ext"]), "preset_model_unoffered", 3);
-    assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
+    refused(
+        &fx.cpd(&["preset", "apply", "ext"]),
+        "preset_model_unoffered",
+        3,
+    );
+    assert_eq!(
+        fx.host_text(),
+        HOST,
+        "host.toml is untouched by the refusal"
+    );
     assert!(fx.env.model_changed().is_empty(), "no Event is appended");
 }
 
@@ -186,7 +238,11 @@ fn apply_of_an_unknown_preset_refuses_preset_unknown() {
     fx.host(HOST);
 
     refused(&fx.cpd(&["preset", "apply", "nope"]), "preset_unknown", 4);
-    assert_eq!(fx.host_text(), HOST, "host.toml is untouched by the refusal");
+    assert_eq!(
+        fx.host_text(),
+        HOST,
+        "host.toml is untouched by the refusal"
+    );
     assert!(fx.env.model_changed().is_empty());
 }
 
@@ -200,14 +256,26 @@ fn apply_same_preset_twice_is_a_no_op_with_no_event() {
     fx.sessions();
 
     fx.cpd(&["preset", "apply", "fast"]).ok();
-    assert_eq!(fx.env.model_changed().len(), 1, "the first apply changed the Lead's letter");
+    assert_eq!(
+        fx.env.model_changed().len(),
+        1,
+        "the first apply changed the Lead's letter"
+    );
     let host_after_first = fx.host_text();
 
     let out = fx.cpd(&["preset", "apply", "fast"]).ok();
     assert_eq!(out["already"], true, "{out}");
     assert_eq!(out["changed"], json!([]), "{out}");
-    assert_eq!(fx.host_text(), host_after_first, "host.toml bytes are unchanged by the no-op");
-    assert_eq!(fx.env.model_changed().len(), 1, "the no-op appends no Event");
+    assert_eq!(
+        fx.host_text(),
+        host_after_first,
+        "host.toml bytes are unchanged by the no-op"
+    );
+    assert_eq!(
+        fx.env.model_changed().len(),
+        1,
+        "the no-op appends no Event"
+    );
 }
 
 #[test]
@@ -220,11 +288,21 @@ fn apply_emits_one_session_model_changed_per_changed_live_session() {
     let out = fx.cpd(&["preset", "apply", "fast"]).ok();
     assert_eq!(out["already"], false, "{out}");
     let changed = fx.env.model_changed();
-    assert_eq!(changed.len(), 1, "exactly one Session's letter changed: {changed:?}");
+    assert_eq!(
+        changed.len(),
+        1,
+        "exactly one Session's letter changed: {changed:?}"
+    );
     // The Lead is on the O letter, which the apply changed; the Manager is on the unchanged S letter.
     assert_eq!(changed[0]["session"], "lead1", "{changed:?}");
-    assert_eq!(changed[0]["data"]["from"], "github-copilot/claude-opus-5.5", "{changed:?}");
-    assert_eq!(changed[0]["data"]["to"], "github-copilot/claude-haiku-4.5", "{changed:?}");
+    assert_eq!(
+        changed[0]["data"]["from"], "github-copilot/claude-opus-5.5",
+        "{changed:?}"
+    );
+    assert_eq!(
+        changed[0]["data"]["to"], "github-copilot/claude-haiku-4.5",
+        "{changed:?}"
+    );
 }
 
 // ---------- list and show ----------
@@ -236,7 +314,11 @@ fn list_and_show_print_the_presets_and_the_current_model() {
     fx.host(HOST);
 
     let out = fx.cpd(&["preset", "list"]).ok();
-    assert_eq!(out["presets"], json!([{"name": "fast", "provider": "github-copilot"}]), "{out}");
+    assert_eq!(
+        out["presets"],
+        json!([{"name": "fast", "provider": "github-copilot"}]),
+        "{out}"
+    );
 
     let out = fx.cpd(&["preset", "show", "fast"]).ok();
     assert_eq!(out["name"], "fast", "{out}");
@@ -244,8 +326,14 @@ fn list_and_show_print_the_presets_and_the_current_model() {
     assert_eq!(out["S"], "github-copilot/claude-sonnet-5.5", "{out}");
     assert_eq!(out["H"], "github-copilot/claude-haiku-4.5", "{out}");
     assert_eq!(out["G"], "github-copilot/gemini-3.8-flash", "{out}");
-    assert_eq!(out["host"]["O"], "github-copilot/claude-opus-5.5", "{out}: the current host [model]");
-    assert_eq!(out["host"]["S"], "github-copilot/claude-sonnet-5.5", "{out}");
+    assert_eq!(
+        out["host"]["O"], "github-copilot/claude-opus-5.5",
+        "{out}: the current host [model]"
+    );
+    assert_eq!(
+        out["host"]["S"], "github-copilot/claude-sonnet-5.5",
+        "{out}"
+    );
     assert_eq!(out["host"]["H"], "github-copilot/claude-haiku-4.5", "{out}");
     assert_eq!(out["host"]["G"], "github-copilot/gemini-3.8-flash", "{out}");
 

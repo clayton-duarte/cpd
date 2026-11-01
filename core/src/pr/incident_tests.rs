@@ -64,7 +64,11 @@ fn pr_open_refuses_a_held_plan_for_an_agent() {
     let web = WorkflowKey::parse("web").unwrap();
 
     let err = refused(&mut f, &ops, &web);
-    assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
+    assert_eq!(
+        err.code(),
+        ErrorCode::IncidentHold,
+        "the code is incident_hold"
+    );
     assert_eq!(err.exit().code(), 3, "incident_hold is exit 3");
     assert_eq!(err.details()["plan"], json!("ops"), "details.plan names the held Plan");
     assert_eq!(err.details()["pr"], json!("web"), "details.pr names the Workflow the caller resolved");
@@ -79,7 +83,11 @@ fn pr_push_refuses_a_held_plan_for_an_agent() {
 
     // The agent is refused; a caller that is not an agent is not (the User's own push).
     let err = refused(&mut f, &ops, &web);
-    assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
+    assert_eq!(
+        err.code(),
+        ErrorCode::IncidentHold,
+        "the code is incident_hold"
+    );
     assert_eq!(err.exit().code(), 3, "incident_hold is exit 3");
     f.store
         .read(|c| hold_refused(c, &ops, &web, false))
@@ -93,7 +101,11 @@ fn pr_rebase_refuses_a_held_plan_for_an_agent() {
     let web = WorkflowKey::parse("web").unwrap();
 
     let err = refused(&mut f, &ops, &web);
-    assert_eq!(err.code(), ErrorCode::IncidentHold, "the code is incident_hold");
+    assert_eq!(
+        err.code(),
+        ErrorCode::IncidentHold,
+        "the code is incident_hold"
+    );
     assert_eq!(err.exit().code(), 3, "incident_hold is exit 3");
 }
 

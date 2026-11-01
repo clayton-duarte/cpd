@@ -32,9 +32,9 @@ use crate::pill::spec;
 use crate::ports::Ports;
 
 use super::deadline::Failed;
+use super::layout::{LEGACY_VIEWS, View};
 use super::runner::Runner;
 use super::spawn::{Pid as ProcessId, Spawn as ProcessPort};
-use super::layout::{LEGACY_VIEWS, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
 /// milliseconds, so a longer wait means a hung server.
@@ -61,7 +61,12 @@ const UTF8: &str = "-u";
 /// Every spawn of tmux in cpd starts from it, so every call is a UTF-8 client whatever the caller's locale.
 pub fn client(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
-    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").env_remove("CPD_SESSION").env_remove("CPD_ATTEMPT").stdin(Stdio::null());
+    cmd.arg(UTF8)
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .env_remove("CPD_SESSION")
+        .env_remove("CPD_ATTEMPT")
+        .stdin(Stdio::null());
     cmd
 }
 
@@ -157,8 +162,11 @@ pub const PANE_DIED_HOOK: &str = concat!(
 /// (`kill-window`, an install's restart), so no pane died to say so: start the
 /// engine again with `engine_ensure!`. The window is already gone, so its name
 /// is what tells it was the engine's (`hook_window_name`).
-pub const WINDOW_UNLINKED_HOOK: &str =
-    concat!(r##"if -F "#{==:#{hook_window_name},watch}" ""##, engine_ensure!(), r##"""##);
+pub const WINDOW_UNLINKED_HOOK: &str = concat!(
+    r##"if -F "#{==:#{hook_window_name},watch}" ""##,
+    engine_ensure!(),
+    r##"""##
+);
 
 /// Every global option, key binding and hook of contract §6.1, each as the
 /// arguments after `tmux -L <socket>`, in the order of the reference's
@@ -182,7 +190,12 @@ pub static SERVER_OPTIONS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
         strings(&["set", "-g", "status", "off"]),
         strings(&["set", "-g", "pane-border-status", "top"]),
         strings(&["set", "-g", "pane-border-lines", "heavy"]),
-        vec!["set".into(), "-g".into(), "pane-border-format".into(), BORDER_FORMAT.clone()],
+        vec![
+            "set".into(),
+            "-g".into(),
+            "pane-border-format".into(),
+            BORDER_FORMAT.clone(),
+        ],
         // Unfocused borders are grey like their titles (hs-d489).
         strings(&["set", "-g", "pane-border-style", "fg=colour7"]),
         strings(&["set", "-g", "pane-active-border-style", "fg=blue"]),
@@ -201,9 +214,22 @@ pub static SERVER_OPTIONS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
         strings(&["set-hook", "-g", "pane-died", PANE_DIED_HOOK]),
         strings(&["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK]),
         strings(&["set", "-s", "exit-empty", "off"]),
-        strings(&["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"]),
-        strings(&["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK]),
-
+        strings(&[
+            "bind",
+            "-T",
+            "root",
+            "MouseDown1Pane",
+            "select-pane -t = ; send-keys -M",
+        ]),
+        strings(&[
+            "bind",
+            "-T",
+            "root",
+            "MouseDown1Status",
+            "run-shell",
+            "-b",
+            STATUS_CLICK,
+        ]),
     ]
 });
 
@@ -217,13 +243,30 @@ const SET_TITLES_STRING: &str = "φ · #{?@cpd_machine,#{@cpd_machine},#{host_sh
 /// for every pane cpd starts (`session::PROGRAM`). Its stderr is dropped,
 /// since a `run-shell -b` that fails or prints puts the active pane into view
 /// mode (research `statusbar-no-row.md` 2c).
-pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null";
+pub const STATUS_CLICK: &str =
+    "cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null";
 
 // The StatusBar's button glyphs (hs-d235, Material Design). Macros, because `concat!` takes literals only.
-macro_rules! reset_glyph { () => { "\u{F0A1D}" }; } // md-view_dashboard_outline
-macro_rules! legend_glyph { () => { "\u{F0A01}" }; } // md-map_legend
-macro_rules! logs_glyph { () => { "\u{F09ED}" }; } // md-text_box_outline
-macro_rules! costs_glyph { () => { "\u{EEC1}" }; } // nf-fa-comment_dollar
+macro_rules! reset_glyph {
+    () => {
+        "\u{F0A1D}"
+    };
+} // md-view_dashboard_outline
+macro_rules! legend_glyph {
+    () => {
+        "\u{F0A01}"
+    };
+} // md-map_legend
+macro_rules! logs_glyph {
+    () => {
+        "\u{F09ED}"
+    };
+} // md-text_box_outline
+macro_rules! costs_glyph {
+    () => {
+        "\u{EEC1}"
+    };
+} // nf-fa-comment_dollar
 
 /// The reset-layout button's glyph, U+F0A1D md-view_dashboard_outline.
 pub const RESET_GLYPH: &str = reset_glyph!();
@@ -238,56 +281,143 @@ pub const COSTS_GLYPH: &str = costs_glyph!();
 const BUTTON_BASE: u8 = 7;
 
 // The runner pill's width (0 while `@cpd_runner` is unset): a join, two caps and the runner.
-macro_rules! runner_width { () => { "#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}" }; }
+macro_rules! runner_width {
+    () => {
+        "#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}"
+    };
+}
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
-macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
+macro_rules! preview_width {
+    () => {
+        "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}"
+    };
+}
 // Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
 // whose one space is the join), the closing `━`'s cell, the left group's 20 and a fill of at least 1 (22 in all), the
 // preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
+        concat!(
+            "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},",
+            runner_width!(),
+            "},",
+            preview_width!(),
+            "},",
+            version_width!(),
+            "},",
+            incident_width!(),
+            "}}"
+        )
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
-macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
+macro_rules! version_width {
+    () => {
+        "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}"
+    };
+}
 // The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and the 15-cell label
 // `Incident Mode: ` plus the value.
-macro_rules! incident_width { () => { "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}" }; }
+macro_rules! incident_width {
+    () => {
+        "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}"
+    };
+}
 // The fill's first column, F0: the left group's 20 cells and the preview pill.
-macro_rules! fill_start { () => { concat!("#{e|+:#{e|+:20,", runner_width!(), "},", preview_width!(), "}") }; }
+macro_rules! fill_start {
+    () => {
+        concat!(
+            "#{e|+:#{e|+:20,",
+            runner_width!(),
+            "},",
+            preview_width!(),
+            "}"
+        )
+    };
+}
 // The fill's cell count: `#{client_width}` minus the left group's 20, the preview pill, the version pill, the incident
 // pill and the right group's workers pill in the form drawn plus the closing `━`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},20},", runner_width!(), "},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
-            "#{e|+:#{?", long_fits!(), ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},20},",
+            runner_width!(),
+            "},",
+            preview_width!(),
+            "},",
+            version_width!(),
+            "},",
+            incident_width!(),
+            "},",
+            "#{e|+:#{?",
+            long_fits!(),
+            ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
         )
     };
 }
 // F1 = F0 + the count: the first column of the right group.
-macro_rules! fill_end { () => { concat!("#{e|+:", fill_start!(), ",", fill_count!(), "}") }; }
+macro_rules! fill_end {
+    () => {
+        concat!("#{e|+:", fill_start!(), ",", fill_count!(), "}")
+    };
+}
 // `max(a, b)` and `min(a, b)`: the format language has neither.
-macro_rules! max { ($a:expr, $b:expr) => { concat!("#{?#{e|>:", $a, ",", $b, "},", $a, ",", $b, "}") }; }
-macro_rules! min { ($a:expr, $b:expr) => { concat!("#{?#{e|<:", $a, ",", $b, "},", $a, ",", $b, "}") }; }
+macro_rules! max {
+    ($a:expr, $b:expr) => {
+        concat!("#{?#{e|>:", $a, ",", $b, "},", $a, ",", $b, "}")
+    };
+}
+macro_rules! min {
+    ($a:expr, $b:expr) => {
+        concat!("#{?#{e|<:", $a, ",", $b, "},", $a, ",", $b, "}")
+    };
+}
 // The vertical border's column right of the visited pane.
-macro_rules! border_column { () => { "#{e|+:#{pane_right},1}" }; }
+macro_rules! border_column {
+    () => {
+        "#{e|+:#{pane_right},1}"
+    };
+}
 // The fill: today's run of `━` in a zoomed window; else, per bottom-row pane in index order, its columns that lie in
 // the fill as a run of `━`, then a `┻` at its right border's column when that is in the fill and the pane is not at the right edge.
 macro_rules! fill {
     () => {
         concat!(
-            "#{?window_zoomed_flag,#{R:\u{2501},", fill_count!(), "},",
+            "#{?window_zoomed_flag,#{R:\u{2501},",
+            fill_count!(),
+            "},",
             "#{P/i/:#{?pane_at_bottom,",
-            "#{R:\u{2501},", max!("0", concat!("#{e|+:#{e|-:", min!("#{pane_right}", concat!("#{e|-:", fill_end!(), ",1}")), ",", max!("#{pane_left}", fill_start!()), "},1}")), "}",
-            "#{?#{&&:#{!:#{pane_at_right}},#{&&:#{e|>=:", border_column!(), ",", fill_start!(), "},#{e|<:", border_column!(), ",", fill_end!(), "}}},\u{253B},}",
+            "#{R:\u{2501},",
+            max!(
+                "0",
+                concat!(
+                    "#{e|+:#{e|-:",
+                    min!("#{pane_right}", concat!("#{e|-:", fill_end!(), ",1}")),
+                    ",",
+                    max!("#{pane_left}", fill_start!()),
+                    "},1}"
+                )
+            ),
+            "}",
+            "#{?#{&&:#{!:#{pane_at_right}},#{&&:#{e|>=:",
+            border_column!(),
+            ",",
+            fill_start!(),
+            "},#{e|<:",
+            border_column!(),
+            ",",
+            fill_end!(),
+            "}}},\u{253B},}",
             ",}}}"
         )
     };
 }
 // A join: one grey `━`, outside the click ranges.
-macro_rules! join { () => { "#[fg=colour8]\u{2501}#[default]" }; }
+macro_rules! join {
+    () => {
+        "#[fg=colour8]\u{2501}#[default]"
+    };
+}
 
 /// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
 /// one grey (colour 8) `\u{2501}` line across the full width that starts and ends with a
@@ -339,15 +469,45 @@ macro_rules! join { () => { "#[fg=colour8]\u{2501}#[default]" }; }
 pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let m = &spec().meanings;
     let button = |range: &str, glyph: &str, base: u8| {
-        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(base)), "", glyph)))
+        pill::range(
+            range,
+            &format!(
+                "{}#[default]",
+                pill::pill(&pill::fg(spec().clickable(base)), "", glyph)
+            ),
+        )
     };
     // A glyph button: the glyph and ONE space inside the pill, because a terminal draws a Nerd Font glyph full size
     // only with an empty cell after it (hs-d730, pro-d296). The runner pill is text and takes no space.
     let glyph_button = |range: &str, glyph: &str| button(range, &format!("{glyph} "), BUTTON_BASE);
-    let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
+    let status =
+        |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     // The incident pill is red on a red block in the `incident` click range: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
-    let incident = pill::range("incident", &format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}")));
+    let incident = pill::range(
+        "incident",
+        &format!(
+            "{}#[default]",
+            pill::italic_pill(
+                &pill::fg(spec().clickable(m.failed)),
+                "",
+                "Incident Mode: #{@cpd_incident}"
+            )
+        ),
+    );
+    // The red branch: the bright red clickable pair of the failed meaning, in the click range.
+    let alert = pill::range(
+        "host",
+        &format!(
+            "{}#[default]",
+            pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}")
+        ),
+    );
+    // The plain branch: the grey pill, only while `@cpd_version` is set.
+    let plain = format!(
+        "#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}",
+        status(m.nothing, "#{@cpd_version}")
+    );
     format!(
         "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
@@ -358,12 +518,17 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         runner = button("runner", "#{@cpd_runner}", BUTTON_BASE),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
-        workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
+        workers = status(
+            m.nothing,
+            concat!(
+                "#{?",
+                long_fits!(),
+                ",#{@cpd_workers},#{@cpd_workers_short}}"
+            )
+        ),
         incident = incident,
-        // The red branch: the bright red clickable pair of the failed meaning, in the click range.
-        alert = pill::range("host", &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
-        // The plain branch: the grey pill, only while `@cpd_version` is set.
-        plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}", status(m.nothing, "#{@cpd_version}")),
+        alert = alert,
+        plain = plain,
     )
 });
 
@@ -371,7 +536,11 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
 /// is a session option, and `-g` would give `cpd-work` a row too.
 /// `status-style default` replaces tmux's green bar with the terminal's colours.
 pub static STATUS_OPTIONS: LazyLock<[(&'static str, String); 3]> = LazyLock::new(|| {
-    [("status", "on".into()), ("status-style", "default".into()), ("status-format[0]", STATUS_FORMAT.clone())]
+    [
+        ("status", "on".into()),
+        ("status-style", "default".into()),
+        ("status-format[0]", STATUS_FORMAT.clone()),
+    ]
 });
 
 /// The value `terminal-features` is appended with (`set -as`), the one entry of
@@ -391,7 +560,8 @@ pub struct PaneId(String);
 pub struct WindowId(String);
 
 fn tmux_id(s: &str, sigil: char) -> bool {
-    s.strip_prefix(sigil).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    s.strip_prefix(sigil)
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 impl PaneId {
@@ -599,13 +769,27 @@ impl Eq for Handle {}
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
+        Tmux {
+            socket: socket.into(),
+            tmpdir: None,
+            program: None,
+            runner: Handle::default(),
+            clock: Time::default(),
+            procs: Procs::default(),
+        }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
+        Tmux {
+            socket: socket.into(),
+            tmpdir: Some(tmpdir.into()),
+            program: None,
+            runner: Handle::default(),
+            clock: Time::default(),
+            procs: Procs::default(),
+        }
     }
 
     /// This server, with every call run by `runner` instead of the real processes.
@@ -644,13 +828,23 @@ impl Tmux {
     /// macOS: the `read_link` of a regular file fails, so the program is the path `server_exe` read.
     pub fn on_server_binary(&self) -> Result<Tmux, CpdError> {
         let exe = self.server_exe()?;
-        let program = std::fs::read_link(&exe).ok().filter(|file| file.is_file()).unwrap_or(exe);
+        let program = std::fs::read_link(&exe)
+            .ok()
+            .filter(|file| file.is_file())
+            .unwrap_or(exe);
         Ok(self.clone().with_program(program))
     }
 
     /// The full argv of a call: `tmux -u -L <socket> -f /dev/null <args>` (`-u`: a UTF-8 client, hs-d463).
     pub fn argv(&self, args: &[String]) -> Vec<String> {
-        let mut argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-L".to_owned(), self.socket.clone(), "-f".to_owned(), "/dev/null".to_owned()];
+        let mut argv = vec![
+            PROGRAM.to_owned(),
+            UTF8.to_owned(),
+            "-L".to_owned(),
+            self.socket.clone(),
+            "-f".to_owned(),
+            "/dev/null".to_owned(),
+        ];
         argv.extend(args.iter().cloned());
         argv
     }
@@ -658,7 +852,11 @@ impl Tmux {
     /// The `Command` for a call: its argv, without `TMUX` and `TMUX_PANE`.
     fn command(&self, args: &[String]) -> Command {
         let argv = self.argv(args);
-        let mut cmd = client(self.program.as_deref().unwrap_or_else(|| Path::new(PROGRAM)));
+        let mut cmd = client(
+            self.program
+                .as_deref()
+                .unwrap_or_else(|| Path::new(PROGRAM)),
+        );
         cmd.args(&argv[2..]);
         if let Some(tmpdir) = &self.tmpdir {
             cmd.env("TMUX_TMPDIR", tmpdir);
@@ -670,17 +868,28 @@ impl Tmux {
         let argv = self.argv(args);
         // tmux falls back to `/tmp/tmux-<uid>/` for a `TMUX_TMPDIR` that does not exist: a late start would escape every
         // teardown (hygiene.md 3b), so a missing directory is refused.
-        let tmpdir = self.tmpdir.clone().or_else(|| std::env::var_os("TMUX_TMPDIR").filter(|v| !v.is_empty()).map(Into::into));
+        let tmpdir = self.tmpdir.clone().or_else(|| {
+            std::env::var_os("TMUX_TMPDIR")
+                .filter(|v| !v.is_empty())
+                .map(Into::into)
+        });
         if let Some(dir) = tmpdir.filter(|d| !d.is_dir()) {
-            return Err(CpdError::new(ErrorCode::TmuxFailed, format!("TMUX_TMPDIR {} is not a directory.", dir.display()))
-                .with("argv", argv)
-                .with("exit", serde_json::Value::Null));
+            return Err(CpdError::new(
+                ErrorCode::TmuxFailed,
+                format!("TMUX_TMPDIR {} is not a directory.", dir.display()),
+            )
+            .with("argv", argv)
+            .with("exit", serde_json::Value::Null));
         }
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
             Some(limit) => self.runner.0.output(&mut cmd, "tmux", limit),
             // No deadline; the runner starts it in its own process group, as every other call.
-            None => self.runner.0.output_unbounded(&mut cmd, "tmux").map_err(Failed::Io),
+            None => self
+                .runner
+                .0
+                .output_unbounded(&mut cmd, "tmux")
+                .map_err(Failed::Io),
         };
         ran.map_err(|e| match e {
             Failed::Io(e) => CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
@@ -696,10 +905,16 @@ impl Tmux {
         let lines: Vec<&str> = stderr.lines().collect();
         let tail = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join("\n");
         let first = lines.first().copied().unwrap_or("no output");
-        CpdError::new(ErrorCode::TmuxFailed, format!("tmux {} failed: {first}", args.first().map_or("", String::as_str)))
-            .with("argv", self.argv(args))
-            .with("exit", out.status.code())
-            .with("stderr", tail)
+        CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!(
+                "tmux {} failed: {first}",
+                args.first().map_or("", String::as_str)
+            ),
+        )
+        .with("argv", self.argv(args))
+        .with("exit", out.status.code())
+        .with("stderr", tail)
     }
 
     /// Runs a call that must succeed; returns its stdout.
@@ -747,7 +962,12 @@ impl Tmux {
     /// (see [`new_session_args`]).
     /// Returns whether it created the session. Idempotent; a concurrent creator
     /// winning the race is not an error.
-    pub fn ensure_session(&self, name: &str, window: &str, spawn: &Spawn) -> Result<bool, CpdError> {
+    pub fn ensure_session(
+        &self,
+        name: &str,
+        window: &str,
+        spawn: &Spawn,
+    ) -> Result<bool, CpdError> {
         Ok(self.create_session(name, window, spawn)?.is_some())
     }
 
@@ -759,7 +979,12 @@ impl Tmux {
     /// which every later window of the session would inherit (tmux(1)); they
     /// are unset from it at once (`set-environment -u`), so like
     /// [`Tmux::new_window`]'s `-e` they reach only this first pane.
-    pub fn create_session(&self, name: &str, window: &str, spawn: &Spawn) -> Result<Option<(WindowId, PaneId)>, CpdError> {
+    pub fn create_session(
+        &self,
+        name: &str,
+        window: &str,
+        spawn: &Spawn,
+    ) -> Result<Option<(WindowId, PaneId)>, CpdError> {
         let fresh = !self.server_running()?;
         if !fresh && self.has_session(name)? {
             return Ok(None);
@@ -774,10 +999,18 @@ impl Tmux {
         }
         let printed = String::from_utf8_lossy(&out.stdout);
         let ids = printed.trim_end_matches('\n');
-        let parsed = ids.split_once(' ').and_then(|(w, p)| Some((WindowId::parse(w)?, PaneId::parse(p)?)));
+        let parsed = ids
+            .split_once(' ')
+            .and_then(|(w, p)| Some((WindowId::parse(w)?, PaneId::parse(p)?)));
         let parsed = parsed.ok_or_else(|| self.unexpected(&args, ids))?;
         for key in spawn.env.keys() {
-            self.run(&strings(&["set-environment", "-t", &format!("={name}"), "-u", key]))?;
+            self.run(&strings(&[
+                "set-environment",
+                "-t",
+                &format!("={name}"),
+                "-u",
+                key,
+            ]))?;
         }
         Ok(Some(parsed))
     }
@@ -798,7 +1031,13 @@ impl Tmux {
     pub fn apply_status_line(&self, session: &str, version: &str) -> Result<(), CpdError> {
         self.run(&strings(&["set", "-g", "@cpd_version", version]))?;
         for (option, value) in STATUS_OPTIONS.iter() {
-            self.run(&strings(&["set", "-t", &format!("={session}:"), option, value]))?;
+            self.run(&strings(&[
+                "set",
+                "-t",
+                &format!("={session}:"),
+                option,
+                value,
+            ]))?;
         }
         Ok(())
     }
@@ -834,7 +1073,10 @@ impl Tmux {
     /// `display -p '#{version}'`: the version of the tmux the server runs
     /// (`3.4`, `next-3.7`), which is the one it was started with.
     pub fn server_version(&self) -> Result<String, CpdError> {
-        Ok(self.run(&strings(&["display", "-p", "#{version}"]))?.trim().to_owned())
+        Ok(self
+            .run(&strings(&["display", "-p", "#{version}"]))?
+            .trim()
+            .to_owned())
     }
 
     /// The server's own tmux program. Linux: `/proc/<server pid>/exe`, which
@@ -845,61 +1087,131 @@ impl Tmux {
     pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
         let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
         let pid: u32 = out.trim().parse().map_err(|e| {
-            CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
+            CpdError::new(
+                ErrorCode::TmuxFailed,
+                format!(
+                    "The tmux server's pid {:?} is not a number: {e}.",
+                    out.trim()
+                ),
+            )
         })?;
         let exe = Tmux::pid_exe_with(&*self.procs.0, pid).ok_or_else(|| {
-            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid})."))
-                .with("pid", pid.to_string())
+            CpdError::new(
+                ErrorCode::TmuxFailed,
+                format!("Cannot find the tmux server's own binary (pid {pid})."),
+            )
+            .with("pid", pid.to_string())
         })?;
         std::fs::metadata(&exe).map_err(|e| {
-            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
-                .with("path", exe.display().to_string())
+            CpdError::new(
+                ErrorCode::TmuxFailed,
+                format!(
+                    "Cannot find the tmux server's own binary {}: {e}.",
+                    exe.display()
+                ),
+            )
+            .with("path", exe.display().to_string())
         })?;
         Ok(exe)
     }
 
     /// `show -gv <option>`: a global option's value, without the newline.
     pub fn global_option(&self, option: &str) -> Result<String, CpdError> {
-        Ok(self.run(&strings(&["show", "-gv", option]))?.trim_end_matches('\n').to_owned())
+        Ok(self
+            .run(&strings(&["show", "-gv", option]))?
+            .trim_end_matches('\n')
+            .to_owned())
     }
 
     /// `set -p -t <pane> @cpd_session <id>`.
     pub fn set_pane_session(&self, pane: &PaneId, session: &SessionId) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_SESSION, session.as_str()])).map(drop)
+        self.run(&strings(&[
+            "set",
+            "-p",
+            "-t",
+            pane.as_str(),
+            OPT_SESSION,
+            session.as_str(),
+        ]))
+        .map(drop)
     }
 
     /// `set -p -t <pane> @cpd_title <title>`, the title in Title Case (hs-d475, [`title_case`]).
     pub fn set_pane_title(&self, pane: &PaneId, title: &str) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, &title_case(title)])).map(drop)
+        self.run(&strings(&[
+            "set",
+            "-p",
+            "-t",
+            pane.as_str(),
+            OPT_TITLE,
+            &title_case(title),
+        ]))
+        .map(drop)
     }
 
     /// `set -p -t <pane> @cpd_view <view>`.
     pub fn set_pane_view(&self, pane: &PaneId, view: View) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_VIEW, view.as_str()])).map(drop)
+        self.run(&strings(&[
+            "set",
+            "-p",
+            "-t",
+            pane.as_str(),
+            OPT_VIEW,
+            view.as_str(),
+        ]))
+        .map(drop)
     }
 
     /// `set -p -t <pane> @cpd_history <id>`.
     pub fn set_pane_history(&self, pane: &PaneId, session: &SessionId) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_HISTORY, session.as_str()])).map(drop)
+        self.run(&strings(&[
+            "set",
+            "-p",
+            "-t",
+            pane.as_str(),
+            OPT_HISTORY,
+            session.as_str(),
+        ]))
+        .map(drop)
     }
 
     /// `new-window -d -t =<session>: -n <name> [-c <cwd>] [-e K=V …] -P -F
     /// '#{window_id} #{pane_id}' -- <argv…>` (contract §6.3).
-    pub fn new_window(&self, session: &str, name: &str, spawn: &Spawn) -> Result<(WindowId, PaneId), CpdError> {
-        let mut args = strings(&["new-window", "-d", "-t", &format!("={session}:"), "-n", name]);
+    pub fn new_window(
+        &self,
+        session: &str,
+        name: &str,
+        spawn: &Spawn,
+    ) -> Result<(WindowId, PaneId), CpdError> {
+        let mut args = strings(&[
+            "new-window",
+            "-d",
+            "-t",
+            &format!("={session}:"),
+            "-n",
+            name,
+        ]);
         spawn.push_args(&mut args);
         args.extend(strings(&["-P", "-F", "#{window_id} #{pane_id}"]));
         spawn.push_argv(&mut args);
         let out = self.run(&args)?;
         let ids = out.trim_end_matches('\n');
-        let parsed = ids.split_once(' ').and_then(|(w, p)| Some((WindowId::parse(w)?, PaneId::parse(p)?)));
+        let parsed = ids
+            .split_once(' ')
+            .and_then(|(w, p)| Some((WindowId::parse(w)?, PaneId::parse(p)?)));
         parsed.ok_or_else(|| self.unexpected(&args, ids))
     }
 
     /// `split-window -d -t <pane> -h|-v [-l <size>] [-c <cwd>] [-e K=V …] -P -F
     /// '#{pane_id}' -- <argv…>`: a new pane beside `target` (the cockpit's
     /// layout, commands.md §13.1). `size` is tmux's `-l`: cells, or `NN%`.
-    pub fn split_window(&self, target: &PaneId, split: Split, size: Option<&str>, spawn: &Spawn) -> Result<PaneId, CpdError> {
+    pub fn split_window(
+        &self,
+        target: &PaneId,
+        split: Split,
+        size: Option<&str>,
+        spawn: &Spawn,
+    ) -> Result<PaneId, CpdError> {
         let mut args = strings(&["split-window", "-d", "-t", target.as_str()]);
         args.extend(strings(split.flags()));
         if let Some(size) = size {
@@ -916,12 +1228,21 @@ impl Tmux {
     /// `swap-pane -d -s <source> -t <target>`: both processes keep their pids,
     /// and pane options move with the panes (contract §6.2, §6.3).
     pub fn swap_pane(&self, source: &PaneId, target: &PaneId) -> Result<(), CpdError> {
-        self.run(&strings(&["swap-pane", "-d", "-s", source.as_str(), "-t", target.as_str()])).map(drop)
+        self.run(&strings(&[
+            "swap-pane",
+            "-d",
+            "-s",
+            source.as_str(),
+            "-t",
+            target.as_str(),
+        ]))
+        .map(drop)
     }
 
     /// `rename-window -t <window> <name>`.
     pub fn rename_window(&self, window: &WindowId, name: &str) -> Result<(), CpdError> {
-        self.run(&strings(&["rename-window", "-t", window.as_str(), name])).map(drop)
+        self.run(&strings(&["rename-window", "-t", window.as_str(), name]))
+            .map(drop)
     }
 
     /// `respawn-pane -t <pane> [-c <cwd>] [-e K=V …] [-- <argv…>]`: restarts a
@@ -947,7 +1268,8 @@ impl Tmux {
 
     /// `kill-pane -t <pane>`; the window goes with its last pane.
     pub fn kill_pane(&self, pane: &PaneId) -> Result<(), CpdError> {
-        self.run(&strings(&["kill-pane", "-t", pane.as_str()])).map(drop)
+        self.run(&strings(&["kill-pane", "-t", pane.as_str()]))
+            .map(drop)
     }
 
     /// `kill-server`: the server and everything in it end. Returns once the server is gone. A server that
@@ -956,7 +1278,8 @@ impl Tmux {
     pub fn kill_server(&self) -> Result<(), CpdError> {
         let args = strings(&["kill-server"]);
         let out = self.output(&args)?;
-        if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
+        if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering
+        {
             return Err(self.failed(&args, &out));
         }
         let clock = &self.clock.0;
@@ -973,8 +1296,11 @@ impl Tmux {
                 // Its connection closed on us: the server is dead, only its cleanup is left.
                 Liveness::Dying => return Ok(()),
                 Liveness::Answering => {
-                    return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
-                        .with("argv", self.argv(&args)));
+                    return Err(CpdError::new(
+                        ErrorCode::TmuxFailed,
+                        "The tmux server did not exit within 10 s of kill-server.",
+                    )
+                    .with("argv", self.argv(&args)));
                 }
             }
         }
@@ -987,7 +1313,9 @@ impl Tmux {
         let own = |p: &Path| p.is_absolute();
         #[cfg(not(target_os = "macos"))]
         let own = |p: &Path| p.starts_with("/proc/");
-        self.program.as_deref().is_some_and(|p| own(p) && !p.exists())
+        self.program
+            .as_deref()
+            .is_some_and(|p| own(p) && !p.exists())
     }
 
     /// `list-sessions`, read as the answer of a server that may be on its way out.
@@ -1009,14 +1337,23 @@ impl Tmux {
 
     /// `kill-window -t <window>`.
     pub fn kill_window(&self, window: &WindowId) -> Result<(), CpdError> {
-        self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
+        self.run(&strings(&["kill-window", "-t", window.as_str()]))
+            .map(drop)
     }
 
     /// `#{pane_width}` of `pane`: its width in columns (the chat slot's, for E10's retitle, hs-d543).
     pub fn pane_width(&self, pane: &PaneId) -> Result<u32, CpdError> {
-        let args = strings(&["display-message", "-p", "-t", pane.as_str(), "#{pane_width}"]);
+        let args = strings(&[
+            "display-message",
+            "-p",
+            "-t",
+            pane.as_str(),
+            "#{pane_width}",
+        ]);
         let out = self.run(&args)?;
-        out.trim().parse().map_err(|_| self.unexpected(&args, out.trim()))
+        out.trim()
+            .parse()
+            .map_err(|_| self.unexpected(&args, out.trim()))
     }
 
     /// `list-panes -a`: every pane of the server; none only when tmux says no
@@ -1032,7 +1369,9 @@ impl Tmux {
             // first call connected: list again, once.
             out = self.output(&args)?;
             // A server with no session (`exit-empty off`, §6.1) has no pane: tmux says "no current target".
-            if !out.status.success() && String::from_utf8_lossy(&out.stderr).trim() == "no current target" {
+            if !out.status.success()
+                && String::from_utf8_lossy(&out.stderr).trim() == "no current target"
+            {
                 return Ok(Vec::new());
             }
             if !out.status.success() {
@@ -1053,10 +1392,13 @@ impl Tmux {
 
     /// `tmux_failed` for output cpd cannot parse.
     fn unexpected(&self, args: &[String], output: &str) -> CpdError {
-        CpdError::new(ErrorCode::TmuxFailed, format!("tmux {} printed unexpected output.", args[0]))
-            .with("argv", self.argv(args))
-            .with("exit", 0)
-            .with("stdout", output.to_owned())
+        CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("tmux {} printed unexpected output.", args[0]),
+        )
+        .with("argv", self.argv(args))
+        .with("exit", 0)
+        .with("stdout", output.to_owned())
     }
 }
 
@@ -1068,7 +1410,11 @@ fn version_key(version: &str) -> Option<(u32, u32, u8)> {
     let (major, rest) = v.split_once('.')?;
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let minor = rest[..digits].parse().ok()?;
-    let letter = rest[digits..].bytes().next().filter(u8::is_ascii_lowercase).map_or(0, |b| b - b'a' + 1);
+    let letter = rest[digits..]
+        .bytes()
+        .next()
+        .filter(u8::is_ascii_lowercase)
+        .map_or(0, |b| b - b'a' + 1);
     Some((major.parse().ok()?, minor, letter))
 }
 
@@ -1106,10 +1452,13 @@ pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
     let text = String::from_utf8_lossy(&out.stdout);
     match (out.status.success(), text.trim().strip_prefix("tmux ")) {
         (true, Some(version)) => Ok(version.to_owned()),
-        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
-            .with("argv", argv.clone())
-            .with("exit", out.status.code())
-            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
+        _ => Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            "tmux -V did not print `tmux <version>`.",
+        )
+        .with("argv", argv.clone())
+        .with("exit", out.status.code())
+        .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
 }
 
@@ -1120,7 +1469,8 @@ pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
 fn no_server(stderr: &str) -> bool {
     stderr.lines().any(|line| {
         line.starts_with("no server running on ")
-            || (line.starts_with("error connecting to ") && line.ends_with("(No such file or directory)"))
+            || (line.starts_with("error connecting to ")
+                && line.ends_with("(No such file or directory)"))
     })
 }
 
@@ -1138,13 +1488,17 @@ enum Liveness {
 /// Whether a failed call's stderr says the connection to the server was refused (its socket file is
 /// left behind, nothing listens on it).
 fn refused(stderr: &str) -> bool {
-    stderr.lines().any(|line| line.starts_with("error connecting to ") && line.ends_with("(Connection refused)"))
+    stderr.lines().any(|line| {
+        line.starts_with("error connecting to ") && line.ends_with("(Connection refused)")
+    })
 }
 
 /// Whether a failed call's stderr says the server closed the connection without answering, as a
 /// server does while it exits.
 fn dying(stderr: &str) -> bool {
-    stderr.lines().any(|line| line.starts_with("server exited unexpectedly") || line.starts_with("lost server"))
+    stderr.lines().any(|line| {
+        line.starts_with("server exited unexpectedly") || line.starts_with("lost server")
+    })
 }
 
 /// The arguments of [`Tmux::create_session`]'s call: `new-session -d -s <name>
@@ -1163,7 +1517,12 @@ fn new_session_args(name: &str, window: &str, spawn: &Spawn, fresh: bool) -> Vec
         }
     }
     args.extend(strings(&["new-session", "-d", "-s", name, "-n", window]));
-    args.extend(strings(&["-x", &SESSION_WIDTH.to_string(), "-y", &SESSION_HEIGHT.to_string()]));
+    args.extend(strings(&[
+        "-x",
+        &SESSION_WIDTH.to_string(),
+        "-y",
+        &SESSION_HEIGHT.to_string(),
+    ]));
     spawn.push_args(&mut args);
     args.extend(strings(&["-P", "-F", "#{window_id} #{pane_id}"]));
     spawn.push_argv(&mut args);
@@ -1185,14 +1544,31 @@ enum Line {
 /// Logs an unknown `@cpd_view` value to stderr, once per value and process.
 fn warn_unknown_view(view: &str) {
     static SEEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-    if SEEN.lock().unwrap_or_else(|e| e.into_inner()).insert(view.to_owned()) {
-        eprintln!("cpd: skipping tmux panes with the unknown @cpd_view {view:?}: a newer cpd made them");
+    if SEEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(view.to_owned())
+    {
+        eprintln!(
+            "cpd: skipping tmux panes with the unknown @cpd_view {view:?}: a newer cpd made them"
+        );
     }
 }
 
 fn parse_pane(line: &str) -> Option<Line> {
     let fields: Vec<&str> = line.split('\t').collect();
-    let [pane, window, session_name, window_name, dead, dead_status, pid, cpd_session, cpd_view] = fields[..] else {
+    let [
+        pane,
+        window,
+        session_name,
+        window_name,
+        dead,
+        dead_status,
+        pid,
+        cpd_session,
+        cpd_view,
+    ] = fields[..]
+    else {
         return None;
     };
     let pane = Pane {
@@ -1205,16 +1581,31 @@ fn parse_pane(line: &str) -> Option<Line> {
             "1" => true,
             _ => return None,
         },
-        dead_status: if dead_status.is_empty() { None } else { Some(dead_status.parse().ok()?) },
-        pid: if pid.is_empty() { None } else { Some(pid.parse().ok()?) },
-        cpd_session: if cpd_session.is_empty() { None } else { Some(SessionId::parse(cpd_session).ok()?) },
+        dead_status: if dead_status.is_empty() {
+            None
+        } else {
+            Some(dead_status.parse().ok()?)
+        },
+        pid: if pid.is_empty() {
+            None
+        } else {
+            Some(pid.parse().ok()?)
+        },
+        cpd_session: if cpd_session.is_empty() {
+            None
+        } else {
+            Some(SessionId::parse(cpd_session).ok()?)
+        },
         cpd_view: None,
     };
     if cpd_view.is_empty() {
         return Some(Line::Pane(pane));
     }
     match View::parse(cpd_view) {
-        Some(view) => Some(Line::Pane(Pane { cpd_view: Some(view), ..pane })),
+        Some(view) => Some(Line::Pane(Pane {
+            cpd_view: Some(view),
+            ..pane
+        })),
         None if LEGACY_VIEWS.contains(&cpd_view) => Some(Line::LegacyView),
         None => Some(Line::UnknownView(cpd_view.to_owned())),
     }
@@ -1266,7 +1657,10 @@ mod tests {
     fn client_strips_cpd_session_and_cpd_attempt() {
         let cmd = client("tmux");
         for k in ["CPD_SESSION", "CPD_ATTEMPT"] {
-            assert!(cmd.get_envs().any(|(n, v)| n == k && v.is_none()), "{k} not removed");
+            assert!(
+                cmd.get_envs().any(|(n, v)| n == k && v.is_none()),
+                "{k} not removed"
+            );
         }
     }
 
@@ -1274,15 +1668,31 @@ mod tests {
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
         let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}";
-        let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {}", *STATUS_FORMAT));
-        let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
-        assert!(at > workers, "the version pill follows the workers pill: {}", *STATUS_FORMAT);
+        let at = STATUS_FORMAT
+            .find(pill)
+            .unwrap_or_else(|| panic!("no version pill in {}", *STATUS_FORMAT));
+        let workers = STATUS_FORMAT
+            .rfind("#{@cpd_workers_short}}")
+            .expect("the workers pill");
+        assert!(
+            at > workers,
+            "the version pill follows the workers pill: {}",
+            *STATUS_FORMAT
+        );
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
-        assert!(tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"), "{tail}");
-        assert!(tail.ends_with("#[fg=colour8]\u{2501}#[default]"), "the closing ━ follows the pill: {tail}");
+        assert!(
+            tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"),
+            "{tail}"
+        );
+        assert!(
+            tail.ends_with("#[fg=colour8]\u{2501}#[default]"),
+            "the closing ━ follows the pill: {tail}"
+        );
         assert_eq!(
-            STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(),
+            STATUS_FORMAT
+                .matches("#[reverse]#{@cpd_version}#[noreverse]")
+                .count(),
             2,
             "each branch draws the text once: {}",
             *STATUS_FORMAT
@@ -1297,8 +1707,16 @@ mod tests {
         let fill = fill_count!();
         assert!(fill.contains(width), "the fill count: {fill}");
         assert!(long_fits!().contains(width), "long_fits: {}", long_fits!());
-        assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {}", *STATUS_FORMAT);
-        assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {}", *STATUS_FORMAT);
+        assert!(
+            STATUS_FORMAT.contains(fill),
+            "the format uses the fill count: {}",
+            *STATUS_FORMAT
+        );
+        assert!(
+            STATUS_FORMAT.contains(long_fits!()),
+            "the format uses long_fits: {}",
+            *STATUS_FORMAT
+        );
     }
 
     // ---------- the status line, as `STATUS_FORMAT`'s text (the pane tests of `cli/tests/tui/tui.rs` drew it on a real tmux client) ----------
@@ -1321,12 +1739,17 @@ mod tests {
     /// `long_fits!()` as text: the client is at least the workers pill's width plus 22 (the left group's 20, the closing `━` and a
     /// fill of at least 1), the preview pill, the version pill and the incident pill.
     fn long_fits() -> String {
-        format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{w:@cpd_workers}},2}},22}},{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
+        format!(
+            "#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{w:@cpd_workers}},2}},22}},{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}"
+        )
     }
 
     /// A button of the left group: its click range, its glyph and one space between the two caps (4 cells), a block of the bright pair of `base`.
     fn button(range: &str, glyph: &str, base: u8) -> String {
-        format!("#[range=user|{range}]#[fg=colour{}]\u{e0b6}#[reverse]{glyph} #[noreverse]\u{e0b4}#[default]#[norange]", spec().clickable(base))
+        format!(
+            "#[range=user|{range}]#[fg=colour{}]\u{e0b6}#[reverse]{glyph} #[noreverse]\u{e0b4}#[default]#[norange]",
+            spec().clickable(base)
+        )
     }
 
     /// A pill of colour `colour`: its text between the caps, with no padding, in reverse video.
@@ -1336,7 +1759,13 @@ mod tests {
 
     /// The workers pill: the long form while the client is wide enough, else the short form.
     fn workers_pill() -> String {
-        pill_of(8, &format!("#{{?{},#{{@cpd_workers}},#{{@cpd_workers_short}}}}", long_fits()))
+        pill_of(
+            8,
+            &format!(
+                "#{{?{},#{{@cpd_workers}},#{{@cpd_workers_short}}}}",
+                long_fits()
+            ),
+        )
     }
 
     /// The fill's cell count: the client's width less the left group, the preview, version and incident pills and the right
@@ -1350,7 +1779,10 @@ mod tests {
 
     /// The preview pill's conditional: the join and `preview: <value>`, empty while `@cpd_preview` is unset.
     fn preview_branch() -> String {
-        format!("#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}", pill_of(3, "preview: #{@cpd_preview}"))
+        format!(
+            "#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}",
+            pill_of(3, "preview: #{@cpd_preview}")
+        )
     }
 
     /// What follows the logs button in the format.
@@ -1367,23 +1799,57 @@ mod tests {
     #[test]
     fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_39_columns() {
         let f: &str = &STATUS_FORMAT;
-        assert_eq!(long_fits!(), long_fits(), "`client_width >= w:@cpd_workers + 2 + 22`, plus the pills that are set");
-        assert_eq!(LEFT_WIDTH + 1 + 1, 22, "the left group's 20, the closing `━` and a fill of 1");
-        assert_eq!(LONG_WIDTH + 22, 39, "the long form needs a client of 39 columns");
-        assert!(f.contains(&workers_pill()), "the workers pill reads `@cpd_workers` when the long form fits: {f}");
+        assert_eq!(
+            long_fits!(),
+            long_fits(),
+            "`client_width >= w:@cpd_workers + 2 + 22`, plus the pills that are set"
+        );
+        assert_eq!(
+            LEFT_WIDTH + 1 + 1,
+            22,
+            "the left group's 20, the closing `━` and a fill of 1"
+        );
+        assert_eq!(
+            LONG_WIDTH + 22,
+            39,
+            "the long form needs a client of 39 columns"
+        );
+        assert!(
+            f.contains(&workers_pill()),
+            "the workers pill reads `@cpd_workers` when the long form fits: {f}"
+        );
         // the line is full: the fill is the width less the left group and the right group in the form drawn
         assert_eq!(fill_count!(), fill_count());
-        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2501},{}}},", fill_count())), "{f}");
+        assert!(
+            f.contains(&format!(
+                "#{{?window_zoomed_flag,#{{R:\u{2501},{}}},",
+                fill_count()
+            )),
+            "{f}"
+        );
     }
 
     #[test]
-    fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_39_columns() {
+    fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_39_columns()
+    {
         let f: &str = &STATUS_FORMAT;
         // the short form is the else branch of the long form's test, and the fill subtracts its width then
-        assert!(f.contains(&workers_pill()) && workers_pill().contains(",#{@cpd_workers},#{@cpd_workers_short}}"), "{f}");
-        assert!(fill_count().contains(",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}}"), "{}", fill_count());
+        assert!(
+            f.contains(&workers_pill())
+                && workers_pill().contains(",#{@cpd_workers},#{@cpd_workers_short}}"),
+            "{f}"
+        );
+        assert!(
+            fill_count().contains(",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}}"),
+            "{}",
+            fill_count()
+        );
         // 39 fits and 38 does not: the test is `>=`
-        assert!(long_fits().starts_with("#{e|>=:#{client_width},"), "{}", long_fits());
+        assert!(
+            long_fits().starts_with("#{e|>=:#{client_width},"),
+            "{}",
+            long_fits()
+        );
         // the format writes no `workers` word of its own: it is in `@cpd_workers`, which the engine sets
         assert!(!f.replace("@cpd_workers", "").contains("workers"), "{f}");
     }
@@ -1391,16 +1857,34 @@ mod tests {
     #[test]
     fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
         let f: &str = &STATUS_FORMAT;
-        let buttons = format!("{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}", button("reset", RESET_GLYPH, BUTTON_BASE), button("legend", LEGEND_GLYPH, BUTTON_BASE), button("logs", LOGS_GLYPH, BUTTON_BASE), button("costs", COSTS_GLYPH, BUTTON_BASE));
+        let buttons = format!(
+            "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}",
+            button("reset", RESET_GLYPH, BUTTON_BASE),
+            button("legend", LEGEND_GLYPH, BUTTON_BASE),
+            button("logs", LOGS_GLYPH, BUTTON_BASE),
+            button("costs", COSTS_GLYPH, BUTTON_BASE)
+        );
         // the leading `━`, then the four buttons joined by a single `━` each: 4 joins and 4 buttons of 4 cells, 20 cells
         assert!(f.starts_with(&buttons), "{f}");
         assert_eq!(buttons.matches('\u{2501}').count() + 4 * 4, LEFT_WIDTH);
-        assert!(f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour15]\u{e0b6}")), "the leading line cell, grey, then a button's cap: {f}");
+        assert!(
+            f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour15]\u{e0b6}")),
+            "the leading line cell, grey, then a button's cap: {f}"
+        );
         // the right group ends with the version conditional, then the closing `━`, grey
-        assert!(f.ends_with(&format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}}}{JOIN}", pill_of(8, "#{@cpd_version}"))), "{f}");
+        assert!(
+            f.ends_with(&format!(
+                "#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}}}{JOIN}",
+                pill_of(8, "#{@cpd_version}")
+            )),
+            "{f}"
+        );
         // the right pills are joined by one `━` (never a space), and the left group by the buttons' own
         assert!(!f.contains("inbox"), "{f}");
-        assert!(!f.contains("\u{e0b4} \u{e0b6}") && !f.contains("\u{e0b4}\u{e0b6}"), "no space and no touching caps between two pills: {f}");
+        assert!(
+            !f.contains("\u{e0b4} \u{e0b6}") && !f.contains("\u{e0b4}\u{e0b6}"),
+            "no space and no touching caps between two pills: {f}"
+        );
     }
 
     #[test]
@@ -1409,12 +1893,27 @@ mod tests {
         // the fill follows the logs button (and the preview pill, while set) in grey, and the right group follows it
         let after = after_the_buttons();
         assert!(after.starts_with(&preview_branch()), "{after}");
-        assert!(after[preview_branch().len()..].starts_with("#[fg=colour8]#{?window_zoomed_flag,#{R:\u{2501},"), "{after}");
+        assert!(
+            after[preview_branch().len()..]
+                .starts_with("#[fg=colour8]#{?window_zoomed_flag,#{R:\u{2501},"),
+            "{after}"
+        );
         assert!(after.contains("#[default]#{?@cpd_incident,"), "{after}");
         // a zoomed window's fill is one run of the whole free width, in either form (40 and 100 columns: the short form and the long one)
-        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2501},{}}},", fill_count())), "{f}");
+        assert!(
+            f.contains(&format!(
+                "#{{?window_zoomed_flag,#{{R:\u{2501},{}}},",
+                fill_count()
+            )),
+            "{f}"
+        );
         // otherwise it starts after the left group's 20 cells and the preview pill
-        assert!(f.contains(&format!("#{{e|+:#{{e|+:20,{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}}")), "{f}");
+        assert!(
+            f.contains(&format!(
+                "#{{e|+:#{{e|+:20,{RUNNER_WIDTH}}},{PREVIEW_WIDTH}}}"
+            )),
+            "{f}"
+        );
     }
 
     const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
@@ -1427,21 +1926,43 @@ mod tests {
         // `#{n:@cpd_preview}` + 12: the join, two caps and `preview: `
         assert_eq!(1 + 2 + "preview: ".chars().count(), 12);
         assert_eq!(PREVIEW.chars().count(), 33);
-        assert_eq!(LONG_WIDTH + 22 + PREVIEW.chars().count() + 12, 84, "the long form fits from 84 columns with this preview");
+        assert_eq!(
+            LONG_WIDTH + 22 + PREVIEW.chars().count() + 12,
+            84,
+            "the long form fits from 84 columns with this preview"
+        );
         // right after the buttons: a join, then the pill in reverse video on colour 3, unpadded and with no background
-        assert!(after_the_buttons().starts_with(&preview_branch()), "{}", after_the_buttons());
-        assert!(preview_branch().contains("\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}"), "{}", preview_branch());
+        assert!(
+            after_the_buttons().starts_with(&preview_branch()),
+            "{}",
+            after_the_buttons()
+        );
+        assert!(
+            preview_branch()
+                .contains("\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}"),
+            "{}",
+            preview_branch()
+        );
         assert!(!f.contains("bg="), "{f}");
         // the fill and the long form's test are shorter by the pill's width while the option is set
-        assert!(fill_count().contains(PREVIEW_WIDTH) && long_fits().contains(PREVIEW_WIDTH), "{f}");
-        assert!(f.contains(&fill_count()) && f.contains(&long_fits()), "the format uses them: {f}");
+        assert!(
+            fill_count().contains(PREVIEW_WIDTH) && long_fits().contains(PREVIEW_WIDTH),
+            "{f}"
+        );
+        assert!(
+            f.contains(&fill_count()) && f.contains(&long_fits()),
+            "the format uses them: {f}"
+        );
     }
 
     #[test]
     fn the_status_line_shows_no_preview_once_the_option_is_unset() {
         let f: &str = &STATUS_FORMAT;
         // the pill is a conditional on the option with an empty else branch, and the width one with 0
-        assert!(f.contains(&preview_branch()) && preview_branch().ends_with(",}"), "{f}");
+        assert!(
+            f.contains(&preview_branch()) && preview_branch().ends_with(",}"),
+            "{f}"
+        );
         assert!(PREVIEW_WIDTH.ends_with(",0}"), "{PREVIEW_WIDTH}");
         // and the option is used nowhere else: with those two forms taken out, no `@cpd_preview` is left
         let rest = f.replace(PREVIEW_WIDTH, "").replace(&preview_branch(), "");
@@ -1456,7 +1977,14 @@ mod tests {
 
     #[test]
     fn versions_are_ordered_by_major_minor_and_patch_letter() {
-        for (server, installed) in [("3.4", "3.8"), ("3.3a", "3.4"), ("3.3", "3.3a"), ("2.9", "3.0"), ("next-3.5", "3.6"), ("3.6", "3.10")] {
+        for (server, installed) in [
+            ("3.4", "3.8"),
+            ("3.3a", "3.4"),
+            ("3.3", "3.3a"),
+            ("2.9", "3.0"),
+            ("next-3.5", "3.6"),
+            ("3.6", "3.10"),
+        ] {
             assert!(older_version(server, installed), "{server} < {installed}");
             assert!(!older_version(installed, server), "{installed} !< {server}");
         }
@@ -1524,7 +2052,10 @@ mod tests {
         // tmux >= 3.8 prints `#{pane_pid}` empty once the pane's tty has
         // closed: dead, or dying (not yet reaped, so `#{pane_dead}` is 0).
         let dead = pane_of("%5\t@2\tcpd-work\twatch\t1\t7\t\t\t");
-        assert_eq!((dead.dead, dead.dead_status, dead.pid), (true, Some(7), None));
+        assert_eq!(
+            (dead.dead, dead.dead_status, dead.pid),
+            (true, Some(7), None)
+        );
         let dying = pane_of("%4\t@2\tcpd\tmain\t0\t\t\t\t");
         assert_eq!((dying.dead, dying.pid), (false, None));
         assert!(parse_pane("%4\t@2\tcpd\tmain\t1\t\tx\t\t").is_none());
@@ -1538,15 +2069,24 @@ mod tests {
 
     #[test]
     fn a_pane_with_an_unknown_view_is_a_line_to_skip_not_a_malformed_one() {
-        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tnope"), Some(Line::UnknownView("nope".into())));
+        assert_eq!(
+            parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tnope"),
+            Some(Line::UnknownView("nope".into()))
+        );
         // Any other defect still fails.
         assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tnope"), None);
     }
 
     #[test]
     fn an_old_statusbar_pane_is_a_line_to_skip_quietly() {
-        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tstatusbar"), Some(Line::LegacyView));
-        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tstatusbar"), None);
+        assert_eq!(
+            parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tstatusbar"),
+            Some(Line::LegacyView)
+        );
+        assert_eq!(
+            parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tstatusbar"),
+            None
+        );
     }
 
     #[test]
@@ -1558,20 +2098,47 @@ mod tests {
     #[test]
     fn the_engines_hooks_name_its_window_and_start_it_again_quietly() {
         for hook in [PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK] {
-            assert!(hook.contains(&format!("_name}},{}}}", super::super::layout::WATCH_WINDOW)), "{hook}");
-            assert!(hook.contains("cpd watch --ensure --wait >/dev/null 2>&1"), "{hook}");
+            assert!(
+                hook.contains(&format!("_name}},{}}}", super::super::layout::WATCH_WINDOW)),
+                "{hook}"
+            );
+            assert!(
+                hook.contains("cpd watch --ensure --wait >/dev/null 2>&1"),
+                "{hook}"
+            );
         }
         assert!(WINDOW_UNLINKED_HOOK.contains("#{hook_window_name}"));
     }
 
     #[test]
     fn a_fresh_server_gets_its_options_before_the_first_pane_spawns() {
-        let spawn = Spawn { cwd: None, env: BTreeMap::new(), argv: strings(&["cpd", "watch"]) };
+        let spawn = Spawn {
+            cwd: None,
+            env: BTreeMap::new(),
+            argv: strings(&["cpd", "watch"]),
+        };
         let new_session = strings(&[
-            "new-session", "-d", "-s", "cpd-work", "-n", "watch", "-x", "215", "-y", "62", "-P", "-F", "#{window_id} #{pane_id}", "--",
-            "cpd", "watch",
+            "new-session",
+            "-d",
+            "-s",
+            "cpd-work",
+            "-n",
+            "watch",
+            "-x",
+            "215",
+            "-y",
+            "62",
+            "-P",
+            "-F",
+            "#{window_id} #{pane_id}",
+            "--",
+            "cpd",
+            "watch",
         ]);
-        assert_eq!(new_session_args("cpd-work", "watch", &spawn, false), new_session);
+        assert_eq!(
+            new_session_args("cpd-work", "watch", &spawn, false),
+            new_session
+        );
 
         let fresh = new_session_args("cpd-work", "watch", &spawn, true);
         let commands: Vec<&[String]> = fresh.split(|a| a == ";").collect();
@@ -1584,33 +2151,67 @@ mod tests {
 
     #[test]
     fn every_call_has_the_deadline_but_display_popup() {
-        assert_eq!(deadline_of(&strings(&["list-panes", "-a"])), Some(Duration::from_secs(10)));
-        assert_eq!(deadline_of(&strings(&["kill-window", "-t", "@1"])), Some(Duration::from_secs(10)));
-        assert_eq!(deadline_of(&strings(&["display-popup", "-E", "-T", "t", "cpd tui view legend"])), None);
+        assert_eq!(
+            deadline_of(&strings(&["list-panes", "-a"])),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            deadline_of(&strings(&["kill-window", "-t", "@1"])),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(
+            deadline_of(&strings(&[
+                "display-popup",
+                "-E",
+                "-T",
+                "t",
+                "cpd tui view legend"
+            ])),
+            None
+        );
     }
 
     #[test]
     fn every_call_names_the_socket_and_no_config_and_drops_tmux_vars() {
         let tmux = Tmux::new("cpdt");
-        assert_eq!(tmux.argv(&strings(&["kill-server"])), ["tmux", "-u", "-L", "cpdt", "-f", "/dev/null", "kill-server"]);
+        assert_eq!(
+            tmux.argv(&strings(&["kill-server"])),
+            ["tmux", "-u", "-L", "cpdt", "-f", "/dev/null", "kill-server"]
+        );
         let cmd = tmux.command(&strings(&["kill-server"]));
         assert_eq!(cmd.get_program(), "tmux");
         assert_eq!(cmd.get_args().next().unwrap(), "-u");
-        let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_owned())
+            .collect();
         assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
     }
 
     #[test]
     fn every_call_runs_the_program_it_was_given() {
         let tmux = Tmux::new("s").with_program("/opt/tmux-3.4");
-        assert_eq!(tmux.command(&strings(&["kill-server"])).get_program(), "/opt/tmux-3.4");
+        assert_eq!(
+            tmux.command(&strings(&["kill-server"])).get_program(),
+            "/opt/tmux-3.4"
+        );
         assert_eq!(tmux.argv(&strings(&["kill-server"]))[0], "tmux");
     }
 
     #[test]
     fn what_a_server_says_while_it_exits() {
-        assert!(dying("server exited unexpectedly\n") && dying("lost server\n") && !dying("no server running on /tmp/x"));
-        assert!(refused("error connecting to /tmp/x (Connection refused)") && !refused("error connecting to /tmp/x (No such file or directory)"));
-        assert!(no_server("error connecting to /tmp/x (No such file or directory)"));
+        assert!(
+            dying("server exited unexpectedly\n")
+                && dying("lost server\n")
+                && !dying("no server running on /tmp/x")
+        );
+        assert!(
+            refused("error connecting to /tmp/x (Connection refused)")
+                && !refused("error connecting to /tmp/x (No such file or directory)")
+        );
+        assert!(no_server(
+            "error connecting to /tmp/x (No such file or directory)"
+        ));
     }
 }

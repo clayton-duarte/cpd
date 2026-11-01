@@ -1,7 +1,7 @@
 //! Helpers of the `cpd secret` tests (commands.md §24): a fake `op` that only logs its argv, the Sessions
 //! and Attempts the rules need, and a way to run `cpd secret ...` as each of them. Not a test file itself.
 
-use crate::common::{self, Run, TestEnv, CPD};
+use crate::common::{self, CPD, Run, TestEnv};
 
 use std::fs;
 use std::io::Write;
@@ -37,7 +37,11 @@ impl Fx {
     pub fn new() -> Fx {
         let env = TestEnv::new();
         let fx = Fx { env };
-        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+        fs::write(
+            fx.env.cpd_home().join("config.toml"),
+            "version = 1\nmachine = \"m1\"\n",
+        )
+        .unwrap();
         let fp = "0".repeat(64);
         let job = |plan: &str, key: &str, pr: &str| {
             format!(
@@ -90,31 +94,23 @@ impl Fx {
         self.env.root().join("op")
     }
 
-    /// The fake `op` answers `item <sub>` (`get`, `list`, `create`, `edit`, `delete`) with `stdout`, `stderr` and
-    /// exit status `code`, until the next call of this for the same `sub`.
-    pub fn op_says(&self, sub: &str, stdout: &str, stderr: &str, code: i32) {
-        let d = self.op_dir();
-        fs::write(d.join(format!("{sub}.out")), stdout).unwrap();
-        fs::write(d.join(format!("{sub}.err")), stderr).unwrap();
-        fs::write(d.join(format!("{sub}.code")), code.to_string()).unwrap();
-    }
-
-    /// What the fake `op` read on stdin in its last `item <sub>` call (`create` or `edit`).
-    pub fn op_stdin(&self, sub: &str) -> String {
-        fs::read_to_string(self.op_dir().join(format!("stdin.{sub}"))).unwrap_or_else(|e| panic!("op got no stdin for {sub}: {e}"))
-    }
-
     fn op_log_path(&self) -> std::path::PathBuf {
         self.env.root().join("op.log")
     }
 
     /// The fake `op`'s calls, one argv line each, in order.
     pub fn op_log(&self) -> Vec<String> {
-        fs::read_to_string(self.op_log_path()).map(|t| t.lines().map(str::to_owned).collect()).unwrap_or_default()
+        fs::read_to_string(self.op_log_path())
+            .map(|t| t.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
     }
 
     pub fn assert_op_not_called(&self, run: &Run) {
-        assert_eq!(self.op_log(), Vec::<String>::new(), "op was called: {run:?}");
+        assert_eq!(
+            self.op_log(),
+            Vec::<String>::new(),
+            "op was called: {run:?}"
+        );
     }
 
     /// `cpd <args>` as `who`, with `stdin` (none: a closed stdin).
@@ -123,7 +119,13 @@ impl Fx {
     }
 
     /// Like [`Fx::run`], with `PATH` set to `path` when given.
-    pub fn run_with_path(&self, who: Who, args: &[&str], stdin: Option<&str>, path: Option<&std::ffi::OsStr>) -> Run {
+    pub fn run_with_path(
+        &self,
+        who: Who,
+        args: &[&str],
+        stdin: Option<&str>,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Run {
         let mut cmd = self.env.command(CPD);
         cmd.args(args);
         if let Some(path) = path {
@@ -144,14 +146,20 @@ impl Fx {
                 cmd.env("CPD_SESSION", "mgr1");
             }
             Who::Worker => {
-                cmd.env("CPD_SESSION", "w-a").env("CPD_ATTEMPT", "a-a1").env("CPD_PLAN", "pl");
+                cmd.env("CPD_SESSION", "w-a")
+                    .env("CPD_ATTEMPT", "a-a1")
+                    .env("CPD_PLAN", "pl");
             }
         }
         let out = match stdin {
             None => common::output(&mut cmd),
             Some(text) => {
-                let mut child =
-                    common::spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())).expect("spawn cpd");
+                let mut child = common::spawn(
+                    cmd.stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped()),
+                )
+                .expect("spawn cpd");
                 // A command that refuses before it reads its stdin has exited: the write may meet a closed pipe, and the Run says why.
                 match child.stdin.take().unwrap().write_all(text.as_bytes()) {
                     Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
@@ -190,8 +198,18 @@ pub fn args(command: &str, vault: &str, item: &str, field: &str) -> Vec<String> 
     a
 }
 
-pub fn approve_args(action: &str, vault: &str, item: Option<&str>, field: Option<&str>) -> Vec<String> {
-    let mut a: Vec<String> = vec!["secret".into(), "approve".into(), format!("--action={action}"), format!("--vault={vault}")];
+pub fn approve_args(
+    action: &str,
+    vault: &str,
+    item: Option<&str>,
+    field: Option<&str>,
+) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        "secret".into(),
+        "approve".into(),
+        format!("--action={action}"),
+        format!("--vault={vault}"),
+    ];
     if let Some(i) = item {
         a.push(format!("--item={i}"));
     }

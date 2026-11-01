@@ -50,7 +50,10 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         other => {
             return Err(CpdError::new(
                 ErrorCode::IllegalTransition,
-                format!("Plan {id} is in phase {}: only a Plan in phase plan is locked.", other.as_str()),
+                format!(
+                    "Plan {id} is in phase {}: only a Plan in phase plan is locked.",
+                    other.as_str()
+                ),
             )
             .with("plan", id.as_str())
             .with("from", other.as_str())
@@ -64,7 +67,12 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     env.store.read(|conn| check_drafts_complete(conn, &id, &jobs))?;
     super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
-    let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
+    let (review, latest) = env.store.read(|conn| {
+        Ok((
+            latest_approved_for(conn, &id, &fingerprint)?,
+            latest_json(conn, &id)?,
+        ))
+    })?;
     let Some(review) = review else {
         return Err(CpdError::new(
             ErrorCode::PlanNotApproved,
@@ -91,9 +99,15 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         return Err(error);
     }
     if let Some(cycle) = jobs::cycle(&jobs) {
-        return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The draft Jobs of {id} depend on each other in a cycle: {}.", cycle.join(" → ")))
-            .with("plan", id.as_str())
-            .with("cycle", cycle));
+        return Err(CpdError::new(
+            ErrorCode::DependencyCycle,
+            format!(
+                "The draft Jobs of {id} depend on each other in a cycle: {}.",
+                cycle.join(" → ")
+            ),
+        )
+        .with("plan", id.as_str())
+        .with("cycle", cycle));
     }
 
     // git, outside any transaction (§7.2): every Workflow with no needs is prepared first,
@@ -177,8 +191,11 @@ fn listed(workflows: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, 
 }
 
 fn cas_lost(id: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while it was being locked: rerun the command."))
-        .with("plan", id.as_str())
+    CpdError::new(
+        ErrorCode::CasLost,
+        format!("Plan {id} changed while it was being locked: rerun the command."),
+    )
+    .with("plan", id.as_str())
 }
 
 /// `cpd watch --ensure` (commands.md §12), run as a subprocess with `cpd`
@@ -191,7 +208,11 @@ fn ensure_watch(env: &Env, plan: &PlanId) -> Result<Value, CpdError> {
 }
 
 /// [`ensure_watch`] on `runner`: one call of `cpd watch --ensure` with `CPD_HOME=<root>` and `root` as its cwd.
-pub(crate) fn ensure_watch_with(runner: &dyn Runner, root: &Path, plan: &PlanId) -> Result<Value, CpdError> {
+pub(crate) fn ensure_watch_with(
+    runner: &dyn Runner,
+    root: &Path,
+    plan: &PlanId,
+) -> Result<Value, CpdError> {
     let argv = [PROGRAM, "watch", "--ensure"];
     let failed = |why: String, error: Value| {
         CpdError::new(
@@ -204,23 +225,42 @@ pub(crate) fn ensure_watch_with(runner: &dyn Runner, root: &Path, plan: &PlanId)
         .with("next", "cpd watch --ensure")
     };
     let mut command = Command::new(argv[0]);
-    command.args(&argv[1..]).env("CPD_HOME", root).current_dir(root).stdin(Stdio::null());
-    let out = runner.output(&mut command, "cpd", NO_DEADLINE).map_err(|e| match e {
-        Failed::Io(e) => failed(format!("cannot run {}: {e}.", argv[0]), json!({"message": e.to_string()})),
-        Failed::Timeout(e) => failed(e.message().to_owned(), json!({"message": e.message()})),
-    })?;
+    command
+        .args(&argv[1..])
+        .env("CPD_HOME", root)
+        .current_dir(root)
+        .stdin(Stdio::null());
+    let out = runner
+        .output(&mut command, "cpd", NO_DEADLINE)
+        .map_err(|e| match e {
+            Failed::Io(e) => failed(
+                format!("cannot run {}: {e}.", argv[0]),
+                json!({"message": e.to_string()}),
+            ),
+            Failed::Timeout(e) => failed(e.message().to_owned(), json!({"message": e.message()})),
+        })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let parsed: Option<Map<String, Value>> = serde_json::from_str::<Value>(stdout.trim()).ok().and_then(|v| match v {
-        Value::Object(map) => Some(map),
-        _ => None,
-    });
+    let parsed: Option<Map<String, Value>> = serde_json::from_str::<Value>(stdout.trim())
+        .ok()
+        .and_then(|v| match v {
+            Value::Object(map) => Some(map),
+            _ => None,
+        });
     let unexpected = || {
         json!({"exit": out.status.code(), "stdout": tail(&stdout, TAIL_LINES),
                "stderr": tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES)})
     };
     if !out.status.success() {
-        let error = parsed.as_ref().and_then(|m| m.get("error")).cloned().unwrap_or_else(unexpected);
-        let why = error.get("message").and_then(Value::as_str).unwrap_or("it failed").to_owned();
+        let error = parsed
+            .as_ref()
+            .and_then(|m| m.get("error"))
+            .cloned()
+            .unwrap_or_else(unexpected);
+        let why = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("it failed")
+            .to_owned();
         return Err(failed(why, error));
     }
     match parsed {
@@ -228,6 +268,9 @@ pub(crate) fn ensure_watch_with(runner: &dyn Runner, root: &Path, plan: &PlanId)
             fields.remove("ok");
             Ok(Value::Object(fields))
         }
-        _ => Err(failed("it printed no success value.".to_owned(), unexpected())),
+        _ => Err(failed(
+            "it printed no success value.".to_owned(),
+            unexpected(),
+        )),
     }
 }

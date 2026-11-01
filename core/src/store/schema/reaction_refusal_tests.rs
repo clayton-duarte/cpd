@@ -15,10 +15,14 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 }
 
 fn message(result: Result<(), CpdError>, what: &str) -> String {
-    result.expect_err(what).details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    result.expect_err(what).details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
-const PLAN: &str = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+const PLAN: &str =
+    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
      INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
        VALUES ('pay-lead', 'lead', 'ctx', 'pay', 'Lead pay', '/', 'O3', 'stopped', 't', 't');
      INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
@@ -52,8 +56,15 @@ fn workflow_before(key: &str, number: u32, reaction: &str) -> String {
 
 fn before_refusal() -> (tempfile::TempDir, CpdHome) {
     let (dir, home) = crate::store::tests::tmp_home();
-    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-slack-reaction-refusal")).collect();
-    assert!(earlier.len() < NAMED.len(), "slack-reaction-refusal is a built-in migration");
+    let earlier: Vec<Named> = NAMED
+        .iter()
+        .copied()
+        .take_while(|n| !n.name.ends_with("-slack-reaction-refusal"))
+        .collect();
+    assert!(
+        earlier.len() < NAMED.len(),
+        "slack-reaction-refusal is a built-in migration"
+    );
     let mut store = crate::store::tests::open_named(&home, &earlier).unwrap();
     let sql = format!(
         "{PLAN}{}{}{}
@@ -95,15 +106,51 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
         serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null})
     };
     let expected = vec![
-        row("1793040000.000001", "git-merge", "q1", Value::Null, "pay".into(), "a".into()),
-        row("1793040000.000002", "git-merge", "q2", "r2".into(), "pay".into(), "b".into()),
-        row("1793040000.000001", "eyes", "q3", Value::Null, Value::Null, Value::Null),
-        row("1793040000.000099", "git-merge", "q4", Value::Null, Value::Null, Value::Null),
+        row(
+            "1793040000.000001",
+            "git-merge",
+            "q1",
+            Value::Null,
+            "pay".into(),
+            "a".into(),
+        ),
+        row(
+            "1793040000.000002",
+            "git-merge",
+            "q2",
+            "r2".into(),
+            "pay".into(),
+            "b".into(),
+        ),
+        row(
+            "1793040000.000001",
+            "eyes",
+            "q3",
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ),
+        row(
+            "1793040000.000099",
+            "git-merge",
+            "q4",
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ),
     ];
-    assert_eq!(rows(&mut store), expected, "the rows matching a post by channel, ts and emoji are linked; the others stay unlinked");
+    assert_eq!(
+        rows(&mut store),
+        expected,
+        "the rows matching a post by channel, ts and emoji are linked; the others stay unlinked"
+    );
     drop(store);
     let mut again = Store::open(&home, 5000).unwrap();
-    assert_eq!(rows(&mut again), expected, "applying the migrations again changes nothing");
+    assert_eq!(
+        rows(&mut again),
+        expected,
+        "applying the migrations again changes nothing"
+    );
 }
 
 #[test]
@@ -118,7 +165,11 @@ fn slack_reactions_refuses_a_half_linked_or_half_refused_row() {
         ("workflow", "'a'", "pr without plan"),
         ("refused_at", "'t'", "refused_at without refusal"),
         ("refusal", "'invalid_name'", "refusal without refused_at"),
-        ("reacted_at, refused_at, refusal", "'r', 't', 'invalid_name'", "reacted and refused"),
+        (
+            "reacted_at, refused_at, refusal",
+            "'r', 't', 'invalid_name'",
+            "reacted and refused",
+        ),
     ] {
         let text = message(write(&mut store, &insert(columns, values)), what);
         assert!(text.contains("CHECK"), "{what}: {text}");

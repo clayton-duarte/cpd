@@ -17,9 +17,11 @@ use super::team::{self, GhPr, Lookup, Memo, Post, Status};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+#[cfg(test)]
+use crate::ids::PrKey;
 use crate::job::home::JobHome;
 use crate::job::worked_on::failed_worked_on;
-use crate::ids::{ContextId, JobKey, PlanId, WorkflowKey, SessionId};
+use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::plan::Phase;
 use crate::plan::parked_wake::wake_state;
 use crate::ports::Ports;
@@ -33,18 +35,22 @@ const PLAN_REVIEW: &str = "φ: plan review";
 /// The `state_label` prefix of a Verdict dialog (pi adapter): the item is `<who> verdict\n<option>` (Row 1, Row 2).
 const VERDICT_PREFIX: &str = "verdict: ";
 
+/// The call that asks GitHub for the state of the posted pull requests.
+type GithubLookup<'a> = &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>;
+
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
 pub struct Team<'a> {
     pub bot_reviewers: &'a [String],
-    pub github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>,
+    pub github: GithubLookup<'a>,
 }
 
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
 static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
-/// Every condition of the kinds, in the order of the kinds. There is no `engine-error` (hs-d314: the engine's errors go to
-/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
+/// Every condition of the kinds, in the order of the kinds. The only `engine-error` is a stalled `durable` Attempt
+/// (hs-d798, [`stalls`]); the engine's own errors go to the Manager (hs-d314). There is no `job-stuck` (hs-d318: a
+/// stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
@@ -53,14 +59,31 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
 
 /// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and
 /// `ports.runner` runs `gh`.
-pub fn conditions_on(ports: &Ports, store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+pub fn conditions_on(
+    ports: &Ports,
+    store: &mut Store,
+    home: &CpdHome,
+) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
     let mut github = |refs: &[(String, u64)]| {
         let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
-        held.get_or_insert_with(Memo::default).get(refs, ports.clock.now(), |refs| team::github_lookup_with(&*ports.runner, home, refs))
+        held.get_or_insert_with(Memo::default)
+            .get(refs, ports.clock.now(), |refs| {
+                team::github_lookup_with(&*ports.runner, home, refs)
+            })
     };
-    let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
-    conditions_with(store, home, ports.clock.utc(), config.loop_guard_turns, config.context_curation_min_records, team)
+    let team = (!config.inbox.team_channel.is_empty()).then_some(Team {
+        bot_reviewers: &config.inbox.bot_reviewers,
+        github: &mut github,
+    });
+    conditions_with(
+        store,
+        home,
+        ports.clock.utc(),
+        config.loop_guard_turns,
+        config.context_curation_min_records,
+        team,
+    )
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.
@@ -74,7 +97,7 @@ pub fn conditions_with(
 ) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| loop_guards(conn, loop_guard_turns))?);
-    all.extend(store.read(|conn| plan_reviews(conn))?);
+    all.extend(store.read(plan_reviews)?);
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
@@ -84,6 +107,7 @@ pub fn conditions_with(
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
+    all.extend(store.read(stalls)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
 }
@@ -91,6 +115,47 @@ pub fn conditions_with(
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
 /// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
 /// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
+fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
+           JOIN plans p ON p.id = a.plan
+           JOIN events e ON e.plan = a.plan AND e.attempt = a.id AND e.kind = 'error'
+                AND json_extract(e.data, '$.code') = 'worker_stalled'
+          WHERE a.status <> 'ended'
+          ORDER BY a.plan, a.id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (plan, context, attempt, job) in rows {
+        let plan = id("Plan id", &plan, PlanId::parse)?;
+        let job = id("Job key", &job, JobKey::parse)?;
+        out.push(Condition {
+            kind: Kind::EngineError,
+            urgency: Urgency::Red,
+            subject: format!("error:driver/worker_stalled/{attempt}"),
+            label: format!("worker stalled: cpd job cancel {job} now, or cpd attempt abort {attempt} once that command lands"),
+            url: None,
+            context: Some(id("Context id", &context, ContextId::parse)?),
+            plan: Some(plan),
+            job: Some(job),
+            session: None,
+            record: None,
+            event: None,
+            opened_at: None,
+        });
+    }
+    Ok(out)
+}
+
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     #[derive(serde::Deserialize)]
     struct Cache {
@@ -110,7 +175,17 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
     let read = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Cache>(&text)
             .map_err(|e| format!("{} is not a deploy cache: {e}.", path.display()))
-            .and_then(|c| if c.version == 1 { Ok(c) } else { Err(format!("{} has version {}, not 1.", path.display(), c.version)) }),
+            .and_then(|c| {
+                if c.version == 1 {
+                    Ok(c)
+                } else {
+                    Err(format!(
+                        "{} has version {}, not 1.",
+                        path.display(),
+                        c.version
+                    ))
+                }
+            }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => Err(format!("Cannot read {}: {e}.", path.display())),
     };
@@ -134,7 +209,12 @@ fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError
             })
             .collect()),
         Err(message) => {
-            let mut out: Vec<Condition> = store.read(open_items)?.iter().filter(|i| i.kind == Kind::Deploy).map(Condition::from).collect();
+            let mut out: Vec<Condition> = store
+                .read(open_items)?
+                .iter()
+                .filter(|i| i.kind == Kind::Deploy)
+                .map(Condition::from)
+                .collect();
             out.push(Condition {
                 kind: Kind::EngineError,
                 urgency: Urgency::Red,
@@ -163,12 +243,22 @@ fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
           WHERE p.archived_at IS NULL AND p.deleted_at IS NULL AND s.role = 'lead' AND s.archived_at IS NULL AND s.state = 'idle'
           ORDER BY p.id",
     )?;
-    let plans = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let plans = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let mut out = Vec::new();
     for (plan, context, lead) in plans {
         let plan = id("Plan id", &plan, PlanId::parse)?;
         let wake = wake_state(conn, &plan, &lead)?;
-        let opened = !wake.parked.is_empty() && wake.wake.is_some_and(|w| w > wake.t) && wake.finished_turn_after_wake;
+        let opened = !wake.parked.is_empty()
+            && wake.wake.is_some_and(|w| w > wake.t)
+            && wake.finished_turn_after_wake;
         if !opened {
             continue;
         }
@@ -193,10 +283,18 @@ fn drafts_parked(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 /// A stored value that does not parse: the database was written outside cpd.
 fn corrupt(what: &str, value: &str) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid {what}: {value:?}.")).with("value", value)
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("The store holds an invalid {what}: {value:?}."),
+    )
+    .with("value", value)
 }
 
-pub(super) fn id<T>(what: &str, value: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<T, CpdError> {
+pub(super) fn id<T>(
+    what: &str,
+    value: &str,
+    parse: fn(&str) -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
     parse(value).map_err(|_| corrupt(what, value))
 }
 
@@ -207,7 +305,8 @@ pub(super) fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdErro
 // ---- Sessions: dialog and unread ---------------------------------------------------------------------------------
 
 /// The id of a Session's latest `session-state` Event.
-const LATEST_STATE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
+const LATEST_STATE: &str =
+    "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
 /// The id of its latest finished reply turn: its latest `session-state` Event from `working`, `waiting` or `blocked` to `idle`
 /// with `data.reply` true, a turn that answered the User (a start or reload, `stopped` to `idle`, is not one; a turn
 /// that answered an Event or another Session is not one either; hs-d242, hs-d278).
@@ -216,7 +315,8 @@ const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.i
                                 AND json_extract(e.data, '$.from') IN ('working', 'waiting', 'blocked')
                                 AND json_extract(e.data, '$.reply') = 1)";
 /// The id of its latest `session-moved` Event with `place: chat`.
-const LATEST_CHAT: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
+const LATEST_CHAT: &str =
+    "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
                                 AND json_extract(e.data, '$.place') = 'chat')";
 /// Where its pane is: the `place` of its latest `session-moved` Event.
 const PLACE: &str = "(SELECT json_extract(e.data, '$.place') FROM events e
@@ -259,14 +359,18 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
         let who = match (&plan, plan_lead, manager) {
             (Some(plan), true, _) => plan.to_string(),
             (_, _, true) => context.clone(),
-            (Some(plan), false, false) => format!("{plan}·{}", session.chars().take(4).collect::<String>()),
+            (Some(plan), false, false) => {
+                format!("{plan}·{}", session.chars().take(4).collect::<String>())
+            }
             (None, _, false) => session.chars().take(8).collect(),
         };
         seats.push(Seat {
             session: id("Session id", &session, SessionId::parse)?,
             context: id("Context id", &context, ContextId::parse)?,
             plan,
-            phase: phase.map(|p| Phase::parse(&p).ok_or_else(|| corrupt("Plan phase", &p))).transpose()?,
+            phase: phase
+                .map(|p| Phase::parse(&p).ok_or_else(|| corrupt("Plan phase", &p)))
+                .transpose()?,
             who,
             event: row.get(6)?,
             state_label: row.get(7)?,
@@ -295,7 +399,9 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
 
 /// `dialog`: a Lead, fork or Manager asks the User something. Red when its Plan is in `dispatch` or `deploy`, else magenta.
 fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let filter = format!("s.state = 'blocked' AND s.state_label NOT IN ('{PLAN_REVIEW}', '{LOOP_GUARD_LABEL}')");
+    let filter = format!(
+        "s.state = 'blocked' AND s.state_label NOT IN ('{PLAN_REVIEW}', '{LOOP_GUARD_LABEL}')"
+    );
     Ok(seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
@@ -304,7 +410,11 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
                 _ => Urgency::Magenta,
             };
             let label = if seat.state_label.starts_with(VERDICT_PREFIX) {
-                format!("{} verdict\n{}", seat.who, &seat.state_label[VERDICT_PREFIX.len()..])
+                format!(
+                    "{} verdict\n{}",
+                    seat.who,
+                    &seat.state_label[VERDICT_PREFIX.len()..]
+                )
             } else {
                 format!("{} asks you", seat.who)
             };
@@ -320,7 +430,11 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
     Ok(seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
-            let label = format!("{}: loop guard, {} turns in 10 min", seat.who, loop_guard_turns + 1);
+            let label = format!(
+                "{}: loop guard, {} turns in 10 min",
+                seat.who,
+                loop_guard_turns + 1
+            );
             seat_condition(seat, Kind::LoopGuard, Urgency::Red, label)
         })
         .collect())
@@ -331,7 +445,9 @@ fn loop_guards(conn: &Connection, loop_guard_turns: u32) -> Result<Vec<Condition
 /// (never in the slot counts as older than everything). Label `<who> replied`, then `\n` and the title (the Plan's, else the
 /// Session's, as is) when there is one: Row 2.
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
+    let filter = format!(
+        "s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)"
+    );
     Ok(seats(conn, LATEST_IDLE, &filter)?
         .into_iter()
         .map(|seat| {
@@ -365,7 +481,11 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
         ),
     ] {
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([floor], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([floor], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         for (raw, n) in rows {
             let context = id("context id", &raw, ContextId::parse)?;
             out.push(Condition {
@@ -399,8 +519,13 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (plan, review, context, lead, title): (String, String, String, String, Option<String>) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
+        let (plan, review, context, lead, title): (String, String, String, String, Option<String>) = (
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+        );
         let plan = id("Plan id", &plan, PlanId::parse)?;
         out.push(Condition {
             kind: Kind::PlanReview,
@@ -444,7 +569,11 @@ pub struct StuckJob {
 /// The stuck Jobs, oldest failure first: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and
 /// it is not being worked on (pro-d88, [`failed_worked_on`]: the Job is stuck from the next tick after
 /// that stops). Read only: E8 tells the Manager.
-pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
+pub fn stuck_jobs(
+    store: &mut Store,
+    now: OffsetDateTime,
+    stuck_after: Duration,
+) -> Result<Vec<StuckJob>, CpdError> {
     store.read(|conn| {
         let worked_on = failed_worked_on(conn, None)?;
         let mut stmt = conn.prepare(
@@ -501,7 +630,10 @@ pub struct StuckGroup {
 pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
     let mut groups: Vec<StuckGroup> = Vec::new();
     for job in jobs {
-        match groups.iter_mut().find(|g| g.plan == job.plan && g.home == job.home) {
+        match groups
+            .iter_mut()
+            .find(|g| g.plan == job.plan && g.home == job.home)
+        {
             Some(group) => {
                 group.event = group.event.max(job.event);
                 group.jobs.push(job);
@@ -527,15 +659,26 @@ pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
 /// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
-fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
-    let Some(team) = team else { return Ok(Vec::new()) };
+fn review_requested(
+    store: &mut Store,
+    home: &CpdHome,
+    now: OffsetDateTime,
+    team: Option<Team<'_>>,
+) -> Result<Vec<Condition>, CpdError> {
+    let Some(team) = team else {
+        return Ok(Vec::new());
+    };
     let cache = match team::read_cache(home) {
         Ok(Some(cache)) => cache,
         Ok(None) => return kept_review_items(store, None),
         Err(e) => return kept_review_items(store, Some(&e)),
     };
     let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
-    let posts: Vec<&Post> = cache.posts.iter().filter(|p| p.primary && p.ts >= cutoff).collect();
+    let posts: Vec<&Post> = cache
+        .posts
+        .iter()
+        .filter(|p| p.primary && p.ts >= cutoff)
+        .collect();
     if posts.is_empty() {
         return Ok(Vec::new());
     }
@@ -546,7 +689,10 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
     };
     let read = |p: &Post| -> Option<&GhPr> { lookup.workflows.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
     if posts.iter().all(|p| read(p).is_none()) {
-        let none = CpdError::new(ErrorCode::GhFailed, "GitHub could not read any pull request posted in the team channel.");
+        let none = CpdError::new(
+            ErrorCode::GhFailed,
+            "GitHub could not read any pull request posted in the team channel.",
+        );
         return kept_review_items(store, Some(&none));
     }
     let settled = settled_review_subjects(store)?;
@@ -579,7 +725,9 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
 
 /// The subjects of the `review-requested` items, open or closed, that a dismissal or a claim settled for good (C1): closed items
 /// are kept, so the history is the memory.
-fn settled_review_subjects(store: &mut Store) -> Result<std::collections::HashSet<String>, CpdError> {
+fn settled_review_subjects(
+    store: &mut Store,
+) -> Result<std::collections::HashSet<String>, CpdError> {
     store.read(|c| {
         let mut stmt = c.prepare(
             "SELECT DISTINCT subject FROM inbox_items WHERE kind = 'review-requested' AND (dismissed_at IS NOT NULL OR claimed_at IS NOT NULL)",
@@ -590,9 +738,16 @@ fn settled_review_subjects(store: &mut Store) -> Result<std::collections::HashSe
 }
 
 /// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.
-fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Condition>, CpdError> {
-    let mut out: Vec<Condition> =
-        store.read(open_items)?.iter().filter(|i| i.kind == Kind::ReviewRequested).map(Condition::from).collect();
+fn kept_review_items(
+    store: &mut Store,
+    why: Option<&CpdError>,
+) -> Result<Vec<Condition>, CpdError> {
+    let mut out: Vec<Condition> = store
+        .read(open_items)?
+        .iter()
+        .filter(|i| i.kind == Kind::ReviewRequested)
+        .map(Condition::from)
+        .collect();
     if let Some(e) = why {
         let code = e.code().as_str();
         out.push(Condition {
@@ -615,7 +770,11 @@ fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Co
 
 /// `models-changed`: each provider file whose `changes.at` is within [`models::WINDOW`] and whose announced part is not empty.
 /// A provider with no readable file (missing, not `version` 1) keeps its open items as they are.
-fn models_changed(store: &mut Store, home: &CpdHome, now: OffsetDateTime) -> Result<Vec<Condition>, CpdError> {
+fn models_changed(
+    store: &mut Store,
+    home: &CpdHome,
+    now: OffsetDateTime,
+) -> Result<Vec<Condition>, CpdError> {
     let reads = crate::models::read_all(home)?;
     let readable: Vec<&str> = reads
         .iter()
@@ -628,13 +787,20 @@ fn models_changed(store: &mut Store, home: &CpdHome, now: OffsetDateTime) -> Res
         .read(open_items)?
         .iter()
         .filter(|i| i.kind == Kind::ModelsChanged)
-        .filter(|i| models::parse_subject(&i.subject).is_some_and(|(provider, _)| !readable.contains(&provider)))
+        .filter(|i| {
+            models::parse_subject(&i.subject)
+                .is_some_and(|(provider, _)| !readable.contains(&provider))
+        })
         .map(Condition::from)
         .collect();
     let cutoff = now - models::WINDOW;
     for read in &reads {
-        let crate::models::Read::Good(file) = read else { continue };
-        let Some(changes) = &file.changes else { continue };
+        let crate::models::Read::Good(file) = read else {
+            continue;
+        };
+        let Some(changes) = &file.changes else {
+            continue;
+        };
         if !OffsetDateTime::parse(&changes.at, &Rfc3339).is_ok_and(|at| at >= cutoff) {
             continue;
         }
@@ -691,9 +857,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let store = Store::open(&home, 5000).unwrap();
-        let mut f = Fixture { _dir: dir, home, store };
-        let locked = if matches!(phase, "grounding" | "plan") { "NULL".to_owned() } else { format!("'{T}'") };
-        let done = if phase == "done" { format!("'{T}'") } else { "NULL".to_owned() };
+        let mut f = Fixture {
+            _dir: dir,
+            home,
+            store,
+        };
+        let locked = if matches!(phase, "grounding" | "plan") {
+            "NULL".to_owned()
+        } else {
+            format!("'{T}'")
+        };
+        let done = if phase == "done" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         f.sql(&format!(
             "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
              INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
@@ -717,14 +895,25 @@ mod tests {
         }
 
         /// Appends an Event and returns its id.
-        fn event(&mut self, kind: &str, session: Option<&str>, job: Option<&str>, at: &str, data: &str) -> i64 {
+        fn event(
+            &mut self,
+            kind: &str,
+            session: Option<&str>,
+            job: Option<&str>,
+            at: &str,
+            data: &str,
+        ) -> i64 {
             let session = session.map_or("NULL".to_owned(), |s| format!("'{s}'"));
-            let (plan, job) = job.map_or(("NULL".to_owned(), "NULL".to_owned()), |j| ("'pay'".to_owned(), format!("'{j}'")));
+            let (plan, job) = job.map_or(("NULL".to_owned(), "NULL".to_owned()), |j| {
+                ("'pay'".to_owned(), format!("'{j}'"))
+            });
             self.sql(&format!(
                 "INSERT INTO events (txn, at, kind, context, plan, job, session, text, data)
                  VALUES (cpd_txn(), '{at}', '{kind}', 'ctx', {plan}, {job}, {session}, 'x', '{data}');"
             ));
-            self.store.read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap()
+            self.store
+                .read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?))
+                .unwrap()
         }
 
         /// The Session's state changes: the row and its `session-state` Event (`from` is the state it was in).
@@ -737,16 +926,43 @@ mod tests {
             self.state_as(session, "idle", None, true)
         }
 
-        fn state_as(&mut self, session: &str, state: &str, label: Option<&str>, reply: bool) -> i64 {
-            let from: String = self.store.read(|c| Ok(c.query_row("SELECT state FROM sessions WHERE id = ?1", [session], |r| r.get(0))?)).unwrap();
+        fn state_as(
+            &mut self,
+            session: &str,
+            state: &str,
+            label: Option<&str>,
+            reply: bool,
+        ) -> i64 {
+            let from: String = self
+                .store
+                .read(|c| {
+                    Ok(
+                        c.query_row("SELECT state FROM sessions WHERE id = ?1", [session], |r| {
+                            r.get(0)
+                        })?,
+                    )
+                })
+                .unwrap();
             let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
             self.sql(&format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = '{session}'"));
             let reply = if reply { r#","reply":true"# } else { "" };
-            self.event("session-state", Some(session), None, T, &format!(r#"{{"from":"{from}","label":null,"to":"{state}"{reply}}}"#))
+            self.event(
+                "session-state",
+                Some(session),
+                None,
+                T,
+                &format!(r#"{{"from":"{from}","label":null,"to":"{state}"{reply}}}"#),
+            )
         }
 
         fn moved(&mut self, session: &str, place: &str) -> i64 {
-            self.event("session-moved", Some(session), None, T, &format!(r#"{{"from":"none","place":"{place}"}}"#))
+            self.event(
+                "session-moved",
+                Some(session),
+                None,
+                T,
+                &format!(r#"{{"from":"none","place":"{place}"}}"#),
+            )
         }
 
         fn session(&mut self, id: &str, role: &str, plan: Option<&str>) {
@@ -766,7 +982,11 @@ mod tests {
         }
 
         fn job(&mut self, key: &str, status: &str) {
-            let cause = if status == "failed" { "'crashed'" } else { "NULL" };
+            let cause = if status == "failed" {
+                "'crashed'"
+            } else {
+                "NULL"
+            };
             self.sql(&format!(
                 "INSERT OR IGNORE INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pay', 'p1', '/r', 'main', 'dispatch', 'cpd/pay/p1', '/lw', 1, '{T}', '{T}');
@@ -778,7 +998,11 @@ mod tests {
 
         fn review(&mut self, id: &str, status: &str) {
             let number = &id[1..];
-            let decided = if status == "pending" { "NULL".to_owned() } else { format!("'{T}'") };
+            let decided = if status == "pending" {
+                "NULL".to_owned()
+            } else {
+                format!("'{T}'")
+            };
             self.sql(&format!(
                 "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
                  VALUES ('pay', '{id}', {number}, '{FP}', '{status}', '{T}', {decided});"
@@ -813,7 +1037,13 @@ mod tests {
             assert_eq!(c.urgency, urgency, "{phase}");
             assert_eq!(c.subject, "session:l-pay");
             assert_eq!(c.label, "pay asks you");
-            assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
+            assert_eq!(
+                (
+                    c.context.as_ref().map(|c| c.as_str()),
+                    c.plan.as_ref().map(|p| p.as_str())
+                ),
+                (Some("ctx"), Some("pay"))
+            );
             assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"));
             assert_eq!(c.event, Some(event));
         }
@@ -838,10 +1068,22 @@ mod tests {
         }
         let found = f.of(Kind::Dialog);
         let by = |subject: &str| found.iter().find(|c| c.subject == subject).unwrap().clone();
-        assert_eq!((by("session:mgr").label.as_str(), by("session:mgr").urgency), ("ctx asks you", Urgency::Magenta));
-        assert_eq!((by("session:fork-1234").label.as_str(), by("session:fork-1234").urgency), ("pay·fork asks you", Urgency::Red));
         assert_eq!(
-            (by("session:loose-fork-id").label.as_str(), by("session:loose-fork-id").urgency),
+            (by("session:mgr").label.as_str(), by("session:mgr").urgency),
+            ("ctx asks you", Urgency::Magenta)
+        );
+        assert_eq!(
+            (
+                by("session:fork-1234").label.as_str(),
+                by("session:fork-1234").urgency
+            ),
+            ("pay·fork asks you", Urgency::Red)
+        );
+        assert_eq!(
+            (
+                by("session:loose-fork-id").label.as_str(),
+                by("session:loose-fork-id").urgency
+            ),
             ("loose-fo asks you", Urgency::Magenta)
         );
         assert_eq!(found.len(), 3);
@@ -888,7 +1130,10 @@ mod tests {
         let mut f = fixture("dispatch");
         let idle = f.reply("l-pay");
         let c = one(f.of(Kind::Unread));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::White, "session:l-pay", "pay replied\nPay"));
+        assert_eq!(
+            (c.urgency, c.subject.as_str(), c.label.as_str()),
+            (Urgency::White, "session:l-pay", "pay replied\nPay")
+        );
         assert_eq!(c.event, Some(idle), "the idle Event");
         assert_eq!(c.plan.as_ref().map(|p| p.as_str()), Some("pay"));
 
@@ -897,10 +1142,17 @@ mod tests {
         f.moved("l-pay", "chat");
         assert!(f.of(Kind::Unread).is_empty(), "in the slot: seen");
         f.moved("l-pay", "parked");
-        assert!(f.of(Kind::Unread).is_empty(), "out of the slot again, but the turn is not newer than the sight");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "out of the slot again, but the turn is not newer than the sight"
+        );
         f.state("l-pay", "working", None);
         let idle = f.reply("l-pay");
-        assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "a new idle turn after being seen");
+        assert_eq!(
+            one(f.of(Kind::Unread)).event,
+            Some(idle),
+            "a new idle turn after being seen"
+        );
     }
 
     #[test]
@@ -910,7 +1162,10 @@ mod tests {
         assert!(f.of(Kind::Unread).is_empty(), "a non-reply turn alone");
         f.state("l-pay", "working", None);
         f.state("l-pay", "idle", None);
-        assert!(f.of(Kind::Unread).is_empty(), "working -> idle without a reply");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "working -> idle without a reply"
+        );
     }
 
     #[test]
@@ -925,7 +1180,10 @@ mod tests {
         f.moved("l-pay", "parked");
         f.state("l-pay", "working", None);
         f.state("l-pay", "idle", None);
-        assert!(f.of(Kind::Unread).is_empty(), "seen, and the later turn was no reply");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "seen, and the later turn was no reply"
+        );
     }
 
     #[test]
@@ -937,10 +1195,16 @@ mod tests {
         assert!(f.of(Kind::Unread).is_empty(), "seen");
         f.state("l-pay", "stopped", None);
         f.state("l-pay", "idle", None);
-        assert!(f.of(Kind::Unread).is_empty(), "idle -> stopped -> idle is a reload, not a turn");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "idle -> stopped -> idle is a reload, not a turn"
+        );
         f.state("l-pay", "stopped", None);
         f.reply("l-pay");
-        assert!(f.of(Kind::Unread).is_empty(), "stopped -> idle is a reload even when it says reply");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "stopped -> idle is a reload even when it says reply"
+        );
     }
 
     #[test]
@@ -952,7 +1216,11 @@ mod tests {
             f.moved("l-pay", "parked");
             f.state("l-pay", before, (before != "working").then_some("Which?"));
             let idle = f.reply("l-pay");
-            assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "{before} -> idle");
+            assert_eq!(
+                one(f.of(Kind::Unread)).event,
+                Some(idle),
+                "{before} -> idle"
+            );
         }
     }
 
@@ -964,7 +1232,10 @@ mod tests {
         assert!(f.of(Kind::Unread).is_empty());
         f.state("mgr", "working", None);
         f.state("mgr", "blocked", Some("Which?"));
-        assert!(f.of(Kind::Unread).is_empty(), "blocked is a dialog, not unread");
+        assert!(
+            f.of(Kind::Unread).is_empty(),
+            "blocked is a dialog, not unread"
+        );
         f.state("mgr", "waiting", Some("φ: Worker question"));
         assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
         f.state("mgr", "stopped", None);
@@ -992,11 +1263,25 @@ mod tests {
         let c = one(f.of(Kind::PlanReview));
         assert_eq!(
             (c.urgency, c.subject.as_str(), c.label.as_str()),
-            (Urgency::Magenta, "review:pay/r1", "pay plan review\nAdd retries")
+            (
+                Urgency::Magenta,
+                "review:pay/r1",
+                "pay plan review\nAdd retries"
+            )
         );
         assert_eq!(c.url, None, "a plan-review has no url (hs-d739)");
-        assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
-        assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
+        assert_eq!(
+            c.session.as_ref().map(|s| s.as_str()),
+            Some("l-pay"),
+            "its Lead"
+        );
+        assert_eq!(
+            (
+                c.context.as_ref().map(|c| c.as_str()),
+                c.plan.as_ref().map(|p| p.as_str())
+            ),
+            (Some("ctx"), Some("pay"))
+        );
     }
 
     #[test]
@@ -1037,8 +1322,20 @@ mod tests {
         let mut f = fixture("dispatch");
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
-        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
-        let latest = f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T00:00:00.000Z",
+            r#"{}"#,
+        );
+        let latest = f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T23:50:00.000Z",
+            r#"{}"#,
+        );
         let stuck = f.stuck();
         assert_eq!(
             stuck,
@@ -1064,10 +1361,28 @@ mod tests {
         f.state("l-pay", "idle", None);
         for (key, status) in [("a", "failed"), ("b", "failed")] {
             f.job(key, status);
-            f.event("job-failed", None, Some(key), "2026-01-01T00:00:00.000Z", r#"{}"#);
+            f.event(
+                "job-failed",
+                None,
+                Some(key),
+                "2026-01-01T00:00:00.000Z",
+                r#"{}"#,
+            );
         }
-        let a = f.event("job-failed", None, Some("a"), "2026-01-01T23:00:00.000Z", r#"{}"#);
-        let b = f.event("job-failed", None, Some("b"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        let a = f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T23:00:00.000Z",
+            r#"{}"#,
+        );
+        let b = f.event(
+            "job-failed",
+            None,
+            Some("b"),
+            "2026-01-01T23:50:00.000Z",
+            r#"{}"#,
+        );
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.len(), 1, "one Workflow, one group");
         let group = &groups[0];
@@ -1090,8 +1405,20 @@ mod tests {
         ));
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
         f.event("job-failed", None, Some("b"), T, r#"{}"#);
-        f.event("job-failed", None, Some("b"), "2026-01-01T22:00:00.000Z", r#"{}"#);
-        f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        f.event(
+            "job-failed",
+            None,
+            Some("b"),
+            "2026-01-01T22:00:00.000Z",
+            r#"{}"#,
+        );
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T23:50:00.000Z",
+            r#"{}"#,
+        );
         let groups = stuck_groups(f.stuck());
         assert_eq!(groups.iter().map(|g| g.home.clone()).collect::<Vec<_>>(), [JobHome::Workflow(WorkflowKey::parse("p2").unwrap()), JobHome::Workflow(WorkflowKey::parse("p1").unwrap())], "the group of the oldest first Event leads");
     }
@@ -1101,7 +1428,13 @@ mod tests {
         let mut f = fixture("dispatch");
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
-        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T00:00:00.000Z",
+            r#"{}"#,
+        );
         assert_eq!(f.stuck().len(), 1);
         assert!(f.of(Kind::JobStuck).is_empty());
         assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
@@ -1112,21 +1445,46 @@ mod tests {
         let mut f = fixture("dispatch");
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
-        f.event("job-failed", None, Some("a"), "2026-01-01T23:50:01.000Z", r#"{}"#);
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T23:50:01.000Z",
+            r#"{}"#,
+        );
         assert!(f.stuck().is_empty(), "9 min 59 s");
-        f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T23:50:00.000Z",
+            r#"{}"#,
+        );
         assert_eq!(f.stuck().len(), 1, "exactly the stuck time counts");
         f.job("b", "queued");
         f.event("job-failed", None, Some("b"), T, r#"{}"#);
-        assert_eq!(f.stuck().len(), 1, "a Job that is not failed is never stuck");
+        assert_eq!(
+            f.stuck().len(),
+            1,
+            "a Job that is not failed is never stuck"
+        );
     }
 
     #[test]
     fn a_failed_job_is_not_stuck_while_its_lead_works_and_is_at_the_next_tick_after_it_stops() {
         let mut f = fixture("dispatch");
         f.job("a", "failed");
-        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
-        assert!(f.stuck().is_empty(), "the Lead is working: it handles the failure (audit Q1)");
+        f.event(
+            "job-failed",
+            None,
+            Some("a"),
+            "2026-01-01T00:00:00.000Z",
+            r#"{}"#,
+        );
+        assert!(
+            f.stuck().is_empty(),
+            "the Lead is working: it handles the failure (audit Q1)"
+        );
         f.state("l-pay", "idle", None);
         assert_eq!(f.stuck()[0].job.as_str(), "a", "the Lead stopped working");
         f.state("l-pay", "working", None);
@@ -1171,7 +1529,16 @@ mod tests {
         let found = conditions(&mut f.store, &f.home).unwrap();
         let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
         assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
-        let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL", [], |r| r.get(0))?)).unwrap();
+        let open: i64 = f
+            .store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM inbox_items WHERE closed_at IS NULL",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
         assert_eq!(open, 0);
     }
 
@@ -1194,7 +1561,9 @@ mod tests {
     }
 
     fn set(f: &mut Fixture, n: i64, assignments: &str) {
-        f.sql(&format!("UPDATE pull_requests SET {assignments} WHERE number = {n}"));
+        f.sql(&format!(
+            "UPDATE pull_requests SET {assignments} WHERE number = {n}"
+        ));
     }
 
     fn pr_kinds(f: &mut Fixture) -> Vec<Kind> {
@@ -1208,7 +1577,11 @@ mod tests {
         pull_request(&mut f, 7, "failed", "mergeable", "none");
         set(&mut f, 7, "merge_state = 'blocked'"); // a required check failed (hs-d481)
         assert!(f.of(Kind::PrFailing).is_empty());
-        assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "one pr-ready row, named failing");
+        assert_eq!(
+            pr_kinds(&mut f),
+            [Kind::PrReady],
+            "one pr-ready row, named failing"
+        );
     }
 
     #[test]
@@ -1219,7 +1592,11 @@ mod tests {
         assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 conflict\nT");
         set(&mut f, 8, "checks = 'failed'");
         assert!(f.of(Kind::PrFailing).is_empty());
-        set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'");
+        set(
+            &mut f,
+            8,
+            "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'",
+        );
         assert!(f.of(Kind::PrFailing).is_empty());
         assert_eq!(one(f.of(Kind::PrReady)).label, "shop#8 ready to merge\nT");
     }
@@ -1236,7 +1613,10 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
         assert!(f.of(Kind::PrChanges).is_empty());
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#3 changes requested\nT");
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#3 changes requested\nT"
+        );
     }
 
     #[test]
@@ -1244,15 +1624,44 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 4, "passed", "mergeable", "approved");
         let c = one(f.of(Kind::PrReady));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#4", "shop#4 ready to merge\nT"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/4"));
+        assert_eq!(
+            (c.urgency, c.subject.as_str(), c.label.as_str()),
+            (
+                Urgency::Yellow,
+                "pr:acme/shop#4",
+                "shop#4 ready to merge\nT"
+            )
+        );
+        assert_eq!(
+            c.url.as_deref(),
+            Some("https://github.com/acme/shop/pull/4")
+        );
         set(&mut f, 4, "review_decision = 'none'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 ready to merge\nT", "no review is no objection");
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#4 ready to merge\nT",
+            "no review is no objection"
+        );
         set(&mut f, 4, "draft = 1");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 draft\nT", "a draft is never ready");
-        set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 changes requested\nT");
-        set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#4 draft\nT",
+            "a draft is never ready"
+        );
+        set(
+            &mut f,
+            4,
+            "draft = 0, review_decision = 'changes_requested'",
+        );
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#4 changes requested\nT"
+        );
+        set(
+            &mut f,
+            4,
+            "review_decision = 'approved', checks = 'pending'",
+        );
         assert_eq!(one(f.of(Kind::PrReady)).label, "shop#4 checks running\nT");
     }
 
@@ -1262,7 +1671,11 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 5, "passed", "mergeable", "none");
         set(&mut f, 5, "merge_state = 'blocked'");
-        assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "unowned");
+        assert_eq!(
+            one(f.of(Kind::PrReady)).label,
+            "shop#5 waiting\nT",
+            "unowned"
+        );
         own(&mut f, 5);
         assert_eq!(one(f.of(Kind::PrReady)).label, "shop#5 waiting\nT", "owned");
     }
@@ -1278,13 +1691,30 @@ mod tests {
         // hs-d525: only clean is ready; unstable and has_hooks are not.
         for merge_state in ["clean"] {
             for review in ["approved", "none"] {
-                assert!(ready(merge_state, review), "{merge_state} {review} is ready");
+                assert!(
+                    ready(merge_state, review),
+                    "{merge_state} {review} is ready"
+                );
             }
-            assert!(!ready(merge_state, "changes_requested"), "{merge_state} with changes requested is not ready");
+            assert!(
+                !ready(merge_state, "changes_requested"),
+                "{merge_state} with changes requested is not ready"
+            );
         }
-        for merge_state in ["blocked", "behind", "dirty", "unknown", "draft", "unstable", "has_hooks"] {
+        for merge_state in [
+            "blocked",
+            "behind",
+            "dirty",
+            "unknown",
+            "draft",
+            "unstable",
+            "has_hooks",
+        ] {
             for review in ["approved", "none", "changes_requested"] {
-                assert!(!ready(merge_state, review), "{merge_state} {review} is not ready");
+                assert!(
+                    !ready(merge_state, review),
+                    "{merge_state} {review} is not ready"
+                );
             }
         }
     }
@@ -1298,7 +1728,11 @@ mod tests {
         set(&mut f, 5, "merge_state = 'blocked'");
         let found = conditions(&mut f.store, &f.home).unwrap();
         let changes = reconcile(&mut f.store, &found, T).unwrap();
-        assert_eq!((changes.opened.len(), changes.closed.len()), (1, 1), "a colour change closes the yellow row and opens a cyan one");
+        assert_eq!(
+            (changes.opened.len(), changes.closed.len()),
+            (1, 1),
+            "a colour change closes the yellow row and opens a cyan one"
+        );
     }
 
     #[test]
@@ -1306,9 +1740,16 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        assert_eq!(pr_kinds(&mut f), [Kind::PrReady, Kind::PrReady], "every authored open pull request has a row");
+        assert_eq!(
+            pr_kinds(&mut f),
+            [Kind::PrReady, Kind::PrReady],
+            "every authored open pull request has a row"
+        );
         f.sql("UPDATE pull_requests SET authored = 0, review_requested = 1");
-        assert!(pr_kinds(&mut f).is_empty(), "review_requested alone is no item (hs-d320)");
+        assert!(
+            pr_kinds(&mut f).is_empty(),
+            "review_requested alone is no item (hs-d320)"
+        );
     }
 
     #[test]
@@ -1341,10 +1782,19 @@ mod tests {
         pull_request(&mut f, 6, "passed", "mergeable", "approved");
         pull_request(&mut f, 7, "passed", "mergeable", "approved");
         own(&mut f, 6);
-        for kind in [Kind::PrReady] {
-            let c = one(f.of(kind).into_iter().filter(|c| c.subject == "pr:acme/shop#6").collect());
+        {
+            let kind = Kind::PrReady;
+            let c = one(f
+                .of(kind)
+                .into_iter()
+                .filter(|c| c.subject == "pr:acme/shop#6")
+                .collect());
             assert_eq!(
-                (c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str()), c.session.as_ref().map(|s| s.as_str())),
+                (
+                    c.context.as_ref().map(|c| c.as_str()),
+                    c.plan.as_ref().map(|p| p.as_str()),
+                    c.session.as_ref().map(|s| s.as_str())
+                ),
                 (Some("ctx"), Some("pay"), Some("l-pay")),
                 "{kind:?}"
             );
@@ -1367,7 +1817,11 @@ mod tests {
                 set(&mut f, 6, "merge_state = 'blocked'"); // a required check failed (hs-d481)
             }
             own(&mut f, 6);
-            assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "{checks} {mergeable} {review}");
+            assert_eq!(
+                pr_kinds(&mut f),
+                [Kind::PrReady],
+                "{checks} {mergeable} {review}"
+            );
         }
     }
 
@@ -1379,13 +1833,19 @@ mod tests {
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
         pull_request(&mut f, 6, "failed", "conflicting", "changes_requested");
         own(&mut f, 6);
-        let seen: Vec<_> = f.of(Kind::PrFailing).into_iter().chain(f.of(Kind::PrChanges)).map(|c| c.subject).collect();
+        let seen: Vec<_> = f
+            .of(Kind::PrFailing)
+            .into_iter()
+            .chain(f.of(Kind::PrChanges))
+            .map(|c| c.subject)
+            .collect();
         assert!(seen.is_empty(), "{seen:?}");
     }
 
     /// hs-d470: `pr-failing` and `pr-changes` are dropped, so items an older engine opened close at the next reconcile.
     #[test]
-    fn open_pr_failing_and_pr_changes_items_an_older_engine_opened_are_closed_by_the_next_reconcile() {
+    fn open_pr_failing_and_pr_changes_items_an_older_engine_opened_are_closed_by_the_next_reconcile()
+     {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "mergeable", "none");
         pull_request(&mut f, 2, "passed", "mergeable", "changes_requested");
@@ -1446,20 +1906,37 @@ mod tests {
     }
 
     fn open_pr() -> GhPr {
-        GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
+        GhPr {
+            title: "Add retries".to_owned(),
+            draft: false,
+            state: GhState::Open,
+            author: "ryan".to_owned(),
+            decision: None,
+            reviews: Vec::new(),
+        }
     }
 
     fn reviewed_by(login: &str) -> GhPr {
-        GhPr { reviews: vec![Review { author: login.to_owned(), state: "COMMENTED".to_owned() }], ..open_pr() }
+        GhPr {
+            reviews: vec![Review {
+                author: login.to_owned(),
+                state: "COMMENTED".to_owned(),
+            }],
+            ..open_pr()
+        }
     }
 
     fn lookup(workflows: &[(&str, u64, GhPr)]) -> Lookup {
         Lookup { me: ME_LOGIN.to_owned(), workflows: workflows.iter().map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone()))).collect() }
     }
 
-    fn team<'a>(github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>) -> Team<'a> {
-        static BOT_LIST: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| BOTS.map(str::to_owned).to_vec());
-        Team { bot_reviewers: &BOT_LIST, github }
+    fn team<'a>(github: GithubLookup<'a>) -> Team<'a> {
+        static BOT_LIST: std::sync::LazyLock<Vec<String>> =
+            std::sync::LazyLock::new(|| BOTS.map(str::to_owned).to_vec());
+        Team {
+            bot_reviewers: &BOT_LIST,
+            github,
+        }
     }
 
     /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
@@ -1473,17 +1950,40 @@ mod tests {
     #[test]
     fn a_post_with_no_review_opens_an_item_with_the_posts_pull_request() {
         let mut f = fixture("dispatch");
-        let c = one(reviews(&mut f, &[post("acme/pay", 812)], &[("acme/pay", 812, open_pr())]));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812\nAdd retries"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
-        assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
+        let c = one(reviews(
+            &mut f,
+            &[post("acme/pay", 812)],
+            &[("acme/pay", 812, open_pr())],
+        ));
+        assert_eq!(
+            (c.urgency, c.subject.as_str(), c.label.as_str()),
+            (
+                Urgency::Blue,
+                "pr:acme/pay#812",
+                "review pay#812\nAdd retries"
+            )
+        );
+        assert_eq!(
+            c.url.as_deref(),
+            Some("https://github.com/acme/pay/pull/812")
+        );
+        assert_eq!(
+            (c.context, c.plan, c.session, c.job, c.record, c.event),
+            (None, None, None, None, None, None)
+        );
     }
 
     /// One case per hermes rule: what GitHub says, what Slack says, and whether the item opens.
     #[test]
     fn each_hermes_rule_opens_the_item_or_not() {
-        let changes = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..open_pr() };
-        let approved = GhPr { decision: Some("APPROVED".to_owned()), ..open_pr() };
+        let changes = GhPr {
+            decision: Some("CHANGES_REQUESTED".to_owned()),
+            ..open_pr()
+        };
+        let approved = GhPr {
+            decision: Some("APPROVED".to_owned()),
+            ..open_pr()
+        };
         let cases: Vec<(&str, Value, GhPr, bool)> = vec![
             ("no review yet", post("acme/pay", 1), open_pr(), true),
             ("AI review only", post("acme/pay", 1), reviewed_by("github-actions"), true),
@@ -1523,7 +2023,15 @@ mod tests {
         assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other Workflows");
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let none = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
+        let none = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| panic!("no post, no call"))),
+        )
+        .unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
     }
 
@@ -1554,13 +2062,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(asked, [("acme/pay".to_owned(), 1)]);
-        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"]);
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .map(|c| c.subject.as_str())
+                .collect::<Vec<_>>(),
+            ["pr:acme/pay#1"]
+        );
     }
 
     #[test]
     fn with_the_rule_off_nothing_opens_and_open_items_close() {
         let mut f = fixture("dispatch");
-        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        let opened = reviews(
+            &mut f,
+            &[post("acme/pay", 1)],
+            &[("acme/pay", 1, open_pr())],
+        );
         reconcile(&mut f.store, &opened, T).unwrap();
         let off = conditions_with(&mut f.store, &f.home, NOW, 20, 1, None).unwrap();
         assert!(off.is_empty());
@@ -1570,11 +2088,17 @@ mod tests {
 
     /// The open items after reconciling `conditions` over them.
     fn open_subjects(f: &mut Fixture) -> Vec<String> {
-        f.store.read(open_items).unwrap().into_iter().map(|i| i.subject).collect()
+        f.store
+            .read(open_items)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.subject)
+            .collect()
     }
 
     #[test]
-    fn a_missing_cache_leaves_open_items_as_they_are_and_a_pull_request_that_leaves_it_closes_its_item() {
+    fn a_missing_cache_leaves_open_items_as_they_are_and_a_pull_request_that_leaves_it_closes_its_item()
+     {
         let mut f = fixture("dispatch");
         let two = [post("acme/pay", 1), post("acme/pay", 2)];
         let both = [("acme/pay", 1, open_pr()), ("acme/pay", 2, open_pr())];
@@ -1583,12 +2107,28 @@ mod tests {
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let unknown = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
-        assert_eq!(unknown.len(), 2, "no file is unknown, not empty: {unknown:?}");
+        let unknown = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| panic!("nothing to ask"))),
+        )
+        .unwrap();
+        assert_eq!(
+            unknown.len(),
+            2,
+            "no file is unknown, not empty: {unknown:?}"
+        );
         reconcile(&mut f.store, &unknown, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
-        let rest = reviews(&mut f, &[post("acme/pay", 2)], &[("acme/pay", 2, open_pr())]);
+        let rest = reviews(
+            &mut f,
+            &[post("acme/pay", 2)],
+            &[("acme/pay", 2, open_pr())],
+        );
         reconcile(&mut f.store, &rest, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#2"], "#1 left the file");
     }
@@ -1596,26 +2136,93 @@ mod tests {
     #[test]
     fn an_unreadable_cache_keeps_the_items_and_says_so() {
         let mut f = fixture("dispatch");
-        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        let opened = reviews(
+            &mut f,
+            &[post("acme/pay", 1)],
+            &[("acme/pay", 1, open_pr())],
+        );
         reconcile(&mut f.store, &opened, T).unwrap();
         std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("unreadable")))).unwrap();
-        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1);
-        let error = all.iter().find(|c| c.kind == Kind::EngineError).expect("an engine-error condition");
-        assert_eq!((error.urgency, error.subject.as_str(), error.label.as_str()), (Urgency::Red, "error:E8/team-review/store_failed", "team review: store_failed"));
-        std::fs::write(f.home.run_dir().join("team-review.json"), r#"{"version": 2, "posts": []}"#).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("unreadable")))).unwrap();
-        assert!(all.iter().any(|c| c.kind == Kind::EngineError), "another version is unreadable too");
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| panic!("unreadable"))),
+        )
+        .unwrap();
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1
+        );
+        let error = all
+            .iter()
+            .find(|c| c.kind == Kind::EngineError)
+            .expect("an engine-error condition");
+        assert_eq!(
+            (error.urgency, error.subject.as_str(), error.label.as_str()),
+            (
+                Urgency::Red,
+                "error:E8/team-review/store_failed",
+                "team review: store_failed"
+            )
+        );
+        std::fs::write(
+            f.home.run_dir().join("team-review.json"),
+            r#"{"version": 2, "posts": []}"#,
+        )
+        .unwrap();
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| panic!("unreadable"))),
+        )
+        .unwrap();
+        assert!(
+            all.iter().any(|c| c.kind == Kind::EngineError),
+            "another version is unreadable too"
+        );
     }
 
     #[test]
     fn a_github_that_fails_keeps_the_items_and_says_so() {
         let mut f = fixture("dispatch");
-        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        let opened = reviews(
+            &mut f,
+            &[post("acme/pay", 1)],
+            &[("acme/pay", 1, open_pr())],
+        );
         reconcile(&mut f.store, &opened, T).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
-        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "kept");
-        assert_eq!(all.iter().find(|c| c.kind == Kind::EngineError).map(|c| c.subject.as_str()), Some("error:E8/team-review/gh_failed"));
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| {
+                Err(CpdError::new(ErrorCode::GhFailed, "down"))
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1,
+            "kept"
+        );
+        assert_eq!(
+            all.iter()
+                .find(|c| c.kind == Kind::EngineError)
+                .map(|c| c.subject.as_str()),
+            Some("error:E8/team-review/gh_failed")
+        );
     }
 
     #[test]
@@ -1627,7 +2234,11 @@ mod tests {
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
         assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
 
-        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        let opened = reviews(
+            &mut f,
+            &[post("acme/pay", 1)],
+            &[("acme/pay", 1, open_pr())],
+        );
         reconcile(&mut f.store, &opened, T).unwrap();
         let blind = Lookup { me: ME_LOGIN.to_owned(), workflows: [(("acme/pay".to_owned(), 1), None)].into() };
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
@@ -1646,21 +2257,44 @@ mod tests {
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
-        let kinds: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).collect();
-        assert_eq!(kinds, [Kind::Dialog, Kind::PlanReview, Kind::Unread], "the failed Job is no item");
-        pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
-        pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
-               VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
-        let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
-        assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
-        write_cache(&f, &[post("acme/pay", 812)]);
-        let lookup = lookup(&[("acme/pay", 812, open_pr())]);
-        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone()))))
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home)
             .unwrap()
             .into_iter()
             .map(|c| c.kind)
             .collect();
-        assert_eq!(kinds[3..], [Kind::PrReady, Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(
+            kinds,
+            [Kind::Dialog, Kind::PlanReview, Kind::Unread],
+            "the failed Job is no item"
+        );
+        pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
+        pull_request(&mut f, 2, "passed", "mergeable", "approved");
+        f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+               VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
+        let tail: Vec<_> = conditions(&mut f.store, &f.home)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.kind)
+            .skip(3)
+            .collect();
+        assert_eq!(tail, [Kind::PrReady, Kind::PrReady]);
+        write_cache(&f, &[post("acme/pay", 812)]);
+        let lookup = lookup(&[("acme/pay", 812, open_pr())]);
+        let kinds: Vec<_> = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            20,
+            1,
+            Some(team(&mut |_| Ok(lookup.clone()))),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|c| c.kind)
+        .collect();
+        assert_eq!(
+            kinds[3..],
+            [Kind::PrReady, Kind::PrReady, Kind::ReviewRequested]
+        );
     }
 }

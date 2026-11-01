@@ -34,8 +34,11 @@ pub struct Starter {
 }
 
 fn lock_failed(path: &Path, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the driver lock {}: {e}.", path.display()))
-        .with("lock", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot use the driver lock {}: {e}.", path.display()),
+    )
+    .with("lock", path.display().to_string())
 }
 
 impl Starter {
@@ -58,7 +61,9 @@ impl Starter {
         } else {
             Err(CpdError::new(
                 ErrorCode::CasLost,
-                format!("The driver lock of Attempt {attempt} is held: another starter is creating it."),
+                format!(
+                    "The driver lock of Attempt {attempt} is held: another starter is creating it."
+                ),
             )
             .with("plan", plan.as_str())
             .with("attempt", attempt.to_string())
@@ -92,7 +97,11 @@ pub fn probe(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Optio
 /// [`probe`] for a caller that means to hold the lock: it **creates** the file
 /// when it is missing, as a starter does. Not for E2, R or `pr open`: a file
 /// created for an Attempt that has none is never removed.
-pub fn take_free_driver_lock(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Option<Free>, CpdError> {
+pub fn take_free_driver_lock(
+    home: &CpdHome,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<Option<Free>, CpdError> {
     let path = home.attempt_lock(plan, attempt);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| lock_failed(&path, e))?;
@@ -101,9 +110,17 @@ pub fn take_free_driver_lock(home: &CpdHome, plan: &PlanId, attempt: &AttemptId)
 }
 
 fn try_take(path: &Path, create: bool) -> Result<Option<Free>, CpdError> {
-    let file = match OpenOptions::new().read(true).write(true).create(create).truncate(false).open(path) {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false)
+        .open(path)
+    {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Free { _file: None })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(Free { _file: None }));
+        }
         Err(e) => return Err(lock_failed(path, e)),
     };
     let taken = lock::try_lock(&file).map_err(|e| lock_failed(path, e))?;
@@ -118,9 +135,14 @@ fn try_take(path: &Path, create: bool) -> Result<Option<Free>, CpdError> {
 /// end nobody opens this path again (E2's [`probe`] never creates it).
 pub fn remove(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
     // The Attempt's check lock (§7.7) goes with its driver lock: nothing submits for an ended Attempt.
-    for path in [home.attempt_lock(plan, attempt), home.check_lock(plan, attempt)] {
+    for path in [
+        home.attempt_lock(plan, attempt),
+        home.check_lock(plan, attempt),
+    ] {
         match fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(lock_failed(&path, e)),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(lock_failed(&path, e));
+            }
             _ => {}
         }
     }
@@ -129,7 +151,11 @@ pub fn remove(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<(), 
 
 /// Whether a check span of the Attempt is open (contract §7.7): a live `attempt submit` holds `locks/check-<plan>--<attempt>.lock`.
 /// Opens the lock file without creating it; a missing file is no span. A4's stall check does not run while this is true.
-pub fn check_span_open(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<bool, CpdError> {
+pub fn check_span_open(
+    home: &CpdHome,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<bool, CpdError> {
     // `try_take` locks the file when it is free, and the guard it returns lets it go at once.
     Ok(try_take(&home.check_lock(plan, attempt), false)?.is_none())
 }
@@ -156,12 +182,17 @@ impl Inherited {
 
     fn set_flags(&self, flags: FdFlag) -> Result<(), CpdError> {
         for file in std::iter::once(&self._file) {
-            fcntl(file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
-                CpdError::new(
-                    ErrorCode::DriverLockMissing,
-                    format!("Cannot change close-on-exec on a lock the driver holds (fd {}): {e}.", file.as_raw_fd()),
-                )
-            })?;
+            fcntl(file, FcntlArg::F_SETFD(flags))
+                .map(drop)
+                .map_err(|e| {
+                    CpdError::new(
+                        ErrorCode::DriverLockMissing,
+                        format!(
+                            "Cannot change close-on-exec on a lock the driver holds (fd {}): {e}.",
+                            file.as_raw_fd()
+                        ),
+                    )
+                })?;
         }
         Ok(())
     }
@@ -173,18 +204,30 @@ impl Inherited {
 /// nothing the driver starts (git, hooks, tmux) can keep the lock alive.
 ///
 /// Call it before the process opens any file, so fd 3 cannot be one of its own.
-pub fn inherited(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Inherited, CpdError> {
+pub fn inherited(
+    home: &CpdHome,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<Inherited, CpdError> {
     inherited_on(DRIVER_FD, home, plan, attempt)
 }
 
 /// [`inherited`] for the descriptor `fd` (the driver's is [`DRIVER_FD`]): a test hands it one that is its own.
-pub(crate) fn inherited_on(fd: RawFd, home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Inherited, CpdError> {
+pub(crate) fn inherited_on(
+    fd: RawFd,
+    home: &CpdHome,
+    plan: &PlanId,
+    attempt: &AttemptId,
+) -> Result<Inherited, CpdError> {
     let path = home.attempt_lock(plan, attempt);
     let missing = |why: String| {
-        CpdError::new(ErrorCode::DriverLockMissing, format!("fd {fd} is not the driver lock {}: {why}.", path.display()))
-            .with("plan", plan.as_str())
-            .with("attempt", attempt.to_string())
-            .with("lock", path.display().to_string())
+        CpdError::new(
+            ErrorCode::DriverLockMissing,
+            format!("fd {fd} is not the driver lock {}: {why}.", path.display()),
+        )
+        .with("plan", plan.as_str())
+        .with("attempt", attempt.to_string())
+        .with("lock", path.display().to_string())
     };
     // SAFETY: only probes the descriptor number; nothing is owned yet.
     let open = fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFD);
@@ -210,7 +253,8 @@ pub(crate) fn inherited_on(fd: RawFd, home: &CpdHome, plan: &PlanId, attempt: &A
         std::mem::forget(file);
         return Err(missing(why));
     }
-    fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| missing(format!("cannot set close-on-exec ({e})")))?;
+    fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+        .map_err(|e| missing(format!("cannot set close-on-exec ({e})")))?;
     Ok(Inherited { _file: file })
 }
 
@@ -222,7 +266,12 @@ mod tests {
     fn home() -> (tempfile::TempDir, CpdHome, PlanId, AttemptId) {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        (dir, home, PlanId::parse("pl").unwrap(), AttemptId::parse("api-a1").unwrap())
+        (
+            dir,
+            home,
+            PlanId::parse("pl").unwrap(),
+            AttemptId::parse("api-a1").unwrap(),
+        )
     }
 
     /// engine-G1: E2, R and `pr open` probe the driver lock of an Attempt that
@@ -240,7 +289,9 @@ mod tests {
     fn taking_a_missing_driver_lock_holds_it_until_dropped() {
         let (_dir, home, plan, attempt) = home();
 
-        let held = take_free_driver_lock(&home, &plan, &attempt).unwrap().expect("free");
+        let held = take_free_driver_lock(&home, &plan, &attempt)
+            .unwrap()
+            .expect("free");
 
         assert!(probe(&home, &plan, &attempt).unwrap().is_none());
         drop(held);
@@ -256,7 +307,12 @@ mod tests {
     fn lock_file(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> File {
         let path = home.attempt_lock(plan, attempt);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let file = OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap();
         fcntl(&file, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
         file
     }
@@ -264,7 +320,9 @@ mod tests {
     #[test]
     fn keeping_the_lock_across_exec_clears_close_on_exec_and_closing_it_on_exec_sets_it_again() {
         let (_dir, home, plan, attempt) = home();
-        let held = Inherited { _file: lock_file(&home, &plan, &attempt) };
+        let held = Inherited {
+            _file: lock_file(&home, &plan, &attempt),
+        };
         assert!(!flags(&held).contains(FdFlag::FD_CLOEXEC));
 
         held.close_on_exec().unwrap();
@@ -295,7 +353,11 @@ mod tests {
         let refused = inherited_on(fd, &home, &plan, &attempt).unwrap_err();
 
         assert_eq!(refused.code(), ErrorCode::DriverLockMissing);
-        assert!(refused.message().contains("another file"), "{}", refused.message());
+        assert!(
+            refused.message().contains("another file"),
+            "{}",
+            refused.message()
+        );
         // Not ours to close: the refusal leaves it open (the test closes it here).
         assert!(fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFD).is_ok());
         drop(unsafe { File::from_raw_fd(fd) });
@@ -309,6 +371,10 @@ mod tests {
         let refused = inherited_on(9999, &home, &plan, &attempt).unwrap_err();
 
         assert_eq!(refused.code(), ErrorCode::DriverLockMissing);
-        assert!(refused.message().contains("not open"), "{}", refused.message());
+        assert!(
+            refused.message().contains("not open"),
+            "{}",
+            refused.message()
+        );
     }
 }

@@ -40,7 +40,11 @@ pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         })));
     }
     let text = String::from_utf8_lossy(&stderr);
-    let message = text.lines().filter(|line| !line.trim().is_empty()).last().unwrap_or("cpd install failed.").to_owned();
+    let message = text
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .unwrap_or("cpd install failed.")
+        .to_owned();
     Err(CpdError::new(ErrorCode::InstallFailed, message).with("exit", exit))
 }
 
@@ -49,13 +53,25 @@ pub fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
 /// `cpd_home` from `$CPD_HOME`; `lock_wait` from `CPD_INSTALL_LOCK_WAIT_SECS`, else the core's default.
 fn resolve(args: Args) -> Result<Install, CpdError> {
     let root = args.root;
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
-    let home = std::env::var_os("HOME")
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .ok_or_else(|| CpdError::new(ErrorCode::Internal, "HOME is not set: cannot find where to install cpd."))?;
+        .unwrap_or_else(|| root.join("target"));
+    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::Internal,
+            "HOME is not set: cannot find where to install cpd.",
+        )
+    })?;
     let lock_wait = std::env::var_os("CPD_INSTALL_LOCK_WAIT_SECS")
         .and_then(|value| value.to_str().and_then(|s| s.parse::<u64>().ok()))
         .map(Duration::from_secs)
         .unwrap_or(install::DEFAULT_LOCK_WAIT);
-    Ok(Install { root, target_dir, home, cpd_home: CpdHome::from_env()?, pid: std::process::id(), lock_wait })
+    Ok(Install {
+        root,
+        target_dir,
+        home,
+        cpd_home: CpdHome::from_env()?,
+        pid: std::process::id(),
+        lock_wait,
+    })
 }

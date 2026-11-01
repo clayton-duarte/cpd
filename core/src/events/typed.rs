@@ -41,16 +41,43 @@ fn make(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {
 
 #[allow(clippy::too_many_arguments)]
 impl NewEvent {
-    pub fn context_created(text: impl Into<String>, title: &str, jira: Option<&str>, created_on: &str) -> NewEvent {
-        make(Kind::ContextCreated, text, json!({"title": title, "jira": jira, "created_on": created_on}))
+    pub fn context_created(
+        text: impl Into<String>,
+        title: &str,
+        jira: Option<&str>,
+        created_on: &str,
+    ) -> NewEvent {
+        make(
+            Kind::ContextCreated,
+            text,
+            json!({"title": title, "jira": jira, "created_on": created_on}),
+        )
     }
 
-    pub fn context_record(text: impl Into<String>, record: impl Serialize, kind: &str, machine: impl Serialize, seq: i64) -> NewEvent {
-        make(Kind::ContextRecord, text, json!({"record": record, "kind": kind, "machine": machine, "seq": seq}))
+    pub fn context_record(
+        text: impl Into<String>,
+        record: impl Serialize,
+        kind: &str,
+        machine: impl Serialize,
+        seq: i64,
+    ) -> NewEvent {
+        make(
+            Kind::ContextRecord,
+            text,
+            json!({"record": record, "kind": kind, "machine": machine, "seq": seq}),
+        )
     }
 
-    pub fn context_grounded(text: impl Into<String>, seq: i64, forked_from: impl Serialize) -> NewEvent {
-        make(Kind::ContextGrounded, text, json!({"seq": seq, "forked_from": forked_from}))
+    pub fn context_grounded(
+        text: impl Into<String>,
+        seq: i64,
+        forked_from: impl Serialize,
+    ) -> NewEvent {
+        make(
+            Kind::ContextGrounded,
+            text,
+            json!({"seq": seq, "forked_from": forked_from}),
+        )
     }
 
     pub fn plan_created(
@@ -84,13 +111,29 @@ impl NewEvent {
     }
 
     /// A review that was just requested.
-    pub fn plan_review_requested(text: impl Into<String>, review: impl Serialize, fingerprint: &str) -> NewEvent {
-        make(Kind::PlanReview, text, json!({"review": review, "fingerprint": fingerprint, "status": "pending"}))
+    pub fn plan_review_requested(
+        text: impl Into<String>,
+        review: impl Serialize,
+        fingerprint: &str,
+    ) -> NewEvent {
+        make(
+            Kind::PlanReview,
+            text,
+            json!({"review": review, "fingerprint": fingerprint, "status": "pending"}),
+        )
     }
 
     /// A review cpd closed because nobody can or needs to decide it any more.
-    pub fn plan_review_superseded(text: impl Into<String>, review: impl Serialize, fingerprint: &str) -> NewEvent {
-        make(Kind::PlanReview, text, json!({"review": review, "fingerprint": fingerprint, "status": "superseded"}))
+    pub fn plan_review_superseded(
+        text: impl Into<String>,
+        review: impl Serialize,
+        fingerprint: &str,
+    ) -> NewEvent {
+        make(
+            Kind::PlanReview,
+            text,
+            json!({"review": review, "fingerprint": fingerprint, "status": "superseded"}),
+        )
     }
 
     /// A review that was decided; `jobs` are the draft Jobs it queued, when it queued any.
@@ -153,7 +196,15 @@ impl NewEvent {
 
     /// `turn` is whether the Lead should take a turn (hs-d514). `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
     /// `pr`, `number` and `url` are in `data` only then (§5.2).
-    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, turn: bool, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
+    pub fn job_merged(
+        text: impl Into<String>,
+        sha: &str,
+        tier: &str,
+        kind: &str,
+        turn: bool,
+        cancel_too_late: bool,
+        pull: Option<(&str, i64, &str)>,
+    ) -> NewEvent {
         let mut data = json!({"sha": sha, "tier": tier, "kind": kind, "turn": turn});
         if cancel_too_late {
             data["cancel_too_late"] = json!(true);
@@ -167,12 +218,33 @@ impl NewEvent {
     }
 
     /// The `job-merged` of an explore Job (§5.2): `sha` is the artefact's SHA-256, `artefact` its path relative to `$CPD_HOME`; `turn` is always true.
-    pub fn job_merged_explore(text: impl Into<String>, sha: &str, tier: &str, kind: &str, summary: &str, artefact: &str) -> NewEvent {
-        make(Kind::JobMerged, text, json!({"sha": sha, "tier": tier, "kind": kind, "turn": true, "summary": summary, "artefact": artefact}))
+    pub fn job_merged_explore(
+        text: impl Into<String>,
+        sha: &str,
+        tier: &str,
+        kind: &str,
+        summary: &str,
+        artefact: &str,
+    ) -> NewEvent {
+        make(
+            Kind::JobMerged,
+            text,
+            json!({"sha": sha, "tier": tier, "kind": kind, "turn": true, "summary": summary, "artefact": artefact}),
+        )
     }
 
-    pub fn job_failed(text: impl Into<String>, cause: &str, detail: &str, tier: &str, attempts: i64) -> NewEvent {
-        make(Kind::JobFailed, text, json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts}))
+    pub fn job_failed(
+        text: impl Into<String>,
+        cause: &str,
+        detail: &str,
+        tier: &str,
+        attempts: i64,
+    ) -> NewEvent {
+        make(
+            Kind::JobFailed,
+            text,
+            json!({"cause": cause, "detail": detail, "tier": tier, "attempts": attempts}),
+        )
     }
 
     pub fn job_retried(text: impl Into<String>, tier: &str) -> NewEvent {
@@ -187,8 +259,27 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
-    pub fn attempt_started(text: impl Into<String>, number: impl Serialize, tier: &str, origin: &str) -> NewEvent {
-        make(Kind::AttemptStarted, text, json!({"number": number, "tier": tier, "origin": origin}))
+    pub fn job_addendum(text: impl Into<String>, addendum: &str) -> NewEvent {
+        make(Kind::JobAddendum, text, json!({"text": addendum}))
+    }
+
+    /// `job-blocked` (§5.2, hs-d798): E3 skipped a Ready Job for want of a pool slot, one Event per
+    /// waiting episode; `waiting` is the number of Ready Jobs skipped that tick.
+    pub fn job_blocked(text: impl Into<String>, waiting: u64) -> NewEvent {
+        make(Kind::JobBlocked, text, json!({"waiting": waiting}))
+    }
+
+    pub fn attempt_started(
+        text: impl Into<String>,
+        number: impl Serialize,
+        tier: &str,
+        origin: &str,
+    ) -> NewEvent {
+        make(
+            Kind::AttemptStarted,
+            text,
+            json!({"number": number, "tier": tier, "origin": origin}),
+        )
     }
 
     pub fn attempt_status(text: impl Into<String>, from: &str, to: &str) -> NewEvent {
@@ -197,7 +288,11 @@ impl NewEvent {
 
     /// The start of a check span of `attempt submit` (contract §7.7): `from` = `to` = `running`, `what` `checks`.
     pub fn attempt_check_start(text: impl Into<String>, what: &str) -> NewEvent {
-        make(Kind::AttemptStatus, text, json!({"from": "running", "to": "running", "check": "start", "what": what}))
+        make(
+            Kind::AttemptStatus,
+            text,
+            json!({"from": "running", "to": "running", "check": "start", "what": what}),
+        )
     }
 
     /// The end of a check span; `died` (E2's `end` for a submit that died, §3.7) is present only when true.
@@ -209,7 +304,13 @@ impl NewEvent {
         make(Kind::AttemptStatus, text, data)
     }
 
-    pub fn attempt_retry(text: impl Into<String>, outcome: &str, cause: &str, next_tier: &str, feedback: &str) -> NewEvent {
+    pub fn attempt_retry(
+        text: impl Into<String>,
+        outcome: &str,
+        cause: &str,
+        next_tier: &str,
+        feedback: &str,
+    ) -> NewEvent {
         make(
             Kind::AttemptRetry,
             text,
@@ -217,8 +318,47 @@ impl NewEvent {
         )
     }
 
+    /// `attempt abort` (contract §5.2, commands.md §6.5): the Lead ended a running Attempt `failed` / `aborted`.
+    /// `by` is the calling Session's id.
+    pub fn attempt_aborted(text: impl Into<String>, tier: &str, by: &str) -> NewEvent {
+        make(Kind::AttemptAborted, text, json!({"tier": tier, "by": by}))
+    }
+
     pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
+    }
+
+    /// `attempt-ended` (§5.2, hs-d798): the end of a `pi` or `durable` Attempt, appended in the same
+    /// transaction that writes `attempts.metrics`. `data` is the metrics blob: the ten keys copied
+    /// from it; when there are no metrics, all ten keys are present with null.
+    pub fn attempt_ended(text: impl Into<String>, metrics: Option<&Value>) -> NewEvent {
+        const KEYS: [&str; 10] = [
+            "turns",
+            "tokens_in",
+            "tokens_out",
+            "cache_read",
+            "cache_write",
+            "cost_usd",
+            "duration_s",
+            "model",
+            "stop_reason",
+            "thinking_level",
+        ];
+        // Always all ten keys, null for the missing ones: the blob may be absent or partial.
+        let mut data = json!({
+            "turns": null, "tokens_in": null, "tokens_out": null, "cache_read": null, "cache_write": null,
+            "cost_usd": null, "duration_s": null, "model": null, "stop_reason": null, "thinking_level": null,
+        });
+        if let Some(blob) = metrics
+            && let Some(obj) = blob.as_object()
+        {
+            for key in KEYS {
+                if let Some(value) = obj.get(key) {
+                    data[key] = value.clone();
+                }
+            }
+        }
+        make(Kind::AttemptEnded, text, data)
     }
 
     pub fn all_merged(text: impl Into<String>, workflow: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
@@ -324,24 +464,60 @@ impl NewEvent {
         make(Kind::PrMerged, text, json!({"workflow": workflow, "number": number, "url": url, "merged_at": merged_at}))
     }
 
-    pub fn escalation(text: impl Into<String>, escalation: impl Serialize, question: &str) -> NewEvent {
-        make(Kind::Escalation, text, json!({"escalation": escalation, "question": question}))
+    pub fn escalation(
+        text: impl Into<String>,
+        escalation: impl Serialize,
+        question: &str,
+    ) -> NewEvent {
+        make(
+            Kind::Escalation,
+            text,
+            json!({"escalation": escalation, "question": question}),
+        )
     }
 
     pub fn escalation_answered(text: impl Into<String>, escalation: impl Serialize) -> NewEvent {
-        make(Kind::EscalationAnswered, text, json!({"escalation": escalation}))
+        make(
+            Kind::EscalationAnswered,
+            text,
+            json!({"escalation": escalation}),
+        )
     }
 
-    pub fn escalation_expired(text: impl Into<String>, escalation: impl Serialize, reason: &str) -> NewEvent {
-        make(Kind::EscalationExpired, text, json!({"escalation": escalation, "reason": reason}))
+    pub fn escalation_expired(
+        text: impl Into<String>,
+        escalation: impl Serialize,
+        reason: &str,
+    ) -> NewEvent {
+        make(
+            Kind::EscalationExpired,
+            text,
+            json!({"escalation": escalation, "reason": reason}),
+        )
     }
 
-    pub fn session_registered(text: impl Into<String>, role: &str, name: &str, forked_from: impl Serialize, tier: &str) -> NewEvent {
-        make(Kind::SessionRegistered, text, json!({"role": role, "name": name, "forked_from": forked_from, "tier": tier}))
+    pub fn session_registered(
+        text: impl Into<String>,
+        role: &str,
+        name: &str,
+        forked_from: impl Serialize,
+        tier: &str,
+    ) -> NewEvent {
+        make(
+            Kind::SessionRegistered,
+            text,
+            json!({"role": role, "name": name, "forked_from": forked_from, "tier": tier}),
+        )
     }
 
     /// `reply` is in `data` only when true (`session state idle --reply`).
-    pub fn session_state(text: impl Into<String>, from: &str, to: &str, label: Option<&str>, reply: bool) -> NewEvent {
+    pub fn session_state(
+        text: impl Into<String>,
+        from: &str,
+        to: &str,
+        label: Option<&str>,
+        reply: bool,
+    ) -> NewEvent {
         let mut data = json!({"from": from, "to": to, "label": label});
         if reply {
             data["reply"] = json!(true);
@@ -350,8 +526,17 @@ impl NewEvent {
     }
 
     /// `pane` and `window` are null when the Session has no pane (`place` is then `none`).
-    pub fn session_moved(text: impl Into<String>, pane: Option<&str>, window: Option<&str>, place: &str) -> NewEvent {
-        make(Kind::SessionMoved, text, json!({"pane": pane, "window": window, "place": place}))
+    pub fn session_moved(
+        text: impl Into<String>,
+        pane: Option<&str>,
+        window: Option<&str>,
+        place: &str,
+    ) -> NewEvent {
+        make(
+            Kind::SessionMoved,
+            text,
+            json!({"pane": pane, "window": window, "place": place}),
+        )
     }
 
     pub fn session_renamed(text: impl Into<String>, name: &str) -> NewEvent {
@@ -369,11 +554,19 @@ impl NewEvent {
     /// `session-model-changed` (contract §5.2, commands.md §14.6): `cpd preset apply` rewrote the machine host
     /// `[model]`; the Session's letter model moved from `from` to `to`. The adapter switches pi at its next idle.
     pub fn session_model_changed(text: impl Into<String>, from: &str, to: &str) -> NewEvent {
-        make(Kind::SessionModelChanged, text, json!({"from": from, "to": to}))
+        make(
+            Kind::SessionModelChanged,
+            text,
+            json!({"from": from, "to": to}),
+        )
     }
 
     pub fn mcp_attached(text: impl Into<String>, name: &str, server: impl Serialize) -> NewEvent {
-        make(Kind::McpAttached, text, json!({"name": name, "server": server}))
+        make(
+            Kind::McpAttached,
+            text,
+            json!({"name": name, "server": server}),
+        )
     }
 
     pub fn session_asleep(text: impl Into<String>) -> NewEvent {
@@ -400,16 +593,42 @@ impl NewEvent {
         )
     }
 
-    pub fn records_retired(text: impl Into<String>, context: &str, approved: impl Serialize, rejected: impl Serialize) -> NewEvent {
-        make(Kind::RecordsRetired, text, json!({"context": context, "approved": approved, "rejected": rejected}))
+    pub fn records_retired(
+        text: impl Into<String>,
+        context: &str,
+        approved: impl Serialize,
+        rejected: impl Serialize,
+    ) -> NewEvent {
+        make(
+            Kind::RecordsRetired,
+            text,
+            json!({"context": context, "approved": approved, "rejected": rejected}),
+        )
     }
 
-    pub fn docs_decided(text: impl Into<String>, context: &str, sent: impl Serialize, dismissed: impl Serialize) -> NewEvent {
-        make(Kind::DocsDecided, text, json!({"context": context, "sent": sent, "dismissed": dismissed}))
+    pub fn docs_decided(
+        text: impl Into<String>,
+        context: &str,
+        sent: impl Serialize,
+        dismissed: impl Serialize,
+    ) -> NewEvent {
+        make(
+            Kind::DocsDecided,
+            text,
+            json!({"context": context, "sent": sent, "dismissed": dismissed}),
+        )
     }
 
-    pub fn context_curated(text: impl Into<String>, context: &str, curated: u64, rejected: u64, retire: u64, docs: u64) -> NewEvent {
-        let mut data = json!({"context": context, "curated": curated, "retire": retire, "docs": docs});
+    pub fn context_curated(
+        text: impl Into<String>,
+        context: &str,
+        curated: u64,
+        rejected: u64,
+        retire: u64,
+        docs: u64,
+    ) -> NewEvent {
+        let mut data =
+            json!({"context": context, "curated": curated, "retire": retire, "docs": docs});
         // `rejected` is there only when a line was rejected (contract §5.2).
         if rejected > 0 {
             data["rejected"] = json!(rejected);
@@ -441,17 +660,45 @@ impl NewEvent {
         make(Kind::SessionArchived, text, json!({"archived": archived}))
     }
 
-    pub fn session_message(text: impl Into<String>, from: impl Serialize, message: &str, wake: bool) -> NewEvent {
-        make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
+    pub fn session_message(
+        text: impl Into<String>,
+        from: impl Serialize,
+        message: &str,
+        wake: bool,
+    ) -> NewEvent {
+        make(
+            Kind::SessionMessage,
+            text,
+            json!({"from": from, "text": message, "wake": wake}),
+        )
     }
 
     /// A `session-message` of `cpd session send`: it always wakes, so it carries `unblocks` and no `wake` (hs-d514).
-    pub fn session_message_unblocking(text: impl Into<String>, from: impl Serialize, message: &str, unblocks: &str) -> NewEvent {
-        make(Kind::SessionMessage, text, json!({"from": from, "text": message, "unblocks": unblocks}))
+    pub fn session_message_unblocking(
+        text: impl Into<String>,
+        from: impl Serialize,
+        message: &str,
+        unblocks: &str,
+    ) -> NewEvent {
+        make(
+            Kind::SessionMessage,
+            text,
+            json!({"from": from, "text": message, "unblocks": unblocks}),
+        )
     }
 
-    pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
-        make(Kind::InboxOpened, text, json!({"item": item, "kind": kind, "urgency": urgency, "label": label}))
+    pub fn inbox_opened(
+        text: impl Into<String>,
+        item: i64,
+        kind: &str,
+        urgency: &str,
+        label: &str,
+    ) -> NewEvent {
+        make(
+            Kind::InboxOpened,
+            text,
+            json!({"item": item, "kind": kind, "urgency": urgency, "label": label}),
+        )
     }
 
     pub fn inbox_closed(text: impl Into<String>, item: i64, kind: &str) -> NewEvent {
@@ -459,7 +706,11 @@ impl NewEvent {
     }
 
     pub fn inbox_snoozed(text: impl Into<String>, item: i64, until: &str) -> NewEvent {
-        make(Kind::InboxSnoozed, text, json!({"item": item, "until": until}))
+        make(
+            Kind::InboxSnoozed,
+            text,
+            json!({"item": item, "until": until}),
+        )
     }
 
     pub fn inbox_dismissed(text: impl Into<String>, item: i64) -> NewEvent {
@@ -478,8 +729,18 @@ impl NewEvent {
         make(Kind::WatchStopped, text, json!({"pid": pid}))
     }
 
-    pub fn error(text: impl Into<String>, source: &str, code: &str, message: &str, details: impl Serialize) -> NewEvent {
-        make(Kind::Error, text, json!({"source": source, "code": code, "message": message, "details": details}))
+    pub fn error(
+        text: impl Into<String>,
+        source: &str,
+        code: &str,
+        message: &str,
+        details: impl Serialize,
+    ) -> NewEvent {
+        make(
+            Kind::Error,
+            text,
+            json!({"source": source, "code": code, "message": message, "details": details}),
+        )
     }
 
     /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
@@ -546,11 +807,17 @@ mod tests {
                 NewEvent::job_added_by_cpd(T, s, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s))), NewEvent::job_merged_explore(T, s, s, s, s, s)],
+            Kind::JobMerged => vec![
+                NewEvent::job_merged(T, s, s, s, false, false, None),
+                NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s))),
+                NewEvent::job_merged_explore(T, s, s, s, s, s),
+            ],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobAddendum => vec![NewEvent::job_addendum(T, s)],
+            Kind::JobBlocked => vec![NewEvent::job_blocked(T, 1)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![
                 NewEvent::attempt_status(T, s, s),
@@ -559,7 +826,19 @@ mod tests {
                 NewEvent::attempt_check_end(T, s, true),
             ],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
+            Kind::AttemptAborted => vec![NewEvent::attempt_aborted(T, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
+            Kind::AttemptEnded => vec![
+                NewEvent::attempt_ended(
+                    T,
+                    Some(
+                        &json!({"turns": 1, "tokens_in": 2, "tokens_out": 3, "cache_read": 4, "cache_write": 5, "cost_usd": 0.0, "duration_s": 6.0, "model": "m", "stop_reason": "stop", "thinking_level": "high"}),
+                    ),
+                ),
+                NewEvent::attempt_ended(T, None),
+                // a partial blob still yields all ten keys, the rest null
+                NewEvent::attempt_ended(T, Some(&json!({"duration_s": 6.0, "cost_usd": 0.5}))),
+            ],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::WorkflowAdded => vec![NewEvent::workflow_added(T, s, s, s, s, None, None, [s], b)],
@@ -578,8 +857,14 @@ mod tests {
             Kind::EscalationAnswered => vec![NewEvent::escalation_answered(T, s)],
             Kind::EscalationExpired => vec![NewEvent::escalation_expired(T, s, s)],
             Kind::SessionRegistered => vec![NewEvent::session_registered(T, s, s, s, s)],
-            Kind::SessionState => vec![NewEvent::session_state(T, s, s, None, false), NewEvent::session_state(T, s, s, None, true)],
-            Kind::SessionMoved => vec![NewEvent::session_moved(T, Some(s), Some(s), s), NewEvent::session_moved(T, None, None, s)],
+            Kind::SessionState => vec![
+                NewEvent::session_state(T, s, s, None, false),
+                NewEvent::session_state(T, s, s, None, true),
+            ],
+            Kind::SessionMoved => vec![
+                NewEvent::session_moved(T, Some(s), Some(s), s),
+                NewEvent::session_moved(T, None, None, s),
+            ],
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
@@ -589,16 +874,24 @@ mod tests {
             Kind::SessionResumed => vec![NewEvent::session_resumed(T)],
             Kind::PlanDeleted => vec![NewEvent::plan_deleted(T, &Counts::default())],
             Kind::ContextDeleted => vec![NewEvent::context_deleted(T, 0, &Counts::default())],
-            Kind::RecordsRetired => vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())],
+            Kind::RecordsRetired => {
+                vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())]
+            }
             Kind::DocsDecided => vec![NewEvent::docs_decided(T, s, [s], Vec::<String>::new())],
-            Kind::ContextCurated => vec![NewEvent::context_curated(T, s, 0, 0, 0, 0), NewEvent::context_curated(T, s, 1, 1, 0, 0)],
+            Kind::ContextCurated => vec![
+                NewEvent::context_curated(T, s, 0, 0, 0, 0),
+                NewEvent::context_curated(T, s, 1, 1, 0, 0),
+            ],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_unblocking(T, s, s, s)],
+            Kind::SessionMessage => vec![
+                NewEvent::session_message(T, s, s, b),
+                NewEvent::session_message_unblocking(T, s, s, s),
+            ],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],
@@ -631,14 +924,56 @@ mod tests {
         for &kind in Kind::ALL {
             let spec = kind.spec();
             let samples = samples(kind);
-            assert!(samples.is_empty() == RETIRED.contains(&kind), "{kind}: a constructor exists exactly for a kind that is not retired");
+            assert!(
+                samples.is_empty() == RETIRED.contains(&kind),
+                "{kind}: a constructor exists exactly for a kind that is not retired"
+            );
             for event in samples {
                 assert_eq!(event.kind(), kind);
-                let keys: BTreeSet<&str> = event.data().as_object().expect("data is an object").keys().map(String::as_str).collect();
-                let missing: Vec<_> = spec.required.iter().filter(|k| !keys.contains(**k)).collect();
-                let unknown: Vec<_> = keys.iter().filter(|k| !spec.required.contains(k) && !spec.optional.contains(k)).collect();
-                assert!(missing.is_empty() && unknown.is_empty(), "{kind}: missing {missing:?}, unknown {unknown:?}");
+                let keys: BTreeSet<&str> = event
+                    .data()
+                    .as_object()
+                    .expect("data is an object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect();
+                let missing: Vec<_> = spec
+                    .required
+                    .iter()
+                    .filter(|k| !keys.contains(**k))
+                    .collect();
+                let unknown: Vec<_> = keys
+                    .iter()
+                    .filter(|k| !spec.required.contains(k) && !spec.optional.contains(k))
+                    .collect();
+                assert!(
+                    missing.is_empty() && unknown.is_empty(),
+                    "{kind}: missing {missing:?}, unknown {unknown:?}"
+                );
             }
+        }
+    }
+
+    /// A partial (or absent) metrics blob still yields the ten keys, the missing ones null: the
+    /// `attempt-ended` schema requires all ten (hs-d798).
+    #[test]
+    fn attempt_ended_fills_a_partial_metrics_blob_with_null() {
+        let event =
+            NewEvent::attempt_ended("text", Some(&json!({"duration_s": 6.0, "cost_usd": 0.5})));
+        let data = event.data();
+        assert_eq!(data["duration_s"], json!(6.0));
+        assert_eq!(data["cost_usd"], json!(0.5));
+        for key in [
+            "turns",
+            "tokens_in",
+            "tokens_out",
+            "cache_read",
+            "cache_write",
+            "model",
+            "stop_reason",
+            "thinking_level",
+        ] {
+            assert_eq!(data[key], Value::Null, "{key} is null for a partial blob");
         }
     }
 
@@ -678,10 +1013,21 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&file).unwrap();
-            for (i, _) in text.lines().enumerate().filter(|(_, l)| l.contains(&needle)) {
-                found.push(format!("{}:{}", file.strip_prefix(&src).unwrap().display(), i + 1));
+            for (i, _) in text
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| l.contains(&needle))
+            {
+                found.push(format!(
+                    "{}:{}",
+                    file.strip_prefix(&src).unwrap().display(),
+                    i + 1
+                ));
             }
         }
-        assert!(found.is_empty(), "build these Events with the constructor of their kind (events/typed.rs): {found:#?}");
+        assert!(
+            found.is_empty(),
+            "build these Events with the constructor of their kind (events/typed.rs): {found:#?}"
+        );
     }
 }

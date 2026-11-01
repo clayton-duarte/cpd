@@ -55,10 +55,15 @@ pub struct File {
 
 /// What reading one file gave.
 #[derive(Clone, Debug)]
+// The variant carries the one value this enum exists to hand back; boxing is a type change out of scope.
+#[allow(clippy::large_enum_variant)]
 pub enum Read {
     Good(File),
     /// Not JSON of the contract's shape: treated as missing, and reported.
-    Unparseable { provider: String, path: PathBuf },
+    Unparseable {
+        provider: String,
+        path: PathBuf,
+    },
 }
 
 fn path_of(home: &CpdHome, provider: &str) -> PathBuf {
@@ -66,7 +71,11 @@ fn path_of(home: &CpdHome, provider: &str) -> PathBuf {
 }
 
 fn io_failed(what: &str, path: &Path, e: std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display())).with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot {what} {}: {e}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 fn read_file(provider: &str, path: &Path) -> Result<Option<Read>, CpdError> {
@@ -76,8 +85,17 @@ fn read_file(provider: &str, path: &Path) -> Result<Option<Read>, CpdError> {
         Err(e) => return Err(io_failed("read", path, e)),
     };
     Ok(Some(match serde_json::from_str::<File>(&text) {
-        Ok(file) if file.version == 1 && file.provider == provider && OffsetDateTime::parse(&file.polled_at, &Rfc3339).is_ok() => Read::Good(file),
-        _ => Read::Unparseable { provider: provider.to_owned(), path: path.to_owned() },
+        Ok(file)
+            if file.version == 1
+                && file.provider == provider
+                && OffsetDateTime::parse(&file.polled_at, &Rfc3339).is_ok() =>
+        {
+            Read::Good(file)
+        }
+        _ => Read::Unparseable {
+            provider: provider.to_owned(),
+            path: path.to_owned(),
+        },
     }))
 }
 
@@ -91,8 +109,16 @@ pub fn read_all(home: &CpdHome) -> Result<Vec<Read>, CpdError> {
     };
     let mut names = BTreeSet::new();
     for entry in entries {
-        let name = entry.map_err(|e| io_failed("list", &dir, e))?.file_name().to_string_lossy().into_owned();
-        if let Some(provider) = name.strip_prefix("models-").and_then(|n| n.strip_suffix(".json")).filter(|p| super::safe_name(p)) {
+        let name = entry
+            .map_err(|e| io_failed("list", &dir, e))?
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        if let Some(provider) = name
+            .strip_prefix("models-")
+            .and_then(|n| n.strip_suffix(".json"))
+            .filter(|p| super::safe_name(p))
+        {
             names.insert(provider.to_owned());
         }
     }
@@ -141,8 +167,15 @@ pub struct Applied {
 /// `locks/models.lock`, held while the value lives; `lock_timeout` after `busy_ms`.
 fn take_lock(home: &CpdHome, busy_ms: u32) -> Result<std::fs::File, CpdError> {
     let path = home.locks_dir().join("models.lock");
-    fs::create_dir_all(home.locks_dir()).map_err(|e| io_failed("create the directory of", &path, e))?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| io_failed("open", &path, e))?;
+    fs::create_dir_all(home.locks_dir())
+        .map_err(|e| io_failed("create the directory of", &path, e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| io_failed("open", &path, e))?;
     let wait = Duration::from_millis(u64::from(busy_ms));
     let started = Instant::now();
     loop {
@@ -150,9 +183,16 @@ fn take_lock(home: &CpdHome, busy_ms: u32) -> Result<std::fs::File, CpdError> {
             return Ok(file);
         }
         if started.elapsed() >= wait {
-            return Err(CpdError::new(ErrorCode::LockTimeout, format!("Another model-list write held {} for longer than {} ms.", path.display(), busy_ms))
-                .with("lock", path.display().to_string())
-                .with("waited_ms", busy_ms));
+            return Err(CpdError::new(
+                ErrorCode::LockTimeout,
+                format!(
+                    "Another model-list write held {} for longer than {} ms.",
+                    path.display(),
+                    busy_ms
+                ),
+            )
+            .with("lock", path.display().to_string())
+            .with("waited_ms", busy_ms));
         }
         std::thread::sleep(RETRY);
     }
@@ -161,22 +201,40 @@ fn take_lock(home: &CpdHome, busy_ms: u32) -> Result<std::fs::File, CpdError> {
 /// `run/models-<provider>.json` whole: a `.tmp` and a rename, so a reader never sees half of it.
 fn write_file(path: &Path, file: &File) -> Result<(), CpdError> {
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(file).expect("a cache file serializes")).map_err(|e| io_failed("write", &tmp, e))?;
+    fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(file).expect("a cache file serializes"),
+    )
+    .map_err(|e| io_failed("write", &tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| io_failed("replace", path, e))
 }
 
 fn sorted(ids: &[String]) -> Vec<String> {
-    ids.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect()
+    ids.iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn diff(old: &[String], new: &[String], at: &str) -> Option<Changes> {
     let (old, new): (BTreeSet<_>, BTreeSet<_>) = (old.iter().collect(), new.iter().collect());
     let appeared: Vec<String> = new.difference(&old).map(|s| (*s).clone()).collect();
     let went_away: Vec<String> = old.difference(&new).map(|s| (*s).clone()).collect();
-    (!appeared.is_empty() || !went_away.is_empty()).then(|| Changes { at: at.to_owned(), appeared, went_away })
+    (!appeared.is_empty() || !went_away.is_empty()).then(|| Changes {
+        at: at.to_owned(),
+        appeared,
+        went_away,
+    })
 }
 
-fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, applied: &mut Applied) -> Result<Outcome, CpdError> {
+fn write_listed(
+    home: &CpdHome,
+    pi_version: &str,
+    listed: &Listed,
+    now: &str,
+    applied: &mut Applied,
+) -> Result<Outcome, CpdError> {
     let provider = &listed.provider;
     let ids = sorted(&listed.ids);
     if ids.is_empty() {
@@ -202,20 +260,33 @@ fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, ap
     // The file keeps the last change, not the last poll.
     let kept = this.clone().or_else(|| comparable.and_then(|p| p.changes));
     let known = listed.known.as_deref().map(sorted);
-    let kind = if listed.auth == "custom" { "openai-models" } else { "copilot-available" };
+    let kind = if listed.auth == "custom" {
+        "openai-models"
+    } else {
+        "copilot-available"
+    };
     let file = File {
         version: 1,
         provider: provider.clone(),
         polled_at: now.to_owned(),
         pi_version: pi_version.to_owned(),
-        source: Source { kind: kind.to_owned(), auth: listed.auth.clone(), base: listed.base.clone() },
+        source: Source {
+            kind: kind.to_owned(),
+            auth: listed.auth.clone(),
+            base: listed.base.clone(),
+        },
         ids,
         known,
         changes: kept,
     };
     fs::create_dir_all(home.run_dir()).map_err(|e| io_failed("create", &home.run_dir(), e))?;
     write_file(&path, &file)?;
-    Ok(Outcome::Written(Written { provider: provider.clone(), polled_at: now.to_owned(), count: file.ids.len(), changes: this }))
+    Ok(Outcome::Written(Written {
+        provider: provider.clone(),
+        polled_at: now.to_owned(),
+        count: file.ids.len(),
+        changes: this,
+    }))
 }
 
 /// Writes the good lists of `answer` (contract §3.7 E15), each against its own previous file, under
@@ -226,13 +297,20 @@ pub fn apply(home: &CpdHome, busy: &Timeouts, answer: &Answer) -> Result<Applied
 }
 
 /// [`apply`] with `polled_at` the time `at` (the engine's clock, so a test's virtual time is what the files say).
-pub fn apply_at(home: &CpdHome, busy: &Timeouts, answer: &Answer, at: OffsetDateTime) -> Result<Applied, CpdError> {
+pub fn apply_at(
+    home: &CpdHome,
+    busy: &Timeouts,
+    answer: &Answer,
+    at: OffsetDateTime,
+) -> Result<Applied, CpdError> {
     let _lock = take_lock(home, busy.store_busy_ms)?;
     let now = timestamp(at);
     let mut applied = Applied::default();
     for entry in &answer.entries {
         let outcome = match entry {
-            Entry::Listed(listed) => write_listed(home, &answer.pi_version, listed, &now, &mut applied)?,
+            Entry::Listed(listed) => {
+                write_listed(home, &answer.pi_version, listed, &now, &mut applied)?
+            }
             Entry::Failed(failure) => Outcome::Failed(failure.clone()),
         };
         applied.outcomes.push(outcome);

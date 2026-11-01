@@ -22,9 +22,19 @@ impl Checkout {
         let origin = env.git_repo("install-origin");
         fs::create_dir_all(origin.join("scripts")).unwrap();
         for script in ["install-cpd.sh", "cargo.sh"] {
-            fs::copy(Path::new(SCRIPTS).join(script), origin.join("scripts").join(script)).unwrap();
+            fs::copy(
+                Path::new(SCRIPTS).join(script),
+                origin.join("scripts").join(script),
+            )
+            .unwrap();
         }
-        for file in ["package.json", "extension.ts", "lib/cpd.ts", "lib/adapter.ts", "test/cpd.test.ts"] {
+        for file in [
+            "package.json",
+            "extension.ts",
+            "lib/cpd.ts",
+            "lib/adapter.ts",
+            "test/cpd.test.ts",
+        ] {
             let path = origin.join("pi").join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, format!("{file}\n")).unwrap();
@@ -37,7 +47,15 @@ impl Checkout {
         env.git(&origin, &["add", "-A"]);
         env.git(&origin, &["commit", "-q", "-m", "install files"]);
         let root = env.root().join("repos/install-clone");
-        env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), root.to_str().unwrap()]);
+        env.git(
+            env.root(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                root.to_str().unwrap(),
+            ],
+        );
         Checkout { root }
     }
 

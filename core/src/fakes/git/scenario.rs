@@ -26,7 +26,7 @@ pub(super) struct World {
     pub route: Arc<GitRoute>,
     pub runner: FakeRunner,
     dirs: usize,
-    worktrees: Vec<(PathBuf, PathBuf)>,  // (worktree_path, repo_dir)
+    worktrees: Vec<(PathBuf, PathBuf)>, // (worktree_path, repo_dir)
 }
 
 pub(super) fn world() -> World {
@@ -37,7 +37,14 @@ pub(super) fn world() -> World {
     let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let runner = FakeRunner::new(clock.clone()).with_git(&route);
-    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, dirs: 0, worktrees: Vec::new() }
+    World {
+        tmp: tempfile::tempdir().unwrap(),
+        universe,
+        route,
+        runner,
+        dirs: 0,
+        worktrees: Vec::new(),
+    }
 }
 
 pub(super) fn p(path: &Path) -> &str {
@@ -86,7 +93,10 @@ impl World {
     }
     fn build(&self, repo: &Repo, parents: &[&Oid], files: &[(&str, &str)], message: &str) -> Oid {
         self.u(|u| {
-            let blobs: Vec<(&str, Oid)> = files.iter().map(|(p, t)| (*p, u.blob(repo.id(), t.as_bytes()))).collect();
+            let blobs: Vec<(&str, Oid)> = files
+                .iter()
+                .map(|(p, t)| (*p, u.blob(repo.id(), t.as_bytes())))
+                .collect();
             let entries: Vec<(&str, &Oid)> = blobs.iter().map(|(p, b)| (*p, b)).collect();
             let tree = u.tree(repo.id(), &entries);
             let parents: Vec<Oid> = parents.iter().map(|p| (*p).clone()).collect();
@@ -94,11 +104,29 @@ impl World {
         })
     }
     /// A commit of exactly `files` over `parent` (or a root commit), authored by the default user, moving no ref.
-    pub fn snap(&self, repo: &Repo, parent: Option<&Oid>, files: &[(&str, &str)], message: &str) -> Oid {
-        self.build(repo, &parent.into_iter().collect::<Vec<_>>(), files, message)
+    pub fn snap(
+        &self,
+        repo: &Repo,
+        parent: Option<&Oid>,
+        files: &[(&str, &str)],
+        message: &str,
+    ) -> Oid {
+        self.build(
+            repo,
+            &parent.into_iter().collect::<Vec<_>>(),
+            files,
+            message,
+        )
     }
     /// [`World::snap`] authored by `<name> <<name>@x.invalid>`.
-    pub fn by(&self, repo: &Repo, name: &str, parent: Option<&Oid>, files: &[(&str, &str)], message: &str) -> Oid {
+    pub fn by(
+        &self,
+        repo: &Repo,
+        name: &str,
+        parent: Option<&Oid>,
+        files: &[(&str, &str)],
+        message: &str,
+    ) -> Oid {
         self.u(|u| {
             u.config_set(repo.id(), "user.name", name);
             u.config_set(repo.id(), "user.email", &format!("{name}@x.invalid"));
@@ -111,16 +139,36 @@ impl World {
         commit
     }
     /// A commit with these parents (a merge when there are two), authored by the default user, moving no ref.
-    pub fn join(&self, repo: &Repo, parents: &[&Oid], files: &[(&str, &str)], message: &str) -> Oid {
+    pub fn join(
+        &self,
+        repo: &Repo,
+        parents: &[&Oid],
+        files: &[(&str, &str)],
+        message: &str,
+    ) -> Oid {
         self.build(repo, parents, files, message)
     }
     /// `refs/heads/<name>` at `oid`.
     pub fn branch(&self, repo: &Repo, name: &str, oid: &Oid) {
-        self.u(|u| u.set_ref(repo.id(), &format!("refs/heads/{name}"), oid, "branch: test"));
+        self.u(|u| {
+            u.set_ref(
+                repo.id(),
+                &format!("refs/heads/{name}"),
+                oid,
+                "branch: test",
+            )
+        });
     }
     /// `refs/remotes/origin/<name>` at `oid`.
     pub fn tracking(&self, repo: &Repo, name: &str, oid: &Oid) {
-        self.u(|u| u.set_ref(repo.id(), &format!("refs/remotes/origin/{name}"), oid, "fetch"));
+        self.u(|u| {
+            u.set_ref(
+                repo.id(),
+                &format!("refs/remotes/origin/{name}"),
+                oid,
+                "fetch",
+            )
+        });
     }
     /// `git -C <dir> <args...>`, the form of the product.
     pub fn git(&self, dir: &Path, args: &[&str]) -> Out {
@@ -131,7 +179,10 @@ impl World {
     /// [`World::git`] with the options the product puts before a rebase: `-c core.editor=true -c sequence.editor=true`.
     pub fn git_no_editor(&self, dir: &Path, args: &[&str]) -> Out {
         let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(dir).args(["-c", "core.editor=true", "-c", "sequence.editor=true"]).args(args);
+        cmd.arg("-C")
+            .arg(dir)
+            .args(["-c", "core.editor=true", "-c", "sequence.editor=true"])
+            .args(args);
         run(&self.runner, &mut cmd)
     }
     /// [`World::git`] that must exit 0; returns stdout.
@@ -147,15 +198,31 @@ impl World {
     /// A linked worktree on the new branch `branch` at `at`, made by `worktree add`.
     pub fn worktree(&mut self, repo: &Repo, branch: &str, at: &Oid) -> PathBuf {
         let path = self.fresh("wt");
-        self.ok(repo.dir(), &["worktree", "add", "--no-track", "-b", branch, p(&path), at.as_str()]);
-        self.worktrees.push((path.clone(), repo.dir().to_path_buf()));
+        self.ok(
+            repo.dir(),
+            &[
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                branch,
+                p(&path),
+                at.as_str(),
+            ],
+        );
+        self.worktrees
+            .push((path.clone(), repo.dir().to_path_buf()));
         path
     }
     /// A linked worktree with a detached `HEAD` at `at` (the gate worktree of the product).
     pub fn detached(&mut self, repo: &Repo, at: &Oid) -> PathBuf {
         let path = self.fresh("gate");
-        self.ok(repo.dir(), &["worktree", "add", "--detach", p(&path), at.as_str()]);
-        self.worktrees.push((path.clone(), repo.dir().to_path_buf()));
+        self.ok(
+            repo.dir(),
+            &["worktree", "add", "--detach", p(&path), at.as_str()],
+        );
+        self.worktrees
+            .push((path.clone(), repo.dir().to_path_buf()));
         path
     }
 
@@ -167,12 +234,18 @@ impl World {
     }
     /// The file `path` of the tree of `rev` (a commit or a tree), as `git rev-parse <rev>:<path>` finds it.
     pub fn file_at(&self, dir: &Path, rev: &str, path: &str) -> Option<String> {
-        let out = self.git(dir, &["rev-parse", "--verify", "--quiet", &format!("{rev}:{path}")]);
+        let out = self.git(
+            dir,
+            &["rev-parse", "--verify", "--quiet", &format!("{rev}:{path}")],
+        );
         (out.code == 0).then(|| self.text(&Oid::new(out.stdout.trim())))
     }
     /// Every path of the tree of `rev`, sorted.
     pub fn paths_at(&self, dir: &Path, rev: &str) -> Vec<String> {
-        self.ok(dir, &["ls-tree", "-r", "--name-only", rev]).lines().map(str::to_owned).collect()
+        self.ok(dir, &["ls-tree", "-r", "--name-only", rev])
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
     /// The commit's data.
     pub fn commit_of(&self, oid: &Oid) -> Commit {
@@ -190,11 +263,18 @@ impl World {
     }
     /// The index of the worktree at `dir` as `(path, stage)`, sorted.
     pub fn stages(&self, dir: &Path) -> Vec<(String, u8)> {
-        self.u(|u| u.index(&u.worktree_of(dir).unwrap())).into_iter().map(|(p, _, s)| (p, s)).collect()
+        self.u(|u| u.index(&u.worktree_of(dir).unwrap()))
+            .into_iter()
+            .map(|(p, _, s)| (p, s))
+            .collect()
     }
     /// The text the index of the worktree at `dir` holds for `path` at `stage`.
     pub fn staged(&self, dir: &Path, path: &str, stage: u8) -> Option<String> {
-        let blob = self.u(|u| u.index(&u.worktree_of(dir).unwrap())).into_iter().find(|(p, _, s)| p == path && *s == stage).map(|(_, b, _)| b);
+        let blob = self
+            .u(|u| u.index(&u.worktree_of(dir).unwrap()))
+            .into_iter()
+            .find(|(p, _, s)| p == path && *s == stage)
+            .map(|(_, b, _)| b);
         blob.map(|b| self.text(&b))
     }
     /// `git add <path>` of the working file as it is: stage 0, the other stages of the path gone.
@@ -222,7 +302,13 @@ impl World {
     }
     /// The absolute path `git rev-parse --path-format=absolute --git-path <name>` prints in `dir`.
     pub fn git_path(&self, dir: &Path, name: &str) -> PathBuf {
-        PathBuf::from(self.ok(dir, &["rev-parse", "--path-format=absolute", "--git-path", name]).trim())
+        PathBuf::from(
+            self.ok(
+                dir,
+                &["rev-parse", "--path-format=absolute", "--git-path", name],
+            )
+            .trim(),
+        )
     }
 }
 
@@ -232,7 +318,13 @@ impl Drop for World {
         // that must be cleaned up with `git worktree remove`, not just by deleting the directory.
         for (wt_path, repo_dir) in &self.worktrees {
             let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(repo_dir).args(&["worktree", "remove", "--force", "--force", p(wt_path)]);
+            cmd.arg("-C").arg(repo_dir).args([
+                "worktree",
+                "remove",
+                "--force",
+                "--force",
+                p(wt_path),
+            ]);
             let _ = self.runner.output(&mut cmd, "git", Duration::from_secs(60));
         }
     }

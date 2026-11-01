@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
+use super::TAIL_LINES;
 use super::run::{branch_exists_with, current_branch_with, ok_with, rev_parse_with, run_with};
 use super::worktree::{list_with, worktree_of_branch_with};
-use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
 use crate::host::runner::Runner;
@@ -61,7 +61,10 @@ pub enum HookOutcome {
     /// Exit 0, or no commands.
     Passed,
     /// The first failing command's exit code, in file order.
-    Failed { exit: i32, command: String },
+    Failed {
+        exit: i32,
+        command: String,
+    },
     Error(HookError),
 }
 
@@ -109,7 +112,15 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_hook_with(&Ports::current(), hook, pipeline, worktree, operation, timeout, log)
+    run_hook_with(
+        &Ports::current(),
+        hook,
+        pipeline,
+        worktree,
+        operation,
+        timeout,
+        log,
+    )
 }
 
 /// [`run_hook`] on `ports`: the git calls that build the template variables and the hooks themselves go through
@@ -123,7 +134,17 @@ pub fn run_hook_with(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(ports, hook, pipeline, worktree, None, operation, timeout, log, Log::Truncate)
+    run_with_branch(
+        ports,
+        hook,
+        pipeline,
+        worktree,
+        None,
+        operation,
+        timeout,
+        log,
+        Log::Truncate,
+    )
 }
 
 /// How a hook's log is opened: every hook starts its log afresh, except the Gate's `pre-merge`, whose log
@@ -146,6 +167,8 @@ pub struct Detached<'a> {
 /// [`run_hook`] in a worktree whose `HEAD` is detached (a gate worktree,
 /// contract §7.3, §7.6): the template variable `branch` is `detached.branch`
 /// instead of being read from `HEAD`, and `detached.env` is added to the environment.
+// Each argument is a distinct input of the hook; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 pub fn run_hook_as(
     hook: Hook,
     pipeline: &Pipeline,
@@ -156,9 +179,21 @@ pub fn run_hook_as(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(&Ports::current(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
+    run_with_branch(
+        &Ports::current(),
+        hook,
+        pipeline,
+        worktree,
+        Some(detached),
+        operation,
+        timeout,
+        log,
+        mode,
+    )
 }
 
+// Each argument is a distinct input of the hook; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 fn run_with_branch(
     ports: &Ports,
     hook: Hook,
@@ -171,10 +206,15 @@ fn run_with_branch(
     mode: Log,
 ) -> Result<HookResult, CpdError> {
     if pipeline.is_empty() {
-        return Ok(HookResult { outcome: HookOutcome::Passed, tail: None });
+        return Ok(HookResult {
+            outcome: HookOutcome::Passed,
+            tail: None,
+        });
     }
 
-    let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
+    let cwd = worktree
+        .canonicalize()
+        .unwrap_or_else(|_| worktree.to_path_buf());
     let vars = variables(ports, hook, &cwd, detached.map(|d| d.branch), operation)?;
     let mut blocks = Vec::new();
     for block in &pipeline.blocks {
@@ -187,15 +227,30 @@ fn run_with_branch(
             let command = match template::render(&c.template, &vars) {
                 Ok(command) => command,
                 Err(why) => {
-                    return Ok(HookResult { outcome: HookOutcome::Error(HookError::Invalid(why)), tail: None });
+                    return Ok(HookResult {
+                        outcome: HookOutcome::Error(HookError::Invalid(why)),
+                        tail: None,
+                    });
                 }
             };
-            rendered.push(exec::Rendered { name: c.name.clone(), command, context: exec::context_json(&vars) });
+            rendered.push(exec::Rendered {
+                name: c.name.clone(),
+                command,
+                context: exec::context_json(&vars),
+            });
         }
         blocks.push(rendered);
     }
 
-    Ok(run_rendered(ports, &blocks, &cwd, detached.map_or(&[], |d| d.env), timeout, log, mode))
+    Ok(run_rendered(
+        ports,
+        &blocks,
+        &cwd,
+        detached.map_or(&[], |d| d.env),
+        timeout,
+        log,
+        mode,
+    ))
 }
 
 /// Runs rendered `blocks` in `cwd` and writes the output to `log` (opened as `mode` says).
@@ -213,25 +268,45 @@ fn run_rendered(
         Log::Truncate => fs::File::create(log),
         Log::Append => fs::File::options().create(true).append(true).open(log),
     };
-    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| open()) {
+    let file = match log
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| open())
+    {
         Ok(file) => file,
         Err(e) => {
             let why = format!("Cannot write {}: {e}.", log.display());
-            return HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None };
+            return HookResult {
+                outcome: HookOutcome::Error(HookError::Io(why)),
+                tail: None,
+            };
         }
     };
-    let done = exec::run_on(&*ports.runner, &*ports.clock, blocks, cwd, timeout, env, file, TAIL_LINES);
+    let done = exec::run_on(
+        &*ports.runner,
+        &*ports.clock,
+        blocks,
+        cwd,
+        timeout,
+        env,
+        file,
+        TAIL_LINES,
+    );
     let tail = Some(done.tail.join("\n"));
 
     let written = match done.log_error {
         None => Ok(()),
-        Some(e) => Err(HookError::Io(format!("Cannot write {}: {e}.", log.display()))),
+        Some(e) => Err(HookError::Io(format!(
+            "Cannot write {}: {e}.",
+            log.display()
+        ))),
     };
     let outcome = match (done.failure, written) {
         (None, Ok(())) => HookOutcome::Passed,
-        (Some(exec::Ended::Exit(exit)), _) => {
-            HookOutcome::Failed { exit, command: done.failed_command.expect("a failure has its command") }
-        }
+        (Some(exec::Ended::Exit(exit)), _) => HookOutcome::Failed {
+            exit,
+            command: done.failed_command.expect("a failure has its command"),
+        },
         (Some(exec::Ended::Signal(n)), _) => HookOutcome::Error(HookError::Signal(n)),
         (Some(exec::Ended::TimedOut), _) => HookOutcome::Error(HookError::Timeout),
         (Some(exec::Ended::NotStarted(why)), _) => HookOutcome::Error(HookError::Io(why)),
@@ -253,17 +328,36 @@ pub fn run_command(
     mode: Log,
 ) -> Result<HookResult, CpdError> {
     let ports = Ports::current();
-    let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
+    let cwd = worktree
+        .canonicalize()
+        .unwrap_or_else(|_| worktree.to_path_buf());
     let mut vars = variables(&ports, Hook::PreCommit, &cwd, None, Some(operation))?;
     for (key, value) in extra {
         vars.insert((*key).to_owned(), value.clone());
     }
     let command = match template::render(template, &vars) {
         Ok(command) => command,
-        Err(why) => return Ok(HookResult { outcome: HookOutcome::Error(HookError::Invalid(why)), tail: None }),
+        Err(why) => {
+            return Ok(HookResult {
+                outcome: HookOutcome::Error(HookError::Invalid(why)),
+                tail: None,
+            });
+        }
     };
-    let rendered = exec::Rendered { name: None, command, context: exec::context_json(&vars) };
-    Ok(run_rendered(&ports, &[vec![rendered]], &cwd, &[], timeout, log, mode))
+    let rendered = exec::Rendered {
+        name: None,
+        command,
+        context: exec::context_json(&vars),
+    };
+    Ok(run_rendered(
+        &ports,
+        &[vec![rendered]],
+        &cwd,
+        &[],
+        timeout,
+        log,
+        mode,
+    ))
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the
@@ -290,13 +384,29 @@ fn variables(
         set("branch", json!(branch));
     }
     set("worktree_path", json!(cwd));
-    set("worktree_name", json!(cwd.file_name().map(|n| n.to_string_lossy().into_owned())));
+    set(
+        "worktree_name",
+        json!(cwd.file_name().map(|n| n.to_string_lossy().into_owned())),
+    );
     set("commit", json!(rev_parse_with(runner, cwd, "HEAD")?));
-    set("short_commit", json!(ok_with(runner, cwd, &["rev-parse", "--short", "HEAD"])?.trim()));
+    set(
+        "short_commit",
+        json!(ok_with(runner, cwd, &["rev-parse", "--short", "HEAD"])?.trim()),
+    );
 
-    let primary = list_with(runner, clock, cwd)?.into_iter().next().map(|w| w.path);
+    let primary = list_with(runner, clock, cwd)?
+        .into_iter()
+        .next()
+        .map(|w| w.path);
     if let Some(primary) = primary {
-        set("repo", json!(primary.file_name().map(|n| n.to_string_lossy().into_owned())));
+        set(
+            "repo",
+            json!(
+                primary
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            ),
+        );
         set("repo_path", json!(primary));
         set("primary_worktree_path", json!(primary));
     }
@@ -333,16 +443,24 @@ fn primary_remote(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, Cpd
     let remotes = ok_with(runner, dir, &["remote"])?;
     let mut names = remotes.lines().map(str::trim).filter(|l| !l.is_empty());
     let first = names.next().map(str::to_owned);
-    Ok(if remotes.lines().any(|l| l.trim() == "origin") { Some("origin".to_owned()) } else { first })
+    Ok(if remotes.lines().any(|l| l.trim() == "origin") {
+        Some("origin".to_owned())
+    } else {
+        first
+    })
 }
 
 /// `origin/HEAD`'s branch, else `main` or `master` when it exists.
 fn default_branch(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, CpdError> {
-    let head = run_with(runner, dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?;
-    if head.code == 0 {
-        if let Some(name) = head.stdout.trim().strip_prefix("origin/") {
-            return Ok(Some(name.to_owned()));
-        }
+    let head = run_with(
+        runner,
+        dir,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )?;
+    if head.code == 0
+        && let Some(name) = head.stdout.trim().strip_prefix("origin/")
+    {
+        return Ok(Some(name.to_owned()));
     }
     for candidate in ["main", "master"] {
         if branch_exists_with(runner, dir, candidate)? {
@@ -351,4 +469,3 @@ fn default_branch(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, Cpd
     }
     Ok(None)
 }
-

@@ -20,13 +20,25 @@ struct Hunk {
 /// The hunks that turn `base` into `side`, in order. Two hunks never touch: a line they share lies between.
 fn diff(base: &[&[u8]], side: &[&[u8]]) -> Vec<Hunk> {
     let prefix = base.iter().zip(side).take_while(|(a, b)| a == b).count();
-    let suffix = base[prefix..].iter().rev().zip(side[prefix..].iter().rev()).take_while(|(a, b)| a == b).count();
-    let (b, s) = (&base[prefix..base.len() - suffix], &side[prefix..side.len() - suffix]);
+    let suffix = base[prefix..]
+        .iter()
+        .rev()
+        .zip(side[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (b, s) = (
+        &base[prefix..base.len() - suffix],
+        &side[prefix..side.len() - suffix],
+    );
     // `lcs[i][j]`: the longest common subsequence of `b[i..]` and `s[j..]`.
     let mut lcs = vec![vec![0u32; s.len() + 1]; b.len() + 1];
     for i in (0..b.len()).rev() {
         for j in (0..s.len()).rev() {
-            lcs[i][j] = if b[i] == s[j] { lcs[i + 1][j + 1] + 1 } else { lcs[i + 1][j].max(lcs[i][j + 1]) };
+            lcs[i][j] = if b[i] == s[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
         }
     }
     let (mut i, mut j) = (0, 0);
@@ -34,7 +46,12 @@ fn diff(base: &[&[u8]], side: &[&[u8]]) -> Vec<Hunk> {
     let mut hunks = Vec::new();
     let mut close = |open: &mut Option<(usize, usize)>, i: usize, j: usize| {
         if let Some((bi, sj)) = open.take() {
-            hunks.push(Hunk { start: prefix + bi, end: prefix + i, with_start: prefix + sj, with_end: prefix + j });
+            hunks.push(Hunk {
+                start: prefix + bi,
+                end: prefix + i,
+                with_start: prefix + sj,
+                with_end: prefix + j,
+            });
         }
     };
     while i < b.len() || j < s.len() {
@@ -57,7 +74,11 @@ fn diff(base: &[&[u8]], side: &[&[u8]]) -> Vec<Hunk> {
 
 /// `(inserted, deleted)` lines of the change from `old` to `new`.
 pub(super) fn line_changes(old: &[u8], new: &[u8]) -> (usize, usize) {
-    diff(&split(old), &split(new)).iter().fold((0, 0), |(ins, del), h| (ins + h.with_end - h.with_start, del + h.end - h.start))
+    diff(&split(old), &split(new))
+        .iter()
+        .fold((0, 0), |(ins, del), h| {
+            (ins + h.with_end - h.with_start, del + h.end - h.start)
+        })
 }
 
 /// The merge of `ours` and `theirs` over `base`: the text, and whether it holds conflict blocks, which are
@@ -97,15 +118,27 @@ pub(super) fn merge3(
     let mut conflicted = false;
     let mut at = 0;
     for group in groups {
-        let start = group.iter().map(|(_, h)| h.start).min().expect("a group has a hunk");
-        let end = group.iter().map(|(_, h)| h.end).max().expect("a group has a hunk");
+        let start = group
+            .iter()
+            .map(|(_, h)| h.start)
+            .min()
+            .expect("a group has a hunk");
+        let end = group
+            .iter()
+            .map(|(_, h)| h.end)
+            .max()
+            .expect("a group has a hunk");
         out.extend(base[at..start].concat());
         at = end;
         let text = |side: usize, hunk: &Hunk| sides[side][hunk.with_start..hunk.with_end].concat();
         // The hunks of one side never touch, so a group of several holds both sides.
         match group[..] {
             [(side, hunk)] => out.extend(text(side, &hunk)),
-            [(0, a), (1, b)] if (a.start, a.end) == (b.start, b.end) && text(0, &a) == text(1, &b) => out.extend(text(0, &a)),
+            [(0, a), (1, b)]
+                if (a.start, a.end) == (b.start, b.end) && text(0, &a) == text(1, &b) =>
+            {
+                out.extend(text(0, &a))
+            }
             _ => {
                 let side_text = |side: usize| {
                     let mut text: Vec<u8> = Vec::new();

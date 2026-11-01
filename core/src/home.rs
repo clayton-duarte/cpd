@@ -156,12 +156,14 @@ impl CpdHome {
 
     /// `locks/attempt-<plan>--<attempt>.lock`: the driver lock (contract §3.4).
     pub fn attempt_lock(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.locks_dir().join(format!("attempt-{plan}--{attempt}.lock"))
+        self.locks_dir()
+            .join(format!("attempt-{plan}--{attempt}.lock"))
     }
 
     /// `locks/check-<plan>--<attempt>.lock`: held by `attempt submit` while its checks run, a span (contract §7.7).
     pub fn check_lock(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.locks_dir().join(format!("check-{plan}--{attempt}.lock"))
+        self.locks_dir()
+            .join(format!("check-{plan}--{attempt}.lock"))
     }
 
     /// `locks/distill-<context>.lock`: held by the Context's one distill run (contract §4.6).
@@ -216,12 +218,15 @@ impl CpdHome {
 
     /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
     pub fn context_digest_dir(&self, context: &ContextId) -> PathBuf {
-        self.run_dir().join("context-digests").join(context.as_str())
+        self.run_dir()
+            .join("context-digests")
+            .join(context.as_str())
     }
 
     /// `run/context-digests/<context>/<upto_seq>.jsonl.invalid`: the last invalid output of the distiller (contract §4.6 step 5).
     pub fn context_digest_invalid(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
-        self.context_digest_dir(context).join(format!("{upto_seq}.jsonl.invalid"))
+        self.context_digest_dir(context)
+            .join(format!("{upto_seq}.jsonl.invalid"))
     }
 
     /// `run/context-digests/<context>/distill.pid`: the pid of the distill run the engine started (§3.7 E9), while it runs.
@@ -241,7 +246,9 @@ impl CpdHome {
 
     /// `run/<context>/manager-message.md`: a Context's Manager's first message (commands.md §3.10).
     pub fn manager_message(&self, context: &ContextId) -> PathBuf {
-        self.run_dir().join(context.as_str()).join("manager-message.md")
+        self.run_dir()
+            .join(context.as_str())
+            .join("manager-message.md")
     }
 
     /// `run/<plan>/lead-message.md`: the Plan Lead's first message (commands.md §1.4).
@@ -251,12 +258,16 @@ impl CpdHome {
 
     /// `run/<plan>/messages/<session>.md`: a fork's first message (commands.md §1.4).
     pub fn session_message(&self, plan: &PlanId, session: &SessionId) -> PathBuf {
-        self.plan_dir(plan).join("messages").join(format!("{session}.md"))
+        self.plan_dir(plan)
+            .join("messages")
+            .join(format!("{session}.md"))
     }
 
     /// `run/<plan>/specs/<attempt>.md`: the rendered Worker Spec.
     pub fn worker_spec(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan).join("specs").join(format!("{attempt}.md"))
+        self.plan_dir(plan)
+            .join("specs")
+            .join(format!("{attempt}.md"))
     }
 
     /// `run/<plan>/reviews/<attempt>.md`: the review brief.
@@ -280,37 +291,67 @@ impl CpdHome {
     }
 
     fn review_file(&self, plan: &PlanId, attempt: &AttemptId, extension: &str) -> PathBuf {
-        self.plan_dir(plan).join("reviews").join(format!("{attempt}.{extension}"))
+        self.plan_dir(plan)
+            .join("reviews")
+            .join(format!("{attempt}.{extension}"))
     }
 
     /// `run/<plan>/logs/worker-<attempt>.log`: a `durable` Worker's stdout and stderr, appended (contract §3.4 "The Worker
     /// runner and its seam").
     pub fn worker_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan).join("logs").join(format!("worker-{attempt}.log"))
+        self.plan_dir(plan)
+            .join("logs")
+            .join(format!("worker-{attempt}.log"))
     }
 
     /// `run/<plan>/attempts/<attempt>.report.json`: a `durable` Worker's end report, replaced after every settle (§6.12).
     pub fn worker_report(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan).join("attempts").join(format!("{attempt}.report.json"))
+        self.plan_dir(plan)
+            .join("attempts")
+            .join(format!("{attempt}.report.json"))
+    }
+
+    /// `run/<plan>/durable/<attempt>.sqlite`: a `durable` Worker's transcript, appended by its host every turn
+    /// (contract §6.12 `storePath`). The driver watches it for the stall rule (§3.4 A4, hs-d798).
+    pub fn durable_store(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.plan_dir(plan)
+            .join("durable")
+            .join(format!("{attempt}.sqlite"))
     }
 
     /// `run/<plan>/logs/attempt-<attempt>.log`: the Attempt driver's stderr.
     pub fn driver_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan).join("logs").join(format!("attempt-{attempt}.log"))
+        self.plan_dir(plan)
+            .join("logs")
+            .join(format!("attempt-{attempt}.log"))
     }
 
     /// `run/<plan>/attempts/<attempt>.infra`: the marker a driver leaves when an install or a store migration
     /// ended it (see [`Infra`]).
     pub fn attempt_infra(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
-        self.plan_dir(plan).join("attempts").join(format!("{attempt}.infra"))
+        self.plan_dir(plan)
+            .join("attempts")
+            .join(format!("{attempt}.infra"))
     }
 
     /// Leaves the marker of a driver that ended on `infra` (`message` says why), before it exits and releases
     /// its driver lock. Written whole, then renamed, so a reader never sees half of it.
-    pub fn leave_infra(&self, plan: &PlanId, attempt: &AttemptId, infra: Infra, message: &str) -> Result<(), CpdError> {
+    pub fn leave_infra(
+        &self,
+        plan: &PlanId,
+        attempt: &AttemptId,
+        infra: Infra,
+        message: &str,
+    ) -> Result<(), CpdError> {
         let path = self.attempt_infra(plan, attempt);
         let failed = |e: std::io::Error| {
-            CpdError::new(ErrorCode::StoreFailed, format!("Cannot write the infrastructure marker {}: {e}.", path.display()))
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!(
+                    "Cannot write the infrastructure marker {}: {e}.",
+                    path.display()
+                ),
+            )
         };
         std::fs::create_dir_all(path.parent().expect("a file in attempts/")).map_err(failed)?;
         let tmp = path.with_extension("infra.tmp");
@@ -321,21 +362,40 @@ impl CpdHome {
 
     /// The marker of `attempt`'s driver: `None` when it left none. A marker that cannot be read is an error, not
     /// a missing one.
-    pub fn infra(&self, plan: &PlanId, attempt: &AttemptId) -> Result<Option<(Infra, String)>, CpdError> {
+    pub fn infra(
+        &self,
+        plan: &PlanId,
+        attempt: &AttemptId,
+    ) -> Result<Option<(Infra, String)>, CpdError> {
         let path = self.attempt_infra(plan, attempt);
-        let bad = |why: String| CpdError::new(ErrorCode::StoreFailed, format!("The infrastructure marker {} is invalid: {why}.", path.display()));
+        let bad = |why: String| {
+            CpdError::new(
+                ErrorCode::StoreFailed,
+                format!(
+                    "The infrastructure marker {} is invalid: {why}.",
+                    path.display()
+                ),
+            )
+        };
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(bad(e.to_string())),
         };
-        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
-        let code = json.get("code").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
+        let code = json
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         let infra = [Infra::LockTimeout, Infra::StoreTooNew]
             .into_iter()
             .find(|i| i.code() == code)
             .ok_or_else(|| bad(format!("code {code:?}")))?;
-        let message = json.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let message = json
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         Ok(Some((infra, message.to_owned())))
     }
 
@@ -343,28 +403,38 @@ impl CpdHome {
     pub fn remove_infra(&self, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
         let path = self.attempt_infra(plan, attempt);
         match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot remove the infrastructure marker {}: {e}.", path.display())))
-            }
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(CpdError::new(
+                ErrorCode::StoreFailed,
+                format!(
+                    "Cannot remove the infrastructure marker {}: {e}.",
+                    path.display()
+                ),
+            )),
             _ => Ok(()),
         }
     }
 
     /// `run/<plan>/logs/<attempt>.<hook>.log`: the full output of a hook run.
     pub fn hook_log(&self, plan: &PlanId, attempt: &AttemptId, hook: Hook) -> PathBuf {
-        self.plan_dir(plan).join("logs").join(format!("{attempt}.{}.log", hook.as_str()))
+        self.plan_dir(plan)
+            .join("logs")
+            .join(format!("{attempt}.{}.log", hook.as_str()))
     }
 
     /// `run/<plan>/logs/<attempt>.tests-<what>.log`: the full output of one of the repo's `[tests]` commands
     /// (`what`: `build`, `list` or `run`, contract §7.7).
     pub fn tests_log(&self, plan: &PlanId, attempt: &AttemptId, what: &str) -> PathBuf {
-        self.plan_dir(plan).join("logs").join(format!("{attempt}.tests-{what}.log"))
+        self.plan_dir(plan)
+            .join("logs")
+            .join(format!("{attempt}.tests-{what}.log"))
     }
 
     /// `run/<plan>/logs/lead.<hook>.log`: the full output of a hook run in the
     /// Lead worktree (`pre-start` at `plan lock`; Escalation `rs-plan-a1-q4`).
     pub fn lead_hook_log(&self, plan: &PlanId, hook: Hook) -> PathBuf {
-        self.plan_dir(plan).join("logs").join(format!("lead.{}.log", hook.as_str()))
+        self.plan_dir(plan)
+            .join("logs")
+            .join(format!("lead.{}.log", hook.as_str()))
     }
 }
 
@@ -432,16 +502,35 @@ mod tests {
             p("/h/.cpd/locks/attempt-pay-4521--api-schema-a2.lock")
         );
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
-        assert_eq!(h.attempt_infra(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/attempts/api-schema-a2.infra"));
+        assert_eq!(
+            h.attempt_infra(&plan(), &attempt()),
+            p("/h/.cpd/run/pay-4521/attempts/api-schema-a2.infra")
+        );
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
         assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
-        assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
+        assert_eq!(
+            h.tmux_restart_pending(),
+            p("/h/.cpd/run/tmux-restart.pending")
+        );
         assert_eq!(h.tmux_restart_log(), p("/h/.cpd/run/tmux-restart.log"));
         assert_eq!(h.tmux_restart_pid(), p("/h/.cpd/run/tmux-restart.pid"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
-        assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
-        assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
-        assert_eq!(h.review_diff(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.diff"));
+        assert_eq!(
+            h.worker_spec(&plan(), &attempt()),
+            p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md")
+        );
+        assert_eq!(
+            h.durable_store(&plan(), &attempt()),
+            p("/h/.cpd/run/pay-4521/durable/api-schema-a2.sqlite")
+        );
+        assert_eq!(
+            h.review_brief(&plan(), &attempt()),
+            p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md")
+        );
+        assert_eq!(
+            h.review_diff(&plan(), &attempt()),
+            p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.diff")
+        );
         assert_eq!(
             h.review_check(&plan(), &attempt()),
             p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.check.txt")
@@ -454,12 +543,21 @@ mod tests {
             h.driver_log(&plan(), &attempt()),
             p("/h/.cpd/run/pay-4521/logs/attempt-api-schema-a2.log")
         );
-        for (hook, name) in [(Hook::PreStart, "pre-start"), (Hook::PreCommit, "pre-commit"), (Hook::PreMerge, "pre-merge")] {
+        for (hook, name) in [
+            (Hook::PreStart, "pre-start"),
+            (Hook::PreCommit, "pre-commit"),
+            (Hook::PreMerge, "pre-merge"),
+        ] {
             assert_eq!(
                 h.hook_log(&plan(), &attempt(), hook),
-                p(&format!("/h/.cpd/run/pay-4521/logs/api-schema-a2.{name}.log"))
+                p(&format!(
+                    "/h/.cpd/run/pay-4521/logs/api-schema-a2.{name}.log"
+                ))
             );
-            assert_eq!(h.lead_hook_log(&plan(), hook), p(&format!("/h/.cpd/run/pay-4521/logs/lead.{name}.log")));
+            assert_eq!(
+                h.lead_hook_log(&plan(), hook),
+                p(&format!("/h/.cpd/run/pay-4521/logs/lead.{name}.log"))
+            );
         }
     }
 
@@ -467,28 +565,53 @@ mod tests {
     fn files_added_by_amendment_4() {
         let h = home();
         let session = SessionId::parse("596d007f-6775-4134-b77a-b356cc523842").unwrap();
-        assert_eq!(h.lead_message(&plan()), p("/h/.cpd/run/pay-4521/lead-message.md"));
+        assert_eq!(
+            h.lead_message(&plan()),
+            p("/h/.cpd/run/pay-4521/lead-message.md")
+        );
         assert_eq!(
             h.session_message(&plan(), &session),
             p("/h/.cpd/run/pay-4521/messages/596d007f-6775-4134-b77a-b356cc523842.md")
         );
-        assert_eq!(h.manager_message(&ContextId::parse("pay").unwrap()), p("/h/.cpd/run/pay/manager-message.md"));
+        assert_eq!(
+            h.manager_message(&ContextId::parse("pay").unwrap()),
+            p("/h/.cpd/run/pay/manager-message.md")
+        );
     }
 
     #[test]
     fn the_context_digest_files_of_contract_4_6() {
         let h = home();
         let ctx = ContextId::parse("building-cpd").unwrap();
-        assert_eq!(h.context_digest_dir(&ctx), p("/h/.cpd/run/context-digests/building-cpd"));
-        assert_eq!(h.context_digest_invalid(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.jsonl.invalid"));
-        assert_eq!(h.distill_lock(&ctx), p("/h/.cpd/locks/distill-building-cpd.lock"));
-        assert_eq!(h.distill_pid(&ctx), p("/h/.cpd/run/context-digests/building-cpd/distill.pid"));
+        assert_eq!(
+            h.context_digest_dir(&ctx),
+            p("/h/.cpd/run/context-digests/building-cpd")
+        );
+        assert_eq!(
+            h.context_digest_invalid(&ctx, 1342),
+            p("/h/.cpd/run/context-digests/building-cpd/1342.jsonl.invalid")
+        );
+        assert_eq!(
+            h.distill_lock(&ctx),
+            p("/h/.cpd/locks/distill-building-cpd.lock")
+        );
+        assert_eq!(
+            h.distill_pid(&ctx),
+            p("/h/.cpd/run/context-digests/building-cpd/distill.pid")
+        );
     }
 
     #[test]
     fn no_name_collides_with_cpd_1() {
         let h = home();
-        let ours = [h.config(), h.db(), h.old_contexts_dir(), h.archived_contexts_dir(), h.locks_dir(), h.run_dir()];
+        let ours = [
+            h.config(),
+            h.db(),
+            h.old_contexts_dir(),
+            h.archived_contexts_dir(),
+            h.locks_dir(),
+            h.run_dir(),
+        ];
         for theirs in ["config.json", "leads", "slots", "workflows"] {
             assert!(!ours.contains(&h.root().join(theirs)), "{theirs}");
         }
@@ -498,7 +621,11 @@ mod tests {
     fn only_a_lock_timeout_or_a_store_too_new_is_infrastructure() {
         assert_eq!(Infra::of(ErrorCode::LockTimeout), Some(Infra::LockTimeout));
         assert_eq!(Infra::of(ErrorCode::StoreTooNew), Some(Infra::StoreTooNew));
-        for other in [ErrorCode::StoreFailed, ErrorCode::StoreBusy, ErrorCode::IllegalTransition] {
+        for other in [
+            ErrorCode::StoreFailed,
+            ErrorCode::StoreBusy,
+            ErrorCode::IllegalTransition,
+        ] {
             assert_eq!(Infra::of(other), None, "{other:?}");
         }
     }
@@ -508,12 +635,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let h = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         assert_eq!(h.infra(&plan(), &attempt()).unwrap(), None);
-        h.leave_infra(&plan(), &attempt(), Infra::StoreTooNew, "newer").unwrap();
-        assert_eq!(h.infra(&plan(), &attempt()).unwrap(), Some((Infra::StoreTooNew, "newer".to_owned())));
+        h.leave_infra(&plan(), &attempt(), Infra::StoreTooNew, "newer")
+            .unwrap();
+        assert_eq!(
+            h.infra(&plan(), &attempt()).unwrap(),
+            Some((Infra::StoreTooNew, "newer".to_owned()))
+        );
         h.remove_infra(&plan(), &attempt()).unwrap();
         h.remove_infra(&plan(), &attempt()).unwrap();
         assert_eq!(h.infra(&plan(), &attempt()).unwrap(), None);
-        std::fs::write(h.attempt_infra(&plan(), &attempt()), r#"{"code":"crashed"}"#).unwrap();
-        assert_eq!(h.infra(&plan(), &attempt()).unwrap_err().code(), ErrorCode::StoreFailed);
+        std::fs::write(
+            h.attempt_infra(&plan(), &attempt()),
+            r#"{"code":"crashed"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            h.infra(&plan(), &attempt()).unwrap_err().code(),
+            ErrorCode::StoreFailed
+        );
     }
 }

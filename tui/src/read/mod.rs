@@ -26,33 +26,29 @@
 
 mod active;
 mod age;
+#[cfg(test)]
+mod age_tests;
 mod cost;
 #[cfg(test)]
 mod cost_tests;
-#[cfg(test)]
-mod age_tests;
-#[cfg(test)]
-mod inbox_mark_tests;
 mod dot;
 #[cfg(test)]
 mod dot_pr_tests;
-mod flow;
-mod follow;
-mod logs;
 #[cfg(test)]
 mod elapsed_tests;
 #[cfg(test)]
 mod explore_attempt_tests;
 #[cfg(test)]
 mod explore_view_tests;
+mod flow;
+mod follow;
 #[cfg(test)]
-mod workflow_cost_tests;
-#[cfg(test)]
-mod look_tests;
+mod inbox_mark_tests;
 #[cfg(test)]
 mod lead_dot_box_tests;
+mod logs;
 #[cfg(test)]
-mod working_pr_dot_tests;
+mod look_tests;
 pub mod pr_look;
 mod pulse;
 #[cfg(test)]
@@ -61,10 +57,14 @@ mod shared;
 #[cfg(test)]
 pub(crate) mod stacked_ready_tests;
 mod tree;
-mod widgets;
 pub mod watch;
 #[cfg(test)]
 mod watch_tests;
+mod widgets;
+#[cfg(test)]
+mod workflow_cost_tests;
+#[cfg(test)]
+mod working_pr_dot_tests;
 
 pub use age::age_text;
 pub use flow::{

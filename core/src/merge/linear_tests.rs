@@ -24,17 +24,43 @@ use crate::ports::{Fakes, Ports};
 use crate::store::Store;
 
 fn config() -> Config {
-    Config::parse("version = 1\nmachine = \"test\"\n", Path::new("config.toml")).unwrap().0
+    Config::parse(
+        "version = 1\nmachine = \"test\"\n",
+        Path::new("config.toml"),
+    )
+    .unwrap()
+    .0
 }
 
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
-    Catalog { pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: TierModel { model: "g/m".to_owned(), efforts: vec![] } }
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
+    Catalog {
+        pi_version: "1.0.0".to_owned(),
+        o: model("o/m"),
+        s: model("s/m"),
+        h: model("h/m"),
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
+    }
 }
 
 /// A commit of exactly `files` over `parents`.
-fn commit(u: &mut Universe, repo: RepoId, parents: &[Oid], files: &[(&str, &str)], message: &str) -> Oid {
-    let blobs: Vec<(&str, Oid)> = files.iter().map(|(path, text)| (*path, u.blob(repo, text.as_bytes()))).collect();
+fn commit(
+    u: &mut Universe,
+    repo: RepoId,
+    parents: &[Oid],
+    files: &[(&str, &str)],
+    message: &str,
+) -> Oid {
+    let blobs: Vec<(&str, Oid)> = files
+        .iter()
+        .map(|(path, text)| (*path, u.blob(repo, text.as_bytes())))
+        .collect();
     let entries: Vec<(&str, &Oid)> = blobs.iter().map(|(path, blob)| (*path, blob)).collect();
     let tree = u.tree(repo, &entries);
     u.commit(repo, &tree, parents, message)
@@ -72,16 +98,36 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
     repo.branch(lead);
     let (submitted, _top) = {
         let mut u = universe.lock().unwrap();
-        let submitted = commit(&mut u, repo.id(), &[base.clone()], attempt_tree, "attempt");
+        let submitted = commit(
+            &mut u,
+            repo.id(),
+            std::slice::from_ref(&base),
+            attempt_tree,
+            "attempt",
+        );
         let top = match sibling_tree {
-            Some(tree) => commit(&mut u, repo.id(), &[submitted.clone()], tree, "sibling"),
+            Some(tree) => commit(
+                &mut u,
+                repo.id(),
+                std::slice::from_ref(&submitted),
+                tree,
+                "sibling",
+            ),
             None => submitted.clone(),
         };
-        u.set_ref(repo.id(), &format!("refs/heads/{lead}"), &top, "commit: top");
+        u.set_ref(
+            repo.id(),
+            &format!("refs/heads/{lead}"),
+            &top,
+            "commit: top",
+        );
         (submitted, top)
     };
     let worktree = root.join("r.lead");
-    universe.lock().unwrap().add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
+    universe
+        .lock()
+        .unwrap()
+        .add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
 
     let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
     std::fs::create_dir_all(home.root().join("policy/acme")).unwrap();
@@ -112,7 +158,14 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
             Ok(())
         })
         .unwrap();
-    Rig { _tmp: tmp, fakes, home, store, plan: PlanId::parse("pay").unwrap(), id: AttemptId::parse("a-a1").unwrap() }
+    Rig {
+        _tmp: tmp,
+        fakes,
+        home,
+        store,
+        plan: PlanId::parse("pay").unwrap(),
+        id: AttemptId::parse("a-a1").unwrap(),
+    }
 }
 
 /// cpd's compiled default policy, as a complete owner scope (so `policy_of_job` resolves).
@@ -144,23 +197,47 @@ text = \"\"
 text = \"\"
 ";
 
-fn merge_ctx<'a>(home: &'a CpdHome, config: &'a Config, catalog: &'a Catalog, metrics: &'a dyn Fn(&Attempt) -> Option<Value>) -> Ctx<'a> {
-    Ctx { home, config, catalog, source: "test", metrics }
+fn merge_ctx<'a>(
+    home: &'a CpdHome,
+    config: &'a Config,
+    catalog: &'a Catalog,
+    metrics: &'a dyn Fn(&Attempt) -> Option<Value>,
+) -> Ctx<'a> {
+    Ctx {
+        home,
+        config,
+        catalog,
+        source: "test",
+        metrics,
+    }
 }
 
 #[test]
 fn a_linear_merge_uses_the_base_sha_for_the_tamper_check() {
     // `submitted` adds a file under `.cpd/` (always protected): the diff `base_sha...submitted_sha`
     // touches it, while `old...branch` (the Lead tip is `submitted`) is empty.
-    let attempt = [("f.txt", "base\n"), ("protected.txt", "safe\n"), (".cpd/tampered", "x\n")];
+    let attempt = [
+        ("f.txt", "base\n"),
+        ("protected.txt", "safe\n"),
+        (".cpd/tampered", "x\n"),
+    ];
     let mut rig = rig(&attempt, None);
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
     let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
-    let out = Ports::scope(&rig.fakes.ports, || merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)).unwrap();
+    let out = Ports::scope(&rig.fakes.ports, || {
+        merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)
+    })
+    .unwrap();
     assert!(
-        matches!(&out.end, merge::End::Failed { cause: merge::Failure::Tampered, .. }),
+        matches!(
+            &out.end,
+            merge::End::Failed {
+                cause: merge::Failure::Tampered,
+                ..
+            }
+        ),
         "a protected path in `base_sha...submitted_sha` is tampering, got {:?}",
         out.end
     );
@@ -170,27 +247,50 @@ fn a_linear_merge_uses_the_base_sha_for_the_tamper_check() {
 fn a_linear_merge_records_the_submitted_commit() {
     // A sibling merged on top of the linear Attempt's commit: the Lead tip is past `submitted_sha`.
     let attempt = [("f.txt", "attempt\n"), ("protected.txt", "safe\n")];
-    let sibling = [("f.txt", "attempt\n"), ("protected.txt", "safe\n"), ("other.txt", "sibling\n")];
+    let sibling = [
+        ("f.txt", "attempt\n"),
+        ("protected.txt", "safe\n"),
+        ("other.txt", "sibling\n"),
+    ];
     let mut rig = rig(&attempt, Some(&sibling));
     let submitted = rig
         .store
         .read(|conn| {
-            Ok(conn.query_row("SELECT submitted_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'", [], |r| r.get::<_, String>(0))?)
+            Ok(conn.query_row(
+                "SELECT submitted_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
         })
         .unwrap();
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
     let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
-    let out = Ports::scope(&rig.fakes.ports, || merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)).unwrap();
-    assert!(matches!(&out.end, merge::End::Merged { .. }), "the linear merge stands, got {:?}", out.end);
+    let out = Ports::scope(&rig.fakes.ports, || {
+        merge::merge(&mut rig.store, &ctx, &rig.plan, &rig.id)
+    })
+    .unwrap();
+    assert!(
+        matches!(&out.end, merge::End::Merged { .. }),
+        "the linear merge stands, got {:?}",
+        out.end
+    );
     let merged = rig
         .store
         .read(|conn| {
-            Ok(conn.query_row("SELECT merged_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'", [], |r| r.get::<_, Option<String>>(0))?)
+            Ok(conn.query_row(
+                "SELECT merged_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'",
+                [],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
         })
         .unwrap();
-    assert_eq!(merged.as_deref(), Some(submitted.as_str()), "a linear merge records merged_sha = submitted_sha");
+    assert_eq!(
+        merged.as_deref(),
+        Some(submitted.as_str()),
+        "a linear merge records merged_sha = submitted_sha"
+    );
     let verbs: Vec<String> = rig
         .fakes
         .runner
@@ -199,30 +299,53 @@ fn a_linear_merge_records_the_submitted_commit() {
         .filter(|c| c.program == "git")
         .flat_map(|c| c.args.iter().cloned())
         .collect();
-    assert!(!verbs.iter().any(|a| a == "rebase"), "a linear merge never rebases: {verbs:?}");
-    assert!(!verbs.iter().any(|a| a == "update-ref"), "a linear merge never fast-forwards: {verbs:?}");
+    assert!(
+        !verbs.iter().any(|a| a == "rebase"),
+        "a linear merge never rebases: {verbs:?}"
+    );
+    assert!(
+        !verbs.iter().any(|a| a == "update-ref"),
+        "a linear merge never fast-forwards: {verbs:?}"
+    );
 }
 
 #[test]
 fn r_recovers_a_linear_merging_attempt() {
     // The same shape: `submitted_sha` is an ancestor of the Lead Branch tip, so the merge happened.
     let attempt = [("f.txt", "attempt\n"), ("protected.txt", "safe\n")];
-    let sibling = [("f.txt", "attempt\n"), ("protected.txt", "safe\n"), ("other.txt", "sibling\n")];
+    let sibling = [
+        ("f.txt", "attempt\n"),
+        ("protected.txt", "safe\n"),
+        ("other.txt", "sibling\n"),
+    ];
     let mut rig = rig(&attempt, Some(&sibling));
     let submitted = rig
         .store
         .read(|conn| {
-            Ok(conn.query_row("SELECT submitted_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'", [], |r| r.get::<_, String>(0))?)
+            Ok(conn.query_row(
+                "SELECT submitted_sha FROM attempts WHERE plan = 'pay' AND id = 'a-a1'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
         })
         .unwrap();
     // R's A9 kills the Attempt's tmux window: the fake lists none.
-    let _ = (*rig.fakes.runner).clone().on("tmux", |_| true, Reply::ok(""));
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .on("tmux", |_| true, Reply::ok(""));
     let config = config();
     let catalog = catalog();
     let metrics = |_a: &Attempt| None;
     let ctx = merge_ctx(&rig.home, &config, &catalog, &metrics);
-    let ports = Ports { clock: rig.fakes.ports.clock.clone(), runner: rig.fakes.ports.runner.clone(), spawn: rig.fakes.ports.spawn.clone() };
-    let _ = Ports::scope(&ports, || merge::recover_attempt(&mut rig.store, &ctx, &rig.plan, &rig.id));
+    let ports = Ports {
+        clock: rig.fakes.ports.clock.clone(),
+        runner: rig.fakes.ports.runner.clone(),
+        spawn: rig.fakes.ports.spawn.clone(),
+        ..Ports::real()
+    };
+    let _ = Ports::scope(&ports, || {
+        merge::recover_attempt(&mut rig.store, &ctx, &rig.plan, &rig.id)
+    });
     let (outcome, merged): (Option<String>, Option<String>) = rig
         .store
         .read(|conn| {
@@ -233,6 +356,14 @@ fn r_recovers_a_linear_merging_attempt() {
             )?)
         })
         .unwrap();
-    assert_eq!(outcome.as_deref(), Some("merged"), "R ends a recovered linear Attempt merged");
-    assert_eq!(merged.as_deref(), Some(submitted.as_str()), "R records merged_sha = submitted_sha for a linear Attempt");
+    assert_eq!(
+        outcome.as_deref(),
+        Some("merged"),
+        "R ends a recovered linear Attempt merged"
+    );
+    assert_eq!(
+        merged.as_deref(),
+        Some(submitted.as_str()),
+        "R records merged_sha = submitted_sha for a linear Attempt"
+    );
 }

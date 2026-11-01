@@ -43,7 +43,10 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
         .with("workflow", key.as_str())
         .with("max", MAX_CHARS));
     }
-    let (status, already) = match env.store.read(|conn| decide(conn, &plan, &key, Some(&text)))? {
+    let (status, already) = match env
+        .store
+        .read(|conn| decide(conn, &plan, &key, Some(&text)))?
+    {
         Decision::Already(status) => (status, true),
         Decision::Update { open, .. } => {
             if let Some((repo, number)) = open {
@@ -73,7 +76,9 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
 fn read_text(file: &Path) -> Result<String, CpdError> {
     if file == Path::new("-") {
         let mut bytes = Vec::new();
-        std::io::stdin().read_to_end(&mut bytes).map_err(|e| CpdError::file_unreadable(file, e))?;
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .map_err(|e| CpdError::file_unreadable(file, e))?;
         return String::from_utf8(bytes).map_err(|e| CpdError::file_unreadable(file, e));
     }
     std::fs::read_to_string(file).map_err(|e| CpdError::file_unreadable(file, e))
@@ -104,7 +109,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
             "SELECT p.repo, p.number FROM workflows r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
         )?
-        .query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row([plan.as_str(), key.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .optional()?;
     Ok(Decision::Update { status: workflow.status.clone(), open })
 }

@@ -8,7 +8,7 @@ use cpd_core::ids::ContextId;
 use cpd_core::session::{Role, State};
 use ratatui::text::Line;
 
-use super::fixture::{archived, session, WHEN};
+use super::fixture::{WHEN, archived, session};
 use super::rows;
 use crate::palette;
 use crate::read::Place;
@@ -27,7 +27,12 @@ fn an_archived_manager_is_a_muted_row_in_its_contexts_archived_section() {
     manager.role = Role::Manager;
     manager.context = ContextId::parse("zeta").unwrap();
     manager.archived_at = Some(WHEN.into());
-    tree.contexts.iter_mut().find(|c| c.id.as_str() == "zeta").unwrap().archived_managers.push(manager);
+    tree.contexts
+        .iter_mut()
+        .find(|c| c.id.as_str() == "zeta")
+        .unwrap()
+        .archived_managers
+        .push(manager);
     let path = vec!["zeta".to_owned(), "m-zeta".to_owned()];
     // `zeta` unfolded: its title row and its closing row are both open.
     let mut opened = HashSet::new();
@@ -39,17 +44,38 @@ fn an_archived_manager_is_a_muted_row_in_its_contexts_archived_section() {
         .contexts
         .iter()
         .find(|c| c.id.as_str() == "zeta")
-        .and_then(|c| c.archived_managers.iter().find(|s| s.id.as_str() == "m-zeta"))
+        .and_then(|c| {
+            c.archived_managers
+                .iter()
+                .find(|s| s.id.as_str() == "m-zeta")
+        })
         .expect("the archived Context `zeta` has an archived Manager `m-zeta`");
     let dot = palette::dot_span(manager.dot, 0, true);
 
     let flat = rows::items(&tree, &opened, 44, 0);
     let drawn = flat.iter().find(|r| r.path == path).unwrap_or_else(|| {
-        panic!("no row for zeta's archived Manager: {:?}", flat.iter().map(|r| text(&r.line)).collect::<Vec<_>>())
+        panic!(
+            "no row for zeta's archived Manager: {:?}",
+            flat.iter().map(|r| text(&r.line)).collect::<Vec<_>>()
+        )
     });
-    assert_eq!(text(&drawn.line), format!("├─{} zeta-manager", dot.content), "{:?}", flat.iter().map(|r| text(&r.line)).collect::<Vec<_>>());
-    let shown_dot = drawn.line.spans.iter().find(|s| s.content == dot.content).expect("the row's dot");
-    assert_eq!(shown_dot.style, palette::archived_text(), "the archived Manager's dot is muted (colour 8)");
+    assert_eq!(
+        text(&drawn.line),
+        format!("├─{} zeta-manager", dot.content),
+        "{:?}",
+        flat.iter().map(|r| text(&r.line)).collect::<Vec<_>>()
+    );
+    let shown_dot = drawn
+        .line
+        .spans
+        .iter()
+        .find(|s| s.content == dot.content)
+        .expect("the row's dot");
+    assert_eq!(
+        shown_dot.style,
+        palette::archived_text(),
+        "the archived Manager's dot is muted (colour 8)"
+    );
 
     assert!(
         matches!(rows::row(&tree, &path), Some(rows::Row::Manager(c, s)) if c.id.as_str() == "zeta" && s.id.as_str() == "m-zeta"),

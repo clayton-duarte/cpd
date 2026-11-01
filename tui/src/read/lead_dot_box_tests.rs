@@ -71,7 +71,11 @@ fn title_dot(b: &PlanBoxes, workflow: &WorkflowNode, frame: usize) -> Option<rat
     let chart = boxes::layout(std::slice::from_ref(workflow), &b.jobs, &b.needs_user, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
-        .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))
+        .find(|cell| {
+            palette::SPINNER
+                .iter()
+                .any(|glyph| cell.symbol().contains(glyph))
+        })
         .map(|cell| cell.fg)
 }
 
@@ -79,8 +83,15 @@ fn title_dot(b: &PlanBoxes, workflow: &WorkflowNode, frame: usize) -> Option<rat
 fn lead_dot_box_merged_box_title_draws_no_dot_and_the_open_box_title_does() {
     let (_dir, b) = plan_boxes(false);
     for frame in [0, 5, 27] {
-        assert_eq!(title_dot(&b, node(&b, "old"), frame), None, "merged box, frame {frame}");
-        assert!(title_dot(&b, node(&b, "new"), frame).is_some(), "open box, frame {frame}");
+        assert_eq!(
+            title_dot(&b, node(&b, "old"), frame),
+            None,
+            "merged box, frame {frame}"
+        );
+        assert!(
+            title_dot(&b, node(&b, "new"), frame).is_some(),
+            "open box, frame {frame}"
+        );
     }
 }
 
@@ -90,7 +101,10 @@ fn lead_dot_box_merged_box_draws_no_red_loader_when_a_sibling_job_failed() {
     for frame in [0, 5, 27] {
         let red = palette::dot_span(Dot::Fixing, frame, false).style.fg;
         let dot = title_dot(&b, node(&b, "old"), frame);
-        assert_eq!(dot, None, "merged box, frame {frame} (red loader is {red:?})");
+        assert_eq!(
+            dot, None,
+            "merged box, frame {frame} (red loader is {red:?})"
+        );
     }
 }
 
@@ -98,6 +112,10 @@ fn lead_dot_box_merged_box_draws_no_red_loader_when_a_sibling_job_failed() {
 fn lead_dot_box_cancelled_box_draws_no_dot() {
     let (_dir, b) = plan_boxes(false);
     for frame in [0, 5, 27] {
-        assert_eq!(title_dot(&b, node(&b, "gone"), frame), None, "cancelled box, frame {frame}");
+        assert_eq!(
+            title_dot(&b, node(&b, "gone"), frame),
+            None,
+            "cancelled box, frame {frame}"
+        );
     }
 }

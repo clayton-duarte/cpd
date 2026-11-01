@@ -21,7 +21,15 @@ const OUT_OF_SCOPE_MAX: usize = 5;
 const DONE_WHEN_MAX: usize = 3;
 
 /// The seven fields of the outline file, in the order they are checked.
-const FIELDS: [&str; 7] = ["goal", "decisions", "assumptions", "risks", "done_when", "out_of_scope", "decided"];
+const FIELDS: [&str; 7] = [
+    "goal",
+    "decisions",
+    "assumptions",
+    "risks",
+    "done_when",
+    "out_of_scope",
+    "decided",
+];
 
 /// One question the User answered.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -45,16 +53,27 @@ pub struct Outline {
 }
 
 fn invalid(field: &str, why: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::OutlineInvalid, format!("The outline is invalid at {field}: {why}.")).with("field", field)
+    CpdError::new(
+        ErrorCode::OutlineInvalid,
+        format!("The outline is invalid at {field}: {why}."),
+    )
+    .with("field", field)
 }
 
 /// A line: 1–200 characters, no control character (so no line break and no tab).
 fn line(field: &str, value: &Value) -> Result<String, CpdError> {
-    let Value::String(text) = value else { return Err(invalid(field, "expected a string")) };
+    let Value::String(text) = value else {
+        return Err(invalid(field, "expected a string"));
+    };
     match text.chars().count() {
         0 => Err(invalid(field, "must not be empty")),
-        n if n > LINE_MAX => Err(invalid(field, format!("{n} characters, at most {LINE_MAX}"))),
-        _ if text.chars().any(char::is_control) => Err(invalid(field, "must be one line with no control character")),
+        n if n > LINE_MAX => Err(invalid(
+            field,
+            format!("{n} characters, at most {LINE_MAX}"),
+        )),
+        _ if text.chars().any(char::is_control) => {
+            Err(invalid(field, "must be one line with no control character"))
+        }
         _ => Ok(text.clone()),
     }
 }
@@ -62,8 +81,12 @@ fn line(field: &str, value: &Value) -> Result<String, CpdError> {
 /// `value` (absent: empty) as an array of at most `max` lines; `field[i]` is the failure of an element, and the
 /// element `max` is the one over the limit.
 fn lines(fields: &Map<String, Value>, name: &str, max: usize) -> Result<Vec<String>, CpdError> {
-    let Some(value) = fields.get(name) else { return Ok(Vec::new()) };
-    let Value::Array(items) = value else { return Err(invalid(name, "expected an array")) };
+    let Some(value) = fields.get(name) else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(items) = value else {
+        return Err(invalid(name, "expected an array"));
+    };
     items
         .iter()
         .enumerate()
@@ -78,22 +101,38 @@ fn lines(fields: &Map<String, Value>, name: &str, max: usize) -> Result<Vec<Stri
 }
 
 fn decisions(fields: &Map<String, Value>) -> Result<Vec<Decision>, CpdError> {
-    let Some(value) = fields.get("decisions") else { return Ok(Vec::new()) };
-    let Value::Array(items) = value else { return Err(invalid("decisions", "expected an array")) };
+    let Some(value) = fields.get("decisions") else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(items) = value else {
+        return Err(invalid("decisions", "expected an array"));
+    };
     items
         .iter()
         .enumerate()
         .map(|(i, item)| {
             let path = format!("decisions[{i}]");
-            let Value::Object(pair) = item else { return Err(invalid(&path, "expected an object {question, answer}")) };
-            if let Some(unknown) = pair.keys().find(|k| !matches!(k.as_str(), "question" | "answer")) {
+            let Value::Object(pair) = item else {
+                return Err(invalid(&path, "expected an object {question, answer}"));
+            };
+            if let Some(unknown) = pair
+                .keys()
+                .find(|k| !matches!(k.as_str(), "question" | "answer"))
+            {
                 return Err(invalid(&format!("{path}.{unknown}"), "unknown field"));
             }
             let part = |name: &str| {
                 let field = format!("{path}.{name}");
-                line(&field, pair.get(name).ok_or_else(|| invalid(&field, "missing field"))?)
+                line(
+                    &field,
+                    pair.get(name)
+                        .ok_or_else(|| invalid(&field, "missing field"))?,
+                )
             };
-            Ok(Decision { question: part("question")?, answer: part("answer")? })
+            Ok(Decision {
+                question: part("question")?,
+                answer: part("answer")?,
+            })
         })
         .collect()
 }
@@ -105,7 +144,9 @@ fn done_when(fields: &Map<String, Value>) -> Result<BTreeMap<String, Vec<String>
         .iter()
         .map(|(key, value)| {
             let path = format!("done_when.{key}");
-            let Value::Array(items) = value else { return Err(invalid(&path, "expected an array of 1 to 3 lines")) };
+            let Value::Array(items) = value else {
+                return Err(invalid(&path, "expected an array of 1 to 3 lines"));
+            };
             if items.is_empty() {
                 return Err(invalid(&path, "needs at least one line"));
             }
@@ -130,26 +171,43 @@ impl Outline {
     /// first in byte order), then the seven fields and each element in order. What it says of the Plan (the Workflows of
     /// `done_when`, the records of `decided`) is checked against the Plan by [`check_against_plan`].
     pub fn parse(text: &str) -> Result<Outline, CpdError> {
-        let value: Value = serde_json::from_str(text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
-        let Value::Object(fields) = value else { return Err(invalid("$", "expected an object")) };
+        let value: Value =
+            serde_json::from_str(text).map_err(|e| invalid("$", format!("not JSON: {e}")))?;
+        let Value::Object(fields) = value else {
+            return Err(invalid("$", "expected an object"));
+        };
         let mut names: Vec<&String> = fields.keys().collect();
         names.sort();
         if let Some(unknown) = names.into_iter().find(|k| !FIELDS.contains(&k.as_str())) {
             return Err(invalid(unknown, "unknown field"));
         }
-        let goal = line("goal", fields.get("goal").ok_or_else(|| invalid("goal", "missing field"))?)?;
+        let goal = line(
+            "goal",
+            fields
+                .get("goal")
+                .ok_or_else(|| invalid("goal", "missing field"))?,
+        )?;
         let decisions = decisions(&fields)?;
         let assumptions = lines(&fields, "assumptions", usize::MAX)?;
         let risks = lines(&fields, "risks", RISKS_MAX)?;
         let done_when = done_when(&fields)?;
         let out_of_scope = lines(&fields, "out_of_scope", OUT_OF_SCOPE_MAX)?;
         let decided = lines(&fields, "decided", usize::MAX)?;
-        Ok(Outline { assumptions, decided, decisions, done_when, goal, out_of_scope, risks })
+        Ok(Outline {
+            assumptions,
+            decided,
+            decisions,
+            done_when,
+            goal,
+            out_of_scope,
+            risks,
+        })
     }
 
     /// As stored (`plans.outline`): a row that does not parse is a bad row.
     pub fn stored(plan: &str, text: &str) -> Result<Outline, CpdError> {
-        serde_json::from_str(text).map_err(|e| CpdError::bad_row(format!("Plan {plan} has outline {text:?}: {e}")))
+        serde_json::from_str(text)
+            .map_err(|e| CpdError::bad_row(format!("Plan {plan} has outline {text:?}: {e}")))
     }
 
     /// The outline as a JSON value (`plan show`, the fingerprint of §2.3).
@@ -165,7 +223,11 @@ impl Outline {
 
 /// What the outline says of the Plan, checked against it (§4.13): every `done_when` key is a Workflow of the Plan that is not
 /// `cancelled`, every `decided` id is a record of the Plan's Context.
-fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> Result<(), CpdError> {
+fn check_against_plan(
+    conn: &Connection,
+    plan: &PlanRow,
+    outline: &Outline,
+) -> Result<(), CpdError> {
     let counts: Vec<String> = {
         let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND status <> 'cancelled'")?;
         stmt.query_map([plan.id.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
@@ -180,12 +242,19 @@ fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> R
     }
     for (i, id) in outline.decided.iter().enumerate() {
         let found: Option<i64> = conn
-            .query_row("SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2", [plan.context.as_str(), id], |r| r.get(0))
+            .query_row(
+                "SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2",
+                [plan.context.as_str(), id],
+                |r| r.get(0),
+            )
             .optional()?;
         if found.is_none() {
             return Err(CpdError::new(
                 ErrorCode::OutlineInvalid,
-                format!("The outline's decided names {id}, which is no record of Context {}.", plan.context),
+                format!(
+                    "The outline's decided names {id}, which is no record of Context {}.",
+                    plan.context
+                ),
             )
             .with("field", format!("decided[{i}]"))
             .with("record", id.as_str()));
@@ -195,9 +264,16 @@ fn check_against_plan(conn: &Connection, plan: &PlanRow, outline: &Outline) -> R
 }
 
 /// The Plan's outline as stored, if set.
-pub(super) fn load(conn: &Connection, plan: &crate::ids::PlanId) -> Result<Option<Outline>, CpdError> {
+pub(super) fn load(
+    conn: &Connection,
+    plan: &crate::ids::PlanId,
+) -> Result<Option<Outline>, CpdError> {
     let text: Option<String> = conn
-        .query_row("SELECT outline FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .query_row(
+            "SELECT outline FROM plans WHERE id = ?1",
+            [plan.as_str()],
+            |r| r.get(0),
+        )
         .optional()?
         .flatten();
     text.map(|t| Outline::stored(plan.as_str(), &t)).transpose()
@@ -207,7 +283,11 @@ pub(super) fn load(conn: &Connection, plan: &crate::ids::PlanId) -> Result<Optio
 fn open_plan(conn: &Connection, id: &crate::ids::PlanId) -> Result<PlanRow, CpdError> {
     let plan = row::load(conn, id)?;
     if plan.archived_at.is_some() {
-        return Err(CpdError::new(ErrorCode::Archived, format!("Plan {id} is archived: unarchive it first.")).with("plan", id.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::Archived,
+            format!("Plan {id} is archived: unarchive it first."),
+        )
+        .with("plan", id.as_str()));
     }
     Ok(plan)
 }
@@ -215,13 +295,18 @@ fn open_plan(conn: &Connection, id: &crate::ids::PlanId) -> Result<PlanRow, CpdE
 /// `plan outline` (§4.13).
 pub(super) fn outline(args: OutlineArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
-    let text = std::fs::read_to_string(&args.file).map_err(|e| CpdError::file_unreadable(&args.file, e))?;
+    let text = std::fs::read_to_string(&args.file)
+        .map_err(|e| CpdError::file_unreadable(&args.file, e))?;
     let parsed = Outline::parse(&text)?;
     let canonical = parsed.canonical();
     let mut env = Env::open()?;
     // The same outline again writes nothing, not even the transaction's own row: it is looked for before the write, and
     // checked against the Plan only when it is new (§4.13: it is checked when it is written).
-    let same = |plan: &PlanRow| plan.outline.as_ref().is_some_and(|old| old.canonical() == canonical);
+    let same = |plan: &PlanRow| {
+        plan.outline
+            .as_ref()
+            .is_some_and(|old| old.canonical() == canonical)
+    };
     let mut replaced = None;
     if !same(&env.store.read(|conn| open_plan(conn, &id))?) {
         // Checked again inside the transaction, so the outline written is the outline checked.
@@ -231,9 +316,15 @@ pub(super) fn outline(args: OutlineArgs) -> Result<Output, CpdError> {
                 return Ok(None);
             }
             check_against_plan(tx, &plan, &parsed)?;
-            tx.execute("UPDATE plans SET outline = ?1 WHERE id = ?2", [canonical.as_str(), id.as_str()])?;
+            tx.execute(
+                "UPDATE plans SET outline = ?1 WHERE id = ?2",
+                [canonical.as_str(), id.as_str()],
+            )?;
             let replaced = plan.outline.is_some();
-            append(tx, NewEvent::plan_outlined(format!("Plan {id} outlined."), replaced).plan(id.clone()))?;
+            append(
+                tx,
+                NewEvent::plan_outlined(format!("Plan {id} outlined."), replaced).plan(id.clone()),
+            )?;
             Ok(Some(replaced))
         })?;
     }

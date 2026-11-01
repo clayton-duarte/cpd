@@ -5,12 +5,12 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::deadline;
 use super::check::{Check, Severity};
+use super::deadline;
 use cpd_core::config::catalog::read as read_catalog;
-use cpd_core::policy::model::Models;
 use cpd_core::config::{Config, locate_pi};
 use cpd_core::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
+use cpd_core::policy::model::Models;
 
 /// Each model of the machine layer's `[model]` (over cpd's default) is in pi's catalog and `lead_tier` is valid for its model.
 ///
@@ -34,7 +34,10 @@ pub fn tiers(config: &Config) -> Check {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    match catalog.check(config.lead_tier).and_then(|()| catalog.check(config.review_lead_tier)) {
+    match catalog
+        .check(config.lead_tier)
+        .and_then(|()| catalog.check(config.review_lead_tier))
+    {
         Ok(()) => Check::pass(name, Severity::Error).found(catalog.pi_version),
         Err(e) => Check::from_error(name, Severity::Error, &e),
     }
@@ -65,7 +68,13 @@ pub fn lead_packages(config: &Config) -> Check {
     let (dirs, cwd) = match (PiDirs::from_env(), std::env::current_dir()) {
         (Ok(dirs), Ok(cwd)) => (dirs, cwd),
         (Err(e), _) => return Check::from_error(name, Severity::Warn, &e),
-        (_, Err(e)) => return Check::fail(name, Severity::Warn, format!("The current directory is unreadable: {e}.")),
+        (_, Err(e)) => {
+            return Check::fail(
+                name,
+                Severity::Warn,
+                format!("The current directory is unreadable: {e}."),
+            );
+        }
     };
     let adapter = match config.pi_adapter_dir() {
         Ok(dir) => dir.display().to_string(),
@@ -73,7 +82,11 @@ pub fn lead_packages(config: &Config) -> Check {
     };
     // Where pi's global and project settings declare packages; a log nobody reads.
     let mut declarations = declared(&dirs.global_settings(), &dirs.home, &mut std::io::sink());
-    declarations.extend(declared(&project_settings(&cwd), &dirs.home, &mut std::io::sink()));
+    declarations.extend(declared(
+        &project_settings(&cwd),
+        &dirs.home,
+        &mut std::io::sink(),
+    ));
 
     let mut report = Vec::new();
     let mut unresolvable = Vec::new();
@@ -89,9 +102,13 @@ pub fn lead_packages(config: &Config) -> Check {
         };
         report.push(entry);
     }
-    let check = Check::new(name, Severity::Warn, unresolvable.is_empty()).found(Value::Array(report));
+    let check =
+        Check::new(name, Severity::Warn, unresolvable.is_empty()).found(Value::Array(report));
     if unresolvable.is_empty() {
         return check;
     }
-    check.message(format!("Neither declared in pi's settings nor resolvable: {}.", unresolvable.join(", ")))
+    check.message(format!(
+        "Neither declared in pi's settings nor resolvable: {}.",
+        unresolvable.join(", ")
+    ))
 }

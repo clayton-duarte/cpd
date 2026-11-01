@@ -5,8 +5,8 @@
 use cpd_core::ports::Fakes;
 use serde_json::json;
 
-use super::{open, schedule};
 use super::testkit::Fx;
+use super::{open, schedule};
 
 /// One tick of E3 on the fake ports: a started Attempt records its rows and launches nothing real.
 fn tick(fx: &mut Fx) {
@@ -31,7 +31,9 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
         .store
         .read(|conn| {
             let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            Ok(stmt
+                .query_map([kind], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .unwrap()
 }
@@ -49,12 +51,16 @@ fn with_open_job(key: &str, kind: &str) -> Fx {
          VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, "");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM prs WHERE description IS NULL AND head_ref IS NULL"), 1);
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM prs WHERE description IS NULL AND head_ref IS NULL"),
+        1
+    );
     fx
 }
 
 #[test]
-fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_and_starts_it_once_described() {
+fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_and_starts_it_once_described()
+ {
     let mut fx = with_open_job("open-repo", "open");
 
     ticks(&mut fx, 3);
@@ -72,7 +78,12 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "described: started");
-    assert_eq!(fx.count("error"), 1, "no further error: {:?}", texts(&mut fx, "error"));
+    assert_eq!(
+        fx.count("error"),
+        1,
+        "no further error: {:?}",
+        texts(&mut fx, "error")
+    );
 }
 
 /// Guard: an adopted Workflow keeps its own pull request body; its open Job starts.
@@ -105,7 +116,10 @@ fn an_undescribed_pr_keeps_one_open_job_and_no_attempt_over_eleven_e3_and_e4_tic
         open::run(&mut fx.engine);
     }
 
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'"), 1);
+    assert_eq!(
+        fx.query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'"),
+        1
+    );
     assert_eq!(attempts(&mut fx), 0);
     assert_eq!(fx.job_status("open-repo"), "queued");
     let errors = fx.events("error");

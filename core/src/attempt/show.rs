@@ -19,7 +19,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let attempt = row::load(conn, &plan, &id)?;
         let escalations = row::escalations(conn, &plan, &id)?;
         let file: Option<Option<String>> = match &attempt.worker_session {
-            Some(s) => conn.query_row("SELECT file FROM sessions WHERE id = ?1", [s], |r| r.get(0)).optional()?,
+            Some(s) => conn
+                .query_row("SELECT file FROM sessions WHERE id = ?1", [s], |r| r.get(0))
+                .optional()?,
             None => None,
         };
         Ok((attempt, escalations, file.flatten(), highest_id(conn)?))
@@ -40,7 +42,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let attempts = env.store.read(|conn| row::list(conn, &plan, args.job.as_ref(), args.active))?;
+    let attempts = env
+        .store
+        .read(|conn| row::list(conn, &plan, args.job.as_ref(), args.active))?;
     let listed: Vec<_> = attempts.iter().map(summary).collect();
     Ok(Output::success(json!({"attempts": listed})))
 }

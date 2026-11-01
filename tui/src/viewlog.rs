@@ -17,7 +17,9 @@ impl ViewLog {
     /// The log of `view` in `home`; nothing is created until the first line.
     pub fn of(home: &CpdHome, view: &str) -> ViewLog {
         // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists the files of `run/tui/` there.
-        ViewLog { path: home.run_dir().join("tui").join(format!("{view}.log")) }
+        ViewLog {
+            path: home.run_dir().join("tui").join(format!("{view}.log")),
+        }
     }
 
     /// Appends `<RFC 3339 time> <line>`; `Err` with the reason when the file cannot be written.
@@ -27,12 +29,20 @@ impl ViewLog {
 
     /// [`ViewLog::append`] stamped by the clock of `ports`.
     pub fn append_with(&self, ports: &Ports, line: &str) -> Result<(), String> {
-        let at = ports.clock.utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+        let at = ports
+            .clock
+            .utc()
+            .format(&Rfc3339)
+            .expect("a UTC time is RFC 3339");
         let failed = |e: std::io::Error| format!("cannot write {}: {e}", self.path.display());
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(failed)?;
         }
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path).map_err(failed)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(failed)?;
         writeln!(file, "{at} {line}").map_err(failed)
     }
 }
@@ -63,7 +73,10 @@ mod tests {
     fn a_log_that_cannot_be_written_is_an_error_not_a_panic() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("run/tui/tree.log")).unwrap();
-        let log = ViewLog::of(&CpdHome::resolve(Some(dir.path().into()), None).unwrap(), "tree");
+        let log = ViewLog::of(
+            &CpdHome::resolve(Some(dir.path().into()), None).unwrap(),
+            "tree",
+        );
         assert!(log.append("x").unwrap_err().contains("tree.log"));
     }
 }

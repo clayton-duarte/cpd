@@ -52,7 +52,10 @@ fn fixture(incident: Incident) -> TestEnv {
 /// A `tmux` on `PATH` that records its argv (env.calls) and then runs the built fake tmux, so no real
 /// tmux server ever starts.
 fn recording_fake_tmux(env: &TestEnv) {
-    env.fake("tmux", &format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_fake-tmux")));
+    env.fake(
+        "tmux",
+        &format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_fake-tmux")),
+    );
 }
 
 /// Context `ctx`, the Plan `pay` whose Lead is `lead1`, and — when `incident` — the `incident` and
@@ -86,12 +89,40 @@ fn seed(env: &TestEnv, incident: Incident) {
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", MAIN_WINDOW, "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let tree = ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        MAIN_WINDOW,
+        "-x",
+        "215",
+        "-y",
+        "62",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        &format!("sleep {SLEEP_SECONDS}"),
+    ]);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let chat = ok(&[
+        "split-window",
+        "-d",
+        "-t",
+        &tree,
+        "-P",
+        "-F",
+        "#{pane_id}",
+        &format!("sleep {SLEEP_SECONDS}"),
+    ]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
 }
 
@@ -102,12 +133,22 @@ fn action(env: &TestEnv) -> Run {
 
 /// The `session-message` Events, in order.
 fn messages(env: &TestEnv) -> Vec<Value> {
-    env.cpd(&["events", "list", "--kind", "session-message"]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", "session-message"])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 /// The `@cpd_session` of the chat slot of `cpd:main` (empty while the placeholder holds it).
 fn chat_slot_session(env: &TestEnv) -> String {
-    let out = env.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}\t#{@cpd_view}"]);
+    let out = env.tmux(&[
+        "list-panes",
+        "-t",
+        "=cpd:main",
+        "-F",
+        "#{@cpd_session}\t#{@cpd_view}",
+    ]);
     let text = String::from_utf8(out.stdout).unwrap();
     for line in text.lines() {
         let (session, view) = line.split_once('\t').expect("session and view");
@@ -120,7 +161,10 @@ fn chat_slot_session(env: &TestEnv) -> String {
 
 /// The recorded `display-message` calls.
 fn display_messages(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-message")).collect()
+    env.calls("tmux")
+        .into_iter()
+        .filter(|c| c.iter().any(|a| a == "display-message"))
+        .collect()
 }
 
 #[test]
@@ -128,10 +172,22 @@ fn a_click_opens_the_incident_lead() {
     let env = fixture(Incident::On);
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
-    assert!(messages(&env).is_empty(), "the Lead is opened, not woken: {:?}", messages(&env));
-    assert_eq!(chat_slot_session(&env), LEAD, "the incident's Lead is in the chat slot");
+    assert!(
+        messages(&env).is_empty(),
+        "the Lead is opened, not woken: {:?}",
+        messages(&env)
+    );
+    assert_eq!(
+        chat_slot_session(&env),
+        LEAD,
+        "the incident's Lead is in the chat slot"
+    );
     env.tmux(&["kill-session", "-t", "cpd"]);
 }
 
@@ -140,11 +196,18 @@ fn a_click_with_no_incident_reports_on_the_client() {
     let env = fixture(Incident::Off);
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
     assert_eq!(chat_slot_session(&env), "", "nothing is opened");
     let displays = display_messages(&env);
-    let call = displays.iter().find(|c| c.iter().any(|a| a.contains(NO_INCIDENT))).unwrap_or_else(|| panic!("no {NO_INCIDENT:?}: {displays:?}"));
+    let call = displays
+        .iter()
+        .find(|c| c.iter().any(|a| a.contains(NO_INCIDENT)))
+        .unwrap_or_else(|| panic!("no {NO_INCIDENT:?}: {displays:?}"));
     assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
     env.tmux(&["kill-session", "-t", "cpd"]);
 }
@@ -154,11 +217,18 @@ fn a_click_with_no_lead_reports_on_the_client() {
     let env = fixture(Incident::NoLead);
 
     let run = action(&env);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
 
     assert_eq!(chat_slot_session(&env), "", "nothing is opened");
     let displays = display_messages(&env);
-    let call = displays.iter().find(|c| c.iter().any(|a| a.contains(NO_LEAD))).unwrap_or_else(|| panic!("no {NO_LEAD:?}: {displays:?}"));
+    let call = displays
+        .iter()
+        .find(|c| c.iter().any(|a| a.contains(NO_LEAD)))
+        .unwrap_or_else(|| panic!("no {NO_LEAD:?}: {displays:?}"));
     assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
     env.tmux(&["kill-session", "-t", "cpd"]);
 }

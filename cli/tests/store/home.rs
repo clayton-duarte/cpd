@@ -26,7 +26,10 @@ pub struct Home {
 impl Home {
     /// A home with no store: the first open creates it.
     pub fn empty() -> Home {
-        let dir = tempfile::Builder::new().prefix("cpd-store-test-").tempdir().expect("a temp dir");
+        let dir = tempfile::Builder::new()
+            .prefix("cpd-store-test-")
+            .tempdir()
+            .expect("a temp dir");
         std::fs::create_dir_all(dir.path().join("cpd-home")).expect("create cpd-home");
         Home { dir }
     }

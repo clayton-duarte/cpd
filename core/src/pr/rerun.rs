@@ -29,7 +29,10 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
 
     let head_sha = gh::head_commit(runner, lead, number)?;
     let runs = gh::workflow_runs(runner, lead, &head_sha)?;
-    let failed: Vec<&gh::WorkflowRun> = runs.iter().filter(|r| FAILED.contains(&r.conclusion.to_lowercase().as_str())).collect();
+    let failed: Vec<&gh::WorkflowRun> = runs
+        .iter()
+        .filter(|r| FAILED.contains(&r.conclusion.to_lowercase().as_str()))
+        .collect();
     if failed.is_empty() {
         let listed: Vec<Value> = runs
             .iter()

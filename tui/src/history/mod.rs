@@ -57,7 +57,13 @@ struct History {
 
 pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let history = open(args)?;
-    run_view_on(ports, "history", Capture::Mouse, || Ok(history), |ctx, history| Ok(event_loop_with(ctx, history)?))?;
+    run_view_on(
+        ports,
+        "history",
+        Capture::Mouse,
+        || Ok(history),
+        |ctx, history| Ok(event_loop_with(ctx, history)?),
+    )?;
     // `q` or Esc: the pane shows the placeholder text, as the chat slot's placeholder does.
     chat::run()
 }
@@ -74,9 +80,17 @@ pub fn run_on<B: Backend, W: Write>(
     input: &mut dyn Input,
 ) -> Result<Output, CpdError> {
     let history = open(args)?;
-    run_view_with(ports, tty, out, terminal, input, "history", Capture::Mouse, || Ok(history), |ctx, history| {
-        Ok(event_loop_with(ctx, history)?)
-    })
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "history",
+        Capture::Mouse,
+        || Ok(history),
+        |ctx, history| Ok(event_loop_with(ctx, history)?),
+    )
 }
 
 /// What the view shows, read before anything is drawn.
@@ -90,7 +104,13 @@ fn open(args: Args) -> Result<History, CpdError> {
 
 /// The view's first frame for the Session `name` over the text of its file, drawn on `f` as `run` draws it (the view starts at
 /// the end). Tests draw it on a `TestBackend` instead of running the view in a terminal.
-pub fn draw_history(name: &str, archived: bool, text: &str, zone: &cpd_core::clock::TimeZone, f: &mut ratatui::Frame) {
+pub fn draw_history(
+    name: &str,
+    archived: bool,
+    text: &str,
+    zone: &cpd_core::clock::TimeZone,
+    f: &mut ratatui::Frame,
+) {
     let mut view = View::new(name, archived);
     view.set_lines(render(text, zone));
     view.draw(f);
@@ -100,16 +120,27 @@ fn load(store: &mut Store, id: &SessionId) -> Result<History, CpdError> {
     let (name, file, archived): (String, Option<String>, bool) = store
         .read(|conn| {
             Ok(conn
-                .query_row("SELECT name, file, archived_at IS NOT NULL FROM sessions WHERE id = ?1", [id.as_str()], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })
+                .query_row(
+                    "SELECT name, file, archived_at IS NOT NULL FROM sessions WHERE id = ?1",
+                    [id.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
                 .optional()?)
         })?
-        .ok_or_else(|| CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}.")).with("session", id.as_str()))?;
-    let unreadable = |why: String| CpdError::new(ErrorCode::FileUnreadable, why).with("session", id.as_str());
+        .ok_or_else(|| {
+            CpdError::new(ErrorCode::SessionNotFound, format!("No Session {id}."))
+                .with("session", id.as_str())
+        })?;
+    let unreadable =
+        |why: String| CpdError::new(ErrorCode::FileUnreadable, why).with("session", id.as_str());
     let file = file.ok_or_else(|| unreadable(format!("Session {id} has no session file.")))?;
-    let text = std::fs::read_to_string(&file).map_err(|e| unreadable(format!("Cannot read {file} as UTF-8 text: {e}.")))?;
-    Ok(History { name, archived, text })
+    let text = std::fs::read_to_string(&file)
+        .map_err(|e| unreadable(format!("Cannot read {file} as UTF-8 text: {e}.")))?;
+    Ok(History {
+        name,
+        archived,
+        text,
+    })
 }
 
 fn event_loop_with<B: Backend>(ctx: &mut Ctx<B>, history: History) -> std::io::Result<()> {
@@ -121,7 +152,12 @@ const IDLE: Duration = Duration::from_secs(60);
 
 /// Draws the history of the Session `name` over the text of its file and takes input until `q` or Esc: what `run` runs in
 /// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
-pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
+pub fn show_with<B: Backend>(
+    ctx: &mut Ctx<B>,
+    name: &str,
+    archived: bool,
+    text: &str,
+) -> std::io::Result<()> {
     let mut view = View::new(name, archived);
     view.set_lines(render(text, &ctx.ports.clock.zone()));
     loop {

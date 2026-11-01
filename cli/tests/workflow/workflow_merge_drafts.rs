@@ -23,7 +23,11 @@ fn search_merged() -> Reply {
 /// when `with_draft` is false, none. The Plan holds a second PR `web` (open too) so that the Plan is not done by the merge.
 fn world(fx: &Fx, with_draft: bool) {
     let env = &fx.env;
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"t\"\n").unwrap();
+    std::fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"t\"\n",
+    )
+    .unwrap();
     env.sql(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored, base_ref, default_branch)
          VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add the thing', 0, 'open', 'none', 'none', 't', 't', 'clean', 1, 'main', 'main');
@@ -46,11 +50,16 @@ fn world(fx: &Fx, with_draft: bool) {
 }
 
 fn events(fx: &Fx, kind: &str) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", kind, "--plan", "pay-1"]).ok()["events"].as_array().unwrap().clone()
+    fx.cpd(&["events", "list", "--kind", kind, "--plan", "pay-1"])
+        .ok()["events"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 fn status(fx: &Fx, key: &str) -> String {
-    fx.env.query(&format!("SELECT status FROM jobs WHERE key = '{key}'"))
+    fx.env
+        .query(&format!("SELECT status FROM jobs WHERE key = '{key}'"))
 }
 
 /// The PR is merged, its draft is cancelled with the reason `pr merged` and one `job-cancelled` Event, and `pr-merged` is written.
@@ -58,7 +67,11 @@ fn assert_draft_cancelled_with_the_merge(fx: &Fx) {
     assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
     assert_eq!(events(fx, "pr-merged").len(), 1);
     assert_eq!(status(fx, "late"), "cancelled");
-    assert_eq!(fx.env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'late'"), "pr merged");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'late'"),
+        "pr merged"
+    );
     let cancelled = events(fx, "job-cancelled");
     assert_eq!(cancelled.len(), 1, "{cancelled:?}");
     assert_eq!(cancelled[0]["job"], "late");
@@ -86,15 +99,31 @@ fn pr_merge_cancels_drafts() {
     let merged = view("MERGED", "UNKNOWN", Some(MERGED_AT));
     // `pr view` reads open until `pr merge` ran, merged after; the poll after it fails, so the command itself records the merge.
     let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    struct Gh(String, String, std::sync::Arc<std::sync::atomic::AtomicBool>);
+    struct Gh(
+        String,
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    );
     impl cpd_core::host::runner::Handler for Gh {
         fn handle(&self, call: &cpd_core::host::runner::Call) -> Reply {
             use std::sync::atomic::Ordering::SeqCst;
             let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
             match args[..2] {
-                ["pr", "view"] => Reply::ok(&format!("{}\n", if self.2.load(SeqCst) { &self.1 } else { &self.0 })),
-                ["repo", "view"] if args.contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") => {
-                    Reply::ok("{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n")
+                ["pr", "view"] => Reply::ok(&format!(
+                    "{}\n",
+                    if self.2.load(SeqCst) {
+                        &self.1
+                    } else {
+                        &self.0
+                    }
+                )),
+                ["repo", "view"]
+                    if args
+                        .contains(&"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed") =>
+                {
+                    Reply::ok(
+                        "{\"squashMergeAllowed\":true,\"mergeCommitAllowed\":false,\"rebaseMergeAllowed\":false}\n",
+                    )
                 }
                 ["pr", "merge"] => {
                     self.2.store(true, SeqCst);
@@ -104,7 +133,9 @@ fn pr_merge_cancels_drafts() {
             }
         }
     }
-    let _ = (*fx.fakes.runner).clone().route("gh", std::sync::Arc::new(Gh(open, merged, ran)));
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route("gh", std::sync::Arc::new(Gh(open, merged, ran)));
     fx.cpd(&["pr", "merge", "acme/api#7"]).ok();
     assert_draft_cancelled_with_the_merge(&fx);
 }

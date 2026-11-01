@@ -28,7 +28,8 @@ fn poll(runner: &FakeRunner) -> Result<Value, Failure> {
 }
 
 fn printed_ok() -> String {
-    json!({"ok": true, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}}).to_string()
+    json!({"ok": true, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}})
+        .to_string()
 }
 
 // ---- watch::pr ---------------------------------------------------------------------------------------------------
@@ -51,9 +52,18 @@ fn poll_with_gives_the_child_two_minutes_the_home_as_its_directory_and_the_homes
     let call = &runner.calls()[0];
     assert_eq!(call.deadline, Duration::from_secs(120));
     assert_eq!(call.cwd.as_deref(), Some(Path::new(ROOT)));
-    assert!(call.envs.contains(&("CPD_HOME".to_owned(), Some(ROOT.to_owned()))), "{:?}", call.envs);
+    assert!(
+        call.envs
+            .contains(&("CPD_HOME".to_owned(), Some(ROOT.to_owned()))),
+        "{:?}",
+        call.envs
+    );
     for removed in ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT"] {
-        assert!(call.envs.contains(&(removed.to_owned(), None)), "{removed}: {:?}", call.envs);
+        assert!(
+            call.envs.contains(&(removed.to_owned(), None)),
+            "{removed}: {:?}",
+            call.envs
+        );
     }
 }
 
@@ -91,14 +101,24 @@ fn poll_with_maps_a_child_that_cannot_start_to_spawn_failed() {
     let runner = fake("cpd", Reply::io(ErrorKind::NotFound));
     let failure = poll(&runner).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.starts_with(&format!("Cannot run {EXE} pr poll: ")), "{}", failure.message);
+    assert!(
+        failure
+            .message
+            .starts_with(&format!("Cannot run {EXE} pr poll: ")),
+        "{}",
+        failure.message
+    );
     assert_eq!(failure.details["argv"], json!([EXE, "pr", "poll"]));
 }
 
 #[test]
 fn poll_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("cpd", |_| true, Reply::ok(&printed_ok()).takes(Duration::from_secs(121)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "cpd",
+        |_| true,
+        Reply::ok(&printed_ok()).takes(Duration::from_secs(121)),
+    );
     let failure = poll(&runner).unwrap_err();
     assert_eq!(failure.code, "tool_timeout");
     assert_eq!(failure.details["tool"], "cpd");
@@ -131,7 +151,12 @@ fn engine() -> (Fx, tempfile::TempDir) {
 }
 
 fn script(adapter: &tempfile::TempDir) -> String {
-    adapter.path().join("lib").join("slack-channel.ts").display().to_string()
+    adapter
+        .path()
+        .join("lib")
+        .join("slack-channel.ts")
+        .display()
+        .to_string()
 }
 
 /// Starts the helper on `runner` and waits for its answer (a channel receive, no clock).
@@ -143,7 +168,10 @@ fn helper(runner: &FakeRunner, fx: &Fx) -> Result<Value, Failure> {
 #[test]
 fn start_with_asks_the_runner_for_node_running_the_slack_helper_with_the_channel_and_the_user() {
     let (fx, adapter) = engine();
-    let runner = fake("node", Reply::ok(&json!({"ok": true, "posts": [], "read": 0}).to_string()));
+    let runner = fake(
+        "node",
+        Reply::ok(&json!({"ok": true, "posts": [], "read": 0}).to_string()),
+    );
     helper(&runner, &fx).unwrap();
     let calls = runner.calls();
     assert_eq!(calls.len(), 1);
@@ -151,7 +179,15 @@ fn start_with_asks_the_runner_for_node_running_the_slack_helper_with_the_channel
     assert_eq!(calls[0].program, NODE);
     assert_eq!(
         calls[0].args,
-        [script(&adapter).as_str(), "--coding-agent", "/pi/agent/coding-agent.js", "--channel", "C123ABC", "--me", "U123ABC"]
+        [
+            script(&adapter).as_str(),
+            "--coding-agent",
+            "/pi/agent/coding-agent.js",
+            "--channel",
+            "C123ABC",
+            "--me",
+            "U123ABC"
+        ]
     );
 }
 
@@ -164,17 +200,36 @@ fn start_with_gives_the_helper_two_minutes_the_home_as_its_directory_and_pis_env
     let root = fx.engine.home.root().to_owned();
     assert_eq!(call.deadline, Duration::from_secs(120));
     assert_eq!(call.cwd.as_deref(), Some(root.as_path()));
-    assert!(call.envs.contains(&("PI_CODING_AGENT_DIR".to_owned(), Some("/pi/agent".to_owned()))), "{:?}", call.envs);
-    assert!(call.envs.contains(&("CPD_HOME".to_owned(), Some(root.display().to_string()))), "{:?}", call.envs);
+    assert!(
+        call.envs.contains(&(
+            "PI_CODING_AGENT_DIR".to_owned(),
+            Some("/pi/agent".to_owned())
+        )),
+        "{:?}",
+        call.envs
+    );
+    assert!(
+        call.envs
+            .contains(&("CPD_HOME".to_owned(), Some(root.display().to_string()))),
+        "{:?}",
+        call.envs
+    );
     for removed in ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT"] {
-        assert!(call.envs.contains(&(removed.to_owned(), None)), "{removed}: {:?}", call.envs);
+        assert!(
+            call.envs.contains(&(removed.to_owned(), None)),
+            "{removed}: {:?}",
+            call.envs
+        );
     }
 }
 
 #[test]
 fn start_with_answers_the_value_the_helper_printed_on_success() {
     let (fx, _adapter) = engine();
-    let runner = fake("node", Reply::ok(&json!({"ok": true, "posts": [{"ts": "1"}], "read": 3}).to_string()));
+    let runner = fake(
+        "node",
+        Reply::ok(&json!({"ok": true, "posts": [{"ts": "1"}], "read": 3}).to_string()),
+    );
     let value = helper(&runner, &fx).unwrap();
     assert_eq!(value["read"], 3);
     assert_eq!(value["posts"].as_array().unwrap().len(), 1);
@@ -196,7 +251,11 @@ fn start_with_maps_a_helper_that_printed_no_result_to_spawn_failed() {
     let runner = fake("node", Reply::exit(3, "", "boom"));
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.ends_with("printed no result."), "{}", failure.message);
+    assert!(
+        failure.message.ends_with("printed no result."),
+        "{}",
+        failure.message
+    );
     assert_eq!(failure.details["exit"], 3);
     assert_eq!(failure.details["stderr"], "boom");
 }
@@ -207,13 +266,23 @@ fn start_with_names_a_helper_that_exited_zero_with_no_output() {
     let runner = fake("node", Reply::exit(0, "", ""));
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.ends_with(" exited 0 but printed no result."), "{}", failure.message);
+    assert!(
+        failure
+            .message
+            .ends_with(" exited 0 but printed no result."),
+        "{}",
+        failure.message
+    );
     assert_eq!(failure.details["exit"], 0);
 
     let runner = fake("node", Reply::exit(3, "", "boom"));
     let failure = helper(&runner, &fx).unwrap_err();
     assert!(!failure.message.contains("exited 0"), "{}", failure.message);
-    assert!(failure.message.ends_with("printed no result."), "{}", failure.message);
+    assert!(
+        failure.message.ends_with("printed no result."),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]
@@ -222,7 +291,13 @@ fn start_with_maps_a_node_that_cannot_start_to_spawn_failed_with_the_argv() {
     let runner = fake("node", Reply::io(ErrorKind::NotFound));
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.starts_with(&format!("Cannot run {NODE} {} ", script(&adapter))), "{}", failure.message);
+    assert!(
+        failure
+            .message
+            .starts_with(&format!("Cannot run {NODE} {} ", script(&adapter))),
+        "{}",
+        failure.message
+    );
     assert_eq!(failure.details["argv"][0], NODE);
     assert_eq!(failure.details["argv"][1], script(&adapter).as_str());
 }
@@ -231,7 +306,11 @@ fn start_with_maps_a_node_that_cannot_start_to_spawn_failed_with_the_argv() {
 fn start_with_maps_a_scripted_timeout_to_tool_timeout() {
     let (fx, _adapter) = engine();
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("node", |_| true, Reply::ok("{}").takes(Duration::from_secs(500)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "node",
+        |_| true,
+        Reply::ok("{}").takes(Duration::from_secs(500)),
+    );
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "tool_timeout");
     assert_eq!(failure.details["tool"], "node");

@@ -4,9 +4,9 @@ use crate::home::Home;
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 
+use crate::home::HasCpdHome;
 use cpd_core::error::CpdError;
 use cpd_core::store::{Store, WriteTxn};
-use crate::home::HasCpdHome;
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
@@ -18,7 +18,10 @@ fn refused(store: &mut Store, sql: &str) -> CpdError {
 }
 
 fn sqlite_message(err: &CpdError) -> String {
-    err.details()["sqlite_message"].as_str().unwrap_or_default().to_owned()
+    err.details()["sqlite_message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A store holding a Context, its Lead, Plan `pay` and its PR `pay`.
@@ -79,7 +82,10 @@ fn a_row_outside_the_checks_is_refused() {
         );
         let err = refused(&mut store, &sql);
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
-        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{sql}: {err:?}");
+        assert!(
+            sqlite_message(&err).contains("CHECK constraint failed"),
+            "{sql}: {err:?}"
+        );
     }
 }
 
@@ -92,7 +98,10 @@ fn a_row_of_a_missing_pr_is_refused() {
     let err = refused(&mut store, &GOOD.replace("'pay', 'pay'", "'pay', 'nope'"));
 
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
-    assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{err:?}");
+    assert!(
+        sqlite_message(&err).contains("FOREIGN KEY constraint failed"),
+        "{err:?}"
+    );
 }
 
 #[test]

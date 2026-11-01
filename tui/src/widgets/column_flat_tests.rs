@@ -19,11 +19,28 @@ const CAP_R: &str = "\u{E0B4}";
 const W: u16 = 30;
 
 fn machine() -> Machine {
-    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
+    Machine {
+        name: "homeserver".to_owned(),
+        usage: Usage {
+            cpu: Some(23),
+            gpus: vec![],
+            mem: Some(41),
+        },
+    }
 }
 
 fn items(n: usize) -> Vec<Item> {
-    (1..=n).map(|i| item(i as i64, Kind::PrFailing, Urgency::Red, &format!("item {i}"), "2026-01-02T23:55:00.000Z")).collect()
+    (1..=n)
+        .map(|i| {
+            item(
+                i as i64,
+                Kind::PrFailing,
+                Urgency::Red,
+                &format!("item {i}"),
+                "2026-01-02T23:55:00.000Z",
+            )
+        })
+        .collect()
 }
 
 fn draw(n: usize, scroll: usize, height: u16) -> (Vec<String>, Drawn, Buffer) {
@@ -31,19 +48,43 @@ fn draw(n: usize, scroll: usize, height: u16) -> (Vec<String>, Drawn, Buffer) {
     let items = items(n);
     let mut terminal = Terminal::new(TestBackend::new(W, height)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(column::draw(f, f.area(), &machine(), 0, &items, scroll, now, &Default::default()))).unwrap();
+    terminal
+        .draw(|f| {
+            drawn = Some(column::draw(
+                f,
+                f.area(),
+                &machine(),
+                0,
+                &items,
+                scroll,
+                now,
+                &Default::default(),
+            ))
+        })
+        .unwrap();
     let buf = terminal.backend().buffer().clone();
-    ((0..height).map(|y| row(&buf, y)).collect(), drawn.unwrap(), buf)
+    (
+        (0..height).map(|y| row(&buf, y)).collect(),
+        drawn.unwrap(),
+        buf,
+    )
 }
 
 fn header(count: usize) -> String {
-    format!("───{CAP_L}Inbox{CAP_R}{}{CAP_L}{count}{CAP_R}─", "─".repeat(30 - 3 - 7 - 2 - count.to_string().len() - 1))
+    format!(
+        "───{CAP_L}Inbox{CAP_R}{}{CAP_L}{count}{CAP_R}─",
+        "─".repeat(30 - 3 - 7 - 2 - count.to_string().len() - 1)
+    )
 }
 
 /// An item's row: the glyph at column 1, the label from column 3, `5m` ending at column 28.
 fn item_row(n: usize) -> String {
     let label = format!("item {n}");
-    format!(" {} {label}{}5m", palette::TIER_RED, " ".repeat(24 - label.len()))
+    format!(
+        " {} {label}{}5m",
+        palette::TIER_RED,
+        " ".repeat(24 - label.len())
+    )
 }
 
 fn cue(text: &str) -> String {
@@ -51,7 +92,11 @@ fn cue(text: &str) -> String {
 }
 
 fn machine_rows() -> [String; 3] {
-    [String::new(), " homeserver".to_owned(), " \u{F4BC} 23%  \u{EFC5} 41%".to_owned()]
+    [
+        String::new(),
+        " homeserver".to_owned(),
+        " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
+    ]
 }
 
 #[test]
@@ -59,12 +104,23 @@ fn the_inbox_is_pinned_to_the_bottom_and_ends_on_the_panes_last_row() {
     let (got, _, _) = draw(0, 0, 12);
     let mut want: Vec<String> = machine_rows().into();
     want.extend(vec![String::new(); 5]); // rows 3-7: the blank rows above the section (row 7 is its blank first row)
-    want.extend([header(0), String::new(), " up to date, drink some water".to_owned(), String::new()]);
+    want.extend([
+        header(0),
+        String::new(),
+        " up to date, drink some water".to_owned(),
+        String::new(),
+    ]);
     assert_eq!(got, want, "no item");
     let (got, _, _) = draw(2, 0, 12);
     let mut want: Vec<String> = machine_rows().into();
     want.extend(vec![String::new(); 4]);
-    want.extend([header(2), String::new(), item_row(1), item_row(2), String::new()]);
+    want.extend([
+        header(2),
+        String::new(),
+        item_row(1),
+        item_row(2),
+        String::new(),
+    ]);
     assert_eq!(got, want, "two items");
 }
 
@@ -79,13 +135,25 @@ fn the_inbox_grows_upward_as_items_arrive() {
 
 #[test]
 fn an_overflowing_inbox_fills_the_rows_under_the_machine_lines() {
-    for (scroll, above, first, below) in [(0, "", 1, "▼ 7 more"), (3, "▲ 3 more", 4, "▼ 4 more"), (10, "▲ 7 more", 8, "")] {
+    for (scroll, above, first, below) in [
+        (0, "", 1, "▼ 7 more"),
+        (3, "▲ 3 more", 4, "▼ 4 more"),
+        (10, "▲ 7 more", 8, ""),
+    ] {
         let (got, _, _) = draw(12, scroll, 12);
         let mut want: Vec<String> = machine_rows().into();
         want.extend([String::new(), header(12)]);
-        want.push(if above.is_empty() { String::new() } else { cue(above) });
+        want.push(if above.is_empty() {
+            String::new()
+        } else {
+            cue(above)
+        });
         want.extend((first..first + 5).map(item_row));
-        want.push(if below.is_empty() { String::new() } else { cue(below) });
+        want.push(if below.is_empty() {
+            String::new()
+        } else {
+            cue(below)
+        });
         assert_eq!(got[..2 + 1 + 1], want[..4], "scroll {scroll}");
         assert_eq!(got[3], "", "scroll {scroll}: the section's blank first row");
         assert_eq!(got[4..], want[4..], "scroll {scroll}");

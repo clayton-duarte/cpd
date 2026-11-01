@@ -26,20 +26,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
+use super::SOURCE;
 use super::engine::Engine;
 use super::lock;
+use super::report::{About, Step};
 use super::{detached_launch, record_detached, sweep_detached};
 use cpd_core::clock::timestamp;
-use super::report::{About, Step};
-use super::SOURCE;
 use cpd_core::config::Config;
-use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::env::Env;
+use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
-use cpd_core::host::tmux::{installed_version, older_version};
 use cpd_core::host::deadline::Failed as RunFailed;
 use cpd_core::host::runner::{Call, NO_DEADLINE, Runner};
+use cpd_core::host::tmux::{installed_version, older_version};
 use cpd_core::host::{Tmux, exe};
 use cpd_core::ports::Ports;
 use cpd_core::session;
@@ -77,16 +77,25 @@ pub struct Failed {
 impl Pending {
     /// The one line `doctor` and bare `cpd` say about it.
     pub fn describe(&self, zone: &cpd_core::clock::TimeZone) -> String {
-        let local = |at: &str| match OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339) {
+        let local = |at: &str| match OffsetDateTime::parse(
+            at,
+            &time::format_description::well_known::Rfc3339,
+        ) {
             Ok(t) => cpd_core::clock::prose(t, zone),
             Err(_) => at.to_owned(),
         };
         match &self.failed {
             None => format!(
                 "A tmux restart is pending since {}: the server runs tmux {}, the installed tmux is {}. No Attempt starts until it has run.",
-                local(&self.at), self.server, self.installed
+                local(&self.at),
+                self.server,
+                self.installed
             ),
-            Some(f) => format!("The tmux restart failed at {}: {} See run/tmux-restart.log.", local(&f.at), f.reason),
+            Some(f) => format!(
+                "The tmux restart failed at {}: {} See run/tmux-restart.log.",
+                local(&f.at),
+                f.reason
+            ),
         }
     }
 }
@@ -96,14 +105,20 @@ fn now() -> String {
 }
 
 fn file_failed(path: &Path, what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {what}.", path.display())).with("path", path.display().to_string())
+    CpdError::new(
+        ErrorCode::StoreFailed,
+        format!("Cannot use {}: {what}.", path.display()),
+    )
+    .with("path", path.display().to_string())
 }
 
 /// The pending restart, if one is marked.
 pub fn read(home: &CpdHome) -> Result<Option<Pending>, CpdError> {
     let path = home.tmux_restart_pending();
     match fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| file_failed(&path, format!("it is not a pending restart: {e}"))),
+        Ok(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|e| file_failed(&path, format!("it is not a pending restart: {e}"))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(file_failed(&path, e)),
     }
@@ -134,14 +149,32 @@ pub fn mark(home: &CpdHome, server: &str, installed: &str) -> Result<bool, CpdEr
     if read(home)?.is_some_and(|p| p.failed.is_none()) {
         return Ok(false);
     }
-    write(home, &Pending { at: now(), server: server.to_owned(), installed: installed.to_owned(), failed: None })?;
+    write(
+        home,
+        &Pending {
+            at: now(),
+            server: server.to_owned(),
+            installed: installed.to_owned(),
+            failed: None,
+        },
+    )?;
     Ok(true)
 }
 
 /// Keeps the pending file with the reason the restart failed (a new file when there is none).
 fn record_failure(home: &CpdHome, error: &CpdError) -> Result<(), CpdError> {
-    let mut pending = read(home)?.unwrap_or_else(|| Pending { at: now(), server: String::new(), installed: String::new(), failed: None });
-    pending.failed = Some(Failed { at: now(), code: error.code().as_str().to_owned(), reason: error.message().to_owned(), reported: false });
+    let mut pending = read(home)?.unwrap_or_else(|| Pending {
+        at: now(),
+        server: String::new(),
+        installed: String::new(),
+        failed: None,
+    });
+    pending.failed = Some(Failed {
+        at: now(),
+        code: error.code().as_str().to_owned(),
+        reason: error.message().to_owned(),
+        reported: false,
+    });
     write(home, &pending)
 }
 
@@ -190,7 +223,13 @@ pub enum Outcome {
 fn take_lock(home: &CpdHome) -> Result<Option<File>, CpdError> {
     let path = home.tmux_restart_lock();
     fs::create_dir_all(home.locks_dir()).map_err(|e| file_failed(&path, e))?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| file_failed(&path, e))?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| file_failed(&path, e))?;
     match cpd_core::lock::try_lock(&file) {
         Ok(true) => Ok(Some(file)),
         Ok(false) => Ok(None),
@@ -201,8 +240,15 @@ fn take_lock(home: &CpdHome) -> Result<Option<File>, CpdError> {
 /// Restarts the tmux server onto the installed tmux when it is older and it is safe, as the
 /// module says, and clears the pending file when it is done. A failure is recorded in the pending
 /// file (and returned). `log` gets a line for each step. Never call it from a pane of the server.
-pub fn restart(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnMut(&str)) -> Result<Outcome, CpdError> {
-    let Some(_lock) = take_lock(home)? else { return Ok(Outcome::Running) };
+pub fn restart(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    log: &mut dyn FnMut(&str),
+) -> Result<Outcome, CpdError> {
+    let Some(_lock) = take_lock(home)? else {
+        return Ok(Outcome::Running);
+    };
     match perform(home, config, store, log) {
         Ok(Outcome::Busy(why)) => Ok(Outcome::Busy(why)),
         Ok(done) => {
@@ -217,7 +263,12 @@ pub fn restart(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn
     }
 }
 
-fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnMut(&str)) -> Result<Outcome, CpdError> {
+fn perform(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+    log: &mut dyn FnMut(&str),
+) -> Result<Outcome, CpdError> {
     let tmux = Tmux::new(config.tmux.socket.clone());
     if !tmux.server_running()? {
         return Ok(Outcome::NotNeeded);
@@ -236,7 +287,11 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
     let cockpit = config.tmux.cockpit_session.as_str();
     // The list of what to restore is taken before the kill, from the store as well as from the panes.
     let placed = session::placed(store, &old, cockpit)?;
-    log(&format!("restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions to reopen: {}", tmux.socket(), placed.len()));
+    log(&format!(
+        "restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions to reopen: {}",
+        tmux.socket(),
+        placed.len()
+    ));
     old.kill_server()?;
     log("the server is gone");
 
@@ -245,7 +300,10 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
     let mut problems: Vec<String> = Vec::new();
     let mut note = |what: String| problems.push(what);
     for (id, e) in session::gone(store, &placed, "tmux restart") {
-        note(format!("the rows of Session {id} were not written ({})", e.message()));
+        note(format!(
+            "the rows of Session {id} were not written ({})",
+            e.message()
+        ));
     }
     if let Err(e) = wait_engine_gone(home) {
         note(e.message().to_owned());
@@ -257,26 +315,41 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
 
     let failed = session::reopen(&placed);
     if !failed.is_empty() {
-        let list: Vec<String> = failed.iter().map(|(id, e)| format!("{id} ({})", e.message())).collect();
-        note(format!("these Sessions were not reopened: {}. Open each with cpd session open", list.join("; ")));
+        let list: Vec<String> = failed
+            .iter()
+            .map(|(id, e)| format!("{id} ({})", e.message()))
+            .collect();
+        note(format!(
+            "these Sessions were not reopened: {}. Open each with cpd session open",
+            list.join("; ")
+        ));
     }
     if !problems.is_empty() {
         return Err(CpdError::new(
             ErrorCode::TmuxFailed,
-            format!("The server was restarted but not all of it came back: {}.", problems.join("; ")),
+            format!(
+                "The server was restarted but not all of it came back: {}.",
+                problems.join("; ")
+            ),
         ));
     }
     log(&format!("reopened {} Session(s); done", placed.len()));
-    Ok(Outcome::Restarted { reopened: placed.len() })
+    Ok(Outcome::Restarted {
+        reopened: placed.len(),
+    })
 }
 
 /// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
 fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
-    rebuild_cockpit_with(&*Ports::current().runner, &exe::started_as()?, home)
+    rebuild_cockpit_with(&*Ports::current().runner, exe::started_as()?, home)
 }
 
 /// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.
-pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHome) -> Result<(), CpdError> {
+pub(super) fn rebuild_cockpit_with(
+    runner: &dyn Runner,
+    exe: &Path,
+    home: &CpdHome,
+) -> Result<(), CpdError> {
     let root = home.root().to_owned();
     let call = Call {
         tool: "cpd".to_owned(),
@@ -284,7 +357,16 @@ pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHo
         args: vec!["tui".to_owned()],
         envs: [("CPD_HOME", Some(root.to_string_lossy().into_owned()))]
             .into_iter()
-            .chain(["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(|n| (n, None)))
+            .chain(
+                [
+                    "CPD_PLAN",
+                    "CPD_SESSION",
+                    "CPD_ATTEMPT",
+                    "TMUX",
+                    "TMUX_PANE",
+                ]
+                .map(|n| (n, None)),
+            )
             .map(|(k, v)| (k.to_owned(), v))
             .collect(),
         cwd: Some(root),
@@ -297,11 +379,21 @@ pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHo
             RunFailed::Io(e) => e.to_string(),
             RunFailed::Timeout(e) => e.message().to_owned(),
         };
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run cpd tui: {why}."))
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot run cpd tui: {why}."),
+        )
     })?;
     if !out.status.success() {
-        let tail = String::from_utf8_lossy(&out.stdout).trim().to_owned() + &String::from_utf8_lossy(&out.stderr);
-        return Err(CpdError::new(ErrorCode::TmuxFailed, format!("cpd tui failed after the server was killed: {}", tail.trim())));
+        let tail = String::from_utf8_lossy(&out.stdout).trim().to_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        return Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!(
+                "cpd tui failed after the server was killed: {}",
+                tail.trim()
+            ),
+        ));
     }
     Ok(())
 }
@@ -312,7 +404,10 @@ fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
     let deadline = Instant::now() + ENGINE_EXIT_LIMIT;
     while lock::held(home)? {
         if Instant::now() >= deadline {
-            return Err(CpdError::new(ErrorCode::WatchRunning, "The engine still runs after the tmux server was killed."));
+            return Err(CpdError::new(
+                ErrorCode::WatchRunning,
+                "The engine still runs after the tmux server was killed.",
+            ));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -322,7 +417,12 @@ fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
 /// `cpd watch --restart-tmux` (internal): the restart, started detached by the engine; its output
 /// is `run/tmux-restart.log`. Exits 0 when it did nothing (not needed, not safe, another run).
 pub(super) fn detached() -> Result<cpd_core::output::Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env {
+        home,
+        config,
+        mut store,
+        ..
+    } = Env::open()?;
     let mut log = |line: &str| {
         let _ = writeln!(std::io::stderr(), "{} cpd tmux restart: {line}", now());
     };
@@ -333,7 +433,9 @@ pub(super) fn detached() -> Result<cpd_core::output::Output, CpdError> {
         Outcome::NotNeeded => log("the server needs no restart"),
         Outcome::Restarted { .. } => {}
     }
-    Ok(cpd_core::output::Output::success(json!({"outcome": format!("{outcome:?}")})))
+    Ok(cpd_core::output::Output::success(
+        json!({"outcome": format!("{outcome:?}")}),
+    ))
 }
 
 /// The engine's step before E1: reports a failed restart once, and starts the detached restart once
@@ -343,7 +445,13 @@ pub(super) fn drain(engine: &mut Engine) {
     let pending = match read(&engine.home) {
         Ok(Some(pending)) => pending,
         Ok(None) => return,
-        Err(e) => return engine.log.line(&format!("tmux restart: {} ({})", e.message(), e.code().as_str())),
+        Err(e) => {
+            return engine.log.line(&format!(
+                "tmux restart: {} ({})",
+                e.message(),
+                e.code().as_str()
+            ));
+        }
     };
     if let Some(failed) = &pending.failed {
         if !failed.reported {
@@ -357,7 +465,10 @@ pub(super) fn drain(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     }
     let now = engine.ports.clock.now();
-    if engine.restart_started.is_some_and(|at| now.saturating_duration_since(at) < RESTART_START_PAUSE) {
+    if engine
+        .restart_started
+        .is_some_and(|at| now.saturating_duration_since(at) < RESTART_START_PAUSE)
+    {
         return;
     }
     match spawn(engine) {
@@ -382,11 +493,20 @@ fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
                 f.reported = true;
             }
             match write(&engine.home, &done) {
-                Ok(()) => engine.log.line(&format!("tmux restart: failed: {}", failed.reason)),
-                Err(e) => engine.log.line(&format!("tmux restart: cannot update the pending file: {}", e.message())),
+                Ok(()) => engine
+                    .log
+                    .line(&format!("tmux restart: failed: {}", failed.reason)),
+                Err(e) => engine.log.line(&format!(
+                    "tmux restart: cannot update the pending file: {}",
+                    e.message()
+                )),
             }
         }
-        Err(e) => engine.log.line(&format!("tmux restart: cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
+        Err(e) => engine.log.line(&format!(
+            "tmux restart: cannot append the error Event: {} ({})",
+            e.message(),
+            e.code().as_str()
+        )),
     }
 }
 
@@ -395,14 +515,29 @@ fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
 /// `run/tmux-restart.pid` ([`record_detached`]). Returns its pid.
 fn spawn(engine: &mut Engine) -> Result<u32, CpdError> {
     let log_path = engine.home.tmux_restart_log();
-    let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the tmux restart: {why}."));
+    let failed = |why: String| {
+        CpdError::new(
+            ErrorCode::SpawnFailed,
+            format!("Cannot start the tmux restart: {why}."),
+        )
+    };
     let exe = engine.ports.spawn.self_exe()?;
     let run_dir = engine.home.run_dir();
-    fs::create_dir_all(&run_dir).map_err(|e| failed(format!("cannot create {}: {e}", run_dir.display())))?;
+    fs::create_dir_all(&run_dir)
+        .map_err(|e| failed(format!("cannot create {}: {e}", run_dir.display())))?;
     let launch = detached_launch(&exe, &["watch", "--restart-tmux"], &engine.home, log_path);
-    let pid = engine.ports.spawn.spawn(&launch).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid = engine
+        .ports
+        .spawn
+        .spawn(&launch)
+        .map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
     let pid_path = engine.home.tmux_restart_pid();
-    record_detached(engine, pid, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
+    record_detached(engine, pid, pid_path.clone()).map_err(|e| {
+        failed(format!(
+            "it runs, but its pid cannot be written to {}: {e}",
+            pid_path.display()
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -426,14 +561,27 @@ mod tests {
         assert!(!holding(&home).unwrap());
         assert!(mark(&home, "3.4", "3.8").unwrap());
         let first = read(&home).unwrap().unwrap();
-        assert_eq!((first.server.as_str(), first.installed.as_str(), first.failed.is_none()), ("3.4", "3.8", true));
+        assert_eq!(
+            (
+                first.server.as_str(),
+                first.installed.as_str(),
+                first.failed.is_none()
+            ),
+            ("3.4", "3.8", true)
+        );
         assert!(holding(&home).unwrap());
         assert!(!mark(&home, "3.4", "3.8").unwrap());
         assert_eq!(read(&home).unwrap().unwrap(), first);
 
         record_failure(&home, &CpdError::new(ErrorCode::TmuxFailed, "it broke.")).unwrap();
         let failed = read(&home).unwrap().unwrap();
-        assert_eq!(failed.failed.as_ref().map(|f| (f.reason.as_str(), f.reported)), Some(("it broke.", false)));
+        assert_eq!(
+            failed
+                .failed
+                .as_ref()
+                .map(|f| (f.reason.as_str(), f.reported)),
+            Some(("it broke.", false))
+        );
         assert!(!holding(&home).unwrap(), "a failed restart holds nothing");
         assert!(mark(&home, "3.4", "3.8").unwrap());
         assert!(read(&home).unwrap().unwrap().failed.is_none());

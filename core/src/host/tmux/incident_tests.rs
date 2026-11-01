@@ -19,7 +19,10 @@ const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
 #[test]
 fn the_incident_pill_is_first_after_the_fill() {
     let f: &str = &STATUS_FORMAT;
-    assert!(!f.contains("#[align=right]"), "no right-aligned side clips the incident pill's left cap: {f}");
+    assert!(
+        !f.contains("#[align=right]"),
+        "no right-aligned side clips the incident pill's left cap: {f}"
+    );
     assert!(
         f.contains("#[default]#{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}"),
         "the incident branch opens with its click range and left cap immediately after the fill's reset: {f}"
@@ -33,16 +36,44 @@ fn the_incident_pill_is_first_after_the_fill() {
 #[test]
 fn the_incident_pill_carries_the_incident_click_range() {
     let f: &str = &STATUS_FORMAT;
-    let label = f.find("Incident Mode: #{@cpd_incident}").expect("the incident pill's label");
-    let open = f[..label].rfind("#[range=user|incident]").expect("the incident pill's click range");
-    let close = label + f[label..].find("#[norange]").expect("the pill's range close") + "#[norange]".len();
-    assert!(f[open..].starts_with("#[range=user|incident]#[fg=colour9]\u{e0b6}"), "the range opens immediately before the left cap: {}", &f[open..close]);
-    assert!(f[close..].starts_with("#[fg=colour8]\u{2501}"), "the range closes before the following join: {}", &f[close..]);
+    let label = f
+        .find("Incident Mode: #{@cpd_incident}")
+        .expect("the incident pill's label");
+    let open = f[..label]
+        .rfind("#[range=user|incident]")
+        .expect("the incident pill's click range");
+    let close = label
+        + f[label..]
+            .find("#[norange]")
+            .expect("the pill's range close")
+        + "#[norange]".len();
+    assert!(
+        f[open..].starts_with("#[range=user|incident]#[fg=colour9]\u{e0b6}"),
+        "the range opens immediately before the left cap: {}",
+        &f[open..close]
+    );
+    assert!(
+        f[close..].starts_with("#[fg=colour8]\u{2501}"),
+        "the range closes before the following join: {}",
+        &f[close..]
+    );
     let pill = &f[open..close];
-    assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
-    assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");
-    assert!(pill.replace("noitalics", "").contains("italics"), "the text is italic: {pill}");
-    assert!(pill.contains("Incident Mode: #{@cpd_incident}"), "the label reads the option: {pill}");
+    assert!(
+        pill.contains("colour9"),
+        "the block and caps are colour 9: {pill}"
+    );
+    assert!(
+        pill.replace("noreverse", "").contains("reverse"),
+        "the text is reversed: {pill}"
+    );
+    assert!(
+        pill.replace("noitalics", "").contains("italics"),
+        "the text is italic: {pill}"
+    );
+    assert!(
+        pill.contains("Incident Mode: #{@cpd_incident}"),
+        "the label reads the option: {pill}"
+    );
 }
 
 /// The incident pill is guarded by `@cpd_incident`, reads `Incident Mode: ` immediately followed
@@ -51,22 +82,53 @@ fn the_incident_pill_carries_the_incident_click_range() {
 #[test]
 fn the_incident_pill_shows_the_elapsed_time_first_in_the_right_group() {
     let f: &str = &STATUS_FORMAT;
-    assert_eq!(f.matches("Incident Mode").count(), 1, "one incident pill: {f}");
-    assert!(f.contains("Incident Mode: #{@cpd_incident}"), "the label reads the option: {f}");
-    assert!(!f.contains(" Incident Mode: "), "the label is 15 cells with no leading space: {f}");
-    let label = f.find("Incident Mode: ").expect("the incident pill's label");
+    assert_eq!(
+        f.matches("Incident Mode").count(),
+        1,
+        "one incident pill: {f}"
+    );
+    assert!(
+        f.contains("Incident Mode: #{@cpd_incident}"),
+        "the label reads the option: {f}"
+    );
+    assert!(
+        !f.contains(" Incident Mode: "),
+        "the label is 15 cells with no leading space: {f}"
+    );
+    let label = f
+        .find("Incident Mode: ")
+        .expect("the incident pill's label");
     // The branch of the pill: the plain `#{?@cpd_incident` conditional that opens it.
-    let guard = f[..label].rfind("#{?@cpd_incident").expect("the pill is guarded by @cpd_incident");
-    assert!(f[guard..label].contains("#{?@cpd_incident"), "the label sits in the @cpd_incident branch: {}", &f[guard..label]);
+    let guard = f[..label]
+        .rfind("#{?@cpd_incident")
+        .expect("the pill is guarded by @cpd_incident");
+    assert!(
+        f[guard..label].contains("#{?@cpd_incident"),
+        "the label sits in the @cpd_incident branch: {}",
+        &f[guard..label]
+    );
     // The whole pill: the guard, the join, the caps and the text.
-    let close = label + f[label..].find('\u{e0b4}').expect("the pill's right cap") + '\u{e0b4}'.len_utf8();
+    let close =
+        label + f[label..].find('\u{e0b4}').expect("the pill's right cap") + '\u{e0b4}'.len_utf8();
     let pill = &f[guard..close];
-    assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
-    assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");
-    assert!(pill.replace("noitalics", "").contains("italics"), "the text is italic: {pill}");
+    assert!(
+        pill.contains("colour9"),
+        "the block and caps are colour 9: {pill}"
+    );
+    assert!(
+        pill.replace("noreverse", "").contains("reverse"),
+        "the text is reversed: {pill}"
+    );
+    assert!(
+        pill.replace("noitalics", "").contains("italics"),
+        "the text is italic: {pill}"
+    );
     // The incident pill is first in the right group, before the workers pill.
     let workers = f.find("#{@cpd_workers}").expect("the workers pill");
-    assert!(guard < workers, "the incident branch comes before the workers pill: {f}");
+    assert!(
+        guard < workers,
+        "the incident branch comes before the workers pill: {f}"
+    );
 }
 
 /// The fill count and `long_fits!()` subtract the incident pill's width while
@@ -76,16 +138,37 @@ fn the_incident_pill_shows_the_elapsed_time_first_in_the_right_group() {
 fn the_incident_pill_width_follows_the_duration() {
     let f: &str = &STATUS_FORMAT;
     assert_eq!(LABEL.chars().count(), 15, "the label is 15 cells");
-    assert!(f.contains("Incident Mode: #{@cpd_incident}"), "the pill's text carries the label and the duration: {f}");
-    assert!(!f.contains(" Incident Mode: "), "the label has no leading space: {f}");
+    assert!(
+        f.contains("Incident Mode: #{@cpd_incident}"),
+        "the pill's text carries the label and the duration: {f}"
+    );
+    assert!(
+        !f.contains(" Incident Mode: "),
+        "the label has no leading space: {f}"
+    );
     let cells = LABEL.chars().count() + 3;
     assert!(
         INCIDENT_WIDTH.contains(&format!(",{cells}}}")),
         "the width is one join, two caps and the 15-cell label: {INCIDENT_WIDTH}"
     );
     let fill = fill_count!();
-    assert!(fill.contains(INCIDENT_WIDTH), "the fill count subtracts the incident width: {fill}");
-    assert!(long_fits!().contains(INCIDENT_WIDTH), "long_fits subtracts the incident width: {}", long_fits!());
-    assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {}", *STATUS_FORMAT);
-    assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {}", *STATUS_FORMAT);
+    assert!(
+        fill.contains(INCIDENT_WIDTH),
+        "the fill count subtracts the incident width: {fill}"
+    );
+    assert!(
+        long_fits!().contains(INCIDENT_WIDTH),
+        "long_fits subtracts the incident width: {}",
+        long_fits!()
+    );
+    assert!(
+        STATUS_FORMAT.contains(fill),
+        "the format uses the fill count: {}",
+        *STATUS_FORMAT
+    );
+    assert!(
+        STATUS_FORMAT.contains(long_fits!()),
+        "the format uses long_fits: {}",
+        *STATUS_FORMAT
+    );
 }

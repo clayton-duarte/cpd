@@ -10,7 +10,7 @@ use super::report::{About, Step};
 use super::sleep::LEAD_FINISHED;
 use cpd_core::clock::timestamp;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::ids::PlanId;
+use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::plan::archive::{self, Objects};
 
 /// Every Plan with a Lead asleep past the threshold whose Plan is still finished (contract §3.7; hs-d630). `?1` is
@@ -38,23 +38,48 @@ pub(super) fn run(engine: &mut Engine) {
     let mut archived = 0usize;
     for plan in plans {
         match archive_plan(engine, &plan) {
-            Ok(true) => archived += 1,
+            Ok(true) => {
+                stop_hosts(engine, &plan);
+                archived += 1;
+            }
             Ok(false) => {}
             Err(e) => engine.fail(Step::E14, About::Plan(plan), &e),
         }
     }
     if archived > 0 {
-        engine.log.line(&format!("E14: archived {archived} Plan(s)"));
+        engine
+            .log
+            .line(&format!("E14: archived {archived} Plan(s)"));
+    }
+}
+
+/// Stops the hosts of the Plan's durable Lead Sessions (contract §6.19; E14 archives their Plan).
+fn stop_hosts(engine: &mut Engine, plan: &PlanId) {
+    let sessions: Vec<SessionId> = match engine.store.read(|conn| {
+        let mut stmt = conn.prepare("SELECT id FROM sessions WHERE plan = ?1 AND role = 'lead' AND runner = 'durable' ORDER BY id")?;
+        Ok(stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }) {
+        Ok(ids) => ids.iter().filter_map(|id| SessionId::parse(id).ok()).collect(),
+        Err(e) => {
+            engine.log.line(&format!("E14: cannot read the durable Leads of Plan {plan}: {}", e.message()));
+            return;
+        }
+    };
+    for session in sessions {
+        super::hosts::stop(engine, &session);
     }
 }
 
 fn ready(engine: &mut Engine) -> Result<Vec<PlanId>, CpdError> {
     let now = OffsetDateTime::now_utc();
-    let cutoff = now - time::Duration::seconds(i64::from(engine.config.timeouts.archive_sleep_seconds));
+    let cutoff =
+        now - time::Duration::seconds(i64::from(engine.config.timeouts.archive_sleep_seconds));
     let (now, cutoff) = (timestamp(now), timestamp(cutoff));
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&archivable())?;
-        let rows = stmt.query_map([&now, &cutoff], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([&now, &cutoff], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.iter().map(|id| PlanId::parse(id)).collect()
     })
 }
@@ -65,7 +90,9 @@ fn archive_plan(engine: &mut Engine, plan: &PlanId) -> Result<bool, CpdError> {
     let objects = engine.store.read(|conn| Objects::of_plan(conn, plan))?;
     match archive::archive(&mut engine.store, &engine.config, "engine E14", &objects) {
         Ok(_) => Ok(true),
-        Err(e) if matches!(e.code(), ErrorCode::ArchiveBlocked | ErrorCode::InChatSlot) => Ok(false),
+        Err(e) if matches!(e.code(), ErrorCode::ArchiveBlocked | ErrorCode::InChatSlot) => {
+            Ok(false)
+        }
         Err(e) => Err(e),
     }
 }

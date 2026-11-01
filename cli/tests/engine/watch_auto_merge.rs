@@ -65,7 +65,10 @@ impl Handler for Gh {
             return match &script.refuse {
                 Some(message) => Reply::exit(
                     1,
-                    &format!("{}\n", json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})),
+                    &format!(
+                        "{}\n",
+                        json!({"data": {"enablePullRequestAutoMerge": null}, "errors": [{"message": message}]})
+                    ),
                     &format!("gh: {message}\n"),
                 ),
                 None => Reply::ok(&format!(
@@ -95,19 +98,33 @@ struct Probe {
 impl Probe {
     /// The auto-merge calls of `gh` (the viewer lookup of E8 is not E18's), argv joined.
     fn calls(&self) -> Vec<String> {
-        self.gh.seen.lock().unwrap().iter().filter(|c| c.contains("autoMergeAllowed") || c.contains("enablePullRequestAutoMerge")).cloned().collect()
+        self.gh
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.contains("autoMergeAllowed") || c.contains("enablePullRequestAutoMerge"))
+            .cloned()
+            .collect()
     }
 
     fn reads(&self) -> usize {
-        self.calls().iter().filter(|c| c.contains("autoMergeAllowed")).count()
+        self.calls()
+            .iter()
+            .filter(|c| c.contains("autoMergeAllowed"))
+            .count()
     }
 
     fn mutations(&self) -> Vec<String> {
-        self.calls().into_iter().filter(|c| c.contains("enablePullRequestAutoMerge")).collect()
+        self.calls()
+            .into_iter()
+            .filter(|c| c.contains("enablePullRequestAutoMerge"))
+            .collect()
     }
 
     fn store(&self) -> Connection {
-        Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
+        Connection::open_with_flags(self.home.join("cpd.db"), OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap()
     }
 
     /// The `(auto_merge, auto_merge_at)` of PR `pr`'s post.
@@ -124,21 +141,40 @@ impl Probe {
     /// The data of every `error` Event.
     fn errors(&self) -> Vec<Value> {
         let conn = self.store();
-        let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
-        rows.iter().map(|d| serde_json::from_str::<Value>(d).unwrap()).collect()
+        let mut stmt = conn
+            .prepare("SELECT data FROM events WHERE kind = 'error' ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows.iter()
+            .map(|d| serde_json::from_str::<Value>(d).unwrap())
+            .collect()
     }
 
     /// The `error` Events of code `code`: `(plan, session, data)`.
     fn errors_of(&self, code: &str) -> Vec<(Option<String>, Option<String>, Value)> {
         let conn = self.store();
-        let mut stmt = conn.prepare("SELECT plan, session, data FROM events WHERE kind = 'error' ORDER BY id").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT plan, session, data FROM events WHERE kind = 'error' ORDER BY id")
+            .unwrap();
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        rows.into_iter().map(|(p, s, d)| (p, s, serde_json::from_str::<Value>(&d).unwrap())).filter(|(_, _, d)| d["code"] == code).collect()
+        rows.into_iter()
+            .map(|(p, s, d)| (p, s, serde_json::from_str::<Value>(&d).unwrap()))
+            .filter(|(_, _, d)| d["code"] == code)
+            .collect()
     }
 
     fn log(&self) -> String {
@@ -147,7 +183,14 @@ impl Probe {
 
     /// A write of the store, as another process's: a fixture the engine finds at its next tick.
     fn write(&self, sql: &str) {
-        common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(), 5000).unwrap(), sql);
+        common::sql(
+            &mut Store::open(
+                &CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(),
+                5000,
+            )
+            .unwrap(),
+            sql,
+        );
     }
 
     /// Moves the engine's clock forward by `seconds`.
@@ -176,7 +219,15 @@ fn merge(repeat: u32) -> Merge {
     fx.env.quiet_models(fx.fakes.clock.utc());
     fx.engine_routes();
     fx.install_pi();
-    let gh = Arc::new(Gh { script: Mutex::new(Script { allowed: true, methods: [true, false, false], refuse: None, fail: None }), seen: Mutex::new(Vec::new()) });
+    let gh = Arc::new(Gh {
+        script: Mutex::new(Script {
+            allowed: true,
+            methods: [true, false, false],
+            refuse: None,
+            fail: None,
+        }),
+        seen: Mutex::new(Vec::new()),
+    });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let now = fx.stamp_ago(0);
     fx.env.sql(&format!(
@@ -191,7 +242,11 @@ fn merge(repeat: u32) -> Merge {
 
 impl Merge {
     fn probe(&self) -> Probe {
-        Probe { home: self.fx.env.cpd_home(), gh: self.gh.clone(), clock: (*self.fx.fakes.clock).clone() }
+        Probe {
+            home: self.fx.env.cpd_home(),
+            gh: self.gh.clone(),
+            clock: (*self.fx.fakes.clock).clone(),
+        }
     }
 
     fn script(&self, change: impl FnOnce(&mut Script)) {
@@ -200,21 +255,44 @@ impl Merge {
 
     /// PR `key` of Plan `pay`, pull request `number`, based on `base`, with the pull request in state `pr_state` and the
     /// PR row in status `status`; its post requests auto-merge as `auto_merge` (`enabled` and `refused` carry a time).
-    fn pr(&self, key: &str, number: u32, base: &str, status: &str, pr_state: &str, auto_merge: &str) {
+    fn pr(
+        &self,
+        key: &str,
+        number: u32,
+        base: &str,
+        status: &str,
+        pr_state: &str,
+        auto_merge: &str,
+    ) {
         let url = format!("https://github.com/acme/pay/pull/{number}");
         let merged_at = if status == "merged" { "'t'" } else { "NULL" };
-        let at = if matches!(auto_merge, "enabled" | "refused") { "'t'" } else { "NULL" };
+        let at = if matches!(auto_merge, "enabled" | "refused") {
+            "'t'"
+        } else {
+            "NULL"
+        };
         // A waiting PR has no worktree, no start and no pull request yet.
         let waiting = status == "waiting";
-        let (worktree, started) = if waiting { ("NULL", "NULL") } else { ("'/nowhere/lead'", "'t'") };
+        let (worktree, started) = if waiting {
+            ("NULL", "NULL")
+        } else {
+            ("'/nowhere/lead'", "'t'")
+        };
         let (n, u, opened, pull) = if waiting {
-            ("NULL".to_owned(), "NULL".to_owned(), "NULL", "NULL".to_owned())
+            (
+                "NULL".to_owned(),
+                "NULL".to_owned(),
+                "NULL",
+                "NULL".to_owned(),
+            )
         } else {
             (
                 number.to_string(),
                 format!("'{url}'"),
                 "'t'",
-                format!("(SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number})"),
+                format!(
+                    "(SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number})"
+                ),
             )
         };
         let pull_request = if waiting {
@@ -242,12 +320,17 @@ impl Merge {
     /// The engine runs until `step` says so (it is called before each nap, after the tick that came before it) or [`CAP`] naps.
     fn run(&self, mut step: impl FnMut(&Probe, usize) -> bool + Send + 'static) {
         let probe = self.probe();
-        self.fx.watch_steps(move |nap| nap >= CAP || step(&probe, nap)).unwrap();
+        self.fx
+            .watch_steps(move |nap| nap >= CAP || step(&probe, nap))
+            .unwrap();
     }
 }
 
 /// `done` once `cond` has held for `ticks` whole ticks: the state the engine reached, and that it stays so.
-fn then_ticks(ticks: usize, mut cond: impl FnMut(&Probe) -> bool + Send + 'static) -> impl FnMut(&Probe, usize) -> bool + Send + 'static {
+fn then_ticks(
+    ticks: usize,
+    mut cond: impl FnMut(&Probe) -> bool + Send + 'static,
+) -> impl FnMut(&Probe, usize) -> bool + Send + 'static {
     let mut since = None;
     move |p, nap| {
         if since.is_none() && cond(p) {
@@ -268,10 +351,20 @@ fn enables_a_pending_request_for_an_unstacked_open_pr() {
     assert_eq!(state, "enabled");
     assert!(at.is_some_and(|at| !at.is_empty()), "auto_merge_at is set");
     let calls = p.calls();
-    assert_eq!(calls.len(), 2, "the read query, then one mutation, and later ticks make no call: {calls:?}");
+    assert_eq!(
+        calls.len(),
+        2,
+        "the read query, then one mutation, and later ticks make no call: {calls:?}"
+    );
     assert!(calls[0].contains("autoMergeAllowed"), "{calls:?}");
-    assert!(calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"), "{calls:?}");
-    assert!(calls.iter().all(|c| !c.contains("pr merge")), "never `gh pr merge`: {calls:?}");
+    assert!(
+        calls[1].contains("enablePullRequestAutoMerge") && calls[1].contains("SQUASH"),
+        "{calls:?}"
+    );
+    assert!(
+        calls.iter().all(|c| !c.contains("pr merge")),
+        "never `gh pr merge`: {calls:?}"
+    );
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
 
@@ -298,8 +391,16 @@ fn waits_while_the_base_is_another_prs_lead_branch_then_enables_after_the_unstac
     });
     let p = t.probe();
 
-    assert_eq!(held.lock().unwrap().take(), Some((Vec::<String>::new(), "pending".to_owned())), "stacked: no gh call, the row stays pending");
-    assert_eq!(p.state("top"), "enabled", "after the unstack the engine enables it");
+    assert_eq!(
+        held.lock().unwrap().take(),
+        Some((Vec::<String>::new(), "pending".to_owned())),
+        "stacked: no gh call, the row stays pending"
+    );
+    assert_eq!(
+        p.state("top"),
+        "enabled",
+        "after the unstack the engine enables it"
+    );
     assert_eq!(p.mutations().len(), 1, "{:?}", p.calls());
     assert_eq!(p.errors(), Vec::<Value>::new());
 }
@@ -336,13 +437,29 @@ fn a_gh_failure_keeps_the_row_pending_and_is_tried_again_after_error_repeat_seco
     });
     let p = t.probe();
 
-    assert_eq!(seen.lock().unwrap().take(), Some(1), "500 s after the failed run's end is not 600 s: no call");
-    assert_eq!(p.reads(), 2, "after the period the same request is tried again, once: {:?}", p.calls());
-    assert_eq!(p.row("repo"), ("pending".to_owned(), None), "a failure leaves the row pending");
+    assert_eq!(
+        seen.lock().unwrap().take(),
+        Some(1),
+        "500 s after the failed run's end is not 600 s: no call"
+    );
+    assert_eq!(
+        p.reads(),
+        2,
+        "after the period the same request is tried again, once: {:?}",
+        p.calls()
+    );
+    assert_eq!(
+        p.row("repo"),
+        ("pending".to_owned(), None),
+        "a failure leaves the row pending"
+    );
     let errors = p.errors();
     assert_eq!(errors.len(), 1, "reported once per code: {errors:?}");
     assert_eq!(errors[0]["source"], "watch");
-    assert!(errors[0]["message"].as_str().unwrap().contains("502"), "{errors:?}");
+    assert!(
+        errors[0]["message"].as_str().unwrap().contains("502"),
+        "{errors:?}"
+    );
 }
 
 #[test]
@@ -360,10 +477,19 @@ fn a_github_refusal_marks_the_row_refused_raises_one_error_event_and_is_not_retr
     let refused = p.errors_of("auto_merge_refused");
     assert_eq!(refused.len(), 1, "ONE error Event: {:?}", p.errors());
     let (plan, session, data) = &refused[0];
-    assert_eq!(plan.as_deref(), Some("pay"), "the Lead sees it: Plan scoped");
+    assert_eq!(
+        plan.as_deref(),
+        Some("pay"),
+        "the Lead sees it: Plan scoped"
+    );
     assert_eq!(*session, None);
     let message = data["message"].as_str().unwrap();
-    assert!(message.contains("repo") && message.contains('7') && message.contains("Pull request is in clean status"), "{message}");
+    assert!(
+        message.contains("repo")
+            && message.contains('7')
+            && message.contains("Pull request is in clean status"),
+        "{message}"
+    );
     assert_eq!(p.errors().len(), 1, "no other error: {:?}", p.errors());
 }
 
@@ -375,10 +501,22 @@ fn a_repo_that_stopped_allowing_auto_merge_gets_none_and_no_error_event() {
     t.run(then_ticks(5, |p| p.state("repo") != "pending"));
     let p = t.probe();
 
-    assert_eq!(p.row("repo"), ("none".to_owned(), None), "a settled row without a time");
-    assert!(p.mutations().is_empty(), "nothing is requested: {:?}", p.calls());
+    assert_eq!(
+        p.row("repo"),
+        ("none".to_owned(), None),
+        "a settled row without a time"
+    );
+    assert!(
+        p.mutations().is_empty(),
+        "nothing is requested: {:?}",
+        p.calls()
+    );
     assert_eq!(p.reads(), 1, "never retried: {:?}", p.calls());
-    assert_eq!(p.errors(), Vec::<Value>::new(), "no error Event for a repo that lacks auto-merge");
+    assert_eq!(
+        p.errors(),
+        Vec::<Value>::new(),
+        "no error Event for a repo that lacks auto-merge"
+    );
 }
 
 #[test]
@@ -391,7 +529,10 @@ fn a_pending_request_is_enabled_with_the_method_the_repo_allows() {
 
     let mutations = p.mutations();
     assert_eq!(mutations.len(), 1, "{:?}", p.calls());
-    assert!(mutations[0].contains("REBASE") && !mutations[0].contains("SQUASH"), "{mutations:?}");
+    assert!(
+        mutations[0].contains("REBASE") && !mutations[0].contains("SQUASH"),
+        "{mutations:?}"
+    );
     assert_eq!(p.state("repo"), "enabled");
 }
 
@@ -404,12 +545,19 @@ fn a_repo_that_allows_no_merge_method_is_refused_with_one_error_event() {
     let p = t.probe();
 
     assert_eq!(p.state("repo"), "refused");
-    assert!(p.mutations().is_empty(), "nothing is requested: {:?}", p.calls());
+    assert!(
+        p.mutations().is_empty(),
+        "nothing is requested: {:?}",
+        p.calls()
+    );
     assert_eq!(p.reads(), 1, "never retried: {:?}", p.calls());
     let refused = p.errors_of("auto_merge_refused");
     assert_eq!(refused.len(), 1, "ONE error Event: {:?}", p.errors());
     let message = refused[0].2["message"].as_str().unwrap();
-    assert!(message.contains("the repo allows no merge method"), "{message}");
+    assert!(
+        message.contains("the repo allows no merge method"),
+        "{message}"
+    );
     assert_eq!(p.errors().len(), 1, "no other error: {:?}", p.errors());
 }
 
@@ -465,7 +613,11 @@ fn holds_while_incident_mode_is_on() {
     let p = t.probe();
 
     let (calls, state, log) = held.lock().unwrap().take().expect("five ticks passed");
-    assert_eq!((calls, state), (Vec::<String>::new(), "pending".to_owned()), "while incident mode is on: no gh call, no row written");
+    assert_eq!(
+        (calls, state),
+        (Vec::<String>::new(), "pending".to_owned()),
+        "while incident mode is on: no gh call, no row written"
+    );
     assert!(log.contains("E18: holding: incident mode is on"), "{log}");
     assert_eq!(p.state("repo"), "enabled", "off again: it runs");
 }

@@ -5,7 +5,6 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::Modifier;
 
 use super::fixture::{context, plan, session, tree};
 use super::view::{Effect, View};
@@ -28,7 +27,14 @@ fn priced() -> Tree {
 
 /// The same, the Plan named `id` with `counts` (`[draft, queued, running, merging, failed, merged]`).
 fn named(id: &str, counts: [usize; 6]) -> Tree {
-    let mut p = plan(id, "alpha", Phase::Dispatch, counts, session("l-ship", "lead", State::Idle, None, Place::Parked), vec![]);
+    let mut p = plan(
+        id,
+        "alpha",
+        Phase::Dispatch,
+        counts,
+        session("l-ship", "lead", State::Idle, None, Place::Parked),
+        vec![],
+    );
     p.cost_usd = Some(12.3);
     let mut c = context("alpha", vec![p]);
     c.cost_usd = Some(45.6);
@@ -51,13 +57,24 @@ fn draw_in(view: &mut View, width: u16) -> Buffer {
 
 /// The drawn rows, trailing blanks trimmed.
 fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
 }
 
 /// The row that holds `text`, from the first column of the row area.
 fn row(buf: &Buffer, text: &str) -> String {
     let all = rows(buf);
-    let found = all.iter().find(|r| r.contains(text)).unwrap_or_else(|| panic!("no row with {text:?}: {all:?}"));
+    let found = all
+        .iter()
+        .find(|r| r.contains(text))
+        .unwrap_or_else(|| panic!("no row with {text:?}: {all:?}"));
     found.chars().skip(1).collect()
 }
 
@@ -77,11 +94,23 @@ fn the_dollar_key_shows_the_costs_and_a_second_press_hides_them() {
     let mut view = View::new(priced(), true);
     assert_eq!(press(&mut view, '$'), Effect::None);
     let buf = draw(&mut view);
-    assert!(row(&buf, "alpha").contains(&format!("alpha {}", format_cost(45.6))), "the Context's cost: {:?}", rows(&buf));
-    assert!(row(&buf, "ship").contains(&format!("ship {}", format_cost(12.3))), "the Plan's cost: {:?}", rows(&buf));
+    assert!(
+        row(&buf, "alpha").contains(&format!("alpha {}", format_cost(45.6))),
+        "the Context's cost: {:?}",
+        rows(&buf)
+    );
+    assert!(
+        row(&buf, "ship").contains(&format!("ship {}", format_cost(12.3))),
+        "the Plan's cost: {:?}",
+        rows(&buf)
+    );
     assert_eq!(press(&mut view, '$'), Effect::None);
     let buf = draw(&mut view);
-    assert!(!has_cost(&buf), "a second press hides them: {:?}", rows(&buf));
+    assert!(
+        !has_cost(&buf),
+        "a second press hides them: {:?}",
+        rows(&buf)
+    );
 }
 
 #[test]
@@ -90,11 +119,22 @@ fn the_dollar_key_needs_no_cursor_and_does_not_show_it() {
     let block = crate::palette::selected().add_modifier;
     let reversed = |buf: &Buffer| buf.content().iter().any(|c| c.modifier.intersects(block));
     let before = draw(&mut view);
-    assert!(!reversed(&before) && !has_cost(&before), "no cursor and no cost before the key: {:?}", rows(&before));
+    assert!(
+        !reversed(&before) && !has_cost(&before),
+        "no cursor and no cost before the key: {:?}",
+        rows(&before)
+    );
     assert_eq!(press(&mut view, '$'), Effect::None);
     let buf = draw(&mut view);
-    assert!(has_cost(&buf), "the key toggled with no cursor: {:?}", rows(&buf));
-    assert!(!reversed(&buf), "and the cursor stays hidden: no reversed cell");
+    assert!(
+        has_cost(&buf),
+        "the key toggled with no cursor: {:?}",
+        rows(&buf)
+    );
+    assert!(
+        !reversed(&buf),
+        "and the cursor stays hidden: no reversed cell"
+    );
 }
 
 #[test]
@@ -121,11 +161,23 @@ fn a_long_plan_name_takes_the_room_of_the_hidden_cost() {
     let mut view = View::new(named(id, counts), true);
     let off = cut(area - 6 - (c + 1));
     let buf = draw_in(&mut view, NARROW);
-    assert_eq!(row(&buf, "abc").trim_end(), row_of(format!("╰─{IDLE} {off}")), "costs off: cut by the counters only");
+    assert_eq!(
+        row(&buf, "abc").trim_end(),
+        row_of(format!("╰─{IDLE} {off}")),
+        "costs off: cut by the counters only"
+    );
 
     press(&mut view, '$');
     let on = cut(area - 6 - (1 + k) - (c + 1));
     let buf = draw_in(&mut view, NARROW);
-    assert_eq!(row(&buf, "abc").trim_end(), row_of(format!("╰─{IDLE} {on} {}", format_cost(12.3))), "costs on: cut before the cost too");
-    assert_eq!(off.chars().count(), on.chars().count() + 1 + k, "off shows the room of the hidden cost more");
+    assert_eq!(
+        row(&buf, "abc").trim_end(),
+        row_of(format!("╰─{IDLE} {on} {}", format_cost(12.3))),
+        "costs on: cut before the cost too"
+    );
+    assert_eq!(
+        off.chars().count(),
+        on.chars().count() + 1 + k,
+        "off shows the room of the hidden cost more"
+    );
 }

@@ -8,7 +8,7 @@ mod pane_io;
 mod server;
 mod target;
 
-use super::{run, Invocation, Outcome, State};
+use super::{Invocation, Outcome, State, run};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
@@ -20,7 +20,10 @@ pub struct T {
 
 impl T {
     pub fn new() -> T {
-        T { dir: tempfile::tempdir().unwrap(), env: vec![("FAKE_TMUX_SERVER_PID".into(), "4242".into())] }
+        T {
+            dir: tempfile::tempdir().unwrap(),
+            env: vec![("FAKE_TMUX_SERVER_PID".into(), "4242".into())],
+        }
     }
     pub fn path(&self) -> PathBuf {
         self.dir.path().to_path_buf()
@@ -30,9 +33,16 @@ impl T {
     }
     /// Runs `tmux -u -L <socket> -f /dev/null <args>`.
     pub fn on(&self, socket: &str, args: &[&str]) -> Outcome {
-        let mut argv: Vec<String> = ["-u", "-L", socket, "-f", "/dev/null"].map(String::from).to_vec();
+        let mut argv: Vec<String> = ["-u", "-L", socket, "-f", "/dev/null"]
+            .map(String::from)
+            .to_vec();
         argv.extend(args.iter().map(|a| a.to_string()));
-        run(&Invocation { argv, tmux_tmpdir: self.path(), cwd: self.path(), env: self.env.clone() })
+        run(&Invocation {
+            argv,
+            tmux_tmpdir: self.path(),
+            cwd: self.path(),
+            env: self.env.clone(),
+        })
     }
     /// Socket `t`.
     pub fn t(&self, args: &[&str]) -> Outcome {

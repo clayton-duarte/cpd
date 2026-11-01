@@ -20,10 +20,9 @@ use ratatui::{
     widgets::Widget,
 };
 
-
 use super::flow::{self, Chart, Mask, Pill, free_row, glyph};
-use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
+use crate::buffer::copy_cells;
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
 use crate::read::{JobNode, NeedsUser, PrFacts, WorkflowNode, WorkflowStatus, Pull, pr_look};
@@ -32,8 +31,18 @@ use crate::read::{JobNode, NeedsUser, PrFacts, WorkflowNode, WorkflowStatus, Pul
 const GAP: u16 = 2;
 /// What the box of a Workflow with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
-/// The title of the one Plan-level box holding the explore Jobs (D1-A): leading and trailing space, no state word.
-const EXPLORE_TITLE: &str = " explore Jobs ";
+/// The title of the one Plan-level box holding the explore Jobs (D1-A): ` explore Jobs · <n> <kind> · <n> <kind> `, the kinds in byte order, one read-only span.
+fn explore_title(explore: &[&JobNode]) -> Line<'static> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for j in explore {
+        *counts.entry(j.kind.as_str()).or_default() += 1;
+    }
+    let mut text = String::from(" explore Jobs ");
+    for (kind, n) in counts {
+        text.push_str(&format!("· {n} {kind} "));
+    }
+    Line::from(Span::styled(text, palette::read_only_text()))
+}
 
 /// The body of a Workflow box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the Workflow has none.
 struct ChartBody<'a> {
@@ -45,7 +54,12 @@ impl Widget for ChartBody<'_> {
         if self.chart.pills.is_empty() {
             Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(area, buf);
         }
-        copy_cells(&self.chart.buf, Rect::new(0, 0, area.width, area.height), buf, Position::new(area.x, area.y));
+        copy_cells(
+            &self.chart.buf,
+            Rect::new(0, 0, area.width, area.height),
+            buf,
+            Position::new(area.x, area.y),
+        );
     }
 }
 
@@ -165,7 +179,10 @@ fn title_of(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static>
     match &workflow.pull {
         Some(pull) => {
             // the title is a hit target (the link): clickable text and the bright pairs
-            spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
+            spans.push(Span::styled(
+                format!("#{} ", pull.number),
+                palette::clickable_text(),
+            ));
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if let Some(dot) = workflow.lead_dot {
@@ -225,6 +242,7 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
         .collect();
     let explore_chart = (!explore.is_empty())
         .then(|| flow::layout(&flow::flow_jobs(explore.iter().copied(), &needs_user.worked_on), frame));
+    let explore_title = explore_title(&explore);
     let titles: Vec<Line> = workflows.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
     let footers: Vec<Option<String>> = workflows.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
@@ -236,15 +254,27 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
         .zip(&footer_w)
         .map(|((c, t), &fw)| {
             let empty = c.pills.is_empty();
-            let body_w = c.buf.area.width.max(if empty { NO_JOBS.chars().count() as u16 } else { 0 });
+            let body_w = c.buf.area.width.max(if empty {
+                NO_JOBS.chars().count() as u16
+            } else {
+                0
+            });
             let inner_h = if empty { 1 } else { c.buf.area.height };
-            ((body_w + 2 + 2 * spacing::PAD_X).max(t.width() as u16 + 4).max(if fw > 0 { fw + 4 } else { 0 }), inner_h + 2)
+            (
+                (body_w + 2 + 2 * spacing::PAD_X)
+                    .max(t.width() as u16 + 4)
+                    .max(if fw > 0 { fw + 4 } else { 0 }),
+                inner_h + 2,
+            )
         })
         .collect();
     // The explore box: its chart's body, the walls and the padding, at least as wide as its title plus 4.
     let explore_size: Option<(u16, u16)> = explore_chart.as_ref().map(|c| {
         let inner_h = c.buf.area.height;
-        ((c.buf.area.width + 2 + 2 * spacing::PAD_X).max(EXPLORE_TITLE.chars().count() as u16 + 4), inner_h + 2)
+        (
+            (c.buf.area.width + 2 + 2 * spacing::PAD_X).max(explore_title.width() as u16 + 4),
+            inner_h + 2,
+        )
     });
 
     // y: each row of boxes as tall as its tallest box, `GAP` between; x: a row's boxes side by side by key, one apart
@@ -284,8 +314,14 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
         .filter(|&(p, c)| level[p] < level[c])
         .collect();
     // a line that skips rows keeps a column clear of their boxes and of the columns beside them
-    let busy: Vec<HashSet<u16>> =
-        rows.iter().map(|r| r.iter().flat_map(|&i| at[i].0.saturating_sub(1)..=at[i].0 + size[i].0).collect()).collect();
+    let busy: Vec<HashSet<u16>> = rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .flat_map(|&i| at[i].0.saturating_sub(1)..=at[i].0 + size[i].0)
+                .collect()
+        })
+        .collect();
     let mut hs: Vec<(u16, u16, u16)> = Vec::new(); // (y, x1, x2)
     let mut vs: Vec<(u16, u16, u16)> = Vec::new(); // (x, y1, y2)
     for &(p, c) in &edges {
@@ -303,8 +339,15 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     }
     let boxes_w = (0..workflows.len()).map(|i| at[i].0 + size[i].0).max().unwrap_or(0);
     let explore_w = explore_size.map_or(0, |(w, _)| w);
-    let width = vs.iter().map(|v| v.0 + 1).fold(boxes_w.max(explore_w), u16::max);
-    let height = if nrows == 0 { explore_size.map_or(0, |(_, h)| h) } else { ys[nrows - 1] + row_h[nrows - 1] };
+    let width = vs
+        .iter()
+        .map(|v| v.0 + 1)
+        .fold(boxes_w.max(explore_w), u16::max);
+    let height = if nrows == 0 {
+        explore_size.map_or(0, |(_, h)| h)
+    } else {
+        ys[nrows - 1] + row_h[nrows - 1]
+    };
     let mut mask = Mask::new(width, height);
     for &(y, x1, x2) in &hs {
         mask.h(y, x1, x2);
@@ -320,12 +363,14 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     if let (Some(chart), Some((w, h))) = (explore_chart.as_ref(), explore_size) {
         let rect = Rect::new(0, 0, w, h);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart })
-            .title(Line::from(Span::styled(EXPLORE_TITLE, palette::read_only_text())))
+            .title(explore_title.clone())
             .render(rect, &mut buf);
     }
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
-        BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(titles[i].clone()).render(rect, &mut buf);
+        BoxWidget::new(Walls::Full, lines, ChartBody { chart })
+            .title(titles[i].clone())
+            .render(rect, &mut buf);
         if let Some(text) = &footers[i] {
             buf.set_string(at[i].0 + 2, at[i].1 + size[i].1 - 1, text, lines);
         }
@@ -334,7 +379,12 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
             // `#<number> <state>`, the Lead's dot when it works (the title's spans after the repo), then the cue
             let spans = &titles[i].spans;
             let link = Link::new(&pull.url).text(Line::from(spans[3..spans.len() - 2].to_vec()));
-            let area = Rect::new(rect.x + 1 + titles[i].width() as u16 - link.width(), rect.y, link.width(), 1);
+            let area = Rect::new(
+                rect.x + 1 + titles[i].width() as u16 - link.width(),
+                rect.y,
+                link.width(),
+                1,
+            );
             links.draw(link, area, &mut buf);
         }
     }
@@ -342,7 +392,9 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     for y in 0..height {
         for x in 0..width {
             if mask.at(x, y) != 0 {
-                buf[(x, y)].set_symbol(glyph(mask.at(x, y))).set_style(lines);
+                buf[(x, y)]
+                    .set_symbol(glyph(mask.at(x, y)))
+                    .set_style(lines);
             }
         }
     }
@@ -357,7 +409,11 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     // a box's body starts where its widget puts it
     let body: Vec<(u16, u16)> = (0..workflows.len())
         .map(|i| {
-            let inner = geometry(&Walls::Full, Rect::new(at[i].0, at[i].1, size[i].0, size[i].1)).inner;
+            let inner = geometry(
+                &Walls::Full,
+                Rect::new(at[i].0, at[i].1, size[i].0, size[i].1),
+            )
+            .inner;
             (inner.x, inner.y)
         })
         .collect();
@@ -365,13 +421,24 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
     let mut base = Vec::with_capacity(workflows.len());
     let mut pills: Vec<Pill> = Vec::new();
     if let (Some(chart), Some((bx, by))) = (explore_chart.as_ref(), explore_body) {
-        pills.extend(chart.pills.iter().map(|p| Pill { key: p.key.clone(), rect: Rect { x: p.rect.x + bx, y: p.rect.y + by, ..p.rect } }));
+        pills.extend(chart.pills.iter().map(|p| Pill {
+            key: p.key.clone(),
+            rect: Rect {
+                x: p.rect.x + bx,
+                y: p.rect.y + by,
+                ..p.rect
+            },
+        }));
     }
     for (i, chart) in charts.iter().enumerate() {
         base.push(pills.len());
         pills.extend(chart.pills.iter().map(|p| Pill {
             key: p.key.clone(),
-            rect: Rect { x: p.rect.x + body[i].0, y: p.rect.y + body[i].1, ..p.rect },
+            rect: Rect {
+                x: p.rect.x + body[i].0,
+                y: p.rect.y + body[i].1,
+                ..p.rect
+            },
         }));
     }
     let mut columns: Vec<Vec<usize>> = Vec::new();
@@ -385,25 +452,40 @@ pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUs
             }
         }
     }
-    Boxes { chart: Chart { buf, pills, columns }, links, links_origin: (0, 0) }
+    Boxes {
+        chart: Chart {
+            buf,
+            pills,
+            columns,
+        },
+        links,
+        links_origin: (0, 0),
+    }
 }
 
 impl Boxes {
     /// The same canvas with `margin` around it ([`Chart::with_margin`]).
     pub fn with_margin(self, margin: Margin) -> Boxes {
-        let links_origin = (self.links_origin.0 + margin.horizontal, self.links_origin.1 + margin.vertical);
-        Boxes { chart: self.chart.with_margin(margin), links_origin, ..self }
+        let links_origin = (
+            self.links_origin.0 + margin.horizontal,
+            self.links_origin.1 + margin.vertical,
+        );
+        Boxes {
+            chart: self.chart.with_margin(margin),
+            links_origin,
+            ..self
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ratatui::buffer::CellWidth;
+
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::test_text::rows;
     use crate::read::{JobStatus, PrState};
+    use crate::test_text::rows;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, WorkflowKey};
 
@@ -424,11 +506,20 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, update: None, draft: false }
+        Pull {
+            number,
+            state,
+            url: format!("https://github.com/acme/repo/pull/{number}"),
+            conflicting: false,
+            clean: false,
+            update: None,
+            draft: false,
+        }
     }
 
     fn job(workflow: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
+            kind: "work".into(),
             key: JobKey::parse(key).unwrap(),
             workflow: Some(WorkflowKey::parse(workflow).unwrap()),
             seq: 0,
@@ -488,7 +579,11 @@ mod tests {
         let last_merged = ["cpd", "drafts", "followups"].iter().map(|k| y(k)).max().unwrap();
         let first_other = ["cleanup", "flake", "status"].iter().map(|k| y(k)).min().unwrap();
         assert!(first_other > last_merged, "{first_other} > {last_merged}");
-        assert_eq!(y("cleanup"), y("flake"), "the others sit together, side by side");
+        assert_eq!(
+            y("cleanup"),
+            y("flake"),
+            "the others sit together, side by side"
+        );
         assert!(y("status") > y("cleanup"), "and still by needs");
     }
 
@@ -514,7 +609,8 @@ mod tests {
                                     │
 ╭─ web · web-repo 󱦰 main · dispatch ┴╮
 │ no Jobs                            │
-╰────────────────────────────────────╯");
+╰────────────────────────────────────╯",
+        );
     }
 
     #[test]
@@ -540,7 +636,8 @@ mod tests {
 
     #[test]
     fn the_arrow_glyphs_are_one_cell_wide() {
-        for glyph in [TO] {
+        {
+            let glyph = TO;
             assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
         }
     }
@@ -552,12 +649,18 @@ mod tests {
         let b = layout(&workflows, &[job("zed", "z", &[]), job("alpha", "a", &[])], &NeedsUser::default(), 0);
         let c = &b.chart;
         let rect = |key: &str| c.pills.iter().find(|p| p.key == key).unwrap().rect;
-        assert!(rect("a").x < rect("z").x && rect("a").y == rect("z").y, "alpha left of zed");
+        assert!(
+            rect("a").x < rect("z").x && rect("a").y == rect("z").y,
+            "alpha left of zed"
+        );
         assert_eq!(c.columns, [vec![1], vec![0]], "alpha's column first");
-        snap(c, "
+        snap(
+            c,
+            "
 ╭─ alpha · alpha-repo 󱦰 main · dispatch ─╮ ╭─ zed · zed-repo 󱦰 main · dispatch ─╮
 │ 󰝦 a│S1                               │ │ 󰝦 z│S1                           │
-╰────────────────────────────────────────╯ ╰────────────────────────────────────╯");
+╰────────────────────────────────────────╯ ╰────────────────────────────────────╯",
+        );
     }
 
     #[test]
@@ -568,15 +671,22 @@ mod tests {
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {
-            let inside: String = rows[y + 1].chars().skip(1 + spacing::PAD_X as usize).take(want.chars().count()).collect();
+            let inside: String = rows[y + 1]
+                .chars()
+                .skip(1 + spacing::PAD_X as usize)
+                .take(want.chars().count())
+                .collect();
             assert_eq!(inside, want, "row {y}");
         }
-        snap(&c, "
+        snap(
+            &c,
+            "
 ╭─ api · api-repo 󱦰 main · dispatch ─╮
 │ 󰝦 a│S1──╮                        │
 │           ├──󰝦 c│S1              │
 │ 󰝦 b│S1──╯                        │
-╰────────────────────────────────────╯");
+╰────────────────────────────────────╯",
+        );
     }
 
     /// The glyphs at the four corners of the buffer of a single box.
@@ -592,7 +702,14 @@ mod tests {
             let c = layout(&[workflow("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
             assert_eq!(corners(&c), ["╭", "╮", "╰", "╯"], "{} Jobs", jobs.len());
             let (w, h) = (c.buf.area.width, c.buf.area.height);
-            assert_eq!((c.buf[(w / 2, h - 1)].symbol(), c.buf[(0, 1)].symbol(), c.buf[(w - 1, 1)].symbol()), ("─", "│", "│"));
+            assert_eq!(
+                (
+                    c.buf[(w / 2, h - 1)].symbol(),
+                    c.buf[(0, 1)].symbol(),
+                    c.buf[(w - 1, 1)].symbol()
+                ),
+                ("─", "│", "│")
+            );
             let shown = text(&c);
             assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
         }
@@ -603,11 +720,20 @@ mod tests {
         let workflows = [workflow("api", &[]), workflow("web", &["api"])];
         let c = layout(&workflows, &[job("api", "a", &[]), job("web", "c", &[])], &NeedsUser::default(), 0).chart;
         let shown = text(&c);
-        assert_eq!([('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()), [2, 3, 3, 2], "two boxes, four corners each, and the need line turns with a ╰ and a ╮ to land after the title: {shown}");
+        assert_eq!(
+            [('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()),
+            [2, 3, 3, 2],
+            "two boxes, four corners each, and the need line turns with a ╰ and a ╮ to land after the title: {shown}"
+        );
         assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
         // the needed box's bottom border leaves by a ┬, the line reaches the needing box's top border
         assert_eq!(shown.matches('┬').count(), 1, "{shown}");
-        assert!(shown.lines().any(|l| l.starts_with("╰") && l.contains('┬') && l.ends_with('╯')), "{shown}");
+        assert!(
+            shown
+                .lines()
+                .any(|l| l.starts_with("╰") && l.contains('┬') && l.ends_with('╯')),
+            "{shown}"
+        );
     }
 
     #[test]
@@ -616,10 +742,18 @@ mod tests {
         snap(&c, "
 ╭─ api · api-repo 󱦰 main · dispatch ─╮
 │ no Jobs                            │
-╰────────────────────────────────────╯");
+╰────────────────────────────────────╯",
+        );
         assert!(crate::palette::check::is_muted(&c.buf[(2, 1)]));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
-        assert_eq!(layout(&[], &[], &NeedsUser::default(), 0).chart.buf.area.area(), 0);
+        assert_eq!(
+            layout(&[], &[], &NeedsUser::default(), 0)
+                .chart
+                .buf
+                .area
+                .area(),
+            0
+        );
     }
 
     #[test]
@@ -631,7 +765,10 @@ mod tests {
         let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󱆭 ");
         assert_eq!(t.spans[4].style.fg, failed);
-        assert_ne!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Failed).fg);
+        assert_ne!(
+            t.spans[4].style.fg,
+            palette::fg_clickable(Meaning::Failed).fg
+        );
         // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
         let t = title(&p, false, 0);
@@ -639,10 +776,16 @@ mod tests {
         assert_ne!(t.spans[4].style.fg, failed);
         // merged and closed never read `conflict`
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
-            p.pull = Some(Pull { conflicting: true, ..pull(12, state) });
+            p.pull = Some(Pull {
+                conflicting: true,
+                ..pull(12, state)
+            });
             let t = title(&p, false, 0);
             assert_eq!(t.spans[4].content, word);
-            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
+            assert_eq!(
+                t.spans[4].style.fg,
+                palette::fg_clickable(palette::pr_state(state)).fg
+            );
         }
     }
 
@@ -653,14 +796,37 @@ mod tests {
         p.lead_dot = Some(crate::read::Dot::working(false, None));
         for frame in 0..palette::SPINNER.len() {
             let t = title(&p, false, frame);
-            assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󱆭 ", palette::SPINNER[frame]), "frame {frame}");
-            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
+            assert_eq!(
+                t.to_string(),
+                format!(
+                    " api · api-repo 󱦰 main · #12 open {} 󱆭 ",
+                    palette::SPINNER[frame]
+                ),
+                "frame {frame}"
+            );
+            assert_eq!(
+                t.spans[4].style.fg,
+                palette::fg_clickable(palette::pr_state(PrState::Open)).fg,
+                "the state keeps its colour"
+            );
         }
         // the dot goes with the state, in the waiting colour of `conflict` too
-        p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
+        p.pull = Some(Pull {
+            conflicting: true,
+            ..pull(12, PrState::Open)
+        });
         let t = title(&p, false, 3);
-        assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󱆭 ", palette::SPINNER[3]));
-        assert_eq!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Waiting).fg);
+        assert_eq!(
+            t.to_string(),
+            format!(
+                " api · api-repo 󱦰 main · #12 conflict {} 󱆭 ",
+                palette::SPINNER[3]
+            )
+        );
+        assert_eq!(
+            t.spans[4].style.fg,
+            palette::fg_clickable(Meaning::Waiting).fg
+        );
     }
 
     #[test]
@@ -687,7 +853,9 @@ mod tests {
         let plain = layout(&[p], &[], &NeedsUser::default(), 5).chart;
         let working = layout(&[w], &[], &NeedsUser::default(), 5).chart;
         assert_eq!(working.buf.area.width, plain.buf.area.width + 2);
-        let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
+        let top: String = (0..working.buf.area.width)
+            .map(|x| working.buf[(x, 0)].symbol().to_owned())
+            .collect();
         assert!(top.contains(palette::SPINNER[5]), "{top}");
         // one frame later: the next glyph
         let w2 = layout(&[WorkflowNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..workflow("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
@@ -700,22 +868,45 @@ mod tests {
         let mut p = workflow("api", &[]);
         p.pull = Some(pull(12, PrState::Closed));
         let colour = |asked| title(&p, asked, 0).spans[4].style.fg;
-        assert_eq!(colour(false), palette::fg_clickable(Meaning::Waiting).fg, "its Lead handles it");
-        assert_eq!(colour(true), palette::fg_clickable(Meaning::Failed).fg, "its Lead has a dialog open: it asks the User");
+        assert_eq!(
+            colour(false),
+            palette::fg_clickable(Meaning::Waiting).fg,
+            "its Lead handles it"
+        );
+        assert_eq!(
+            colour(true),
+            palette::fg_clickable(Meaning::Failed).fg,
+            "its Lead has a dialog open: it asks the User"
+        );
         // the question concerns the closed pull request only
         for state in [PrState::Open, PrState::Merged] {
             p.pull = Some(pull(12, state));
-            assert_eq!(title(&p, true, 0).spans[4].style.fg, title(&p, false, 0).spans[4].style.fg, "{state:?}");
+            assert_eq!(
+                title(&p, true, 0).spans[4].style.fg,
+                title(&p, false, 0).spans[4].style.fg,
+                "{state:?}"
+            );
         }
         // through the layout: the title is drawn in the colour
         p.pull = Some(pull(12, PrState::Closed));
         let cell = |needs: &NeedsUser| {
             let c = layout(&[p.clone()], &[], needs, 0).chart;
-            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol() == "c" && c.buf[(x + 1, 0)].symbol() == "l").unwrap();
+            let x = (0..c.buf.area.width)
+                .find(|&x| c.buf[(x, 0)].symbol() == "c" && c.buf[(x + 1, 0)].symbol() == "l")
+                .unwrap();
             c.buf[(x, 0)].fg
         };
-        assert_eq!(cell(&NeedsUser::default()), palette::color_clickable(Meaning::Waiting));
-        assert_eq!(cell(&NeedsUser { lead_dialog: true, ..NeedsUser::default() }), palette::color_clickable(Meaning::Failed));
+        assert_eq!(
+            cell(&NeedsUser::default()),
+            palette::color_clickable(Meaning::Waiting)
+        );
+        assert_eq!(
+            cell(&NeedsUser {
+                lead_dialog: true,
+                ..NeedsUser::default()
+            }),
+            palette::color_clickable(Meaning::Failed)
+        );
     }
 
     #[test]
@@ -724,19 +915,32 @@ mod tests {
         open.pull = Some(pull(12, PrState::Open));
         let t = title(&open, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󱆭 ");
-        assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
-        assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg);
+        assert!(
+            t.spans[1].style.add_modifier.contains(Modifier::BOLD),
+            "the key is bold"
+        );
+        assert_eq!(
+            t.spans[4].style.fg,
+            palette::fg_clickable(palette::pr_state(PrState::Open)).fg
+        );
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             open.pull = Some(pull(12, state));
             let t = title(&open, false, 0);
             assert_eq!(t.spans[4].content, word);
-            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
+            assert_eq!(
+                t.spans[4].style.fg,
+                palette::fg_clickable(palette::pr_state(state)).fg
+            );
         }
         let mut waiting = workflow("web", &["api"]);
         waiting.status = WorkflowStatus::Waiting;
         let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
-        assert_eq!(t.spans[3].style, palette::muted_text(), "the status before a pull request exists is muted");
+        assert_eq!(
+            t.spans[3].style,
+            palette::muted_text(),
+            "the status before a pull request exists is muted"
+        );
     }
 
     /// The cells of the title row (y 0) that are the link to the pull request, and the cells of `#` and `󱆭` in the chart.
@@ -745,7 +949,9 @@ mod tests {
         let top: Vec<char> = text(c).lines().next().unwrap().chars().collect();
         let first = top.iter().position(|&ch| ch == '#').unwrap() as u16;
         let arrow = top.iter().position(|&ch| ch.to_string() == CUE).unwrap() as u16;
-        let covered = (0..c.buf.area.width).filter(|&x| b.links.at(Position::new(x, 0)).is_some()).collect();
+        let covered = (0..c.buf.area.width)
+            .filter(|&x| b.links.at(Position::new(x, 0)).is_some())
+            .collect();
         (covered, first, arrow)
     }
 
@@ -754,12 +960,19 @@ mod tests {
         let mut api = workflow("api", &[]);
         api.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let b = layout(&[api], &[], &NeedsUser::default(), 0);
-        snap(&b.chart, "
+        snap(
+            &b.chart,
+            "
 ╭─ api · api-repo 󱦰 main · #12 conflict 󱆭 ─╮
 │ no Jobs                                  │
-╰──────────────────────────────────────────╯");
+╰──────────────────────────────────────────╯",
+        );
         let (covered, first, arrow) = link_cells(&b);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󱆭` whole, not the key nor the separators");
+        assert_eq!(
+            covered,
+            (first..=arrow).collect::<Vec<_>>(),
+            "`#12 conflict 󱆭` whole, not the key nor the separators"
+        );
     }
 
     #[test]
@@ -770,13 +983,24 @@ mod tests {
         api.pull = Some(pull(12, PrState::Open));
         let b = layout(&[api], &[], &NeedsUser::default(), 0);
         let c = &b.chart;
-        snap(c, "
+        snap(
+            c,
+            "
 ╭─ api · api-repo 󱦰 main · #12 open 󱆭 ─╮
 │ no Jobs                              │
-╰──────────────────────────────────────╯");
-        assert_eq!(c.buf.area.width, before.chart.buf.area.width + 2, "`#12 open 󱆭` is two cells longer than `dispatch`");
+╰──────────────────────────────────────╯",
+        );
+        assert_eq!(
+            c.buf.area.width,
+            before.chart.buf.area.width + 2,
+            "`#12 open 󱆭` is two cells longer than `dispatch`"
+        );
         let (covered, first, arrow) = link_cells(&b);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󱆭`, not the key nor the separators");
+        assert_eq!(
+            covered,
+            (first..=arrow).collect::<Vec<_>>(),
+            "`#` through `󱆭`, not the key nor the separators"
+        );
         assert_eq!(before.links, Links::default(), "no pull request, no link");
     }
 
@@ -793,9 +1017,15 @@ mod tests {
                                     │
 ╭─ web · web-repo 󱦰 main · dispatch ┴╮
 │ 󰝦 c│S1                           │
-╰────────────────────────────────────╯");
+╰────────────────────────────────────╯",
+        );
         // the exit and the line are in the lines' colour
-        let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
+        let exit = c
+            .buf
+            .content
+            .iter()
+            .find(|cell| cell.symbol() == EXIT)
+            .unwrap();
         assert_eq!(Some(exit.fg), palette::fg(Meaning::Nothing).fg);
     }
 
@@ -811,7 +1041,8 @@ mod tests {
                                       │                                      │
 ╭─ docs · docs-repo 󱦰 main · dispatch ┴╮ ╭─ web · web-repo 󱦰 main · dispatch ┴╮
 │ 󰝦 readme│S1                        │ │ 󰝦 page│S1                        │
-╰──────────────────────────────────────╯ ╰────────────────────────────────────╯");
+╰──────────────────────────────────────╯ ╰────────────────────────────────────╯",
+        );
     }
 
     #[test]
@@ -826,7 +1057,8 @@ mod tests {
                                     │
 ╭─ web · web-repo 󱦰 main · dispatch ┴╮
 │ 󰝦 w│S1                           │
-╰────────────────────────────────────╯");
+╰────────────────────────────────────╯",
+        );
     }
 
     #[test]
@@ -845,7 +1077,8 @@ mod tests {
                                 │
 ╭─ c · c-repo 󱦰 main · dispatch ┴╮
 │ no Jobs                        │
-╰────────────────────────────────╯");
+╰────────────────────────────────╯",
+        );
     }
 
     /// The pill index of Job `key`.
@@ -860,10 +1093,20 @@ mod tests {
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("docs", "d", &[]), job("web", "w", &[])];
         let b = layout(&workflows, &jobs, &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
-        assert_eq!(b.chart.columns, [vec![at("a")], vec![at("b")], vec![at("d")], vec![at("w")]]);
+        assert_eq!(
+            b.chart.columns,
+            [vec![at("a")], vec![at("b")], vec![at("d")], vec![at("w")]]
+        );
         let r = b.chart.pills[at("w")].rect;
         assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
-        assert_eq!((b.chart.buf[(r.x, r.y)].symbol(), b.chart.buf[(r.right() - 1, r.y)].symbol()), ("\u{e0b6}", "\u{e0b4}"), "the caps are on the whole pill's rectangle");
+        assert_eq!(
+            (
+                b.chart.buf[(r.x, r.y)].symbol(),
+                b.chart.buf[(r.right() - 1, r.y)].symbol()
+            ),
+            ("\u{e0b6}", "\u{e0b4}"),
+            "the caps are on the whole pill's rectangle"
+        );
     }
 
     /// The pane's body of `w`×`h` cells showing the margined chart of one empty Workflow at `scroll`, one row per string.
@@ -871,7 +1114,9 @@ mod tests {
         let c = layout(&[workflow("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
         c.blit(&mut dst, Rect::new(0, 0, w, h), scroll);
-        (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()
+        (0..h)
+            .map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect())
+            .collect()
     }
 
     #[test]
@@ -885,7 +1130,13 @@ mod tests {
     fn scrolled_the_box_is_drawn_up_to_every_edge_of_the_body() {
         // the box is 34 columns by 3 rows; the body is 10×3, scrolled to the box's top-left corner, then to its
         // bottom-right one (the margin is 2 columns and 1 row on every side of it)
-        assert_eq!(body(10, 3, (2, 1)), ["╭─ api · a", "│ no Jobs ", "╰─────────"]);
-        assert_eq!(body(10, 3, (30, 1)), ["ispatch ─╮", "         │", "─────────╯"]);
+        assert_eq!(
+            body(10, 3, (2, 1)),
+            ["╭─ api · a", "│ no Jobs ", "╰─────────"]
+        );
+        assert_eq!(
+            body(10, 3, (30, 1)),
+            ["ispatch ─╮", "         │", "─────────╯"]
+        );
     }
 }

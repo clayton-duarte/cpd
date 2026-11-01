@@ -71,7 +71,14 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
@@ -79,8 +86,9 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
             // A stub draft has no Spec yet: no files to compare.
             let touches = touches
                 .map(|text| {
-                    serde_json::from_str::<Vec<String>>(&text)
-                        .map_err(|_| CpdError::bad_row(format!("Job {plan}/{job} has touches {text:?}")))
+                    serde_json::from_str::<Vec<String>>(&text).map_err(|_| {
+                        CpdError::bad_row(format!("Job {plan}/{job} has touches {text:?}"))
+                    })
                 })
                 .transpose()?
                 .unwrap_or_default();
@@ -131,7 +139,10 @@ pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Ov
                 plan: other_plan.to_owned(),
                 workflow: other_workflow.to_owned(),
                 other_jobs,
-                paths: overlapped.into_iter().map(|i| paths[i].to_owned()).collect(),
+                paths: overlapped
+                    .into_iter()
+                    .map(|i| paths[i].to_owned())
+                    .collect(),
             });
         }
     }
@@ -149,7 +160,10 @@ mod tests {
         assert!(overlaps("core/src/", "core/src/x.rs"));
         assert!(overlaps("core/", "core/src/"));
         assert!(!overlaps("core/src/x.rs", "core/src/y.rs"));
-        assert!(!overlaps("core/src", "core/src/x.rs"), "a path without a trailing slash is a file");
+        assert!(
+            !overlaps("core/src", "core/src/x.rs"),
+            "a path without a trailing slash is a file"
+        );
         assert!(!overlaps("core/src/", "core/srcs/x.rs"));
     }
 }

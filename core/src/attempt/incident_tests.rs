@@ -60,13 +60,19 @@ fn running_attempt(f: &mut Fixture) {
 
 /// A catalog the ladder can climb without pi (the Interrupted end uses the same Tier, not the ladder).
 pub(super) fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
     Catalog {
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),
         h: model("h/m"),
-        g: TierModel { model: "g/m".to_owned(), efforts: vec![] },
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
     }
 }
 
@@ -77,14 +83,36 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
 
     let attempt = f
         .store
-        .read(|conn| ledger::load(conn, &PlanId::parse("pay").unwrap(), &AttemptId::parse("a-a1").unwrap()))
+        .read(|conn| {
+            ledger::load(
+                conn,
+                &PlanId::parse("pay").unwrap(),
+                &AttemptId::parse("a-a1").unwrap(),
+            )
+        })
         .unwrap();
-    assert_eq!(attempt.stop_request.as_deref(), Some("cancelled"), "incident start asked it to stop");
+    assert_eq!(
+        attempt.stop_request.as_deref(),
+        Some("cancelled"),
+        "incident start asked it to stop"
+    );
 
     let catalog = catalog();
-    let ladder = Ladder { catalog: &catalog, retry_cap: 3 };
+    let ladder = Ladder {
+        catalog: &catalog,
+        retry_cap: 3,
+    };
     f.store
-        .write("test", |tx| ledger::end(tx, &attempt, &End::Interrupted, None, &ladder, Stage::Driver))
+        .write("test", |tx| {
+            ledger::end(
+                tx,
+                &attempt,
+                &End::Interrupted,
+                None,
+                &ladder,
+                Stage::Driver,
+            )
+        })
         .unwrap();
 
     // The Attempt ended `cancelled` / `cancel_requested`, and is not a try (the next one keeps the Tier).
@@ -98,16 +126,24 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
             )?)
         })
         .unwrap();
-    assert_eq!((status.as_str(), outcome.as_str(), cause.as_str()), ("ended", "cancelled", "cancel_requested"));
-    assert_eq!(driver_pid, None, "an Interrupted Attempt does not use up a try: the next Attempt keeps the Tier");
+    assert_eq!(
+        (status.as_str(), outcome.as_str(), cause.as_str()),
+        ("ended", "cancelled", "cancel_requested")
+    );
+    assert_eq!(
+        driver_pid, None,
+        "an Interrupted Attempt does not use up a try: the next Attempt keeps the Tier"
+    );
 
     // The Job returns to `queued` at the same Tier.
     let (job_status, job_tier) = f
         .store
         .read(|conn| {
-            Ok(conn.query_row("SELECT status, tier FROM jobs WHERE plan = 'pay' AND key = 'a'", [], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?)
+            Ok(conn.query_row(
+                "SELECT status, tier FROM jobs WHERE plan = 'pay' AND key = 'a'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?)
         })
         .unwrap();
     assert_eq!((job_status.as_str(), job_tier.as_str()), ("queued", "S2"));
@@ -116,7 +152,8 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
     let events = f
         .store
         .read(|conn| {
-            let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = 'attempt-retry' ORDER BY id")?;
+            let mut stmt =
+                conn.prepare("SELECT data FROM events WHERE kind = 'attempt-retry' ORDER BY id")?;
             Ok(stmt
                 .query_map([], |r| {
                     let data: String = r.get(0)?;
@@ -131,7 +168,11 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
     assert_eq!(data["cause"], json!("cancel_requested"));
     assert_eq!(data["next_tier"], json!("S2"));
     assert!(
-        data["feedback"].as_str().unwrap_or_default().to_lowercase().contains("incident"),
+        data["feedback"]
+            .as_str()
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains("incident"),
         "the feedback names incident mode: {}",
         data["feedback"]
     );
@@ -153,6 +194,12 @@ fn incident_interrupted_attempts_do_not_count_for_the_ladder() {
         })
         .unwrap();
 
-    let counted = f.store.write("test", |tx| Ok(ledger::automatic_attempts(tx, "pay", "a")?)).unwrap();
-    assert_eq!(counted, 1, "only the failed Attempt counts; the Interrupted one is ignored");
+    let counted = f
+        .store
+        .write("test", |tx| ledger::automatic_attempts(tx, "pay", "a"))
+        .unwrap();
+    assert_eq!(
+        counted, 1,
+        "only the failed Attempt counts; the Interrupted one is ignored"
+    );
 }

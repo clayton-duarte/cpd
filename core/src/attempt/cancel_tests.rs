@@ -47,13 +47,19 @@ fn fixture() -> (tempfile::TempDir, Store) {
 
 /// A catalog the ladder can read without pi (a `cancelled` end uses no Tier).
 fn catalog() -> Catalog {
-    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
+    let model = |m: &str| TierModel {
+        model: m.to_owned(),
+        efforts: vec![1, 2, 3],
+    };
     Catalog {
         pi_version: "1.0.0".to_owned(),
         o: model("o/m"),
         s: model("s/m"),
         h: model("h/m"),
-        g: TierModel { model: "g/m".to_owned(), efforts: vec![] },
+        g: TierModel {
+            model: "g/m".to_owned(),
+            efforts: vec![],
+        },
     }
 }
 
@@ -80,28 +86,52 @@ fn job_row(store: &mut Store, plan: &str, key: &str, column: &str) -> Value {
 fn a_cancelled_attempt_fails_the_dependents() {
     let (_dir, mut store) = fixture();
     let attempt = store
-        .read(|conn| ledger::load(conn, &PlanId::parse("pay").unwrap(), &AttemptId::parse("a-a1").unwrap()))
+        .read(|conn| {
+            ledger::load(
+                conn,
+                &PlanId::parse("pay").unwrap(),
+                &AttemptId::parse("a-a1").unwrap(),
+            )
+        })
         .unwrap();
-    assert_eq!(attempt.stop_request.as_deref(), Some("cancelled"), "the engine asked the Attempt to stop");
+    assert_eq!(
+        attempt.stop_request.as_deref(),
+        Some("cancelled"),
+        "the engine asked the Attempt to stop"
+    );
 
     let catalog = catalog();
-    let ladder = Ladder { catalog: &catalog, retry_cap: 3 };
-    store.write("test", |tx| ledger::end(tx, &attempt, &End::Cancelled, None, &ladder, Stage::Driver)).unwrap();
+    let ladder = Ladder {
+        catalog: &catalog,
+        retry_cap: 3,
+    };
+    store
+        .write("test", |tx| {
+            ledger::end(tx, &attempt, &End::Cancelled, None, &ladder, Stage::Driver)
+        })
+        .unwrap();
 
     // The transaction that makes `a` cancelled also fails its queued dependent `b` (hs-d647).
     assert_eq!(job_row(&mut store, "pay", "a", "status"), "cancelled");
     assert_eq!(job_row(&mut store, "pay", "b", "status"), "failed");
-    assert_eq!(job_row(&mut store, "pay", "b", "failed_cause"), "its need a was cancelled");
+    assert_eq!(
+        job_row(&mut store, "pay", "b", "failed_cause"),
+        "its need a was cancelled"
+    );
 
     // Exactly one `job-failed` Event, with Job `b`.
     let failed: Vec<(String, Value)> = store
         .read(|conn| {
-            let mut stmt = conn.prepare("SELECT job, data FROM events WHERE kind = 'job-failed' ORDER BY id")?;
+            let mut stmt =
+                conn.prepare("SELECT job, data FROM events WHERE kind = 'job-failed' ORDER BY id")?;
             Ok(stmt
                 .query_map([], |r| {
                     let job: String = r.get(0)?;
                     let data: String = r.get(1)?;
-                    Ok((job, serde_json::from_str::<Value>(&data).expect("data is JSON")))
+                    Ok((
+                        job,
+                        serde_json::from_str::<Value>(&data).expect("data is JSON"),
+                    ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
         })

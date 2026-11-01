@@ -29,7 +29,12 @@ fn broken() -> CpdError {
 }
 
 /// One read of `path` at `stamp` whose parse gives `parsed`; returns the answer and how often `parse` ran.
-fn read_once(cache: &mut CostCache, path: &str, at: Option<(SystemTime, u64)>, parsed: Result<f64, CpdError>) -> (Option<f64>, u32) {
+fn read_once(
+    cache: &mut CostCache,
+    path: &str,
+    at: Option<(SystemTime, u64)>,
+    parsed: Result<f64, CpdError>,
+) -> (Option<f64>, u32) {
     let (stats, parses) = (Cell::new(0u32), Cell::new(0u32));
     let got = cache.cost(
         Path::new(path),
@@ -49,68 +54,143 @@ fn read_once(cache: &mut CostCache, path: &str, at: Option<(SystemTime, u64)>, p
 #[test]
 fn an_unchanged_file_is_parsed_once() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
     // Same stamp: the cached cost, parse not called (it would give 9.0).
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)), (Some(0.25), 0));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)), (Some(0.25), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)),
+        (Some(0.25), 0)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)),
+        (Some(0.25), 0)
+    );
 }
 
 #[test]
 fn a_changed_mtime_parses_again() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(0.5)), (Some(0.5), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(9.0)), (Some(0.5), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(0.5)),
+        (Some(0.5), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(9.0)),
+        (Some(0.5), 0)
+    );
 }
 
 #[test]
 fn a_changed_length_parses_again() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 101), Ok(0.5)), (Some(0.5), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 101), Ok(9.0)), (Some(0.5), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 101), Ok(0.5)),
+        (Some(0.5), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 101), Ok(9.0)),
+        (Some(0.5), 0)
+    );
 }
 
 #[test]
 fn a_failed_parse_keeps_the_last_good_cost_and_parses_again_at_the_next_read() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
     // The file changed and cannot be parsed: the last good cost.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Err(broken())), (Some(0.25), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Err(broken())),
+        (Some(0.25), 1)
+    );
     // The failed stamp was not stored: the same stamp parses again, and now it works.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Ok(0.5)), (Some(0.5), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Ok(9.0)), (Some(0.5), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Ok(0.5)),
+        (Some(0.5), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 120), Ok(9.0)),
+        (Some(0.5), 0)
+    );
 }
 
 #[test]
 fn a_file_never_parsed_well_is_none() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Err(broken())), (None, 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Err(broken())),
+        (None, 1)
+    );
     // Nothing was stored: it parses again at the next read.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Err(broken())), (None, 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Err(broken())),
+        (None, 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
 }
 
 #[test]
 fn a_missing_file_is_none_is_not_parsed_and_leaves_no_entry() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
     // Gone: None, no parse.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", None, Ok(9.0)), (None, 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", None, Ok(9.0)),
+        (None, 0)
+    );
     // It comes back with the very stamp it had: the entry was dropped, so it is parsed again.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.5)), (Some(0.5), 1));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.5)),
+        (Some(0.5), 1)
+    );
 }
 
 #[test]
 fn two_files_have_their_own_entries() {
     let mut cache = CostCache::new();
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)), (Some(0.25), 1));
-    assert_eq!(read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(1.0)), (Some(1.0), 1));
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)), (Some(0.25), 0));
-    assert_eq!(read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(9.0)), (Some(1.0), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(0.25)),
+        (Some(0.25), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(1.0)),
+        (Some(1.0), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(10, 100), Ok(9.0)),
+        (Some(0.25), 0)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(9.0)),
+        (Some(1.0), 0)
+    );
     // A change of one leaves the other.
-    assert_eq!(read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(0.5)), (Some(0.5), 1));
-    assert_eq!(read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(9.0)), (Some(1.0), 0));
+    assert_eq!(
+        read_once(&mut cache, "/s/a.jsonl", stamp(11, 100), Ok(0.5)),
+        (Some(0.5), 1)
+    );
+    assert_eq!(
+        read_once(&mut cache, "/s/b.jsonl", stamp(10, 100), Ok(9.0)),
+        (Some(1.0), 0)
+    );
 }
 
 #[test]
@@ -135,7 +215,11 @@ fn a_total_of_data_that_sums_to_zero_is_some_zero() {
 
 /// A store in a temporary home, which lives as long as the returned directory.
 fn open(dir: &tempfile::TempDir) -> Store {
-    Store::open(&CpdHome::resolve(Some(dir.path().join("home").into_os_string()), None).unwrap(), 5000).unwrap()
+    Store::open(
+        &CpdHome::resolve(Some(dir.path().join("home").into_os_string()), None).unwrap(),
+        5000,
+    )
+    .unwrap()
 }
 
 /// Runs `text` as the store's own write.
@@ -169,7 +253,11 @@ impl Fx {
     /// Writes the session file `name` with `lines` and returns its path.
     fn file(&self, name: &str, lines: &[String]) -> String {
         let path = self.path(name);
-        fs::write(&path, lines.iter().map(|l| format!("{l}\n")).collect::<String>()).unwrap();
+        fs::write(
+            &path,
+            lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+        )
+        .unwrap();
         path
     }
 
@@ -183,7 +271,8 @@ impl Fx {
 }
 
 fn header() -> String {
-    r#"{"type":"session","version":3,"id":"aaa","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/w"}"#.to_owned()
+    r#"{"type":"session","version":3,"id":"aaa","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/w"}"#
+        .to_owned()
 }
 
 /// A fork header an hour after the entries it copies.
@@ -202,7 +291,12 @@ fn assistant(n: u32, minute: u32, cost: f64) -> String {
 /// A session file of `header` and assistant messages that cost `costs`.
 pub(super) fn costing(costs: &[f64]) -> Vec<String> {
     let mut lines = vec![header()];
-    lines.extend(costs.iter().enumerate().map(|(i, c)| assistant(i as u32, i as u32 + 1, *c)));
+    lines.extend(
+        costs
+            .iter()
+            .enumerate()
+            .map(|(i, c)| assistant(i as u32, i as u32 + 1, *c)),
+    );
     lines
 }
 
@@ -212,7 +306,15 @@ fn context(id: &str) -> String {
     )
 }
 
-pub(super) fn session(id: &str, role: &str, context: &str, plan: Option<&str>, attempt: Option<&str>, file: Option<&str>, extra: &str) -> String {
+pub(super) fn session(
+    id: &str,
+    role: &str,
+    context: &str,
+    plan: Option<&str>,
+    attempt: Option<&str>,
+    file: Option<&str>,
+    extra: &str,
+) -> String {
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
@@ -246,13 +348,19 @@ fn fork_of(id: &str, context: &str, file: &str) -> String {
         Some(id),
         None,
         Some(file),
-        &format!("UPDATE sessions SET forked_from = 'l-{id}', created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'f-{id}';"),
+        &format!(
+            "UPDATE sessions SET forked_from = 'l-{id}', created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'f-{id}';"
+        ),
     )
 }
 
 /// A Manager Session `id` of `context`; archived when `archived`.
 fn manager(id: &str, context: &str, file: Option<&str>, archived: bool) -> String {
-    let extra = if archived { format!("UPDATE sessions SET archived_at = '2026-01-05T00:00:00.000Z' WHERE id = '{id}';") } else { String::new() };
+    let extra = if archived {
+        format!("UPDATE sessions SET archived_at = '2026-01-05T00:00:00.000Z' WHERE id = '{id}';")
+    } else {
+        String::new()
+    };
     session(id, "manager", context, None, None, file, &extra)
 }
 
@@ -267,10 +375,22 @@ fn job(plan: &str, key: &str) -> String {
 
 /// Attempt `<job>-a1` of the Plan's Job `job`, with Worker Session `w-<job>` (file `file`). `metrics` is the stored
 /// JSON of an ended Attempt, `None` for a live one (a running Attempt with NULL `metrics`).
-fn attempt(plan: &str, context: &str, job_key: &str, metrics: Option<&str>, file: Option<&str>) -> String {
+fn attempt(
+    plan: &str,
+    context: &str,
+    job_key: &str,
+    metrics: Option<&str>,
+    file: Option<&str>,
+) -> String {
     let id = format!("{job_key}-a1");
     let (status, outcome, cause, ended, metrics) = match metrics {
-        Some(m) => ("ended", "'failed'", "'crashed'", "'2026-01-02T02:00:00.000Z'", format!("'{m}'")),
+        Some(m) => (
+            "ended",
+            "'failed'",
+            "'crashed'",
+            "'2026-01-02T02:00:00.000Z'",
+            format!("'{m}'"),
+        ),
         None => ("running", "NULL", "NULL", "NULL", "NULL".to_owned()),
     };
     format!(
@@ -290,7 +410,11 @@ fn ctx<'a>(t: &'a read::Tree, id: &str) -> &'a ContextNode {
 }
 
 fn pl<'a>(t: &'a read::Tree, context: &str, id: &str) -> &'a PlanNode {
-    ctx(t, context).plans.iter().find(|p| p.head.id.as_str() == id).unwrap()
+    ctx(t, context)
+        .plans
+        .iter()
+        .find(|p| p.head.id.as_str() == id)
+        .unwrap()
 }
 
 pub(super) fn near(got: Option<f64>, want: f64) {
@@ -316,7 +440,12 @@ fn a_session_with_no_file_or_a_missing_file_has_no_cost() {
     let mut fx = Fx::new();
     let missing = fx.path("never-written.jsonl");
     let present = fx.file("present.jsonl", &costing(&[0.25]));
-    fx.run(&(context("ctx") + &plan("p1", "ctx", None) + &plan("p2", "ctx", Some(&missing)) + &plan("p3", "ctx", Some(&present))));
+    fx.run(
+        &(context("ctx")
+            + &plan("p1", "ctx", None)
+            + &plan("p2", "ctx", Some(&missing))
+            + &plan("p3", "ctx", Some(&present))),
+    );
     let t = fx.tree();
     // A Session with a file does have one: the others' None is "no data", not a cost of zero.
     near(lead_of(&t, "ctx", "p3").cost_usd, 0.25);
@@ -366,7 +495,11 @@ fn a_plan_costs_its_lead_its_forks_and_its_attempts() {
 fn an_ended_attempt_costs_its_stored_metrics_not_its_session_file() {
     let mut fx = Fx::new();
     let w = fx.file("w.jsonl", &costing(&[1.0])); // says 1.0; the stored metrics say 0.5
-    fx.run(&(context("ctx") + &plan("p1", "ctx", None) + &attempt("p1", "ctx", "j1", Some(r#"{"cost_usd":0.5}"#), Some(&w))));
+    fx.run(
+        &(context("ctx")
+            + &plan("p1", "ctx", None)
+            + &attempt("p1", "ctx", "j1", Some(r#"{"cost_usd":0.5}"#), Some(&w))),
+    );
     let t = fx.tree();
     near(pl(&t, "ctx", "p1").cost_usd, 0.5);
 }
@@ -375,7 +508,9 @@ fn an_ended_attempt_costs_its_stored_metrics_not_its_session_file() {
 fn a_live_attempt_costs_its_worker_sessions_file() {
     let mut fx = Fx::new();
     let w = fx.file("w.jsonl", &costing(&[0.25, 0.25]));
-    fx.run(&(context("ctx") + &plan("p1", "ctx", None) + &attempt("p1", "ctx", "j1", None, Some(&w))));
+    fx.run(
+        &(context("ctx") + &plan("p1", "ctx", None) + &attempt("p1", "ctx", "j1", None, Some(&w))),
+    );
     let t = fx.tree();
     near(pl(&t, "ctx", "p1").cost_usd, 0.5);
 }

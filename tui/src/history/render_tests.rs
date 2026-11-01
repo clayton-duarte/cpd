@@ -13,21 +13,46 @@ fn entry(role: &str, part: serde_json::Value) -> String {
 fn file() -> String {
     [
         json!({"type": "session", "id": "w1"}).to_string() + "\n",
-        entry("user", json!({"type": "text", "text": "Implement the API."})),
+        entry(
+            "user",
+            json!({"type": "text", "text": "Implement the API."}),
+        ),
         entry("assistant", json!({"type": "text", "text": "On it."})),
-        entry("assistant", json!({"type": "toolCall", "name": "bash", "arguments": {"command": "cargo test"}})),
-        entry("toolResult", json!({"type": "text", "text": "test result: ok"})),
+        entry(
+            "assistant",
+            json!({"type": "toolCall", "name": "bash", "arguments": {"command": "cargo test"}}),
+        ),
+        entry(
+            "toolResult",
+            json!({"type": "text", "text": "test result: ok"}),
+        ),
     ]
     .concat()
 }
 
 #[test]
 fn a_session_file_renders_one_block_per_message_part() {
-    let rows: Vec<String> =
-        render(&file(), &ManualClock::new().zone()).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>().trim_end().to_owned()).collect();
+    let rows: Vec<String> = render(&file(), &ManualClock::new().zone())
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
     assert_eq!(
         rows,
-        ["12:33:44 you", "      Implement the API.", "12:33:44 agent", "      On it.", "12:33:44 → bash cargo test", "        \u{F060C} test result: ok"]
+        [
+            "12:33:44 you",
+            "      Implement the API.",
+            "12:33:44 agent",
+            "      On it.",
+            "12:33:44 → bash cargo test",
+            "        \u{F060C} test result: ok"
+        ]
     );
 }
 

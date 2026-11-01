@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use super::workflow::{Poll, Rows, pay, poll_fx};
 use super::pr_checks::{answer, checks_of_row, contexts, feedback_data, green, is_checks_read, read_says, reads, run, with_labels};
 
-const POLICY: &str = "[pr]\nfeedback.checks = \"any\"\nexcused_labels = [\"No Merges on Friday\", \"Dont Merge\"]\n";
+const POLICY: &str =
+    "[pr]\nfeedback.checks = \"any\"\nexcused_labels = [\"No Merges on Friday\", \"Dont Merge\"]\n";
 
 /// Today the loader drops a `[pr]` table with an unknown key, so the controls (which must pass before the feature) cannot
 /// carry `excused_labels`; they use this table, with no list.
@@ -44,7 +45,11 @@ fn an_excused_label_stops_the_checks_failed_wake_and_the_checks_stay_failed() {
 
     fx.poll();
 
-    assert_eq!(reads(&fx).len(), 1, "the policy is valid and the failed rollup is confirmed by one checks read");
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the policy is valid and the failed rollup is confirmed by one checks read"
+    );
     assert_eq!(feedback_data(&fx), Vec::<Value>::new());
     assert_eq!(checks_of_row(&fx), "failed");
 }
@@ -55,7 +60,11 @@ fn an_excused_label_matches_without_regard_to_case() {
 
     fx.poll();
 
-    assert_eq!(reads(&fx).len(), 1, "the policy is valid and the failed rollup is confirmed by one checks read");
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the policy is valid and the failed rollup is confirmed by one checks read"
+    );
     assert_eq!(feedback_data(&fx), Vec::<Value>::new());
     assert_eq!(checks_of_row(&fx), "failed");
 }
@@ -64,7 +73,11 @@ fn an_excused_label_matches_without_regard_to_case() {
 fn removing_the_excused_label_while_checks_stay_failed_wakes_nobody() {
     let fx = fx_with(pay("OPEN", None, Some("FAILURE")), &["No Merges on Friday"]);
     fx.poll();
-    assert_eq!(reads(&fx).len(), 1, "the policy is valid and the failed rollup is confirmed by one checks read");
+    assert_eq!(
+        reads(&fx).len(),
+        1,
+        "the policy is valid and the failed rollup is confirmed by one checks read"
+    );
     assert_eq!(feedback_data(&fx), Vec::<Value>::new());
 
     read_says(&fx, labelled(&[]));
@@ -77,7 +90,10 @@ fn removing_the_excused_label_while_checks_stay_failed_wakes_nobody() {
 
 #[test]
 fn an_excused_label_still_lets_changes_requested_wake_the_lead() {
-    let fx = fx_with(pay("OPEN", Some("CHANGES_REQUESTED"), Some("FAILURE")), &["No Merges on Friday"]);
+    let fx = fx_with(
+        pay("OPEN", Some("CHANGES_REQUESTED"), Some("FAILURE")),
+        &["No Merges on Friday"],
+    );
 
     fx.poll();
 
@@ -92,7 +108,11 @@ fn the_checks_read_asks_for_the_labels() {
 
     fx.poll();
 
-    assert!(reads(&fx)[0][3].contains("labels(first: 100)"), "{}", reads(&fx)[0][3]);
+    assert!(
+        reads(&fx)[0][3].contains("labels(first: 100)"),
+        "{}",
+        reads(&fx)[0][3]
+    );
 }
 
 #[test]
@@ -102,14 +122,19 @@ fn a_checks_read_without_labels_fails_the_poll_and_writes_nothing() {
     fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
     let mut pull = contexts(failing(), None);
     pull.as_object_mut().unwrap().remove("labels");
-    let _ = (*fx.fakes.runner).clone().once("gh", is_checks_read, Reply::ok(&answer(vec![pull])));
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .once("gh", is_checks_read, Reply::ok(&answer(vec![pull])));
     let (txns, events, row) = (fx.txns(), fx.event_count(), fx.pr_data());
 
     let run = fx.cpd(&["pr", "poll", "--plan", "pay"]);
 
     assert_eq!(run.exit, 1, "{run:?}");
     assert_eq!(run.error()["code"], "gh_failed");
-    assert_eq!((fx.txns(), fx.event_count(), fx.pr_data()), (txns, events, row));
+    assert_eq!(
+        (fx.txns(), fx.event_count(), fx.pr_data()),
+        (txns, events, row)
+    );
 }
 
 #[test]

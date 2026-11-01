@@ -18,8 +18,8 @@ use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
 use cpd_core::config::Config;
-use cpd_core::host::tmux::RUNNER_OPTION;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::tmux::RUNNER_OPTION;
 use cpd_core::incident::is_on;
 use rusqlite::OptionalExtension;
 
@@ -56,7 +56,12 @@ impl Counts {
     /// All four in one read.
     fn read(conn: &rusqlite::Connection, limit: u32) -> Result<Counts, CpdError> {
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, u32>(0));
-        Ok(Counts { running: count(HELD)?, limit, waiting: count(&format!("SELECT count(*) FROM ({READY})"))?, queued: count(QUEUED)? })
+        Ok(Counts {
+            running: count(HELD)?,
+            limit,
+            waiting: count(&format!("SELECT count(*) FROM ({READY})"))?,
+            queued: count(QUEUED)?,
+        })
     }
 
     /// `workers Q󰞘W󰞘N/M`: the label and the short form, plain.
@@ -66,14 +71,19 @@ impl Counts {
 
     /// `Q󰞘W󰞘N/M`: the three numbers and `/M`, plain, no label.
     pub(super) fn short(self) -> String {
-        format!("{}{SEPARATOR}{}{SEPARATOR}{}/{}", self.queued, self.waiting, self.running, self.limit)
+        format!(
+            "{}{SEPARATOR}{}{SEPARATOR}{}/{}",
+            self.queued, self.waiting, self.running, self.limit
+        )
     }
 }
 
 pub(super) fn run(engine: &mut Engine) {
     let limit = engine.config.concurrency;
     let now = engine.ports.clock.utc();
-    let read = engine.store.read(|conn| Ok((Counts::read(conn, limit)?, incident(conn, now)?)));
+    let read = engine
+        .store
+        .read(|conn| Ok((Counts::read(conn, limit)?, incident(conn, now)?)));
     let (counts, incident) = match read {
         Ok(read) => read,
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
@@ -103,7 +113,9 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a text that belongs to another.
-    let mut args: Vec<String> = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short].map(str::to_owned).to_vec();
+    let mut args: Vec<String> = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short]
+        .map(str::to_owned)
+        .to_vec();
     args.extend([";", "set", "-g", RUNNER_OPTION, runner.as_str()].map(str::to_owned));
     args.push(";".to_string());
     match &incident {
@@ -122,12 +134,21 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// The `@cpd_incident` text while incident mode is on (contract §6.1, hs-d640): the whole-minute
 /// duration from the one `incident` row's `started_at` to now. `None` while off.
-fn incident(conn: &rusqlite::Connection, now: time::OffsetDateTime) -> Result<Option<String>, CpdError> {
+fn incident(
+    conn: &rusqlite::Connection,
+    now: time::OffsetDateTime,
+) -> Result<Option<String>, CpdError> {
     if !is_on(conn) {
         return Ok(None);
     }
-    let started_at = conn.query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| r.get::<_, String>(0)).optional()?;
-    started_at.map(|started_at| elapsed(&started_at, now)).transpose()
+    let started_at = conn
+        .query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?;
+    started_at
+        .map(|started_at| elapsed(&started_at, now))
+        .transpose()
 }
 
 /// The duration from the incident row's `started_at` to `now` (hs-d640, contract §6.1 and 6.1.1),
@@ -136,18 +157,32 @@ fn incident(conn: &rusqlite::Connection, now: time::OffsetDateTime) -> Result<Op
 /// `started_at` in the future reads `0m`. `started_at` is RFC 3339, the format `clock::timestamp`
 /// writes; anything else is a loud `StoreFailed`.
 fn elapsed(started_at: &str, now: time::OffsetDateTime) -> Result<String, CpdError> {
-    let started = time::OffsetDateTime::parse(started_at, &time::format_description::well_known::Rfc3339).map_err(|e| {
-        CpdError::new(ErrorCode::StoreFailed, format!("The incident holds a started_at that is not RFC 3339: {started_at:?} ({e}).")).with("started_at", started_at)
-    })?;
+    let started =
+        time::OffsetDateTime::parse(started_at, &time::format_description::well_known::Rfc3339)
+            .map_err(|e| {
+                CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The incident holds a started_at that is not RFC 3339: {started_at:?} ({e})."),
+        )
+        .with("started_at", started_at)
+            })?;
     let minutes = (now - started).whole_minutes().max(0);
     Ok(if minutes < 60 {
         format!("{minutes}m")
     } else if minutes < 1_440 {
         let (hours, rest) = (minutes / 60, minutes % 60);
-        if rest == 0 { format!("{hours}h") } else { format!("{hours}h {rest}m") }
+        if rest == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h {rest}m")
+        }
     } else {
         let (days, rest) = (minutes / 1_440, (minutes % 1_440) / 60);
-        if rest == 0 { format!("{days}d") } else { format!("{days}d {rest}h") }
+        if rest == 0 {
+            format!("{days}d")
+        } else {
+            format!("{days}d {rest}h")
+        }
     })
 }
 
@@ -174,7 +209,12 @@ mod tests {
     use rusqlite::Connection;
 
     fn counts(running: u32, limit: u32, waiting: u32, queued: u32) -> Counts {
-        Counts { running, limit, waiting, queued }
+        Counts {
+            running,
+            limit,
+            waiting,
+            queued,
+        }
     }
 
     /// The tables the Ready rule reads, with three Plans' worth of rows.

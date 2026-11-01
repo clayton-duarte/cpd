@@ -54,13 +54,20 @@ fn refresh() -> Result<Output, CpdError> {
     });
     match first {
         Some(failure) => Err(failure.error().with("providers", lists)),
-        None => Ok(Output::success(json!({"pi_version": answer.pi_version, "providers": lists}))),
+        None => Ok(Output::success(
+            json!({"pi_version": answer.pi_version, "providers": lists}),
+        )),
     }
 }
 
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if let Some(provider) = args.provider.as_deref().filter(|p| !safe_name(p)) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--provider {provider:?} is not a file-name-safe name (letters, digits, `.`, `_`, `-`).")));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!(
+                "--provider {provider:?} is not a file-name-safe name (letters, digits, `.`, `_`, `-`)."
+            ),
+        ));
     }
     let home = CpdHome::from_env()?;
     let now = OffsetDateTime::now_utc();
@@ -68,7 +75,8 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
     for read in cache::read_all(&home)? {
         match read {
             Read::Good(file) if args.provider.as_ref().is_none_or(|p| *p == file.provider) => {
-                let polled = OffsetDateTime::parse(&file.polled_at, &Rfc3339).expect("a good file's polled_at parses");
+                let polled = OffsetDateTime::parse(&file.polled_at, &Rfc3339)
+                    .expect("a good file's polled_at parses");
                 lists.push(json!({
                     "provider": file.provider,
                     "polled_at": file.polled_at,
@@ -80,11 +88,15 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
                     "changes": file.changes,
                 }));
             }
-            Read::Unparseable { provider, path } if args.provider.as_ref().is_none_or(|p| *p == provider) => {
+            Read::Unparseable { provider, path }
+                if args.provider.as_ref().is_none_or(|p| *p == provider) =>
+            {
                 warnings.push(json!({"provider": provider, "file": path.display().to_string(), "code": "models_unparseable"}));
             }
             _ => {}
         }
     }
-    Ok(Output::success(json!({"providers": lists, "warnings": warnings})))
+    Ok(Output::success(
+        json!({"providers": lists, "warnings": warnings}),
+    ))
 }

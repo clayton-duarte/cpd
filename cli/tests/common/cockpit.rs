@@ -38,13 +38,27 @@ pub const NO_RESTART: Restart = Restart {
 
 /// The engine's restart, as `cpd` hands it to the cockpit (`cli/src/cli.rs` `RESTART`): the engine's own `restart::*`, on
 /// the ports of the test (the server's version is the route's; the pending file is a file of the test's home).
-pub const RESTART: Restart = Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
+pub const RESTART: Restart = Restart {
+    failed: restart_failed,
+    clear: restart::clear,
+    mark: restart::mark,
+    now: restart_now,
+};
 
-fn restart_failed(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(zone)))
+fn restart_failed(
+    home: &CpdHome,
+    zone: &cpd_core::clock::TimeZone,
+) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?
+        .filter(|p| p.failed.is_some())
+        .map(|p| p.describe(zone)))
 }
 
-fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<RestartOutcome, CpdError> {
+fn restart_now(
+    home: &CpdHome,
+    config: &Config,
+    store: &mut Store,
+) -> Result<RestartOutcome, CpdError> {
     Ok(match restart::restart(home, config, store, &mut |_| ())? {
         restart::Outcome::NotNeeded => RestartOutcome::NotNeeded,
         restart::Outcome::Running => RestartOutcome::Running,
@@ -58,11 +72,18 @@ fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
 }
 
 fn run_command_on(ports: &Ports, argv: Vec<OsString>) -> Result<Output, CpdError> {
-    let words: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let words: Vec<String> = argv
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     RAN.with(|ran| ran.borrow_mut().push(words.clone()));
     if words.iter().map(String::as_str).collect::<Vec<_>>() == ["cpd", "watch", "--ensure"] {
         let first = !ENGINE_STARTED.replace(true);
-        return Ok(Output::success(if first { json!({"started": true, "pane": "%99"}) } else { json!({"started": false, "already": true}) }));
+        return Ok(Output::success(if first {
+            json!({"started": true, "pane": "%99"})
+        } else {
+            json!({"started": false, "already": true})
+        }));
     }
     cpd::cli::run_with(ports, argv)
 }
@@ -80,15 +101,31 @@ pub fn tui_result(fx: &Fx, args: &[&str]) -> Result<Output, CpdError> {
 /// [`tui_result`] on `ports`.
 fn tui_on(ports: &Ports, args: &[&str]) -> Result<Output, CpdError> {
     let argv = ["cpd", "tui"].iter().chain(args).map(OsString::from);
-    let Cli { command: Some(Command::Tui(args)) } = Cli::try_parse_from(argv).expect("cpd tui parses") else { unreachable!("cpd tui is the Tui command") };
-    Ports::scope(ports, || cpd_tui::run_with(ports, args, cpd::cli::version(), run_command, run_command_on, RESTART))
+    let Cli {
+        command: Some(Command::Tui(args)),
+    } = Cli::try_parse_from(argv).expect("cpd tui parses")
+    else {
+        unreachable!("cpd tui is the Tui command")
+    };
+    Ports::scope(ports, || {
+        cpd_tui::run_with(
+            ports,
+            args,
+            cpd::cli::version(),
+            run_command,
+            run_command_on,
+            RESTART,
+        )
+    })
 }
 
 /// Bare `cpd` in a terminal, on the ports of `fx`: the follow-ups, then the attach, which the `FakeSpawn` records
 /// (`fx.fakes.spawn.launches()`) and fails with `faked exec`, so the result is that error (the engine's `watch --ensure`
 /// is recorded, [`ran`]). With `restart` as the engine's restart.
 pub fn bare(fx: &Fx, restart: Restart) -> Result<Output, CpdError> {
-    Ports::scope(&fx.fakes.ports, || cpd_tui::bare(cpd::cli::version(), run_command, restart))
+    Ports::scope(&fx.fakes.ports, || {
+        cpd_tui::bare(cpd::cli::version(), run_command, restart)
+    })
 }
 
 /// The `cpd tui` the engine's restart runs once the server is killed (`restart::rebuild_cockpit`): it runs the program
@@ -96,8 +133,14 @@ pub fn bare(fx: &Fx, restart: Restart) -> Result<Output, CpdError> {
 /// cockpit in this process, on the ports of the call. Needs `cpd_core::host::exe::record_start()` first.
 pub fn route_the_restarts_cpd_tui(fx: &Fx) {
     let exe = cpd_core::host::exe::started_as().expect("record_start ran");
-    let name = exe.file_name().expect("the test binary has a name").to_string_lossy().into_owned();
-    let _ = (*fx.fakes.runner).clone().route(&name, std::sync::Arc::new(CpdTui));
+    let name = exe
+        .file_name()
+        .expect("the test binary has a name")
+        .to_string_lossy()
+        .into_owned();
+    let _ = (*fx.fakes.runner)
+        .clone()
+        .route(&name, std::sync::Arc::new(CpdTui));
 }
 
 /// The `cpd tui` of a restart, in this process.
@@ -105,7 +148,11 @@ struct CpdTui;
 
 impl Handler for CpdTui {
     fn handle(&self, call: &Call) -> Reply {
-        assert_eq!(call.args, ["tui"], "the restart runs `cpd tui` and nothing else");
+        assert_eq!(
+            call.args,
+            ["tui"],
+            "the restart runs `cpd tui` and nothing else"
+        );
         match tui_on(&Ports::current(), &[]) {
             Ok(Output::Success(fields)) => Reply::ok(&format!("{}\n", Value::Object(fields))),
             other => Reply::exit(3, "", &format!("{other:?}\n")),
@@ -125,6 +172,9 @@ pub fn tui(fx: &Fx, args: &[&str]) -> Value {
 /// owns its stdout and has none to write.
 pub fn action(fx: &Fx, args: &[&str]) {
     let (result, stderr) = fx.with_stderr(|| tui_result(fx, &[&["action"][..], args].concat()));
-    assert!(matches!(result, Ok(Output::Owned)), "cpd tui action {args:?}: {result:?}");
+    assert!(
+        matches!(result, Ok(Output::Owned)),
+        "cpd tui action {args:?}: {result:?}"
+    );
     assert_eq!(stderr, "", "cpd tui action {args:?}");
 }

@@ -91,8 +91,21 @@ fn rig_hooked(hook: impl FnMut(usize) + Send + 'static) -> Rig {
     let clock = ManualClock::new();
     let runner = Arc::new(FakeRunner::new(clock.clone()));
     let spawn = Arc::new(FakeSpawn::new());
-    let hooked = Arc::new(Hooked { inner: clock.clone(), hook: Mutex::new(Box::new(hook)) });
-    Rig { ports: Ports { clock: hooked, runner: runner.clone(), spawn: spawn.clone() }, clock, runner, spawn }
+    let hooked = Arc::new(Hooked {
+        inner: clock.clone(),
+        hook: Mutex::new(Box::new(hook)),
+    });
+    Rig {
+        ports: Ports {
+            clock: hooked,
+            runner: runner.clone(),
+            spawn: spawn.clone(),
+            ..Ports::real()
+        },
+        clock,
+        runner,
+        spawn,
+    }
 }
 
 impl Rig {
@@ -114,7 +127,11 @@ fn home(config: &str) -> Home {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"m1\"\n{config}")).unwrap();
+    fs::write(
+        home.config(),
+        format!("version = 1\nmachine = \"m1\"\n{config}"),
+    )
+    .unwrap();
     Home { _dir: dir, home }
 }
 
@@ -138,8 +155,16 @@ fn sql(store: &mut Store, sql: &str) {
 /// Plan `pl` (Lead `lead-pl`), its open Workflow `repo`, Job `a` running, and Attempt `a-a1` in `status` (`running` or `merging`)
 /// with Worker Session `w1` `working`.
 fn seed(store: &mut Store, status: &str) {
-    let submitted = if status == "merging" { ", submitted_sha, submitted_at" } else { "" };
-    let submitted_values = if status == "merging" { ", 'abc', 't'" } else { "" };
+    let submitted = if status == "merging" {
+        ", submitted_sha, submitted_at"
+    } else {
+        ""
+    };
+    let submitted_values = if status == "merging" {
+        ", 'abc', 't'"
+    } else {
+        ""
+    };
     sql(
         store,
         &format!(
@@ -215,14 +240,26 @@ impl Write for Sink {
 }
 
 fn follow_args(since: Option<i64>, until_idle: bool) -> FollowArgs {
-    FollowArgs { scope: Scope { plan: None, context: None, session: None }, kinds: Vec::new(), since, until_idle }
+    FollowArgs {
+        scope: Scope {
+            plan: None,
+            context: None,
+            session: None,
+        },
+        kinds: Vec::new(),
+        since,
+        until_idle,
+    }
 }
 
 /// Appends an `error` Event whose text is `text`, through `store`.
 fn event(store: &mut Store, text: &str) {
     store
         .write("fixture", |tx| {
-            append(tx, NewEvent::error(text, "fixture", "internal", "m", json!({})))?;
+            append(
+                tx,
+                NewEvent::error(text, "fixture", "internal", "m", json!({})),
+            )?;
             Ok(())
         })
         .unwrap();
@@ -230,7 +267,14 @@ fn event(store: &mut Store, text: &str) {
 
 fn texts(lines: &Arc<Mutex<String>>) -> Vec<String> {
     let held = lines.lock().unwrap();
-    held.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()["text"].as_str().unwrap().to_owned()).collect()
+    held.lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
 }
 
 /// A follower that started with `old` already in the store; `row A` is committed after the 2nd nap and `row B` after the
@@ -247,8 +291,19 @@ fn followed_two_rows() -> (Vec<String>, Vec<Duration>) {
     });
     let mut env = env(&rig, &h);
     let lines = Arc::new(Mutex::new(String::new()));
-    let out = crate::events::follow_in(&mut env, follow_args(None, false), &mut Sink { lines: lines.clone(), keep: 1 }).unwrap();
-    assert!(matches!(out, Output::Owned), "a reader that goes away ends the follower without an error");
+    let out = crate::events::follow_in(
+        &mut env,
+        follow_args(None, false),
+        &mut Sink {
+            lines: lines.clone(),
+            keep: 1,
+        },
+    )
+    .unwrap();
+    assert!(
+        matches!(out, Output::Owned),
+        "a reader that goes away ends the follower without an error"
+    );
     (texts(&lines), naps_of(&rig))
 }
 
@@ -273,10 +328,22 @@ fn follow_until_idle_prints_what_was_committed_at_the_start_and_never_naps() {
     let rig = rig();
     let mut env = env(&rig, &h);
     let lines = Arc::new(Mutex::new(String::new()));
-    let out = crate::events::follow_in(&mut env, follow_args(Some(0), true), &mut Sink { lines: lines.clone(), keep: usize::MAX }).unwrap();
+    let out = crate::events::follow_in(
+        &mut env,
+        follow_args(Some(0), true),
+        &mut Sink {
+            lines: lines.clone(),
+            keep: usize::MAX,
+        },
+    )
+    .unwrap();
     assert!(matches!(out, Output::Owned));
     assert_eq!(texts(&lines), ["first", "second"]);
-    assert!(naps_of(&rig).is_empty(), "--until-idle returns once it has printed: {:?}", naps_of(&rig));
+    assert!(
+        naps_of(&rig).is_empty(),
+        "--until-idle returns once it has printed: {:?}",
+        naps_of(&rig)
+    );
 }
 
 #[test]
@@ -284,7 +351,7 @@ fn follow_whose_binary_is_replaced_restarts_through_spawn_from_after_the_last_ro
     let h = home("[events]\npoll_ms = 250\n");
     let mut writer = store(&h.home);
     event(&mut writer, "old");
-    let cursor = writer.read(|conn| highest_id(conn)).unwrap();
+    let cursor = writer.read(highest_id).unwrap();
     // The installed cpd: a file that a new install replaces by a rename, so the path holds another inode.
     let bin_dir = tempfile::tempdir().unwrap();
     let exe = bin_dir.path().join("cpd");
@@ -299,13 +366,27 @@ fn follow_whose_binary_is_replaced_restarts_through_spawn_from_after_the_last_ro
     rig.spawn.set_self_exe(&exe);
     let mut env = env(&rig, &h);
     let lines = Arc::new(Mutex::new(String::new()));
-    let err = refused(crate::events::follow_in(&mut env, follow_args(None, false), &mut Sink { lines, keep: usize::MAX }));
-    assert_eq!(err.code(), ErrorCode::SpawnFailed, "the fake exec returns, as an exec that failed does: {err:?}");
+    let err = refused(crate::events::follow_in(
+        &mut env,
+        follow_args(None, false),
+        &mut Sink {
+            lines,
+            keep: usize::MAX,
+        },
+    ));
+    assert_eq!(
+        err.code(),
+        ErrorCode::SpawnFailed,
+        "the fake exec returns, as an exec that failed does: {err:?}"
+    );
     assert_eq!(naps_of(&rig), vec![MS(250)]);
     let launches = rig.spawn.launches();
     assert_eq!(launches.len(), 1, "{launches:?}");
     assert_eq!(Path::new(&launches[0].program), exe);
-    assert_eq!(launches[0].args[launches[0].args.len() - 2..], ["--since".to_owned(), cursor.to_string()]);
+    assert_eq!(
+        launches[0].args[launches[0].args.len() - 2..],
+        ["--since".to_owned(), cursor.to_string()]
+    );
 }
 
 // ---- ask ---------------------------------------------------------------------------------------------------------------
@@ -318,14 +399,28 @@ fn ask_env(rig: &Rig, config: &str) -> (Home, Env) {
 }
 
 fn status_of_escalation(env: &mut Env) -> String {
-    env.store.read(|conn| Ok(conn.query_row("SELECT status FROM escalations WHERE id = 'a-a1-q1'", [], |r| r.get::<_, String>(0))?)).unwrap()
+    env.store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT status FROM escalations WHERE id = 'a-a1-q1'",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .unwrap()
 }
 
 #[test]
 fn ask_expires_at_its_deadline_in_half_second_polls() {
     let rig = rig();
     let (_h, mut env) = ask_env(&rig, "");
-    let err = refused(crate::ask::question::ask_in(&mut env, &plan(), &attempt(), "which port?", Some(1)));
+    let err = refused(crate::ask::question::ask_in(
+        &mut env,
+        &plan(),
+        &attempt(),
+        "which port?",
+        Some(1),
+    ));
     assert_eq!(err.code(), ErrorCode::AskTimeout);
     assert_eq!(naps_of(&rig), vec![MS(500); 120]);
 }
@@ -342,7 +437,13 @@ fn an_ask_that_timed_out_leaves_its_escalation_expired() {
 fn ask_with_a_zero_timeout_expires_at_the_first_poll_without_a_nap() {
     let rig = rig();
     let (_h, mut env) = ask_env(&rig, "");
-    let err = refused(crate::ask::question::ask_in(&mut env, &plan(), &attempt(), "which port?", Some(0)));
+    let err = refused(crate::ask::question::ask_in(
+        &mut env,
+        &plan(),
+        &attempt(),
+        "which port?",
+        Some(0),
+    ));
     assert_eq!(err.code(), ErrorCode::AskTimeout);
     assert!(naps_of(&rig).is_empty());
 }
@@ -351,7 +452,13 @@ fn ask_with_a_zero_timeout_expires_at_the_first_poll_without_a_nap() {
 fn ask_without_a_timeout_waits_the_configured_ask_minutes() {
     let rig = rig();
     let (_h, mut env) = ask_env(&rig, "[timeouts]\nask_minutes = 2\n");
-    let err = refused(crate::ask::question::ask_in(&mut env, &plan(), &attempt(), "which port?", None));
+    let err = refused(crate::ask::question::ask_in(
+        &mut env,
+        &plan(),
+        &attempt(),
+        "which port?",
+        None,
+    ));
     assert_eq!(err.code(), ErrorCode::AskTimeout);
     assert_eq!(rig.clock.elapsed(), SECS(120));
 }
@@ -363,11 +470,15 @@ fn answered_after_three_naps() -> (Output, Vec<Duration>) {
     let home = h.home.clone();
     let rig = rig_hooked(move |n| {
         if n == 3 {
-            sql(&mut store(&home), "UPDATE escalations SET status = 'answered', answer = 'go ahead', answered_at = 't' WHERE status = 'open'");
+            sql(
+                &mut store(&home),
+                "UPDATE escalations SET status = 'answered', answer = 'go ahead', answered_at = 't' WHERE status = 'open'",
+            );
         }
     });
     let mut env = env(&rig, &h);
-    let out = crate::ask::question::ask_in(&mut env, &plan(), &attempt(), "which port?", Some(60)).unwrap();
+    let out = crate::ask::question::ask_in(&mut env, &plan(), &attempt(), "which port?", Some(60))
+        .unwrap();
     (out, naps_of(&rig))
 }
 
@@ -420,7 +531,13 @@ fn plan_cancel_polls_at_its_cadence_until_the_drivers_have_ended() {
 fn plan_cancel_times_out_after_its_limit_in_polls_of_its_cadence() {
     let rig = rig();
     let (_h, mut s) = waiting_store("running");
-    let err = refused(wait_until_ended_with(&rig.ports, &mut s, &plan(), SECS(2), MS(250)));
+    let err = refused(wait_until_ended_with(
+        &rig.ports,
+        &mut s,
+        &plan(),
+        SECS(2),
+        MS(250),
+    ));
     assert_eq!(err.code(), ErrorCode::CancelTimeout);
     assert_eq!(naps_of(&rig), vec![MS(250); 8]);
 }
@@ -429,7 +546,13 @@ fn plan_cancel_times_out_after_its_limit_in_polls_of_its_cadence() {
 fn the_plan_cancel_timeout_names_the_attempts_still_live() {
     let rig = rig();
     let (_h, mut s) = waiting_store("running");
-    let err = refused(wait_until_ended_with(&rig.ports, &mut s, &plan(), SECS(2), MS(250)));
+    let err = refused(wait_until_ended_with(
+        &rig.ports,
+        &mut s,
+        &plan(),
+        SECS(2),
+        MS(250),
+    ));
     assert_eq!(err.details()["attempts"], json!(["a-a1"]));
 }
 
@@ -440,7 +563,9 @@ fn guarded(status: &str) -> (Home, Store, impl Sized) {
     let h = home("");
     let mut s = store(&h.home);
     seed(&mut s, status);
-    let driver = take_free_driver_lock(&h.home, &plan(), &attempt()).unwrap().expect("no driver holds the lock yet");
+    let driver = take_free_driver_lock(&h.home, &plan(), &attempt())
+        .unwrap()
+        .expect("no driver holds the lock yet");
     (h, s, driver)
 }
 
@@ -462,7 +587,9 @@ fn guard_u_does_not_nap_when_the_attempt_is_no_longer_merging() {
 fn guard_u_reads_the_store_every_200_ms_until_the_driver_records_its_merge() {
     let h = home("");
     seed(&mut store(&h.home), "merging");
-    let _driver = take_free_driver_lock(&h.home, &plan(), &attempt()).unwrap().expect("no driver holds the lock yet");
+    let _driver = take_free_driver_lock(&h.home, &plan(), &attempt())
+        .unwrap()
+        .expect("no driver holds the lock yet");
     let home = h.home.clone();
     let rig = rig_hooked(move |n| {
         if n == 3 {
@@ -499,8 +626,17 @@ fn poll_lock_path(h: &Home) -> PathBuf {
 /// Another `pr poll`'s hold on `path`.
 fn held(path: &Path) -> File {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = File::options().read(true).write(true).create(true).truncate(false).open(path).unwrap();
-    assert!(lock::try_lock(&file).unwrap(), "the test takes the free lock first");
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap();
+    assert!(
+        lock::try_lock(&file).unwrap(),
+        "the test takes the free lock first"
+    );
     file
 }
 
@@ -575,11 +711,20 @@ fn gh_answer() -> Reply {
 }
 
 fn review_items(rig: &Rig, h: &Home, s: &mut Store) -> Vec<String> {
-    conditions_on(&rig.ports, s, &h.home).unwrap().into_iter().filter(|c| c.kind == Kind::ReviewRequested).map(|c| c.subject).collect()
+    conditions_on(&rig.ports, s, &h.home)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == Kind::ReviewRequested)
+        .map(|c| c.subject)
+        .collect()
 }
 
 fn gh_calls(rig: &Rig) -> usize {
-    rig.runner.calls().iter().filter(|c| Path::new(&c.program).file_name().is_some_and(|n| n == "gh")).count()
+    rig.runner
+        .calls()
+        .iter()
+        .filter(|c| Path::new(&c.program).file_name().is_some_and(|n| n == "gh"))
+        .count()
 }
 
 #[test]
@@ -588,7 +733,10 @@ fn a_post_inside_the_window_opens_a_review_item() {
     let h = home(TEAM);
     write_cache(&h, &[post(&rig, "acme/win-in", 1, 3600)]);
     rig.on("gh", gh_answer());
-    assert_eq!(review_items(&rig, &h, &mut store(&h.home)), ["pr:acme/win-in#1"]);
+    assert_eq!(
+        review_items(&rig, &h, &mut store(&h.home)),
+        ["pr:acme/win-in#1"]
+    );
 }
 
 #[test]
@@ -599,7 +747,10 @@ fn a_post_the_clock_has_aged_past_the_window_opens_nothing_and_asks_nothing() {
     rig.on("gh", gh_answer());
     // The window is a week: eight days later the same post is outside it.
     rig.clock.advance(SECS(8 * 24 * 3600));
-    assert_eq!(review_items(&rig, &h, &mut store(&h.home)), Vec::<String>::new());
+    assert_eq!(
+        review_items(&rig, &h, &mut store(&h.home)),
+        Vec::<String>::new()
+    );
     assert_eq!(gh_calls(&rig), 0);
 }
 
@@ -635,13 +786,19 @@ fn the_github_answer_is_asked_again_once_its_ttl_has_passed() {
 fn snooze_15_minutes_counts_from_the_clocks_utc_time() {
     let rig = rig();
     rig.clock.advance(SECS(3600));
-    assert_eq!(snooze_until_on(&rig.ports, Until::Minutes15).unwrap(), datetime!(2026-01-01 01:15 UTC));
+    assert_eq!(
+        snooze_until_on(&rig.ports, Until::Minutes15).unwrap(),
+        datetime!(2026-01-01 01:15 UTC)
+    );
 }
 
 #[test]
 fn snooze_an_hour_counts_from_the_clocks_utc_time() {
     let rig = rig();
-    assert_eq!(snooze_until_on(&rig.ports, Until::Hour1).unwrap(), datetime!(2026-01-01 01:00 UTC));
+    assert_eq!(
+        snooze_until_on(&rig.ports, Until::Hour1).unwrap(),
+        datetime!(2026-01-01 01:00 UTC)
+    );
 }
 
 #[test]
@@ -649,7 +806,10 @@ fn snooze_tomorrow_before_nine_local_is_nine_local_today() {
     let rig = rig();
     rig.on("date", Reply::ok("+0200\n"));
     // 00:00 UTC is 02:00 at +0200: 09:00 local is 07:00 UTC the same day.
-    assert_eq!(snooze_until_on(&rig.ports, Until::Tomorrow).unwrap(), datetime!(2026-01-01 07:00 UTC));
+    assert_eq!(
+        snooze_until_on(&rig.ports, Until::Tomorrow).unwrap(),
+        datetime!(2026-01-01 07:00 UTC)
+    );
 }
 
 #[test]
@@ -658,7 +818,10 @@ fn snooze_tomorrow_after_nine_local_is_nine_local_the_next_day() {
     rig.on("date", Reply::ok("+0200\n"));
     // 08:00 UTC is 10:00 at +0200.
     rig.clock.advance(SECS(8 * 3600));
-    assert_eq!(snooze_until_on(&rig.ports, Until::Tomorrow).unwrap(), datetime!(2026-01-02 07:00 UTC));
+    assert_eq!(
+        snooze_until_on(&rig.ports, Until::Tomorrow).unwrap(),
+        datetime!(2026-01-02 07:00 UTC)
+    );
 }
 
 #[test]
@@ -674,7 +837,14 @@ fn snooze_tomorrow_asks_date_for_the_offset_through_the_runner() {
 // ---- secret: how long an approval lasts ---------------------------------------------------------------------------------------
 
 fn approval() -> Approval {
-    Approval { session: "s1".into(), action: "get".into(), vault: "other".into(), item: Some("i".into()), field: Some("f".into()), at: String::new() }
+    Approval {
+        session: "s1".into(),
+        action: "get".into(),
+        vault: "other".into(),
+        item: Some("i".into()),
+        field: Some("f".into()),
+        at: String::new(),
+    }
 }
 
 #[test]
@@ -682,7 +852,10 @@ fn an_approval_expires_ten_minutes_after_the_clocks_utc_time() {
     let rig = rig();
     let h = home("");
     rig.clock.advance(SECS(3600));
-    assert_eq!(approve_on(&rig.ports, &h.home, &approval()).unwrap(), datetime!(2026-01-01 01:10 UTC));
+    assert_eq!(
+        approve_on(&rig.ports, &h.home, &approval()).unwrap(),
+        datetime!(2026-01-01 01:10 UTC)
+    );
 }
 
 #[test]
@@ -717,11 +890,22 @@ fn an_approval_is_taken_once() {
 const PI_LIMIT: Duration = Duration::from_secs(15 * 60);
 
 fn pi_launch() -> PiLaunch {
-    PiLaunch { argv: ["pi", "--mode", "json"].map(str::to_owned).to_vec(), env: Default::default() }
+    PiLaunch {
+        argv: ["pi", "--mode", "json"].map(str::to_owned).to_vec(),
+        env: Default::default(),
+    }
 }
 
 fn run_pi(rig: &Rig) -> crate::context::distill::Timed {
-    run_pi_timed_with(&rig.ports, &pi_launch(), Path::new("/digest"), Path::new("/digest/distill.log"), PI_LIMIT, &[]).unwrap()
+    run_pi_timed_with(
+        &rig.ports,
+        &pi_launch(),
+        Path::new("/digest"),
+        Path::new("/digest/distill.log"),
+        PI_LIMIT,
+        &[],
+    )
+    .unwrap()
 }
 
 #[test]
@@ -744,6 +928,10 @@ fn a_distill_run_past_its_limit_is_timed_out_having_lasted_the_limit() {
     let rig = rig();
     rig.on("pi", Reply::ok("{}").takes(SECS(20 * 60)));
     let timed = run_pi(&rig);
-    assert!(matches!(timed.waited, Waited::TimedOut), "{:?}", timed.waited);
+    assert!(
+        matches!(timed.waited, Waited::TimedOut),
+        "{:?}",
+        timed.waited
+    );
     assert_eq!(timed.seconds, 900.0);
 }

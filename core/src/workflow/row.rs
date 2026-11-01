@@ -52,7 +52,7 @@ pub(crate) struct PlanWorkflows {
 impl PlanWorkflows {
     /// The Workflow `--workflow` names, else the Plan's only Workflow that is not `cancelled` (§1.3).
     pub fn select(&self, arg: &WorkflowArg) -> Result<&WorkflowRow, CpdError> {
-        arg.select(&&self.plan.id, &self.workflows)
+        arg.select(&self.plan.id, &self.workflows)
     }
 
     /// The Workflows that are not `cancelled`.

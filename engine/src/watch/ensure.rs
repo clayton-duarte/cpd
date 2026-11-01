@@ -11,11 +11,11 @@ use serde_json::json;
 
 use super::lock;
 use super::log::Log;
+use cpd_core::clock::Clock;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
-use cpd_core::clock::Clock;
 use cpd_core::host::layout::WATCH_WINDOW;
 use cpd_core::host::tmux::{installed_version, supported_version};
 use cpd_core::host::{PaneId, Spawn, Tmux};
@@ -52,12 +52,17 @@ fn ensure_with(ports: &Ports, wait: bool) -> Result<Output, CpdError> {
     if !home.db().try_exists().unwrap_or(false) {
         return Err(CpdError::new(
             ErrorCode::WatchStartFailed,
-            format!("{} has no store: the home does not exist (any more), so no engine is started.", home.root().display()),
+            format!(
+                "{} has no store: the home does not exist (any more), so no engine is started.",
+                home.root().display()
+            ),
         )
         .with("path", home.root().display().to_string())
         .with("next", "cpd watch --ensure"));
     }
-    let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());
+    let tmux = Tmux::new(config.tmux.socket.as_str())
+        .with_runner(ports.runner.clone())
+        .with_clock(ports.clock.clone());
     let work = config.tmux.work_session.as_str();
     // One call at a time, plain or supervising: a pane that dies at once makes its
     // hook run again while this call still starts it, and the next waits out the
@@ -73,7 +78,11 @@ fn ensure_with(ports: &Ports, wait: bool) -> Result<Output, CpdError> {
         if let Ok(mut log) = Log::open(&home) {
             match &result {
                 Ok(_) => log.line("supervision: the engine runs"),
-                Err(e) => log.line(&format!("supervision: cannot start the engine: {} ({})", e.message(), e.code().as_str())),
+                Err(e) => log.line(&format!(
+                    "supervision: cannot start the engine: {} ({})",
+                    e.message(),
+                    e.code().as_str()
+                )),
             }
         }
         if result.is_err() {
@@ -93,9 +102,12 @@ pub(super) fn check() -> Result<Output, CpdError> {
     verify_store(&home)?;
     let version = installed_version()?;
     if !supported_version(&version) {
-        return Err(CpdError::new(ErrorCode::TmuxFailed, format!("tmux {version} is older than the 3.6 cpd needs."))
-            .with("version", version)
-            .with("expected", ">= 3.6"));
+        return Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("tmux {version} is older than the 3.6 cpd needs."),
+        )
+        .with("version", version)
+        .with("expected", ">= 3.6"));
     }
     let running = verify_listing(&Tmux::new(config.tmux.socket.as_str()))?;
     verify_home(&home)?;
@@ -111,12 +123,18 @@ pub(super) fn check() -> Result<Output, CpdError> {
 fn verify_store(home: &CpdHome) -> Result<(), CpdError> {
     let path = home.db();
     let failed = |e: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display())).with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot read {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     if !path.try_exists().map_err(|e| failed(&e))? {
         return Ok(());
     }
-    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| failed(&e))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| failed(&e))?;
     match cpd_core::store::verdict(&conn)?.refusal() {
         Some(refusal) => Err(refusal.clone()),
         None => Ok(()),
@@ -139,7 +157,11 @@ fn verify_listing(tmux: &Tmux) -> Result<bool, CpdError> {
 /// is writable when its nearest existing ancestor is).
 fn verify_home(home: &CpdHome) -> Result<(), CpdError> {
     let failed = |path: &std::path::Path, why: String| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {why}.", path.display())).with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use {}: {why}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     for dir in [home.locks_dir(), home.run_dir()] {
         let mut existing = dir.as_path();
@@ -150,14 +172,24 @@ fn verify_home(home: &CpdHome) -> Result<(), CpdError> {
             }
         }
         if !existing.is_dir() {
-            return Err(failed(&dir, format!("{} is not a directory", existing.display())));
+            return Err(failed(
+                &dir,
+                format!("{} is not a directory", existing.display()),
+            ));
         }
-        nix::unistd::access(existing, nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK)
-            .map_err(|e| failed(&dir, format!("{} is not writable: {e}", existing.display())))?;
+        nix::unistd::access(
+            existing,
+            nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK,
+        )
+        .map_err(|e| failed(&dir, format!("{} is not writable: {e}", existing.display())))?;
     }
     let lock = home.watch_lock();
     if lock.exists() {
-        OpenOptions::new().read(true).write(true).open(&lock).map_err(|e| failed(&lock, e.to_string()))?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .map_err(|e| failed(&lock, e.to_string()))?;
     }
     Ok(())
 }
@@ -168,10 +200,20 @@ fn verify_home(home: &CpdHome) -> Result<(), CpdError> {
 fn serialize(home: &CpdHome, wait: bool, clock: &dyn Clock) -> Result<File, CpdError> {
     let path = home.locks_dir().join("watch-ensure.lock");
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {e}.", path.display())).with("lock", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot use {}: {e}.", path.display()),
+        )
+        .with("lock", path.display().to_string())
     };
     std::fs::create_dir_all(home.locks_dir()).map_err(failed)?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(failed)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(failed)?;
     if wait {
         cpd_core::lock::blocking(&file).map_err(failed)?;
         return Ok(file);
@@ -181,7 +223,11 @@ fn serialize(home: &CpdHome, wait: bool, clock: &dyn Clock) -> Result<File, CpdE
         if clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::WatchStartFailed,
-                format!("Another watch --ensure still holds {} after {}s.", path.display(), PLAIN_LIMIT.as_secs()),
+                format!(
+                    "Another watch --ensure still holds {} after {}s.",
+                    path.display(),
+                    PLAIN_LIMIT.as_secs()
+                ),
             )
             .with("lock", path.display().to_string())
             .with("next", "cpd watch --ensure"));
@@ -195,7 +241,13 @@ fn serialize(home: &CpdHome, wait: bool, clock: &dyn Clock) -> Result<File, CpdE
 /// is the engine, except for a supervising call (`wait`) that finds no live pane
 /// in the engine's window: that engine's window is gone and its process is on
 /// its way out, so the call waits [`LOCK_LIMIT`] for the lock.
-fn free(home: &CpdHome, tmux: &Tmux, work: &str, wait: bool, clock: &dyn Clock) -> Result<bool, CpdError> {
+fn free(
+    home: &CpdHome,
+    tmux: &Tmux,
+    work: &str,
+    wait: bool,
+    clock: &dyn Clock,
+) -> Result<bool, CpdError> {
     if !lock::held(home)? {
         return Ok(true);
     }
@@ -214,10 +266,19 @@ fn free(home: &CpdHome, tmux: &Tmux, work: &str, wait: bool, clock: &dyn Clock) 
 
 /// The panes of the engine's window.
 fn engine_panes(tmux: &Tmux, work: &str) -> Result<Vec<cpd_core::host::Pane>, CpdError> {
-    Ok(tmux.list_panes()?.into_iter().filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW).collect())
+    Ok(tmux
+        .list_panes()?
+        .into_iter()
+        .filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW)
+        .collect())
 }
 
-fn start(home: &CpdHome, config: &Config, tmux: &Tmux, clock: &dyn Clock) -> Result<Output, CpdError> {
+fn start(
+    home: &CpdHome,
+    config: &Config,
+    tmux: &Tmux,
+    clock: &dyn Clock,
+) -> Result<Output, CpdError> {
     let work = config.tmux.work_session.as_str();
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
     let since = store.read(highest_id)?;
@@ -252,11 +313,16 @@ fn start(home: &CpdHome, config: &Config, tmux: &Tmux, clock: &dyn Clock) -> Res
         },
     };
     match wait_started(tmux, &mut store, &pane, since, clock) {
-        Ok(()) => Ok(Output::success(json!({"started": true, "pane": pane.as_str()}))),
+        Ok(()) => Ok(Output::success(
+            json!({"started": true, "pane": pane.as_str()}),
+        )),
         // A concurrent call started an engine first: ours lost the lock and its
         // pane died. The engine runs, which is what the caller asked for.
         Err(e) if e.code() == ErrorCode::WatchStartFailed && lock::held(home)? => {
-            let dead = tmux.list_panes()?.into_iter().find(|p| p.pane == pane && p.dead);
+            let dead = tmux
+                .list_panes()?
+                .into_iter()
+                .find(|p| p.pane == pane && p.dead);
             if let Some(dead) = dead {
                 tmux.kill_window(&dead.window)?;
             }
@@ -269,19 +335,36 @@ fn start(home: &CpdHome, config: &Config, tmux: &Tmux, clock: &dyn Clock) -> Res
 /// Waits until the engine in `pane` has taken the lock, which it proves by
 /// appending `watch-started` with its pid (the pane's: tmux runs a command of
 /// several arguments without a shell). Fails early when the pane dies.
-fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64, clock: &dyn Clock) -> Result<(), CpdError> {
+fn wait_started(
+    tmux: &Tmux,
+    store: &mut Store,
+    pane: &PaneId,
+    since: i64,
+    clock: &dyn Clock,
+) -> Result<(), CpdError> {
     let deadline = clock.now() + START_LIMIT;
     let failed = |why: String| {
-        CpdError::new(ErrorCode::WatchStartFailed, format!("The engine did not start in pane {pane}: {why}"))
-            .with("pane", pane.as_str())
-            .with("next", "cpd watch --ensure")
+        CpdError::new(
+            ErrorCode::WatchStartFailed,
+            format!("The engine did not start in pane {pane}: {why}"),
+        )
+        .with("pane", pane.as_str())
+        .with("next", "cpd watch --ensure")
     };
     loop {
         let found = tmux.list_panes()?.into_iter().find(|p| p.pane == *pane);
-        let Some(found) = found else { return Err(failed("its pane is gone.".to_owned())) };
+        let Some(found) = found else {
+            return Err(failed("its pane is gone.".to_owned()));
+        };
         if found.dead {
-            let status = found.dead_status.map_or_else(|| ", its exit status is unknown".to_owned(), |s| format!(" with status {s}"));
-            return Err(failed(format!("it exited{status}; see the pane and run/watch.log.")).with("exit", found.dead_status));
+            let status = found.dead_status.map_or_else(
+                || ", its exit status is unknown".to_owned(),
+                |s| format!(" with status {s}"),
+            );
+            return Err(failed(format!(
+                "it exited{status}; see the pane and run/watch.log."
+            ))
+            .with("exit", found.dead_status));
         }
         // No pid: tmux >= 3.8 has seen its tty close, so it is dying and is
         // dead at a later poll.
@@ -299,7 +382,10 @@ fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64, clock
             return Ok(());
         }
         if clock.now() >= deadline {
-            return Err(failed(format!("its process did not take the lock within {}s.", START_LIMIT.as_secs())));
+            return Err(failed(format!(
+                "its process did not take the lock within {}s.",
+                START_LIMIT.as_secs()
+            )));
         }
         clock.sleep(POLL);
     }

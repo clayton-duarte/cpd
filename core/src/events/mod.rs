@@ -5,6 +5,7 @@
 
 mod append;
 mod kind;
+pub mod repeat;
 mod select;
 mod stale;
 mod typed;
@@ -91,14 +92,18 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-
 /// `events list` (§11.1).
 fn list(args: ListArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;
     let since = args.since.unwrap_or(0);
-    let Scope { plan, context, session } = args.scope;
+    let Scope {
+        plan,
+        context,
+        session,
+    } = args.scope;
     let events = store.read(|conn| {
-        Selection::resolve(conn, plan, context, session, args.kinds)?.fetch(conn, since, None, args.limit)
+        Selection::resolve(conn, plan, context, session, args.kinds)?
+            .fetch(conn, since, None, args.limit)
     })?;
     let next = events.last().map_or(since, |e| e.id);
     Ok(Output::success(json!({"events": events, "next": next})))
@@ -119,7 +124,13 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let mut stdout = std::io::stdout().lock();
     let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
-    follow_loop(&mut env, args, &mut stdout, &|| reader_gone(&std::io::stdout()), &argv)
+    follow_loop(
+        &mut env,
+        args,
+        &mut stdout,
+        &|| reader_gone(&std::io::stdout()),
+        &argv,
+    )
 }
 
 /// The loop of [`follow`] and [`follow_in`]: `gone` says whether the reader went away without a write (G1), and `argv`
@@ -132,12 +143,21 @@ pub fn follow_loop(
     gone: &dyn Fn() -> bool,
     argv: &[OsString],
 ) -> Result<Output, CpdError> {
-    let Env { store, config, ports, .. } = env;
+    let Env {
+        store,
+        config,
+        ports,
+        ..
+    } = env;
     let exe = match ports.spawn.self_exe() {
         Ok(path) => Some(Exe::at(path)?),
         Err(_) => None,
     };
-    let Scope { plan, context, session } = args.scope;
+    let Scope {
+        plan,
+        context,
+        session,
+    } = args.scope;
     let (selection, mut cursor, until) = store.read(|conn| {
         let selection = Selection::resolve(conn, plan, context, session, args.kinds)?.following();
         let highest = highest_id(conn)?;
@@ -218,11 +238,21 @@ pub fn follow_loop(
         }
         // A new install: the same follower again, after the last Event printed (hs-d140). Returns only on failure.
         if let Some(exe) = exe.as_ref().filter(|exe| exe.replaced()) {
-            let args = restart_args(argv.iter().cloned(), cursor).iter().map(|a| a.to_string_lossy().into_owned()).collect();
-            let launch = Launch { program: exe.path().display().to_string(), args, ..Launch::default() };
+            let args = restart_args(argv.iter().cloned(), cursor)
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let launch = Launch {
+                program: exe.path().display().to_string(),
+                args,
+                ..Launch::default()
+            };
             let e = ports.spawn.exec(&launch);
-            return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", exe.path().display()))
-                .with("path", exe.path().display().to_string()));
+            return Err(CpdError::new(
+                ErrorCode::SpawnFailed,
+                format!("Cannot restart cpd from {}: {e}.", exe.path().display()),
+            )
+            .with("path", exe.path().display().to_string()));
         }
         ports.clock.sleep(poll);
     }
@@ -248,10 +278,15 @@ fn restart_args(args: impl Iterator<Item = OsString>, cursor: i64) -> Vec<OsStri
 /// Writes `lines` and flushes. `Err(Ok(()))` when the reader is gone (EPIPE: the normal end of a follower);
 /// `Err(Err(_))` for any other write error: `internal`, as no I/O error code exists and the database is not at fault.
 fn print(out: &mut (impl Write + ?Sized), lines: &str) -> Result<(), Result<(), CpdError>> {
-    out.write_all(lines.as_bytes()).and_then(|()| out.flush()).map_err(|e| match e.kind() {
-        std::io::ErrorKind::BrokenPipe => Ok(()),
-        _ => Err(CpdError::new(ErrorCode::Internal, format!("Cannot write to stdout: {e}."))),
-    })
+    out.write_all(lines.as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::BrokenPipe => Ok(()),
+            _ => Err(CpdError::new(
+                ErrorCode::Internal,
+                format!("Cannot write to stdout: {e}."),
+            )),
+        })
 }
 
 /// Whether the reader of `stdout` is gone, checked without writing (G1): a follower with no Event to
@@ -287,13 +322,18 @@ mod tests {
 
     #[test]
     fn a_stdout_write_error_is_internal_not_store_failed() {
-        let err = print(&mut Failing(std::io::ErrorKind::StorageFull), "x\n").unwrap_err().unwrap_err();
+        let err = print(&mut Failing(std::io::ErrorKind::StorageFull), "x\n")
+            .unwrap_err()
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::Internal, "{err:?}");
     }
 
     #[test]
     fn a_closed_reader_ends_the_follower_without_an_error() {
-        assert!(matches!(print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"), Err(Ok(()))));
+        assert!(matches!(
+            print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"),
+            Err(Ok(()))
+        ));
     }
 
     /// What the follower's `stdout` being a pipe whose reader went away comes to, with no process: a pipe of this
@@ -308,16 +348,44 @@ mod tests {
     }
 
     fn restarted(args: &[&str], cursor: i64) -> Vec<String> {
-        restart_args(args.iter().map(OsString::from), cursor).into_iter().map(|a| a.into_string().unwrap()).collect()
+        restart_args(args.iter().map(OsString::from), cursor)
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect()
     }
 
     #[test]
     fn restart_sets_since_and_keeps_everything_else() {
-        assert_eq!(restarted(&["events", "follow", "--plan", "pay"], 7), ["events", "follow", "--plan", "pay", "--since", "7"]);
         assert_eq!(
-            restarted(&["events", "follow", "--since", "0", "--kind", "error", "--until-idle"], 9),
-            ["events", "follow", "--kind", "error", "--until-idle", "--since", "9"]
+            restarted(&["events", "follow", "--plan", "pay"], 7),
+            ["events", "follow", "--plan", "pay", "--since", "7"]
         );
-        assert_eq!(restarted(&["events", "follow", "--since=3"], 4), ["events", "follow", "--since", "4"]);
+        assert_eq!(
+            restarted(
+                &[
+                    "events",
+                    "follow",
+                    "--since",
+                    "0",
+                    "--kind",
+                    "error",
+                    "--until-idle"
+                ],
+                9
+            ),
+            [
+                "events",
+                "follow",
+                "--kind",
+                "error",
+                "--until-idle",
+                "--since",
+                "9"
+            ]
+        );
+        assert_eq!(
+            restarted(&["events", "follow", "--since=3"], 4),
+            ["events", "follow", "--since", "4"]
+        );
     }
 }

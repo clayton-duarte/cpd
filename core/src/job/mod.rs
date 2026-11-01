@@ -12,16 +12,22 @@
 //! writes is what it checked.
 
 #[cfg(test)]
+#[path = "approve_touches_tests.rs"]
+mod approve_touches_tests;
+
+#[cfg(test)]
 mod incident_tests;
 
 pub(crate) mod add;
+mod addendum;
 mod approve;
-mod chain;
+mod approve_touches;
 pub(crate) mod cancel;
+mod chain;
 mod edit;
-pub(crate) mod fix_retry;
 #[cfg(test)]
 mod explore_tests;
+pub(crate) mod fix_retry;
 #[cfg(test)]
 mod fix_retry_tests;
 pub mod guard;
@@ -66,6 +72,10 @@ pub enum Command {
     Urgent(UrgentArgs),
     /// The Lead approves an impl Job to change red tests (§5.9)
     ApproveTests(ApproveArgs),
+    /// The Lead approves a Job to change a path outside its touches (§5.9a)
+    ApproveTouches(ApproveTouchesArgs),
+    /// Add information to a Job without changing its Spec (§5.10)
+    Addendum(AddendumArgs),
     /// Start one Ready Job now (§5.5)
     Dispatch(driver::DispatchArgs),
     /// List the Jobs (§5.6)
@@ -124,7 +134,12 @@ pub struct EditArgs {
     #[arg(long, value_name = "file")]
     spec: Option<PathBuf>,
     /// The new Dependencies, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
+    #[arg(
+        long,
+        value_name = "k1,k2",
+        value_delimiter = ',',
+        conflicts_with = "no_needs"
+    )]
     needs: Option<Vec<JobKey>>,
     /// Remove every Dependency
     #[arg(long = "no-needs")]
@@ -188,6 +203,37 @@ pub struct ApproveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ApproveTouchesArgs {
+    /// The Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// A path, or a directory ending in `/`, that the touches check refuses (repeatable)
+    #[arg(long = "path", value_name = "p", required = true)]
+    paths: Vec<String>,
+    /// Why
+    #[arg(long, value_name = "text")]
+    reason: Text,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
+pub struct AddendumArgs {
+    /// The Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// The addendum
+    #[arg(value_name = "text")]
+    text: Option<Text>,
+    /// Read the addendum from a file
+    #[arg(long, value_name = "path")]
+    file: Option<PathBuf>,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Only Jobs in this status (repeatable)
     #[arg(long = "status", value_name = "status", value_parser = PossibleValuesParser::new(STATUSES))]
@@ -213,6 +259,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),
         Command::ApproveTests(args) => approve::approve(args),
+        Command::ApproveTouches(args) => approve_touches::approve(args),
+        Command::Addendum(args) => addendum::addendum(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),
         Command::Show(args) => show::show(args),
@@ -256,7 +304,11 @@ impl Env {
         self.check_tier_models(&models, tier)
     }
 
-    fn check_tier_models(&mut self, models: &crate::policy::model::Models, tier: Tier) -> Result<(), CpdError> {
+    fn check_tier_models(
+        &mut self,
+        models: &crate::policy::model::Models,
+        tier: Tier,
+    ) -> Result<(), CpdError> {
         let catalog = match &self.catalog {
             Some(fixed) => fixed.clone(),
             None => config::catalog::load_with(models, &mut self.store)?,
@@ -283,25 +335,35 @@ pub(crate) fn check_kind_tier(kind: &str, tier: Tier) -> Result<(), CpdError> {
     if tier.letter() == letter && (1..=3).contains(&tier.effort()) {
         return Ok(());
     }
-    Err(CpdError::new(ErrorCode::TierNotAllowed, format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."))
-        .with("tier", tier.to_string())
-        .with("kind", kind)
-        .with("allowed", range))
+    Err(CpdError::new(
+        ErrorCode::TierNotAllowed,
+        format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."),
+    )
+    .with("tier", tier.to_string())
+    .with("kind", kind)
+    .with("allowed", range))
 }
 
 /// The Plan's phase, else `plan_not_found`.
 fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
-        .optional()?
-        .ok_or_else(|| CpdError::plan_not_found(plan))
+    conn.query_row(
+        "SELECT phase FROM plans WHERE id = ?1",
+        [plan.as_str()],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
 /// The Job `key` among `jobs`, else `job_not_found`.
 pub(crate) fn find<'a>(jobs: &'a [Job], plan: &PlanId, key: &JobKey) -> Result<&'a Job, CpdError> {
     jobs.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
-        CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
-            .with("plan", plan.as_str())
-            .with("job", key.as_str())
+        CpdError::new(
+            ErrorCode::JobNotFound,
+            format!("No Job {key} in Plan {plan}."),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())
     })
 }
 
@@ -310,18 +372,28 @@ fn sorted_needs(needs: &[JobKey]) -> Result<Vec<String>, CpdError> {
     let mut keys: Vec<String> = needs.iter().map(|k| k.as_str().to_owned()).collect();
     keys.sort();
     if let Some(pair) = keys.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("job", pair[0].as_str()));
+        return Err(CpdError::new(
+            ErrorCode::Usage,
+            format!("--needs lists {} twice.", pair[0]),
+        )
+        .with("job", pair[0].as_str()));
     }
     Ok(keys)
 }
 
 /// Every key of `needs` is a Job of the Plan (`needs_unknown`) (§5.1).
 fn check_needs_known(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
-    let unknown: Vec<&String> = needs.iter().filter(|n| !jobs.iter().any(|j| j.key == **n)).collect();
+    let unknown: Vec<&String> = needs
+        .iter()
+        .filter(|n| !jobs.iter().any(|j| j.key == **n))
+        .collect();
     if !unknown.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no Job {}.", join(&unknown)))
-            .with("plan", plan.as_str())
-            .with("needs", serde_json::json!(unknown)));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnknown,
+            format!("Plan {plan} has no Job {}.", join(&unknown)),
+        )
+        .with("plan", plan.as_str())
+        .with("needs", serde_json::json!(unknown)));
     }
     Ok(())
 }
@@ -416,11 +488,18 @@ fn check_impl_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(),
 /// No key of `needs` is a `cancelled` or `failed` Job, nor an `open` or `update` Job, which nothing waits for
 /// (`needs_unavailable`) (§5.1).
 fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
-    let reserved: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && matches!(j.kind.as_str(), "open" | "update")).map(|j| j.key.as_str()).collect();
+    let reserved: Vec<&str> = jobs
+        .iter()
+        .filter(|j| needs.contains(&j.key) && matches!(j.kind.as_str(), "open" | "update"))
+        .map(|j| j.key.as_str())
+        .collect();
     if !reserved.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need an open or update Job: nothing waits for them.")
-            .with("plan", plan.as_str())
-            .with("jobs", reserved));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job cannot need an open or update Job: nothing waits for them.",
+        )
+        .with("plan", plan.as_str())
+        .with("jobs", reserved));
     }
     let unavailable: Vec<serde_json::Value> = jobs
         .iter()
@@ -428,16 +507,23 @@ fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Resul
         .map(|j| serde_json::json!({"key": j.key, "status": j.status}))
         .collect();
     if !unavailable.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need a cancelled or failed Job.")
-            .with("plan", plan.as_str())
-            .with("needs", unavailable));
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job cannot need a cancelled or failed Job.",
+        )
+        .with("plan", plan.as_str())
+        .with("needs", unavailable));
     }
     Ok(())
 }
 
 /// `job retry`: no key of `needs` is a `cancelled` Job (`needs_unavailable`, exit 3, `details.needs`; a `failed`
 /// need is allowed, §5.4, hs-d647): a Job held by a cancelled need can never start.
-pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+pub(crate) fn check_needs_not_cancelled(
+    jobs: &[Job],
+    plan: &PlanId,
+    needs: &[String],
+) -> Result<(), CpdError> {
     let cancelled: Vec<serde_json::Value> = jobs
         .iter()
         .filter(|j| needs.contains(&j.key) && j.status == "cancelled")
@@ -484,5 +570,8 @@ fn check_workflow_live(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str)
 }
 
 fn join(keys: &[&String]) -> String {
-    keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+    keys.iter()
+        .map(|k| k.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }

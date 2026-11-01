@@ -83,20 +83,38 @@ mod tests {
     fn the_role_comes_first() {
         for vault in ["cpd", "other"] {
             for op in [Op::List, Op::Create, Op::Edit, Op::Delete] {
-                assert_eq!(check(Role::Worker, Action::Op(op), vault), Err(ErrorCode::SecretRoleDenied));
+                assert_eq!(
+                    check(Role::Worker, Action::Op(op), vault),
+                    Err(ErrorCode::SecretRoleDenied)
+                );
             }
-            assert_eq!(check(Role::Manager, Allow, vault), Err(ErrorCode::SecretRoleDenied));
-            assert_eq!(check(Role::Worker, Allow, vault), Err(ErrorCode::SecretRoleDenied));
-            assert_eq!(check(Role::Worker, Approve, vault), Err(ErrorCode::SecretRoleDenied));
+            assert_eq!(
+                check(Role::Manager, Allow, vault),
+                Err(ErrorCode::SecretRoleDenied)
+            );
+            assert_eq!(
+                check(Role::Worker, Allow, vault),
+                Err(ErrorCode::SecretRoleDenied)
+            );
+            assert_eq!(
+                check(Role::Worker, Approve, vault),
+                Err(ErrorCode::SecretRoleDenied)
+            );
         }
     }
 
     #[test]
     fn a_worker_reads_the_allowed_vaults_under_an_allowance() {
         for vault in VAULTS {
-            assert_eq!(check(Role::Worker, Action::Op(Op::Get), vault), Ok(Grant::Allowance));
+            assert_eq!(
+                check(Role::Worker, Action::Op(Op::Get), vault),
+                Ok(Grant::Allowance)
+            );
         }
-        assert_eq!(check(Role::Worker, Action::Op(Op::Get), "other"), Err(ErrorCode::SecretVaultDenied));
+        assert_eq!(
+            check(Role::Worker, Action::Op(Op::Get), "other"),
+            Err(ErrorCode::SecretVaultDenied)
+        );
     }
 
     #[test]
@@ -114,6 +132,9 @@ mod tests {
     #[test]
     fn allow_is_never_for_another_vault() {
         assert_eq!(check(Role::Lead, Allow, "cpd"), Ok(Grant::None));
-        assert_eq!(check(Role::Lead, Allow, "other"), Err(ErrorCode::SecretVaultDenied));
+        assert_eq!(
+            check(Role::Lead, Allow, "other"),
+            Err(ErrorCode::SecretVaultDenied)
+        );
     }
 }

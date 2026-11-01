@@ -28,7 +28,6 @@ pub(crate) struct Workflow {
     pub(crate) lead_branch: String,
     pub(crate) attempt: PathBuf,
     pub(crate) attempt_branch: String,
-    pub(crate) attempt_id: String,
 }
 
 impl Workflow {
@@ -72,7 +71,11 @@ impl Rig {
         let route = Arc::new(GitRoute::new(universe.clone()));
         let _ = (*fakes.runner).clone().with_git(&route);
         // No tmux server: `list-panes` and every other call fail as tmux does without one.
-        let _ = (*fakes.runner).clone().on("tmux", |_| true, Reply::exit(1, "", "no server running on /tmp/tmux-0/s\n"));
+        let _ = (*fakes.runner).clone().on(
+            "tmux",
+            |_| true,
+            Reply::exit(1, "", "no server running on /tmp/tmux-0/s\n"),
+        );
         let repo = Repo::init(&universe, &root.join("pay"));
         repo.write("f.txt", "base\n");
         repo.commit("base");
@@ -117,13 +120,22 @@ impl Rig {
         let lead = workflow_lead_worktree_path(self.repo.dir(), &plan, &WorkflowKey::parse(key).unwrap(), &lead_branch).unwrap();
         let attempt_id = format!("{key}-a1");
         let attempt_branch = format!("cpd/pay--{attempt_id}");
-        let attempt = attempt_worktree_path(self.repo.dir(), &plan, &AttemptId::parse(&attempt_id).unwrap()).unwrap();
+        let attempt = attempt_worktree_path(
+            self.repo.dir(),
+            &plan,
+            &AttemptId::parse(&attempt_id).unwrap(),
+        )
+        .unwrap();
         self.repo.branch(&lead_branch);
         self.repo.branch(&attempt_branch);
         {
             let mut u = self.universe.lock().unwrap();
             u.add_worktree(self.repo.id(), &lead, Head::Branch(lead_branch.clone()));
-            u.add_worktree(self.repo.id(), &attempt, Head::Branch(attempt_branch.clone()));
+            u.add_worktree(
+                self.repo.id(),
+                &attempt,
+                Head::Branch(attempt_branch.clone()),
+            );
         }
         // `add_worktree` makes an empty directory: write the tracked file so that both worktrees are clean.
         for dir in [&lead, &attempt] {
@@ -133,8 +145,16 @@ impl Rig {
         let n = self.number;
         let repo = self.repo.dir().display();
         let (pull, lead_column, stamps) = match status {
-            "cancelled" => (String::new(), "NULL".to_owned(), "NULL, NULL, NULL, NULL, NULL".to_owned()),
-            "dispatch" => (String::new(), format!("'{}'", lead.display()), "'t', NULL, NULL, NULL, NULL".to_owned()),
+            "cancelled" => (
+                String::new(),
+                "NULL".to_owned(),
+                "NULL, NULL, NULL, NULL, NULL".to_owned(),
+            ),
+            "dispatch" => (
+                String::new(),
+                format!("'{}'", lead.display()),
+                "'t', NULL, NULL, NULL, NULL".to_owned(),
+            ),
             _ => {
                 let merged = if status == "merged" { "'t'" } else { "NULL" };
                 let state = if status == "merged" { "merged" } else { "open" };
@@ -180,12 +200,21 @@ impl Rig {
 
     /// Whether the local branch exists in the repo.
     pub(crate) fn branch_exists(&self, branch: &str) -> bool {
-        self.universe.lock().unwrap().ref_oid(self.repo.id(), &format!("refs/heads/{branch}")).is_some()
+        self.universe
+            .lock()
+            .unwrap()
+            .ref_oid(self.repo.id(), &format!("refs/heads/{branch}"))
+            .is_some()
     }
 
     /// Whether the repo still registers a worktree at `path`.
     pub(crate) fn registered(&self, path: &Path) -> bool {
-        self.universe.lock().unwrap().worktrees(self.repo.id()).iter().any(|w| w.path == path)
+        self.universe
+            .lock()
+            .unwrap()
+            .worktrees(self.repo.id())
+            .iter()
+            .any(|w| w.path == path)
     }
 
     /// Everything of the Workflow still on disk or in git: `(lead directory, lead registration, lead branch, attempt
@@ -206,9 +235,15 @@ impl Rig {
         let mut store = Store::open(&self.home, 5000).unwrap();
         store
             .read(|c| {
-                let mut stmt = c.prepare("SELECT text, data FROM events WHERE kind = 'error' ORDER BY id")?;
+                let mut stmt =
+                    c.prepare("SELECT text, data FROM events WHERE kind = 'error' ORDER BY id")?;
                 let rows = stmt
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            serde_json::from_str(&r.get::<_, String>(1)?).unwrap(),
+                        ))
+                    })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
@@ -236,7 +271,12 @@ fn outcomes(output: Output) -> Vec<(String, String)> {
         .as_array()
         .unwrap_or_else(|| panic!("a pass that ran has outcomes: {map:?}"))
         .iter()
-        .map(|o| (o["pr"].as_str().unwrap().to_owned(), o["outcome"].as_str().unwrap().to_owned()))
+        .map(|o| {
+            (
+                o["pr"].as_str().unwrap().to_owned(),
+                o["outcome"].as_str().unwrap().to_owned(),
+            )
+        })
         .collect()
 }
 
@@ -250,7 +290,10 @@ fn janitor_pass_removes_cancelled_and_merged_pr_worktrees_and_branches() {
         assert_eq!(rig.left(workflow), [false; 6], "{} Workflow {}: every worktree, registration and local branch is gone", workflow.status, workflow.key);
         assert!(outcomes.iter().any(|(key, _)| key == workflow.key), "an outcome for Workflow {}: {outcomes:?}", workflow.key);
     }
-    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
+    assert!(
+        outcomes.iter().all(|(_, outcome)| outcome == "removed"),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -268,7 +311,10 @@ fn janitor_pass_skips_a_pr_whose_attempt_is_still_running() {
         .create(true)
         .truncate(false)
         .write(true)
-        .open(rig.home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("web-a1").unwrap()))
+        .open(rig.home.attempt_lock(
+            &PlanId::parse("pay").unwrap(),
+            &AttemptId::parse("web-a1").unwrap(),
+        ))
         .unwrap();
     assert!(crate::lock::try_lock(&held).unwrap());
     let outcomes = outcomes(rig.pass());
@@ -296,7 +342,10 @@ fn dirty_lead_is_kept_untouched(status: &'static str, other: &str) {
     assert_eq!(errors.len(), 1, "one Event: {errors:?}");
     let (text, data) = &errors[0];
     assert_eq!(data["code"], "cleanup_failed");
-    assert!(text.contains(status) && !text.contains(other), "the text names the status {status}, never {other}: {text}");
+    assert!(
+        text.contains(status) && !text.contains(other),
+        "the text names the status {status}, never {other}: {text}"
+    );
     assert!(text.contains("untouched"), "{text}");
     assert!(text.contains(&workflow.lead.display().to_string()), "{text}");
     assert_eq!(data["details"]["status"], status);
@@ -322,7 +371,10 @@ fn janitor_pass_reports_a_kept_worktree_once() {
     rig.pass();
     assert_eq!(rig.errors().len(), 1, "the first pass reports it");
     let second = outcomes(rig.pass());
-    assert!(second.contains(&("api".to_owned(), "kept".to_owned())), "the second pass still sees it: {second:?}");
+    assert!(
+        second.contains(&("api".to_owned(), "kept".to_owned())),
+        "the second pass still sees it: {second:?}"
+    );
     assert_eq!(rig.errors().len(), 1, "a later pass retries silently");
 }
 
@@ -362,9 +414,18 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
     rig.workflow("api", "merged");
     rig.workflow("web", "cancelled");
     std::fs::create_dir_all(rig.home.locks_dir()).unwrap();
-    let held = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(rig.home.locks_dir().join("janitor.lock")).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(rig.home.locks_dir().join("janitor.lock"))
+        .unwrap();
     assert!(crate::lock::try_lock(&held).unwrap());
-    assert!(janitor::running(&rig.home).unwrap(), "the probe sees the held lock");
+    assert!(
+        janitor::running(&rig.home).unwrap(),
+        "the probe sees the held lock"
+    );
     let map = fields(rig.pass());
     assert_eq!(map.get("skipped"), Some(&Value::from("running")), "{map:?}");
     assert!(!map.contains_key("outcomes"), "{map:?}");
@@ -376,7 +437,11 @@ fn janitor_pass_while_another_holds_the_lock_does_nothing() {
 
 /// Contract §7.2 "Ended Attempts of merged Jobs on a live Workflow": the Workflow `key` in `status` with its Job in status `job` and
 /// its Attempt ended `attempt`, after one pass: `(left, outcomes, errors)`.
-fn live_pass(status: &'static str, job: &str, attempt: &str) -> (Rig, [bool; 6], Vec<(String, String)>) {
+fn live_pass(
+    status: &'static str,
+    job: &str,
+    attempt: &str,
+) -> (Rig, [bool; 6], Vec<(String, String)>) {
     let mut rig = Rig::new();
     rig.workflow_with("api", status, job, attempt);
     let outcomes = outcomes(rig.pass());
@@ -386,9 +451,19 @@ fn live_pass(status: &'static str, job: &str, attempt: &str) -> (Rig, [bool; 6],
 
 fn swept_and_lead_untouched(status: &'static str, job: &str, attempt: &str) {
     let (rig, left, outcomes) = live_pass(status, job, attempt);
-    assert_eq!(left, [true, true, true, false, false, false], "the Lead's three stay, the Attempt's three are gone");
-    assert!(outcomes.contains(&("api".to_owned(), "removed".to_owned())), "{outcomes:?}");
-    assert!(outcomes.iter().all(|(_, outcome)| outcome == "removed"), "{outcomes:?}");
+    assert_eq!(
+        left,
+        [true, true, true, false, false, false],
+        "the Lead's three stay, the Attempt's three are gone"
+    );
+    assert!(
+        outcomes.contains(&("api".to_owned(), "removed".to_owned())),
+        "{outcomes:?}"
+    );
+    assert!(
+        outcomes.iter().all(|(_, outcome)| outcome == "removed"),
+        "{outcomes:?}"
+    );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
 
@@ -421,9 +496,13 @@ fn janitor_pass_leaves_a_live_prs_running_attempt_alone_and_sweeps_the_merged_jo
     rig.workflow_with("a", "open", "merged", "failed");
     let plan = PlanId::parse("pay").unwrap();
     let branch = "cpd/pay--b-a1".to_owned();
-    let dir = attempt_worktree_path(rig.repo.dir(), &plan, &AttemptId::parse("b-a1").unwrap()).unwrap();
+    let dir =
+        attempt_worktree_path(rig.repo.dir(), &plan, &AttemptId::parse("b-a1").unwrap()).unwrap();
     rig.repo.branch(&branch);
-    rig.universe.lock().unwrap().add_worktree(rig.repo.id(), &dir, Head::Branch(branch.clone()));
+    rig.universe
+        .lock()
+        .unwrap()
+        .add_worktree(rig.repo.id(), &dir, Head::Branch(branch.clone()));
     std::fs::write(dir.join("f.txt"), "base\n").unwrap();
     rig.sql(&format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
@@ -450,7 +529,10 @@ fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
         .create(true)
         .truncate(false)
         .write(true)
-        .open(rig.home.attempt_lock(&PlanId::parse("pay").unwrap(), &AttemptId::parse("api-a1").unwrap()))
+        .open(rig.home.attempt_lock(
+            &PlanId::parse("pay").unwrap(),
+            &AttemptId::parse("api-a1").unwrap(),
+        ))
         .unwrap();
     assert!(crate::lock::try_lock(&held).unwrap());
     let outcomes = outcomes(rig.pass());

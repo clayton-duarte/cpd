@@ -15,12 +15,17 @@ use cpd_core::session::State;
 const W: u16 = 40;
 
 fn cells(buf: &Buffer, y: u16) -> Vec<String> {
-    (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_owned()).collect()
+    (0..buf.area.width)
+        .map(|x| buf[(x, y)].symbol().to_owned())
+        .collect()
 }
 
 /// The column of the last cell of row `y` that is not blank.
 fn last_column(buf: &Buffer, y: u16) -> usize {
-    cells(buf, y).iter().rposition(|c| c.trim() != "").expect("a row with text")
+    cells(buf, y)
+        .iter()
+        .rposition(|c| c.trim() != "")
+        .expect("a row with text")
 }
 
 fn draw(t: crate::read::Tree) -> Buffer {
@@ -44,8 +49,15 @@ fn a_context_block_row_ends_at_the_panes_inner_edge() {
         vec![],
     );
     let buf = draw(tree(vec![context("cc", vec![long])]));
-    let y = (0..12).find(|&y| cells(&buf, y).iter().any(|c| c == "…")).expect("the Plan's name is cut with an ellipsis");
-    assert_eq!(last_column(&buf, y), usize::from(W) - 2, "the row ends at column W-2: {:?}", cells(&buf, y));
+    let y = (0..12)
+        .find(|&y| cells(&buf, y).iter().any(|c| c == "…"))
+        .expect("the Plan's name is cut with an ellipsis");
+    assert_eq!(
+        last_column(&buf, y),
+        usize::from(W) - 2,
+        "the row ends at column W-2: {:?}",
+        cells(&buf, y)
+    );
     assert_eq!(buf[(W - 1, y)].symbol(), " ", "the margin column is blank");
 }
 
@@ -54,9 +66,19 @@ fn a_long_context_id_and_its_cost_end_at_the_panes_inner_edge() {
     let mut c = context(&"a".repeat(40), vec![]);
     c.cost_usd = Some(12.3);
     let buf = draw(tree(vec![c]));
-    let y = (0..12).find(|&y| cells(&buf, y).iter().any(|c| c == "…")).expect("the id is cut with an ellipsis");
+    let y = (0..12)
+        .find(|&y| cells(&buf, y).iter().any(|c| c == "…"))
+        .expect("the id is cut with an ellipsis");
     let line: String = cells(&buf, y).concat();
-    assert!(line.trim_end().ends_with(&format!(" {}", cpd_core::metrics::format_cost(12.3))), "{line}");
-    assert_eq!(last_column(&buf, y), usize::from(W) - 2, "the row ends at column W-2: {line}");
+    assert!(
+        line.trim_end()
+            .ends_with(&format!(" {}", cpd_core::metrics::format_cost(12.3))),
+        "{line}"
+    );
+    assert_eq!(
+        last_column(&buf, y),
+        usize::from(W) - 2,
+        "the row ends at column W-2: {line}"
+    );
     assert_eq!(buf[(W - 1, y)].symbol(), " ", "the margin column is blank");
 }

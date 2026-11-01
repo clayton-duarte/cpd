@@ -11,7 +11,6 @@ use cpd_core::store::Store;
 use crate::read::{self, Dot, Tree, Work};
 use crate::tree::View;
 
-
 fn session(id: &str, role: &str) -> String {
     format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -99,7 +98,12 @@ fn session_dot(tree: &Tree, id: &str) -> Dot {
 
 /// Sets the dot of every Session the tree draws under a Plan.
 fn every_dot(tree: &mut Tree, dot: Dot) {
-    for s in tree.contexts.iter_mut().flat_map(|c| &mut c.plans).flat_map(|p| &mut p.sessions) {
+    for s in tree
+        .contexts
+        .iter_mut()
+        .flat_map(|c| &mut c.plans)
+        .flat_map(|p| &mut p.sessions)
+    {
         s.dot = dot;
     }
 }
@@ -116,15 +120,22 @@ fn the_tree_animates_a_working_dot_of_every_work() {
     }
     let mut tree = base;
     every_dot(&mut tree, Dot::Working(Some(Work::Dispatch)));
-    for s in tree.contexts.iter_mut().flat_map(|c| &mut c.plans).flat_map(|p| &mut p.sessions) {
+    for s in tree
+        .contexts
+        .iter_mut()
+        .flat_map(|c| &mut c.plans)
+        .flat_map(|p| &mut p.sessions)
+    {
         s.archived_at = Some("2026-02-01T00:00:00.000Z".into());
     }
     for c in &mut tree.contexts {
         c.dot = Dot::Stopped;
     }
-    assert!(!View::new(tree, true).animated(), "an archived Session working dot never turns");
+    assert!(
+        !View::new(tree, true).animated(),
+        "an archived Session working dot never turns"
+    );
 }
-
 
 const T: &str = "'2026-01-02T01:00:00.000Z'";
 
@@ -135,7 +146,11 @@ fn scenario(phase: &str, extra: &str) -> Tree {
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     let done = if phase == "done" { T } else { "NULL" };
-    let locked = if phase == "grounding" || phase == "plan" { "NULL" } else { T };
+    let locked = if phase == "grounding" || phase == "plan" {
+        "NULL"
+    } else {
+        T
+    };
     let sql = format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          {lead}
@@ -159,7 +174,9 @@ fn scenario(phase: &str, extra: &str) -> Tree {
 /// A Workflow `key` of Plan `px`, `status` in the Workflow table, its pull request `mergeable` as given.
 fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     let opened = if status == "open" {
-        format!("{number}, 'https://github.com/acme/repo/pull/{number}', {T}, (SELECT id FROM pull_requests WHERE number = {number}),")
+        format!(
+            "{number}, 'https://github.com/acme/repo/pull/{number}', {T}, (SELECT id FROM pull_requests WHERE number = {number}),"
+        )
     } else {
         "NULL, NULL, NULL, NULL,".to_owned()
     };
@@ -211,7 +228,11 @@ fn dots_tree_dispatch_with_open_pr_is_yellow() {
     for kind in ["open", "update"] {
         for status in ["queued", "running"] {
             let extra = job("work", "j1", kind, status);
-            assert_eq!(lead_dot(&scenario("dispatch", &extra), "px"), review, "a {status} {kind} Job");
+            assert_eq!(
+                lead_dot(&scenario("dispatch", &extra), "px"),
+                review,
+                "a {status} {kind} Job"
+            );
         }
     }
 }
@@ -229,7 +250,11 @@ fn dots_tree_dispatch_with_work_jobs_only_is_cyan() {
 #[test]
 fn dots_tree_grounding_plan_and_done_are_magenta() {
     for phase in ["grounding", "plan", "done"] {
-        assert_eq!(lead_dot(&scenario(phase, ""), "px"), Dot::Working(Some(Work::Planning)), "{phase}");
+        assert_eq!(
+            lead_dot(&scenario(phase, ""), "px"),
+            Dot::Working(Some(Work::Planning)),
+            "{phase}"
+        );
     }
 }
 
@@ -245,8 +270,15 @@ fn dots_tree_draft_job_beats_open_pr() {
 /// `dots_tree_landing_attempt_is_yellow`: a running Job whose Attempt is merging (landing) is `Work::Review`.
 #[test]
 fn dots_tree_landing_attempt_is_yellow() {
-    let extra = format!("{}{}", job("work", "j1", "work", "running"), attempt("j1", "merging"));
-    assert_eq!(lead_dot(&scenario("dispatch", &extra), "px"), Dot::Working(Some(Work::Review)));
+    let extra = format!(
+        "{}{}",
+        job("work", "j1", "work", "running"),
+        attempt("j1", "merging")
+    );
+    assert_eq!(
+        lead_dot(&scenario("dispatch", &extra), "px"),
+        Dot::Working(Some(Work::Review))
+    );
 }
 
 /// `dots_tree_session_without_plan_is_white`: a working fork and a working Manager have no Plan: `Working(None)`.
@@ -254,9 +286,25 @@ fn dots_tree_landing_attempt_is_yellow() {
 fn dots_tree_session_without_plan_is_white() {
     let (_dir, mut store) = fixture_store();
     let tree = read::tree(&mut store).unwrap();
-    assert_eq!(lead_dot(&tree, "pg"), Dot::Working(Some(Work::Planning)), "a Plan's Lead has a Work; a Session without a Plan has none");
-    assert_eq!(session_dot(&tree, "l-fork"), Dot::Working(None), "a working fork leads no Plan");
-    assert_eq!(tree.contexts[0].dot, Dot::Working(None), "the working Manager leads no Plan");
+    assert_eq!(
+        lead_dot(&tree, "pg"),
+        Dot::Working(Some(Work::Planning)),
+        "a Plan's Lead has a Work; a Session without a Plan has none"
+    );
+    assert_eq!(
+        session_dot(&tree, "l-fork"),
+        Dot::Working(None),
+        "a working fork leads no Plan"
+    );
+    assert_eq!(
+        tree.contexts[0].dot,
+        Dot::Working(None),
+        "the working Manager leads no Plan"
+    );
     assert_eq!(lead_dot(&tree, "pf"), Dot::Fixing, "a failed Job stays red");
-    assert_eq!(session_dot(&tree, "l-arch"), Dot::Working(None), "an archived working Lead keeps its glyph");
+    assert_eq!(
+        session_dot(&tree, "l-arch"),
+        Dot::Working(None),
+        "an archived working Lead keeps its glyph"
+    );
 }

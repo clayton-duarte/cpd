@@ -51,7 +51,10 @@ fn policy_file(env: &TestEnv, rel: &str, text: &str) {
 
 /// `config.toml` as it is once `[tiers]` is gone: no models in it.
 fn config_without_tiers(env: &TestEnv, extra: &str) {
-    env.write_config(&format!("version = 1\nmachine = \"m1\"\n{extra}[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
+    env.write_config(&format!(
+        "version = 1\nmachine = \"m1\"\n{extra}[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    ));
 }
 
 /// A fake pi install (`pi` on `PATH`, `current-version`, the two entry points), as `job.rs` makes it.
@@ -59,7 +62,9 @@ fn pi_install(env: &TestEnv) {
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    let scope = env
+        .root()
+        .join("install/releases/1.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
@@ -90,7 +95,8 @@ const ALL: [&str; 3] = ["[0,1,2,3,4,5]", "[0,1,2,3,4,5]", "[0,1,2,3]"];
 #[test]
 fn c1_a_tiers_section_in_config_toml_is_config_invalid() {
     let fx = Fx::new();
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"github-copilot/opus\"\n");
+    fx.env
+        .write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"github-copilot/opus\"\n");
     let error = refused(&fx.cpd(&["config"]), "config_invalid", 1);
     assert_eq!(error["details"]["key"], "tiers", "{error}");
 }
@@ -101,7 +107,12 @@ fn c1_cpd_config_prints_no_tiers_object_and_no_tiers_source() {
     fx.env.write_config("version = 1\nmachine = \"hs\"\n");
     let out = fx.cpd(&["config"]).ok();
     assert!(out["config"].get("tiers").is_none(), "{out}");
-    let sources: Vec<&String> = out["sources"].as_object().unwrap().keys().filter(|k| k.starts_with("tiers")).collect();
+    let sources: Vec<&String> = out["sources"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|k| k.starts_with("tiers"))
+        .collect();
     assert!(sources.is_empty(), "{sources:?}");
 }
 
@@ -143,7 +154,10 @@ fn c2_a_job_tier_is_checked_against_the_efforts_cached_for_its_repos_s_ref() {
     // pi's catalog (the fake node) would allow S2 for every ref: only the cached efforts of the repo's own ref refuse it.
     fx.fake_node(Reply::ok(&format!("{LEVELS}\n")));
     let error = refused(&add(&fx, "r1", "S2"), "tier_invalid", 2);
-    assert!(error.to_string().contains("github-copilot/r1-s"), "the error names r1's S model: {error}");
+    assert!(
+        error.to_string().contains("github-copilot/r1-s"),
+        "the error names r1's S model: {error}"
+    );
     // The same Tier on r2, whose S ref is cached with efforts up to 3.
     let out = add(&fx, "r2", "S2").ok();
     assert_eq!(out["job"]["tier"], "S2", "{out}");
@@ -156,7 +170,11 @@ fn pi_calls(live: &Live) -> Vec<Vec<String>> {
     live.fx
         .calls("tmux")
         .into_iter()
-        .filter(|call| call.args.iter().any(|a| a == "new-session" || a == "new-window"))
+        .filter(|call| {
+            call.args
+                .iter()
+                .any(|a| a == "new-session" || a == "new-window")
+        })
         .filter_map(|call| {
             let after = call.args.iter().position(|a| a == "--")?;
             let argv = &call.args[after + 1..];
@@ -167,16 +185,34 @@ fn pi_calls(live: &Live) -> Vec<Vec<String>> {
 }
 
 fn model_of(argv: &[String]) -> String {
-    let at = argv.iter().position(|a| a == "--model").unwrap_or_else(|| panic!("no --model in {argv:?}"));
+    let at = argv
+        .iter()
+        .position(|a| a == "--model")
+        .unwrap_or_else(|| panic!("no --model in {argv:?}"));
     argv[at + 1].clone()
 }
 
 /// The Worker's pi ends with `status`: its pane is dead, as `driver.rs` does it.
 fn worker_exits(live: &Live, id: &str, status: u8) {
     let window = format!("{PLAN}--{id}");
-    let pane = live.fx.panes().into_iter().find(|p| p.window_name == window).unwrap_or_else(|| panic!("no pane in window {window}"));
-    let out = live.fx.tmux(&["__ctl", "pane-exit", &pane.pane, "--status", &status.to_string()]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let pane = live
+        .fx
+        .panes()
+        .into_iter()
+        .find(|p| p.window_name == window)
+        .unwrap_or_else(|| panic!("no pane in window {window}"));
+    let out = live.fx.tmux(&[
+        "__ctl",
+        "pane-exit",
+        &pane.pane,
+        "--status",
+        &status.to_string(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// `live`'s Plan `pay` (PR `repo` of the repo `acme/pay`, owner `acme`, Job `api` on `S2`), with no `[tiers]` in
@@ -279,7 +315,10 @@ fn c4_a_lead_of_a_context_with_no_owner_has_the_machine_layers_o_ref_then_the_bu
     let fx = sessions();
     assert_eq!(shown_model(&fx, "lead-bare"), "github-copilot/mach-o");
     policy_file(&fx.env, "host.toml", "");
-    assert_eq!(shown_model(&fx, "lead-bare"), "github-copilot/claude-opus-5.5");
+    assert_eq!(
+        shown_model(&fx, "lead-bare"),
+        "github-copilot/claude-opus-5.5"
+    );
 }
 
 #[test]
@@ -306,7 +345,16 @@ fn titles() -> (Fx, std::sync::Arc<TitlePi>) {
         json!({"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "message 1"}]}}),
         json!({"type": "message", "message": {"role": "assistant", "content": "message 2"}}),
     ];
-    fs::write(&file, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+    fs::write(
+        &file,
+        lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
     fixture(
         &fx.env,
         &format!(
@@ -325,7 +373,8 @@ fn titles() -> (Fx, std::sync::Arc<TitlePi>) {
 }
 
 fn title_model(fx: &Fx, session: &str) -> String {
-    fx.cpd(&["session", "retitle", session, "--width", "68"]).ok();
+    fx.cpd(&["session", "retitle", session, "--width", "68"])
+        .ok();
     let calls = fx.calls("pi");
     model_of(&calls.last().expect("pi was called").args)
 }
@@ -345,7 +394,10 @@ fn c5_the_title_writer_of_a_context_with_no_owner_runs_on_the_machine_layers_g_r
 /// A Context `ctx` (owner `acme`, or none) with one record, the policy files of `titles`, pi's catalog from the fake node.
 fn distiller(owner: Option<&str>) -> (Fx, std::sync::Arc<DistillPi>) {
     let fx = Fx::with_ports();
-    config_without_tiers(&fx.env, "lead_pi_packages = []\ncontext_curation_min_records = 1\n");
+    config_without_tiers(
+        &fx.env,
+        "lead_pi_packages = []\ncontext_curation_min_records = 1\n",
+    );
     fx.fake_node(Reply::ok(&format!("{LEVELS}\n")));
     pi_install(&fx.env);
     let pi = DistillPi::install(&fx);
@@ -353,18 +405,31 @@ fn distiller(owner: Option<&str>) -> (Fx, std::sync::Arc<DistillPi>) {
     policy_file(&fx.env, "acme/owner.toml", &table("owner"));
     match owner {
         Some(owner) => {
-            fx.cpd(&["context", "new", "ctx", "--title", "Ctx", "--owner", owner]).ok();
+            fx.cpd(&["context", "new", "ctx", "--title", "Ctx", "--owner", owner])
+                .ok();
         }
-        None => fixture(&fx.env, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"),
+        None => fixture(
+            &fx.env,
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');",
+        ),
     }
     let record = Record {
         id: RecordId::parse("hs-d1").unwrap(),
         at: "2020-01-01T00:00:00.000Z".into(),
-        by: By { session: None, plan: None },
+        by: By {
+            session: None,
+            plan: None,
+        },
         text: "Use sqlite.".into(),
         draft: Draft::Decision { supersedes: None },
     };
-    store(&fx.env).write("fixture", |tx| Ok(record.insert(tx, &ContextId::parse("ctx").unwrap()).unwrap())).unwrap();
+    store(&fx.env)
+        .write("fixture", |tx| {
+            Ok(record
+                .insert(tx, &ContextId::parse("ctx").unwrap())
+                .unwrap())
+        })
+        .unwrap();
     (fx, pi)
 }
 
@@ -395,9 +460,17 @@ fn h3_job(live: &Live) {
          VALUES ('pay', 'repo', 'hi', 'Title of hi', 'H3', 'Do hi.', 'Because.', '[\"hi.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');",
     );
     let plan = PlanId::parse(PLAN).unwrap();
-    let all = store(&live.fx.env).read(|conn| jobs::load(conn, &plan)).unwrap();
+    let all = store(&live.fx.env)
+        .read(|conn| jobs::load(conn, &plan))
+        .unwrap();
     let job = all.iter().find(|j| j.key == "hi").unwrap();
-    fixture(&live.fx.env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'hi';", locked_fingerprint(job)));
+    fixture(
+        &live.fx.env,
+        &format!(
+            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'hi';",
+            locked_fingerprint(job)
+        ),
+    );
 }
 
 fn crash_the_worker(live: &Live) -> String {
@@ -435,7 +508,11 @@ fn c6_a_crash_at_h3_is_retried_at_h3_even_when_the_repo_has_no_s_effort_from_1_u
 
     crash_the_worker(&live);
 
-    let retries: Vec<Value> = live.events("hi-a1").into_iter().filter(|e| e["kind"] == "attempt-retry").collect();
+    let retries: Vec<Value> = live
+        .events("hi-a1")
+        .into_iter()
+        .filter(|e| e["kind"] == "attempt-retry")
+        .collect();
     assert_eq!(retries.len(), 1, "{retries:?}");
     assert_eq!(retries[0]["data"]["next_tier"], "H3");
     assert_eq!(live.job_status("hi"), "queued");

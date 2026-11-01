@@ -63,5 +63,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
         }
         Ok(at)
     })?;
-    Ok(Output::success(json!({"escalation": id, "attempt": attempt, "answered_at": answered_at})))
+    Ok(Output::success(
+        json!({"escalation": id, "attempt": attempt, "answered_at": answered_at}),
+    ))
 }

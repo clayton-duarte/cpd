@@ -48,7 +48,10 @@ fn rows(text: &[char], width: usize) -> Vec<(usize, usize)> {
 /// columns. The cursor keeps its index; its column is the display width of the text before it.
 pub(crate) fn cursor_at(text: &[char], cursor: usize, width: usize) -> (usize, usize) {
     let tw = width.max(1);
-    let before: usize = text[..cursor.min(text.len())].iter().map(|&c| cells::char_width(c)).sum();
+    let before: usize = text[..cursor.min(text.len())]
+        .iter()
+        .map(|&c| cells::char_width(c))
+        .sum();
     (before / tw, before % tw)
 }
 
@@ -71,33 +74,67 @@ impl Widget for Text<'_> {
         let tw = usize::from(area.width).max(1);
         let ranges = rows(self.text, tw);
         let (cursor_row, _) = cursor_at(self.text, self.cursor, tw);
-        let shown = |from: usize, to: usize| self.text.get(from.min(self.text.len())..to.min(self.text.len())).unwrap_or_default().iter().collect::<String>();
+        let shown = |from: usize, to: usize| {
+            self.text
+                .get(from.min(self.text.len())..to.min(self.text.len()))
+                .unwrap_or_default()
+                .iter()
+                .collect::<String>()
+        };
         for n in 0..area.height {
             let k = self.first_row + usize::from(n);
-            let (from, to) = ranges.get(k).copied().unwrap_or((self.text.len(), self.text.len()));
+            let (from, to) = ranges
+                .get(k)
+                .copied()
+                .unwrap_or((self.text.len(), self.text.len()));
             let mut spans = Vec::new();
             if k == cursor_row {
                 let at = self.cursor.clamp(from, to);
                 spans.push(Span::styled(shown(from, at), palette::clickable_text()));
-                spans.push(Span::styled(self.text.get(at).map_or(" ".to_owned(), char::to_string), palette::selected()));
-                spans.push(Span::styled(shown((at + 1).min(to), to), palette::clickable_text()));
+                spans.push(Span::styled(
+                    self.text.get(at).map_or(" ".to_owned(), char::to_string),
+                    palette::selected(),
+                ));
+                spans.push(Span::styled(
+                    shown((at + 1).min(to), to),
+                    palette::clickable_text(),
+                ));
             } else {
                 spans.push(Span::styled(shown(from, to), palette::clickable_text()));
             }
-            Paragraph::new(Line::from(spans)).render(Rect::new(area.x, area.y + n, area.width, 1), buf);
+            Paragraph::new(Line::from(spans))
+                .render(Rect::new(area.x, area.y + n, area.width, 1), buf);
         }
     }
 }
 
 /// The box for `text` in a wall rect `width` wide: the label as a pill on the top border (cut to the room, none for an empty
 /// one), the text rows from `first_row` on.
-pub(crate) fn boxed<'a>(label: &str, text: &'a [char], cursor: usize, focused: bool, first_row: usize, width: usize) -> impl Widget + 'a {
+pub(crate) fn boxed<'a>(
+    label: &str,
+    text: &'a [char],
+    cursor: usize,
+    focused: bool,
+    first_row: usize,
+    width: usize,
+) -> impl Widget + 'a {
     let border = palette::input_border(focused);
     let room = width.saturating_sub(5);
     let label = cells::take(label, room);
-    let widget = BoxWidget::new(Walls::Full, border, Text { text, cursor, first_row });
+    let widget = BoxWidget::new(
+        Walls::Full,
+        border,
+        Text {
+            text,
+            cursor,
+            first_row,
+        },
+    );
     if label.is_empty() || width < 6 {
         return widget;
     }
-    widget.title(Line::from(pill::pill(label.to_owned(), palette::label_pill(focused))))
+    widget.title(Line::from(pill::pill(
+        label.to_owned(),
+        palette::label_pill(focused),
+    )))
 }

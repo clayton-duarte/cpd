@@ -46,7 +46,9 @@ fn job(key: &str, workflow: &str, kind: &str, status: &str, full: bool, needs: &
          VALUES ('pl', '{workflow}', '{key}', 'T', '{kind}', {tier}, {spec}, '{status}', 1, {fingerprint}, {failed}, {merged}, {cancelled}, {cancelled}, cpd_txn(), 't');"
     );
     for need in needs {
-        sql.push_str(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pl', '{key}', '{need}');"));
+        sql.push_str(&format!(
+            "INSERT INTO dependencies (plan, job, needs) VALUES ('pl', '{key}', '{need}');"
+        ));
     }
     sql
 }
@@ -68,7 +70,14 @@ fn a_stub_that_needs_nothing_is_parked() {
 #[test]
 fn a_draft_needing_a_queued_running_or_failed_job_waits() {
     for status in ["queued", "running", "failed"] {
-        let (_d, mut s) = store("dispatch", &format!("{}{}", job("a", "r", "work", status, true, &[]), stub("k", &["a"])));
+        let (_d, mut s) = store(
+            "dispatch",
+            &format!(
+                "{}{}",
+                job("a", "r", "work", status, true, &[]),
+                stub("k", &["a"])
+            ),
+        );
         assert!(parked(&mut s).is_empty(), "{status}");
     }
 }
@@ -76,17 +85,32 @@ fn a_draft_needing_a_queued_running_or_failed_job_waits() {
 #[test]
 fn a_draft_needing_a_merged_or_cancelled_job_is_parked() {
     for status in ["merged", "cancelled"] {
-        let (_d, mut s) = store("dispatch", &format!("{}{}", job("a", "r", "work", status, true, &[]), stub("k", &["a"])));
+        let (_d, mut s) = store(
+            "dispatch",
+            &format!(
+                "{}{}",
+                job("a", "r", "work", status, true, &[]),
+                stub("k", &["a"])
+            ),
+        );
         assert_eq!(parked(&mut s), ["k"], "{status}");
     }
 }
 
 #[test]
 fn waiting_passes_through_drafts_that_wait_and_stops_at_parked_ones() {
-    let waiting = format!("{}{}{}", job("a", "r", "work", "queued", true, &[]), stub("w", &["a"]), stub("k", &["w"]));
+    let waiting = format!(
+        "{}{}{}",
+        job("a", "r", "work", "queued", true, &[]),
+        stub("w", &["a"]),
+        stub("k", &["w"])
+    );
     let (_d, mut s) = store("dispatch", &waiting);
     assert!(parked(&mut s).is_empty());
-    let (_d, mut s) = store("dispatch", &format!("{}{}", stub("p", &[]), stub("k", &["p"])));
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!("{}{}", stub("p", &[]), stub("k", &["p"])),
+    );
     assert_eq!(parked(&mut s), ["p", "k"]);
 }
 
@@ -97,10 +121,23 @@ fn a_full_draft_is_parked_unless_a_current_pending_review_covers_it() {
     let fingerprint = s.read(|conn| plan_fingerprint(conn, &plan())).unwrap();
     let review = |status: &str, fingerprint: &str| {
         let decided = if status == "pending" { "NULL" } else { "'t'" };
-        format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pl', 'r1', 1, '{fingerprint}', 'T', '{status}', 't', {decided});")
+        format!(
+            "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pl', 'r1', 1, '{fingerprint}', 'T', '{status}', 't', {decided});"
+        )
     };
-    for (status, fp, expected) in [("pending", fingerprint.as_str(), 0), ("pending", "0".repeat(64).as_str(), 1), ("approved", fingerprint.as_str(), 1)] {
-        let (_d, mut s) = store("dispatch", &format!("{}{}", job("k", "r", "work", "draft", true, &[]), review(status, fp)));
+    for (status, fp, expected) in [
+        ("pending", fingerprint.as_str(), 0),
+        ("pending", "0".repeat(64).as_str(), 1),
+        ("approved", fingerprint.as_str(), 1),
+    ] {
+        let (_d, mut s) = store(
+            "dispatch",
+            &format!(
+                "{}{}",
+                job("k", "r", "work", "draft", true, &[]),
+                review(status, fp)
+            ),
+        );
         assert_eq!(parked(&mut s).len(), expected, "{status} {fp}");
     }
 }
@@ -113,7 +150,10 @@ fn the_open_jobs_draft_is_exempt() {
 
 #[test]
 fn an_archived_plan_has_none() {
-    let (_d, mut s) = store("dispatch", &format!("{}UPDATE plans SET archived_at = 't';", stub("k", &[])));
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!("{}UPDATE plans SET archived_at = 't';", stub("k", &[])),
+    );
     assert!(parked(&mut s).is_empty());
 }
 
@@ -123,7 +163,10 @@ const WEB_NEEDS_R: &str = "INSERT INTO workflows (plan, key, repo, base, status,
 
 #[test]
 fn a_draft_of_a_pr_that_waits_for_another_pr_waits_after_the_lock_only() {
-    let extra = format!("{WEB_NEEDS_R}{}", job("k", "web", "work", "draft", false, &[]));
+    let extra = format!(
+        "{WEB_NEEDS_R}{}",
+        job("k", "web", "work", "draft", false, &[])
+    );
     let (_d, mut s) = store("dispatch", &extra);
     assert!(parked(&mut s).is_empty());
     let (_d, mut s) = store("plan", &extra);
@@ -135,8 +178,11 @@ fn the_door_refuses_a_stub_that_waits_for_nothing_after_the_lock() {
     let (_d, mut s) = store("dispatch", &job("a", "r", "work", "queued", true, &[]));
     let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
     let mut row = all[0].clone();
-    (row.key, row.status, row.tier, row.spec, row.fingerprint) = ("k".into(), "draft".into(), None, None, None);
-    let run = |s: &mut Store, row: &jobs::Job, phase: &str| s.read(|conn| door(conn, &plan(), phase, &all, row));
+    (row.key, row.status, row.tier, row.spec, row.fingerprint) =
+        ("k".into(), "draft".into(), None, None, None);
+    let run = |s: &mut Store, row: &jobs::Job, phase: &str| {
+        s.read(|conn| door(conn, &plan(), phase, &all, row))
+    };
     let e = run(&mut s, &row, "dispatch").unwrap_err();
     assert_eq!(e.code(), ErrorCode::DraftParked);
     run(&mut s, &row, "plan").unwrap();
@@ -149,7 +195,9 @@ fn the_door_refuses_a_stub_that_waits_for_nothing_after_the_lock() {
 
 fn review(status: &str, fingerprint: &str) -> String {
     let decided = if status == "pending" { "NULL" } else { "'t'" };
-    format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pl', 'r1', 1, '{fingerprint}', 'T', '{status}', 't', {decided});")
+    format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at, decided_at) VALUES ('pl', 'r1', 1, '{fingerprint}', 'T', '{status}', 't', {decided});"
+    )
 }
 
 fn current_fingerprint() -> String {
@@ -161,9 +209,18 @@ fn current_fingerprint() -> String {
 fn an_approved_current_review_covers_a_draft_in_phase_plan() {
     let fingerprint = current_fingerprint();
     let draft = job("k", "r", "work", "draft", true, &[]);
-    let (_d, mut s) = store("plan", &format!("{draft}{}", review("approved", &fingerprint)));
-    assert!(parked(&mut s).is_empty(), "approved and current in phase plan covers the draft");
-    let (_d, mut s) = store("dispatch", &format!("{draft}{}", review("approved", &fingerprint)));
+    let (_d, mut s) = store(
+        "plan",
+        &format!("{draft}{}", review("approved", &fingerprint)),
+    );
+    assert!(
+        parked(&mut s).is_empty(),
+        "approved and current in phase plan covers the draft"
+    );
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!("{draft}{}", review("approved", &fingerprint)),
+    );
     assert_eq!(parked(&mut s), ["k"], "only phase plan gains the case");
 }
 

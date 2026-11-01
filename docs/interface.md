@@ -47,6 +47,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
+| `cpd job approve-touches` | The Lead approves a Job to change a path outside its touches (§5.9a) | Lead | |
+| `cpd job addendum` | Add information to a Job without changing its Spec (§5.10) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
@@ -55,6 +57,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead | |
 | `cpd attempt show` | Show an Attempt (§6.3) | Lead | |
 | `cpd attempt list` | List Attempts (§6.3) | Lead | |
+| `cpd attempt abort` | End a running Attempt failed/aborted (Lead) (§6.5) | Lead | |
 | `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
 | `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
 | `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |
@@ -95,6 +98,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session archive` | Archive a Lead Session (§10.10) | | yes |
 | `cpd session unarchive` | Unarchive a Lead Session (§10.11) | | yes |
 | `cpd session send` | Send a message to a Lead or Manager (§10.13) | Lead, Manager | |
+| `cpd session tail` | Stream a durable Session's transcript, read-only (§10.19) | Lead, Manager, Worker | |
 | `cpd session resume` | Resume a Lead or Manager blocked by the loop guard (§10.17) | | yes |
 | `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
@@ -147,6 +151,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd preset list` | Print the presets (§14.6) | Manager, Lead | |
 | `cpd preset show` | Print a preset and the current host model (§14.6) | Manager, Lead | |
 | `cpd preset apply` | Switch the machine to a preset's models (§14.6) | Manager | |
+| `cpd metrics` | The read-only aggregate of the machine's Ledger (commands.md §14.7) | Lead, Manager | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
 | `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |

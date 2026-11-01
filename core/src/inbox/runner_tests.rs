@@ -44,8 +44,17 @@ fn github_lookup_with_asks_the_runner_for_gh_api_graphql_with_the_query() {
     assert_eq!(calls[0].program, "gh");
     assert_eq!(&calls[0].args[..3], ["api", "graphql", "-f"]);
     assert_eq!(calls[0].args.len(), 4);
-    assert!(calls[0].args[3].starts_with("query=query { viewer { login }"), "{}", calls[0].args[3]);
-    assert!(calls[0].args[3].contains("p0: repository(owner: \"acme\", name: \"api\") { pullRequest(number: 7)"), "{}", calls[0].args[3]);
+    assert!(
+        calls[0].args[3].starts_with("query=query { viewer { login }"),
+        "{}",
+        calls[0].args[3]
+    );
+    assert!(
+        calls[0].args[3]
+            .contains("p0: repository(owner: \"acme\", name: \"api\") { pullRequest(number: 7)"),
+        "{}",
+        calls[0].args[3]
+    );
 }
 
 #[test]
@@ -62,8 +71,14 @@ fn github_lookup_with_turns_off_gh_prompts_and_colour() {
     let runner = fake(Reply::ok(&answer()));
     github_lookup_with(&runner, &home(), &refs()).unwrap();
     let envs = runner.calls()[0].envs.clone();
-    assert!(envs.contains(&("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned()))), "{envs:?}");
-    assert!(envs.contains(&("NO_COLOR".to_owned(), Some("1".to_owned()))), "{envs:?}");
+    assert!(
+        envs.contains(&("GH_PROMPT_DISABLED".to_owned(), Some("1".to_owned()))),
+        "{envs:?}"
+    );
+    assert!(
+        envs.contains(&("NO_COLOR".to_owned(), Some("1".to_owned()))),
+        "{envs:?}"
+    );
 }
 
 #[test]
@@ -87,11 +102,25 @@ fn github_lookup_with_lets_stdout_decide_when_gh_exits_one_with_data() {
 
 #[test]
 fn github_lookup_with_maps_stdout_that_is_not_json_to_gh_failed_with_the_stderr() {
-    let runner = fake(Reply::exit(4, "not json", "gh: To get started with GitHub CLI, please run: gh auth login"));
+    let runner = fake(Reply::exit(
+        4,
+        "not json",
+        "gh: To get started with GitHub CLI, please run: gh auth login",
+    ));
     let err = github_lookup_with(&runner, &home(), &refs()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GhFailed);
-    assert!(err.message().starts_with("gh api graphql printed unexpected JSON"), "{}", err.message());
-    assert!(err.details()["stderr"].as_str().unwrap().contains("gh auth login"));
+    assert!(
+        err.message()
+            .starts_with("gh api graphql printed unexpected JSON"),
+        "{}",
+        err.message()
+    );
+    assert!(
+        err.details()["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("gh auth login")
+    );
 }
 
 #[test]
@@ -99,14 +128,22 @@ fn github_lookup_with_maps_a_gh_that_cannot_start_to_gh_failed() {
     let runner = fake(Reply::io(ErrorKind::NotFound));
     let err = github_lookup_with(&runner, &home(), &refs()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::GhFailed);
-    assert!(err.message().starts_with("Cannot run gh: "), "{}", err.message());
+    assert!(
+        err.message().starts_with("Cannot run gh: "),
+        "{}",
+        err.message()
+    );
     assert!(!err.details()["stderr"].as_str().unwrap().is_empty());
 }
 
 #[test]
 fn github_lookup_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
-    let runner = FakeRunner::new(clock.clone()).on("gh", |_| true, Reply::ok(&answer()).takes(Duration::from_secs(20)));
+    let runner = FakeRunner::new(clock.clone()).on(
+        "gh",
+        |_| true,
+        Reply::ok(&answer()).takes(Duration::from_secs(20)),
+    );
     let err = github_lookup_with(&runner, &home(), &refs()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], "gh");

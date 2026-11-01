@@ -7,18 +7,21 @@
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
 //! - [`cancel`]: `plan cancel`, which abandons a Plan;
+//! - [`shared`]: `is_shared`, the predicate for lockfile paths (contract §2.6);
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
 pub(crate) mod cancel;
 pub(crate) mod delete;
 pub mod display;
-pub mod fingerprint;
-pub mod jobs;
 #[cfg(test)]
 mod display_tier_tests;
 #[cfg(test)]
+mod explore_render_tests;
+#[cfg(test)]
 mod explore_tests;
+pub mod fingerprint;
+pub mod jobs;
 mod lead;
 mod list;
 pub(crate) mod lock;
@@ -26,30 +29,35 @@ mod new;
 mod outline;
 mod overlap;
 pub mod parked;
-pub mod parked_wake;
 #[cfg(test)]
 mod parked_tests;
-#[cfg(test)]
-mod tier_advice_tests;
+pub mod parked_wake;
 #[cfg(test)]
 mod parked_wake_tests;
 mod phase;
 mod prs;
-mod render;
 mod rename;
+mod render;
+#[cfg(test)]
+mod render_all_jobs_tests;
 mod review;
 pub mod row;
 pub(crate) mod shape;
+pub mod shared;
+#[cfg(test)]
+mod shared_tests;
 mod show;
+#[cfg(test)]
+mod sql_trace;
 mod summary;
 pub mod tier_advice;
 #[cfg(test)]
-mod sql_trace;
+mod tier_advice_tests;
 
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, WorkflowTitle, Text, Title};
-use crate::config::Tier;
+use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -57,12 +65,11 @@ use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
 
 pub use fingerprint::plan_fingerprint;
-pub use outline::Outline;
 pub use jobs::locked_fingerprint;
+pub(crate) use new::lead_message;
 pub use prs::{WorkflowRow, Pull};
 pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
-pub(crate) use new::lead_message;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -123,6 +130,9 @@ pub struct NewArgs {
     /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt
     #[arg(long = "by-user")]
     by_user: bool,
+    /// The new Lead's runner; default the config key `lead_runner`
+    #[arg(long, value_name = "pi|durable")]
+    runner: Option<WorkerRunner>,
 }
 
 /// Filters only: neither falls back to `CPD_PLAN`, so the TUI lists every Plan.
@@ -262,16 +272,17 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 /// A file given by path (`--brief-file`, `--feedback-file`): readable UTF-8,
 /// else `file_unreadable` (commands.md §1.5).
 fn read_text_file(path: &Path) -> Result<String, CpdError> {
-    std::fs::read_to_string(path).map_err(|e| {
-        CpdError::file_unreadable(path, e)
-    })
+    std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))
 }
 
 /// Writes a file under `$CPD_HOME` whole, through [`crate::atomic::write_atomic`], so a reader never sees half of it.
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("Cannot write {}: {e}.", path.display()),
+        )
+        .with("path", path.display().to_string())
     };
     crate::atomic::write_atomic(path, text).map_err(failed)
 }

@@ -42,15 +42,32 @@ fn done(out: Result<std::process::Output, crate::host::deadline::Failed>) -> Don
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         },
-        Err(Failed::Io(e)) => Done { code: -1, stdout: String::new(), stderr: e.to_string() },
-        Err(Failed::Timeout(e)) => Done { code: -1, stdout: String::new(), stderr: e.message().to_owned() },
+        Err(Failed::Io(e)) => Done {
+            code: -1,
+            stdout: String::new(),
+            stderr: e.to_string(),
+        },
+        Err(Failed::Timeout(e)) => Done {
+            code: -1,
+            stdout: String::new(),
+            stderr: e.message().to_owned(),
+        },
     }
 }
 
 /// The code and the message of a cpd error value, else its text as it is.
 pub(super) fn describe(text: &str) -> String {
-    let error = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.get("error").cloned());
-    let field = |name: &str| error.as_ref().and_then(|e| e.get(name)).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned);
+    let error = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("error").cloned());
+    let field = |name: &str| {
+        error
+            .as_ref()
+            .and_then(|e| e.get(name))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
     match (field("code"), field("message")) {
         (Some(code), Some(message)) => format!("{message} ({code})"),
         _ => text.to_owned(),
@@ -67,9 +84,21 @@ struct TmuxConf {
 
 fn tmux_conf(config: &str) -> TmuxConf {
     let value: serde_json::Value = serde_json::from_str(config).unwrap_or_default();
-    let tmux = value.get("config").and_then(|c| c.get("tmux")).or_else(|| value.get("tmux"));
-    let field = |name: &str| tmux.and_then(|t| t.get(name)).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-    TmuxConf { socket: field("socket"), cockpit: field("cockpit_session"), work: field("work_session") }
+    let tmux = value
+        .get("config")
+        .and_then(|c| c.get("tmux"))
+        .or_else(|| value.get("tmux"));
+    let field = |name: &str| {
+        tmux.and_then(|t| t.get(name))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+    TmuxConf {
+        socket: field("socket"),
+        cockpit: field("cockpit_session"),
+        work: field("work_session"),
+    }
 }
 
 struct FollowUps<'a> {
@@ -102,13 +131,27 @@ impl FollowUps<'_> {
 
     /// Whether the session `target` has a window named `window`.
     fn has_window(&self, socket: &str, session: &str, window: &str) -> bool {
-        let listed = self.tmux(socket, &["list-windows", "-t", &format!("={session}"), "-F", "#{window_name}"]);
+        let listed = self.tmux(
+            socket,
+            &[
+                "list-windows",
+                "-t",
+                &format!("={session}"),
+                "-F",
+                "#{window_name}",
+            ],
+        );
         listed.ok() && listed.stdout.lines().any(|l| l == window)
     }
 
     /// Whether nobody holds the lock on `path` (the lock cpd takes, `crate::lock`).
     fn lock_free(path: &Path) -> io::Result<bool> {
-        let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
         crate::lock::try_lock(&file)
     }
 
@@ -122,10 +165,17 @@ impl FollowUps<'_> {
         let conf = tmux_conf(&config.stdout);
         let checked = self.cpd(&["watch", "--check"]);
         if !checked.ok() {
-            self.fail(format!("cpd watch --check: {} {}; {untouched}", describe(&checked.stdout), checked.stderr));
+            self.fail(format!(
+                "cpd watch --check: {} {}; {untouched}",
+                describe(&checked.stdout),
+                checked.stderr
+            ));
             return;
         }
-        if !conf.socket.is_empty() && !conf.cockpit.is_empty() && self.has_window(&conf.socket, &conf.cockpit, "main") {
+        if !conf.socket.is_empty()
+            && !conf.cockpit.is_empty()
+            && self.has_window(&conf.socket, &conf.cockpit, "main")
+        {
             let out = self.cpd(&["tui", "--respawn"]);
             if out.ok() {
                 let _ = writeln!(self.err, "{}", out.stdout);
@@ -138,17 +188,26 @@ impl FollowUps<'_> {
                 ));
             }
         }
-        if !conf.socket.is_empty() && !conf.work.is_empty() && self.has_window(&conf.socket, &conf.work, "watch") {
+        if !conf.socket.is_empty()
+            && !conf.work.is_empty()
+            && self.has_window(&conf.socket, &conf.work, "watch")
+        {
             self.restart_engine(&conf);
         }
     }
 
     /// Retires the old engine and starts the new one.
     fn restart_engine(&mut self, conf: &TmuxConf) {
-        let _ = writeln!(self.err, "restarting the running engine (cpd watch) to run the new binary");
+        let _ = writeln!(
+            self.err,
+            "restarting the running engine (cpd watch) to run the new binary"
+        );
         let mark = self.cpd(&["watch", "--mark-restart"]);
         if !mark.ok() {
-            self.fail(format!("cpd watch --mark-restart: {}; the engine restart is not marked as planned", mark.text()));
+            self.fail(format!(
+                "cpd watch --mark-restart: {}; the engine restart is not marked as planned",
+                mark.text()
+            ));
         }
         let target = format!("={}:watch", conf.work);
         let killed = self.tmux(&conf.socket, &["kill-window", "-t", &target]);
@@ -165,11 +224,11 @@ impl FollowUps<'_> {
         // The killed engine releases its lock a moment later, possibly well after: wait for the lock itself,
         // bounded, then start the engine once and check that it holds the lock (hs-n288).
         let lock = self.install.cpd_home.watch_lock();
-        if let Some(dir) = lock.parent() {
-            if let Err(e) = std::fs::create_dir_all(dir) {
-                self.fail(format!("cannot create {}: {e}", dir.display()));
-                return;
-            }
+        if let Some(dir) = lock.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            self.fail(format!("cannot create {}: {e}", dir.display()));
+            return;
         }
         let mut waited = Duration::ZERO;
         let free = loop {
@@ -219,7 +278,13 @@ impl FollowUps<'_> {
 
 /// Runs the follow-ups on `<dest>`; whether one failed.
 pub(super) fn run(ports: &Ports, install: &Install, dest: &Path, err: &mut dyn Write) -> bool {
-    let mut follow_ups = FollowUps { ports, install, dest, err, failed: false };
+    let mut follow_ups = FollowUps {
+        ports,
+        install,
+        dest,
+        err,
+        failed: false,
+    };
     follow_ups.run();
     follow_ups.failed
 }

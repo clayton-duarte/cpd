@@ -8,9 +8,9 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
+use common::TestEnv;
 use common::fx::Fx;
 use common::screen::{Screen, Script, SharedBackend, Step};
-use common::TestEnv;
 use cpd_tui::view_ports::Ctx;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -25,13 +25,21 @@ fn env() -> TestEnv {
 }
 
 fn configure(env: &TestEnv) {
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    std::fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"m1\"\n",
+    )
+    .unwrap();
 }
 
 /// Context `alpha` with the Lead Session `l1`, named `old lead`, with `file` (or none registered), archived or not.
 fn populate(env: &TestEnv, file: Option<&Path>, archived: bool) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-    let archived = if archived { "'2026-01-04T00:00:00.000Z'" } else { "NULL" };
+    let archived = if archived {
+        "'2026-01-04T00:00:00.000Z'"
+    } else {
+        "NULL"
+    };
     env.sql(
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
@@ -53,8 +61,14 @@ fn session_file(env: &TestEnv) -> PathBuf {
     let text = [
         json!({"type": "session", "id": "l1"}).to_string() + "\n",
         entry("user", json!({"type": "text", "text": "Plan the API."})),
-        entry("assistant", json!({"type": "text", "text": "Here is the plan."})),
-        entry("assistant", json!({"type": "toolCall", "name": "bash", "arguments": {"command": "cpd plan show"}})),
+        entry(
+            "assistant",
+            json!({"type": "text", "text": "Here is the plan."}),
+        ),
+        entry(
+            "assistant",
+            json!({"type": "toolCall", "name": "bash", "arguments": {"command": "cpd plan show"}}),
+        ),
         entry("toolResult", json!({"type": "text", "text": "ok"})),
     ]
     .concat();
@@ -62,18 +76,23 @@ fn session_file(env: &TestEnv) -> PathBuf {
     path
 }
 
-
 // ---------- tests ----------
 
 /// The view's first frame in a `width` × `height` pane over the file of the Session `l1` of `fx`, as the rows the pane shows.
 fn drawn(fx: &Fx, width: u16, height: u16) -> Vec<String> {
-    let (name, archived, file): (String, bool, String) = fx
-        .env
-        .read(|c| c.query_row("SELECT name, archived_at IS NOT NULL, file FROM sessions WHERE id = 'l1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))));
+    let (name, archived, file): (String, bool, String) = fx.env.read(|c| {
+        c.query_row(
+            "SELECT name, archived_at IS NOT NULL, file FROM sessions WHERE id = 'l1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+    });
     let text = std::fs::read_to_string(file).unwrap();
     let zone = cpd_core::clock::Clock::zone(&*fx.fakes.ports.clock);
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| cpd_tui::draw_history(&name, archived, &text, &zone, f)).unwrap();
+    terminal
+        .draw(|f| cpd_tui::draw_history(&name, archived, &text, &zone, f))
+        .unwrap();
     let mut rows = Screen::from_buffer(terminal.backend().buffer()).rows();
     while rows.last().is_some_and(String::is_empty) {
         rows.pop();
@@ -133,9 +152,15 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
         Step::ch('k'),
         Step::look(|s| {
             let rows = s.rows();
-            assert!(rows.get(2).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
+            assert!(
+                rows.get(2).is_some_and(|r| r.contains("you")),
+                "the top: {rows:?}"
+            );
             // the uniform 1-cell pad: row 0 and row 3 blank, the title in row 1, the body in row 2
-            assert_eq!(rows, ["", " old lead (archived, read-only)", " 12:33:44 you", ""]);
+            assert_eq!(
+                rows,
+                ["", " old lead (archived, read-only)", " 12:33:44 you", ""]
+            );
         }),
         Step::ch('G'),
         Step::look(|s| assert!(s.contains("󰘌 ok"), "the end again: {:?}", s.rows())),
@@ -157,14 +182,33 @@ fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
     configure(env);
     populate(env, None, true);
     let run = fx.cpd(&["tui", "view", "history", "nope"]);
-    assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("session_not_found")), "{run:?}");
+    assert_eq!(
+        (run.exit, run.error()["code"].clone()),
+        (4, json!("session_not_found")),
+        "{run:?}"
+    );
     let run = fx.cpd(&["tui", "view", "history", "l1"]);
-    assert_eq!(run.error()["code"], "file_unreadable", "a Session with no file: {run:?}");
-    env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
+    assert_eq!(
+        run.error()["code"],
+        "file_unreadable",
+        "a Session with no file: {run:?}"
+    );
+    env.sql(&format!(
+        "UPDATE sessions SET file = '{}' WHERE id = 'l1'",
+        env.root().join("gone.jsonl").display()
+    ));
     let run = fx.cpd(&["tui", "view", "history", "l1"]);
-    assert_eq!(run.error()["code"], "file_unreadable", "a file that is not there: {run:?}");
+    assert_eq!(
+        run.error()["code"],
+        "file_unreadable",
+        "a file that is not there: {run:?}"
+    );
     let run = fx.cpd(&["tui", "view", "history"]);
-    assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{run:?}");
+    assert_eq!(
+        (run.exit, run.error()["code"].clone()),
+        (2, json!("usage")),
+        "{run:?}"
+    );
 }
 
 #[test]

@@ -45,16 +45,28 @@ fn a_work_job_added_to_an_open_pr_is_queued_and_queues_no_update_job() {
     open_tdd(&fx);
     for key in ["fix", "fix2"] {
         let out = add(&fx, key, &[]).ok();
-        assert_eq!((&out["job"]["kind"], &out["job"]["status"]), (&json!("work"), &json!("queued")), "{key}");
+        assert_eq!(
+            (&out["job"]["kind"], &out["job"]["status"]),
+            (&json!("work"), &json!("queued")),
+            "{key}"
+        );
     }
-    assert_eq!(update_jobs(&fx), (0, 0), "no update Job: a fix Job's own merge pushes");
+    assert_eq!(
+        update_jobs(&fx),
+        (0, 0),
+        "no update Job: a fix Job's own merge pushes"
+    );
 }
 
 #[test]
 fn docs_test_and_impl_jobs_are_refused_on_an_open_pr() {
     let fx = Fx::new();
     open_tdd(&fx);
-    let writes = (count(&fx.env, "jobs"), count(&fx.env, "events"), count(&fx.env, "txns"));
+    let writes = (
+        count(&fx.env, "jobs"),
+        count(&fx.env, "events"),
+        count(&fx.env, "txns"),
+    );
     for kind in ["docs", "test", "impl"] {
         // A complete `test` Spec, so that only the shape can refuse it.
         let spec = if kind == "test" { test_spec_file(&fx.env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"])) } else { spec_file(&fx.env) };
@@ -63,7 +75,15 @@ fn docs_test_and_impl_jobs_are_refused_on_an_open_pr() {
         assert_eq!(e["details"]["status"], "open", "{kind}");
         assert_eq!(e["details"]["kind"], kind);
         assert_eq!(e["details"]["allowed"], json!(["work"]), "{kind}");
-        assert_eq!((count(&fx.env, "jobs"), count(&fx.env, "events"), count(&fx.env, "txns")), writes, "{kind} wrote");
+        assert_eq!(
+            (
+                count(&fx.env, "jobs"),
+                count(&fx.env, "events"),
+                count(&fx.env, "txns")
+            ),
+            writes,
+            "{kind} wrote"
+        );
     }
 }
 
@@ -89,11 +109,20 @@ fn approving_a_plan_review_that_holds_drafts_of_an_open_pr_queues_no_update_job(
     assert_eq!(add(&fx, "d1", &["--draft"]).ok()["job"]["status"], "draft");
     assert_eq!(add(&fx, "d2", &["--draft"]).ok()["job"]["status"], "draft");
     fx.outline_for_review("pl");
-    let review = fx.cpd(&["plan", "review", "--plan", "pl", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
-    let out = fx.cpd(&["plan", "decide", &review, "--approve", "--plan", "pl"]).ok();
+    let review = fx
+        .cpd(&["plan", "review", "--plan", "pl", "--title", "Review title"])
+        .ok()["review"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = fx
+        .cpd(&["plan", "decide", &review, "--approve", "--plan", "pl"])
+        .ok();
     assert_eq!(out["review"]["status"], "approved", "{out}");
     for key in ["d1", "d2"] {
-        let status: String = fx.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pl' AND key = '{key}'"));
+        let status: String = fx.env.query(&format!(
+            "SELECT status FROM jobs WHERE plan = 'pl' AND key = '{key}'"
+        ));
         assert_eq!(status, "queued", "{key}");
     }
     assert_eq!(update_jobs(&fx), (0, 0));

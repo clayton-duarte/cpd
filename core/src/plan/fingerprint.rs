@@ -88,13 +88,20 @@ mod tests {
             workflow: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
-            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
+            spec: Some(JobSpec {
+                goal: "g".into(),
+                context: "c".into(),
+                touches: json!(["a"]),
+                acceptance: json!(["b"]),
+                out_of_scope: json!([]),
+            }),
             status: status.into(),
             appended: false,
             kind: "work".into(),
             tests: None,
             test_files: None,
             test_approved: None,
+            touches_approved: None,
             resources: None,
             urgent: false,
             fingerprint: None,
@@ -103,6 +110,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
         }
@@ -144,7 +152,11 @@ mod tests {
         let mut tiered = stub.clone();
         tiered.tier = Some("S2".into());
         assert_ne!(of(&[tiered.clone()], &[]), expected, "a Tier changes it");
-        assert_ne!(of(&[job("a", "draft", &[])], &[]), of(&[tiered], &[]), "so does the Spec");
+        assert_ne!(
+            of(&[job("a", "draft", &[])], &[]),
+            of(&[tiered], &[]),
+            "so does the Spec"
+        );
     }
 
     #[test]
@@ -209,7 +221,11 @@ mod tests {
         approved.kind = "impl".into();
         let without = of(&[approved.clone()], &[]);
         approved.test_approved = Some(json!(["tests/t.rs"]));
-        assert_eq!(of(&[approved], &[]), without, "test_approved is in no fingerprint");
+        assert_eq!(
+            of(&[approved], &[]),
+            without,
+            "test_approved is in no fingerprint"
+        );
 
         let mut tdd = workflow("web", &[]);
         tdd.shape = "tdd".into();
@@ -231,6 +247,10 @@ mod tests {
         plain.kind = "test".into();
         plain.tests = Some(json!(["t"]));
         plain.test_files = Some(json!(["f"]));
-        assert_eq!(jobs::locked_fingerprint(&plain), base, "they are guarded by jobs_locked, not hashed (contract §2.3)");
+        assert_eq!(
+            jobs::locked_fingerprint(&plain),
+            base,
+            "they are guarded by jobs_locked, not hashed (contract §2.3)"
+        );
     }
 }

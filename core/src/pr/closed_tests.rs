@@ -42,7 +42,11 @@ impl Fixture {
 
     /// A pull request `acme/api#n` in `state` (`merged` has its `merged_at`).
     fn pull(&mut self, n: i64, state: &str) {
-        let merged = if state == "merged" { format!("'{T}'") } else { "NULL".to_owned() };
+        let merged = if state == "merged" {
+            format!("'{T}'")
+        } else {
+            "NULL".to_owned()
+        };
         self.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
              VALUES ('acme/api', {n}, 'https://github.com/acme/api/pull/{n}', 'Title {n}', 0, '{state}', 'none', 'none', '{T}', {merged}, '{T}');"
