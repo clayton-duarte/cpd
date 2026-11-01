@@ -207,23 +207,26 @@ pub(super) fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Do
             let g = &resolved.policy.gate;
             vec![(MERGE, value(&g.merge)), (GATE_PR, value(&g.workflow))]
         }
+        Domain::Pr => {
+            let pr = &resolved.policy.pr;
+            vec![
+                (FEEDBACK_CHECKS, value(&pr.feedback.checks)),
+                (POST_ENABLED, value(&pr.post.enabled)),
+                (POST_CHANNEL, value(&pr.post.channel)),
+                (POST_TEMPLATE, value(&pr.post.template)),
+                (POST_MERGED_REACTION, value(&pr.post.merged_reaction)),
+                (HUMAN_GATED_CONTEXTS, value(&pr.human_gated_contexts)),
+                (EXCUSED_LABELS, value(&pr.excused_labels)),
+                (REQUIRED_CHECKS, value(&pr.required_checks)),
+                (JIRA_IN_PROGRESS, value(&pr.jira.in_progress)),
+                (JIRA_IN_REVIEW, value(&pr.jira.in_review)),
+                (JIRA_DONE, value(&pr.jira.done)),
+                (JIRA_ESTIMATE_FIELDS, value(&pr.jira.estimate_fields)),
+            ]
+        }
         Domain::Workflow => {
             let workflow = &resolved.policy.workflow;
-            vec![
-                (FEEDBACK_CHECKS, value(&workflow.feedback.checks)),
-                (POST_ENABLED, value(&workflow.post.enabled)),
-                (POST_CHANNEL, value(&workflow.post.channel)),
-                (POST_TEMPLATE, value(&workflow.post.template)),
-                (POST_MERGED_REACTION, value(&workflow.post.merged_reaction)),
-                (JIRA_REQUIRED, value(&workflow.jira_required)),
-                (HUMAN_GATED_CONTEXTS, value(&workflow.human_gated_contexts)),
-                (EXCUSED_LABELS, value(&workflow.excused_labels)),
-                (REQUIRED_CHECKS, value(&workflow.required_checks)),
-                (JIRA_IN_PROGRESS, value(&workflow.jira.in_progress)),
-                (JIRA_IN_REVIEW, value(&workflow.jira.in_review)),
-                (JIRA_DONE, value(&workflow.jira.done)),
-                (JIRA_ESTIMATE_FIELDS, value(&workflow.jira.estimate_fields)),
-            ]
+            vec![(JIRA_REQUIRED, value(&workflow.jira_required))]
         }
         Domain::Hooks => {
             let h = &resolved.policy.hooks;

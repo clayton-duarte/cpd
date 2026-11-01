@@ -52,7 +52,7 @@ fn name_of(names: &Names, target: Target) -> &str {
 }
 
 fn names_of(policy: &Policy) -> Names {
-    let jira = &policy.workflow.jira;
+    let jira = &policy.pr.jira;
     Names { in_progress: jira.in_progress.clone(), in_review: jira.in_review.clone(), done: jira.done.clone() }
 }
 
@@ -138,7 +138,7 @@ pub(super) fn run(engine: &mut Engine) {
             }
             continue;
         }
-        match start(engine, &due, names, policy.workflow.jira.estimate_fields.clone()) {
+        match start(engine, &due, names, policy.pr.jira.estimate_fields.clone()) {
             Ok(answer) => engine.jira.running = Some(Running { due, status, answer }),
             Err(failure) => {
                 engine.jira.failed_at.insert(due.id, now);

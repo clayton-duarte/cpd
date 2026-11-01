@@ -59,7 +59,7 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     // The deprecated `[pr] gate` alias: `local` -> both gates `local`, `ci`/`none` -> both `none`.
     // An explicit `[gate]` table in the same file wins over it.
     if scope.gate.is_none() {
-        if let Some(alias) = scope.workflow.as_ref().and_then(|workflow| workflow.gate) {
+        if let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
             let gate = alias.gate();
             scope.gate = Some(GatesSet { merge: Some(gate), workflow: Some(gate), text: None });
         }
@@ -74,10 +74,10 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
             }
         }
     }
-    if let Some(jira) = scope.workflow.as_ref().and_then(|workflow| workflow.jira.as_ref()) {
+    if let Some(jira) = scope.pr.as_ref().and_then(|pr| pr.jira.as_ref()) {
         super::jira::check(jira).map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.jira.{name}")), why))?;
     }
-    if let Some(post) = scope.workflow.as_ref().and_then(|workflow| workflow.post.as_ref()) {
+    if let Some(post) = scope.pr.as_ref().and_then(|pr| pr.post.as_ref()) {
         super::post::check(post).map_err(|(name, why)| policy_invalid(file, Some(&format!("pr.post.{name}")), why))?;
     }
     if let Some(set) = &scope.test_commands {

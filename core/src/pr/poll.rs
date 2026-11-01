@@ -109,7 +109,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
         match super::workflow_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
-            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.workflow.feedback.checks, post_enabled: policy.workflow.post.enabled, human_gated: policy.workflow.human_gated_contexts.clone(), excused_labels: policy.workflow.excused_labels.clone(), excused: false, required: policy.workflow.required_checks.clone() }),
+            Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.pr.feedback.checks, post_enabled: policy.pr.post.enabled, human_gated: policy.pr.human_gated_contexts.clone(), excused_labels: policy.pr.excused_labels.clone(), excused: false, required: policy.pr.required_checks.clone() }),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), workflow: key.clone(), number: row.number, error }),
         }
     }
@@ -452,9 +452,9 @@ pub(super) fn repo_required(home: &crate::home::CpdHome, repo: &str) -> Result<V
     let (owner, name) = (OwnerLogin::parse(owner)?, RepoName::parse(name)?);
     let resolved = resolve_unowned_row(home, &PolicyKey::Repo(owner.clone(), name.clone()))?;
     if resolved.sources.get(Domain::Workflow).source != Source::DefaultNoOwnerFile {
-        return Ok(resolved.policy.workflow.required_checks);
+        return Ok(resolved.policy.pr.required_checks);
     }
-    Ok(load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?.and_then(|(_, scope)| scope.workflow).and_then(|workflow| workflow.required_checks).unwrap_or_default())
+    Ok(load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?.and_then(|(_, scope)| scope.pr).and_then(|pr| pr.required_checks).unwrap_or_default())
 }
 
 /// What the poll resolved of an owned Workflow's policy: `pr.feedback.checks` and `pr.post.enabled`.

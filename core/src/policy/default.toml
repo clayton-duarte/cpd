@@ -8,10 +8,13 @@ pr = "none"
 text = ""
 
 [pr]
-jira_required = false
 human_gated_contexts = ["UI Review", "UI Tests"]
 excused_labels = []
 required_checks = []
+text = ""
+
+[workflow]
+jira_required = false
 text = ""
 
 [pr.feedback]

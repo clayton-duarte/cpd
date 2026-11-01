@@ -8,7 +8,7 @@ use std::path::Path;
 
 use ScopeKind::{Machine, Owner, Repo};
 
-const ALL_THREE: [&str; 7] = ["gate", "pr", "deploy", "code", "tests", "monitor", "instructions"];
+const ALL_THREE: [&str; 8] = ["gate", "pr", "workflow", "deploy", "code", "tests", "monitor", "instructions"];
 const REPO_ONLY: [&str; 3] = ["hooks", "test-commands", "protected"];
 
 fn domain(name: &str) -> Domain {

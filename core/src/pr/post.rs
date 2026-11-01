@@ -59,7 +59,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     // (c)
     let policy = workflow_policy(&mut env, &id, &key)?;
     // (d)
-    if !policy.workflow.post.enabled {
+    if !policy.pr.post.enabled {
         return Err(CpdError::new(ErrorCode::PostDisabled, format!("Workflow {key}: posting is not enabled for its owner."))
             .with("pr", key.as_str())
             .with("key", "pr.post.enabled"));
@@ -73,7 +73,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
             .with("number", pull.number));
     }
     // (f)
-    let channel = [policy.workflow.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
+    let channel = [policy.pr.post.channel.as_str(), env.config.inbox.team_channel.as_str()]
         .into_iter()
         .find(|c| !c.is_empty())
         .ok_or_else(|| {
@@ -112,7 +112,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         .with("rebase", m.rebase));
     }
     // (h)
-    let message = crate::policy::render_post(&policy.workflow.post.template, &pull.title, &pull.url).map_err(|e| {
+    let message = crate::policy::render_post(&policy.pr.post.template, &pull.title, &pull.url).map_err(|e| {
         CpdError::new(ErrorCode::PolicyInvalid, format!("The pr.post.template does not render: {e}."))
             .with("key", "pr.post.template")
     })?;
@@ -133,7 +133,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
         ts: text("ts"),
         link: text("link"),
         posted_at: timestamp(env.ports.clock.utc()),
-        reaction: Some(policy.workflow.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
+        reaction: Some(policy.pr.post.merged_reaction.clone()).filter(|r| !r.is_empty()),
         reacted_at: None,
         auto_merge: "pending".to_owned(),
         auto_merge_at: None,

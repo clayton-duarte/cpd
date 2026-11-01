@@ -86,17 +86,24 @@ pub struct Jira {
     pub estimate_fields: Vec<String>,
 }
 
-/// The `pr` domain.
+/// The `pr` domain: the pull request keys (R10).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Workflow {
+pub struct Pr {
     pub feedback: Feedback,
     pub post: Post,
     pub jira: Jira,
-    pub jira_required: bool,
     pub human_gated_contexts: Vec<String>,
     pub excused_labels: Vec<String>,
     pub required_checks: Vec<String>,
+    pub text: String,
+}
+
+/// The `workflow` domain: the Workflow object's keys (R10; `jira_required` moved here from `pr`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Workflow {
+    pub jira_required: bool,
     pub text: String,
 }
 
@@ -143,10 +150,17 @@ pub struct PrSet {
     pub feedback: Option<FeedbackSet>,
     pub post: Option<PostSet>,
     pub jira: Option<JiraSet>,
-    pub jira_required: Option<bool>,
     pub human_gated_contexts: Option<Vec<String>>,
     pub excused_labels: Option<Vec<String>>,
     pub required_checks: Option<Vec<String>>,
+    pub text: Option<String>,
+}
+
+/// What a scope file's `[workflow]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSet {
+    pub jira_required: Option<bool>,
     pub text: Option<String>,
 }
 
@@ -171,6 +185,12 @@ pub struct TextSet {
 /// What `Policy::text` reads: a domain with no `text` (the repo-only ones) has `""`.
 pub trait HasText {
     fn text(&self) -> &str;
+}
+
+impl HasText for Pr {
+    fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 impl HasText for Workflow {
@@ -374,7 +394,7 @@ pub trait Set {
     fn complete(&self) -> Option<Self::Value>;
 }
 
-/// The typed keys of the `gate` and `pr` domains, by name.
+/// The typed keys of the `gate`, `pr` and `workflow` domains, by name.
 pub const MERGE: &str = "merge";
 pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
@@ -382,7 +402,7 @@ pub const POST_ENABLED: &str = "pr.post.enabled";
 pub const POST_CHANNEL: &str = "pr.post.channel";
 pub const POST_TEMPLATE: &str = "pr.post.template";
 pub const POST_MERGED_REACTION: &str = "pr.post.merged_reaction";
-pub const JIRA_REQUIRED: &str = "pr.jira_required";
+pub const JIRA_REQUIRED: &str = "workflow.jira_required";
 pub const HUMAN_GATED_CONTEXTS: &str = "pr.human_gated_contexts";
 pub const EXCUSED_LABELS: &str = "pr.excused_labels";
 pub const REQUIRED_CHECKS: &str = "pr.required_checks";
@@ -410,11 +430,11 @@ impl Set for GatesSet {
 }
 
 impl Set for PrSet {
-    type Value = Workflow;
+    type Value = Pr;
 
     /// `[pr] gate` is the deprecated alias, not a key of the `pr` domain: `parse_scope` moves it into
     /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
-    fn fill(&self, base: &Workflow) -> (Workflow, Vec<&'static str>) {
+    fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
         let post = self.post.as_ref();
         let jira = self.jira.as_ref();
@@ -424,7 +444,6 @@ impl Set for PrSet {
             (POST_CHANNEL, post.and_then(|p| p.channel.as_ref()).is_none()),
             (POST_TEMPLATE, post.and_then(|p| p.template.as_ref()).is_none()),
             (POST_MERGED_REACTION, post.and_then(|p| p.merged_reaction.as_ref()).is_none()),
-            (JIRA_REQUIRED, self.jira_required.is_none()),
             (HUMAN_GATED_CONTEXTS, self.human_gated_contexts.is_none()),
             (EXCUSED_LABELS, self.excused_labels.is_none()),
             (REQUIRED_CHECKS, self.required_checks.is_none()),
@@ -434,7 +453,7 @@ impl Set for PrSet {
             (JIRA_ESTIMATE_FIELDS, jira.and_then(|j| j.estimate_fields.as_ref()).is_none()),
         ]);
         let pick = |set: Option<String>, base: &str| set.unwrap_or_else(|| base.to_owned());
-        let value = Workflow {
+        let value = Pr {
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
             post: Post {
                 enabled: post.and_then(|p| p.enabled).unwrap_or(base.post.enabled),
@@ -448,7 +467,6 @@ impl Set for PrSet {
                 done: pick(jira.and_then(|j| j.done.clone()), &base.jira.done),
                 estimate_fields: jira.and_then(|j| j.estimate_fields.clone()).unwrap_or_else(|| base.jira.estimate_fields.clone()),
             },
-            jira_required: self.jira_required.unwrap_or(base.jira_required),
             human_gated_contexts: self.human_gated_contexts.clone().unwrap_or_else(|| base.human_gated_contexts.clone()),
             excused_labels: self.excused_labels.clone().unwrap_or_else(|| base.excused_labels.clone()),
             required_checks: self.required_checks.clone().unwrap_or_else(|| base.required_checks.clone()),
@@ -457,8 +475,8 @@ impl Set for PrSet {
         (value, left_out)
     }
 
-    fn complete(&self) -> Option<Workflow> {
-        Some(Workflow {
+    fn complete(&self) -> Option<Pr> {
+        Some(Pr {
             feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
             post: {
                 let p = self.post.as_ref()?;
@@ -473,12 +491,28 @@ impl Set for PrSet {
                 let j = self.jira.as_ref()?;
                 Jira { in_progress: j.in_progress.clone()?, in_review: j.in_review.clone()?, done: j.done.clone()?, estimate_fields: j.estimate_fields.clone()? }
             },
-            jira_required: self.jira_required?,
             human_gated_contexts: self.human_gated_contexts.clone()?,
             excused_labels: self.excused_labels.clone()?,
             required_checks: self.required_checks.clone()?,
             text: self.text.clone()?,
         })
+    }
+}
+
+impl Set for WorkflowSet {
+    type Value = Workflow;
+
+    fn fill(&self, base: &Workflow) -> (Workflow, Vec<&'static str>) {
+        let left_out = left_out([(JIRA_REQUIRED, self.jira_required.is_none())]);
+        let value = Workflow {
+            jira_required: self.jira_required.unwrap_or(base.jira_required),
+            text: self.text.clone().unwrap_or_else(|| base.text.clone()),
+        };
+        (value, left_out)
+    }
+
+    fn complete(&self) -> Option<Workflow> {
+        Some(Workflow { jira_required: self.jira_required?, text: self.text.clone()? })
     }
 }
 
@@ -791,7 +825,7 @@ macro_rules! domains {
             let warnings = layers
                 .iter()
                 .filter_map(|(src, scope)| {
-                    scope.workflow.as_ref()?.gate.map(|_| {
+                    scope.pr.as_ref()?.gate.map(|_| {
                         format!(
                             "{src}: the deprecated [pr] gate key is set; use [gate] merge and [gate] pr instead \
                              (local maps to both local, ci/none to both none)"
@@ -806,7 +840,8 @@ macro_rules! domains {
 
 domains! {
     gate, Gates, [Lead, Worker], [Machine, Owner, Repo], Gates, GatesSet;
-    workflow = "pr", Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, PrSet;
+    pr, Pr, [Lead, Worker], [Machine, Owner, Repo], Pr, PrSet;
+    workflow, Workflow, [Lead, Worker], [Machine, Owner, Repo], Workflow, WorkflowSet;
     deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
     code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
