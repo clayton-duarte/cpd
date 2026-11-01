@@ -11,7 +11,11 @@ test("the verify script runs the portability check and pi-check, in the document
   // The tests run in a scratch TMPDIR removed after them (hygiene.md), so the steps are not split on every `&&`.
   assert.equal(
     pkg.scripts["verify:steps"],
-    ["migrations", "portable", "typecheck", "pi", "build", "node", "rust"].map((s) => (s === "typecheck" ? "pnpm run typecheck" : `pnpm run verify:${s}`)).join(" && "),
+    ["migrations", "portable", "typecheck", "pi", "build", "web", "node", "rust"].map((s) => (s === "typecheck" ? "pnpm run typecheck" : `pnpm run verify:${s}`)).join(" && "),
+  );
+  assert.equal(
+    pkg.scripts["verify:web"],
+    "pnpm --filter cpd-web-client run typecheck && pnpm --filter cpd-web-client run build && pnpm --filter cpd-web-client run test",
   );
   assert.equal(pkg.scripts.pretypecheck, "scripts/pnpm-fresh.sh");
   assert.equal(pkg.scripts.preverify, "scripts/pnpm-fresh.sh");
@@ -39,7 +43,7 @@ test("the CI workflow runs the stages of verify:steps, in order, as named steps"
   assert.deepEqual(workflow, gate);
   assert.match(ci, /- name: Dependencies\n\s+run: scripts\/pnpm-fresh\.sh\s*\n/);
   const names = [...ci.matchAll(/^\s*- name: (.+?)\s*$/gm)].map((m) => m[1]);
-  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "pi check", "Rust build", "Node tests", "Rust tests"];
+  const wanted = ["Dependencies", "Migrations frozen", "Portability", "Typecheck", "pi check", "Rust build", "Web", "Node tests", "Rust tests"];
   assert.deepEqual(names.filter((n) => wanted.includes(n)), wanted);
 });
 
