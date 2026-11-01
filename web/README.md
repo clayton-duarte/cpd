@@ -503,6 +503,17 @@ The `tool` row's title is the command or path the call names — the `arguments`
 
 The pairing behind a `tool` part is measured against a real pi session file under `~/.pi/agent/sessions`: an assistant message's content blocks are `thinking` (its text under `thinking`), `text` and `toolCall` (`id`, `name`, `arguments`), and the tool's result is the **following** line's `message.role` `"toolResult"` (`toolCallId`, `toolName`, `content` of `text` and `image` blocks, `isError`, `durationMs`). `parsePiSession` pairs a `toolCall` with its `toolResult` by `toolCallId`: the part carries the call's `arguments`, and the result's text, `durationMs`, `isError` and `image` blocks land on the same turn — the `toolResult` line yields no turn of its own.
 
+### The markdown a turn renders
+
+A turn's text is markdown, and the Chat parses it as **CommonMark plus GFM**. `react-markdown` alone parses CommonMark only, so a markdown table — which a Lead's status message is largely made of — rendered as a paragraph of pipe characters, and a task list, a strikethrough and a bare URL were lost. The prose parser therefore runs through **`remark-gfm`, pinned `4.0.1` and declared in `web/package.json`**; the mapping lives in `web/src/components/markdown.tsx` (the same file that maps a fenced block onto the Code Block). What a turn's text may contain, measured on the preview branch, 2026-11-01:
+
+- A **table** renders as a real `<table>` with its header row and its cells — a table of 3 rows and 7 cells rendered whole. Tailwind's preflight strips a table's borders and cell padding, so the mapping styles them: the table sits in its own `overflow-x-auto` wrapper, so a wide table scrolls instead of widening the turn; each row carries a rule; each cell gets padding; and a header cell does not wrap.
+- A **task list** renders its checkboxes (`type="checkbox"` inputs — 2 measured).
+- A **strikethrough** renders as `<del>`.
+- A **bare URL** becomes a link (an anchor around it).
+- **Inline code** stays inline.
+- A **fenced block** renders through the Code Block, with its language as the title and a copy action (`web/src/components/ui/code-block.tsx`).
+
 ### A message delivered into a Session is the person's turn
 
 A cpd record arrives in a pi session file as a `custom_message` line, and the parser (`parsePiSession`, `web/src/transcript.ts`) filed every one of them as an engine notice — measured against 1 500+ records across 13 real Sessions of Context building-cpd, the Chat showed the person's own words back as a cpd notice. The rule, measured: the record whose `customType` is `"cpd"` and whose `details.kind` is `"session-message"` (595 of those records) is a message **delivered into the Session** — the person's own turn. Every other record is an engine notice: the `customType`s `cpd-context`, `cpd-plan-summary`, `cpd-plan-decision` and `cpd-skills`, and the `"cpd"` kinds `escalation`, `error`, `pr-feedback`, `job-merged`, `job-failed` and `plan-done`. A record with `display: false` is skipped, whichever kind it carries.
