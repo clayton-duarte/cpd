@@ -321,6 +321,13 @@ const SPEC: &[SpecRow] = &[
     ("attempt-aborted", "cpja", "", &["tier", "by"], &[]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
     (
+        "attempt-ended",
+        "cpja",
+        "",
+        &["turns", "tokens_in", "tokens_out", "cache_read", "cache_write", "cost_usd", "duration_s", "model", "stop_reason", "thinking_level"],
+        &[],
+    ),
+    (
         "all-merged",
         "cp",
         "",
