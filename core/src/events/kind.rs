@@ -89,6 +89,7 @@ kinds! {
     JobRetried = "job-retried",
     JobCancelRequested = "job-cancel-requested",
     JobCancelled = "job-cancelled",
+    JobAddendum = "job-addendum",
     AttemptStarted = "attempt-started",
     AttemptStatus = "attempt-status",
     AttemptRetry = "attempt-retry",
@@ -167,6 +168,7 @@ impl Kind {
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
             JobCancelled => spec([Y, Y, Y, M, N], &["reason"], &[]),
+            JobAddendum => spec([Y, Y, Y, M, M], &["text"], &[]),
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
             AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
@@ -254,10 +256,10 @@ mod tests {
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6) and 19 (`context pending`'s plan-level
-    /// `jobs`, commands.md §3.12, Plan explore-view).
+    /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (`job-addendum`, pro-d294).
     #[test]
-    fn the_protocol_is_19_with_the_pending_plan_jobs_field() {
-        assert_eq!(PROTOCOL, 19);
+    fn the_protocol_is_20_with_the_job_addendum_kind() {
+        assert_eq!(PROTOCOL, 20);
     }
 
     #[test]

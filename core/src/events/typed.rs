@@ -187,6 +187,11 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
+    pub fn job_addendum(text: impl Into<String>, addendum: &str) -> NewEvent {
+        let _ = (text.into(), addendum);
+        todo!("job-addendum")
+    }
+
     pub fn attempt_started(text: impl Into<String>, number: impl Serialize, tier: &str, origin: &str) -> NewEvent {
         make(Kind::AttemptStarted, text, json!({"number": number, "tier": tier, "origin": origin}))
     }
@@ -551,6 +556,7 @@ mod tests {
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobAddendum => vec![NewEvent::job_addendum(T, s)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![
                 NewEvent::attempt_status(T, s, s),
