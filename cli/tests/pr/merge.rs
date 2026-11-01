@@ -460,12 +460,13 @@ impl Fx {
         assert_eq!(metrics.as_deref(), Some(r#"{"turns":7}"#));
         assert_eq!(self.job_row(key), ("failed".to_owned(), None, Some(cause.to_owned())));
         let events = self.events(attempt);
-        assert_eq!(events.len(), 1, "{events:?}");
-        assert_eq!(events[0].0, "job-failed");
-        assert_eq!(events[0].1["cause"], cause);
-        assert_eq!(events[0].1["tier"], "S2");
-        assert_eq!(events[0].1["attempts"], 1);
-        events[0].1.clone()
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].0, "attempt-ended");
+        assert_eq!(events[1].0, "job-failed");
+        assert_eq!(events[1].1["cause"], cause);
+        assert_eq!(events[1].1["tier"], "S2");
+        assert_eq!(events[1].1["attempts"], 1);
+        events[1].1.clone()
     }
 
     fn status(&self, dir: &Path) -> String {
@@ -552,7 +553,9 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
         ("ended".into(), Some("merged".into()), Some("merged".into()), Some(new.clone()), Some(r#"{"turns":7}"#.into()))
     );
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(new.clone()), None));
-    assert_eq!(fx.events(&attempt), [("job-merged".to_owned(), json!({"sha": new, "tier": "S2", "kind": "work", "turn": false}))]);
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
+    assert_eq!(events[1].1, json!({"sha": new, "tier": "S2", "kind": "work", "turn": false}));
     let command: String = fx
         .store()
         .read(|c| Ok(c.query_row("SELECT t.command FROM events e JOIN txns t ON t.id = e.txn ORDER BY e.id DESC LIMIT 1", [], |r| r.get(0))?))
@@ -608,12 +611,12 @@ fn merge_conflict_aborts_the_rebase_and_retries_at_the_same_tier() {
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0, "attempt-retry");
-    assert_eq!(events[0].1["outcome"], "failed");
-    assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S2");
-    assert!(events[0].1["feedback"].as_str().unwrap().contains("README.md"));
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].0.as_str(), events[1].0.as_str()), ("attempt-ended", "attempt-retry"));
+    assert_eq!(events[1].1["outcome"], "failed");
+    assert_eq!(events[1].1["cause"], "merge_conflict");
+    assert_eq!(events[1].1["next_tier"], "S2");
+    assert!(events[1].1["feedback"].as_str().unwrap().contains("README.md"));
 }
 
 #[test]
@@ -647,7 +650,7 @@ fn an_untracked_file_in_the_lead_worktree_does_not_stop_the_merge() {
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(fs::read_to_string(fx.lead.join("stray.txt")).unwrap(), "untracked\n");
     assert_eq!(fx.status(&fx.lead), "?? stray.txt");
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 /// Rule S after the fast-forward never overwrites a Lead's staged edit: the
@@ -669,9 +672,9 @@ fn a_staged_edit_in_the_lead_worktree_is_kept_and_reported_stale() {
     assert_eq!(fx.staged_against(&fx.lead, "HEAD~1"), ["README.md"]);
     assert!(!fx.lead.join("api.txt").exists(), "rule S stopped: nothing was written");
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "lead_worktree_stale");
-    assert_eq!(events[1].1["source"], "attempt run");
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged", "error"]);
+    assert_eq!(events[2].1["code"], "lead_worktree_stale");
+    assert_eq!(events[2].1["source"], "attempt run");
 }
 
 #[test]
@@ -957,7 +960,9 @@ fn a_cancel_request_ends_it_cancelled_before_the_merge() {
     let (status, outcome, cause, _, _) = fx.attempt_row(&attempt);
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref()), ("ended", Some("cancelled"), Some("cancel_requested")));
     assert_eq!(fx.job_row("api").0, "cancelled");
-    assert_eq!(fx.events(&attempt), [("job-cancelled".to_owned(), json!({"reason": "not needed"}))]);
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-cancelled"]);
+    assert_eq!(events[1].1, json!({"reason": "not needed"}));
 }
 
 #[test]
@@ -973,10 +978,10 @@ fn step_9_failure_keeps_the_merge_and_reports_a_stale_lead_worktree() {
     assert_eq!(&fx.lead_sha(), sha);
     assert_eq!(fx.job_row("api").0, "merged");
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "lead_worktree_stale");
-    assert_eq!(events[1].1["source"], "attempt run");
-    assert!(events[1].1["details"]["fix"].as_str().unwrap().contains("read-tree -m -u"));
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged", "error"]);
+    assert_eq!(events[2].1["code"], "lead_worktree_stale");
+    assert_eq!(events[2].1["source"], "attempt run");
+    assert!(events[2].1["details"]["fix"].as_str().unwrap().contains("read-tree -m -u"));
 }
 
 #[test]
@@ -1000,7 +1005,7 @@ fn a_merge_pushes_the_lead_branch_to_origin() {
     let End::Merged { sha } = &result.end else { panic!("{result:?}") };
     assert_eq!(&fx.lead_sha(), sha);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), *sha);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1018,10 +1023,10 @@ fn a_rejected_push_leaves_the_job_merged_with_one_push_failed_error() {
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(sha.clone()), None));
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert_eq!(events[1].1["source"], "attempt run");
-    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("nope"));
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged", "error"]);
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert_eq!(events[2].1["source"], "attempt run");
+    assert!(events[2].1["details"]["stderr"].as_str().unwrap().contains("nope"));
 }
 
 #[test]
@@ -1029,7 +1034,7 @@ fn a_repo_without_origin_does_not_push_and_appends_no_error() {
     let fx = fx();
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
     fx.merge(&attempt);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1062,7 +1067,7 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1079,7 +1084,7 @@ fn a_remote_rejected_lock_race_the_origin_already_contains_is_no_push_failed() {
 
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
-    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1091,10 +1096,10 @@ fn a_remote_rejected_push_the_origin_does_not_contain_puts_git_s_reason_in_the_p
     fx.merge(&attempt);
 
     let events = fx.events(&attempt);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert!(events[1].1["message"].as_str().unwrap().contains("cannot lock ref"), "{:?}", events[1].1);
-    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("failed to push some refs"), "{:?}", events[1].1);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged", "error"]);
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert!(events[2].1["message"].as_str().unwrap().contains("cannot lock ref"), "{:?}", events[2].1);
+    assert!(events[2].1["details"]["stderr"].as_str().unwrap().contains("failed to push some refs"), "{:?}", events[2].1);
 }
 
 // ------------------------------------------------- an `open` or `update` Job's merge (contract §7.4; hs-d340)
@@ -1136,9 +1141,9 @@ fn an_update_jobs_merge_pushes_what_it_landed() {
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), new);
     assert_eq!(fx.job_row("up-repo"), ("merged".into(), Some(new), None));
     let kinds: Vec<String> = fx.events(&attempt).into_iter().map(|e| e.0).collect();
-    assert_eq!(kinds, ["job-merged"]);
+    assert_eq!(kinds, ["attempt-ended", "job-merged"]);
     // `job-merged` carries the Job's kind (§5.2); an `update` Job writes no PR row and no `pr-opened`.
-    let merged = &fx.events(&attempt)[0].1;
+    let merged = &fx.events(&attempt)[1].1;
     assert_eq!(merged["kind"], "update", "{merged}");
 }
 
@@ -1191,10 +1196,9 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
         ("ended".into(), Some("merged".into()), Some("merged".into()), Some(tip.clone()), Some(r#"{"turns":7}"#.into()))
     );
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip.clone()), None));
-    assert_eq!(
-        fx.events(&attempt),
-        [("job-merged".to_owned(), json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false, "cancel_too_late": true}))]
-    );
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
+    assert_eq!(events[1].1, json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false, "cancel_too_late": true}));
     // The rest of A9: the worktree and branch are gone.
     assert!(!worktree.exists());
     assert!(!fx.branch_exists("cpd/pay--api-a1"));
@@ -1217,8 +1221,8 @@ fn r_before_step_8_ends_crashed_and_retries_at_the_same_tier() {
     assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("crashed"), None));
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!((events[0].0.as_str(), &events[0].1["cause"], &events[0].1["next_tier"]), ("attempt-retry", &json!("crashed"), &json!("S2")));
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[1].0.as_str(), &events[1].1["cause"], &events[1].1["next_tier"]), ("attempt-retry", &json!("crashed"), &json!("S2")));
     // Kept for debugging.
     assert!(worktree.exists());
 }
@@ -1254,7 +1258,7 @@ fn r_before_step_8_with_a_cancel_request_ends_cancelled() {
 
     assert_eq!(recovered[0].end, Some(End::Cancelled));
     assert_eq!(fx.job_row("api").0, "cancelled");
-    assert_eq!(fx.events(&attempt)[0].0, "job-cancelled");
+    assert_eq!(fx.events(&attempt)[1].0, "job-cancelled");
 }
 
 #[test]
@@ -1309,7 +1313,7 @@ fn rule_s_finishes_a_dead_drivers_stale_lead_worktree_and_the_merge_leaves_its_a
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.status(&fx.lead), "");
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
-    assert_eq!(fx.events(&live).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&live).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
     assert_eq!(fx.job_row("ui").0, "merged");
     // Not the merge's: the dead driver's Attempt is still `merging` until R.
     assert_eq!(fx.attempt_row(&dead).0, "merging");
@@ -1354,7 +1358,7 @@ fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip(
     assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), tip);
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
     for attempt in [&api, &ui] {
-        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
     }
 }
 
@@ -1500,7 +1504,7 @@ fn each_merge_pushes_its_own_prs_branch_to_its_own_origin() {
     assert_eq!(fx.remote_tip(&schema), on_schema);
     assert_ne!(schema_remote, on_schema);
     for attempt in [&api, &ui] {
-        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
     }
 }
 
@@ -1514,7 +1518,7 @@ fn in_one_repo_a_merge_pushes_its_prs_branch_and_not_the_others() {
 
     assert_eq!(fx.remote_tip(&schema), on_schema);
     assert_eq!(fx.remote_tip(&web), web_remote);
-    assert_eq!(fx.events(&api).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(fx.events(&api).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1532,9 +1536,9 @@ fn a_rejected_push_of_one_prs_branch_is_that_attempts_push_failed_only() {
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
     assert_eq!(fx.remote_tip(&web), on_web);
     let events = fx.events(&api);
-    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
-    assert_eq!(events[1].1["code"], "push_failed");
-    assert_eq!(fx.events(&ui).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged", "error"]);
+    assert_eq!(events[2].1["code"], "push_failed");
+    assert_eq!(fx.events(&ui).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["attempt-ended", "job-merged"]);
 }
 
 #[test]
@@ -1670,9 +1674,9 @@ fn a_conflict_with_the_lead_tip_when_the_attempt_holds_base_commits_is_a_merge_c
     assert_eq!(fx.lead_sha(), old);
     assert_eq!(fx.job_row("api"), ("queued".into(), None, None));
     let events = fx.events(&attempt);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0, "attempt-retry");
-    assert_eq!(events[0].1["cause"], "merge_conflict");
-    assert_eq!(events[0].1["next_tier"], "S2");
-    assert!(events[0].1["feedback"].as_str().unwrap().contains("shared.txt"));
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].0.as_str(), events[1].0.as_str()), ("attempt-ended", "attempt-retry"));
+    assert_eq!(events[1].1["cause"], "merge_conflict");
+    assert_eq!(events[1].1["next_tier"], "S2");
+    assert!(events[1].1["feedback"].as_str().unwrap().contains("shared.txt"));
 }
