@@ -39,6 +39,9 @@ pub(crate) mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;
+pub mod tail;
+#[cfg(test)]
+mod tail_tests;
 pub(crate) mod working_pr;
 
 use std::path::PathBuf;

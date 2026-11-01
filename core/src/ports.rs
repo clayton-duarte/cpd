@@ -1,4 +1,4 @@
-//! `Ports`: the four seams a test fakes (docs/implementing.md, "Ports, Spawn and run_with").
+//! `Ports`: the seams a test fakes (docs/implementing.md, "Ports, Spawn and run_with").
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -13,26 +13,32 @@ use crate::host::runner::FakeRunner;
 use crate::host::host_socket::{HostSocket, SystemHostSocket};
 use crate::host::runner::{Runner, SystemRunner};
 #[cfg(feature = "fakes")]
+use crate::session::tail::FakeHostConn;
+use crate::session::tail::{HostConn, SystemHostConn};
+#[cfg(feature = "fakes")]
 use crate::host::spawn::FakeSpawn;
 use crate::host::spawn::{ProcessSpawn, Spawn};
 
-/// Time, short processes, long-lived or replacing processes, and the host socket.
+/// Time, short processes, long-lived or replacing processes, the host socket and the host connection.
 #[derive(Clone)]
 pub struct Ports {
     pub clock: Arc<dyn Clock>,
     pub runner: Arc<dyn Runner>,
     pub spawn: Arc<dyn Spawn>,
     pub host_socket: Arc<dyn HostSocket>,
+    /// The one Rust seam P1.11 adds (contract §6.20): the socket tail's connection.
+    pub host_conn: Arc<dyn HostConn>,
 }
 
 impl Ports {
-    /// `SystemClock`, `SystemRunner`, `ProcessSpawn` and `SystemHostSocket`.
+    /// `SystemClock`, `SystemRunner`, `ProcessSpawn`, `SystemHostSocket` and `SystemHostConn`.
     pub fn real() -> Ports {
         Ports {
             clock: Arc::new(SystemClock),
             runner: Arc::new(SystemRunner),
             spawn: Arc::new(ProcessSpawn),
             host_socket: Arc::new(SystemHostSocket),
+            host_conn: Arc::new(SystemHostConn),
         }
     }
 
@@ -73,6 +79,7 @@ pub struct Fakes {
     pub runner: Arc<FakeRunner>,
     pub spawn: Arc<FakeSpawn>,
     pub host_socket: Arc<FakeHostSocket>,
+    pub host_conn: Arc<FakeHostConn>,
 }
 
 #[cfg(feature = "fakes")]
@@ -83,7 +90,14 @@ impl Fakes {
         let runner = Arc::new(FakeRunner::new((*clock).clone()));
         let spawn = Arc::new(FakeSpawn::new());
         let host_socket = Arc::new(FakeHostSocket::new());
-        let ports = Ports { clock: clock.clone(), runner: runner.clone(), spawn: spawn.clone(), host_socket: host_socket.clone() };
-        Fakes { ports, clock, runner, spawn, host_socket }
+        let host_conn = Arc::new(FakeHostConn::new());
+        let ports = Ports {
+            clock: clock.clone(),
+            runner: runner.clone(),
+            spawn: spawn.clone(),
+            host_socket: host_socket.clone(),
+            host_conn: host_conn.clone(),
+        };
+        Fakes { ports, clock, runner, spawn, host_socket, host_conn }
     }
 }
