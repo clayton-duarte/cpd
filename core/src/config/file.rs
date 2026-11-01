@@ -57,6 +57,10 @@ pub struct Config {
     pub pi_adapter: String,
     /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
     pub worker_runner: WorkerRunner,
+    /// The runner of each new Lead Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `manager_runner` (Q11).
+    pub lead_runner: WorkerRunner,
+    /// The runner of each new Manager Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `lead_runner` (Q11).
+    pub manager_runner: WorkerRunner,
     /// `context_engine_enabled`: the operator kill switch for the holographic engine.
     pub context_engine_enabled: bool,
     /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
@@ -74,6 +78,23 @@ pub struct Config {
     pub inbox: Inbox,
     pub events: Events,
     pub tmux: Tmux,
+    /// The `[presets.<name>]` tables of config.toml (contract §8.2 "`[presets.<name>]`"), by name; none by default.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub presets: BTreeMap<String, Preset>,
+}
+
+/// A `[presets.<name>]` table (contract §8.2 "`[presets.<name>]`", commands.md §14.6): a named set of the four
+/// model refs `O`, `S`, `H` and `G` that `cpd preset apply` writes into the machine host policy's `[model]` table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Preset {
+    #[serde(rename = "O")]
+    pub o: String,
+    #[serde(rename = "S")]
+    pub s: String,
+    #[serde(rename = "H")]
+    pub h: String,
+    #[serde(rename = "G")]
+    pub g: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -229,7 +250,7 @@ impl Config {
                 .with("path", path.display().to_string())
         })?;
         let mut r = Reader { table, path, sources: Sources::new() };
-        r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux"])?;
+        r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux", "presets"])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
@@ -272,6 +293,9 @@ impl Config {
         })?;
 
         let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        // The runner of each new Lead and Manager Session (contract §6.19, hs-d754 Q10); independent keys (Q11).
+        let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
+        let manager_runner = r.get("manager_runner", WorkerRunner::Pi, |v| WorkerRunner::parse(text_of(&v)?))?;
 
         let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
             Value::Boolean(b) => Ok(b),
@@ -347,6 +371,8 @@ impl Config {
             return Err(r.invalid(key, "must differ from tmux.cockpit_session"));
         }
 
+        let presets = r.presets()?;
+
         r.finish()?;
         let sources = r.sources;
         let config = Config {
@@ -364,6 +390,8 @@ impl Config {
             lead_pi_packages,
             pi_adapter,
             worker_runner,
+            lead_runner,
+            manager_runner,
             context_engine_enabled,
             context_engine_bridge,
             context_engine_python,
@@ -375,6 +403,7 @@ impl Config {
             inbox,
             events,
             tmux,
+            presets,
         };
         Ok((config, sources))
     }
@@ -515,9 +544,47 @@ impl Reader<'_> {
         }
         Ok(())
     }
+
+    /// The `[presets.<name>]` tables (contract §8.2): each a table of exactly `O`, `S`, `H` and `G`, each a model
+    /// ref of §8.3's shape. A name that is not `^[a-z][a-z0-9-]{0,31}$`, an extra key, a missing letter or a
+    /// malformed ref is `config_invalid` with the key path (`presets.<name>`, `presets.<name>.<letter>`).
+    fn presets(&mut self) -> Result<BTreeMap<String, Preset>, CpdError> {
+        let mut presets = BTreeMap::new();
+        let Some(Value::Table(names)) = self.take("presets") else {
+            return Ok(presets);
+        };
+        for (name, value) in names {
+            if !is_preset_name(&name) {
+                return Err(self.invalid(&format!("presets.{name}"), "is not a preset name `^[a-z][a-z0-9-]{0,31}$`"));
+            }
+            let Value::Table(letters) = value else {
+                return Err(self.invalid(&format!("presets.{name}"), "must be a table of the four model refs O, S, H and G"));
+            };
+            for key in letters.keys() {
+                if !matches!(key.as_str(), "O" | "S" | "H" | "G") {
+                    return Err(self.invalid(&format!("presets.{name}.{key}"), "is not a known key"));
+                }
+            }
+            for letter in ["O", "S", "H", "G"] {
+                if !letters.contains_key(letter) {
+                    return Err(self.invalid(&format!("presets.{name}"), format!("is missing the {letter} model ref")));
+                }
+            }
+            let mut preset = Preset { o: String::new(), s: String::new(), h: String::new(), g: String::new() };
+            for (letter, slot) in [("O", &mut preset.o), ("S", &mut preset.s), ("H", &mut preset.h), ("G", &mut preset.g)] {
+                let value = letters.get(letter).expect("the four letters were checked above");
+                let key = format!("presets.{name}.{letter}");
+                let text = text_of(value).map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
+                *slot = preset_ref(text).map_err(|why| self.invalid(&key, format!("is invalid: {why}")))?;
+                self.sources.insert(key, Source::File);
+            }
+            presets.insert(name, preset);
+        }
+        Ok(presets)
+    }
 }
 
-const KNOWN_SECTIONS: [&str; 5] = ["timeouts", "watch", "inbox", "events", "tmux"];
+const KNOWN_SECTIONS: [&str; 6] = ["timeouts", "watch", "inbox", "events", "tmux", "presets"];
 
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
 fn leader_tier(value: &Value) -> Result<Tier, String> {
@@ -553,6 +620,24 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
 
 fn non_empty(s: &str) -> Result<String, String> {
     if s.is_empty() { Err("must not contain an empty string".into()) } else { Ok(s.to_owned()) }
+}
+
+/// `^[a-z][a-z0-9-]{0,31}$` (contract §8.2): a preset name starts with a lowercase letter, then lowercase
+/// letters, digits and `-`, at most 32 characters.
+fn is_preset_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let first = chars.next();
+    first.is_some_and(|c| c.is_ascii_lowercase())
+        && name.chars().count() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A preset model ref (contract §8.2): §8.3's `<provider>/<id>` shape, 1–200 characters, no NUL.
+fn preset_ref(s: &str) -> Result<String, String> {
+    if s.is_empty() || s.chars().count() > 200 || s.contains('\0') {
+        return Err(format!("{s:?} is not <provider>/<model-id> of 1 to 200 characters"));
+    }
+    crate::policy::model::model_ref(s)
 }
 
 /// `^[A-Za-z0-9_-]{1,32}$`.

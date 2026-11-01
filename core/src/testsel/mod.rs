@@ -1,7 +1,8 @@
 //! `cpd test changed` and `cpd test run` (commands.md §26): the logic of `scripts/test-changed` and of
 //! `scripts/tests.sh`, over [`Ports`]. The selection and the classification of a test name are pure over the text
 //! of `git diff` and `cargo metadata`, which the [`Runner`](crate::host::runner::Runner) returns; the commands start
-//! `cargo` through `scripts/cargo.sh`, and `node` for pi tests.
+//! `cargo` through `scripts/cargo.sh`, `node` for pi tests, and the web package's vitest through `pnpm` for web
+//! tests.
 //!
 //! A process's output is read when it ends and then forwarded: the `Runner` returns it whole.
 
@@ -45,7 +46,7 @@ pub struct ChangedArgs {
 /// `cpd test list <name>` (commands.md §26.3).
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
 pub struct ListArgs {
-    /// A Rust name as nextest filters it, or a pi name `pi/test/<file>.test.ts::<title>`
+    /// A Rust name as nextest filters it, or a pi name `pi/test/<file>.test.ts::<title>`, or a web name `web/<file>.test.ts(x)::<title>`
     #[arg(value_name = "NAME")]
     pub name: String,
 }
@@ -53,7 +54,7 @@ pub struct ListArgs {
 /// `cpd test run <name>...` (commands.md §26.2).
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
 pub struct RunArgs {
-    /// A Rust name as nextest filters it, or a pi name `pi/test/<file>.test.ts::<title>`
+    /// A Rust name as nextest filters it, or a pi name `pi/test/<file>.test.ts::<title>`, or a web name `web/<file>.test.ts(x)::<title>`
     #[arg(required = true, value_name = "NAME")]
     pub names: Vec<String>,
 }
@@ -120,11 +121,13 @@ pub fn run(ports: &Ports, cwd: &Path, names: &[String], out: &mut dyn Write, err
     let root = repo_root(ports, cwd)?;
     let mut status = 0;
     let mut rust: Vec<&str> = Vec::new();
-    let mut pi: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut pi: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut web: Vec<(String, String)> = Vec::new();
     for name in names {
-        match pi_name(name) {
-            Some((file, title)) => pi.entry(file).or_default().push(title),
-            None => rust.push(name),
+        match kind_of(name) {
+            Kind::Rust => rust.push(name),
+            Kind::Pi { file, title } => pi.entry(file).or_default().push(title),
+            Kind::Web { file, title } => web.push((file, title)),
         }
     }
     if !rust.is_empty() {
@@ -137,19 +140,27 @@ pub fn run(ports: &Ports, cwd: &Path, names: &[String], out: &mut dyn Write, err
     for (file, titles) in pi {
         let mut node = vec!["--test".to_owned()];
         for title in titles {
-            if pi_has(&root, file, title) {
-                node.push(format!("--test-name-pattern={}", pi_pattern(title)));
+            if pi_has(&root, &file, &title) {
+                node.push(format!("--test-name-pattern={}", pi_pattern(&title)));
             } else {
-                write(err, &no_title(file, title))?;
+                write(err, &no_title(&file, &title))?;
                 status = 1;
             }
         }
         if node.len() == 1 {
             continue;
         }
-        node.push(file.to_owned());
+        node.push(file);
         let args: Vec<&str> = node.iter().map(String::as_str).collect();
         let output = process(ports, "node", "node", &args, &root)?;
+        forward(out, err, &output)?;
+        if !output.status.success() {
+            status = 1;
+        }
+    }
+    for (file, title) in web {
+        let args = ["--filter", "cpd-web-client", "exec", "vitest", "run", "--testNamePattern", title.as_str(), file.as_str()];
+        let output = process(ports, "pnpm", "pnpm", &args, &root)?;
         forward(out, err, &output)?;
         if !output.status.success() {
             status = 1;
@@ -158,7 +169,8 @@ pub fn run(ports: &Ports, cwd: &Path, names: &[String], out: &mut dyn Write, err
     Ok(status)
 }
 
-/// `scripts/tests.sh build`: `nextest run --workspace --no-run`, then `pnpm run typecheck`; stops at the first failure.
+/// `scripts/tests.sh build`: `nextest run --workspace --no-run`, then `pnpm run typecheck`, then the web client's
+/// typecheck when `web/package.json` exists (skipped without it); stops at the first failure.
 pub fn build(ports: &Ports, cwd: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<u8, CpdError> {
     let root = repo_root(ports, cwd)?;
     let compiled = cargo(ports, &root, &["nextest", "run", "--workspace", "--no-run"])?;
@@ -168,30 +180,95 @@ pub fn build(ports: &Ports, cwd: &Path, out: &mut dyn Write, err: &mut dyn Write
     }
     let typechecked = process(ports, "pnpm", "pnpm", &["run", "typecheck"], &root)?;
     forward(out, err, &typechecked)?;
-    Ok(status_of(&typechecked))
+    if !typechecked.status.success() {
+        return Ok(status_of(&typechecked));
+    }
+    if root.join("web/package.json").exists() {
+        let web = process(ports, "pnpm", "pnpm", &["--filter", "cpd-web-client", "run", "typecheck"], &root)?;
+        forward(out, err, &web)?;
+        return Ok(status_of(&web));
+    }
+    Ok(0)
 }
 
 /// `scripts/tests.sh list <name>`: 0 only when that one test exists.
 pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Result<u8, CpdError> {
     let root = repo_root(ports, cwd)?;
-    if let Some((file, title)) = pi_name(name) {
-        if pi_has(&root, file, title) {
-            return Ok(0);
+    match kind_of(name) {
+        // A web title in a repo without the web client (no `web/package.json`) is refused like a pi title that
+        // exists nowhere: nothing runs, `pnpm --filter` on a missing package would exit 0 silently.
+        Kind::Web { file, title } => {
+            if !root.join("web/package.json").exists() {
+                write(err, &no_title(&file, &title))?;
+                return Ok(1);
+            }
+            // `vitest list <file> --json` imports the file and prints the collected tests without running them, so
+            // an existing-but-red test still lists as found and only an absent title or a file that does not collect
+            // is refused; `run` would exit non-zero on a red test and read as 'not found'. The pinned vitest 5
+            // ignores `--reporter` in list mode and prints plain lines, so the file positional must come *before*
+            // `--json`: `--json [true/path]` consumes the next positional as its output file unless it follows the
+            // filters (verified against vitest 5.0.5's `list --help` and a throwaway package: `list <file> --json`
+            // prints `[{ name, file, location }, …]` to stdout with `name` the `' > '`-joined suite chain, while
+            // `list --json <file>` writes the array to `<file>` and prints nothing).
+            let args = ["--filter", "cpd-web-client", "exec", "vitest", "list", file.as_str(), "--json"];
+            let answered = process(ports, "pnpm", "pnpm", &args, &root)?;
+            if answered.status.success() && web_has(&answered.stdout, &title) {
+                return Ok(0);
+            }
+            write(err, &text(&answered.stderr))?;
+            write(err, &no_title(&file, &title))?;
+            Ok(1)
         }
-        write(err, &no_title(file, title))?;
-        return Ok(1);
+        Kind::Pi { file, title } => {
+            if pi_has(&root, &file, &title) {
+                return Ok(0);
+            }
+            write(err, &no_title(&file, &title))?;
+            Ok(1)
+        }
+        Kind::Rust => {
+            let listed = cargo(ports, &root, &["nextest", "list", "--workspace", "--message-format", "oneline", name])?;
+            if listed.status.success() && text(&listed.stdout).lines().any(|l| !l.is_empty()) {
+                return Ok(0);
+            }
+            write(err, &text(&listed.stderr))?;
+            write(err, &format!("cpd test: no test named '{name}'\n"))?;
+            Ok(1)
+        }
     }
-    let listed = cargo(ports, &root, &["nextest", "list", "--workspace", "--message-format", "oneline", name])?;
-    if listed.status.success() && text(&listed.stdout).lines().any(|l| !l.is_empty()) {
-        return Ok(0);
-    }
-    write(err, &text(&listed.stderr))?;
-    write(err, &format!("cpd test: no test named '{name}'\n"))?;
-    Ok(1)
 }
 
 fn no_title(file: &str, title: &str) -> String {
     format!("cpd test: no test titled '{title}' in {file}\n")
+}
+
+/// How a `cpd test run|list` name classifies (§26).
+#[derive(Debug, PartialEq, Eq)]
+enum Kind {
+    /// A Rust name, as nextest filters it.
+    Rust,
+    /// A pi name `pi/test/<file>.test.ts::<title>`.
+    Pi { file: String, title: String },
+    /// A web name `web/<file>.test.ts(x)::<title>`.
+    Web { file: String, title: String },
+}
+
+/// Classifies a test name: a web name, a pi name, else a Rust name.
+fn kind_of(name: &str) -> Kind {
+    if let Some((file, title)) = web_name(name) {
+        Kind::Web { file: file.to_owned(), title: title.to_owned() }
+    } else if let Some((file, title)) = pi_name(name) {
+        Kind::Pi { file: file.to_owned(), title: title.to_owned() }
+    } else {
+        Kind::Rust
+    }
+}
+
+/// A web name: `web/<file>.test.ts(x)::<title>` is its file and its title; `None` for any other name.
+fn web_name(name: &str) -> Option<(&str, &str)> {
+    let (file, title) = name.split_once("::")?;
+    let is_web = file.starts_with("web/") && (file.ends_with(".test.ts") || file.ends_with(".test.tsx")) && !title.is_empty();
+    is_web.then_some((file, title))
 }
 
 /// A pi name: `pi/test/<file>.test.ts::<title>` is its file and its title; `None` for a Rust name.
@@ -199,6 +276,18 @@ fn pi_name(name: &str) -> Option<(&str, &str)> {
     let (file, title) = name.split_once("::")?;
     let is_pi = file.starts_with("pi/test/") && file.ends_with(".test.ts") && !title.is_empty();
     is_pi.then_some((file, title))
+}
+
+/// Whether the collected tests name `title`: an item's `name` equals the title, or its last `' > '`-separated
+/// segment does (vitest joins suite chains like `'<file> > <suite> > <title>'`). The `list --json` array is the
+/// report; when the output is not a JSON array (the reporter was ignored and vitest printed plain lines), each
+/// line's trailing `' > '` segment is matched instead.
+fn web_has(report: &[u8], title: &str) -> bool {
+    let segments = |name: &str| name.rsplit(" > ").next() == Some(title);
+    match serde_json::from_slice::<Value>(report) {
+        Ok(Value::Array(items)) => items.iter().any(|item| item["name"].as_str().is_some_and(|name| name == title || segments(name))),
+        _ => text(report).lines().any(segments),
+    }
 }
 
 /// Whether `title` is in a `test(` or `it(` call of the file, quoted `'`, `"` or `` ` ``.

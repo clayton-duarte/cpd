@@ -8,7 +8,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/test/durable-worker/*.test.ts pi/skills/skill.test.ts; fi; node --test \"$@\"; }; t",
+    "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/test/durable-worker/*.test.ts pi/test/durable-host/*.test.ts pi/skills/skill.test.ts; fi; node --test \"$@\"; }; t",
     "pretypecheck": "scripts/pnpm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/pnpm-fresh.sh",
@@ -25,6 +25,7 @@
     "@earendil-works/chord": "1.3.0",
     "@earendil-works/pi-coding-agent": "1.3.0",
     "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-codemode": "1.3.0",
     "@earendil-works/pi-durable": "1.3.0"
   },
   "devDependencies": {

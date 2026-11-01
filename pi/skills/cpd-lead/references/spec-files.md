@@ -57,7 +57,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H3` or `S0`–`S3` only** (pro-d82; the explore kinds have their own ranges, [Explore Jobs](#explore-jobs)); a Worker's ladder goes H0>H1>H2>H3>S1>S2>S3 and ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H3` or `S0`–`S3` only** (pro-d82; the explore kinds have their own ranges, [Explore Jobs](#explore-jobs)); a Worker's ladder climbs to the next valid Worker-allowed effort within the letter (contract §9 'Ladder') and ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
 
 | Work | Tier | Why |
 |---|---|---|
@@ -156,6 +156,6 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: cite that path in the Spec of each Job that needs the finding.
 
 - **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
-- **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries one rung up its own range (`H1` > `H2` > `H3`, `S1` > `S2` > `S3`); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
+- **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries at the next valid effort inside its letter (contract §9 'Ladder'; on the hs catalog, scout `H1` > `H3` and `H3` has none, research `S1` > `S3`); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
 - **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
 - **Refusals.** `explore_pr_forbidden` (`--pr`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.

@@ -16,6 +16,7 @@
 pub mod deadline;
 pub mod exe;
 pub mod git_guard;
+pub mod host_socket;
 pub mod input;
 pub mod install_state;
 pub mod layout;

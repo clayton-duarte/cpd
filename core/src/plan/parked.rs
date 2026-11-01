@@ -88,6 +88,24 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
         .collect())
 }
 
+/// The keys of the Plan's `draft` Jobs that wait, in Job order: a need chains, directly or through other drafts, to a
+/// `queued`, `running` or `failed` Job, or (after the lock) the Job's PR waits for another PR. Never applies the
+/// `covered` check `parked_drafts` applies: a draft is exempt from review completeness because it waits, even while a
+/// review covers it.
+pub fn waiting_set(conn: &Connection, plan: &PlanId, all: &[Job]) -> Result<BTreeSet<String>, CpdError> {
+    let phase: String = conn
+        .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| CpdError::plan_not_found(plan))?;
+    let waits = Waits { all, pr_waits: waiting_prs(conn, plan, &phase)? };
+    Ok(all
+        .iter()
+        .filter(|j| j.is_draft())
+        .filter(|j| waits.waiting(j, &mut BTreeSet::from([j.key.clone()])))
+        .map(|j| j.key.clone())
+        .collect())
+}
+
 /// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a stub (no Tier or
 /// no Spec) that does not wait is refused `draft_parked`. `others` are the Plan's Jobs as stored, `job` the row as it
 /// would be (never in `others`). Never refused: a full draft, the `open` Job's draft, any draft in phase `plan`.

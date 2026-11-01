@@ -133,8 +133,10 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             .iter()
             .find(|p| p.key.as_str() == job.pr_str())
             .ok_or_else(|| CpdError::bad_row(format!("Job {} has no PR row {} in Plan {}", job.key, job.pr_str(), target.plan)))?;
-        // The stored text keeps the base of the insert; A3 tells the Worker the live one.
-        crate::job::open::fixed_spec(pr, job.kind == "update")
+        // The stored text keeps the base of the insert; A3 tells the Worker the live one. The cause is the Job's
+        // own (`base-merged` merges the base even without a conflict), read from its `job-added` Event.
+        let cause = (job.kind == "update").then(|| crate::job::open::cause_of(conn, &target.plan, &job.key)).transpose()?;
+        crate::job::open::fixed_spec(pr, job.kind == "update", cause)
     } else {
         job.require_spec()?.clone()
     };

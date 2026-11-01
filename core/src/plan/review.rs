@@ -12,6 +12,7 @@ use super::fingerprint::{load_prs, plan_fingerprint};
 use super::prs::PrRow;
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
+use super::parked;
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
 use crate::error::{CpdError, ErrorCode};
@@ -179,7 +180,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    check_drafts_complete(&id, jobs)?;
+    env.store.read(|conn| check_drafts_complete(conn, &id, jobs))?;
     check_outline(&id, &s)?;
     super::shape::check(&id, &s.prs, jobs)?;
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
@@ -302,8 +303,9 @@ pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
 /// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
 /// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
 /// cannot be approved, so neither `plan review` nor `plan lock` goes on.
-pub(super) fn check_drafts_complete(id: &PlanId, jobs: &[Job]) -> Result<(), CpdError> {
-    let mut stubs: Vec<&Job> = jobs.iter().filter(|j| j.is_draft() && !j.missing().is_empty()).collect();
+pub(super) fn check_drafts_complete(conn: &Connection, id: &PlanId, jobs: &[Job]) -> Result<(), CpdError> {
+    let waiting = parked::waiting_set(conn, id, jobs)?;
+    let mut stubs: Vec<&Job> = jobs.iter().filter(|j| j.is_draft() && !waiting.contains(j.key.as_str()) && !j.missing().is_empty()).collect();
     if stubs.is_empty() {
         return Ok(());
     }
@@ -350,6 +352,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         // The phase and the drafts as they are now: an approval queues what it covered only.
         let phase = row::load(tx, &id)?.phase;
         let all = jobs::load(tx, &id)?;
+        let waiting = parked::waiting_set(tx, &id, &all)?;
         let current = review.fingerprint == plan_fingerprint(tx, &id)?;
         let changed = tx.execute(
             "UPDATE plan_reviews SET status = ?1, feedback = ?2, decided_at = (SELECT at FROM txns WHERE id = cpd_txn())
@@ -363,7 +366,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         let queues = status == "approved" && current && phase != Phase::Plan;
         let mut queued: Vec<String> = Vec::new();
         if queues {
-            for job in all.iter().filter(|j| j.is_draft()) {
+            for job in all.iter().filter(|j| j.is_draft() && !waiting.contains(j.key.as_str())) {
                 tx.execute(
                     "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",
                     [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],

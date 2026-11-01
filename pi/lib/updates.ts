@@ -66,12 +66,14 @@ export type PrOpened = { event: number; plan: string; pr: string; number: number
 /** An `error` Event: its Event id and `data.code`. */
 export type ErrorEvent = { event: number; code: string };
 
-/** A Job of `context pending`, reduced to what the digest needs. */
-export type PendingJob = { key: string; status: string; title: string };
+/** A plan-level explore Job of `context pending`, reduced to what the digest needs. */
+export type PendingJob = { key: string; kind: string; status: string; tier: string | null; title: string };
+/** A Job of a PR of `context pending`. */
+export type PendingPrJob = { key: string; status: string; title: string };
 /** A PR of `context pending` that is not merged or cancelled. */
-export type PendingPr = { key: string; status: string; number: number | null; jobs: PendingJob[] };
+export type PendingPr = { key: string; status: string; number: number | null; jobs: PendingPrJob[] };
 /** An active Plan of `context pending`. */
-export type PendingPlan = { id: string; phase: string; prs: PendingPr[] };
+export type PendingPlan = { id: string; phase: string; prs: PendingPr[]; jobs: PendingJob[] };
 
 /** At most this many Jobs are listed under one PR of `Pending work:`; the rest are named by a count. */
 export const MAX_PENDING_JOBS = 10;
@@ -132,16 +134,20 @@ export function parseTaken(out: Record<string, unknown>): BoardPost[] {
   });
 }
 
-/** Parse `cpd context pending`: each active Plan's id and phase, and its PRs with their Jobs' key, status and title. */
+/** Parse `cpd context pending`: each active Plan's id and phase, its plan-level explore Jobs and its PRs with their Jobs' key, status and title. */
 export function parsePending(out: Record<string, unknown>): PendingPlan[] {
   const what = "context pending";
   if (!Array.isArray(out.plans)) throw bad(what, "`plans` is not a list");
   return out.plans.map((p) => {
-    if (!isObject(p) || typeof p.id !== "string" || typeof p.phase !== "string" || !Array.isArray(p.prs)) throw bad(what, "a Plan lacks id, phase or prs");
+    if (!isObject(p) || typeof p.id !== "string" || typeof p.phase !== "string" || !Array.isArray(p.prs) || !Array.isArray(p.jobs)) throw bad(what, "a Plan lacks id, phase, prs or jobs");
     const plan = p.id;
     return {
       id: plan,
       phase: p.phase,
+      jobs: p.jobs.map((j) => {
+        if (!isObject(j) || typeof j.key !== "string" || typeof j.kind !== "string" || typeof j.status !== "string" || typeof j.title !== "string") throw bad(what, `Plan ${plan}: a Job lacks key, kind, status or title`);
+        return { key: j.key, kind: j.kind, status: j.status, tier: typeof j.tier === "string" ? j.tier : null, title: j.title };
+      }),
       prs: p.prs.map((r) => {
         if (!isObject(r) || typeof r.key !== "string" || typeof r.status !== "string" || !Array.isArray(r.jobs)) throw bad(what, `Plan ${plan}: a PR lacks key, status or jobs`);
         if (r.pull_request !== null && !(isObject(r.pull_request) && Number.isSafeInteger(r.pull_request.number))) throw bad(what, `Plan ${plan}, PR ${r.key}: pull_request is neither null nor an object with a number`);
@@ -223,19 +229,22 @@ function plansSection(plans: readonly PlanEvent[]): string[] {
   ];
 }
 
-/** The `Pending work:` section: one line per active Plan with a PR, each PR with its Job counts (or its status and number when it has no Job). Empty when no Plan has a PR. */
+/** The `Pending work:` section: one line per active Plan with plan-level Jobs or a PR, the `jobs <counts>` segment first, then one per PR. Empty when no Plan has work. */
 export function pendingSection(plans: readonly PendingPlan[]): string[] {
+  const statuses = ["running", "queued", "failed", "draft", "merged"];
+  const counts = (jobs: readonly { status: string }[]) => statuses.flatMap((status) => {
+    const n = jobs.filter((j) => j.status === status).length;
+    return n === 0 ? [] : [`${n} ${status}`];
+  });
   const lines: string[] = [];
   for (const p of plans) {
-    if (p.prs.length === 0) continue;
-    const prs = p.prs.map((pr) => {
-      const counts = ["running", "queued", "failed", "draft", "merged"].flatMap((status) => {
-        const n = pr.jobs.filter((j) => j.status === status).length;
-        return n === 0 ? [] : [`${n} ${status}`];
-      });
-      return `PR ${pr.key} ${counts.length > 0 ? counts.join(", ") : `${pr.status}${pr.number !== null ? ` #${pr.number}` : ""}`}`;
-    });
-    lines.push(`- ${p.id} (${p.phase}): ${prs.join("; ")}`);
+    const segments = p.jobs.length === 0 ? [] : [`jobs ${counts(p.jobs).join(", ")}`];
+    for (const pr of p.prs) {
+      const parts = counts(pr.jobs);
+      segments.push(`PR ${pr.key} ${parts.length > 0 ? parts.join(", ") : `${pr.status}${pr.number !== null ? ` #${pr.number}` : ""}`}`);
+    }
+    if (segments.length === 0) continue;
+    lines.push(`- ${p.id} (${p.phase}): ${segments.join("; ")}`);
   }
   return lines.length === 0 ? [] : ["Pending work:", ...lines];
 }
@@ -317,7 +326,7 @@ export function contextUpdate(context: string, sessionId: string, events: readon
       delivered_to: sessionId,
       records: fresh.map((r) => r.id),
       plan_events: plans.length,
-      plans_pending: pending.filter((p) => p.prs.length > 0).length,
+      plans_pending: pending.filter((p) => p.prs.length > 0 || p.jobs.length > 0).length,
       ...optional("posts", posts.length),
       ...optional("errors", errors.length),
     },

@@ -24,6 +24,10 @@ mod moves;
 mod phi_label_tests;
 #[cfg(test)]
 mod ports_tests;
+#[cfg(test)]
+mod durable_moves_tests;
+#[cfg(test)]
+mod durable_send_tests;
 mod reload;
 mod resolve;
 mod resume;
@@ -31,7 +35,7 @@ mod retier;
 mod report;
 mod switch;
 pub(crate) mod retitle;
-mod row;
+pub(crate) mod row;
 pub(crate) mod run;
 pub(crate) mod send;
 mod state;

@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 17;
+pub const PROTOCOL: u32 = 19;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -112,6 +112,7 @@ kinds! {
     SessionRenamed = "session-renamed",
     SessionTitled = "session-titled",
     SessionRetiered = "session-retiered",
+    SessionModelChanged = "session-model-changed",
     McpAttached = "mcp-attached",
     SessionAsleep = "session-asleep",
     SessionResumed = "session-resumed",
@@ -193,6 +194,7 @@ impl Kind {
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
             SessionRetiered => spec([Y, M, N, N, Y], &["from", "to"], &[]),
+            SessionModelChanged => spec([Y, M, N, N, Y], &["from", "to"], &[]),
             McpAttached => spec([Y, M, N, N, Y], &["name", "server"], &[]),
             SessionAsleep => spec([Y, M, N, N, Y], &[], &[]),
             SessionResumed => spec([Y, M, N, N, Y], &[], &[]),
@@ -249,15 +251,25 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13), hs-d634 (the incident kinds: 14) and pro-d8 (`mcp-attached`: 15).
+    /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
+    /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
+    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6) and 19 (`context pending`'s plan-level
+    /// `jobs`, commands.md §3.12, Plan explore-view).
     #[test]
-    fn the_protocol_is_17_with_the_pr_described_kind() {
-        assert_eq!(PROTOCOL, 17);
+    fn the_protocol_is_19_with_the_pending_plan_jobs_field() {
+        assert_eq!(PROTOCOL, 19);
     }
 
     #[test]
     fn session_retiered_is_about_a_session_and_carries_from_and_to() {
         let spec = Kind::SessionRetiered.spec();
+        assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
+        assert_eq!(spec.required, ["from", "to"]);
+    }
+
+    #[test]
+    fn session_model_changed_is_about_a_session_and_carries_from_and_to() {
+        let spec = Kind::SessionModelChanged.spec();
         assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
         assert_eq!(spec.required, ["from", "to"]);
     }

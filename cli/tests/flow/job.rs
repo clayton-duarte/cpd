@@ -1776,6 +1776,49 @@ fn add_says_tier_invalid_before_tier_not_allowed() {
     plan(&fx.env, "pl", "plan");
     refused(&job_add(&fx, "pl", "k", "O9", &[]), "tier_invalid", 2);
     refused(&job_add(&fx, "pl", "k", "X5", &[]), "tier_invalid", 2);
+    // H has no effort 9 (hs-n632): the brief's `H9` case is `tier_invalid`, and nothing is written.
+    refused(&job_add(&fx, "pl", "k", "H9", &[]), "tier_invalid", 2);
+}
+
+/// B (hs-d796, hs-d797): a Lead replaces a cancelled `update` Job with a plain `work` Job at the chosen
+/// Tier (§5.1's `-r` recipe, contract §3.8 "Updating"), and cancelling re-queues no `update` Job:
+/// the poll (§3.7 E5, `core/src/pr/poll.rs` `update_for_conflict`) fires only on a transition of
+/// `mergeable` to `conflicting`, so the cancel leaves none behind and a later transition queues one as always.
+#[test]
+fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
+    let fx = Fx::new();
+    // Plan `pl` in `deploy` whose PR `p` is `open`, of shape `tdd` (as job_fix.rs::open_tdd builds one).
+    setup(&fx.env);
+    plan(&fx.env, "pl", "deploy");
+    fixture(
+        &fx.env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)\n             VALUES ('pl', 'p', '/repo', 'main', 'waiting', 'cpd/pl/p', 'tdd', cpd_txn(), 't');\n             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'p';\n             {}\n             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/p/pull/2', pr_opened_at = 't',\n                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/p') WHERE key = 'p';\n             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)\n             VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl' AND key = 'p'), 'up-p', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
+            pull_request("p", 2, "open"),
+            "f".repeat(64)
+        ),
+    );
+    assert_eq!(job_row(&fx.env, "pl", "up-p", "status"), json!("queued"));
+
+    // The Lead cancels the wrong-Tier `update` Job and adds its replacement at the chosen Tier.
+    let out = job(&fx, &["cancel", "up-p", "--reason", "wrong Tier"], "pl").ok();
+    assert_eq!(out, json!({"ok": true, "job": "up-p", "status": "cancelled", "cancel_requested": false}));
+    let spec = spec_file(&fx.env);
+    let out = fx.cpd(&[
+        "job", "add", "up-p-r1", "--title", "Bring the pull request up to date", "--tier", "S1", "--spec", &spec, "--pr", "p", "--plan", "pl",
+    ]).ok();
+    assert_eq!(
+        out["job"],
+        json!({"key": "up-p-r1", "pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false})
+    );
+    assert_eq!(job_row(&fx.env, "pl", "up-p-r1", "tier"), "S1");
+    assert_eq!(events(&fx, "job-added").last().unwrap()["data"], json!({"pr": "p", "kind": "work", "status": "queued", "appended": true, "tier": "S1", "needs": [], "urgent": false}));
+    // E3 does not re-queue an `update` Job on the cancel (hs-d797).
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE kind = 'update' AND status IN ('queued', 'running')"),
+        0
+    );
+    assert_eq!(job_row(&fx.env, "pl", "up-p", "status"), json!("cancelled"));
 }
 
 #[test]

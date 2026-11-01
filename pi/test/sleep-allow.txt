@@ -16,6 +16,7 @@ pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/compact-tools.test.ts 3  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/editor-box.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/delivery.test.ts 27  # m-pi: sleep or wall-clock wait
+pi/test/dialog-slot.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/first-message.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/follower.test.ts 21  # m-pi: sleep or wall-clock wait
 pi/test/handle.test.ts 10  # m-pi: sleep or wall-clock wait
@@ -33,6 +34,7 @@ pi/test/reminder.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/reply.test.ts 9  # m-pi: sleep or wall-clock wait
 pi/test/retier.test.ts 11  # m-pi: sleep or wall-clock wait
 pi/test/review-chat.test.ts 39  # m-pi: sleep or wall-clock wait
+pi/test/session_model_changed.test.ts 2  # m-pi: sleep or wall-clock wait
 pi/test/slack-channel.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
 pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait

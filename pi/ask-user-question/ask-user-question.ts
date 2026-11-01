@@ -20,6 +20,7 @@ import {
 	STACKED_OVERLAY_PRESENTATION,
 	YIELD_TO_OVERLAY,
 } from "./presentation.ts";
+import { MOUNT_BOUND_MS, RENDER_GUARD_TICK_MS, RenderGuard } from "./hang-guard.ts";
 import { editWithExternalEditor } from "./state/external-editor.ts";
 import {
 	type QuestionnaireSession as QuestionnaireSessionInstance,
@@ -91,6 +92,27 @@ const ERROR_NO_UI = "Error: UI not available (running in non-interactive mode)";
 const ERROR_NO_CUSTOM_UI =
 	"Error: this client cannot render the questionnaire (custom UI is unavailable, e.g. RPC/ACP hosts such as Zed or Paseo). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
 
+/** Model-facing sentences of the never-hang resolutions, verbatim from docs/commands.md §15.13. */
+const DISPLACED_SENTENCE =
+	"Error: the question dialog disappeared before the user answered (another dialog took the single dialog slot). The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
+
+const STUCK_SENTENCE =
+	"Error: the question dialog did not settle within 2 hours and was closed. The user never saw the questions — do NOT treat this as a decline. Ask the questions as plain chat text instead, without using this tool.";
+
+/** Loud, coded result when the inline slot was taken by another dialog (§15.13). */
+const DISPLACED_RESULT: QuestionnaireResult = Object.freeze({
+	answers: [],
+	cancelled: true,
+	error: "dialog_displaced",
+});
+
+/** Loud, coded result when a mount outlives the two-hour bound (§15.13). */
+const STUCK_RESULT: QuestionnaireResult = Object.freeze({
+	answers: [],
+	cancelled: true,
+	error: "dialog_stuck",
+});
+
 /** Standard terminal bell — same byte rpiv-warp exports as OSC_TERMINATOR. */
 export const BEL = "\x07";
 
@@ -111,6 +133,10 @@ function emitTerminalAttention(): void {
 
 type SessionRef = { current: QuestionnaireSessionInstance | null };
 type OverlayHandleRef = { current: OverlayHandle | undefined };
+/** The inline mount's render guard, registered at mount time so the mount teardown can stop it. */
+type GuardRef = { current: RenderGuard | undefined };
+/** The `done` the host handed the component factory, for the two-hour bound. */
+type DoneRef = { current: ((result: QuestionnaireResult) => void) | undefined };
 
 /**
  * Register the raw terminal listener that toggles collapse while the overlay is hidden.
@@ -161,8 +187,21 @@ function makeSessionFactory(config: {
 	presentation: Presentation;
 	sessionRef: SessionRef;
 	Session: typeof QuestionnaireSession;
+	guardRef: GuardRef;
+	doneRef: DoneRef;
 }) {
-	const { ctx, typed, itemsByTab, collapseKey, canReopenWhileHidden, presentation, sessionRef, Session } = config;
+	const {
+		ctx,
+		typed,
+		itemsByTab,
+		collapseKey,
+		canReopenWhileHidden,
+		presentation,
+		sessionRef,
+		Session,
+		guardRef,
+		doneRef,
+	} = config;
 	return (
 		tui: TUI,
 		theme: Theme,
@@ -201,7 +240,15 @@ function makeSessionFactory(config: {
 			rowBudget: rowBudgetForHost(tui.terminal, presentation.rowBudget),
 		});
 		sessionRef.current = session;
-		return session.component;
+		doneRef.current = done;
+		const component = session.component;
+		// The render guard applies to the inline mount only: overlays stack over other
+		// overlays and cannot be displaced, so they are left unwrapped.
+		if (presentation.overlay) return component;
+		const guard = new RenderGuard(tui, component, () => done(DISPLACED_RESULT));
+		guardRef.current = guard;
+		guard.start(RENDER_GUARD_TICK_MS);
+		return guard.component;
 	};
 }
 
@@ -230,6 +277,8 @@ async function mountQuestionnaire(config: {
 	const { ctx, collapseKey, presentation } = config;
 	const sessionRef: SessionRef = { current: null };
 	const overlayHandleRef: OverlayHandleRef = { current: undefined };
+	const guardRef: GuardRef = { current: undefined };
+	const doneRef: DoneRef = { current: undefined };
 	const removeOverlayInputListener = presentation.hideOnCollapse
 		? registerCollapseKeyListener(ctx, collapseKey, sessionRef, overlayHandleRef)
 		: undefined;
@@ -237,26 +286,43 @@ async function mountQuestionnaire(config: {
 	// may emit `setHidden` only when it was actually registered; otherwise collapse falls
 	// back to the visible one-line row.
 	const canReopenWhileHidden = removeOverlayInputListener !== undefined;
+	// Every mount, inline and overlay, is bounded at MOUNT_BOUND_MS: a mount that neither
+	// settles nor is displaced resolves loud with the stuck result. The bound wins its race
+	// with the host's custom() promise even when that promise never settles (the displaced
+	// slot, a stuck session) — the custom promise is abandoned; the guard is cleared first.
+	let boundTimer: ReturnType<typeof setTimeout> | undefined;
+	const bound = new Promise<QuestionnaireResult>((resolve) => {
+		boundTimer = setTimeout(() => {
+			guardRef.current?.stop();
+			doneRef.current?.(STUCK_RESULT);
+			resolve(STUCK_RESULT);
+		}, MOUNT_BOUND_MS);
+	});
 	try {
-		return await ctx.ui.custom<QuestionnaireResult>(
-			makeSessionFactory({ ...config, canReopenWhileHidden, sessionRef }),
-			presentation.overlay
-				? {
-						overlay: true,
-						overlayOptions: {
-							anchor: "bottom-center",
-							width: "100%",
-							maxHeight: "100%",
-							margin: { left: 0, right: 0, bottom: 0 },
-						},
-						onHandle: (handle) => {
-							overlayHandleRef.current = handle;
-							sessionRef.current?.setOverlayHandle(handle);
-						},
-					}
-				: { overlay: false },
-		);
+		return await Promise.race([
+			ctx.ui.custom<QuestionnaireResult>(
+				makeSessionFactory({ ...config, canReopenWhileHidden, sessionRef, guardRef, doneRef }),
+				presentation.overlay
+					? {
+							overlay: true,
+							overlayOptions: {
+								anchor: "bottom-center",
+								width: "100%",
+								maxHeight: "100%",
+								margin: { left: 0, right: 0, bottom: 0 },
+							},
+							onHandle: (handle) => {
+								overlayHandleRef.current = handle;
+								sessionRef.current?.setOverlayHandle(handle);
+							},
+						}
+					: { overlay: false },
+			),
+			bound,
+		]);
 	} finally {
+		clearTimeout(boundTimer);
+		guardRef.current?.stop();
 		removeOverlayInputListener?.();
 	}
 }
@@ -383,6 +449,17 @@ export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 
 				if (result === undefined) {
 					return resolveUndefinedResult(ctx, typed);
+				}
+
+				// The never-hang resolutions (§15.13): the mount settled because the inline
+				// slot was displaced or the two-hour bound elapsed. Either way the user never
+				// saw the questions — resolve loud (isError, coded details) so the model
+				// re-asks them as plain chat text instead of treating it as a decline.
+				if (result.error === "dialog_displaced") {
+					return { ...buildToolResult(DISPLACED_SENTENCE, result), isError: true };
+				}
+				if (result.error === "dialog_stuck") {
+					return { ...buildToolResult(STUCK_SENTENCE, result), isError: true };
 				}
 
 				return buildQuestionnaireResponse(result, typed);

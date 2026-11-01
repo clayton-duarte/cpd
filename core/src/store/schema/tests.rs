@@ -1843,8 +1843,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 if values.len() == width {
                     continue;
                 }
-                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0.
-                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0) || (table == "attempts" && v == "pi");
+                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0. `session-runner` one, `sessions.runner` 'pi'.
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0) || (table == "sessions" && v == "pi") || (table == "attempts" && v == "pi");
                 assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();
@@ -2148,7 +2148,7 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, `switch_failed` (`switch-failed`), null, and `working_pr` (`session-working-pr`), null.
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0, `switch_failed` (`switch-failed`), null, and `working_pr` (`session-working-pr`), null, and `runner` (`session-runner`), 'pi'.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
@@ -2156,6 +2156,7 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
             assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("runner"), Some(Value::from("pi")));
             row
         })
         .collect();
@@ -2221,13 +2222,14 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
     let conn = connection(&home.db());
-    // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null; `working_pr` (`session-working-pr`), null.
+    // `by_user` is a later migration's column (`session-by-user`), 0 on every row; `switch_failed` (`switch-failed`), null; `working_pr` (`session-working-pr`), null; `runner` (`session-runner`), 'pi'.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             assert_eq!(row.as_object_mut().unwrap().remove("switch_failed"), Some(Value::Null));
             assert_eq!(row.as_object_mut().unwrap().remove("working_pr"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("runner"), Some(Value::from("pi")));
             row
         })
         .collect();
@@ -2893,8 +2895,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------

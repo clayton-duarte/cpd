@@ -36,6 +36,26 @@ impl Role {
     }
 }
 
+/// What runs a Session (contract §2.2 `runner`): pi in a tmux pane, or a durable host with no pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Runner {
+    Pi,
+    Durable,
+}
+
+impl Runner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Runner::Pi => "pi",
+            Runner::Durable => "durable",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Runner> {
+        [Runner::Pi, Runner::Durable].into_iter().find(|r| r.as_str() == s)
+    }
+}
+
 /// A Session's agent state (§3.6): `blocked` needs the User, `waiting` needs another agent (hs-d303).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -102,6 +122,8 @@ pub(super) struct Row {
     pub by_user: bool,
     /// The failed model switch the pi adapter recorded (`session switch-failed`, commands.md §10.18a): `{tier, code, message, at}`.
     pub switch_failed: Option<Value>,
+    /// What runs it (`sessions.runner`).
+    pub runner: Runner,
 }
 
 const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.cwd, s.tier,
@@ -110,7 +132,7 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
        (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
-       s.archived_at, s.title, s.titled_at, s.asleep_at, s.by_user, s.switch_failed
+       s.archived_at, s.title, s.titled_at, s.asleep_at, s.by_user, s.switch_failed, s.runner
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -140,6 +162,7 @@ struct Raw {
     asleep_at: Option<String>,
     by_user: bool,
     switch_failed: Option<String>,
+    runner: String,
 }
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -168,6 +191,7 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         asleep_at: r.get(21)?,
         by_user: r.get(22)?,
         switch_failed: r.get(23)?,
+        runner: r.get(24)?,
     })
 }
 
@@ -213,6 +237,7 @@ impl Row {
             dynamic_title: raw.title,
             titled_at: raw.titled_at,
             by_user: raw.by_user,
+            runner: Runner::parse(&raw.runner).ok_or_else(|| field("runner", &raw.runner))?,
             switch_failed: raw
                 .switch_failed
                 .map(|j| serde_json::from_str::<Value>(&j).ok().filter(Value::is_object).ok_or_else(|| field("switch_failed", &j)))
@@ -245,6 +270,7 @@ impl Row {
             "title": self.dynamic_title,
             "titled_at": self.titled_at,
             "by_user": self.by_user,
+            "runner": self.runner.as_str(),
         })
     }
 }
@@ -267,10 +293,29 @@ pub(super) fn live(conn: &Connection) -> Result<Vec<Row>, CpdError> {
     query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())
 }
 
+/// The fields a live model switch needs (commands.md §14.6 step 7): the same live selection `session retier` uses.
+#[derive(Clone, Debug)]
+pub(crate) struct ModelSwitchRow {
+    pub id: SessionId,
+    pub role: Role,
+    pub context: ContextId,
+    pub plan: Option<PlanId>,
+    pub tier: String,
+}
+
+/// Every live Lead and Manager that is not archived, oldest first, as the model-switch step of `cpd preset apply`
+/// reads them (commands.md §14.6 step 7).
+pub(crate) fn live_model_switch(conn: &Connection) -> Result<Vec<ModelSwitchRow>, CpdError> {
+    Ok(query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())?
+        .into_iter()
+        .map(|r| ModelSwitchRow { id: r.id, role: r.role, context: r.context, plan: r.plan, tier: r.tier })
+        .collect())
+}
+
 /// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): the `<letter>` ref of the Session's `Models` (its Context's key) and
 /// the level of the Tier's digit. The one function `session show` and `session run` share, so a Session retiered and a
 /// Session started later are on the same model.
-pub(super) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
+pub(crate) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
     let tier = Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
     let model = match tier.letter() {
         Letter::O => &models.o,
