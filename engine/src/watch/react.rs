@@ -55,8 +55,8 @@ pub(super) fn run(engine: &mut Engine) {
             }
         };
         let due = engine.react.running.take().expect("a run was in flight").due;
-        if let Err(failure) = &answer {
-            if failure.code == "slack_refused" {
+        if let Err(failure) = &answer
+            && failure.code == "slack_refused" {
                 let reason = failure.details["reason"].as_str().unwrap_or("unknown").to_owned();
                 match park(engine, &due, &reason) {
                     Ok(()) => {
@@ -71,7 +71,6 @@ pub(super) fn run(engine: &mut Engine) {
                 }
                 return;
             }
-        }
         match answer.and_then(|()| mark(engine, &due)) {
             Ok(()) => {
                 engine.react.failed_at.remove(&due.id);

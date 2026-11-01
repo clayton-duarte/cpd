@@ -42,6 +42,9 @@ fn catalog() -> Catalog {
     }
 }
 
+/// One row of the events table: `(plan, job, attempt, data)`.
+pub(super) type EventRow = (Option<String>, Option<String>, Option<String>, Value);
+
 /// An engine on a temporary home, and the home's directory kept for as long as the test runs.
 pub(super) struct Fx {
     pub engine: Engine,
@@ -191,7 +194,7 @@ impl Fx {
     }
 
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
-    pub(super) fn events(&mut self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+    pub(super) fn events(&mut self, kind: &str) -> Vec<EventRow> {
         self.engine
             .store
             .read(|conn| {

@@ -70,7 +70,7 @@ fn expire(engine: &mut Engine, escalation: &Open) -> Result<bool, CpdError> {
             tx,
             NewEvent::escalation_expired(text, id.to_string(), "asker_dead").plan(plan.clone()).job(attempt.job().clone()).attempt(attempt.clone()),
         )?;
-        cpd_core::ask::resume_attempt(tx, plan, &attempt)?;
+        cpd_core::ask::resume_attempt(tx, plan, attempt)?;
         Ok(true)
     })
 }

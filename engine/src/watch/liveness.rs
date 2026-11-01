@@ -96,12 +96,11 @@ fn attempts(engine: &mut Engine) {
 
     for attempt in &active {
         // A submit that died inside its check span left the span open: close it (§7.7), before the Attempt's end or its timeout reads it.
-        if attempt.status == "running" {
-            if let Err(e) = close_dead_span(engine, attempt) {
+        if attempt.status == "running"
+            && let Err(e) = close_dead_span(engine, attempt) {
                 engine.fail(Step::E2, attempt.about(), &e);
                 continue;
             }
-        }
         let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
