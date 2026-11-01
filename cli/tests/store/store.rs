@@ -464,7 +464,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("contexts", "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('x', 'T', 't', 'm')".to_owned()),
         ("context_records", "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'n1', 'bogus', 't', 'm', 'x')".to_owned()),
         ("plans", "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', 'bogus', 'lead1', 't')".to_owned()),
-        ("prs", format!("INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
+        ("workflows", format!("INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
         ("workflow_needs", "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
         ("plan_reviews", format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r2', 1, '{FP}', 'pending', 't')")),
         ("jobs", format!("INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
@@ -669,7 +669,7 @@ fn append_only_tables_refuse_updates_and_deletes() {
         assert_eq!(sqlite_message(&err), message, "{sql}");
     }
     // The fixture's rows: the generated `<table>_no_delete` refuses them.
-    for table in ["contexts", "sessions", "plans", "prs", "jobs", "attempts", "escalations"] {
+    for table in ["contexts", "sessions", "plans", "workflows", "jobs", "attempts", "escalations"] {
         let err = refused(&mut store, &format!("DELETE FROM {table}"));
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
         assert_eq!(sqlite_message(&err), format!("append_only: {table}"));

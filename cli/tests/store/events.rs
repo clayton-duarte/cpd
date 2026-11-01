@@ -215,13 +215,13 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-record", "c", "", &["record", "kind", "machine", "seq"], &[]),
     ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),
     ("plan-created", "cp", "", &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
-    ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
+    ("plan-phase", "cp", "", &["from", "to"], &["jobs", "workflows"]),
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
     ("plan-outlined", "cp", "", &["replaced"], &[]),
-    ("plan-done", "cp", "", &["prs"], &[]),
-    ("job-added", "cpj", "", &["pr", "kind", "status", "appended", "tier", "needs", "urgent"], &["by", "reason"]),
+    ("plan-done", "cp", "", &["workflows"], &[]),
+    ("job-added", "cpj", "", &["workflow", "kind", "status", "appended", "tier", "needs", "urgent"], &["by", "reason"]),
     ("job-edited", "cpj", "", &["fields"], &[]),
-    ("job-merged", "cpja", "", &["sha", "tier", "kind"], &["cancel_too_late", "pr", "number", "url"]),
+    ("job-merged", "cpja", "", &["sha", "tier", "kind"], &["cancel_too_late", "workflow", "number", "url"]),
     ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),
     ("job-retried", "cpj", "", &["tier"], &[]),
     ("job-cancel-requested", "cpja", "", &["reason"], &[]),
@@ -230,16 +230,16 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("attempt-status", "cpja", "", &["from", "to"], &[]),
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
-    ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
-    ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
-    ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
-    ("pr-edited", "cp", "", &["pr", "fields"], &[]),
-    ("pr-described", "cp", "", &["pr"], &[]),
-    ("pr-cancelled", "cp", "", &["pr"], &["superseded_by"]),
-    ("pr-started", "cp", "", &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"], &[]),
-    ("pr-base-changed", "cp", "", &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
-    ("pr-opened", "cp", "", &["pr", "number", "url"], &[]),
-    ("pr-merged", "cp", "", &["pr", "number", "url", "merged_at"], &[]),
+    ("all-merged", "cp", "", &["workflow", "merged", "cancelled"], &[]),
+    ("pr-feedback", "cp", "", &["workflow", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
+    ("workflow-added", "cp", "", &["workflow", "repo", "base", "needs", "appended"], &[]),
+    ("workflow-edited", "cp", "", &["workflow", "fields"], &[]),
+    ("workflow-described", "cp", "", &["workflow"], &[]),
+    ("workflow-cancelled", "cp", "", &["workflow"], &["superseded_by"]),
+    ("workflow-started", "cp", "", &["workflow", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"], &[]),
+    ("workflow-base-changed", "cp", "", &["workflow", "from", "to", "from_workflow", "to_workflow", "by"], &["number", "url"]),
+    ("pr-opened", "cp", "", &["workflow", "number", "url"], &[]),
+    ("pr-merged", "cp", "", &["workflow", "number", "url", "merged_at"], &[]),
     ("escalation", "cpja", "", &["escalation", "question"], &[]),
     ("escalation-answered", "cpja", "", &["escalation"], &[]),
     ("escalation-expired", "cpja", "", &["escalation", "reason"], &[]),
@@ -275,8 +275,8 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
     ("review-opened", "cs", "p", &["pn_id", "kind", "subject", "port"], &[]),
     ("review-closed", "cs", "p", &["pn_id", "ended"], &[]),
-    ("incident-started", "", "", &["by", "reason", "started_at", "plans"], &["until_pr"]),
-    ("incident-plans", "", "", &["by", "plans"], &["until_pr"]),
+    ("incident-started", "", "", &["by", "reason", "started_at", "plans"], &["until_workflow"]),
+    ("incident-plans", "", "", &["by", "plans"], &["until_workflow"]),
     ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
 ];
 
@@ -317,6 +317,9 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
     let in_table: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
     let mut expected = names.clone();
+    // The retired `pr-*` object kinds stay in `event_kinds` as history (rename map R7a): past Events hold those
+    // kinds, so the store keeps the rows and reads the new ones only.
+    expected.extend(["pr-added", "pr-base-changed", "pr-cancelled", "pr-described", "pr-edited", "pr-started"]);
     expected.sort();
     assert_eq!(in_table, expected);
 }
@@ -922,7 +925,7 @@ struct Stale {
 fn kind_data(kind: Kind) -> Value {
     use Kind::*;
     match kind {
-        PlanDone => json!({"prs": []}),
+        PlanDone => json!({"workflows": []}),
         PlanPhase => json!({"from": "dispatch", "to": "deploy"}),
         PlanReview => json!({"review": "r1", "fingerprint": "f", "status": "pending"}),
         JobFailed => json!({"cause": "gate", "detail": "d", "tier": "S1", "attempts": 1}),
@@ -936,13 +939,13 @@ fn kind_data(kind: Kind) -> Value {
         EscalationExpired => json!({"escalation": "e1", "reason": "timeout"}),
         Error => json!({"source": "engine", "code": "push_failed", "message": "m", "details": {}}),
         PrFeedback => json!({
-            "pr": "r1", "number": 1, "url": "u", "state": "open", "checks": "failed", "review_decision": "none",
+            "workflow": "r1", "number": 1, "url": "u", "state": "open", "checks": "failed", "review_decision": "none",
             "mergeable": "mergeable", "merge_state": "clean", "conflict": false, "reasons": ["checks_failed"]
         }),
-        PrMerged => json!({"pr": "r1", "number": 1, "url": "u", "merged_at": "t"}),
-        WorkflowCancelled => json!({"pr": "r1"}),
+        PrMerged => json!({"workflow": "r1", "number": 1, "url": "u", "merged_at": "t"}),
+        WorkflowCancelled => json!({"workflow": "r1"}),
         WorkflowStarted => json!({
-            "pr": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
+            "workflow": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
             "reused": false, "pushed": false, "by": "cpd"
         }),
         other => panic!("no data for {other:?}"),
@@ -1030,7 +1033,7 @@ impl Stale {
             .unwrap();
     }
 
-    /// A PR of `plan` that was never opened: its `prs` row has no `pull_request`.
+    /// A Workflow of `plan` that was never opened: its `workflows` row has no `pull_request`.
     fn waiting_pr(&mut self, plan: &str, key: &str) {
         self.store
             .write("pr", |tx| {
@@ -1048,7 +1051,7 @@ impl Stale {
 
     /// A `pr-feedback` of PR `pr` of `plan` for `reasons`.
     fn feedback(&mut self, plan: &str, pr: &str, reasons: Value) -> i64 {
-        self.ev(Kind::PrFeedback, plan, None, json!({"pr": pr, "reasons": reasons}))
+        self.ev(Kind::PrFeedback, plan, None, json!({"workflow": pr, "reasons": reasons}))
     }
 
     /// A `pr_posts` row for PR `pr` of `plan`: it was posted for review.
@@ -1163,15 +1166,15 @@ fn follow_session_drops_a_pr_error_that_a_later_pr_start_merge_or_cancel_clears(
     let mut s = Stale::new();
     let err = |pr: &str| json!({"details": {"pr": pr}});
     let _e1 = s.ev(Kind::Error, "pay", None, err("a")); // 1 error of PR a, pr-started a 2
-    let ps1 = s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "a"}));
+    let ps1 = s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "a"}));
     let _e2 = s.ev(Kind::Error, "pay", None, err("b")); // 3 error of PR b, pr-merged b 4
-    let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "b"}));
+    let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "b"}));
     let _e3 = s.ev(Kind::Error, "pay", None, err("c")); // 5 error of PR c, pr-cancelled c 6
-    let pc3 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"pr": "c"}));
+    let pc3 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"workflow": "c"}));
     let e4 = s.ev(Kind::Error, "pay", None, err("d")); // 7 error of PR d, pr-started e: streams
-    let pse = s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "e"}));
+    let pse = s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "e"}));
     let e5 = s.ev(Kind::Error, "pay", None, err("f")); // 9 error of PR f, pr-merged f in another Plan: streams
-    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "f"}));
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"workflow": "f"}));
     assert_eq!(s.lead(), vec![ps1, pm2, pc3, e4, pse, e5]);
 }
 
@@ -1183,17 +1186,17 @@ fn follow_session_keeps_every_other_error_and_every_kind_that_reports_a_complete
     live.push(s.ev(Kind::Error, "pay", None, json!({}))); // error with no Job and no details.pr
     live.push(s.ev(Kind::Error, "pay", None, json!({"details": {"pr": 5}}))); // details.pr not a string
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::JobCancelled, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
     // Later Events about the same objects:
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "5"})));
-    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
-    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "5"})));
+    live.push(s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"workflow": "x"})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({"status": "approved"})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanDone, "pay", None, json!({}))); // supersedes 1
@@ -1207,14 +1210,14 @@ fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
         s.pr("pay", key, "open", "none", "failed", Some("[]")); // every row still says checks failed
     }
     let _f1 = s.feedback("pay", "a", json!(["checks_failed"])); // 1 feedback of a, pr-merged a 2
-    let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "a"}));
+    let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "a"}));
     let _f2 = s.feedback("pay", "b", json!(["checks_failed"])); // 3 feedback of b, pr-cancelled b 4
-    let pc2 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"pr": "b"}));
+    let pc2 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"workflow": "b"}));
     let f3 = s.feedback("pay", "c", json!(["checks_failed"])); // 5 feedback of c, nothing after: streams
     let f4 = s.feedback("pay", "d", json!(["checks_failed"])); // 6 feedback of d, pr-merged e: streams
-    let pme = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "e"}));
+    let pme = s.ev(Kind::PrMerged, "pay", None, json!({"workflow": "e"}));
     let f5 = s.feedback("pay", "g", json!(["checks_failed"])); // 8 feedback of g, pr-merged g in another Plan: streams
-    let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "g"}));
+    let _other = s.ev(Kind::PrMerged, "other", None, json!({"workflow": "g"}));
     assert_eq!(s.lead(), vec![pm1, pc2, f3, f4, pme, f5]);
 }
 
@@ -1283,10 +1286,10 @@ fn follow_session_fails_open_when_the_object_or_a_data_field_is_missing() {
     s.pr("pay", "p6", "open", "none", "passed", None);
     let _dropped = s.ev(Kind::PlanDone, "pay", None, json!({})); // 1 plan-done, superseded by the last Event
     let mut live = vec![];
-    live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no prs row
-    live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // prs.pull_request NULL
+    live.push(s.feedback("pay", "nopr", json!(["checks_failed"]))); // no workflows row
+    live.push(s.feedback("pay", "w1", json!(["checks_failed"]))); // workflows.pull_request NULL
     live.push(s.feedback("pay", "p6", json!(["comments"]))); // feedback NULL
-    live.push(s.raw(Kind::PrFeedback, Some("pay"), None, json!({"pr": "p1", "reasons": null}))); // reasons missing
+    live.push(s.raw(Kind::PrFeedback, Some("pay"), None, json!({"workflow": "p1", "reasons": null}))); // reasons missing
     live.push(s.feedback("pay", "p2", json!([]))); // reasons empty
     live.push(s.feedback("pay", "p3", json!("checks_failed"))); // reasons not an array
     live.push(s.feedback("pay", "p4", json!([5]))); // reasons not strings
