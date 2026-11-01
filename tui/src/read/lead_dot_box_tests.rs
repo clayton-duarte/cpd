@@ -33,20 +33,20 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
                    'main', 'main', {AT}, {AT}, {AT}),
                   ('acme/repo', 2, 'https://github.com/acme/repo/pull/2', 'T', 0, 'open', 'none', 'passed', 'clean', 1,
                    'main', 'main', {AT}, {AT}, NULL);
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', 'old', '/repo', 'main', 'merged', 'pay/old', '/wt-old', 1, 'https://github.com/acme/repo/pull/1', {AT},
                    (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT}, {AT});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at)
            VALUES ('pay', 'new', '/repo', 'main', 'open', 'pay/new', '/wt-new', 2, 'https://github.com/acme/repo/pull/2', {AT},
                    (SELECT id FROM pull_requests WHERE number = 2), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'gone', '/repo', 'main', 'cancelled', 'pay/gone', cpd_txn(), '2026-01-01T00:00:00.000Z');"
     );
     if failed {
         sql.push_str(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha)
                VALUES ('pay', 'new', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', cpd_txn(), {AT}, 'crashed', NULL);"
         ));

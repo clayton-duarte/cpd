@@ -259,7 +259,7 @@ impl Opener<'_> {
         let key = Store::open(self.home, self.busy_ms).and_then(|mut store| {
             store.read(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT r.key FROM prs r JOIN pull_requests q ON q.id = r.pull_request \
+                    "SELECT r.key FROM workflows r JOIN pull_requests q ON q.id = r.pull_request \
                      WHERE r.plan = ?1 AND q.repo = ?2 AND q.number = ?3 ORDER BY r.key LIMIT 1",
                 )?;
                 let keys = stmt.query_map(rusqlite::params![plan.as_str(), pull.repo, pull.number], |r| r.get::<_, String>(0))?;

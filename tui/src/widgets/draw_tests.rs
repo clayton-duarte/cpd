@@ -74,7 +74,7 @@ fn plan_row(id: &str, phase: &str, created: &str, workflow: Option<(i64, (&str, 
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', 'l-{id}', '{created}', {locked}, {done});
          {row}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {pull_request},
                  cpd_txn(), '{created}', {locked}, {done});"
@@ -337,7 +337,7 @@ fn the_pr_states_and_checks_are_listed_in_their_colours() {
     for (name, state) in palette::PR_LEGEND {
         assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
     }
-    let checks = find(&buf, "Workflow Checks").1;
+    let checks = find(&buf, "PR Checks").1;
     for (name, c) in palette::CHECKS_LEGEND {
         let (icon, m) = palette::checks(c);
         let (x, y) = find_after(&buf, checks, &format!(" {name}"));

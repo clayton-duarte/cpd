@@ -65,10 +65,10 @@ pub struct Boxes {
     pub links_origin: (u16, u16),
 }
 
-/// The level of each Workflow (indices into `prs`). A merged Workflow's is 0 with no needs, else one more than the highest level
+/// The level of each Workflow (indices into `workflows`). A merged Workflow's is 0 with no needs, else one more than the highest level
 /// among its needs. A Workflow that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
 /// of any merged Workflow (no floor when none is merged): every box that is not merged is below every merged box, so the work
-/// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
+/// in progress sits together (User, 2026-10-18). A need that is not one of `workflows`, or that closes a cycle, is ignored.
 /// The `cancelled` Workflows are all one level below the last of the others (the first when there is none); their needs count for nothing.
 pub fn levels(workflows: &[WorkflowNode]) -> Vec<usize> {
     fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
@@ -103,7 +103,7 @@ pub fn levels(workflows: &[WorkflowNode]) -> Vec<usize> {
     (0..workflows.len()).map(|i| if workflows[i].status == WorkflowStatus::Cancelled { below } else { by_needs[i] }).collect()
 }
 
-/// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` Workflow, and none on one.
+/// The needs of `workflows[i]` that are boxes of `workflows` (indices): none of a `cancelled` Workflow, and none on one.
 fn live_needs(workflows: &[WorkflowNode], i: usize) -> Vec<usize> {
     if workflows[i].status == WorkflowStatus::Cancelled {
         return Vec::new();
@@ -211,8 +211,8 @@ impl Drop for LayoutGuard {
     }
 }
 
-/// The whole canvas of boxes: one per Workflow of `prs`, each holding the chart of its
-/// `jobs`. The pills are in the order of `prs`, then of each Workflow's Jobs. A running Job's icon is the spinner's `frame`.
+/// The whole canvas of boxes: one per Workflow of `workflows`, each holding the chart of its
+/// `jobs`. The pills are in the order of `workflows`, then of each Workflow's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a Workflow.
 pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     #[cfg(test)]

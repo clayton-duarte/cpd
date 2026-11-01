@@ -1,5 +1,5 @@
 //! The plan view of a Plan whose Attempt is an explore Job (Decision pro-d237, Plan `explore-roles`): an explore Job
-//! (kind `scout` or `research`) has `jobs.pr` NULL; the Workflow cost must not read it, and every cockpit read takes it.
+//! (kind `scout` or `research`) has `jobs.workflow` NULL; the Workflow cost must not read it, and every cockpit read takes it.
 //! Fixed `now`: no wall clock, no sleep, no git, no tmux.
 
 use cpd_core::error::CpdError;
@@ -21,7 +21,7 @@ fn pay() -> PlanId {
 /// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'scout');"
@@ -135,7 +135,7 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
 fn an_explore_attempts_time_is_in_no_workflows_active_time() {
     let (_dir, mut store) = store_with(&["api"]);
     let explore_run = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', NULL, 'look', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'scout');

@@ -30,7 +30,7 @@ pub(super) fn store_with(workflows: &[&str]) -> (tempfile::TempDir, Store) {
     );
     for key in workflows {
         sql += &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{key}', '/repo', 'main', 'dispatch', 'cpd/pay/{key}', '/wt/{key}', cpd_txn(), '2026-01-01T00:00:00.000Z', {at});"
         );
     }
@@ -50,7 +50,7 @@ pub(super) fn run(store: &mut Store, sql: &str) {
 /// A Job `key` of kind `kind` of Workflow `pr`, queued or running.
 pub(super) fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', '{workflow}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', '{kind}');"

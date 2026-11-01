@@ -45,7 +45,7 @@ fn fixture(lead_state: &str) -> Fixture {
     );
     for workflow in ["p1", "p2", "p3"] {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{workflow}', '/r', 'main', 'dispatch', 'cpd/pay/{workflow}', '/lw', 1, '{T}', '{T}');"
         ));
     }
@@ -68,7 +68,7 @@ impl Fixture {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha)
                VALUES ('pay', '{workflow}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha});"
         ));

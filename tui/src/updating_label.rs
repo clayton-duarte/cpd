@@ -121,12 +121,12 @@ fn the_plan_read_reports_the_update_job_state() {
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, created_at, changed_at)
              VALUES ('acme/repo', 12, 'https://github.com/acme/repo/pull/12', 'T', 0, 'open', 'none', 'passed', 'conflicting',
                      '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request)
              VALUES ('p1', 'repo', '/repo', 'main', 'open', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z',
                      12, 'https://github.com/acme/repo/pull/12', '2026-01-03T00:00:00.000Z',
                      (SELECT id FROM pull_requests WHERE number = 12));
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
              VALUES ('p1', 'repo', 'up-repo', 'Update', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'update', '{FP}', cpd_txn(), 't');"
         ),
     );

@@ -28,7 +28,7 @@ pub(crate) fn store_with(base_ref: &str, default_branch: &str) -> (tempfile::Tem
                                     base_ref, default_branch, created_at, changed_at)
            VALUES ('acme/repo', 7, 'https://github.com/acme/repo/pull/7', 'T', 0, 'open', 'none', 'passed', 'clean', 1,
                    {base_ref}, {default_branch}, {at}, {at});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at)
            VALUES ('pay', 'api', '/repo', 'main', 'open', 'cpd/pay/api', '/wt', 7, 'https://github.com/acme/repo/pull/7', {at},
                    (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(), '2026-01-01T00:00:00.000Z', {at});"

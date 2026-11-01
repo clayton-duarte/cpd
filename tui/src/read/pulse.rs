@@ -262,7 +262,7 @@ mod tests {
             (&["pr-opened"], Kind::PrOpened),
             (&["escalation", "escalation-answered", "escalation-expired"], Kind::Escalation),
             (&["job-merged", "pr-merged"], Kind::Merged),
-            (&["job-added", "job-retried", "attempt-started", "attempt-status", "all-merged", "pr-feedback", "pr-started", "session-state"], Kind::Other),
+            (&["job-added", "job-retried", "attempt-started", "attempt-status", "all-merged", "pr-feedback", "workflow-started", "session-state"], Kind::Other),
         ] {
             for event in events {
                 assert_eq!(Kind::of(event), kind, "{event}");

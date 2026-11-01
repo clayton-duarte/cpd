@@ -140,7 +140,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
              UPDATE sessions SET plan = '{plan}' WHERE id = '{lead}';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, authored, created_at, changed_at)
                VALUES ('acme/repo', {number}, 'https://github.com/acme/repo/pull/{number}', 'T', 0, 'open', 'none', 'passed', 1, {at}, {at});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                               pull_request, created_txn, created_at, started_at)
                VALUES ('{plan}', 'api', '/repo', 'main', 'open', 'cpd/{plan}/api', '/wt', {number},
                        'https://github.com/acme/repo/pull/{number}', {at},

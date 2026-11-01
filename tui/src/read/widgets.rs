@@ -93,7 +93,7 @@ pub struct WorkflowRow {
     pub key: WorkflowKey,
     pub number: i64,
     pub state: PrState,
-    /// Always set: a Workflow with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
+    /// Always set: a Workflow with a pull request has its row (`workflows` CHECK). Job `dispatch-prs2` drops the `Option`.
     pub polled: Option<PolledPr>,
 }
 
@@ -193,7 +193,7 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
 fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT r.plan, r.key, r.pr_number, r.status, q.state, q.title, q.review_decision, q.checks
-           FROM prs r JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
+           FROM workflows r JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
     )?;
     let mut rows = stmt.query([])?;
     let mut out: BTreeMap<String, Vec<WorkflowRow>> = BTreeMap::new();

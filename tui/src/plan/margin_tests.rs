@@ -29,7 +29,7 @@ fn centre() -> Centre {
          {}
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('p1', 'api', '/api-repo', 'main', 'dispatch', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)

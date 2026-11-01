@@ -59,7 +59,7 @@ fn pill(live: Live, key: &str, tier: &str) -> String {
 
 /// The rectangle of each Workflow's box, read off the canvas: the title starts two cells after the box's `╭`, the box's `╮` is the
 /// first one after the title on that row and its `╰` the first one down the box's left column. (Chart lines inside a box use
-/// `╭` and `╮` too, so the corners are found from the titles, not by scanning for them.) In the order of `prs`.
+/// `╭` and `╮` too, so the corners are found from the titles, not by scanning for them.) In the order of `workflows`.
 fn box_rects(buf: &Buffer, workflows: &[WorkflowNode]) -> Vec<Rect> {
     workflows.iter()
         .map(|p| {

@@ -17,7 +17,7 @@ fn tripped(kind: Kind) -> Env {
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('alpha', 'Title of alpha', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('sketch', 'alpha', 'Plan sketch', 'plan', 'l-sketch', '2026-01-02T00:00:01.000Z', NULL, NULL);
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
          VALUES ('sketch', 'repo', '/repo/sketch', 'main', 'waiting', 'cpd/sketch', NULL, NULL, NULL, NULL,
                  NULL, cpd_txn(), '2026-01-02T00:00:01.000Z', NULL, NULL);

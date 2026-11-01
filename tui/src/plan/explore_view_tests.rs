@@ -35,7 +35,7 @@ fn db() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = db_without_workflow();
     run(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'api', '/repo', 'main', 'dispatch', 'cpd/pay/api', '/wt/api', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');",
     );
     (dir, store)
@@ -61,7 +61,7 @@ fn db_without_workflow() -> (tempfile::TempDir, Store) {
 /// A Workflow Job `key` of Workflow `pr`, queued or running, Tier S3.
 fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', '{workflow}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'work');"
@@ -72,7 +72,7 @@ fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
 fn explore_job(key: &str, status: &str) -> String {
     let failed_cause = if status == "failed" { "'crashed'" } else { "NULL" };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind, failed_cause)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'scout', {failed_cause});"

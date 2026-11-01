@@ -99,9 +99,9 @@ fn escalated(status: &str) -> Tree {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('px', 'ctx', 'X', 'dispatch', 'l-x', {t}, {t}, NULL);
          UPDATE sessions SET plan = 'px' WHERE id = 'l-x';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('px', 'work', '/repo', 'main', 'dispatch', 'cpd/px/work', '/wt', cpd_txn(), {t}, {t});
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at)
            VALUES ('px', 'work', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{fp}', cpd_txn(), {t});
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)

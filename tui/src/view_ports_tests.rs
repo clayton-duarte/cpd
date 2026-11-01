@@ -761,7 +761,7 @@ const PLAN_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at, c
                  '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('p1', 'api', '/api-repo', 'main', 'dispatch', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
@@ -791,7 +791,7 @@ fn the_plan_views_snapshot_reads_the_elapsed_time_at_its_ports_clock() {
     sql(
         &mut store,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, created_at)
              VALUES ('p1', 'api', 'a', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0,
                      '0000000000000000000000000000000000000000000000000000000000000000', cpd_txn(), '2026-01-02T00:00:00.000Z');

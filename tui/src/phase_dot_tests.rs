@@ -49,9 +49,9 @@ fn fixture_store() -> (tempfile::TempDir, Store) {
          UPDATE sessions SET plan = 'pa' WHERE id = 'l-arch';
          UPDATE sessions SET plan = 'pd' WHERE id = 'l-fork';
          UPDATE sessions SET archived_at = '2026-01-05T00:00:00.000Z' WHERE id = 'l-arch';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pf', 'work', '/repo', 'main', 'dispatch', 'cpd/pf/work', '/wt', cpd_txn(), {t}, {t});
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status,
                            appended, fingerprint, failed_cause, created_txn, created_at)
            VALUES ('pf', 'work', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'failed',
                    0, '{FP}', 'boom', cpd_txn(), {t});",
@@ -142,7 +142,7 @@ fn scenario(phase: &str, extra: &str) -> Tree {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('px', 'ctx', 'X', '{phase}', 'l-x', {T}, {locked}, {done});
          UPDATE sessions SET plan = 'px' WHERE id = 'l-x';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('px', 'work', '/repo', 'main', 'dispatch', 'cpd/px/work', '/wt', cpd_txn(), {T}, {T});
          {extra}",
         lead = session("l-x", "lead"),
@@ -173,7 +173,7 @@ fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
     };
     format!(
         "{pull}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
            VALUES ('px', '{key}', '/repo', 'main', '{status}', 'cpd/px/{key}', '/wt', {opened} cpd_txn(), {T}, {T});"
     )
@@ -183,7 +183,7 @@ fn workflow(key: &str, number: u32, status: &str, mergeable: &str) -> String {
 fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                           created_txn, created_at, kind)
          VALUES ('px', '{workflow}', '{key}', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fp}, cpd_txn(), {T}, '{kind}');"
     )

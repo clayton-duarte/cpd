@@ -197,7 +197,7 @@ impl Checks {
     }
 }
 
-/// A Plan's Pull Request: the columns of `prs`, with what `pr poll` last stored in its `pull_requests` row.
+/// A Plan's Pull Request: the columns of `workflows`, with what `pr poll` last stored in its `pull_requests` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pr {
     pub number: i64,
@@ -386,7 +386,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
 
     let mut git: BTreeSet<String> = BTreeSet::new();
     let mut stmt = conn.prepare(
-        "SELECT r.plan FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
+        "SELECT r.plan FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE (?1 IS NULL OR r.plan = ?1) AND (r.status = 'open' OR q.mergeable = 'conflicting')
          UNION
          SELECT j.plan FROM jobs j
@@ -415,8 +415,8 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
                 r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
-           FROM plans p LEFT JOIN prs r ON r.plan = p.id
-                AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
+           FROM plans p LEFT JOIN workflows r ON r.plan = p.id
+                AND r.key = (SELECT key FROM workflows WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE p.deleted_at IS NULL AND (?1 IS NULL OR p.id = ?1) ORDER BY p.created_at, p.id",
     )?;
@@ -431,7 +431,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
         let workflow = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
             (Some(number), Some(url), Some(opened_at)) => {
-                // A Workflow with a number has its pull request (`prs` CHECK).
+                // A Workflow with a number has its pull request (`workflows` CHECK).
                 let checks = row_checks.ok_or_else(|| bad_row(format!("Workflow of Plan {plan} has no pull request row")))?;
                 Some(Pr {
                     number,

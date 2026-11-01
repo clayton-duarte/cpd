@@ -52,7 +52,7 @@ pub struct PlanBoxes {
     pub context: ContextId,
     /// The Workflows, in key order.
     pub workflows: Vec<WorkflowNode>,
-    /// Every Job of the Plan, in creation order; `pr` is `None` exactly for an explore Job (`jobs.pr` NULL).
+    /// Every Job of the Plan, in creation order; `workflow` is `None` exactly for an explore Job (`jobs.workflow` NULL).
     pub jobs: Vec<JobNode>,
     /// What of the Plan needs the User, from the same transaction.
     pub needs_user: NeedsUser,
@@ -120,7 +120,7 @@ impl WorkflowStatus {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowNode {
     pub key: WorkflowKey,
-    /// The repo's directory name: the last component of `prs.repo`.
+    /// The repo's directory name: the last component of `workflows.repo`.
     pub repo_name: String,
     pub base: String,
     pub status: WorkflowStatus,
@@ -187,7 +187,7 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobNode {
     pub key: JobKey,
-    /// The Job's Workflow (`jobs.pr`), `None` exactly for an explore Job of the Plan.
+    /// The Job's Workflow (`jobs.workflow`), `None` exactly for an explore Job of the Plan.
     pub workflow: Option<WorkflowKey>,
     pub seq: i64,
     pub title: String,
@@ -361,9 +361,9 @@ fn workflow_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, le
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
     // An explore Job belongs to the Plan, not to a Workflow: its Attempts are in the Plan's cost, in no Workflow's (pro-d237).
     let mut stmt = conn.prepare(
-        "SELECT j.pr, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
+        "SELECT j.workflow, json_extract(a.metrics, '$.cost_usd'), a.metrics IS NULL, s.file
            FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job LEFT JOIN sessions s ON s.id = a.worker_session
-          WHERE a.plan = ?1 AND j.pr IS NOT NULL",
+          WHERE a.plan = ?1 AND j.workflow IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| {
         Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
@@ -375,19 +375,19 @@ fn workflow_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, le
         };
         costs.entry(workflow.to_string()).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
     }
-    let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut failed_workflows: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stmt = conn.prepare(
-        "SELECT pr FROM jobs WHERE plan = ?1 AND status = 'failed' AND pr IS NOT NULL
-         UNION SELECT j.pr FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE e.status = 'open' AND j.plan = ?1 AND j.pr IS NOT NULL",
+        "SELECT workflow FROM jobs WHERE plan = ?1 AND status = 'failed' AND workflow IS NOT NULL
+         UNION SELECT j.workflow FROM escalations e JOIN attempts a ON a.id = e.attempt JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE e.status = 'open' AND j.plan = ?1 AND j.workflow IS NOT NULL",
     )?;
     for row in stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))? {
-        failed_prs.insert(row?);
+        failed_workflows.insert(row?);
     }
     let display = Display::load(conn, plan)?;
     let workflow_rows = load_workflows(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<WorkflowKey>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    let mut stmt = conn.prepare("SELECT workflow, needs FROM workflow_needs WHERE plan = ?1 ORDER BY workflow, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (workflow, need) = row?;
         needs.entry(workflow).or_default().push(id("Workflow key", &need, WorkflowKey::parse)?);
@@ -396,9 +396,9 @@ fn workflow_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, le
     let mut stmt = conn.prepare(&format!(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
                 {ready}, COALESCE(q.draft, 0),
-                (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
+                (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.workflow = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
-           FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
+           FROM workflows r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 ORDER BY r.key",
     ))?;
     let mut rows = stmt.query([plan.as_str()])?;
@@ -441,7 +441,7 @@ fn workflow_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, le
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
         let row = workflow_rows.iter().find(|p| p.key.as_str() == key);
         let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, WorkflowStatus::Merged | WorkflowStatus::Cancelled))
-            .then(|| Dot::working(failed_prs.contains(&key), lead_work));
+            .then(|| Dot::working(failed_workflows.contains(&key), lead_work));
         out.push(WorkflowNode {
             lead_dot,
             waiting_on: row.map(|p| display.workflow_blockers(p)).unwrap_or_default(),

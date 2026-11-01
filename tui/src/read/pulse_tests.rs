@@ -43,7 +43,7 @@ fn plan(id: &str, context: &str, created: &str, state: &str) -> String {
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'dispatch', 'l-{id}', '{created}', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '{created}', '{created}');
          {}",
         session(&format!("l-{id}"), "lead", context, Some(id), None, state, label)
@@ -55,7 +55,7 @@ fn plan_done(id: &str, context: &str, created: &str, done_at: &str) -> String {
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'done', 'l-{id}', '{created}', '2026-01-02T00:00:00.000Z', '{done_at}');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '{created}', '{created}');
          {}",
         session(&format!("l-{id}"), "lead", context, Some(id), None, "stopped", None)
@@ -78,7 +78,7 @@ fn job(plan: &str, key: &str, status: &str) -> String {
     let fp = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
     let sha = if status == "merged" { "'abc123'" } else { "NULL" };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, merged_sha, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fp}, cpd_txn(),
                  {sha}, '2026-01-02T00:00:00.000Z');"
