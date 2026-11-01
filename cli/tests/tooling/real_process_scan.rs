@@ -29,7 +29,37 @@ pub const ALLOW: &[&str] = &[
 ];
 
 /// The baseline: (file, program, count) of the real-process sites outside `ALLOW` at the base of PR `final`.
-pub const DEBT: &[(&str, &str, usize)] = &[];
+/// Measured by this scan: git 96 in 9 files, python3 1, ps 1, sh 1, env 1. The 77 git sites of the three `pr_adopt_*`
+/// files go through their local `Fx`, which forwards to `TestEnv`: they are real; record pro-d314's 'git 44, git_repo 4'
+/// counted them as fake and is superseded. Each row is a debt: lower or remove it when the site goes away.
+pub const DEBT: &[(&str, &str, usize)] = &[
+    // the engine watch test inits a real repo through TestEnv
+    ("cli/tests/engine/watch.rs", "git", 2),
+    // a flow test runs the real python3
+    ("cli/tests/flow/context_engine.rs", "python3", 1),
+    // the gate flow test builds a real repo through TestEnv
+    ("cli/tests/flow/gate.rs", "git", 5),
+    // the git-layer test runs real git on temporary repos
+    ("cli/tests/pr/git.rs", "git", 1),
+    // the git-layer test asks the real ps whether a pid is dead
+    ("cli/tests/pr/git.rs", "ps", 1),
+    // adopt tests build real repos through TestEnv
+    ("cli/tests/pr/pr_adopt_add.rs", "git", 4),
+    // its local Fx forwards git to TestEnv (real git)
+    ("cli/tests/pr/pr_adopt_life.rs", "git", 21),
+    // its local Fx forwards git to TestEnv (real git)
+    ("cli/tests/pr/pr_adopt_pub.rs", "git", 17),
+    // its local Fx forwards git to TestEnv (real git)
+    ("cli/tests/pr/pr_adopt_rebase.rs", "git", 39),
+    // the lead-branch test builds a real repo through TestEnv
+    ("cli/tests/pr/pr_lead_branch.rs", "git", 3),
+    // pr open tests build real repos through TestEnv
+    ("cli/tests/pr/pr_open.rs", "git", 4),
+    // a store test starts the real sh through TestEnv
+    ("cli/tests/store/store.rs", "sh", 1),
+    // a tui test runs the real env to read its environment
+    ("cli/tests/tui/tui.rs", "env", 1),
+];
 
 const PROGRAMS: [&str; 7] = ["tmux", "sh", "python3", "node", "ps", "kill", "env"];
 
@@ -59,7 +89,13 @@ fn scanned_part<'a>(path: &str, text: &'a str) -> Option<&'a str> {
 /// The text with its comment lines blanked.
 fn without_comments(text: &str) -> String {
     text.lines()
-        .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
+        .map(|l| {
+            if l.trim_start().starts_with("//") {
+                ""
+            } else {
+                l
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

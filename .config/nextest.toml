@@ -19,6 +19,10 @@
 [profile.default]
 fail-fast = false
 
+# A test never passes on a second try: a retry hides a flake. nextest's default is also none; this line makes it
+# explicit and `guards::nextest_retries_are_pinned_to_zero` keeps it so.
+retries = 0
+
 # CI overrides it for its Rust tests step (NEXTEST_TEST_THREADS in .github/workflows/ci.yml, docs/research/test-threads.md).
 # test-threads = 4, still PROVISIONAL: the A/B leaked at 4 (docs/research/leak-flake-ab.md:
 # 8 LEAK-FAIL in 18 runs, against 34 at 14 threads, same pressure: about 4 times fewer, not 0).
