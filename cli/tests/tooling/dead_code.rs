@@ -25,11 +25,18 @@ fn every_allow_dead_code_states_a_live_reason() {
     let own = Path::new(file!()).file_name().unwrap();
     let mut bad = Vec::new();
     for file in files.iter().filter(|f| f.file_name() != Some(own)) {
-        for (n, line) in fs::read_to_string(file).unwrap().lines().enumerate() {
+        let text = fs::read_to_string(file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().copied().enumerate() {
             if !line.contains("allow(dead_code)") {
                 continue;
             }
-            let reason = line.split_once("//").map(|(_, r)| r.trim()).unwrap_or("");
+            // rustfmt moves a trailing comment that is too long to the next line.
+            let next = lines.get(n + 1).map(|l| l.trim()).unwrap_or("");
+            let reason = match line.split_once("//") {
+                Some((_, r)) => r.trim(),
+                None => next.strip_prefix("//").map(str::trim).unwrap_or(""),
+            };
             if reason.is_empty() || reason.contains("Job `") {
                 bad.push(format!(
                     "{}:{}: {}",
