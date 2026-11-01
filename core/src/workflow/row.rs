@@ -13,7 +13,7 @@ use crate::plan::fingerprint::load_workflows;
 use crate::plan::{self, PlanRow, WorkflowRow, Pull};
 
 impl WorkflowRow {
-    /// The Workflow's Lead worktree: set from the status `dispatch` on (`prs` CHECK).
+    /// The Workflow's Lead worktree: set from the status `dispatch` on (`workflows` CHECK).
     pub fn lead(&self, plan: &PlanId) -> Result<&PathBuf, CpdError> {
         self.lead_worktree.as_ref().ok_or_else(|| CpdError::bad_row(format!("Workflow {} of Plan {plan} has no Lead worktree", self.key)))
     }

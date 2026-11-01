@@ -16,7 +16,7 @@ use super::add::{
 };
 use super::EditArgs;
 use crate::env::Env;
-use crate::pr::{find_workflow, plan_phase, pr_locked};
+use crate::pr::{find_workflow, plan_phase, workflow_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey, RepoName};
@@ -79,7 +79,7 @@ pub(crate) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
     {
         return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("Workflow {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("flag", flag));
     }
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
@@ -138,28 +138,28 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
 }
 
 /// The Workflow `key` and its stored title, which must be editable. With `title`, the Workflow is not
-/// `merged` or `cancelled` (`pr_ended`: its title is history). With `others` (a flag other than
+/// `merged` or `cancelled` (`workflow_ended`: its title is history). With `others` (a flag other than
 /// `--title`), the Plan is in `grounding` or `plan` and the Workflow `waiting` (`illegal_transition`); `--title` alone
 /// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` Workflow passes;
-/// anything else is `pr_locked`, and `decide` checks the rest of the restack.
+/// anything else is `workflow_locked`, and `decide` checks the rest of the restack.
 fn editable_workflow(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(WorkflowRow, Option<String>), CpdError> {
     let workflows = load_workflows(conn, plan)?;
     let workflow = find_workflow(&workflows, plan, key)?;
     if title && matches!(workflow.status.as_str(), "merged" | "cancelled") {
         return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("Workflow {key} of Plan {plan} is {}: its title and ticket are history.", workflow.status))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("status", workflow.status.as_str()));
     }
     if others {
         let phase = plan_phase(conn, plan)?;
         if !matches!(phase, Phase::Grounding | Phase::Plan) && !(restack && workflow.status == "waiting") {
-            return Err(pr_locked(plan, phase, COMMAND));
+            return Err(workflow_locked(plan, phase, COMMAND));
         }
         if workflow.status != "waiting" {
             return Err(CpdError::new(ErrorCode::IllegalTransition, format!("Workflow {key} is {}: only a waiting Workflow is edited.", workflow.status))
                 .with("plan", plan.as_str())
-                .with("pr", key.as_str())
+                .with("workflow", key.as_str())
                 .with("from", workflow.status.as_str())
                 .with("to", "waiting"));
         }
@@ -189,7 +189,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
         after.base = resolved.base;
         let phase = plan_phase(conn, plan)?;
         if !matches!(phase, Phase::Grounding | Phase::Plan) {
-            check_restack(conn, plan, &before, &after, resolved.base_workflow.as_deref()).map_err(|()| pr_locked(plan, phase, COMMAND))?;
+            check_restack(conn, plan, &before, &after, resolved.base_workflow.as_deref()).map_err(|()| workflow_locked(plan, phase, COMMAND))?;
         }
     }
     if after.repo != before.repo {
@@ -200,7 +200,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
                 format!("Workflow {key} keeps its repo: {} {} stacked on it.", in_use.join(", "), if in_use.len() == 1 { "is" } else { "are" }),
             )
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("workflows", in_use));
         }
     }
@@ -238,7 +238,7 @@ fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: 
     if want == got { Ok(()) } else { Err(()) }
 }
 
-/// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
+/// Writes the changed `workflows` columns, and deletes and inserts `workflow_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a Workflow that has it already is not touched).
 fn update(tx: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {

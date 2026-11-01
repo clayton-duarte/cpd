@@ -1,7 +1,7 @@
 //! Starting a Workflow (contract §3.8 "The start", §7.2; commands.md §9.7): one
 //! routine for `plan lock`, engine E7 and `workflow start`. It creates the Workflow's Lead
 //! worktree on its Lead Branch (R35's remote rules), runs `pre-start`, pushes a
-//! new branch, then writes `status = dispatch` and `pr-started` in one
+//! new branch, then writes `status = dispatch` and `workflow-started` in one
 //! transaction. `plan lock` uses the steps one by one (all or nothing across
 //! Workflows); E7 and `workflow start` use [`start`].
 
@@ -22,13 +22,13 @@ use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::{Phase, WorkflowRow};
 
-/// Every Workflow of a Plan in key order (`plan::fingerprint::load_prs`), as E7 and `workflow start` read them.
+/// Every Workflow of a Plan in key order (`plan::fingerprint::load_workflows`), as E7 and `workflow start` read them.
 pub use crate::plan::fingerprint::load_workflows as load;
 use crate::store::{Store, WriteTxn};
 
 const COMMAND: &str = "workflow start";
 
-/// Who started the Workflow: the `by` of `pr-started`, and the `source` of the `error`
+/// Who started the Workflow: the `by` of `workflow-started`, and the `source` of the `error`
 /// Events the start appends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum By {
@@ -65,19 +65,19 @@ macro_rules! needs_unmerged {
 }
 /// The base Workflow of `r` (§2.2 "The base Workflow": the Workflow of its repo whose Lead Branch is its base) has not opened: it is
 /// `waiting` or `dispatch` (the implied need; a `merged` one is unstacked first).
-macro_rules! base_pr_not_open {
+macro_rules! base_workflow_not_open {
     () => {
         "b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status IN ('waiting', 'dispatch')"
     };
 }
 
-/// E7's condition over `prs r`: every need `merged` and the base Workflow, when the Workflow is
+/// E7's condition over `workflows r`: every need `merged` and the base Workflow, when the Workflow is
 /// stacked, its base Workflow `open` (the implied need; a `merged` one is not waited for).
 pub const READY: &str = concat!(
     "NOT EXISTS (SELECT 1 FROM workflow_needs n, workflows q WHERE ",
     needs_unmerged!(),
     ") AND NOT EXISTS (SELECT 1 FROM workflows b WHERE ",
-    base_pr_not_open!(),
+    base_workflow_not_open!(),
     ")"
 );
 
@@ -105,7 +105,7 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &Workfl
     let needs = stmt
         .query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM workflows r, workflows b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_not_open!()))?;
+    let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM workflows r, workflows b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_workflow_not_open!()))?;
     let base_workflow = stmt
         .query_map([plan.as_str(), key.as_str()], |r| Ok(format!("{}/{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?
@@ -148,8 +148,8 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &WorkflowKey) ->
 
 /// The unstack of a Workflow whose base Workflow merged (contract §3.8 "Stacked Workflows" step 7, hs-d301): while Workflow `key` of `plan` is
 /// `waiting` or `dispatch` and its base Workflow (§2.2, derived from `base`) is `merged`, its `base` becomes that Workflow's own
-/// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base Workflows. GitHub deleted
-/// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `workflow start`, `pr open`); the
+/// `base` and `workflow-base-changed` is appended for its Plan, once per step down a chain of merged base Workflows. GitHub deleted
+/// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `workflow start`, `workflow open`); the
 /// poll's Event has `number` and `url` null. Whether anything changed.
 pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<bool, CpdError> {
     use rusqlite::OptionalExtension;
@@ -165,7 +165,7 @@ pub(crate) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &
         if moved == 0 {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Workflow {key} of Plan {plan} changed while it was unstacked: rerun the command."))
                 .with("plan", plan.as_str())
-                .with("pr", key.as_str()));
+                .with("workflow", key.as_str()));
         }
         let to_workflow: Option<String> = tx
             .query_row("SELECT plan || '/' || key FROM workflows WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
@@ -193,7 +193,7 @@ pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key
         .ok_or_else(|| CpdError::bad_row(format!("Workflow {key} of Plan {plan} vanished while it was unstacked")))
 }
 
-/// A2 of an `open` Job (contract §3.4, hs-d340): a Workflow stacked on a base Workflow that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
+/// A2 of an `open` Job (contract §3.4, hs-d340): a Workflow stacked on a base Workflow that has merged is unstacked first (`workflow-base-changed`, `by` `open job`),
 /// so the Worker is told a base that exists: GitHub deleted the merged base Workflow's branch.
 pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey) -> Result<(), CpdError> {
     unstack_stored(store, source, plan, key, "open job").map(|_| ())
@@ -249,7 +249,7 @@ impl Prepared {
     pub fn push(self) -> Pushed {
         let (pushed, failed) = match self.lead.push() {
             Ok(pushed) => (pushed, None),
-            Err(e) => (false, Some(e.with("pr", self.workflow.key.as_str()))),
+            Err(e) => (false, Some(e.with("workflow", self.workflow.key.as_str()))),
         };
         Pushed { prepared: self, pushed, failed }
     }
@@ -274,7 +274,7 @@ impl Pushed {
     }
 
     /// The key, the Lead Branch and worktree and R35's outcome, as the results
-    /// list a started Workflow (commands.md §4.8 `prs`, §9.7).
+    /// list a started Workflow (commands.md §4.8 `workflows`, §9.7).
     pub fn to_json(&self) -> Value {
         let (workflow, lead) = (&self.prepared.workflow, &self.prepared.lead);
         json!({
@@ -331,7 +331,7 @@ fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId,
     match git::prepare_workflow_lead_worktree(Path::new(&workflow.repo), plan, &path, &workflow.lead_branch, &workflow.base, cut, &setup, &policy.hooks.pre_start) {
         Ok(lead) => Ok(Prepared { workflow: workflow.clone(), lead }),
         Err(failure) => {
-            let mut error = failure.error.with("pr", key.as_str());
+            let mut error = failure.error.with("workflow", key.as_str());
             if error.code() == ErrorCode::SetupFailed {
                 error = error.with("step", failure.step.as_str());
             }
@@ -341,7 +341,7 @@ fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId,
 }
 
 /// Inside the transaction: the Workflow `waiting → dispatch` with its worktree, then
-/// `pr-started`, and the `error` `push_failed` of a push that failed (R35).
+/// `workflow-started`, and the `error` `push_failed` of a push that failed (R35).
 /// Compare-and-swap on `status = 'waiting'`, else `cas_lost`.
 pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Result<(), CpdError> {
     let (workflow, lead) = (&pushed.prepared.workflow, &pushed.prepared.lead);
@@ -354,7 +354,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
     if moved == 0 {
         return Err(CpdError::new(ErrorCode::CasLost, format!("Workflow {} of Plan {plan} changed while it was started: rerun the command.", workflow.key))
             .with("plan", plan.as_str())
-            .with("pr", workflow.key.as_str()));
+            .with("workflow", workflow.key.as_str()));
     }
     let text = format!(
         "Workflow {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
@@ -364,7 +364,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
     append(tx, event.plan(plan.clone()))?;
     if let Some(error) = &pushed.failed {
         let text = format!(
-            "The Lead Branch {} of Workflow {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
+            "The Lead Branch {} of Workflow {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd workflow open pushes it again.",
             lead.branch,
             workflow.key,
             error.message()
@@ -393,7 +393,7 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
 }
 
 /// Engine E7 failed to start a `waiting` Workflow (§3.8 "A failed start"): in one
-/// transaction `start_failed_at` is set and one `error` Event `pr_start_failed`
+/// transaction `start_failed_at` is set and one `error` Event `workflow_start_failed`
 /// is appended for the Plan's Lead, `source` being the engine's. False when the
 /// Workflow is no longer `waiting` or was already marked: nothing is written.
 pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, step: Step, error: &CpdError) -> Result<bool, CpdError> {
@@ -406,7 +406,7 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &Work
         if marked == 0 {
             return Ok(false);
         }
-        let mut details = json!({"pr": key, "step": step.as_str()});
+        let mut details = json!({"workflow": key, "step": step.as_str()});
         for field in ["tail", "log"] {
             if let Some(value) = error.details().get(field).filter(|v| !v.is_null()) {
                 details[field] = value.clone();
@@ -432,14 +432,14 @@ pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
     let Some(workflow) = workflows.iter().find(|p| p.key == key) else {
         return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No Workflow {key} in Plan {plan}."))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str()));
+            .with("workflow", key.as_str()));
     };
     match workflow.status.as_str() {
         "waiting" => {}
         "cancelled" => {
             return Err(CpdError::new(ErrorCode::IllegalTransition, format!("Workflow {key} of Plan {plan} is cancelled: it cannot be started."))
                 .with("plan", plan.as_str())
-                .with("pr", key.as_str())
+                .with("workflow", key.as_str())
                 .with("from", "cancelled")
                 .with("to", "dispatch"));
         }
@@ -460,10 +460,10 @@ pub(crate) fn run(args: StartArgs) -> Result<Output, CpdError> {
         }
         let mut error = CpdError::new(ErrorCode::WorkflowNotReady, format!("Workflow {key} of Plan {plan} {}.", why.join(" and ")))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("needs", held.needs);
         if let Some(base_workflow) = held.base_workflow {
-            error = error.with("base_pr", base_workflow);
+            error = error.with("base_workflow", base_workflow);
         }
         return Err(error);
     }

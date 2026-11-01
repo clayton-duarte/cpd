@@ -69,14 +69,14 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd workflow cancel` | Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd workflow start` | Start a waiting Workflow whose needs are merged, after a failed start (§9.7) | Lead | |
 | `cpd pr` | Pull requests, through gh (commands.md §9) | | |
-| `cpd pr open` | Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
+| `cpd pr open` | Push the Lead Branch and open the Workflow, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
-| `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
-| `cpd pr reply` | Reply to an open feedback item of the PR's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
-| `cpd pr rerun` | Re-run the failed GitHub Actions workflow runs of the PR's head commit (§9.8c) | Lead | |
-| `cpd pr post` | Post the PR's pull request to Slack for review (§9.8b) | Lead | |
+| `cpd pr view` | Show the Workflow's checks, reviews and comments (§9.8) | Lead | |
+| `cpd pr reply` | Reply to an open feedback item of the Workflow's pull request as the User, with the cpd marker; never resolves a thread | Lead | |
+| `cpd pr rerun` | Re-run the failed GitHub Actions workflow runs of the Workflow's head commit (§9.8c) | Lead | |
+| `cpd pr post` | Post the Workflow's pull request to Slack for review (§9.8b) | Lead | |
 | `cpd pr merge` | Merge a clean pull request on GitHub with a method the repo allows (§9.10) | Lead | yes |
 | `cpd review` | The GitHub review (commands.md §31.1) | | |
 | `cpd review submit` | Post a GitHub review (APPROVE or REQUEST_CHANGES) and, with --slack, queue its reaction (§31.1) | Lead, Manager | |
@@ -170,7 +170,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd resource list` | The repo's declared resources and who holds them (§30.1) | Manager, Lead, Worker | |
 | `cpd resource run` | Take a resource and run a command holding it (§30.2) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
-| `cpd janitor` | Remove the worktrees and branches of merged and cancelled PRs (commands.md §29) | | |
+| `cpd janitor` | Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29) | | |
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §26.2) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

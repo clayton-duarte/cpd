@@ -31,7 +31,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     let mut env = Env::open()?;
-    // The Workflow first (`pr_adopted`, `pr_ended`), then the text.
+    // The Workflow first (`workflow_adopted`, `workflow_ended`), then the text.
     env.store.read(|conn| decide(conn, &plan, &key, None).map(drop))?;
     let text = read_text(&args.file)?;
     if text.trim().is_empty() || text.chars().count() > MAX_CHARS {
@@ -40,7 +40,7 @@ pub(crate) fn describe(args: DescribeArgs) -> Result<Output, CpdError> {
             format!("The description must have text and at most {MAX_CHARS} characters, it has {} (trimmed: {}).", text.chars().count(), text.trim().chars().count()),
         )
         .with("plan", plan.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
         .with("max", MAX_CHARS));
     }
     let (status, already) = match env.store.read(|conn| decide(conn, &plan, &key, Some(&text)))? {
@@ -86,12 +86,12 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
     if workflow.head_ref.is_some() {
         return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("Workflow {key} is an adopted pull request: its own body is kept, so it is not described."))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str()));
+            .with("workflow", key.as_str()));
     }
     if matches!(workflow.status.as_str(), "merged" | "cancelled") {
         return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("Workflow {key} of Plan {plan} is {}: its description is history.", workflow.status))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("status", workflow.status.as_str()));
     }
     let Some(text) = text else { return Ok(Decision::Already(workflow.status.clone())) };

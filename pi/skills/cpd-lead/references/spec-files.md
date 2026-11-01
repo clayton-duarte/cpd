@@ -158,4 +158,4 @@ Add the Job and read its summary when it merges (`job-merged`). Its file stays w
 - **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
 - **Tier.** A scout is `H1`-`H3` and a research Job `S1`-`S3`; any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries at the next valid effort inside its letter (contract §9 'Ladder'; on the hs catalog, scout `H1` > `H3` and `H3` has none, research `S1` > `S3`); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
 - **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
-- **Refusals.** `explore_pr_forbidden` (`--workflow`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.
+- **Refusals.** `explore_workflow_forbidden` (`--workflow`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.

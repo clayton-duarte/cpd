@@ -164,7 +164,7 @@ impl FromStr for WorkflowRef {
 }
 
 /// `needs` as the sorted references of `own`'s Plan: the bare key for a Workflow of the Plan however it was written, `<plan>/<key>`
-/// for another Plan's (which `resolve_refs` refuses, `pr_other_plan`); a repeat is refused with `usage` (§9.4).
+/// for another Plan's (which `resolve_refs` refuses, `workflow_other_plan`); a repeat is refused with `usage` (§9.4).
 pub(super) fn needs_refs(own: &PlanId, needs: &[WorkflowRef]) -> Result<Vec<String>, CpdError> {
     let mut refs: Vec<String> = needs
         .iter()
@@ -175,7 +175,7 @@ pub(super) fn needs_refs(own: &PlanId, needs: &[WorkflowRef]) -> Result<Vec<Stri
         .collect();
     refs.sort();
     if let Some(pair) = refs.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
+        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("workflow", pair[0].as_str()));
     }
     Ok(refs)
 }
@@ -248,7 +248,7 @@ pub(super) fn known_workflows(conn: &Connection, plan: &PlanId) -> Result<Vec<Kn
 }
 
 /// The base Workflow of a Workflow of `repo` targeting `base` (§2.2 "The base Workflow"): derived, never stored.
-pub(super) fn derived_base_pr<'a>(known: &'a [Known], repo: &str, base: &str) -> Option<&'a Known> {
+pub(super) fn derived_base_workflow<'a>(known: &'a [Known], repo: &str, base: &str) -> Option<&'a Known> {
     known.iter().find(|q| q.repo == repo && q.lead_branch == base)
 }
 
@@ -273,21 +273,21 @@ pub(super) struct Resolved {
     pub base_workflow: Option<String>,
 }
 
-/// A reference naming another Plan (`pr_other_plan`): needs and base Workflows are Workflows of the Workflow's own Plan.
+/// A reference naming another Plan (`workflow_other_plan`): needs and base Workflows are Workflows of the Workflow's own Plan.
 fn other_plan(subject: &Subject<'_>, plan: &str, key: &str) -> CpdError {
     CpdError::new(
         ErrorCode::WorkflowOtherPlan,
         format!("Workflow {plan}/{key} is a Workflow of Plan {plan}, not of {}: needs and base Workflows are Workflows of the Workflow's own Plan.", subject.plan),
     )
-    .with("pr", subject.key.as_str())
+    .with("workflow", subject.key.as_str())
     .with("reference", format!("{plan}/{key}"))
     .with("plan", plan)
 }
 
 /// The validation of contract §2.2 "Validation of a reference" for the base and the needs of `subject`, and the
-/// base it makes: the references are Workflows of the Workflow's own Plan (`pr_other_plan`), exist (`base_pr_unknown`,
-/// `needs_unknown`), are not `cancelled` (`needs_unavailable`), a base Workflow is not `merged` (`base_pr_unavailable`)
-/// and is of the Workflow's repo (`base_pr_other_repo`); no Workflow is both base and need (`usage`); the graph of needs and
+/// base it makes: the references are Workflows of the Workflow's own Plan (`workflow_other_plan`), exist (`base_workflow_unknown`,
+/// `needs_unknown`), are not `cancelled` (`needs_unavailable`), a base Workflow is not `merged` (`base_workflow_unavailable`)
+/// and is of the Workflow's repo (`base_workflow_other_repo`); no Workflow is both base and need (`usage`); the graph of needs and
 /// base Workflows stays acyclic (`dependency_cycle`). `needs` are references of the Plan, as `needs_refs` makes them.
 pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &BaseWanted, needs: &[String]) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
@@ -309,7 +309,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
             let Some(workflow) = find(base_key.as_str()) else {
                 return Err(CpdError::new(ErrorCode::BaseWorkflowUnknown, format!("Plan {plan} has no Workflow {base_key} to stack on."))
                     .with("plan", plan.as_str())
-                    .with("pr", base_key.as_str()));
+                    .with("workflow", base_key.as_str()));
             };
             check_base_workflow_state(workflow)?;
             if workflow.repo != subject.repo {
@@ -317,7 +317,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
                     ErrorCode::BaseWorkflowOtherRepo,
                     format!("Workflow {} is in {}, not in {}: a Workflow stacks only on a Workflow of its repo.", workflow.key, workflow.repo, subject.repo),
                 )
-                .with("pr", workflow.key.as_str())
+                .with("workflow", workflow.key.as_str())
                 .with("repo", subject.repo)
                 .with("base_repo", workflow.repo.as_str()));
             }
@@ -325,7 +325,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
         }
         BaseWanted::Branch(branch) => {
             // A branch that is already a Lead Branch of a Workflow of the Plan is stacked all the same.
-            let derived = derived_base_pr(&known, subject.repo, branch);
+            let derived = derived_base_workflow(&known, subject.repo, branch);
             if let Some(workflow) = derived {
                 check_base_workflow_state(workflow)?;
             }
@@ -351,7 +351,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
             ErrorCode::Usage,
             format!("{key} is the base Workflow and a need: the base Workflow is already the implied need (this Workflow waits for it to open), so drop --needs {key}."),
         )
-        .with("pr", key.as_str()));
+        .with("workflow", key.as_str()));
     }
 
     let this = subject.key.to_string();
@@ -366,14 +366,14 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     Ok(Resolved { base: branch, base_workflow: base_workflow.map(|p| format!("{plan}/{}", p.key)) })
 }
 
-/// A base Workflow is not `cancelled` or `merged` (`base_pr_unavailable`).
+/// A base Workflow is not `cancelled` or `merged` (`base_workflow_unavailable`).
 fn check_base_workflow_state(workflow: &Known) -> Result<(), CpdError> {
     if matches!(workflow.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
             ErrorCode::BaseWorkflowUnavailable,
             format!("Workflow {} is {}: there is nothing to stack on, name its base branch instead.", workflow.key, workflow.status),
         )
-        .with("pr", workflow.key.as_str())
+        .with("workflow", workflow.key.as_str())
         .with("status", workflow.status.as_str()));
     }
     Ok(())
@@ -392,7 +392,7 @@ fn edges(conn: &Connection, plan: &PlanId, known: &[Known], except: &String) -> 
         }
     }
     for p in known.iter().filter(|p| p.status != "cancelled" && &p.key != except) {
-        if let Some(q) = derived_base_pr(known, &p.repo, &p.base).filter(|q| q.status != "cancelled") {
+        if let Some(q) = derived_base_workflow(known, &p.repo, &p.base).filter(|q| q.status != "cancelled") {
             graph.entry(p.key.clone()).or_default().push(q.key.clone());
         }
     }
@@ -451,7 +451,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
     // A branch that is a Workflow's Lead Branch of the Plan and repo is its base Workflow's: it needs no branch yet (that Workflow may be `waiting`).
     let lead_branch_of_workflow = match &base {
-        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_pr(&known_workflows(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
+        BaseArg::Branch(Some(branch)) => env.store.read(|conn| Ok(derived_base_workflow(&known_workflows(conn, &plan)?, &repo.display().to_string(), branch).is_some()))?,
         _ => false,
     };
     let wanted = Wanted {
@@ -528,7 +528,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
     let jira = env.store.read(|conn| Ok(conn.query_row("SELECT jira FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), wanted.key.as_str()], |r| r.get::<_, Option<String>>(0))?))?;
     let mut out = json!({"workflow": {
-        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_workflow, "title": wanted.title, "jira": jira, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_workflow": base_workflow, "title": wanted.title, "jira": jira, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
         "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
@@ -599,7 +599,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
         if same(existing, title.as_deref(), wanted, &workflows, &base_branch(conn, &wanted.base)?) {
-            let base_workflow = derived_base_pr(&known_workflows(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
+            let base_workflow = derived_base_workflow(&known_workflows(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
             return Ok(Decision::Already {
                 status: existing.status.clone(),
                 lead_branch,
@@ -611,7 +611,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
         }
         return Err(CpdError::new(ErrorCode::WorkflowExists, format!("Plan {plan} already has a Workflow {} with other flags.", wanted.key))
             .with("plan", plan.as_str())
-            .with("pr", wanted.key.as_str())
+            .with("workflow", wanted.key.as_str())
             .with("repo", existing.repo.as_str())
             .with("base", existing.base.as_str())
             .with("title", title)
@@ -623,7 +623,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
     // Stacked (§2.2 "The base Workflow"): `--base` names a base Workflow, or a branch that is a Workflow's Lead Branch; its base is its link.
     let stacked = match &wanted.base {
         BaseWanted::Workflow(..) => true,
-        BaseWanted::Branch(branch) => derived_base_pr(&known_workflows(conn, plan)?, &wanted.repo, branch).is_some(),
+        BaseWanted::Branch(branch) => derived_base_workflow(&known_workflows(conn, plan)?, &wanted.repo, branch).is_some(),
     };
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
@@ -635,7 +635,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
                 format!("Plan {plan} is in dispatch: say --needs <pr> to link Workflow {} to the Workflow it waits on (merged), --base <pr> to stack it on a Workflow it waits on to open, or --no-needs. A Workflow with no needs is started at once.", wanted.key),
             )
             .with("plan", plan.as_str())
-            .with("pr", wanted.key.as_str())
+            .with("workflow", wanted.key.as_str())
             .with("phase", phase.as_str()));
         }
         None => Vec::new(),
@@ -691,7 +691,7 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
         )
         .with("head_ref", pull.head_ref.as_str())
         .with("plan", plan)
-        .with("pr", workflow));
+        .with("workflow", workflow));
     }
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     if !same(&pull.author, &pull.user) && !adopt.confirm.as_deref().is_some_and(|c| same(c, &pull.author)) {
@@ -741,11 +741,11 @@ fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -
         format!("Plan {plan} already has the Job {}, which the {} template of Workflow {} would add.", taken.join(", "), wanted.shape, wanted.key),
     )
     .with("plan", plan.as_str())
-    .with("pr", wanted.key.as_str())
+    .with("workflow", wanted.key.as_str())
     .with("jobs", taken))
 }
 
-/// The branch `base` names, before any validation: a base Workflow is looked up (`base_pr_unknown`).
+/// The branch `base` names, before any validation: a base Workflow is looked up (`base_workflow_unknown`).
 fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError> {
     match base {
         BaseWanted::Branch(branch) => Ok(branch.clone()),
@@ -756,7 +756,7 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
             .ok_or_else(|| {
                 CpdError::new(ErrorCode::BaseWorkflowUnknown, format!("Plan {plan} has no Workflow {key} to stack on."))
                     .with("plan", plan.as_str())
-                    .with("pr", key.as_str())
+                    .with("workflow", key.as_str())
             }),
     }
 }
@@ -826,7 +826,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             ),
         )
         .with("plan", plan.as_str())
-        .with("pr", wanted.key.as_str())
+        .with("workflow", wanted.key.as_str())
         .with("jobs", jobs));
     }
     for stub in &stubs {
@@ -924,7 +924,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
     Ok(stubs)
 }
 
-/// One `pr_needs` row per need.
+/// One `workflow_needs` row per need.
 pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, workflow: &WorkflowKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
         tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), workflow.as_str(), need.as_str()])?;

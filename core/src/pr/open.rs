@@ -101,7 +101,7 @@ fn require_base_on_remote_pr(repo: &Path, workflow: &WorkflowRow, base_workflow:
         )
         .with("pr", workflow.key.as_str())
         .with("base", workflow.base.as_str())
-        .with("base_pr", base_workflow)),
+        .with("base_workflow", base_workflow)),
         code => Err(CpdError::new(ErrorCode::GitFailed, format!("git ls-remote origin {} exited {code}.", workflow.base))
             .with("exit", code)
             .with("stderr", listed.stderr)),
@@ -232,7 +232,7 @@ pub fn closed(key: &WorkflowKey, branch: &str, head: &gh::HeadPr) -> CpdError {
             head.url
         ),
     )
-    .with("pr", key.as_str())
+    .with("workflow", key.as_str())
     .with("number", head.number)
     .with("url", head.url.as_str())
 }
@@ -360,7 +360,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
     if moved == 0 {
         return Err(cas_lost(id, key));
     }
-    let opened = opened_prs(tx, id)?;
+    let opened = opened_workflows(tx, id)?;
     let text = if pulled.is_merged() {
         format!("Every Workflow of Plan {id} is open or merged. The engine polls them; to follow them by hand: cpd pr poll --plan {id}")
     } else {
@@ -384,14 +384,14 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &WorkflowKey, pulled: &Pulled
         return Err(cas_lost(id, key));
     }
     let text = format!("Every Workflow of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-    append(tx, NewEvent::plan_done(text, merged_prs(tx, id)?).plan(id.clone()))?;
+    append(tx, NewEvent::plan_done(text, merged_workflows(tx, id)?).plan(id.clone()))?;
     Ok(Some(Phase::Done))
 }
 
 /// What an `open` or `update` Job's `attempt submit` once checked (contract §7.7, hs-d340). It has had no caller since commit 84c274f
 /// (#425): submit now checks only the Workflow's policy (§7.7 "An `open` or `update` Job at submit"), and the checks listed here run at the
 /// merge (§7.4), where a refusal ends the Attempt, not the submit. They were, in this
-/// order, each refusal changing nothing: for an `open` Job the stored title (`pr_title_required`) and the newest pull request of the Lead
+/// order, each refusal changing nothing: for an `open` Job the stored title (`workflow_title_required`) and the newest pull request of the Lead
 /// Branch not closed without a merge (`pr_closed`; a merged one is adopted by the Job's merge, so nothing below it runs, as `pr open` runs no
 /// Gate for it); for an `update` Job the Workflow is `open`; the Workflow's policy resolves; and the Lead Branch's tip is an ancestor of HEAD
 /// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds). The base check and the Gates run
@@ -439,7 +439,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
                     short(&tip)
                 ),
             )
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("lead_branch", workflow.lead_branch.as_str())
             .with("lead_sha", tip.as_str())
             .with("sha", sha)
@@ -456,7 +456,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
 }
 
 /// `[{key, number, url, merged_at}]` of every `merged` Workflow, in key order (`plan-done`'s `prs`).
-pub(crate) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(crate) fn merged_workflows(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM workflows WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
@@ -469,11 +469,11 @@ pub(crate) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_jso
 fn cas_lost(id: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("Workflow {key} of Plan {id} left status dispatch meanwhile: rerun the command."))
         .with("plan", id.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
 }
 
 /// `[{key, number, url}]` of every Workflow that is not `cancelled`, in key order.
-pub(crate) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(crate) fn opened_workflows(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM workflows WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?})))?
@@ -538,7 +538,7 @@ fn open_job_live(plan: &PlanId, key: &WorkflowKey, job: &str) -> CpdError {
         format!("Workflow {key} of Plan {plan} has its open Job {job} draft, queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the Workflow by hand."),
     )
     .with("plan", plan.as_str())
-    .with("pr", key.as_str())
+    .with("workflow", key.as_str())
     .with("job", job)
 }
 
@@ -563,20 +563,20 @@ pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanWorkflows, key: &Workf
             format!("{} Jobs of Workflow {key} of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.plan.id),
         )
         .with("plan", plan.plan.id.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
         .with("jobs", open));
     }
     if !all.iter().any(|j| j.status == "merged") {
         return Err(CpdError::new(ErrorCode::JobsNotDone, format!("No Job of Workflow {key} of Plan {} is Merged: there is nothing to open a Workflow for.", plan.plan.id))
             .with("plan", plan.plan.id.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("jobs", json!([])));
     }
     Ok(all)
 }
 
 /// The Workflow's stored title (hs-d285), which it must have: a Workflow that existed before migration `pr-title` has none, and
-/// there is no fallback to the Plan's title (`pr_title_required`).
+/// there is no fallback to the Plan's title (`workflow_title_required`).
 fn stored_title(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<String, CpdError> {
     let stored: Option<String> =
         env.store.read(|conn| Ok(conn.query_row("SELECT title FROM workflows WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
@@ -586,7 +586,7 @@ fn stored_title(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Strin
             format!("Workflow {key} of Plan {plan} has no title: run cpd workflow edit {key} --title \"<text>\" (1-72 characters), then open it again."),
         )
         .with("plan", plan.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
     })
 }
 
@@ -616,7 +616,7 @@ pub fn description_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
         format!("Workflow {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd workflow describe --workflow {key} --file <body.md>, then open it again."),
     )
     .with("plan", plan.as_str())
-    .with("pr", key.as_str())
+    .with("workflow", key.as_str())
 }
 
 /// The one ticket rule: a Workflow with no `jira` that is not adopted (`head_ref` null) is `jira_required` when its resolved policy sets
@@ -640,7 +640,7 @@ pub fn jira_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
         format!("Workflow {key} of Plan {plan} has no Jira ticket: its owner's policy sets pr.jira_required; run cpd workflow edit {key} --jira <KEY>, then open it again."),
     )
     .with("plan", plan.as_str())
-    .with("pr", key.as_str())
+    .with("workflow", key.as_str())
 }
 
 /// The seam from a Workflow's stored title to the title of its pull request on GitHub: the one place a per-owner format

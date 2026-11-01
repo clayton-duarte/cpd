@@ -98,7 +98,8 @@ const FORBIDDEN: &[&str] = &[
     "pr-cancelled",
     "pr-started",
     "pr-base-changed",
-    // The object error codes (`pr_closed`/`pr_not_closed` name the pull request's state and stay).
+    // The object error codes (`pr_closed`/`pr_not_closed` name the pull request's state and stay; `pr_not_ready` is
+    // the pull request's ready state code, kept by `core/src/error.rs`'s `PrNotReady`).
     "pr_required",
     "invalid_pr_id",
     "pr_exists",
@@ -106,7 +107,6 @@ const FORBIDDEN: &[&str] = &[
     "pr_empty",
     "pr_locked",
     "pr_ended",
-    "pr_not_ready",
     "pr_title_required",
     "pr_start_failed",
     "pr_adopted",
@@ -141,9 +141,16 @@ const FORBIDDEN: &[&str] = &[
 /// `[deploys] workflows`, `workflow_runs`). The object is spelled **Workflow**; a GitHub Actions workflow is written
 /// in full. Only checked for prose (`.md`); a Rust identifier or a `pi/lib` one may spell `workflow` lower-case.
 fn bare_workflow(line: &str) -> bool {
-    // A line that is about GitHub Actions or the deploy policy names the GitHub object, not the cpd one.
+    // A line that is about GitHub Actions or the deploy policy names the GitHub object, not the cpd one. A line that
+    // names the renamed command or flag speaks the target vocabulary, so the bare-word rule skips it.
     let lower = line.to_lowercase();
     if lower.contains("github actions") || lower.contains("[deploys]") || lower.contains("workflow_runs") {
+        return false;
+    }
+    if lower.contains("cpd workflow") || lower.contains("--workflow") || lower.contains("workflow add")
+        || lower.contains("workflow edit") || lower.contains("workflow describe") || lower.contains("workflow cancel")
+        || lower.contains("workflow start")
+    {
         return false;
     }
     let mut offset = 0;
@@ -225,6 +232,8 @@ fn guard() {
         "tui/src/dialog/pane.rs",
         "tui/src/pill_colours.rs",
         "tui/src/updating_label.rs",
+        // R21 keeps `plan show`'s inner keys (base_pr), so the map allows the file.
+        "core/src/plan/show.rs",
     ];
     let found = offenders(FORBIDDEN, &allowed);
     assert!(

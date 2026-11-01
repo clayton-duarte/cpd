@@ -222,7 +222,7 @@ pub(crate) fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &st
 }
 
 /// `pr_locked` (exit 3): the Plan is past the phases where its Workflows change (§3.8).
-pub(crate) fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
+pub(crate) fn workflow_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
     CpdError::new(
         ErrorCode::WorkflowLocked,
         format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its Workflows are Locked.", phase.as_str()),

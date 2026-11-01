@@ -11,7 +11,7 @@ use serde_json::json;
 use super::add::needs_refs;
 use super::CancelArgs;
 use crate::env::Env;
-use crate::pr::open::{merged_prs, opened_prs};
+use crate::pr::open::{merged_workflows, opened_workflows};
 use crate::pr::{find_workflow, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -54,7 +54,7 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
         Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded)? {
             Decision::Already => Ok(true),
             Decision::Cancel { from, released: gave, superseded_by } => {
-                // `prs` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` Workflow has
+                // `workflows` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` Workflow has
                 // none (the worktree on disk stays, §3.8). They are null already but for the status's own.
                 let moved = tx.execute(
                     "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL,
@@ -65,7 +65,7 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                 if moved == 0 {
                     return Err(CpdError::new(ErrorCode::CasLost, format!("Workflow {key} changed while it was cancelled: rerun the command."))
                         .with("plan", plan.as_str())
-                        .with("pr", key.as_str()));
+                        .with("workflow", key.as_str()));
                 }
                 cancel_jobs(tx, &plan, &key)?;
                 let text = match (&gave, &superseded_by) {
@@ -177,13 +177,13 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option
     let lost = || {
         CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase dispatch while Workflow {key} was cancelled: rerun the command."))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
     };
     if tx.execute("UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'", [plan.as_str()])? == 0 {
         return Err(lost());
     }
     let text = format!("Every Workflow of Plan {plan} that is not cancelled is open or merged. The engine polls them; to follow them by hand: cpd pr poll --plan {plan}");
-    append(tx, NewEvent::plan_phase_deployed(text, opened_prs(tx, plan)?).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_phase_deployed(text, opened_workflows(tx, plan)?).plan(plan.clone()))?;
     Ok(Some(finish(tx, plan, key)?.unwrap_or(Phase::Deploy)))
 }
 
@@ -207,10 +207,10 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey) -> Result<Option<
     if done == 0 {
         return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase deploy while Workflow {key} was cancelled: rerun the command."))
             .with("plan", plan.as_str())
-            .with("pr", key.as_str()));
+            .with("workflow", key.as_str()));
     }
     let text = format!("Every Workflow of Plan {plan} is merged: the Plan is done. See cpd plan show --plan {plan}");
-    append(tx, NewEvent::plan_done(text, merged_prs(tx, plan)?).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_done(text, merged_workflows(tx, plan)?).plan(plan.clone()))?;
     Ok(Some(Phase::Done))
 }
 
@@ -232,7 +232,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
             ),
         )
         .with("plan", plan.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
         .with("jobs", jobs)
         .with("workflows", needing.clone())
     };
@@ -244,7 +244,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
                 format!("Workflow {key} is {status}: --superseded-by cancels only a dispatch Workflow, after the lock."),
             )
             .with("plan", plan.as_str())
-            .with("pr", key.as_str())
+            .with("workflow", key.as_str())
             .with("from", status)
             .with("to", "cancelled"));
         }
@@ -259,7 +259,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
             };
             return Err(CpdError::new(ErrorCode::IllegalTransition, format!("Workflow {key} is {status}: {only}."))
                 .with("plan", plan.as_str())
-                .with("pr", key.as_str())
+                .with("workflow", key.as_str())
                 .with("from", status)
                 .with("to", "cancelled"));
         }
@@ -278,13 +278,13 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
 }
 
 /// The superseding Workflow `by` (a reference of `plan`, §2.2: a bare key, or `<plan>/<key>`): a Workflow of a Plan of the same
-/// Context (`pr_not_found`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will
+/// Context (`workflow_not_found`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will
 /// do: cpd cannot know where the work went (contract §3.8). It is where the work went, not a dependency: it may be
 /// another Plan's.
 fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<(), CpdError> {
     let (by_plan, by_key) = by.split_once('/').unwrap_or((plan.as_str(), by));
     if by_plan == plan.as_str() && by_key == key.as_str() {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--superseded-by names Workflow {key} itself.")).with("pr", key.as_str()));
+        return Err(CpdError::new(ErrorCode::Usage, format!("--superseded-by names Workflow {key} itself.")).with("workflow", key.as_str()));
     }
     let found: Option<String> = conn
         .query_row(
@@ -321,7 +321,7 @@ fn stacked_on(conn: &Connection, plan: &PlanId, workflow: &WorkflowRow) -> Resul
 }
 
 /// An `open` Workflow: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
-/// wrote) and no Workflow that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
+/// wrote) and no Workflow that is not `cancelled` may need it (`workflow_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
 fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, workflow: &WorkflowRow, needing: &[String]) -> Result<Decision, CpdError> {
     let (Some(id), Some(pull), Some(worktree)) = (workflow.pull_request, &workflow.pull, &workflow.lead_worktree) else {
         return Err(CpdError::bad_row(format!("Workflow {key} of Plan {plan} is open without a pull request or a Lead worktree")));
@@ -333,7 +333,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, workflow: &W
             format!("Workflow {key}'s pull request #{} is {state} as the last poll stored it: only a closed one is given up (run cpd pr poll first).", pull.number),
         )
         .with("plan", plan.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
         .with("number", pull.number)
         .with("url", pull.url.as_str())
         .with("state", state));
@@ -344,7 +344,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, workflow: &W
             format!("Workflow {key} is in use: Workflows that need it, or are stacked on it, would wait for a merge that cannot come; edit away the needs and the stacked Workflows on it (cpd workflow edit) first."),
         )
         .with("plan", plan.as_str())
-        .with("pr", key.as_str())
+        .with("workflow", key.as_str())
         .with("jobs", Vec::<String>::new())
         .with("workflows", needing.to_vec()));
     }
