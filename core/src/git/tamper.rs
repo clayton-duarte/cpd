@@ -1,6 +1,7 @@
 //! The tamper check (contract §7.5): an Attempt's diff may not touch the files
 //! that define the Gate.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde_json::json;
@@ -88,6 +89,18 @@ pub fn changed_paths(dir: &Path, diff_base: &str, branch: &str) -> Result<Vec<St
     let range = format!("{diff_base}...{branch}");
     let changed = ok(dir, &["diff", "--name-only", "--no-renames", "-z", &range])?;
     Ok(changed.split('\0').filter(|p| !p.is_empty()).map(str::to_owned).collect())
+}
+
+/// The paths `diff_base...sha` changes that differ from EVERY ref of `compare_with` (contract §7.3, "The written files"), in
+/// the range diff's order: one range diff plus one `git diff --name-only --no-renames -z <ref> <sha>` per ref.
+pub fn written_paths(dir: &Path, diff_base: &str, sha: &str, compare_with: &[&str]) -> Result<Vec<String>, CpdError> {
+    let mut paths = changed_paths(dir, diff_base, sha)?;
+    for rev in compare_with {
+        let out = ok(dir, &["diff", "--name-only", "--no-renames", "-z", rev, sha])?;
+        let differs: HashSet<&str> = out.split('\0').filter(|p| !p.is_empty()).collect();
+        paths.retain(|p| differs.contains(p.as_str()));
+    }
+    Ok(paths)
 }
 
 /// The red-test guard (§7.5 "The red tests", §7.7): the paths `diff_base...branch` changes that an entry of `guarded` matches

@@ -180,6 +180,7 @@ impl Follower {
             clock: Arc::new(Napper { time: (*fx.fakes.clock).clone(), said: Mutex::new(said_tx.clone()), go: Mutex::new(go_rx) }),
             runner: fx.fakes.runner.clone(),
             spawn: fx.fakes.spawn.clone(),
+            ..Ports::real()
         };
         let pipe_closed = Arc::clone(&closed);
         let thread = std::thread::spawn(move || {

@@ -151,7 +151,7 @@ fn the_migration_keeps_every_job_dependency_and_attempt_row() {
                 assert_eq!(row.remove("runner"), Some(Value::from("pi")));
                 assert_eq!(row.remove("worker_pid"), Some(Value::Null));
                 // `gate_hook`, `gate_command` and `gate_exit` are the columns of `gate-facts`, later still: null.
-                for key in ["gate_hook", "gate_command", "gate_exit"] {
+                for key in ["gate_hook", "gate_command", "gate_exit", "actual_files"] {
                     assert_eq!(row.remove(key), Some(Value::Null));
                 }
             }

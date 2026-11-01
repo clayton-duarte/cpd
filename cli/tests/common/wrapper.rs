@@ -263,7 +263,7 @@ impl Pane {
             term_exits: Mutex::new(None),
         });
         let runner = fx.fakes.runner.weak();
-        let ports = Ports { clock: fx.fakes.clock.clone(), runner: runner.clone(), spawn: fx.fakes.spawn.clone() };
+        let ports = Ports { clock: fx.fakes.clock.clone(), runner: runner.clone(), spawn: fx.fakes.spawn.clone(), ..Ports::real() };
         let verdict = Arc::new(VersionRoute { ports, verdict: Mutex::new(Verdict::Real) });
         let program = installed.file_name().expect("the installed cpd has a name").to_string_lossy().into_owned();
         let _ = (*fx.fakes.runner).clone().route(&program, verdict.clone());
@@ -303,7 +303,7 @@ impl Pane {
         let stepped = Arc::new(Stepped { inner: self.clock.clone(), nap: Mutex::new(nap_tx.clone()), go: Mutex::new(go_rx) });
         let typed = Arc::new(Mutex::new(Vec::new()));
         let keys = Keys { stepped: stepped.clone(), typed: typed.clone(), buffer: Vec::new(), at: 0 };
-        let ports = Ports { clock: stepped.clone(), runner: self.runner.clone(), spawn: self.spawn.clone() };
+        let ports = Ports { clock: stepped.clone(), runner: self.runner.clone(), spawn: self.spawn.clone(), ..Ports::real() };
         let screen = self.screen.clone();
         let thread = std::thread::spawn(move || {
             // The first `step` starts it; a `Wrapper` dropped before that never runs it.

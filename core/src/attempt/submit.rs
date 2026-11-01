@@ -82,19 +82,20 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
     let checked = run_checks(&mut env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha);
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
-    let checked = checked.and_then(|()| match git::run::rev_parse(&root, "HEAD") {
-        Ok(now) if now == sha => Ok(()),
+    let checked = checked.and_then(|files| match git::run::rev_parse(&root, "HEAD") {
+        Ok(now) if now == sha => Ok(files),
         Ok(_) => Err(CpdError::new(ErrorCode::CasLost, "HEAD moved while the checks ran: submit again.").with("attempt", id.to_string())),
         Err(e) => Err(e),
     });
-    match checked {
-        Ok(()) => {}
+    let actual_files = match checked {
+        Ok(files) => files,
         Err(e) => {
             // The refusal is what returns; a failed `end` is E2's to close (`died: true`).
             let _ = span.end(&mut env);
             return Err(e);
         }
     };
+    let actual_files = serde_json::to_string(&actual_files).map_err(|e| CpdError::bad_row(format!("actual_files: {e}")))?;
 
     let written = env.store.write(COMMAND, |tx| {
         let now = row::load(tx, &plan, &id)?;
@@ -107,10 +108,10 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
         // The span ends in this transaction, right before the Attempt is `merging`.
         span.end_in(tx)?;
         let moved = tx.execute(
-            "UPDATE attempts SET status = 'merging', submitted_sha = ?3,
+            "UPDATE attempts SET status = 'merging', submitted_sha = ?3, actual_files = ?4,
                     submitted_at = (SELECT at FROM txns WHERE id = cpd_txn())
               WHERE plan = ?1 AND id = ?2 AND status = 'running'",
-            rusqlite::params![plan.as_str(), id.to_string(), sha],
+            rusqlite::params![plan.as_str(), id.to_string(), sha, actual_files],
         )?;
         if moved == 0 {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {id} changed meanwhile: submit again."))
@@ -215,7 +216,7 @@ fn run_checks(
     root: &Path,
     base: &str,
     sha: &str,
-) -> Result<(), CpdError> {
+) -> Result<Vec<String>, CpdError> {
     // A stacked PR's check reads the root base too (§7.5), so one more ref than an unstacked PR's.
     let (lead, base_refs) = env.store.read(|conn| {
         let (lead, repo, pr_base) = lead_branch(conn, plan, key)?;
@@ -233,7 +234,13 @@ fn run_checks(
     if kind::has_checks(job) {
         kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
-    Ok(())
+    // The written files (§7.3): the paths of `base...sha` that differ from every comparison ref. A linear Attempt's
+    // branch is the Lead Branch, so the Lead tip is not a comparison ref.
+    let mut compare_with: Vec<&str> = base_refs.iter().map(String::as_str).collect();
+    if !git::worktree::is_linear(branch, &lead) {
+        compare_with.push(&lead);
+    }
+    git::tamper::written_paths(root, base, sha, &compare_with)
 }
 
 /// The Lead Branch and the base of the PR that holds Job `job` of `plan`.

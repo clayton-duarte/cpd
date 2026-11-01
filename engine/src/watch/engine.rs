@@ -17,10 +17,10 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts, inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
-use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
+use cpd_core::policy::model::{Models, models_of_attempt, models_of_context, models_of_job};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
@@ -85,6 +85,8 @@ pub(super) struct Engine {
     pub auto_merge: auto_merge::State,
     /// E15: the helper's run in flight and when the last one ended.
     pub models: models::State,
+    /// P1.10: the durable host this engine started or adopted, per Session (contract §6.19).
+    pub hosts: hosts::State,
     /// E16: when this engine last started a `cpd janitor` pass (`None` before the first, in this engine's life).
     pub janitor_started: Option<std::time::Instant>,
     /// When the engine last started the detached tmux restart (contract §6.1).
@@ -137,6 +139,7 @@ impl Engine {
             jira: jira::State::default(),
             auto_merge: auto_merge::State::default(),
             models: models::State::default(),
+            hosts: hosts::State::default(),
             janitor_started: None,
             restart_started: None,
             detached: Vec::new(),
@@ -199,6 +202,13 @@ impl Engine {
         self.catalog_of(|store| store.read(|conn| models_of_attempt(conn, &home, plan, &id.to_string())))
     }
 
+    /// pi's catalog of the models of Context `context`: what a host runs under (contract §6.19). A fixed catalog
+    /// (a step test's) is returned without running pi's Node.
+    pub(super) fn catalog_of_session(&mut self, context: &ContextId) -> Result<Catalog, CpdError> {
+        let home = self.home.clone();
+        self.catalog_of(|store| store.read(|conn| models_of_context(conn, &home, context.as_str())))
+    }
+
     fn catalog_of(&mut self, models: impl FnOnce(&mut Store) -> Result<Models, CpdError>) -> Result<Catalog, CpdError> {
         if let Some(catalog) = &self.fixed_catalog {
             return Ok(catalog.clone());
@@ -215,7 +225,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 24] = [
+        let steps: [fn(&mut Engine); 25] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -239,6 +249,7 @@ impl Engine {
             archive::run,
             sleep::run,
             archive_leads::run,
+            hosts::run,
             janitor::run,
         ];
         for step in steps {

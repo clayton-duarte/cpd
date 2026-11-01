@@ -113,6 +113,10 @@ _Avoid_: retry, run (as nouns)
 The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd`.
 _Avoid_: database, tracker; board (as a noun)
 
+**SDK** (entity, hs-d802):
+The whole of cpd as one programmable thing: the **core** (all behaviour and logic, the `cpd-core` library linked into every cpd process), the **ledger** (the one SQLite database per machine, `$CPD_HOME/cpd.db`, holding the typed rows and the append-only Event log) and the **engine** (the one `cpd watch` tick loop per machine). The interfaces (the CLI, the cockpit, the web UI) are its clients, not parts of it. Contract §1.1.
+_Avoid_: platform, framework, API
+
 **Pending work** (new, hs-d159):
 The in-flight work of a Context's active Plans: for every Plan not done and not archived, each Workflow not merged and not cancelled and its Jobs not cancelled and not yet on the Workflow's base (draft, queued, running, failed, or merged on the Lead Branch only), with titles and touched files. Read by `cpd context pending`; the Manager checks it before starting or routing work for an issue (commands.md §3.11, §15.7).
 _Avoid_: backlog, WIP

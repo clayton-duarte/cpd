@@ -125,7 +125,7 @@ fn world(policy: &str, resources: &[&str]) -> World {
     fs::write(&exe, "").unwrap();
     fx.fakes.spawn.set_self_exe(&exe);
     let spawn = Arc::new(Driverish { inner: fx.fakes.spawn.clone(), locks: fx.env.cpd_home().join("locks"), kept: Mutex::default() });
-    let ports = Ports { clock: fx.fakes.ports.clock.clone(), runner: fx.fakes.ports.runner.clone(), spawn: spawn.clone() };
+    let ports = Ports { clock: fx.fakes.ports.clock.clone(), runner: fx.fakes.ports.runner.clone(), spawn: spawn.clone(), ..Ports::real() };
     World { fx, spawn, ports }
 }
 

@@ -632,7 +632,7 @@ fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
     // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
     // while a migration holds the lock.
     let clock = Arc::new(ScriptedClock::new().at(Duration::from_millis(1500), release));
-    let ports = cpd_core::ports::Ports { clock: clock.clone(), runner: fx.fakes.runner.clone(), spawn: fx.fakes.spawn.clone() };
+    let ports = cpd_core::ports::Ports { clock: clock.clone(), runner: fx.fakes.runner.clone(), spawn: fx.fakes.spawn.clone(), ..cpd_core::ports::Ports::real() };
     let run = follow_once_on(&ports, &["--until-idle", "--since", "0"]);
     assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
     assert!(clock.elapsed() >= Duration::from_millis(1000), "did not wait: {:?}", clock.elapsed());

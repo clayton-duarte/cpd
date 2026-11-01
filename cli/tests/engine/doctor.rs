@@ -18,7 +18,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 15] = [
+const NAMES: [&str; 16] = [
     "config",
     "store",
     "tamper",
@@ -31,6 +31,7 @@ const NAMES: [&str; 15] = [
     "tiers",
     "pi_adapter",
     "worker_runner",
+    "host_runner",
     "lead_packages",
     "watch",
     "holographic",
@@ -202,7 +203,7 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "config", "error", "config_missing");
-    for name in ["store", "tiers", "pi_adapter", "worker_runner"] {
+    for name in ["store", "tiers", "pi_adapter", "worker_runner", "host_runner"] {
         assert_fails(&run, name, "error", "not checked");
     }
     assert_fails(&run, "lead_packages", "warn", "not checked");
