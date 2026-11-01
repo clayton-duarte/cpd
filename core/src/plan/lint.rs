@@ -133,7 +133,7 @@ impl Finding {
 pub struct Input<'a> {
     pub plan: &'a PlanId,
     pub phase: Phase,
-    pub prs: &'a [WorkflowRow],
+    pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
 }
@@ -142,14 +142,14 @@ impl<'a> Input<'a> {
     pub fn new(
         plan: &'a PlanId,
         phase: Phase,
-        prs: &'a [WorkflowRow],
+        workflows: &'a [WorkflowRow],
         jobs: &'a [Job],
         outline: Option<&'a Outline>,
     ) -> Self {
         Input {
             plan,
             phase,
-            prs,
+            workflows,
             jobs,
             outline,
         }
@@ -166,7 +166,7 @@ const RULES: [RuleFn; 9] = [
     test_job_required_rule,
     impl_job_required_rule,
     shape_incomplete_rule,
-    pr_empty_rule,
+    workflow_empty_rule,
     dependency_cycle_rule,
     parallel_write_overlap_rule,
 ];
@@ -221,7 +221,7 @@ fn outline_missing_rule(i: &Input) -> Vec<Finding> {
 fn outline_incomplete_rule(i: &Input) -> Vec<Finding> {
     let e = i
         .outline
-        .and_then(|o| outline_incomplete(i.plan, o, i.prs, i.jobs));
+        .and_then(|o| outline_incomplete(i.plan, o, i.workflows, i.jobs));
     one(Rule::OutlineIncomplete, e)
 }
 
@@ -240,7 +240,7 @@ fn impl_job_required_rule(i: &Input) -> Vec<Finding> {
 }
 
 fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
-    shape::shape_incomplete(i.plan, i.prs, i.jobs)
+    shape::shape_incomplete(i.plan, i.workflows, i.jobs)
         .into_iter()
         .map(|e| {
             let pr = e
@@ -253,11 +253,11 @@ fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
         .collect()
 }
 
-fn pr_empty_rule(i: &Input) -> Vec<Finding> {
+fn workflow_empty_rule(i: &Input) -> Vec<Finding> {
     if i.phase != Phase::Plan {
         return Vec::new();
     }
-    one(Rule::WorkflowEmpty, workflow_empty(i.plan, i.prs, i.jobs))
+    one(Rule::WorkflowEmpty, workflow_empty(i.plan, i.workflows, i.jobs))
 }
 
 fn dependency_cycle_rule(i: &Input) -> Vec<Finding> {
@@ -344,8 +344,8 @@ fn reach<'a>(start: &'a Job, by_key: &BTreeMap<&'a str, &'a Job>) -> BTreeSet<&'
 
 fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
     let mut out = Vec::new();
-    let prs: BTreeSet<&str> = i.jobs.iter().map(Job::workflow_str).collect();
-    for pr in prs {
+    let workflow_keys: BTreeSet<&str> = i.jobs.iter().map(Job::workflow_str).collect();
+    for pr in workflow_keys {
         let jobs: Vec<&Job> = i.jobs.iter().filter(|j| j.workflow_str() == pr).collect();
         let by_key: BTreeMap<&str, &Job> = jobs.iter().map(|j| (j.key.as_str(), *j)).collect();
         let closure: BTreeMap<&str, BTreeSet<&str>> = jobs

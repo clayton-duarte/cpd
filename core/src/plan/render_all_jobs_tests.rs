@@ -67,7 +67,7 @@ fn prs_sql(statuses: &[&str]) -> String {
         };
         sql.push_str(&format!(
             "{row}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
              VALUES ('{PLAN}', '{status}', '/r/{status}', 'main', '{status}', 'cpd/{PLAN}/{status}', {worktree}, {pull}, cpd_txn(), 't', {started}, {merged_at});\n"
         ));
     }

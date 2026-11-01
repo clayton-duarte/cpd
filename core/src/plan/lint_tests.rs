@@ -86,9 +86,9 @@ fn outline(prs: &[&str]) -> Outline {
     }
 }
 
-fn lint_with(phase: Phase, prs: &[WorkflowRow], jobs: &[Job], outline: Option<&Outline>) -> Vec<Finding> {
+fn lint_with(phase: Phase, workflows: &[WorkflowRow], jobs: &[Job], outline: Option<&Outline>) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
-    run(&Input::new(&plan, phase, prs, jobs, outline))
+    run(&Input::new(&plan, phase, workflows, jobs, outline))
 }
 
 /// Findings of the Plan with an outline for `web` and Workflow `web`, in phase `dispatch` (no workflow_empty).

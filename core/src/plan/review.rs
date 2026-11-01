@@ -411,10 +411,10 @@ pub(super) fn outline_missing(id: &PlanId) -> CpdError {
 pub(super) fn outline_incomplete(
     id: &PlanId,
     outline: &Outline,
-    prs: &[WorkflowRow],
+    workflows: &[WorkflowRow],
     jobs: &[Job],
 ) -> Option<CpdError> {
-    let mut without: Vec<&str> = prs
+    let mut without: Vec<&str> = workflows
         .iter()
         .filter(|p| {
             p.status != "cancelled"

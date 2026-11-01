@@ -14,7 +14,7 @@ use super::render::{Heading, markdown};
 
 fn job(
     key: &str,
-    pr: Option<&str>,
+    workflow: Option<&str>,
     kind: &str,
     status: &str,
     tier: &str,
@@ -24,13 +24,13 @@ fn job(
     Job {
         seq: 1,
         key: key.into(),
-        pr: pr.map(Into::into),
+        workflow: workflow.map(Into::into),
         title: format!("Title {key}"),
         tier: Some(tier.into()),
         spec: Some(JobSpec {
             goal: goal.into(),
             context: "c".into(),
-            touches: if pr.is_some() {
+            touches: if workflow.is_some() {
                 json!(["a"])
             } else {
                 json!([format!("run/p1/explore/{key}.md")])
@@ -225,9 +225,9 @@ fn plan_render_marks_a_cancelled_explore_job_and_gives_it_no_summary() {
 fn job_load_reads_the_summary_of_a_merged_explore_job() {
     let spec = "'Goal.', 'c', '[\"a\"]', '[\"b\"]', '[]'";
     let sql = format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('{PLAN}', 'r', '/r', 'main', 'dispatch', 'cpd/{PLAN}/r', '/w', cpd_txn(), 't', 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, summary, kind, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, merged_sha, summary, kind, created_txn, created_at)
            VALUES ('{PLAN}', NULL, 'scout-m', 'T', 'H1', {spec}, 'merged', 0, '{f}', '{f}', 'S', 'scout', cpd_txn(), 't'),
                   ('{PLAN}', NULL, 'scout-q', 'T', 'H1', {spec}, 'queued', 0, '{f}', NULL, NULL, 'scout', cpd_txn(), 't'),
                   ('{PLAN}', 'r', 'work-m', 'T', 'S2', {spec}, 'merged', 0, '{f}', '{f}', NULL, 'work', cpd_txn(), 't');",
