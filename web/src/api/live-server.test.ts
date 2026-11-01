@@ -171,6 +171,41 @@ function snapshotText(frame: SnapshotFrame): string {
   return snapshot.messages?.[0]?.text ?? "";
 }
 
+/** The messages of a snapshot frame. */
+function frameMessages(frame: SnapshotFrame): Array<{ id: string; text: string }> {
+  const snapshot = frame.snapshot as { messages?: Array<{ id: string; text: string }> };
+  return snapshot.messages ?? [];
+}
+
+/** A pi JSONL of `count` assistant turns, each a text of `size` characters, ids m1…mN. */
+function piTurns(count: number, size: number): string {
+  const lines: string[] = [];
+  for (let i = 1; i <= count; i += 1) {
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: `m${i}`,
+        message: { role: "assistant", content: [{ type: "text", text: "x".repeat(size) }] },
+      }),
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Reads the first snapshot a frames request sends for `jsonl`, then closes the stream. */
+async function firstSnapshot(handler: LiveHandler, id: string): Promise<SnapshotFrame> {
+  const capture = makeRes();
+  const done = handler(
+    makeReq({ method: "GET", url: `/__cpd/sessions/${id}/frames`, headers: { "x-cpd-token": TOKEN } }),
+    capture.res,
+  );
+  await flush();
+  const frame = frames(capture.body())[0]!;
+  capture.close();
+  await done;
+  return frame;
+}
+
 test("the handler refuses a request without the token", async () => {
   const handler = createLiveHandler(deps());
   const missing = await call(handler, { method: "GET", url: "/__cpd/sessions" });
@@ -274,6 +309,66 @@ test("the SSE route streams a snapshot frame and again when the transcript chang
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("the frames snapshot carries only the newest turns, within the byte budget", async () => {
+  // Fifty short turns: the tail bound keeps the newest 40, dropping m1…m10.
+  const tailHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(50, 1), stat: async () => 1 }),
+  );
+  const tail = frameMessages(await firstSnapshot(tailHandler, piSession.id));
+  expect(tail).toHaveLength(40);
+  expect(tail[0]!.id).toBe("m11");
+  expect(tail[tail.length - 1]!.id).toBe("m50");
+
+  // Ten ~400 KB turns: the byte budget drops old turns until the frame fits, newest kept.
+  const budgetHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(10, 400_000), stat: async () => 1 }),
+  );
+  const budgetFrame = await firstSnapshot(budgetHandler, piSession.id);
+  const budgetMessages = frameMessages(budgetFrame);
+  expect(budgetMessages.length).toBeLessThan(10);
+  expect(budgetMessages[budgetMessages.length - 1]!.id).toBe("m10");
+  expect(JSON.stringify(budgetFrame).length).toBeLessThanOrEqual(1_000_000);
+
+  // One turn larger than the budget still ships: an empty snapshot would blank the Chat.
+  const giantHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(1, 2_000_000), stat: async () => 1 }),
+  );
+  const giantFrame = await firstSnapshot(giantHandler, piSession.id);
+  const giant = frameMessages(giantFrame);
+  expect(giant).toHaveLength(1);
+  expect(giant[0]!.id).toBe("m1");
+  expect(JSON.stringify(giantFrame).length).toBeGreaterThan(1_000_000);
+});
+
+test("the transcript route pages with limit and before and reports whether more precedes the page", async () => {
+  const handler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(10, 3) }),
+  );
+  const readPage = async (url: string): Promise<{ ids: string[]; more: boolean }> => {
+    const { res } = await call(handler, { method: "GET", url, headers: { "x-cpd-token": TOKEN } });
+    const payload = JSON.parse(res.body()) as {
+      messages: Array<{ id: string }>;
+      more: boolean;
+    };
+    return { ids: payload.messages.map((message) => message.id), more: payload.more };
+  };
+  const transcript = `/__cpd/sessions/${piSession.id}/transcript`;
+
+  // With no limit the whole transcript is answered, as before.
+  const whole = await readPage(transcript);
+  expect(whole.ids).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"]);
+
+  // The three turns just above m8, with older turns still preceding them.
+  const page = await readPage(`${transcript}?limit=3&before=m8`);
+  expect(page.ids).toEqual(["m5", "m6", "m7"]);
+  expect(page.more).toBe(true);
+
+  // The page that reaches the oldest turn says nothing precedes it.
+  const first = await readPage(`${transcript}?limit=3&before=m2`);
+  expect(first.ids).toEqual(["m1"]);
+  expect(first.more).toBe(false);
 });
 
 test("the send route runs cpd session send with the unblocks reason", async () => {

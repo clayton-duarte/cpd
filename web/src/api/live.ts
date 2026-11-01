@@ -18,6 +18,18 @@ export interface LiveApi {
   subscribe(id: string, onFrame: (frame: SnapshotFrame) => void): () => void;
   /** Sends one message; always posts the fixed one-line reason. */
   send(id: string, text: string): Promise<void>;
+  /**
+   * One page of older turns, ending just above `before` (the oldest id the caller holds); with no
+   * `before`, the newest page. The live frame carries only the tail, so this is how the rest of a
+   * long Session is read.
+   */
+  history?(id: string, before?: string, limit?: number): Promise<LiveHistoryPage>;
+}
+
+/** One page of a Session's older turns, with whether anything precedes it. */
+export interface LiveHistoryPage {
+  messages: readonly unknown[];
+  more: boolean;
 }
 
 /** `createLiveApi`'s injected boundaries: `fetch` and `EventSource` are replaced in tests; never real in a test. */
@@ -62,6 +74,20 @@ export function createLiveApi(deps: LiveApiDeps): LiveApi {
       return () => {
         source.close();
       };
+    },
+
+    async history(id: string, before?: string, limit = 40): Promise<LiveHistoryPage> {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (before !== undefined) query.set("before", before);
+      const response = await fetchImpl(
+        `${baseUrl}/__cpd/sessions/${encodeURIComponent(id)}/transcript?${query.toString()}`,
+        { headers: { "x-cpd-token": deps.token } },
+      );
+      const payload = (await response.json()) as {
+        messages?: readonly unknown[];
+        more?: boolean;
+      };
+      return { messages: payload.messages ?? [], more: payload.more === true };
     },
 
     async send(id: string, text: string): Promise<void> {

@@ -14,6 +14,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { LiveChat, type LiveChatProps } from "./live-chat";
+import { parsePiSession, toSnapshotFrame } from "../transcript";
 import type { LiveApi } from "../api/live";
 import type { LiveSession } from "../api/live-server";
 import type { SnapshotFrame } from "../fold/fold";
@@ -137,6 +138,360 @@ test("with no Session the live Chat asks for one from the rail", async () => {
   expect(sessionsCalls()).toBe(0);
 });
 
+/** How many times `needle` occurs in `haystack` — a reader-visible marking count. */
+function occurrences(haystack: string, needle: string): number {
+  return needle === "" ? 0 : haystack.split(needle).length - 1;
+}
+
+/** The first button whose visible text carries `text`. */
+function buttonWithText(text: string): HTMLButtonElement | null {
+  return (
+    [...container.querySelectorAll("button")].find((button) =>
+      (button.textContent ?? "").includes(text),
+    ) ?? null
+  );
+}
+
+/** Renders the Chat for one Session and folds a hand-written pi session JSONL onto it. */
+async function renderJsonl(jsonl: string): Promise<void> {
+  const session: TreeSession = { id: "s1", role: "lead", runner: "pi", context: "ctx", name: "Lead one" };
+  const { api, emit } = fakeApi([session]);
+  await act(async () => {
+    root.render(<LiveChatWithSession api={api} token="t0k" session={session} />);
+    await flush();
+  });
+  await act(async () => {
+    emit(toSnapshotFrame(parsePiSession(jsonl)));
+    await flush();
+  });
+}
+
+/** One assistant text turn line and its wrapper, for the JSONL fixtures. */
+function messageLine(id: string, role: "user" | "assistant", content: unknown): string {
+  return JSON.stringify({ type: "message", id, message: { role, content } });
+}
+
+/** A fake LiveApi whose one paged read answers `page`; records the `before` it was asked for. */
+function pagingApi(page: { messages: readonly unknown[]; more: boolean }): {
+  api: LiveApi;
+  pages: Array<{ id: string; before?: string }>;
+  emit: (frame: SnapshotFrame) => void;
+} {
+  const pages: Array<{ id: string; before?: string }> = [];
+  let onFrame: ((frame: SnapshotFrame) => void) | undefined;
+  const answer = async (): Promise<{ messages: readonly unknown[]; more: boolean }> => page;
+  const api = {
+    sessions: async () => [],
+    subscribe: (_id: string, callback: (frame: SnapshotFrame) => void) => {
+      onFrame = callback;
+      return () => {
+        onFrame = undefined;
+      };
+    },
+    send: async () => {},
+    transcript: async (id: string, requested?: { limit?: number; before?: string }) => {
+      pages.push({ id, before: requested?.before });
+      return answer();
+    },
+    history: async (id: string, before?: string) => {
+      pages.push({ id, before });
+      return answer();
+    },
+  } as unknown as LiveApi;
+  return { api, pages, emit: (frame) => onFrame?.(frame) };
+}
+
+test("a person's turn renders as a Bubble and an agent's text as markdown", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "**bold words**"),
+      messageLine("a1", "assistant", [{ type: "text", text: "an *emphasized* answer" }]),
+    ].join("\n"),
+  );
+  // The person's words render as markdown inside their Bubble.
+  expect(container.querySelector("strong")?.textContent).toContain("bold words");
+  // The agent's text renders as markdown too.
+  expect(container.querySelector("em")?.textContent).toContain("emphasized");
+});
+
+test("a thinking part renders as a Trace row carrying its word count", async () => {
+  await renderJsonl(
+    messageLine("a1", "assistant", [
+      { type: "thinking", thinking: "alpha beta gamma delta" },
+      { type: "text", text: "the answer" },
+    ]),
+  );
+  expect(container.textContent).toContain("the answer");
+  // Four words of thinking, counted on the closed row.
+  expect(container.textContent).toMatch(/4\s*words?/i);
+});
+
+/** One toolResult line pairing its result onto the call with `toolCallId`. */
+function toolResultLine(
+  id: string,
+  toolCallId: string,
+  text: string,
+  extra: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    type: "message",
+    id,
+    message: { role: "toolResult", toolCallId, content: [{ type: "text", text }], ...extra },
+  });
+}
+
+test("a tool part renders as a Trace row with its title and duration, and opened shows its arguments and result", async () => {
+  await renderJsonl(
+    [
+      messageLine("a1", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "bash",
+          arguments: { command: "npm test -- --run\nsecond line arg" },
+        },
+      ]),
+      toolResultLine("r1", "call-1", "ALL GREEN", { durationMs: 1500, isError: false }),
+    ].join("\n"),
+  );
+
+  // The title names the command and the duration sits beside it.
+  expect(container.textContent).toContain("npm test -- --run");
+  expect(container.textContent).toMatch(/1\.5\s*s|1500\s*ms/);
+
+  // Opened, the row shows the call's arguments and its result.
+  const trigger = buttonWithText("npm test");
+  expect(trigger).not.toBeNull();
+  await act(async () => {
+    trigger!.click();
+    await flush();
+  });
+  expect(container.textContent).toContain("second line arg");
+  expect(container.textContent).toContain("ALL GREEN");
+});
+
+test("a failed tool part renders as an error row", async () => {
+  await renderJsonl(
+    [
+      messageLine("a1", "assistant", [
+        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/missing" } },
+      ]),
+      toolResultLine("r1", "call-1", "ENOENT: no such file or directory", { isError: true }),
+    ].join("\n"),
+  );
+
+  // The failed row is in its error state, and its output reads as the failure.
+  expect(container.querySelector('[data-status="error"]')).not.toBeNull();
+  const trigger = buttonWithText("/tmp/missing");
+  expect(trigger).not.toBeNull();
+  await act(async () => {
+    trigger!.click();
+    await flush();
+  });
+  expect(container.textContent).toContain("ENOENT: no such file or directory");
+});
+
+test("a cpd notice renders as a Marker, never as a Bubble", async () => {
+  const notice = "cpd engine notice: the Session was archived";
+  await renderJsonl(
+    [
+      JSON.stringify({ type: "message", id: "n1", message: { role: "system", content: notice } }),
+      JSON.stringify({ type: "custom_message", id: "n2", display: true, content: notice }),
+    ].join("\n"),
+  );
+  expect(container.textContent).toContain(notice);
+});
+
+test("an image part renders inline from its data URL", async () => {
+  await renderJsonl(
+    messageLine("a1", "assistant", [{ type: "image", data: "aGk=", mimeType: "image/png" }]),
+  );
+  const image = container.querySelector("img");
+  expect(image?.getAttribute("src")).toBe("data:image/png;base64,aGk=");
+});
+
+test("Load earlier messages asks for the page above the oldest turn held and disappears when none precedes it", async () => {
+  const session: TreeSession = { id: "s1", role: "lead", runner: "pi", context: "ctx", name: "Lead one" };
+  const { api, pages, emit } = pagingApi({ messages: [], more: false });
+
+  await act(async () => {
+    root.render(<LiveChatWithSession api={api} token="t0k" session={session} />);
+    await flush();
+  });
+  await act(async () => {
+    emit(
+      toSnapshotFrame(
+        parsePiSession(
+          [
+            messageLine("m1", "assistant", [{ type: "text", text: "the first turn" }]),
+            messageLine("m2", "assistant", [{ type: "text", text: "the second turn" }]),
+          ].join("\n"),
+        ),
+      ),
+    );
+    await flush();
+  });
+
+  const control = buttonWithText("Load earlier messages");
+  expect(control).not.toBeNull();
+
+  await act(async () => {
+    control!.click();
+    await flush();
+  });
+
+  // It asks for the page above the oldest turn it holds, and hides once none precedes it.
+  expect(pages).toHaveLength(1);
+  expect(pages[0]!.before).toBe("m1");
+  expect(buttonWithText("Load earlier messages")).toBeNull();
+});
+
+test("an ask call renders as a question card: its header, its question and every option, the taken one marked", async () => {
+  await renderJsonl(
+    [
+      messageLine("a1", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "ask_user_question",
+          arguments: {
+            questions: [
+              {
+                header: "Deploy",
+                question: "Ship it now?",
+                options: [
+                  { label: "Ship now", description: "release today" },
+                  { label: "Hold off", description: "wait a day" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      toolResultLine("r1", "call-1", "User has answered your questions", {
+        details: {
+          answers: [{ questionIndex: 0, question: "Ship it now?", kind: "option", answer: "Ship now" }],
+          cancelled: false,
+        },
+      }),
+    ].join("\n"),
+  );
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("Deploy");
+  expect(text).toContain("Ship it now?");
+  expect(text).toContain("release today");
+  expect(text).toContain("wait a day");
+  // The taken option is marked: its label is named again as the outcome, the other is not.
+  expect(occurrences(text, "Ship now")).toBeGreaterThanOrEqual(2);
+  expect(occurrences(text, "Hold off")).toBe(1);
+});
+
+test("a typed ask answer renders as the person's words and a multi answer marks every picked label", async () => {
+  await renderJsonl(
+    [
+      messageLine("a1", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "ask_user_question",
+          arguments: {
+            questions: [
+              { header: "Notes", question: "Why now?", options: [{ label: "Because", description: "say why" }] },
+            ],
+          },
+        },
+      ]),
+      toolResultLine("r1", "call-1", "User has answered your questions", {
+        details: {
+          answers: [{ questionIndex: 0, question: "Why now?", kind: "custom", answer: "please do both" }],
+          cancelled: false,
+        },
+      }),
+      messageLine("a2", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-2",
+          name: "ask_user_question",
+          arguments: {
+            questions: [
+              {
+                header: "Scope",
+                question: "Which parts?",
+                multiSelect: true,
+                options: [
+                  { label: "Alpha", description: "the first" },
+                  { label: "Beta", description: "the second" },
+                  { label: "Gamma", description: "the third" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+      toolResultLine("r2", "call-2", "User has answered your questions", {
+        details: {
+          answers: [
+            { questionIndex: 0, question: "Which parts?", kind: "multi", answer: null, selected: ["Alpha", "Beta"] },
+          ],
+          cancelled: false,
+        },
+      }),
+    ].join("\n"),
+  );
+
+  const text = container.textContent ?? "";
+  // The typed answer reads as the person wrote it.
+  expect(text).toContain("please do both");
+  expect(text).toContain("Typed answer");
+  // The multi answer names its count and every picked label.
+  expect(text).toContain("2 of 3 picked");
+  expect(text).toContain("Alpha");
+  expect(text).toContain("Beta");
+});
+
+test("an unanswered ask question says so and a refused ask shows the refusal", async () => {
+  await renderJsonl(
+    [
+      messageLine("a1", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "ask_user_question",
+          arguments: {
+            questions: [{ header: "Later", question: "Do it later?", options: [{ label: "Maybe", description: "soon" }] }],
+          },
+        },
+      ]),
+      toolResultLine("r1", "call-1", "User has answered your questions", {
+        details: {
+          answers: [{ questionIndex: 0, question: "Do it later?", kind: "option", answer: null }],
+          cancelled: false,
+        },
+      }),
+      messageLine("a2", "assistant", [
+        {
+          type: "toolCall",
+          id: "call-2",
+          name: "ask_user_question",
+          arguments: {
+            questions: [{ header: "Risk", question: "Accept the risk?", options: [{ label: "Accept", description: "go on" }] }],
+          },
+        },
+      ]),
+      toolResultLine("r2", "call-2", "User declined to answer questions", {
+        details: { answers: [], cancelled: true },
+        isError: true,
+      }),
+    ].join("\n"),
+  );
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("No answer");
+  expect(text).toContain("Refused");
+  expect(text).toContain("User declined to answer questions");
+});
+
 test("the live Chat sends a typed message through the live api", async () => {
   const session: TreeSession = {
     id: "s1",
@@ -167,4 +522,160 @@ test("the live Chat sends a typed message through the live api", async () => {
   });
 
   expect(sent).toEqual([{ id: "s1", text: "hello there" }]);
+});
+
+/** One real cpd `custom_message` line: pi's fields, the content and the Event under `details`. */
+function cpdRecordLine(record: {
+  id: string;
+  customType: string;
+  content: string;
+  details: Record<string, unknown>;
+}): string {
+  return JSON.stringify({
+    type: "custom_message",
+    id: record.id,
+    parentId: "p0",
+    timestamp: "2026-11-01T18:02:00.000Z",
+    customType: record.customType,
+    display: true,
+    content: record.content,
+    details: record.details,
+  });
+}
+
+test("a delivered message renders as the person's Bubble with its delivery line, not as a notice", async () => {
+  const sessionId = "14bd6551-0000-4000-8000-000000000002";
+  const delivered = cpdRecordLine({
+    id: "c1",
+    customType: "cpd",
+    content: `Message from web-chat-live (${sessionId}) (13:02 EST): ship it`,
+    details: {
+      id: 41,
+      at: "2026-11-01T18:02:00.000Z",
+      kind: "session-message",
+      context: "web-chat-live",
+      plan: null,
+      job: null,
+      attempt: null,
+      session: "s1",
+      text: `Message from web-chat-live (${sessionId}) (13:02 EST): ship it`,
+      data: {
+        from: sessionId,
+        text: "ship it",
+        unblocks: "sent from the cpd web chat",
+        wake: true,
+      },
+      delivered_to: "s1",
+    },
+  });
+  const notice = cpdRecordLine({
+    id: "n1",
+    customType: "cpd-plan-summary",
+    content: "NOTICE: plan review r3 was APPROVED",
+    details: { plan: "web-chat-live", review: "r3" },
+  });
+
+  await renderJsonl([delivered, notice].join("\n"));
+
+  const text = container.textContent ?? "";
+  // The person's words are the one Bubble's words — cpd's wrapper is not repeated as the turn.
+  const bubbles = [...container.querySelectorAll('[data-slot="bubble"]')];
+  expect(bubbles).toHaveLength(1);
+  expect(bubbles[0]!.textContent).toContain("ship it");
+  expect(bubbles[0]!.textContent).not.toContain("Message from");
+
+  // The delivery line carries the time cpd stamped and the recorded reason.
+  expect(text).toContain("13:02 EST");
+  expect(text).toContain("sent from the cpd web chat");
+  // The full `Message from <sender> (<time>)` header is the line's title.
+  const titled = container.querySelector('[title*="Message from"]');
+  expect(titled?.getAttribute("title")).toContain(
+    `Message from web-chat-live (${sessionId}) (13:02 EST)`,
+  );
+
+  // The same frame's engine record is a notice: its words show, but never inside a Bubble.
+  expect(text).toContain("NOTICE: plan review r3 was APPROVED");
+  expect(bubbles[0]!.textContent).not.toContain("NOTICE: plan review");
+});
+
+// The Chat thread and where its viewport sits: web/README.md "### The thread follows its live
+// edge". The thread opens at its newest turn and follows new output while the reader stays at
+// that live edge; no turn carries `scrollAnchor`, because an anchor settles that turn at the top
+// of the viewport and holds the mode at `anchored-to-message` — which is why new output never
+// arrived in view — and the Scroll to End control is the way back when the reader scrolls away.
+// jsdom has no layout, so the scrolling itself is not asserted: what is pinned is the composition
+// the bug came from — every rendered row's `data-scroll-anchor` and the control's `data-active`.
+test("no turn in the Chat carries a scroll anchor, which would settle that turn at the top and hold the view there", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "the person's first turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "the agent's first turn" }]),
+      messageLine("u2", "user", "the person's second turn"),
+    ].join("\n"),
+  );
+
+  const rows = [...container.querySelectorAll<HTMLElement>("[data-message-id]")];
+  // The thread rendered the turns the frame gave it, the person's included.
+  expect(rows.map((row) => row.getAttribute("data-message-id"))).toContain("u1");
+  // Not one of them is a scroll anchor: each row carries `data-scroll-anchor="false"`.
+  for (const row of rows) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
+});
+
+test("the Chat renders a Scroll to End control, inert while the reader is at the live edge", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "the person's turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "the agent's turn" }]),
+    ].join("\n"),
+  );
+
+  // The control that returns the reader to the live edge (web/README.md "The thread follows its
+  // live edge") is rendered as the scroller's end `MessageScrollerButton`.
+  const control = container.querySelector<HTMLElement>(
+    '[data-slot="message-scroller-button"][data-direction="end"]',
+  );
+  expect(control).not.toBeNull();
+  expect(control!.textContent).toContain("Scroll to end");
+  // While the thread reports the reader at the live edge the control is inert: `data-active` is
+  // false, which is what hides it and takes it out of the pointer's way.
+  expect(control!.getAttribute("data-active")).toBe("false");
+
+  // The live edge the control returns to is the anchor-free thread: a `scrollAnchor` row is what
+  // held the view off that edge.
+  for (const row of container.querySelectorAll<HTMLElement>("[data-message-id]")) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
+});
+
+test("the Chat renders the person's turns and the assistant's turns in the order the frames give them", async () => {
+  await renderJsonl(
+    [
+      messageLine("u1", "user", "first person turn"),
+      messageLine("a1", "assistant", [{ type: "text", text: "first agent turn" }]),
+      messageLine("u2", "user", "second person turn"),
+      messageLine("a2", "assistant", [{ type: "text", text: "second agent turn" }]),
+    ].join("\n"),
+  );
+
+  // The turns the frame gave render whole and in its order; the Load earlier control is not a turn.
+  const rows = [...container.querySelectorAll<HTMLElement>("[data-message-id]")].filter(
+    (row) => row.getAttribute("data-message-id") !== "load-earlier",
+  );
+  expect(rows.map((row) => row.getAttribute("data-message-id"))).toEqual(["u1", "a1", "u2", "a2"]);
+  // The person's turns are the Bubbles, the agent's are not, each on its own row in order.
+  expect(rows[0]!.querySelector('[data-slot="bubble"]')?.textContent).toContain("first person turn");
+  expect(rows[1]!.querySelector('[data-slot="bubble"]')).toBeNull();
+  // No rendered turn carries a scroll anchor: the thread belongs to its live edge
+  // (web/README.md "The thread follows its live edge").
+  for (const row of rows) {
+    expect(row.getAttribute("data-scroll-anchor"), row.getAttribute("data-message-id") ?? "").toBe(
+      "false",
+    );
+  }
 });

@@ -1,11 +1,12 @@
-// The Markdown renderer for the chat reply (web/README.md "The chat surface"): the assistant's
-// turn goes through react-markdown (plus remark-gfm), and a fenced code block is routed to the
-// vendored AI Elements `CodeBlock` — its language title and copy button replace a bare `<pre>`.
-// This is the one non-registry piece the pinned composition adds; the user's turn is plain text
-// in a Bubble and never reaches here.
-import type { ComponentProps, ReactElement, ReactNode } from "react";
-import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
+// Markdown rendering for a Chat turn: `react-markdown` for the text, with every fenced code block
+// rendered through the shadcn Code Block (`ui.shadcn.com/docs/components/base/code-block`) so a
+// turn's code, log or diff arrives with a title, a language and a copy action.
+//
+// `remark-gfm` is what a turn's tables, task lists, strikethrough and bare autolinks need: CommonMark
+// alone renders a table as a paragraph of pipes, which is how a Lead's status table reached the Chat.
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { cn } from "../lib/utils";
 import {
   CodeBlock,
   CodeBlockActions,
@@ -15,41 +16,98 @@ import {
   CodeBlockTitle,
 } from "./ui/code-block";
 
-/** The language and text of a fenced block, read from its `<code class="language-…">` child. */
-function fenceOf(children: ReactNode): { language?: string; text: string } | undefined {
-  const child = Array.isArray(children) ? children[0] : children;
-  if (child === null || typeof child !== "object" || !("props" in child)) return undefined;
-  const props = (child as { props?: { className?: unknown; children?: unknown } }).props;
-  const className = typeof props?.className === "string" ? props.className : "";
-  const match = /language-([\w-]+)/.exec(className);
-  const text = typeof props?.children === "string" ? props.children : "";
-  return { language: match?.[1], text };
+/** The language of a fenced block's `className` (`language-ts`), or undefined for a plain fence. */
+function fenceLanguage(className: unknown): string | undefined {
+  if (typeof className !== "string") return undefined;
+  return /language-([\w-]+)/.exec(className)?.[1];
 }
 
-/** A fenced code block as a `CodeBlock`; any other `<pre>` falls back to the element. */
-function MarkdownPre({ children }: ComponentProps<"pre"> & ExtraProps): ReactElement {
-  const fence = fenceOf(children);
-  if (fence === undefined) return <pre>{children}</pre>;
-  return (
-    <CodeBlock>
-      <CodeBlockHeader>
-        <CodeBlockTitle>{fence.language ?? "code"}</CodeBlockTitle>
-        <CodeBlockActions>
-          <CodeBlockCopyButton value={fence.text} />
-        </CodeBlockActions>
-      </CodeBlockHeader>
-      <CodeBlockContent>{fence.text}</CodeBlockContent>
-    </CodeBlock>
-  );
+/** The text of a `<code>` element's children, whatever React made of them. */
+function codeText(children: unknown): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(codeText).join("");
+  return "";
 }
 
-const components: Components = { pre: MarkdownPre };
+/** A fenced block becomes a Code Block; inline code stays inline. */
+const components: Components = {
+  // A table is wide by nature and Tailwind's preflight strips its borders and padding, so it gets
+  // a scroller, rules between its rows and room in its cells; a header cell never wraps.
+  table({ children }) {
+    return (
+      <div className="w-full overflow-x-auto">
+        <table className="w-full border-collapse text-sm">{children}</table>
+      </div>
+    );
+  },
+  th({ children, style }) {
+    return (
+      <th
+        style={style}
+        className="border-b border-border px-2 py-1.5 text-start font-medium whitespace-nowrap"
+      >
+        {children}
+      </th>
+    );
+  },
+  td({ children, style }) {
+    return (
+      <td style={style} className="border-b border-border/60 px-2 py-1.5 align-top">
+        {children}
+      </td>
+    );
+  },
+  pre({ children }) {
+    const child = (Array.isArray(children) ? children[0] : children) as
+      | { props?: { className?: unknown; children?: unknown } }
+      | undefined;
+    const text = codeText(child?.props?.children).replace(/\n$/, "");
+    const language = fenceLanguage(child?.props?.className);
+    // A fence with no code in it (a stray `pre`) renders as markdown does.
+    if (text === "") return <pre>{children}</pre>;
+    return (
+      <CodeBlock>
+        <CodeBlockHeader>
+          <CodeBlockTitle>{language ?? "text"}</CodeBlockTitle>
+          <CodeBlockActions>
+            <CodeBlockCopyButton value={text} />
+          </CodeBlockActions>
+        </CodeBlockHeader>
+        <CodeBlockContent>{text}</CodeBlockContent>
+      </CodeBlock>
+    );
+  },
+  a({ className, ...props }) {
+    return (
+      <a
+        className={cn("font-medium underline underline-offset-3", className)}
+        target="_blank"
+        rel="noreferrer"
+        {...props}
+      />
+    );
+  },
+};
 
-/** Renders one markdown reply. */
-export function Markdown({ children }: { children: string }): ReactElement {
+/** Renders one markdown run (a user's words or an assistant's answer). */
+export function Markdown({
+  children,
+  className,
+}: {
+  children: string;
+  className?: string;
+}) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-      {children}
-    </ReactMarkdown>
+    <div
+      className={cn(
+        "flex min-w-0 flex-col gap-3 text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        className
+      )}
+    >
+      <ReactMarkdown components={components} remarkPlugins={[remarkGfm]}>
+        {children}
+      </ReactMarkdown>
+    </div>
   );
 }
