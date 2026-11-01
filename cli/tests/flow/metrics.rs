@@ -3,12 +3,18 @@
 //! The expected numbers are what cpd 1 computes for the same files:
 //! `sessionMetrics(path)` of `src/metrics/session.ts` run under node, on
 //! `PLAIN` itself and, for the fork, on `FORK`'s header and the entries after it.
+//!
+//! Also: the `cpd metrics` command (hs-d798, commands.md §14.7), a read-only aggregate
+//! of the machine's Ledger.
 
 use std::path::Path;
 
+use crate::common::fx::Fx;
+use crate::common::Run;
+
 use cpd_core::error::ErrorCode;
 use cpd_core::metrics::{self, Metrics};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// A Worker's session: a model, a thinking level, an entry of a kind metrics skip, a model
 /// change, two assistant messages.
@@ -139,4 +145,115 @@ fn every_complete_line_must_be_a_session_entry() {
     assert_eq!(refused_at(&format!("{header}\n{no_usage}\n")), 2, "an assistant message needs usage");
     let no_model = r#"{"type":"model_change","timestamp":"2026-01-01T00:00:01.000Z"}"#;
     assert_eq!(refused_at(&format!("{header}\n{USER}\n{no_model}\n")), 3);
+}
+
+// ---------- cpd metrics (commands.md §14.7, hs-d798) ----------
+
+/// The metrics blob of an `attempt-ended` Event and its `attempts.metrics` column.
+fn attempt_metrics(cost_usd: f64, duration_s: f64, model: Option<&str>) -> String {
+    let model = model.map_or("null".to_owned(), |m| format!("\"{m}\""));
+    format!(
+        r#"{{"turns": 3, "tokens_in": 900, "tokens_out": 400, "cache_read": 2000, "cache_write": 500,
+             "cost_usd": {cost_usd}, "duration_s": {duration_s}, "model": {model}, "stop_reason": "stop",
+             "thinking_level": "high"}}"#
+    )
+}
+
+/// A fixture store: Context `ctx`, Plan `pl`, PR `repo` merged, Job `api` merged, Attempt
+/// `api-a1` ended `merged` with its `attempts.metrics` blob and its `attempt-ended` Event.
+fn fixture_metrics() -> Fx {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pl', 'ctx', 'Pl', 'done', 'lead1', 't', 't', 't');
+         INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+           VALUES (1, 'acme/pl', 1, 'https://github.com/acme/pl/1', 'Pl #1', 0, 'merged', 'approved', 'passed', 't', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, merged_at,
+                          pr_number, pr_url, pr_opened_at, pull_request)
+           VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'merged', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't', 't', 't',
+                   1, 'https://github.com/acme/pl/1', 't', 1);
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, merged_sha, created_txn, created_at, kind)
+           VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'merged-sha-test', cpd_txn(), 't', 'work');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,
+                               base_sha, merged_sha, started_at, ended_at, metrics)
+           VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'cpd/pl--api-a1', '/repos/pl--api-a1',
+                   '0123456789abcdef0123456789abcdef01234567', '0123456789abcdef0123456789abcdef01234567', 't', 't',
+                   '{\"turns\": 3, \"tokens_in\": 900, \"tokens_out\": 400, \"cache_read\": 2000, \"cache_write\": 500, \"cost_usd\": 1.234, \"duration_s\": 62.5, \"model\": \"claude-sonnet-x\", \"stop_reason\": \"stop\", \"thinking_level\": \"high\"}');
+        ",
+    );
+    fx
+}
+
+/// A fixture store: Context `ctx`, Plan `pl`, PR `repo`, Job `api` `failed` with Attempt
+/// `api-a1` ended `failed` with a `gate_failed` cause.
+fn fixture_metrics_failed() -> Fx {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pl', 'ctx', 'Pl', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at)
+           VALUES ('pl', 'repo', '/repos/pl', 'pl', 'main', 'dispatch', 'pl/repo', '/repos/pl.pl', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at, kind)
+           VALUES ('pl', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't', 'work');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree,
+                               base_sha, started_at, ended_at)
+           VALUES ('pl', 'api-a1', 'api', 1, 'S2', 'ladder', 'ended', 'failed', 'gate_failed', 'cpd/pl--api-a1', '/repos/pl--api-a1',
+                   '0123456789abcdef0123456789abcdef01234567', 't', 't');
+        ",
+    );
+    fx
+}
+
+#[test]
+fn cpd_metrics_aggregates_a_fixture_store() {
+    let fx = fixture_metrics();
+    let run = fx.cpd(&["metrics"]);
+    let out = run.ok();
+    assert_eq!(
+        out,
+        json!({
+            "store": "<store>",
+            "per_tier": {
+                "S2": {
+                    "attempts": 1,
+                    "merged": 1,
+                    "failed_by_cause": {},
+                    "duration_s": { "avg": 62.5, "median": 62.5 },
+                    "cost_usd": { "avg": 1.234, "total": 1.234 }
+                }
+            },
+            "per_model": {
+                "claude-sonnet-x": {
+                    "attempts": 1,
+                    "merged": 1,
+                    "failed_by_cause": {},
+                    "duration_s": { "avg": 62.5, "median": 62.5 },
+                    "cost_usd": { "avg": 1.234, "total": 1.234 }
+                }
+            },
+            "retries": {},
+            "plans": { "pl": 1.234 },
+            "queue": { "job_added_to_attempt_started": { "avg": 0.0, "max": 0.0 }, "job_blocked_episodes": 0 }
+        })
+    );
+}
+
+#[test]
+fn prometheus_output_parses() {
+    let fx = fixture_metrics();
+    let run = fx.cpd(&["metrics", "--format", "prometheus"]);
+    let out = run.ok();
+    assert_eq!(out["ok"], true);
+    let body = out["data"].as_str().unwrap();
+    assert_eq!(body, "cpd_attempts{tier=\"S2\",model=\"claude-sonnet-x\"} 1\n");
 }
