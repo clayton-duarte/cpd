@@ -210,7 +210,7 @@ pub fn count(fx: &Fx, sql: &str) -> i64 {
 /// The rows the Plan owns, in the tables the delete empties.
 pub fn plan_rows(fx: &Fx, plan: &str) -> i64 {
     // the Lead's row and the `plan-deleted` Event stay (commands.md §4.14): they are not what the delete empties
-    ["jobs", "attempts", "prs"]
+    ["jobs", "attempts", "workflows"]
         .iter()
         .map(|t| {
             count(

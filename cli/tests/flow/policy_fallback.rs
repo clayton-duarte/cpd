@@ -269,7 +269,7 @@ fn f10_a_repo_with_no_origin_is_clayton_duartes() {
     let (fx, repo) = pr_fx(FALLBACK, "pay");
     repo_file(&fx, FALLBACK, "pay");
     let out = add(&fx, &repo).ok();
-    assert_eq!(out["pr"]["name"], "pay", "{out}");
+    assert_eq!(out["workflow"]["name"], "pay", "{out}");
     assert_eq!(
         fx.env
             .query::<String>("SELECT name FROM workflows WHERE plan = 'pay-1' AND key = 'api'"),

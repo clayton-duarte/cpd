@@ -888,7 +888,7 @@ pub fn description_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
 }
 
 /// The one ticket rule: a Workflow with no `jira` that is not adopted (`head_ref` null) is `jira_required` when its resolved policy sets
-/// `pr.jira_required`. A Workflow with a ticket, an adopted Workflow, or a policy that leaves it false never resolves a policy.
+/// `workflow.jira_required`. A Workflow with a ticket, an adopted Workflow, or a policy that leaves it false never resolves a policy.
 pub fn jira_required_of(
     conn: &rusqlite::Connection,
     home: &crate::home::CpdHome,
@@ -914,7 +914,7 @@ pub fn jira_required_of(
 pub fn jira_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::JiraRequired,
-        format!("Workflow {key} of Plan {plan} has no Jira ticket: its owner's policy sets pr.jira_required; run cpd workflow edit {key} --jira <KEY>, then open it again."),
+        format!("Workflow {key} of Plan {plan} has no Jira ticket: its owner's policy sets workflow.jira_required; run cpd workflow edit {key} --jira <KEY>, then open it again."),
     )
     .with("plan", plan.as_str())
     .with("workflow", key.as_str())

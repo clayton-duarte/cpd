@@ -395,7 +395,7 @@ fn decide(
         }
     }
     if before.workflow != after.workflow {
-        fields.push("pr");
+        fields.push("workflow");
     }
     if before.needs != after.needs {
         fields.push("needs");
@@ -431,7 +431,7 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
 
 /// Writes the changed `jobs` columns, and deletes and inserts `dependencies`
 /// rows to match (§4.4 allows deletion only for `draft`): the old
-/// Dependencies first, then the columns (`pr` among them), then the new ones.
+/// Dependencies first, then the columns (`workflow` among them), then the new ones.
 fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(), CpdError> {
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute(
@@ -454,7 +454,7 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
             .map(|(b, a)| (a.0, b.1 != a.1, a.1)),
     );
     written.push((
-        "pr",
+        "workflow",
         before.workflow != after.workflow,
         after.workflow.clone(),
     ));

@@ -34,7 +34,7 @@ fn a_verify_job_runs_and_merges_like_a_docs_job() {
          UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api';
          INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, merged_sha, created_txn, created_at)
          VALUES ('pay', 'repo', 'build', 'Build', 'S2', 'Build.', 'Because.', '[\"build.txt\"]', '[\"it works\"]', '[]', 'merged', 0, 'impl', '{fp}', '{merged}', cpd_txn(), 't');
-         CREATE TRIGGER workflows_shape_fixed BEFORE UPDATE OF shape ON prs
+         CREATE TRIGGER workflows_shape_fixed BEFORE UPDATE OF shape ON workflows
 BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;"
     ));
     let spec = live.fx.env.root().join("verify-spec.json");

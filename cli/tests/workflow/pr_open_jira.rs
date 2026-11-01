@@ -6,11 +6,14 @@ use serde_json::json;
 
 use super::workflow::{Poll, Rows, code, open_jobs, poll_fx};
 
-/// A PR `repo` in `dispatch`, described, whose owner's policy holds `policy` in its `[pr]` table.
+/// A PR `repo` in `dispatch`, described, whose owner's policy holds `gate` in its `[pr]` table and
+/// `policy` in its `[workflow]` table.
 fn fx_with(policy: &str) -> Poll {
     let fx = poll_fx("dispatch");
-    fx.env
-        .owner_policy("acme", &format!("[pr]\ngate = \"local\"\n{policy}"));
+    fx.env.owner_policy(
+        "acme",
+        &format!("[pr]\ngate = \"local\"\n\n[workflow]\n{policy}"),
+    );
     fx.store()
         .write("fixture", |tx| {
             Ok(tx.execute_batch("UPDATE workflows SET description = 'A description'")?)

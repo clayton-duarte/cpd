@@ -172,9 +172,9 @@ fn pr_empty_is_reported_in_phase_plan_and_not_in_dispatch() {
     assert_eq!(findings.len(), 1, "{error}");
     assert_eq!(
         (&findings[0]["rule"], &findings[0]["severity"]),
-        (&json!("pr_empty"), &json!("error"))
+        (&json!("workflow_empty"), &json!("error"))
     );
-    assert_eq!(findings[0]["details"]["prs"], json!(["api"]));
+    assert_eq!(findings[0]["details"]["workflows"], json!(["api"]));
 
     drop(fx);
     let fx = Fx::new();

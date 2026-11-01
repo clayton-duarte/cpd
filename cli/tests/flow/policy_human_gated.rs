@@ -71,7 +71,7 @@ fn human_gated_contexts_refuses_a_value_that_is_not_a_list_of_strings() {
 #[test]
 fn human_gated_contexts_left_out_of_a_set_pr_table_takes_cpds_default() {
     let fx = world("");
-    write(&fx, "acme/r.toml", "[pr]\njira_required = true\n");
+    write(&fx, "acme/r.toml", "[pr]\ntext = \"r\"\n");
     let out = show(&fx, true).ok();
     let repo = format!("repo:{}", real(&fx, "acme/r.toml"));
     assert_eq!(

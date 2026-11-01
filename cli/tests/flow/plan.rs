@@ -1036,9 +1036,9 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
             "pay",
         ])
         .ok();
-    assert_eq!(out["pr"]["base"], "trunk");
+    assert_eq!(out["workflow"]["base"], "trunk");
     assert_eq!(
-        out["pr"]["repo"],
+        out["workflow"]["repo"],
         clone.canonicalize().unwrap().display().to_string()
     );
     let error = refused(

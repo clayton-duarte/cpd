@@ -1,4 +1,4 @@
-//! `job dispatch`, the open Job's merge and the Jira ticket of a PR (Plan pr-ticket): when the owner's policy sets `pr.jira_required`,
+//! `job dispatch`, the open Job's merge and the Jira ticket of a PR (Plan pr-ticket): when the owner's policy sets `workflow.jira_required`,
 //! an `open` Job whose PR has no `jira` and no `head_ref` is refused `jira_required` before any Attempt or driver, and its merge ends
 //! the Attempt `failed` / `gate_error`. An adopted PR's open Job, an `update` Job and a policy that leaves the key false need no ticket.
 
@@ -14,9 +14,9 @@ const WITH_JIRA: &str = "UPDATE workflows SET jira = 'ABC-1' WHERE key = 'repo';
 fn live_requiring(required: bool) -> Live {
     let live = open_live();
     let key = if required {
-        "[pr]\njira_required = true\n"
+        "[workflow]\njira_required = true\n"
     } else {
-        "[pr]\njira_required = false\n"
+        "[workflow]\njira_required = false\n"
     };
     live.fx.env.owner_policy(
         "acme",
@@ -40,7 +40,7 @@ fn job_dispatch_refuses_an_open_job_whose_pr_has_no_jira_when_the_policy_require
         error["message"]
             .as_str()
             .unwrap()
-            .contains("cpd pr edit repo --jira"),
+            .contains("cpd workflow edit repo --jira"),
         "{error}"
     );
     assert_eq!(attempts(&live), 0, "no Attempt row");
@@ -94,7 +94,7 @@ fn job_dispatch_starts_an_update_job_whose_pr_has_no_jira_when_required() {
     let live = open_pr_live();
     live.fx.env.owner_policy(
         "acme",
-        "[gate]\nmerge = \"local\"\npr = \"local\"\n[pr]\njira_required = true\n",
+        "[gate]\nmerge = \"local\"\npr = \"local\"\n\n[workflow]\njira_required = true\n",
     );
     live.add_cpd_job("up-repo", "update");
     let out = live.dispatch("up-repo").ok();

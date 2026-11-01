@@ -1695,7 +1695,7 @@ fn edit_moves_a_draft_job_to_another_pr() {
         "pl",
     )
     .ok();
-    assert_eq!(out["fields"], json!(["pr", "needs"]));
+    assert_eq!(out["fields"], json!(["workflow", "needs"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "workflow"), "web");
     assert_eq!(
         fx.env
@@ -1704,7 +1704,7 @@ fn edit_moves_a_draft_job_to_another_pr() {
     );
     assert_eq!(
         events(&fx, "job-edited").last().unwrap()["data"],
-        json!({"fields": ["pr", "needs"]})
+        json!({"fields": ["workflow", "needs"]})
     );
 
     // A Job with old needs may move with `--no-needs`.
@@ -1714,11 +1714,11 @@ fn edit_moves_a_draft_job_to_another_pr() {
         "pl",
     )
     .ok();
-    assert_eq!(out["fields"], json!(["pr", "needs"]));
+    assert_eq!(out["fields"], json!(["workflow", "needs"]));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies"), 0);
     // A Job with no needs and no dependents moves alone.
     let out = job(&fx, &["edit", "b", "--workflow", "web"], "pl").ok();
-    assert_eq!(out["fields"], json!(["pr"]));
+    assert_eq!(out["fields"], json!(["workflow"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "workflow"), "web");
 
     // The PR it is already in changes nothing, whatever its needs.

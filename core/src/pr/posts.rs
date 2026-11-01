@@ -91,7 +91,7 @@ pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
              WHERE p.auto_merge = 'pending' AND r.status = 'open' AND l.archived_at IS NULL
                AND (NOT EXISTS (SELECT 1 FROM incident) OR EXISTS (SELECT 1 FROM incident_plans i WHERE i.plan = p.plan))
                AND NOT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = r.base)
-             ORDER BY p.posted_at, p.plan, p.pr LIMIT 1",
+             ORDER BY p.posted_at, p.plan, p.workflow LIMIT 1",
             [],
             |r| Ok(Pending { plan: r.get(0)?, workflow: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
         )

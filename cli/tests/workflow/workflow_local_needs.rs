@@ -76,7 +76,7 @@ impl Pay {
     /// `run` is refused `workflow_other_plan`, exit 3, with these details, and wrote nothing.
     fn refused(&self, run: &Run, pr: &str, reference: &str, writes: (i64, i64)) {
         let error = common::refused(run, "workflow_other_plan", 3);
-        assert_eq!(error["details"]["pr"], pr, "{error}");
+        assert_eq!(error["details"]["workflow"], pr, "{error}");
         assert_eq!(error["details"]["reference"], reference, "{error}");
         assert_eq!(error["details"]["plan"], "ops-1", "{error}");
         assert_eq!(self.writes(), writes, "the refusal wrote something");

@@ -19,7 +19,7 @@ fn review_refuses_pr_empty_in_phase_plan_and_writes_nothing() {
     outline(&fx, &["api"]);
 
     let error = refused(&review(&fx), "workflow_empty", 3);
-    assert_eq!(error["details"]["prs"], json!(["web"]), "{error}");
+    assert_eq!(error["details"]["workflows"], json!(["web"]), "{error}");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plan_reviews"), 0);
     assert_eq!(
         fx.env

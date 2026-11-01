@@ -97,7 +97,7 @@ fn explore_job_of(kind: &str, key: &str, status: &str) -> String {
     };
     format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                           created_txn, created_at, kind, failed_cause)
+                           created_txn, created_at, kind, failed_cause, cancel_reason, cancel_requested_at, merged_sha, summary)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', '{kind}', {failed_cause}, {cancel_reason}, {cancel_at}, {merged_sha}, {summary});"
     )

@@ -131,7 +131,8 @@ fn the_output_has_exactly_the_documented_fields() {
             "protected",
             "resources",
             "test-commands",
-            "tests"
+            "tests",
+            "workflow"
         ]
     );
     for (name, domain) in out["policy"].as_object().unwrap() {
@@ -168,7 +169,6 @@ fn the_output_has_exactly_the_documented_fields() {
             "pr.jira.estimate_fields",
             "pr.jira.in_progress",
             "pr.jira.in_review",
-            "pr.jira_required",
             "pr.post.channel",
             "pr.post.enabled",
             "pr.post.merged_reaction",

@@ -47,7 +47,7 @@ fn a_queued_job_with_no_attempt_takes_a_new_spec_and_its_fingerprint_follows() {
     assert_eq!(job_row(&fx.env, "pl", "a", "title"), "Title of a");
     assert_eq!(job_row(&fx.env, "pl", "a", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "kind"), "work");
-    assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
+    assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
     assert_eq!(
         fx.env
