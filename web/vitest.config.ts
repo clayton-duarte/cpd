@@ -9,6 +9,9 @@ export default defineConfig({
     root: "..",
     environment: "node",
     globals: true,
+    // Resolved from `root` (the repo root); it shims the jsdom globals the async view
+    // tests need (ResizeObserver) and nothing else (web/vitest.setup.ts).
+    setupFiles: ["web/vitest.setup.ts"],
     include: ["web/src/**/*.test.{ts,tsx}"],
   },
 });
