@@ -3,7 +3,7 @@
 // real data constructors — the mock's action handlers are the stubs.
 import { expect, test } from "vitest";
 import { createMockApi } from "./mock";
-import { submitPost, uiResponsePost } from "./actions";
+import { historyPost, submitPost, uiResponsePost } from "./actions";
 
 test("actions are typed POSTs carried to the mock", () => {
   const mock = createMockApi();
@@ -18,4 +18,10 @@ test("actions are typed POSTs carried to the mock", () => {
   const answer = uiResponsePost({ type: "ui_response", req: "a", id: "p1", value: "yes" });
   expect(answer.action).toBe("ui_response");
   expect(() => mock.post(answer, { token: "test-token" })).not.toThrow();
+
+  // The P1.8 `history` command is a typed POST too (§1.2).
+  const history = historyPost({ limit: 10 });
+  expect(history.action).toBe("history");
+  expect(history.payload.limit).toBe(10);
+  expect(() => mock.post(history, { token: "test-token" })).not.toThrow();
 });

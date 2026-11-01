@@ -9,6 +9,7 @@ import fixture from "./fixture.json";
 test("the read-model mirror accepts the pinned CLI JSON fixture", () => {
   const parsed = acceptReadModel<PlanListResult>(fixture);
   expect(parsed.ok).toBe(true);
+  expect(parsed.events_cursor).toBe("evt-1");
   expect(parsed.plans.length).toBeGreaterThan(0);
   expect(parsed.plans[0]?.id).toBe("plan-1");
 });

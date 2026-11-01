@@ -9,12 +9,16 @@ test("the fold applies an events batch to the snapshot state", () => {
     type: "events",
     epoch: "e1",
     seq: 6,
-    events: [{ kind: "message_start", id: "m1", role: "assistant", text: "hel" }],
+    events: [
+      { kind: "message_start", id: "m1", role: "assistant", text: "hel" },
+      { kind: "message_start", id: "m2", role: "user", text: "world" },
+    ],
   });
   // each AgentEvent of the batch is applied in order and the cursor advances.
   expect(next.seq).toBe(6);
   expect(next.cursor).toEqual({ epoch: "e1", seq: 6 });
   expect(next.messages.find((m) => m.id === "m1")?.text).toBe("hel");
+  expect(next.messages.find((m) => m.id === "m2")?.text).toBe("world");
 });
 
 test("message_start replaces the whole message at message_end", () => {
