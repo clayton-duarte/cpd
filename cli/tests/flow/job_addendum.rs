@@ -184,8 +184,11 @@ fn an_addendum_refuses_a_draft_merged_or_cancelled_job_and_an_attempt_that_is_no
     engine(&fx.env, "pl", "m", "merged");
     // A running Job whose latest Attempt is `starting`, `merging` or `ended`, inserted in that status.
     for (key, status) in [("s", "starting"), ("g", "merging"), ("e", "ended")] {
-        let ended = if status == "ended" { ", outcome, cause, ended_at" } else { "" };
-        let ended_values = if status == "ended" { ", 'failed', 'timed_out', 't'" } else { "" };
+        let (ended, ended_values) = match status {
+            "ended" => (", outcome, cause, ended_at", ", 'failed', 'timed_out', 't'"),
+            "merging" => (", submitted_sha", ", 'abc123'"),
+            _ => ("", ""),
+        };
         fixture(
             &fx.env,
             &format!(
