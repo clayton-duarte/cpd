@@ -177,6 +177,8 @@ Do not describe code that this PR has not created yet as present: this PR create
 
 A test never starts a process: `tmux`, `git`, `gh`, `node`, the secret tool and `cpd` are scripted on a `FakeRunner`, whose time is the `ManualClock`. There is ONE process trait, `Runner`; tmux and git are not traits of their own, they are routes of the `FakeRunner` (see ADR 0013).
 
+The real-process ratchet (`no_test_starts_a_real_process_beyond_the_debt`, pro-d314; see The guard, below) is what keeps this target from sliding while ADR 0013's deletion of the real-process sites (`docs/adr/0013-tests-in-process.md`, "What dies in mig-final") stays open: it pins the sites each file has today and fails a new one. It deletes none of them; that deletion is still open.
+
 Decided API, in `core/src/host/runner.rs` (cpd-core, always compiled, no feature, like `Clock`):
 ```rust
 pub trait Runner: Send + Sync {
