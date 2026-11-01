@@ -4,9 +4,9 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `pr-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is `attempt-aborted`, `attempt-ended` and `job-blocked`.
+ * 17 is `pr-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is `attempt-ended` and `job-blocked`, 21 is `attempt-aborted`.
  */
-export const PROTOCOL = 20;
+export const PROTOCOL = 21;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
