@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 // Tests for the single-screen AI Elements chat reachable from the Context tree in the left rail
-// (web/README.md "The Context tree in the left rail selects the Chat"). The whole screen is the
-// three-column shell (`App`): the left rail is the Chat's only navigation and nothing is selected
-// on first render, so every test renders `App` exactly as `main.tsx` does, clicks a Session's row
-// in the rail, and pins what the screen then shows and what the injected LiveApi receives.
+// (web/README.md "The Context tree in the left rail selects the Chat"): the Chat is the centre
+// column, with the Context rail to its left and the Inbox placeholder to its right. The whole
+// screen is the three-column shell (`App`): the left rail is the Chat's only navigation and
+// nothing is selected on first render, so every test renders `App` exactly as `main.tsx` does,
+// clicks a Session's row in the rail, and pins what the screen then shows and what the injected
+// LiveApi receives. The shell's own three columns and its 20rem default are pinned by
+// web/src/app/App.test.tsx, not here.
 //
 // Only authored code is tested. The LiveApi is an injected fake: no EventSource opens, no fetch
 // runs, no socket, server or cpd spawns. The frame the view folds is the same `SnapshotFrame`
@@ -140,14 +143,20 @@ test("the chat is the only element on the screen, with no nav and no other panes
 
   await renderScreen(api);
 
-  // The app shell's navigation and the cockpit panes leave the screen.
+  // The legacy single-screen cockpit chrome stays gone: no nav, no Tree/Plan/Inbox/Logs panes.
   expect(container.querySelector("nav")).toBeNull();
   for (const pane of ["tree", "plan", "inbox", "logs"]) {
     expect(container.querySelector(`[data-view="${pane}"]`)).toBeNull();
   }
 
-  // The chat surface itself is the screen: the prompt input is there.
-  expect(container.querySelector("textarea")).not.toBeNull();
+  // The Chat is the centre column of the shell: the Context rail is to its left and the Inbox
+  // placeholder to its right. The shell's three columns and 20rem default are App.test.tsx's.
+  const chat = container.querySelector("textarea")?.closest<HTMLElement>("[data-panel]");
+  expect(chat).not.toBeNull();
+  const context = chat!.previousElementSibling?.previousElementSibling as HTMLElement | null;
+  expect(context?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  const inbox = chat!.nextElementSibling?.nextElementSibling as HTMLElement | null;
+  expect(inbox?.textContent).toContain("The Inbox lands here.");
 });
 
 test("the transcript renders inside a scroll container and the composer stays visible", async () => {

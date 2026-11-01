@@ -75,7 +75,25 @@ fn a_verify_job_is_added_to_a_tdd_pr_when_it_needs_an_impl_job() {
         "verify"
     );
 
-    let out = verify(&fx, "v2", &["i"], "api", true).ok();
+    // The draft form is a stub (no Tier, no Spec): a complete draft that waits for the queued `i` would be parked.
+    let out = fx
+        .cpd(&[
+            "job",
+            "add",
+            "v2",
+            "--title",
+            "Title of v2",
+            "--kind",
+            "verify",
+            "--needs",
+            "i",
+            "--draft",
+            "--pr",
+            "api",
+            "--plan",
+            "pl",
+        ])
+        .ok();
     assert_eq!(
         (&out["job"]["kind"], &out["job"]["status"]),
         (&json!("verify"), &json!("draft")),

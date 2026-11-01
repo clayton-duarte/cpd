@@ -9,7 +9,7 @@ fn plan() -> PlanId {
     PlanId::parse("pl").unwrap()
 }
 
-/// A store with Plan `pl` in `dispatch`, its Lead `lead` and one stub draft `k`, then `extra` SQL.
+/// A store with Plan `pl` in `dispatch`, its Lead `lead` and one complete (parked) draft `k`, then `extra` SQL.
 fn store(extra: &str) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -23,8 +23,8 @@ fn store(extra: &str) -> (tempfile::TempDir, Store) {
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pl', 'ctx', 'P', 'dispatch', 'lead', 't', 't');
                  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pl', 'r', '/r', 'main', 'dispatch', 'cpd/pl', '/w', cpd_txn(), 't', 't');
-                 INSERT INTO jobs (plan, pr, key, title, kind, status, appended, created_txn, created_at)
-                   VALUES ('pl', 'r', 'k', 'T', 'work', 'draft', 1, cpd_txn(), 't');
+                 INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+                   VALUES ('pl', 'r', 'k', 'T', 'work', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, cpd_txn(), 't');
                  {extra}"
             ))?;
             Ok(())

@@ -1,4 +1,8 @@
-//! The parked-draft predicate (contract §2.2 "A parked draft", hs-d731) over in-memory stores: `parked_drafts` and the door.
+//! The parked-draft predicate (contract §2.2 "A parked draft", hs-d822) over in-memory stores: `parked_drafts` and the door.
+//!
+//! A `draft` Job is legal in exactly two forms (hs-d822, superseding hs-d731): incomplete (a stub, no Tier or no Spec),
+//! or covered by a current Plan review. Every other draft is parked, in particular a complete draft whose needs chain
+//! to a `queued`, `running` or `failed` work Job (added queued with `--needs` instead) or to a `merged` one.
 
 use super::jobs;
 use super::parked::{door, parked_drafts};
@@ -79,58 +83,136 @@ fn stub(key: &str, needs: &[&str]) -> String {
     job(key, "r", "work", "draft", false, needs)
 }
 
+// --- The new rule: a stub is legal; a complete draft waiting on a work Job is parked. ---
+
 #[test]
-fn a_stub_that_needs_nothing_is_parked() {
+fn a_stub_draft_that_needs_nothing_is_legal() {
     let (_d, mut s) = store("dispatch", &stub("k", &[]));
+    assert!(
+        parked(&mut s).is_empty(),
+        "a stub is legal on its own (hs-d822)"
+    );
+}
+
+#[test]
+fn a_complete_draft_waiting_on_a_queued_work_job_is_parked() {
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!(
+            "{}{}",
+            job("a", "r", "work", "queued", true, &[]),
+            job("k", "r", "work", "draft", true, &["a"])
+        ),
+    );
     assert_eq!(parked(&mut s), ["k"]);
 }
 
 #[test]
-fn a_draft_needing_a_queued_running_or_failed_job_waits() {
-    for status in ["queued", "running", "failed"] {
-        let (_d, mut s) = store(
-            "dispatch",
-            &format!(
-                "{}{}",
-                job("a", "r", "work", status, true, &[]),
-                stub("k", &["a"])
-            ),
-        );
-        assert!(parked(&mut s).is_empty(), "{status}");
-    }
-}
-
-#[test]
-fn a_draft_needing_a_merged_or_cancelled_job_is_parked() {
-    for status in ["merged", "cancelled"] {
-        let (_d, mut s) = store(
-            "dispatch",
-            &format!(
-                "{}{}",
-                job("a", "r", "work", status, true, &[]),
-                stub("k", &["a"])
-            ),
-        );
-        assert_eq!(parked(&mut s), ["k"], "{status}");
-    }
-}
-
-#[test]
-fn waiting_passes_through_drafts_that_wait_and_stops_at_parked_ones() {
-    let waiting = format!(
-        "{}{}{}",
-        job("a", "r", "work", "queued", true, &[]),
-        stub("w", &["a"]),
-        stub("k", &["w"])
-    );
-    let (_d, mut s) = store("dispatch", &waiting);
-    assert!(parked(&mut s).is_empty());
+fn a_complete_draft_waiting_on_a_running_work_job_is_parked() {
     let (_d, mut s) = store(
         "dispatch",
-        &format!("{}{}", stub("p", &[]), stub("k", &["p"])),
+        &format!(
+            "{}{}",
+            job("a", "r", "work", "running", true, &[]),
+            job("k", "r", "work", "draft", true, &["a"])
+        ),
     );
-    assert_eq!(parked(&mut s), ["p", "k"]);
+    assert_eq!(parked(&mut s), ["k"]);
 }
+
+#[test]
+fn a_complete_draft_waiting_on_a_failed_work_job_is_parked() {
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!(
+            "{}{}",
+            job("a", "r", "work", "failed", true, &[]),
+            job("k", "r", "work", "draft", true, &["a"])
+        ),
+    );
+    assert_eq!(parked(&mut s), ["k"]);
+}
+
+#[test]
+fn a_complete_draft_waiting_on_a_merged_work_job_is_parked() {
+    // The queued sibling pins the rule: a work Job is never a legal wait, whatever its status. Today's code keeps the
+    // queued one legal, so this fails for the right reason.
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!(
+            "{}{}{}{}",
+            job("m", "r", "work", "merged", true, &[]),
+            job("q", "r", "work", "queued", true, &[]),
+            job("km", "r", "work", "draft", true, &["m"]),
+            job("kq", "r", "work", "draft", true, &["q"])
+        ),
+    );
+    assert_eq!(parked(&mut s), ["km", "kq"]);
+}
+
+#[test]
+fn a_complete_draft_waiting_through_a_draft_on_a_work_job_is_parked() {
+    let (_d, mut s) = store(
+        "dispatch",
+        &format!(
+            "{}{}{}",
+            job("w", "r", "work", "queued", true, &[]),
+            stub("d", &["w"]),
+            job("k", "r", "work", "draft", true, &["d"])
+        ),
+    );
+    assert_eq!(parked(&mut s), ["k"]);
+}
+
+const WEB_NEEDS_R: &str =
+    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+     VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
+     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'web', 'r');";
+
+#[test]
+fn a_complete_draft_of_a_pr_that_waits_for_another_pr_is_parked() {
+    // hs-d731's PR-waits clause is gone: a PR that waits for another PR no longer keeps a complete draft legal.
+    let extra = format!(
+        "{WEB_NEEDS_R}{}",
+        job("k", "web", "work", "draft", true, &[])
+    );
+    let (_d, mut s) = store("dispatch", &extra);
+    assert_eq!(
+        parked(&mut s),
+        ["k"],
+        "dispatch: the waiting PR no longer exempts"
+    );
+    let (_d, mut s) = store("plan", &extra);
+    assert_eq!(parked(&mut s), ["k"]);
+}
+
+// --- The door. ---
+
+#[test]
+fn the_door_refuses_a_complete_draft_that_needs_a_queued_work_job() {
+    let (_d, mut s) = store("dispatch", &job("a", "r", "work", "queued", true, &[]));
+    let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
+    let mut row = all[0].clone();
+    // A complete draft (Tier and Spec kept from the queued Job), needing the queued work Job `a`.
+    (row.key, row.status, row.needs) = ("k".into(), "draft".into(), vec!["a".into()]);
+    let e = s
+        .read(|conn| door(conn, &plan(), "dispatch", &all, &row))
+        .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::DraftParked);
+}
+
+#[test]
+fn the_door_allows_a_stub_that_waits_for_nothing() {
+    let (_d, mut s) = store("dispatch", &job("a", "r", "work", "queued", true, &[]));
+    let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
+    let mut row = all[0].clone();
+    (row.key, row.status, row.tier, row.spec, row.fingerprint) =
+        ("k".into(), "draft".into(), None, None, None);
+    s.read(|conn| door(conn, &plan(), "dispatch", &all, &row))
+        .expect("a stub that waits for nothing is legal (hs-d822)");
+}
+
+// --- Kept under the new rule. ---
 
 #[test]
 fn a_full_draft_is_parked_unless_a_current_pending_review_covers_it() {
@@ -173,47 +255,6 @@ fn an_archived_plan_has_none() {
         &format!("{}UPDATE plans SET archived_at = 't';", stub("k", &[])),
     );
     assert!(parked(&mut s).is_empty());
-}
-
-const WEB_NEEDS_R: &str =
-    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-     VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
-     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'web', 'r');";
-
-#[test]
-fn a_draft_of_a_pr_that_waits_for_another_pr_waits_after_the_lock_only() {
-    let extra = format!(
-        "{WEB_NEEDS_R}{}",
-        job("k", "web", "work", "draft", false, &[])
-    );
-    let (_d, mut s) = store("dispatch", &extra);
-    assert!(parked(&mut s).is_empty());
-    let (_d, mut s) = store("plan", &extra);
-    assert_eq!(
-        parked(&mut s),
-        ["k"],
-        "a PR that waits for the lock does not wait"
-    );
-}
-
-#[test]
-fn the_door_refuses_a_stub_that_waits_for_nothing_after_the_lock() {
-    let (_d, mut s) = store("dispatch", &job("a", "r", "work", "queued", true, &[]));
-    let all = s.read(|conn| jobs::load(conn, &plan())).unwrap();
-    let mut row = all[0].clone();
-    (row.key, row.status, row.tier, row.spec, row.fingerprint) =
-        ("k".into(), "draft".into(), None, None, None);
-    let run = |s: &mut Store, row: &jobs::Job, phase: &str| {
-        s.read(|conn| door(conn, &plan(), phase, &all, row))
-    };
-    let e = run(&mut s, &row, "dispatch").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::DraftParked);
-    run(&mut s, &row, "plan").unwrap();
-    row.needs = vec!["a".into()];
-    run(&mut s, &row, "dispatch").unwrap();
-    row.needs.clear();
-    row.kind = "open".into();
-    run(&mut s, &row, "dispatch").unwrap();
 }
 
 fn review(status: &str, fingerprint: &str) -> String {
