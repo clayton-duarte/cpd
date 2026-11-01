@@ -160,7 +160,7 @@ impl Fx {
     /// (the process's are the `Fx`'s, set once; `CPD_HOME` is the same for the engine and the command it runs).
     pub fn cpd_runs_in_process(&self) {
         // The runner is held weakly: the route lives in the runner's own script and calls it back.
-        let ports = Ports { clock: self.fakes.ports.clock.clone(), runner: self.fakes.runner.weak(), spawn: self.fakes.ports.spawn.clone() };
+        let ports = Ports { clock: self.fakes.ports.clock.clone(), runner: self.fakes.runner.weak(), spawn: self.fakes.ports.spawn.clone(), ..Ports::real() };
         let _ = (*self.fakes.runner).clone().route("cpd", Arc::new(CpdRoute { ports }));
     }
 
@@ -277,7 +277,7 @@ impl Fx {
             engine_thread: std::thread::current().id(),
             on_other_thread,
         };
-        let ports = Ports { clock: Arc::new(stepped), runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
+        let ports = Ports { clock: Arc::new(stepped), runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone(), ..Ports::real() };
         // The steps that reach git or tmux through the core's wrappers (E2's merge recovery, a Worker's window) read `Ports::current()`.
         Ports::scope(&ports, || cpd_engine::watch::run_with(&ports, &until))
     }

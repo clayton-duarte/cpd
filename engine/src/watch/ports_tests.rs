@@ -94,7 +94,7 @@ fn world_with(stop_after: usize, hook: impl FnMut(usize) + Send + 'static, front
     spawn.set_self_exe(EXE);
     let until = Arc::new(AtomicBool::new(false));
     let stepped = Stepped { inner: clock.clone(), until: until.clone(), stop_after, hook: Mutex::new(Box::new(hook)) };
-    let ports = Ports { clock: Arc::new(stepped), runner: runner.clone(), spawn: spawn.clone() };
+    let ports = Ports { clock: Arc::new(stepped), runner: runner.clone(), spawn: spawn.clone(), ..Ports::real() };
     let start = clock.utc();
     World { clock, runner, spawn, ports, until, start }
 }

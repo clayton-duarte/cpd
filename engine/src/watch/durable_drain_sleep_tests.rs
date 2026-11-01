@@ -17,7 +17,7 @@ fn drain_fx(runner: &str, state: &str) -> (Fx, Arc<FakeSpawn>) {
     let mut fx = Fx::with_plan("");
     let spawn = Arc::new(FakeSpawn::new());
     spawn.set_self_exe("/opt/cpd/bin/cpd");
-    fx.engine.ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(FakeRunner::new(ManualClock::new())), spawn: spawn.clone() };
+    fx.engine.ports = Ports { clock: Arc::new(ManualClock::new()), runner: Arc::new(FakeRunner::new(ManualClock::new())), spawn: spawn.clone(), ..Ports::real() };
     fx.fixture(&format!("UPDATE sessions SET runner = '{runner}', state = '{state}' WHERE id = 'lead1';"));
     restart::mark(&fx.engine.home, "3.4", "3.8").unwrap();
     (fx, spawn)

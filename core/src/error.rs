@@ -281,6 +281,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     ToolTimeout = "tool_timeout" => Timeout,
+    HostTimeout = "host_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
@@ -309,6 +310,7 @@ error_codes! {
     PrNotOpen = "pr_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
     DurableSession = "durable_session" => Refused,
+    HostRunning = "host_running" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
     AutoMergeRefused = "auto_merge_refused" => Refused,
     PostDisabled = "post_disabled" => Refused,
@@ -554,6 +556,7 @@ mod tests {
             (ErrorCode::NoFailedRun, 3),
             (ErrorCode::AlreadyPosted, 3),
             (ErrorCode::DurableSession, 3),
+            (ErrorCode::HostRunning, 3),
             (ErrorCode::AutoMergeRefused, 3),
             (ErrorCode::PostDisabled, 3),
             (ErrorCode::NotAuthored, 3),

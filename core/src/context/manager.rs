@@ -10,6 +10,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::{ContextRow, Select};
+use crate::config::WorkerRunner;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -36,19 +37,20 @@ struct Live {
     cwd: String,
     state: String,
     pane: Option<String>,
+    runner: String,
 }
 
 fn live(conn: &rusqlite::Connection, context: &ContextId) -> Result<Option<Live>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT id, name, cwd, state, tmux_pane FROM sessions
+            "SELECT id, name, cwd, state, tmux_pane, runner FROM sessions
               WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
             [context.as_str()],
-            |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()?
-        .map(|(id, name, cwd, state, pane)| {
-            Ok::<_, CpdError>(Live { id: SessionId::parse(&id)?, name, cwd, state, pane })
+        .map(|(id, name, cwd, state, pane, runner)| {
+            Ok::<_, CpdError>(Live { id: SessionId::parse(&id)?, name, cwd, state, pane, runner })
         })
         .transpose()?)
 }
@@ -88,7 +90,11 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         .with("context", context.as_str())
         .with("next", format!("cpd context unarchive {context}")));
     }
-    let needs_pane = found.as_ref().is_none_or(|m| m.pane.is_none() && m.state == "stopped");
+    // The runner of the Manager (contract §6.19, Q10): the stored one, or the config key for a fresh one. A durable
+    // Manager has no pane; the engine's `hosts` step starts its host at the next tick.
+    let runner = found.as_ref().map_or(config.manager_runner, |m| WorkerRunner::parse(&m.runner).unwrap_or(config.manager_runner));
+    let durable = runner == WorkerRunner::Durable;
+    let needs_pane = !durable && found.as_ref().is_none_or(|m| m.pane.is_none() && m.state == "stopped");
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.clone();
     if needs_pane && !tmux.has_session(&cockpit)? {
@@ -156,17 +162,17 @@ fn register(
     store.write("context manager", |tx| {
         tx.execute(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at, by_user)
-             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6
+                                   state, state_label, state_at, created_at, by_user, runner)
+             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6, ?7
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user],
+            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, config.manager_runner.as_str()],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
         let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
         append(tx, event.session(id.clone()).context(context.clone()))?;
         Ok(())
     })?;
-    Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None })
+    Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None, runner: config.manager_runner.as_str().to_owned() })
 }
 
 /// A Manager's first message (commands.md §3.10): the header, then the pointer line. Nothing Context-wide is

@@ -1,5 +1,5 @@
-//! The doctor's tool probes (`tools_with`, `gh_auth_with`, `pi_node_with`) on a [`FakeRunner`]: the call each makes and
-//! how it maps a scripted success, failure and timeout.
+//! The doctor's tool probes (`tools_with`, `gh_auth_with`, `pi_node_with`) on a [`FakeRunner`]: the call each
+//! makes and how it maps a scripted success, failure and timeout.
 
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -186,4 +186,25 @@ fn pi_node_with_fails_when_node_is_not_found() {
     assert_eq!(check.name, "pi_node");
     assert!(!check.ok);
     assert_eq!(check.message, Some(format!("`{}` was not found.", node().display())));
+}
+
+// ---------- the host_runner check (contract §6.19, P1.10) ----------
+
+use super::host_runner;
+use cpd_core::config::{Config, WorkerRunner};
+
+#[test]
+fn host_runner_check_fails_without_the_adapter() {
+    let dir = tempfile::tempdir().unwrap();
+    let adapter = dir.path().join("pi");
+    std::fs::create_dir_all(&adapter).unwrap();
+    std::fs::write(adapter.join("package.json"), "{}").unwrap();
+    let text = format!("version = 1\nmachine = \"m1\"\npi_adapter = {:?}\n", adapter.display().to_string());
+    let (mut config, _) = Config::parse(&text, std::path::Path::new("config.toml")).unwrap();
+    config.lead_runner = WorkerRunner::Durable;
+
+    let check = host_runner::check(&config);
+    assert_eq!(check.name, "host_runner");
+    assert_eq!(check.severity, Severity::Error);
+    assert!(!check.ok, "durable without {} fails", adapter.join("durable-host").join("main.ts").display());
 }

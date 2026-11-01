@@ -53,7 +53,7 @@ fn world() -> World {
         .unwrap();
     let clock = ManualClock::new();
     let runner = FakeRunner::with_tmux();
-    let ports = Ports { clock: Arc::new(clock), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()) };
+    let ports = Ports { clock: Arc::new(clock), runner: Arc::new(runner.clone()), spawn: Arc::new(FakeSpawn::new()), ..Ports::real() };
     // The fake tmux keys its server by `$TMUX_TMPDIR` and the socket: the same directory for every `Tmux` of this process.
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")

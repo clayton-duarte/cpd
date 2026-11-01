@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -20,10 +21,12 @@ use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::host::host_socket::Reach;
 use crate::host::layout::{context_window, park_window};
 use crate::host::{Pane, PaneId, Spawn, Tmux, View, WindowId, chat_slot};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::store::{Store, WriteTxn};
 
 /// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
@@ -198,10 +201,15 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_chat_session(&lead)?;
-    require_pane(&lead)?;
     if lead.archived_at.is_some() {
         return Err(archived(&lead));
     }
+    // A durable Session has no pane and never enters the chat slot (contract §3.6, §6.19): resume it and wait for
+    // its host's socket. The engine's `hosts` step starts the host; the command starts none and takes no lock (Q14).
+    if lead.runner == row::Runner::Durable {
+        return open_durable(&mut env, &lead);
+    }
+    require_pane(&lead)?;
     // A Lead has a Plan; a Context's Manager has none.
     if (lead.role == Role::Lead) == lead.plan.is_none() {
         return Err(CpdError::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
@@ -270,6 +278,70 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     }
     let displaced = displaced.filter(|_| !slot.dead).map_or(Value::Null, |d| json!(d.id));
     Ok(Output::success(json!({"session": lead.id, "pane": pane.as_str(), "displaced": displaced})))
+}
+
+/// The label a crash-looped host leaves on its Session (contract §6.19, hs-d785).
+const HOST_CRASH_LABEL: &str = "host crash loop";
+
+/// The socket wait's back-off: 100 ms doubling to a 1 s cap, over a 30 s deadline (contract §6.19, design defaults).
+const SOCKET_NAP: Duration = Duration::from_millis(100);
+const SOCKET_NAP_MAX: Duration = Duration::from_secs(1);
+const SOCKET_DEADLINE: Duration = Duration::from_secs(30);
+
+/// `$CPD_HOME/run/host/<session>.sock` (contract §6.14).
+fn socket_path(home: &CpdHome, session: &SessionId) -> PathBuf {
+    home.run_dir().join("host").join(format!("{session}.sock"))
+}
+
+/// `session open` of a durable Session (contract §6.19): resume it (clear `asleep_at` and the `host crash loop`
+/// label) and wait for its host's socket through the port. No pane, and never the chat slot.
+fn open_durable(env: &mut Env, lead: &Row) -> Result<Output, CpdError> {
+    let id = lead.id.clone();
+    env.store.write("session open", |tx| {
+        tx.execute(
+            "UPDATE sessions SET asleep_at = NULL, state_label = iif(state_label = ?1, NULL, state_label)
+              WHERE id = ?2 AND (asleep_at IS NOT NULL OR state_label = ?1)",
+            rusqlite::params![HOST_CRASH_LABEL, id.as_str()],
+        )?;
+        Ok(())
+    })?;
+    let path = socket_path(&env.home, &id);
+    wait_for_socket(&path, &id)?;
+    Ok(Output::success(json!({"session": id, "pane": Value::Null})))
+}
+
+/// Waits for the host's socket to accept (contract §6.19): `Absent` and `Refused` nap and try again with a
+/// back-off, `Failed` returns at once, and the deadline is `host_timeout` (exit 5).
+fn wait_for_socket(path: &Path, session: &SessionId) -> Result<(), CpdError> {
+    let ports = Ports::current();
+    let mut waited = Duration::ZERO;
+    let mut nap = SOCKET_NAP;
+    loop {
+        match ports.host_socket.reach(path) {
+            Reach::Accepted => return Ok(()),
+            Reach::Failed(e) => {
+                return Err(CpdError::new(ErrorCode::Internal, format!("Cannot probe the host socket {}: {e}.", path.display()))
+                    .with("session", session.as_str())
+                    .with("socket", path.display().to_string()))
+            }
+            Reach::Absent | Reach::Refused => {}
+        }
+        if waited >= SOCKET_DEADLINE {
+            return Err(CpdError::new(
+                ErrorCode::HostTimeout,
+                format!(
+                    "Session {session}'s host did not accept on {} within {}s: the engine is not running or the host keeps dying.",
+                    path.display(),
+                    SOCKET_DEADLINE.as_secs()
+                ),
+            )
+            .with("session", session.as_str())
+            .with("socket", path.display().to_string()));
+        }
+        ports.clock.sleep(nap);
+        waited += nap;
+        nap = (nap * 2).min(SOCKET_NAP_MAX);
+    }
 }
 
 /// `session park` (commands.md §10.5, contract §6.4 with amendment 3).
