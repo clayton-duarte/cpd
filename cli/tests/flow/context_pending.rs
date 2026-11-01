@@ -64,7 +64,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, status: &str) {
     }
     env.sql(
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
              VALUES ('{plan}', '{key}', '/r/{key}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {pull}, cpd_txn(), 't', {started}, {merged});"
         ),
@@ -75,7 +75,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, status: &str) {
 fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
     env.sql(
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('{plan}', '{pr}', '{key}', 'Title {key}', 'S2', 'Goal.', 'Context.', '[\"src/{key}.rs\", \"docs/{key}.md\"]',
                      '[\"cargo test\"]', '[]', '{status}', 0,
@@ -90,7 +90,7 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
 /// and `needs` of other explore Jobs. A `running` one gets a running Attempt.
 fn explore(env: &TestEnv, plan: &str, key: &str, kind: &str, tier: &str, status: &str, needs: &[&str]) {
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
          VALUES ('{plan}', NULL, '{key}', 'Title {key}', '{tier}', 'Goal.', 'Context.', '[\"explore/{key}.md\"]', '[\"ok\"]', '[]', '{kind}', '{status}', 1, '{FP}', cpd_txn(), 't');"
     );
     for need in needs {
@@ -161,8 +161,8 @@ fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
         (&json!("live"), &json!("Title of live"), &json!("dispatch"), &json!("lead-live"))
     );
     // Not `old` (merged) and not `gone` (cancelled), in key order.
-    assert_eq!(keys(&live["prs"]), ["api", "ui"]);
-    let api = &live["prs"][0];
+    assert_eq!(keys(&live["workflows"]), ["api", "ui"]);
+    let api = &live["workflows"][0];
     assert_eq!(
         (&api["repo"], &api["base"], &api["status"], &api["lead_branch"], &api["pull_request"]),
         (&json!("/r/api"), &json!("main"), &json!("dispatch"), &json!("cpd/live/api"), &Value::Null)
@@ -175,7 +175,7 @@ fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
     );
     let statuses: Vec<&str> = api["jobs"].as_array().unwrap().iter().map(|j| j["status"].as_str().unwrap()).collect();
     assert_eq!(statuses, ["merged", "queued", "running", "failed", "draft"]);
-    let ui = &live["prs"][1];
+    let ui = &live["workflows"][1];
     assert_eq!(ui["pull_request"], json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "state": "open"}));
     assert_eq!(keys(&ui["jobs"]), ["g-ui"]);
 }
@@ -211,14 +211,14 @@ fn markdown_prints_the_same_content() {
     assert_eq!(run.exit, 0, "{run:?}");
     let expected = "# Pending work in ctx\n\
 \n## live (dispatch): Title of live\n\
-\n### PR api (/r/api, base main): dispatch\n\
+\n### Workflow api (/r/api, base main): dispatch\n\
 \nno pull request\n\
 \n- a-merged merged: Title a-merged (src/a-merged.rs, docs/a-merged.md)\n\
 - b-queued queued: Title b-queued (src/b-queued.rs, docs/b-queued.md)\n\
 - c-running running: Title c-running (src/c-running.rs, docs/c-running.md)\n\
 - d-failed failed: Title d-failed (src/d-failed.rs, docs/d-failed.md)\n\
 - e-draft draft: Title e-draft (src/e-draft.rs, docs/e-draft.md)\n\
-\n### PR ui (/r/ui, base main): open\n\
+\n### Workflow ui (/r/ui, base main): open\n\
 \n#7 open https://github.com/acme/api/pull/7\n\
 \n- g-ui queued: Title g-ui (src/g-ui.rs, docs/g-ui.md)\n";
     assert_eq!(run.stdout, expected);
@@ -251,9 +251,9 @@ fn context_pending_a_plans_plan_level_explore_jobs_in_json() {
         json!({"key": "look2", "kind": "research", "status": "running", "tier": "S2", "title": "Title look2", "touches": ["explore/look2.md"]})
     );
     // The PR's own `jobs` array is unchanged.
-    assert_eq!(keys(&live["prs"]), ["api"]);
-    assert_eq!(keys(&live["prs"][0]["jobs"]), ["w1"]);
-    assert_eq!(live["prs"][0]["jobs"][0]["status"], "queued");
+    assert_eq!(keys(&live["workflows"]), ["api"]);
+    assert_eq!(keys(&live["workflows"][0]["jobs"]), ["w1"]);
+    assert_eq!(live["workflows"][0]["jobs"][0]["status"], "queued");
 }
 
 /// commands.md §3.12: an explore Job that needs another explore Job is displayed `waiting` with its `waiting_on`.
@@ -283,7 +283,7 @@ fn context_pending_a_plan_with_only_explore_jobs_is_not_empty() {
     let plans = out["plans"].as_array().unwrap();
     assert_eq!(plans.len(), 1, "{out}");
     assert_eq!(plans[0]["id"], "solo");
-    assert_eq!(plans[0]["prs"], json!([]));
+    assert_eq!(plans[0]["workflows"], json!([]));
     assert_eq!(keys(&plans[0]["jobs"]), ["scan"], "{out}");
 }
 
@@ -302,7 +302,7 @@ fn context_pending_markdown_the_plan_level_jobs_section() {
     assert_eq!(run.exit, 0, "{run:?}");
     let expected = "# Pending work in ctx\n\
 \n## live (dispatch): Title of live\n\
-\n### PR api (/r/api, base main): dispatch\n\
+\n### Workflow api (/r/api, base main): dispatch\n\
 \nno pull request\n\
 \n- w1 queued: Title w1 (src/w1.rs, docs/w1.md)\n\
 \n### Jobs\n\

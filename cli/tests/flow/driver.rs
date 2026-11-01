@@ -93,7 +93,7 @@ pub(super) fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay/repo', '{lead}', '{PR_TITLE}', 'A description', 'config', cpd_txn(), 't', 't');",
             repo = repo.display(),
             lead = lead.display()
@@ -112,7 +112,7 @@ pub(super) fn fixture(env: &TestEnv, sql: &str) {
 /// Job `key` of PR `pr` of Plan `pay`, queued with its Locked-Job fingerprint.
 pub(super) fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
     );
     for need in needs {
@@ -356,7 +356,7 @@ fn add_draft(live: &Live, pr: &str, key: &str) {
     fixture(
         &live.fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ),
     );
@@ -391,7 +391,7 @@ fn job_merged_does_not_turn_while_other_jobs_run() {
 fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
     let fx = rows();
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');",
         fx.repo.display()
     ));
@@ -760,7 +760,7 @@ fn dispatch_refuses_when_no_slot_is_free() {
     // The live Attempt is of another PR: a sibling of `api`'s own PR would make the dispatch (always linear) lose, `cas_lost`,
     // before the slots are counted (hs-d683).
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'web', '{}', 'web', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Web', 'config', cpd_txn(), 't', 't');",
         fx.repo.display(),
         fx.repo.with_file_name("pay.web").display()
@@ -813,7 +813,7 @@ impl Rows {
             "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{}' WHERE key = 'api';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
                VALUES ('acme/pay', 812, '{PR_URL}', '{PR_TITLE}', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
-             UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
+             UPDATE workflows SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
              UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
             "1".repeat(40)
         ));

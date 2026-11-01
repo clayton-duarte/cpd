@@ -13,12 +13,12 @@ fn world(fx: &Fx) {
     fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     let repo = fx.keyed_repo("api");
-    fx.cpd(&["pr", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     for key in ["api-config", "open-api"] {
         fx.cpd(&["job", "cancel", key, "--reason", "a stub of the template", "--plan", "pay"]).ok();
     }
     fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');",
     );
 }

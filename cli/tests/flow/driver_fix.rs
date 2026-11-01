@@ -14,7 +14,7 @@ use super::driver_open::{Live, open_live, open_pr_live, submit};
 fn add_fix(live: &Live, key: &str) {
     let spec = live.fx.env.root().join("fix-spec.json");
     fs::write(&spec, r#"{"goal": "Fix it.", "context": "Review feedback.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let out = live.fx.cpd(&["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", PLAN]).ok();
+    let out = live.fx.cpd(&["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--workflow", "repo", "--plan", PLAN]).ok();
     assert_eq!(out["job"]["status"], "queued", "{out}");
 }
 
@@ -38,9 +38,9 @@ fn update_jobs(live: &Live) -> i64 {
 fn adopt(live: &Live) {
     live.fx.git(&live.repo, &["push", "-q", "origin", "main:refs/heads/feat/x"]);
     live.fixture(
-        "CREATE TEMP TABLE adopted AS SELECT * FROM prs WHERE key = 'repo';
+        "CREATE TEMP TABLE adopted AS SELECT * FROM workflows WHERE key = 'repo';
          UPDATE adopted SET head_ref = 'feat/x';
-         INSERT OR REPLACE INTO prs SELECT * FROM adopted;
+         INSERT OR REPLACE INTO workflows SELECT * FROM adopted;
          DROP TABLE adopted;",
     );
 }
@@ -81,7 +81,7 @@ fn a_fix_job_on_an_open_adopted_pr_is_pushed_by_its_own_merge() {
 fn a_work_job_of_an_adopted_pr_that_has_not_opened_is_not_pushed() {
     let live = open_live();
     adopt(&live);
-    assert_eq!(live.value::<String>("SELECT status FROM prs WHERE key = 'repo'"), "dispatch");
+    assert_eq!(live.value::<String>("SELECT status FROM workflows WHERE key = 'repo'"), "dispatch");
     add_fix(&live, "fix");
     let head = live.remote("feat/x");
 

@@ -87,7 +87,7 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
     let mut sql = format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
          VALUES ('{id}', 'ctx', 'Plan {id}', 'grounding', 'lead-{id}', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'waiting', 'cpd/{id}', cpd_txn(), 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
          VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/repo', 'O3', 'stopped', 't', 't');"
@@ -99,7 +99,7 @@ pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
             if *step == "deploy" {
                 sql += &pull_request(id, 1, "open");
             }
-            sql += &format!("UPDATE prs SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
+            sql += &format!("UPDATE workflows SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
             if *step == "done" {
                 sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{id}';");
             }
@@ -163,7 +163,7 @@ pub(super) fn lock(env: &TestEnv, plan_id: &str) {
     let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
     let mut sql = format!(
         "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan_id}';
-         UPDATE prs SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = '{plan_id}';"
+         UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = '{plan_id}';"
     );
     for job in all.iter().filter(|j| j.is_draft()) {
         sql += &format!(
@@ -268,7 +268,7 @@ fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
                 &format!(
                     "UPDATE plans SET phase = 'deploy' WHERE id = 'pl';
                      {}
-                     UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't',
+                     UPDATE workflows SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't',
                             pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pl';",
                     pull_request("pl", 1, "open")
                 ),
@@ -511,10 +511,10 @@ fn job_edit_refuses_an_open_job_even_while_it_is_a_draft() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-               VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl'), 'open-x', 'Open it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, 'open', NULL, cpd_txn(), 't');
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-               VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl'), 'update-x', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+               VALUES ('pl', (SELECT key FROM workflows WHERE plan = 'pl'), 'open-x', 'Open it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, 'open', NULL, cpd_txn(), 't');
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+               VALUES ('pl', (SELECT key FROM workflows WHERE plan = 'pl'), 'update-x', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
             "f".repeat(64)
         ),
     );
@@ -899,19 +899,19 @@ fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     ];
     let repo = format!("{plan_id}-{key}");
     let mut sql = format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan_id}', '{key}', '/{key}', 'main', 'waiting', 'cpd/{plan_id}/{key}', cpd_txn(), 't');"
     );
     match status {
         "waiting" => {}
-        "cancelled" => sql += &format!("UPDATE prs SET status = 'cancelled' WHERE plan = '{plan_id}' AND key = '{key}';"),
+        "cancelled" => sql += &format!("UPDATE workflows SET status = 'cancelled' WHERE plan = '{plan_id}' AND key = '{key}';"),
         _ => {
             let last = STEPS.iter().position(|(s, _)| *s == status).unwrap_or_else(|| panic!("{status}"));
             for (step, set) in &STEPS[..=last] {
                 if *step == "open" {
                     sql += &pull_request(&repo, 1, "open");
                 }
-                sql += &format!("UPDATE prs SET status = '{step}'{} WHERE plan = '{plan_id}' AND key = '{key}';", set.replace("{repo}", &repo));
+                sql += &format!("UPDATE workflows SET status = '{step}'{} WHERE plan = '{plan_id}' AND key = '{key}';", set.replace("{repo}", &repo));
                 if *step == "merged" {
                     sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{repo}';");
                 }
@@ -927,7 +927,7 @@ fn job_add_in(fx: &Fx, plan_id: &str, key: &str, pr: Option<&str>, needs: &[&str
     let needs = needs.join(",");
     let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan_id];
     if let Some(pr) = pr {
-        args.extend(["--pr", pr]);
+        args.extend(["--workflow", pr]);
     }
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
@@ -958,8 +958,8 @@ fn add_defaults_to_the_one_pr_and_names_the_pr_it_was_given() {
     add_pr(&fx.env, "pl", "web", "waiting");
     let out = job_add_in(&fx, "pl", "w", Some("web"), &[]).ok();
     assert_eq!(out["job"]["pr"], "web");
-    assert_eq!(job_row(&fx.env, "pl", "w", "pr"), "web");
-    assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
+    assert_eq!(job_row(&fx.env, "pl", "w", "workflow"), "web");
+    assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
     assert_eq!(events(&fx, "job-added").last().unwrap()["data"]["pr"], "web");
 
     // Rerun: the same PR is `already`, another PR is `job_key_exists`.
@@ -977,19 +977,19 @@ fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
 
     // Two PRs that are not cancelled: `--pr` is required.
-    let e = refused(&job_add_in(&fx, "pl", "k", None, &[]), "pr_required", 2);
+    let e = refused(&job_add_in(&fx, "pl", "k", None, &[]), "workflow_required", 2);
     assert_eq!(e["details"]["prs"], json!(["repo", "web"]));
-    let e = refused(&job_add_in(&fx, "pl", "k", Some("nope"), &[]), "pr_not_found", 4);
+    let e = refused(&job_add_in(&fx, "pl", "k", Some("nope"), &[]), "workflow_not_found", 4);
     assert_eq!(e["details"]["pr"], "nope");
-    let e = refused(&job_add_in(&fx, "pl", "k", Some("gone"), &[]), "pr_ended", 3);
+    let e = refused(&job_add_in(&fx, "pl", "k", Some("gone"), &[]), "workflow_ended", 3);
     assert_eq!(e["details"]["status"], "cancelled");
-    refused(&job_add_in(&fx, "pl", "k", Some("Web"), &[]), "invalid_pr_id", 2);
+    refused(&job_add_in(&fx, "pl", "k", Some("Web"), &[]), "invalid_workflow_id", 2);
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
 
     // No PR that is not cancelled: `pr_required` too, and its message names `cpd pr add`.
     fixture(&fx.env, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pl';
-                   UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';");
-    let e = refused(&job_add_in(&fx, "pl", "k", None, &[]), "pr_required", 2);
+                   UPDATE workflows SET status = 'cancelled' WHERE plan = 'pl';");
+    let e = refused(&job_add_in(&fx, "pl", "k", None, &[]), "workflow_required", 2);
     assert!(e["message"].as_str().unwrap().contains("cpd pr add"), "{e}");
 }
 
@@ -1006,16 +1006,16 @@ fn add_into_a_merged_pr_is_refused_and_into_a_waiting_pr_is_appended() {
         &fx.env,
         &format!(
             "{} {}
-             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/repo/pull/1', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/repo/pull/1', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/repo') WHERE plan = 'pl' AND key = 'repo';
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/web/pull/2', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/web/pull/2', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/web') WHERE plan = 'pl' AND key = 'web';
-             UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pl' AND key = 'repo';",
+             UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pl' AND key = 'repo';",
             pull_request("repo", 1, "merged"),
             pull_request("web", 2, "open")
         ),
     );
-    let e = refused(&job_add_in(&fx, "pl", "k", Some("repo"), &[]), "pr_ended", 3);
+    let e = refused(&job_add_in(&fx, "pl", "k", Some("repo"), &[]), "workflow_ended", 3);
     assert_eq!(e["details"]["status"], "merged");
     let out = job_add_in(&fx, "pl", "k", Some("web"), &[]).ok();
     assert_eq!(out["job"]["pr"], "web");
@@ -1031,9 +1031,9 @@ fn add_needs_must_be_jobs_of_the_same_pr() {
     job_add_in(&fx, "pl", "a2", Some("repo"), &["a"]).ok();
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
 
-    let e = refused(&job_add_in(&fx, "pl", "k", Some("web"), &["w", "a"]), "needs_other_pr", 3);
+    let e = refused(&job_add_in(&fx, "pl", "k", Some("web"), &["w", "a"]), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["a"]));
-    let e = refused(&job_add_in(&fx, "pl", "k", Some("repo"), &["w", "a", "a2"]), "needs_other_pr", 3);
+    let e = refused(&job_add_in(&fx, "pl", "k", Some("repo"), &["w", "a", "a2"]), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["w"]));
     // An unknown need is reported first.
     refused(&job_add_in(&fx, "pl", "k", Some("web"), &["a", "ghost"]), "needs_unknown", 3);
@@ -1048,25 +1048,25 @@ fn edit_moves_a_draft_job_to_another_pr() {
     job_add_in(&fx, "pl", "w", Some("web"), &[]).ok();
     job_add_in(&fx, "pl", "b", Some("repo"), &[]).ok();
 
-    let out = job(&fx, &["edit", "b", "--pr", "web", "--needs", "w"], "pl").ok();
+    let out = job(&fx, &["edit", "b", "--workflow", "web", "--needs", "w"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr", "needs"]));
-    assert_eq!(job_row(&fx.env, "pl", "b", "pr"), "web");
+    assert_eq!(job_row(&fx.env, "pl", "b", "workflow"), "web");
     assert_eq!(fx.env.query::<String>("SELECT needs FROM dependencies WHERE job = 'b'"), "w");
     assert_eq!(events(&fx, "job-edited").last().unwrap()["data"], json!({"fields": ["pr", "needs"]}));
 
     // A Job with old needs may move with `--no-needs`.
-    let out = job(&fx, &["edit", "b", "--pr", "repo", "--no-needs"], "pl").ok();
+    let out = job(&fx, &["edit", "b", "--workflow", "repo", "--no-needs"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr", "needs"]));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies"), 0);
     // A Job with no needs and no dependents moves alone.
-    let out = job(&fx, &["edit", "b", "--pr", "web"], "pl").ok();
+    let out = job(&fx, &["edit", "b", "--workflow", "web"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr"]));
-    assert_eq!(job_row(&fx.env, "pl", "b", "pr"), "web");
+    assert_eq!(job_row(&fx.env, "pl", "b", "workflow"), "web");
 
     // The PR it is already in changes nothing, whatever its needs.
     job(&fx, &["edit", "b", "--needs", "w"], "pl").ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    let out = job(&fx, &["edit", "b", "--pr", "web"], "pl").ok();
+    let out = job(&fx, &["edit", "b", "--workflow", "web"], "pl").ok();
     assert_eq!(out["already"], true);
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
 }
@@ -1082,32 +1082,32 @@ fn edit_pr_refusals_write_nothing() {
     job(&fx, &["cancel", "c", "--reason", "No."], "pl").ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
 
-    let e = refused(&job(&fx, &["edit", "a", "--pr", "nope"], "pl"), "pr_not_found", 4);
+    let e = refused(&job(&fx, &["edit", "a", "--workflow", "nope"], "pl"), "workflow_not_found", 4);
     assert_eq!(e["details"]["pr"], "nope");
-    let e = refused(&job(&fx, &["edit", "a", "--pr", "gone"], "pl"), "pr_ended", 3);
+    let e = refused(&job(&fx, &["edit", "a", "--workflow", "gone"], "pl"), "workflow_ended", 3);
     assert_eq!(e["details"]["status"], "cancelled");
-    refused(&job(&fx, &["edit", "a", "--pr", "Web"], "pl"), "invalid_pr_id", 2);
-    refused(&job(&fx, &["edit", "a", "--pr", "web", "--needs", "ghost"], "pl"), "needs_unknown", 3);
-    refused(&job(&fx, &["edit", "a", "--pr", "web", "--needs", "c"], "pl"), "needs_unavailable", 3);
+    refused(&job(&fx, &["edit", "a", "--workflow", "Web"], "pl"), "invalid_workflow_id", 2);
+    refused(&job(&fx, &["edit", "a", "--workflow", "web", "--needs", "ghost"], "pl"), "needs_unknown", 3);
+    refused(&job(&fx, &["edit", "a", "--workflow", "web", "--needs", "c"], "pl"), "needs_unavailable", 3);
     // The Job keeps no old needs: `b` needs `a`.
-    let e = refused(&job(&fx, &["edit", "b", "--pr", "web"], "pl"), "needs_other_pr", 3);
+    let e = refused(&job(&fx, &["edit", "b", "--workflow", "web"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["a"]));
     // No Job may need it: `b` needs `a`.
-    let e = refused(&job(&fx, &["edit", "a", "--pr", "web"], "pl"), "needs_other_pr", 3);
+    let e = refused(&job(&fx, &["edit", "a", "--workflow", "web"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["b"]));
-    let e = refused(&job(&fx, &["edit", "a", "--pr", "web", "--no-needs"], "pl"), "needs_other_pr", 3);
+    let e = refused(&job(&fx, &["edit", "a", "--workflow", "web", "--no-needs"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["b"]));
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
     // The new needs are Jobs of the new PR.
     job_add_in(&fx, "pl", "w2", Some("web"), &[]).ok();
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    let e = refused(&job(&fx, &["edit", "w", "--pr", "repo", "--needs", "w2", "--tier", "S3"], "pl"), "needs_other_pr", 3);
+    let e = refused(&job(&fx, &["edit", "w", "--workflow", "repo", "--needs", "w2", "--tier", "S3"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["w2"]));
     // Without `--pr` the needs are those of the Job's own PR.
-    let e = refused(&job(&fx, &["edit", "w", "--needs", "a"], "pl"), "needs_other_pr", 3);
+    let e = refused(&job(&fx, &["edit", "w", "--needs", "a"], "pl"), "needs_other_workflow", 3);
     assert_eq!(e["details"]["jobs"], json!(["a"]));
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs));
-    assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
+    assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
 }
 
 #[test]
@@ -1115,8 +1115,8 @@ fn a_locked_job_cannot_change_pr() {
     let fx = Fx::new();
     two_prs(&fx);
     lock(&fx.env, "pl");
-    refused(&job(&fx, &["edit", "a", "--pr", "web"], "pl"), "job_locked", 3);
-    assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
+    refused(&job(&fx, &["edit", "a", "--workflow", "web"], "pl"), "job_locked", 3);
+    assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
 }
 
 // ---------- drafts in a running Plan (hs-d173, hs-d174, hs-d179; commands.md §5.1–§5.3) ----------
@@ -1177,7 +1177,7 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
     // In phase done --draft passes the phase, and finds every PR ended until `pr add` reopens the Plan;
     // without --draft the phase refuses.
     plan(&fx.env, "dn", "done");
-    let e = refused(&job_add_draft(&fx, "dn", "k", &[], &[]), "pr_ended", 3);
+    let e = refused(&job_add_draft(&fx, "dn", "k", &[], &[]), "workflow_ended", 3);
     assert_eq!(e["details"]["status"], "merged");
     refused(&job_add(&fx, "dn", "k", "S2", &[]), "illegal_phase", 3);
 }
@@ -1453,7 +1453,7 @@ pub(super) fn test_spec_file(env: &TestEnv, name: &str, tests: Value, files: Val
 
 /// `job add <key> --kind <kind> --spec <spec>` into PR `pr` of Plan `plan`, a draft, with the Tier S2.
 pub(super) fn add_kind(fx: &Fx, plan: &str, key: &str, kind: &str, spec: &str, pr: &str) -> Run {
-    fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", spec, "--kind", kind, "--pr", pr, "--plan", plan])
+    fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", spec, "--kind", kind, "--workflow", pr, "--plan", plan])
 }
 
 /// PR `key` of Plan `plan`, `waiting`, of the stored `shape`.
@@ -1461,7 +1461,7 @@ pub(super) fn shaped_pr(env: &TestEnv, plan: &str, key: &str, shape: &str) {
     fixture(
         env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
              VALUES ('{plan}', '{key}', '/repo', 'main', 'waiting', 'cpd/{plan}/{key}', '{shape}', cpd_txn(), 't');"
         ),
     );
@@ -1564,7 +1564,7 @@ fn a_job_cannot_need_an_open_or_an_update_job() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
              VALUES ('pl', 'repo', 'open-repo', 'Open', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{fingerprint}', 'open', cpd_txn(), 't');"
         ),
     );
@@ -1683,10 +1683,10 @@ fn edit_kind_changes_a_drafts_kind_and_its_spec_must_fit() {
         assert_eq!(refused(&job(&fx, &["edit", "a", "--kind", kind], "pl"), "kind_reserved", 3)["details"]["kind"], kind);
     }
     // Moving a Job to a PR whose shape does not allow its kind is the same refusal.
-    let e = refused(&job(&fx, &["edit", "c", "--pr", "docs"], "pl"), "shape_violation", 3);
+    let e = refused(&job(&fx, &["edit", "c", "--workflow", "docs"], "pl"), "shape_violation", 3);
     assert_eq!((&e["details"]["pr"], &e["details"]["kind"], &e["details"]["allowed"]), (&json!("docs"), &json!("work"), &json!(["docs"])));
-    job(&fx, &["edit", "c", "--pr", "docs", "--kind", "docs"], "pl").ok();
-    assert_eq!((job_row(&fx.env, "pl", "c", "pr"), job_row(&fx.env, "pl", "c", "kind")), (json!("docs"), json!("docs")));
+    job(&fx, &["edit", "c", "--workflow", "docs", "--kind", "docs"], "pl").ok();
+    assert_eq!((job_row(&fx.env, "pl", "c", "workflow"), job_row(&fx.env, "pl", "c", "kind")), (json!("docs"), json!("docs")));
 }
 
 #[test]
@@ -1775,7 +1775,7 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)\n             VALUES ('pl', 'p', '/repo', 'main', 'waiting', 'cpd/pl/p', 'tdd', cpd_txn(), 't');\n             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'p';\n             {}\n             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/p/pull/2', pr_opened_at = 't',\n                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/p') WHERE key = 'p';\n             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)\n             VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl' AND key = 'p'), 'up-p', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)\n             VALUES ('pl', 'p', '/repo', 'main', 'waiting', 'cpd/pl/p', 'tdd', cpd_txn(), 't');\n             UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'p';\n             {}\n             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/p/pull/2', pr_opened_at = 't',\n                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/p') WHERE key = 'p';\n             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)\n             VALUES ('pl', (SELECT key FROM workflows WHERE plan = 'pl' AND key = 'p'), 'up-p', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
             pull_request("p", 2, "open"),
             "f".repeat(64)
         ),
@@ -1787,7 +1787,7 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
     assert_eq!(out, json!({"ok": true, "job": "up-p", "status": "cancelled", "cancel_requested": false}));
     let spec = spec_file(&fx.env);
     let out = fx.cpd(&[
-        "job", "add", "up-p-r1", "--title", "Bring the pull request up to date", "--tier", "S1", "--spec", &spec, "--pr", "p", "--plan", "pl",
+        "job", "add", "up-p-r1", "--title", "Bring the pull request up to date", "--tier", "S1", "--spec", &spec, "--workflow", "p", "--plan", "pl",
     ]).ok();
     assert_eq!(
         out["job"],
@@ -1960,7 +1960,7 @@ pub(super) fn add_needing(fx: &Fx, plan: &str, key: &str, kind: &str, needs: &[&
     };
     let needs = needs.join(",");
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", kind, "--pr", pr, "--plan", plan];
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", kind, "--workflow", pr, "--plan", plan];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -2094,13 +2094,13 @@ fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
              VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
-             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
              {}
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';
-             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+             INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                kind, tests, test_files, created_txn, created_at)
              VALUES ('pl', 'fix', 'fix-t', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, printf('%064d', 1),
                      'test', '[\"t::a\"]', '[\"tests/a.rs\"]', cpd_txn(), 't'),
@@ -2221,7 +2221,7 @@ pub(super) fn touches_fx() -> Fx {
     plan(&fx.env, "pl", "plan");
     let repo = fx.git_repo("pay").canonicalize().unwrap();
     fx.commit_file(&repo, "src/a.rs", "// a\n", "src");
-    fixture(&fx.env, &format!("UPDATE prs SET repo = '{}' WHERE plan = 'pl';", repo.display()));
+    fixture(&fx.env, &format!("UPDATE workflows SET repo = '{}' WHERE plan = 'pl';", repo.display()));
     fx
 }
 
@@ -2283,7 +2283,7 @@ fn job_edit_refuses_a_touches_path_missing_from_the_tree() {
 /// check is of the stored path, and a real directory would make the `touches` tree check run `git`.
 fn primary(env: &TestEnv, path: PathBuf) -> String {
     let root = path.to_str().unwrap().to_owned();
-    fixture(env, &format!("UPDATE prs SET repo = '{root}' WHERE plan = 'pl';"));
+    fixture(env, &format!("UPDATE workflows SET repo = '{root}' WHERE plan = 'pl';"));
     root
 }
 
@@ -2405,7 +2405,7 @@ fn job_add_checks_the_repo_of_every_pr_of_the_plan() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
              VALUES ('pl', 'two', '{}', 'main', 'waiting', 'cpd/pl/two', cpd_txn(), 't');",
             second.display()
         ),
@@ -2415,7 +2415,7 @@ fn job_add_checks_the_repo_of_every_pr_of_the_plan() {
     let mut spec = spec_json();
     spec["goal"] = json!(format!("{} is the other checkout.", second.display()));
     let spec = write_spec(&fx.env, "second.json", &spec.to_string());
-    let run = fx.cpd(&["job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--pr", "repo", "--plan", "pl"]);
+    let run = fx.cpd(&["job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--workflow", "repo", "--plan", "pl"]);
     let error = refused(&run, "spec_invalid", 2);
     assert_eq!(error["details"]["path"].as_str(), Some("$.goal"));
     assert_eq!(error["details"]["primary"].as_str(), second.to_str());
@@ -2467,7 +2467,7 @@ fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
              VALUES ('pl', 'repo', 'stored', 'Stored', 'S2', '{root}/docs/x.md', 'c', '[\"docs/x.md\"]', '[\"a\"]', '[]', 'draft', 0, 'work', cpd_txn(), 't');"
         ),
     );

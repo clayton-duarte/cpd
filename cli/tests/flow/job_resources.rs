@@ -18,7 +18,7 @@ fn world() -> Fx {
     setup(&fx.env);
     fs::write(fx.env.cpd_home().join("policy/acme/cpd.toml"), "[resources.e2e-port]\n").unwrap();
     plan(&fx.env, "pl", "plan");
-    fixture(&fx.env, "UPDATE prs SET name = 'cpd' WHERE plan = 'pl';");
+    fixture(&fx.env, "UPDATE workflows SET name = 'cpd' WHERE plan = 'pl';");
     fx
 }
 

@@ -5,9 +5,9 @@ use serde_json::json;
 
 use super::driver_open::{Live, open_live, open_pr_live, submit_only};
 
-pub(super) const CLEAR_DESCRIPTION: &str = "UPDATE prs SET description = NULL WHERE plan = 'pay' AND key = 'repo'";
-pub(super) const CLEAR_TITLE: &str = "UPDATE prs SET title = NULL WHERE plan = 'pay' AND key = 'repo'";
-pub(super) const CLEAR_JIRA: &str = "UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_DESCRIPTION: &str = "UPDATE workflows SET description = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_TITLE: &str = "UPDATE workflows SET title = NULL WHERE plan = 'pay' AND key = 'repo'";
+pub(super) const CLEAR_JIRA: &str = "UPDATE workflows SET jira = NULL WHERE plan = 'pay' AND key = 'repo'";
 
 fn open_jobs(live: &Live) -> i64 {
     live.value("SELECT count(*) FROM jobs WHERE plan = 'pay' AND kind = 'open'")
@@ -52,14 +52,14 @@ fn an_open_jobs_merge_with_no_stored_description_fails_gate_error_and_is_not_mer
 #[test]
 fn an_open_jobs_merge_with_no_stored_title_fails_gate_error_and_is_not_merged() {
     let live = open_live();
-    refused_open_merge(&live, CLEAR_TITLE, "pr_title_required");
+    refused_open_merge(&live, CLEAR_TITLE, "workflow_title_required");
 }
 
 #[test]
 fn a_retry_after_a_refused_open_merge_is_a_new_attempt_of_the_same_job() {
     let live = open_live();
     refused_open_merge(&live, CLEAR_DESCRIPTION, "description_required");
-    live.fixture("UPDATE prs SET description = 'A description' WHERE plan = 'pay' AND key = 'repo'");
+    live.fixture("UPDATE workflows SET description = 'A description' WHERE plan = 'pay' AND key = 'repo'");
     live.fx.cpd(&["job", "retry", "open-repo", "--tier", "S2", "--plan", "pay"]).ok();
     live.gh_creates();
 
@@ -77,7 +77,7 @@ fn a_retry_after_a_refused_open_merge_is_a_new_attempt_of_the_same_job() {
 #[test]
 fn an_update_jobs_merge_needs_no_stored_description() {
     let live = open_pr_live();
-    live.fixture("UPDATE prs SET description = NULL WHERE plan = 'pay' AND key = 'repo'");
+    live.fixture("UPDATE workflows SET description = NULL WHERE plan = 'pay' AND key = 'repo'");
     live.add_cpd_job("up-repo", "update");
     live.commit(&live.lead, "README.md", "mine\n", "mine");
     let row = live.pr_row();

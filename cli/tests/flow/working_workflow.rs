@@ -58,7 +58,7 @@ fn seed(fx: &Fx, key: &str, pr: &str) {
 fn working_pr_cmd_job_add_names_the_leads_workflow() {
     let fx = world(None);
     let spec = spec_file(&fx.env);
-    as_lead(&fx, &["job", "add", "k", "--title", "Title of k", "--tier", "S2", "--spec", &spec, "--pr", "b", "--plan", "pl"]).ok();
+    as_lead(&fx, &["job", "add", "k", "--title", "Title of k", "--tier", "S2", "--spec", &spec, "--workflow", "b", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -125,14 +125,14 @@ fn working_pr_cmd_answer_names_the_leads_workflow() {
 fn working_pr_cmd_pr_add_names_the_leads_workflow() {
     let fx = world(Some("a"));
     let repo = fx.keyed_repo("web");
-    as_lead(&fx, &["pr", "add", "c", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]).ok();
+    as_lead(&fx, &["workflow", "add", "c", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("c"), "the NEW PR");
 }
 
 #[test]
 fn working_pr_cmd_pr_edit_names_the_leads_workflow() {
     let fx = world(Some("a"));
-    as_lead(&fx, &["pr", "edit", "b", "--title", "Other title", "--plan", "pl"]).ok();
+    as_lead(&fx, &["workflow", "edit", "b", "--title", "Other title", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
@@ -141,14 +141,14 @@ fn working_pr_cmd_pr_describe_names_the_leads_workflow() {
     let fx = world(None);
     let file = fx.env.root().join("body.md");
     std::fs::write(&file, "## What\n\nIt.\n").unwrap();
-    as_lead(&fx, &["pr", "describe", "--pr", "b", "--file", file.to_str().unwrap(), "--plan", "pl"]).ok();
+    as_lead(&fx, &["workflow", "describe", "--workflow", "b", "--file", file.to_str().unwrap(), "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"));
 }
 
 #[test]
 fn working_pr_cmd_pr_cancel_names_the_leads_workflow() {
     let fx = world(Some("a"));
-    as_lead(&fx, &["pr", "cancel", "b", "--plan", "pl"]).ok();
+    as_lead(&fx, &["workflow", "cancel", "b", "--plan", "pl"]).ok();
     assert_eq!(named(&fx).as_deref(), Some("b"), "a cancelled PR may be named");
 }
 
@@ -196,7 +196,7 @@ fn working_pr_cmd_a_worker_or_the_user_names_nothing() {
         // Each run is a real write (a new Job appended to `b`), so a naming would have happened.
         let spec = spec_file(&fx.env);
         let key = format!("n{n}");
-        as_session(&fx, session, &["job", "add", &key, "--title", "New", "--tier", "S2", "--spec", &spec, "--pr", "b", "--plan", "pl"]).ok();
+        as_session(&fx, session, &["job", "add", &key, "--title", "New", "--tier", "S2", "--spec", &spec, "--workflow", "b", "--plan", "pl"]).ok();
         assert_eq!(named(&fx), None, "{session:?}");
     }
 }

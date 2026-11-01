@@ -7,8 +7,8 @@ use crate::common;
 use super::driver_desc_gate::{CLEAR_JIRA, refused_open_merge};
 use super::driver_open::{Live, open_live, open_pr_live};
 
-const NO_JIRA: &str = "UPDATE prs SET jira = NULL WHERE key = 'repo';";
-const WITH_JIRA: &str = "UPDATE prs SET jira = 'ABC-1' WHERE key = 'repo';";
+const NO_JIRA: &str = "UPDATE workflows SET jira = NULL WHERE key = 'repo';";
+const WITH_JIRA: &str = "UPDATE workflows SET jira = 'ABC-1' WHERE key = 'repo';";
 
 /// `open_live` whose owner `acme` requires a ticket (`required`) or says nothing of it.
 fn live_requiring(required: bool) -> Live {
@@ -64,8 +64,8 @@ fn job_dispatch_starts_the_open_job_of_a_pr_with_no_jira_when_the_policy_does_no
 #[test]
 fn job_dispatch_starts_the_open_job_of_an_adopted_pr_with_no_jira_when_required() {
     let live = live_requiring(true);
-    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'prs_head_ref_fixed'");
-    live.fixture(&format!("DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
+    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'workflows_head_ref_fixed'");
+    live.fixture(&format!("DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
     let out = live.dispatch("open-repo").ok();
     assert_eq!(out["attempt"], "open-repo-a1", "{out}");
 }

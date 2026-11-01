@@ -49,13 +49,13 @@ fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, base: &str, status: &str, name
     let (worktree, started) = if status == "dispatch" { ("'/w'", "'t'") } else { ("NULL", "NULL") };
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     fx.env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, name, title)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, name, title)
          VALUES ('{plan}', '{key}', '{repo}', '{base}', '{status}', 'cpd/{plan}/{key}', {worktree}, cpd_txn(), 't', {started}, {}, {});",
         q(name),
         q(title)
     ));
     for need in needs {
-        fx.env.sql(&format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('{plan}', '{key}', '{need}');"));
+        fx.env.sql(&format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('{plan}', '{key}', '{need}');"));
     }
 }
 
@@ -70,7 +70,7 @@ fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, tier: Option<&str
     };
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
          VALUES ('{plan}', '{pr}', '{key}', 'Title {key}', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't');"
     ));
     for need in needs {
@@ -446,7 +446,7 @@ Plan mine: Title of mine · review r1
 
 Goal: Show the review in chat
 
-## PRs
+## Workflows
 - ui (ui, base cpd/mine/api): Build the UI
   Done when: The summary is written
   Done when: The dialog opens
@@ -471,7 +471,7 @@ Overlaps: 1
 
 Decided: t-d1, t-d2
 
-Later: PR api
+Later: Workflow api
 
 ## Risks
 R1 The dialog API differs between modes
@@ -522,7 +522,7 @@ Plan mine · phase plan
 
 Goal: —
 
-## PRs
+## Workflows
 - api (api-name, base main): API work
 
 ## Jobs (1 under review, 0 locked)

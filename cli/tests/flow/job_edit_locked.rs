@@ -96,7 +96,7 @@ fn only_the_spec_of_a_queued_job_can_be_edited() {
     let fx = locked();
     let spec = new_spec(&fx, "new.json");
     let before = writes(&fx);
-    for flag in [&["--title", "Else"][..], &["--tier", "S3"], &["--pr", "repo"], &["--kind", "docs"], &["--needs", "a"], &["--no-needs"]] {
+    for flag in [&["--title", "Else"][..], &["--tier", "S3"], &["--workflow", "repo"], &["--kind", "docs"], &["--needs", "a"], &["--no-needs"]] {
         let mut args = vec!["edit", "b", "--spec", spec.as_str()];
         args.extend(flag);
         let e = refused(&job(&fx, &args, "pl"), "job_locked", 3);
@@ -141,7 +141,7 @@ fn an_open_or_update_job_is_never_edited() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                VALUES ('pl', 'repo', 'open-x', 'Open it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'open', '{fp}', cpd_txn(), 't'),
                       ('pl', 'repo', 'update-x', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{fp}', cpd_txn(), 't');",
             fp = "f".repeat(64)

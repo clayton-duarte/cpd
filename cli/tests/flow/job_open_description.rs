@@ -5,7 +5,7 @@ use crate::common;
 
 use super::driver_open::{open_live, open_pr_live, Live};
 
-const UNDESCRIBED: &str = "UPDATE prs SET description = NULL WHERE key = 'repo';";
+const UNDESCRIBED: &str = "UPDATE workflows SET description = NULL WHERE key = 'repo';";
 
 fn attempts(live: &Live) -> i64 {
     live.value("SELECT count(*) FROM attempts")
@@ -30,8 +30,8 @@ fn job_dispatch_refuses_an_open_job_whose_pr_has_no_description() {
 fn job_dispatch_starts_the_open_job_of_an_adopted_pr_without_a_description() {
     let live = open_live();
     // `head_ref` is fixed by a trigger: lift it for the update and put back the very same trigger.
-    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'prs_head_ref_fixed'");
-    live.fixture(&format!("{UNDESCRIBED} DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
+    let trigger: String = live.value("SELECT sql FROM sqlite_master WHERE name = 'workflows_head_ref_fixed'");
+    live.fixture(&format!("{UNDESCRIBED} DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature' WHERE key = 'repo'; {trigger};"));
     let out = live.dispatch("open-repo").ok();
     assert_eq!(out["attempt"], "open-repo-a1", "{out}");
     assert_eq!(attempts(&live), 1);

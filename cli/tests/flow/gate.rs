@@ -75,7 +75,7 @@ fn fixture_with(kind: &str, policy: &str, config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Charge the card at checkout', 'A description', cpd_txn(), 't', 't');",
         repo = repo.display(),
         lead = lead.display()
@@ -95,7 +95,7 @@ impl Fx {
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt(), &setup).unwrap();
         self.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                VALUES ('pay', 'repo', 'api', 'Title of api', 'S2', 'Do api.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{kind}', '{}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                VALUES ('pay', '{ATTEMPT}', 'api', 1, 'S2', 'ladder', 'running', '{branch}', '{work}', '{base}', 't');",
@@ -410,7 +410,7 @@ fn every_cause_the_attempts_table_admits_is_rendered_into_the_next_spec() {
         let merged = if outcome == "merged" { "'abc123'" } else { "NULL" };
         let worktree = fx.env.root().join(&job);
         fx.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                VALUES ('pay', 'repo', '{job}', 'Title of {job}', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, merged_sha, started_at, ended_at)
                VALUES ('pay', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'ended', '{outcome}', '{cause}', 'cpd/pay--{job}-a1', '{wt}-a1', '{zero}', {merged}, 't', 't');

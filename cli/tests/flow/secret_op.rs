@@ -27,7 +27,7 @@ fn fixture() -> Fx {
     let fp = "0".repeat(64);
     let job = |plan: &str, key: &str, pr: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                VALUES ('{plan}', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = '{key}';
              UPDATE jobs SET status = 'running' WHERE key = '{key}';
@@ -46,7 +46,7 @@ fn fixture() -> Fx {
                   ('lead2', 'lead', 'ctx', 'pl2', 'L2', '/', 'O3', 'idle', 't', 't');
          INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
            VALUES ('mgr1', 'manager', 'ctx', 'M', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
            VALUES ('pl', 'p1', '/r', 'main', 'waiting', 'cpd/pl/p1', NULL, cpd_txn(), 't'),
                   ('pl2', 'p2', '/r', 'main', 'waiting', 'cpd/pl2/p2', NULL, cpd_txn(), 't');
          {} {} {}",

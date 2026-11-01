@@ -22,7 +22,7 @@ fn verify(fx: &Fx, key: &str, needs: &[&str], pr: &str, draft: bool) -> crate::c
     let spec = spec_file(&fx.env);
     let needs = needs.join(",");
     let title = format!("Title of {key}");
-    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify", "--pr", pr, "--plan", "pl"];
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", "verify", "--workflow", pr, "--plan", "pl"];
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
@@ -149,11 +149,11 @@ fn an_open_pr_refuses_a_verify_job() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
              VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
-             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
              {}
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';",
             pull_request("fix", 2, "open")
         ),

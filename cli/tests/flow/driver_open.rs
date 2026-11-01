@@ -212,7 +212,7 @@ impl Live {
     /// `pr` of the open PR or the PR that is `dispatch`: `(status, pr_number, pr_opened_at)`.
     pub(super) fn pr_row(&self) -> (String, Option<i64>, Option<String>) {
         store(&self.fx.env)
-            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_opened_at FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_opened_at FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
             .unwrap()
     }
 
@@ -233,7 +233,7 @@ impl Live {
     /// Job `key` of PR `repo` as cpd adds an `open` or `update` Job: `appended`, no Dependencies, `queued` with its fingerprint.
     pub(super) fn add_cpd_job(&self, key: &str, kind: &str) {
         self.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
              VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
         ));
         let plan = PlanId::parse(PLAN).unwrap();
@@ -346,7 +346,7 @@ fn open_live_with(config_extra: &str) -> Live {
     ));
     live.hooks("[pre-commit]\ngate = \"make quick\"\n\n[pre-merge]\ngate = \"make test\"\n");
     live.add_cpd_job("open-repo", "open");
-    live.fixture("UPDATE prs SET started_at = '2026-10-27T09:00:00.000Z' WHERE key = 'repo';");
+    live.fixture("UPDATE workflows SET started_at = '2026-10-27T09:00:00.000Z' WHERE key = 'repo';");
     live
 }
 
@@ -357,7 +357,7 @@ pub(super) fn open_pr_live() -> Live {
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'opened', cancel_requested_at = 't' WHERE key = 'open-repo';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 812, '{PR_URL}', '{PR_TITLE}', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
-         UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
+         UPDATE workflows SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
          UPDATE plans SET phase = 'deploy' WHERE id = 'pay';"
     ));
     live
@@ -412,9 +412,9 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
     let (status, number, opened_at) = live.pr_row();
     assert_eq!((status.as_str(), number, opened_at.is_some()), ("open", Some(812), true));
     assert_eq!(live.phase(), "deploy");
-    assert_eq!(live.value::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
+    assert_eq!(live.value::<String>("SELECT pr_url FROM workflows WHERE plan = 'pay'"), PR_URL);
     assert_eq!(live.value::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
-    assert!(live.value::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some());
+    assert!(live.value::<Option<i64>>("SELECT pull_request FROM workflows WHERE plan = 'pay'").is_some());
     let (merged, opened, phase) = (live.plan_events("job-merged"), live.plan_events("pr-opened"), live.plan_events("plan-phase"));
     let ours: Vec<&(i64, Value)> = merged.iter().filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open").collect();
     assert_eq!(ours.len(), 1, "{merged:?}");

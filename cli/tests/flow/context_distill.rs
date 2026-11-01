@@ -404,7 +404,7 @@ fn plan_with_repos(fx: &Fx, repos: &[&std::path::Path]) {
         .enumerate()
         .map(|(n, repo)| {
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                  VALUES ('pl', 'pr{n}', '{}', 'main', 'waiting', 'cpd/pl/pr{n}', cpd_txn(), 't');",
                 repo.display()
             )

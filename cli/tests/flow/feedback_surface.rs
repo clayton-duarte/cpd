@@ -29,7 +29,7 @@ fn plan_show_gives_each_pr_its_open_feedback_count() {
 
     let show = fx.show();
 
-    let prs = show["prs"].as_array().unwrap();
+    let prs = show["workflows"].as_array().unwrap();
     let open = prs.iter().find(|p| p["key"] == "one").unwrap();
     assert_eq!(open["feedback_open"], json!(3), "{open}");
 }
@@ -42,7 +42,7 @@ fn plan_show_gives_null_for_a_pr_whose_feedback_was_never_read() {
 
     let show = fx.show();
 
-    for pr in show["prs"].as_array().unwrap() {
+    for pr in show["workflows"].as_array().unwrap() {
         let object = pr.as_object().unwrap();
         assert!(object.contains_key("feedback_open"), "{pr}");
         assert_eq!(object["feedback_open"], Value::Null, "{pr}");
@@ -53,7 +53,7 @@ fn plan_show_gives_null_for_a_pr_whose_feedback_was_never_read() {
 fn merged_fix_text(live: &Live) -> String {
     let spec = live.fx.env.root().join("fix-spec.json");
     fs::write(&spec, r#"{"goal": "Fix it.", "context": "The review asked.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let added = live.fx.cpd(&["job", "add", "fix", "--title", "Fix the review", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay"]).ok();
+    let added = live.fx.cpd(&["job", "add", "fix", "--title", "Fix the review", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--workflow", "repo", "--plan", "pay"]).ok();
     assert_eq!(added["job"]["status"], "queued");
     let (attempt, submitted) = live.run_job("fix", |live, id| {
         live.commit(&live.worktree(id), "fix.txt", "fixed\n", "fix");

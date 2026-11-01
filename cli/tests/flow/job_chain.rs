@@ -14,11 +14,11 @@ fn open_pr(fx: &Fx) {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
              VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
-             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
              {}
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';",
             pull_request("fix", 2, "open")
         ),
@@ -34,7 +34,7 @@ fn seed(fx: &Fx, key: &str, kind: &str, status: &str, needs: &[&str]) {
     let reason = if status == "cancelled" { "'x', 't'" } else { "NULL, NULL" };
     let cause = if status == "failed" { "'timed_out'" } else { "NULL" };
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, merged_sha, cancel_reason, cancel_requested_at, appended, kind, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, failed_cause, merged_sha, cancel_reason, cancel_requested_at, appended, kind, fingerprint, created_txn, created_at)
          VALUES ('pl', 'fix', '{key}', 'Title of {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', {cause}, {sha}, {reason}, 1, '{kind}', {fingerprint}, cpd_txn(), 't');"
     );
     for need in needs {
@@ -45,7 +45,7 @@ fn seed(fx: &Fx, key: &str, kind: &str, status: &str, needs: &[&str]) {
 
 fn add(fx: &Fx, key: &str, extra: &[&str]) -> crate::common::Run {
     let spec = spec_file(&fx.env);
-    let mut args = vec!["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", &spec, "--pr", "fix", "--plan", "pl"];
+    let mut args = vec!["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", &spec, "--workflow", "fix", "--plan", "pl"];
     args.extend(extra);
     fx.cpd(&args)
 }

@@ -63,7 +63,7 @@ fn an_open_job_that_finds_the_pull_request_already_merged_queues_done() {
 
     live.run_job("open-repo", |live, id| submit(live, id));
 
-    assert_eq!(live.value::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
+    assert_eq!(live.value::<String>("SELECT status FROM workflows WHERE key = 'repo'"), "merged");
     let done: Value = serde_json::from_str(&live.value::<String>("SELECT coalesce(json_group_array(json_array(plan, pr, target, settled_at IS NULL)), '[]') FROM jira_transitions WHERE target = 'done'")).unwrap();
     assert_eq!(done, json!([["pay", "repo", "done", 1]]));
 }

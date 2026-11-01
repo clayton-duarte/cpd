@@ -213,7 +213,7 @@ fn l6_pr_add_of_a_repo_whose_origin_is_acme_owner_is_repo_unkeyed() {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay-1', 'ctx', 'Pay', 'grounding', 'lead1', 't');",
     );
-    let run = fx.cpd(&["pr", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change api", "--shape", "config", "--plan", "pay-1"]);
+    let run = fx.cpd(&["workflow", "add", "api", "--repo", repo.to_str().unwrap(), "--title", "Change api", "--shape", "config", "--plan", "pay-1"]);
     refused(&run, "repo_unkeyed", 1);
 }
 
