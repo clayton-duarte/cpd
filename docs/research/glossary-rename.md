@@ -201,3 +201,11 @@ What each implies, cited:
 Both readings are consistent with the decided rename itself (pro-d136, pro-d138): the object is a Workflow, `PR` means only the pull request, and no alias is invented. Reading 1 leaves cpd's object graph untouched; Reading 2 changes what a Workflow is. The rename's inventory (Part 1) is the same under both; only the second Job's design differs.
 
 **No decision is recorded here.** The User decides at the Plan review.
+
+## Part 3 — The rename design per change class
+
+DRAFT. Mechanism, blast radius and staging per class from Part 1.
+
+## Part 4 — The cost and the order
+
+DRAFT. Files and lines per class, what breaks, what must land together, proposed staging and cutover.
