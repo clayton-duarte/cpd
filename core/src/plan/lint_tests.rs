@@ -76,14 +76,23 @@ fn outline(prs: &[&str]) -> Outline {
         assumptions: vec![],
         decided: vec![],
         decisions: vec![],
-        done_when: prs.iter().map(|k| ((*k).to_owned(), vec!["done".to_owned()])).collect(),
+        done_when: prs
+            .iter()
+            .map(|k| ((*k).to_owned(), vec!["done".to_owned()]))
+            .collect(),
         goal: "g".into(),
         out_of_scope: vec![],
         risks: vec![],
     }
 }
 
-fn lint_with(phase: Phase, prs: &[PrRow], jobs: &[Job], outline: Option<&Outline>, waiting: &[&str]) -> Vec<Finding> {
+fn lint_with(
+    phase: Phase,
+    prs: &[PrRow],
+    jobs: &[Job],
+    outline: Option<&Outline>,
+    waiting: &[&str],
+) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
     let waiting: BTreeSet<String> = waiting.iter().map(|k| (*k).to_owned()).collect();
     run(&Input::new(&plan, phase, prs, jobs, outline, &waiting))
@@ -91,7 +100,13 @@ fn lint_with(phase: Phase, prs: &[PrRow], jobs: &[Job], outline: Option<&Outline
 
 /// Findings of the Plan with an outline for `web` and PR `web`, in phase `dispatch` (no pr_empty).
 fn lint(jobs: &[Job]) -> Vec<Finding> {
-    lint_with(Phase::Dispatch, &[pr("web")], jobs, Some(&outline(&["web"])), &[])
+    lint_with(
+        Phase::Dispatch,
+        &[pr("web")],
+        jobs,
+        Some(&outline(&["web"])),
+        &[],
+    )
 }
 
 fn overlaps(findings: &[Finding]) -> Vec<&Finding> {
@@ -117,7 +132,10 @@ fn assert_silent(jobs: &[Job]) {
 
 #[test]
 fn parallel_write_overlap_reports_equal_files_of_parallel_jobs() {
-    let jobs = [draft("a", &["src/z.rs", "src/a.rs"], &[]), draft("b", &["src/a.rs", "src/z.rs", "src/b.rs"], &[])];
+    let jobs = [
+        draft("a", &["src/z.rs", "src/a.rs"], &[]),
+        draft("b", &["src/a.rs", "src/z.rs", "src/b.rs"], &[]),
+    ];
     let findings = lint(&jobs);
     let hits = overlaps(&findings);
     assert_eq!(hits.len(), 1);
@@ -132,7 +150,9 @@ fn parallel_write_overlap_reports_equal_files_of_parallel_jobs() {
     assert!(f.message.contains("2.4%"));
     assert_eq!(
         f.message,
-        format!("a and b have no dependency path and both name src/a.rs, src/z.rs. {MESSAGE_TAIL} Settle it with cpd job edit a --needs b, or narrow touches.")
+        format!(
+            "a and b have no dependency path and both name src/a.rs, src/z.rs. {MESSAGE_TAIL} Settle it with cpd job edit a --needs b, or narrow touches."
+        )
     );
 }
 
@@ -142,7 +162,11 @@ fn parallel_write_overlap_ignores_jobs_with_a_dependency_path_either_way() {
     assert_fires(&base);
     assert_silent(&[draft("a", &["x.rs"], &["b"]), draft("b", &["x.rs"], &[])]);
     assert_silent(&[draft("a", &["x.rs"], &[]), draft("b", &["x.rs"], &["a"])]);
-    assert_silent(&[draft("a", &["x.rs"], &["m"]), draft("m", &[], &["b"]), draft("b", &["x.rs"], &[])]);
+    assert_silent(&[
+        draft("a", &["x.rs"], &["m"]),
+        draft("m", &[], &["b"]),
+        draft("b", &["x.rs"], &[]),
+    ]);
     assert_silent(&[
         draft("a", &["x.rs"], &["m"]),
         job("m", "web", "work", "cancelled", &[], &["b"]),
@@ -152,18 +176,39 @@ fn parallel_write_overlap_ignores_jobs_with_a_dependency_path_either_way() {
 
 #[test]
 fn parallel_write_overlap_ignores_directory_entries() {
-    assert_fires(&[draft("a", &["docs/contract.md"], &[]), draft("b", &["docs/contract.md"], &[])]);
-    assert_silent(&[draft("a", &["docs/"], &[]), draft("b", &["docs/contract.md"], &[])]);
+    assert_fires(&[
+        draft("a", &["docs/contract.md"], &[]),
+        draft("b", &["docs/contract.md"], &[]),
+    ]);
+    assert_silent(&[
+        draft("a", &["docs/"], &[]),
+        draft("b", &["docs/contract.md"], &[]),
+    ]);
     assert_silent(&[draft("a", &["docs/"], &[]), draft("b", &["docs/"], &[])]);
 }
 
 #[test]
 fn parallel_write_overlap_ignores_open_and_update_and_cancelled_jobs() {
-    assert_fires(&[draft("a", &["x.rs"], &[]), job("b", "web", "work", "queued", &["x.rs"], &[])]);
-    assert_silent(&[draft("a", &["x.rs"], &[]), job("b", "web", "open", "queued", &["x.rs"], &[])]);
-    assert_silent(&[draft("a", &["x.rs"], &[]), job("b", "web", "update", "queued", &["x.rs"], &[])]);
-    assert_silent(&[draft("a", &["x.rs"], &[]), job("b", "web", "work", "cancelled", &["x.rs"], &[])]);
-    assert_silent(&[job("a", "web", "open", "draft", &["x.rs"], &[]), job("b", "web", "work", "queued", &["x.rs"], &[])]);
+    assert_fires(&[
+        draft("a", &["x.rs"], &[]),
+        job("b", "web", "work", "queued", &["x.rs"], &[]),
+    ]);
+    assert_silent(&[
+        draft("a", &["x.rs"], &[]),
+        job("b", "web", "open", "queued", &["x.rs"], &[]),
+    ]);
+    assert_silent(&[
+        draft("a", &["x.rs"], &[]),
+        job("b", "web", "update", "queued", &["x.rs"], &[]),
+    ]);
+    assert_silent(&[
+        draft("a", &["x.rs"], &[]),
+        job("b", "web", "work", "cancelled", &["x.rs"], &[]),
+    ]);
+    assert_silent(&[
+        job("a", "web", "open", "draft", &["x.rs"], &[]),
+        job("b", "web", "work", "queued", &["x.rs"], &[]),
+    ]);
 }
 
 #[test]
@@ -171,17 +216,35 @@ fn parallel_write_overlap_needs_a_draft_under_review() {
     let queued = |k: &str| job(k, "web", "work", "queued", &["x.rs"], &[]);
     assert_fires(&[draft("a", &["x.rs"], &[]), queued("b")]);
     assert_silent(&[queued("a"), queued("b")]);
-    assert_silent(&[draft("a", &["x.rs"], &[]), job("b", "web", "work", "merged", &["x.rs"], &[])]);
+    assert_silent(&[
+        draft("a", &["x.rs"], &[]),
+        job("b", "web", "work", "merged", &["x.rs"], &[]),
+    ]);
 }
 
 #[test]
 fn jobs_of_different_prs_are_not_compared() {
     let same = [draft("a", &["x.rs"], &[]), draft("b", &["x.rs"], &[])];
     assert_fires(&same);
-    let other = [draft("a", &["x.rs"], &[]), job("b", "api", "work", "draft", &["x.rs"], &[])];
-    let findings = lint_with(Phase::Dispatch, &[pr("web"), pr("api")], &other, Some(&outline(&["web", "api"])), &[]);
+    let other = [
+        draft("a", &["x.rs"], &[]),
+        job("b", "api", "work", "draft", &["x.rs"], &[]),
+    ];
+    let findings = lint_with(
+        Phase::Dispatch,
+        &[pr("web"), pr("api")],
+        &other,
+        Some(&outline(&["web", "api"])),
+        &[],
+    );
     assert!(overlaps(&findings).is_empty());
-    let findings = lint_with(Phase::Dispatch, &[pr("web"), pr("api")], &same, Some(&outline(&["web", "api"])), &[]);
+    let findings = lint_with(
+        Phase::Dispatch,
+        &[pr("web"), pr("api")],
+        &same,
+        Some(&outline(&["web", "api"])),
+        &[],
+    );
     assert_eq!(overlaps(&findings).len(), 1);
 }
 
@@ -195,10 +258,15 @@ fn one_finding_per_pair_with_sorted_paths() {
     let findings = lint(&jobs);
     let hits = overlaps(&findings);
     assert_eq!(hits.len(), 3);
-    let first = hits.iter().find(|f| f.job.as_deref() == Some("a") && f.other.as_deref() == Some("b")).unwrap();
+    let first = hits
+        .iter()
+        .find(|f| f.job.as_deref() == Some("a") && f.other.as_deref() == Some("b"))
+        .unwrap();
     assert_eq!(first.paths, ["a.rs", "b.rs", "c.rs"]);
-    let pairs: BTreeSet<(String, String)> =
-        hits.iter().map(|f| (f.job.clone().unwrap(), f.other.clone().unwrap())).collect();
+    let pairs: BTreeSet<(String, String)> = hits
+        .iter()
+        .map(|f| (f.job.clone().unwrap(), f.other.clone().unwrap()))
+        .collect();
     assert_eq!(pairs.len(), 3);
 }
 
@@ -211,8 +279,17 @@ fn stub_drafts_compare_nothing() {
 
 #[test]
 fn lockfiles_are_exempt() {
-    for name in ["Cargo.lock", "core/Cargo.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"] {
-        assert_fires(&[draft("a", &["Cargo.toml"], &[]), draft("b", &["Cargo.toml"], &[])]);
+    for name in [
+        "Cargo.lock",
+        "core/Cargo.lock",
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+    ] {
+        assert_fires(&[
+            draft("a", &["Cargo.toml"], &[]),
+            draft("b", &["Cargo.toml"], &[]),
+        ]);
         assert_silent(&[draft("a", &[name], &[]), draft("b", &[name], &[])]);
     }
 }
@@ -237,10 +314,15 @@ fn run_is_deterministic_and_orders_findings() {
     assert_eq!(order, sorted);
     assert_eq!(order.first(), Some(&Rule::DraftIncomplete));
     assert_eq!(order.last(), Some(&Rule::ParallelWriteOverlap));
-    let shape: Vec<Option<&str>> = of(&findings, Rule::ShapeIncomplete).iter().map(|f| f.pr.as_deref()).collect();
+    let shape: Vec<Option<&str>> = of(&findings, Rule::ShapeIncomplete)
+        .iter()
+        .map(|f| f.pr.as_deref())
+        .collect();
     assert_eq!(shape, [Some("api"), Some("web")]);
-    let ov: Vec<(Option<&str>, Option<&str>)> =
-        overlaps(&findings).iter().map(|f| (f.pr.as_deref(), f.job.as_deref())).collect();
+    let ov: Vec<(Option<&str>, Option<&str>)> = overlaps(&findings)
+        .iter()
+        .map(|f| (f.pr.as_deref(), f.job.as_deref()))
+        .collect();
     assert_eq!(ov, [(Some("api"), Some("c")), (Some("web"), Some("a"))]);
 }
 
@@ -255,7 +337,11 @@ fn run_reports_every_error_not_only_the_first() {
     ];
     let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])), &[]);
     let got = rules(&findings);
-    for rule in [Rule::DraftIncomplete, Rule::ShapeIncomplete, Rule::DependencyCycle] {
+    for rule in [
+        Rule::DraftIncomplete,
+        Rule::ShapeIncomplete,
+        Rule::DependencyCycle,
+    ] {
         assert!(got.contains(&rule), "{rule:?} in {got:?}");
     }
 }
@@ -268,13 +354,25 @@ fn first_error_is_the_refusal_of_the_first_error_finding() {
     assert!(rules(&findings).contains(&Rule::ShapeIncomplete));
     let err = first_error(&findings).expect("an error finding");
     assert_eq!(err.code(), ErrorCode::DraftIncomplete);
-    assert_eq!(err.details()["jobs"], json!([{"key": "s", "missing": ["tier", "spec"]}]));
+    assert_eq!(
+        err.details()["jobs"],
+        json!([{"key": "s", "missing": ["tier", "spec"]}])
+    );
     assert!(err.message().contains('s'));
     assert!(err.message().contains("s."), "{}", err.message());
     // A waiting stub is exempt: the shape gap is then the first error.
-    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])), &["s"]);
+    let findings = lint_with(
+        Phase::Dispatch,
+        &prs,
+        &jobs,
+        Some(&outline(&["web"])),
+        &["s"],
+    );
     assert!(of(&findings, Rule::DraftIncomplete).is_empty());
-    assert_eq!(first_error(&findings).unwrap().code(), ErrorCode::ShapeIncomplete);
+    assert_eq!(
+        first_error(&findings).unwrap().code(),
+        ErrorCode::ShapeIncomplete
+    );
 }
 
 #[test]
@@ -287,7 +385,10 @@ fn first_error_ignores_warnings() {
     with_error.push(stub("s"));
     let findings = lint(&with_error);
     assert_eq!(overlaps(&findings).len(), 1, "control");
-    assert_eq!(first_error(&findings).unwrap().code(), ErrorCode::DraftIncomplete);
+    assert_eq!(
+        first_error(&findings).unwrap().code(),
+        ErrorCode::DraftIncomplete
+    );
 }
 
 #[test]
@@ -308,7 +409,12 @@ fn pr_empty_with_no_live_pr_names_pr_add() {
     let findings = lint_with(Phase::Plan, &[], &[], Some(&outline(&[])), &[]);
     let hits = of(&findings, Rule::PrEmpty);
     assert_eq!(hits.len(), 1);
-    assert!(hits[0].details["next"].as_str().unwrap().starts_with("cpd pr add"));
+    assert!(
+        hits[0].details["next"]
+            .as_str()
+            .unwrap()
+            .starts_with("cpd pr add")
+    );
 }
 
 #[test]
@@ -317,9 +423,20 @@ fn dependency_cycle_finding_lists_the_cycle() {
     let hits = of(&findings, Rule::DependencyCycle);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].severity(), Severity::Error);
-    let cycle: Vec<&str> = hits[0].details["cycle"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let cycle: Vec<&str> = hits[0].details["cycle"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert!(cycle.contains(&"a") && cycle.contains(&"b"), "{cycle:?}");
-    assert!(of(&lint(&[draft("a", &[], &[]), draft("b", &[], &["a"])]), Rule::DependencyCycle).is_empty());
+    assert!(
+        of(
+            &lint(&[draft("a", &[], &[]), draft("b", &[], &["a"])]),
+            Rule::DependencyCycle
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -328,7 +445,13 @@ fn outline_findings_follow_the_outline() {
     let missing = lint_with(Phase::Dispatch, &[pr("web")], &jobs, None, &[]);
     assert_eq!(of(&missing, Rule::OutlineMissing).len(), 1);
     assert!(of(&missing, Rule::OutlineIncomplete).is_empty());
-    let incomplete = lint_with(Phase::Dispatch, &[pr("web")], &jobs, Some(&outline(&[])), &[]);
+    let incomplete = lint_with(
+        Phase::Dispatch,
+        &[pr("web")],
+        &jobs,
+        Some(&outline(&[])),
+        &[],
+    );
     let hits = of(&incomplete, Rule::OutlineIncomplete);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].details["prs"], json!(["web"]));
@@ -355,19 +478,32 @@ fn shape_findings_are_separate_rules() {
         job("i", "web", "impl", "draft", &[], &["t"]),
         job("v", "web", "verify", "draft", &[], &["i"]),
     ]);
-    assert!(rules(&whole).iter().all(|r| *r == Rule::ParallelWriteOverlap));
+    assert!(
+        rules(&whole)
+            .iter()
+            .all(|r| *r == Rule::ParallelWriteOverlap)
+    );
     assert!(whole.iter().all(|f| f.severity() == Severity::Warn));
 }
 
 #[test]
 fn finding_json_has_every_key() {
-    let findings = lint(&[draft("a", &["x.rs"], &[]), draft("b", &["x.rs"], &[]), stub("s")]);
+    let findings = lint(&[
+        draft("a", &["x.rs"], &[]),
+        draft("b", &["x.rs"], &[]),
+        stub("s"),
+    ]);
     assert!(findings.len() >= 2);
     for f in &findings {
         let v: Value = f.to_json();
         let obj = v.as_object().unwrap();
         let keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
-        assert_eq!(keys, BTreeSet::from(["rule", "severity", "message", "pr", "job", "other", "paths", "details"]));
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "rule", "severity", "message", "pr", "job", "other", "paths", "details"
+            ])
+        );
         assert_eq!(obj["rule"], f.rule.as_str());
         assert_eq!(obj["severity"], f.severity().as_str());
     }

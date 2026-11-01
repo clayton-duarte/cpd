@@ -138,9 +138,8 @@ pub(crate) fn shape_incomplete(plan: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Ve
         .into_iter()
         .filter_map(|pr| {
             let lacks = missing(pr, jobs, None);
-            (!lacks.is_empty()).then(|| {
-                incomplete(plan, pr, &lacks, "the review and the lock need both")
-            })
+            (!lacks.is_empty())
+                .then(|| incomplete(plan, pr, &lacks, "the review and the lock need both"))
         })
         .collect()
 }

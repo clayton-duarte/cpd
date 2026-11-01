@@ -26,7 +26,14 @@ pub(super) fn find(
     jobs: &[Job],
 ) -> Result<Vec<Finding>, CpdError> {
     let waiting = parked::waiting_set(conn, &plan.id, jobs)?;
-    Ok(run(&Input::new(&plan.id, plan.phase, prs, jobs, plan.outline.as_ref(), &waiting)))
+    Ok(run(&Input::new(
+        &plan.id,
+        plan.phase,
+        prs,
+        jobs,
+        plan.outline.as_ref(),
+        &waiting,
+    )))
 }
 
 /// `plan lint` (§4.15).
@@ -50,7 +57,10 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
         let findings = find(conn, &plan, &prs, &jobs)?;
         Ok((plan, findings))
     })?;
-    let errors: Vec<&Finding> = findings.iter().filter(|f| f.severity() == Severity::Error).collect();
+    let errors: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.severity() == Severity::Error)
+        .collect();
     let warnings = findings.len() - errors.len();
     let json_findings: Vec<Value> = findings.iter().map(Finding::to_json).collect();
     if errors.is_empty() {
