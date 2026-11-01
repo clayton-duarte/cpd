@@ -1352,6 +1352,10 @@ Idempotent: yes; a Plan already deleted returns `"already": true` and writes not
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `plan_rows` of `cli/tests/flow/plan_delete.rs` counts Sessions with `plan = <id>` and Events with `plan = <id>`, but the Lead's row stays with its `plan` and the `plan-deleted` Event names the Plan; the Jobs, Attempts, PRs, the other Sessions and the other Events are what is gone.
 
+### 4.15 `plan lint`
+
+Skeleton: the section is written in the next commit.
+
 ## 5. `job`
 
 Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except where stated.
