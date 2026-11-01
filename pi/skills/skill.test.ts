@@ -436,12 +436,12 @@ function factProblems(files: { name: string; text: string }[]): string[] {
     // Ids: record ids are <machine>-<letter><n>; the skill's patterns are the contract's.
     for (const m of text.matchAll(/\bhs-([a-z])(\d+)\b/g)) if (!recordLetters.includes(m[1]!) || Number(m[2]) < 1) bad(`${m[0]} is not a Context record id (contract.md §2.1)`);
     for (const m of text.matchAll(/`(\^[^`]+\$)`/g)) {
-      const formats = ["Context id", "Plan id", "PR key \\(R34\\)", "Job key"].map(idFormat);
+      const formats = ["Context id", "Plan id", "Workflow key \\(R34\\)", "Job key"].map(idFormat);
       if (!formats.includes(m[1]!)) bad(`id pattern \`${m[1]}\` is none of contract.md §2.1`);
     }
     for (const [re, format, thing] of [
       [/\b[Ii]d `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
-      [/PR has a key \(`(\^[^`]+\$)`/, idFormat("PR key \\(R34\\)"), "PR key"],
+      [/\b(?:PR|Workflow) has a key \(`(\^[^`]+\$)`/, idFormat("Workflow key \\(R34\\)"), "Workflow key"],
       [/id matches `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
       [/Job key matches `(\^[^`]+\$)`/, idFormat("Job key"), "Job key"],
     ] as const) {
@@ -491,7 +491,7 @@ test("the fact check fails on a code, a kind, a flag, an exit number, a number, 
     ["Escalations expire after `ask_minutes`, default 15 min.", /ask_minutes = 60/], // a wrong default
     ["See hs-x9.", /hs-x9/], // a record id with an unknown letter
     ["A Plan has an id `^[a-z]+$`.", /\^\[a-z\]\+\$/], // an id pattern of no kind
-    ["The key is `^[a-z][a-z0-9-]{1,23}$`; each PR has a key (`^[a-z][a-z0-9-]{1,23}$`, for example `web`).", /PR key pattern/], // the Plan pattern for a PR key
+    ["The key is `^[a-z][a-z0-9-]{1,23}$`; each Workflow has a key (`^[a-z][a-z0-9-]{1,23}$`, for example `web`).", /Workflow key pattern/], // the Plan pattern for a Workflow key
     ["Phases: grounding → plan → dispatch → pr → done.", /grounding → plan → dispatch → pr → done/], // a renamed phase
     ["Read `error.details.nothing`.", /error\.details\.nothing/], // a detail no refusal carries
   ] as const) assert.match(problems(line), culprit, line);
@@ -564,8 +564,11 @@ test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", (
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
     assert.match(text, /gh pr edit <n> --base/, `${skill}: gh pr edit --base`);
-    assert.match(text, /cpd pr add <key> --repo <path> --base/, `${skill}: pr add --base`);
-    assert.match(text, /cpd pr push --pr <key>/, `${skill}: cpd pr push`);
+    // The object is a Workflow (pro-d136): cpd-manager speaks the new vocabulary, cpd-lead keeps its words until its own docs Job.
+    const add = skill === "cpd-manager" ? /cpd workflow add <key> --repo <path> --base/ : /cpd pr add <key> --repo <path> --base/;
+    assert.match(text, add, `${skill}: pr add --base`);
+    const push = skill === "cpd-manager" ? /cpd pr push --workflow <key>/ : /cpd pr push --pr <key>/;
+    assert.match(text, push, `${skill}: cpd pr push`);
   }
 });
 
@@ -610,10 +613,10 @@ test("cpd-lead references: the research follow-up keeps --needs <research-pr> as
   assert.match(line, /the exception to stacking \(\[Scoping\]\(\.\.\/SKILL\.md#scoping\)\)/);
 });
 
-test("cpd-manager: the landing-order line stacks a same-repo PR and keeps --needs for other repos, not for the PRs of a Plan", () => {
+test("cpd-manager: the landing-order line stacks a same-repo Workflow and keeps --needs for other repos, not for the Workflows of a Plan", () => {
   const line = skillFiles("cpd-manager")[0]!.text.split("\n").find((l) => l.startsWith("- **Set the landing order.**")) ?? assert.fail("no landing-order line");
-  assert.match(line, /the Lead stacks a same-repo PR on the one it depends on \(`cpd pr add <key> --repo <path> --base <pr-key>`\), `--needs` across repos/);
-  assert.doesNotMatch(line, /needs order|order its own PRs|each starts when the other merges/, "needs no longer orders the PRs of a Plan");
+  assert.match(line, /the Lead stacks a same-repo Workflow on the one it depends on \(`cpd workflow add <key> --repo <path> --base <workflow-key>`\), `--needs` across repos/);
+  assert.doesNotMatch(line, /needs order|order its own Workflows|each starts when the other merges/, "needs no longer orders the Workflows of a Plan");
 });
 
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
@@ -730,9 +733,9 @@ test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees
   assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 E4)");
   assert.doesNotMatch(lead, /Open a PR as soon as its last Job merges/);
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Oversee all-merged PRs/);
+  assert.match(manager, /Oversee all-merged Workflows/);
   assert.match(manager, /stack those that would conflict/);
-  assert.match(manager, /cpd opens a PR as soon as its last Job merges/);
+  assert.match(manager, /cpd opens the pull request as soon as a Workflow's last Job merges/);
 });
 
 test("the Job kinds: the template and its shape, [tests], the kind of each Job and the red-test guard (hs-d341, hs-d497)", () => {
@@ -797,9 +800,10 @@ test("cpd-manager: job approve-tests joins the commands that belong to a Lead an
   assert.doesNotMatch(rule, /`cpd pr open`/);
 });
 
-test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the PR's open Job (hs-d340)", () => {
+test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the Workflow's open Job (hs-d340)", () => {
   const worker = readFileSync(new URL("../../core/src/spec/worker.md", here), "utf8");
-  assert.match(worker, /the Gate runs it, in the PR's open Job/);
+  // The object is a Workflow (pro-d136): the Spec speaks the new word, the adapter's code keeps its words until the text Jobs rename it.
+  assert.match(worker, /the Gate runs it, in the Workflow's open Job/);
   const guard = readFileSync(new URL("../lib/testguard.ts", here), "utf8");
   assert.match(guard, /the full suite is the Gate's, run by the PR's open Job/);
   for (const text of [worker, guard]) assert.doesNotMatch(text, /at pr open/);
@@ -815,7 +819,7 @@ test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and
   assert.match(lead, /combine finished PRs into one before they open/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Split by deliverable and area/);
-  assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
+  assert.match(manager, /small follow-up goes into its area's existing Workflow, not a new one/);
 });
 
 test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, larger content goes to a file", () => {
@@ -880,7 +884,7 @@ test("cpd-manager pins the exact CLI of context decide, plan new, session send a
 
 test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
   const cases = [
-    { skill: "cpd-manager", scope: "Plan / PR / Job" },
+    { skill: "cpd-manager", scope: "Plan / Workflow / Job" },
     { skill: "cpd-lead", scope: "PR / Job" },
   ];
   for (const c of cases) {

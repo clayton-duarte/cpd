@@ -33,7 +33,7 @@ The workspace version (`[workspace.package] version` in `Cargo.toml` and the fou
 
 ## Changelog
 
-No `CHANGELOG` file is kept in the repo. Between two release tags, run `git cliff v<old>..v<new>` on demand with the `git-cliff` and `cliff.toml` pinned in `~/dotfiles` on `hs`. The commit subjects are the PR titles plus ` (#<number>)`.
+No `CHANGELOG` file is kept in the repo. Between two release tags, run `git cliff v<old>..v<new>` on demand with the `git-cliff` and `cliff.toml` pinned in `~/dotfiles` on `hs`. The commit subjects are the pull request titles plus ` (#<number>)`.
 
 ## What retired
 
