@@ -2,7 +2,6 @@
 //! The one-shot runs (`--no-extensions`) have no MCP already and are unchanged.
 
 use std::num::NonZeroU32;
-use std::path::Path;
 
 use super::*;
 use crate::ids::JobKey;

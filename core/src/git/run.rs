@@ -193,44 +193,6 @@ pub fn worktree_add(dir: &Path, args: &[&str], path: &Path) -> Result<String, Cp
     })
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn is_admin_dir_race_matches_the_linux_and_macos_text_of_strerror_zero() {
-        for tail in ["Success", "Undefined error: 0"] {
-            let line = format!("fatal: failed to read .git/worktrees/x/commondir: {tail}");
-            assert!(super::is_admin_dir_race(&line), "{line}");
-        }
-    }
-
-    use super::{is_fetch_race, is_admin_dir_race};
-
-    #[test]
-    fn worktree_add_retries_the_reproduced_shapes_only() {
-        for stderr in [
-            "Preparing worktree (detached HEAD f094ea8)\nfatal: failed to read .git/worktrees/pay.gate-7/commondir: Success\n",
-            "fatal: failed to read .git/worktrees/w3/commondir: No such file or directory",
-        ] {
-            assert!(is_admin_dir_race(stderr), "{stderr}");
-        }
-        for stderr in [
-            "fatal: '/x/w' already exists",
-            "fatal: invalid reference: nosuch",
-            "fatal: failed to read .git/worktrees/w3/commondir: Permission denied",
-            "fatal: failed to read .git/index: Success",
-            "",
-        ] {
-            assert!(!is_admin_dir_race(stderr), "{stderr}");
-        }
-    }
-
-    #[test]
-    fn fetch_retries_only_the_placeholder_head() {
-        assert!(is_fetch_race("fatal: bad object worktrees/adding/HEAD"));
-        assert!(!is_fetch_race("fatal: couldn't find remote ref no-such-branch"));
-    }
-}
-
 /// `git rev-parse <rev>`, trimmed.
 pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, CpdError> {
     rev_parse_with(&*Ports::current().runner, dir, rev)
@@ -322,4 +284,42 @@ fn push_failed(dir: &Path, branch: &str, stderr: &str) -> CpdError {
         .with("branch", branch)
         .with("repo", dir.display().to_string())
         .with("stderr", tail(stderr, TAIL_LINES))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn is_admin_dir_race_matches_the_linux_and_macos_text_of_strerror_zero() {
+        for tail in ["Success", "Undefined error: 0"] {
+            let line = format!("fatal: failed to read .git/worktrees/x/commondir: {tail}");
+            assert!(super::is_admin_dir_race(&line), "{line}");
+        }
+    }
+
+    use super::{is_fetch_race, is_admin_dir_race};
+
+    #[test]
+    fn worktree_add_retries_the_reproduced_shapes_only() {
+        for stderr in [
+            "Preparing worktree (detached HEAD f094ea8)\nfatal: failed to read .git/worktrees/pay.gate-7/commondir: Success\n",
+            "fatal: failed to read .git/worktrees/w3/commondir: No such file or directory",
+        ] {
+            assert!(is_admin_dir_race(stderr), "{stderr}");
+        }
+        for stderr in [
+            "fatal: '/x/w' already exists",
+            "fatal: invalid reference: nosuch",
+            "fatal: failed to read .git/worktrees/w3/commondir: Permission denied",
+            "fatal: failed to read .git/index: Success",
+            "",
+        ] {
+            assert!(!is_admin_dir_race(stderr), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn fetch_retries_only_the_placeholder_head() {
+        assert!(is_fetch_race("fatal: bad object worktrees/adding/HEAD"));
+        assert!(!is_fetch_race("fatal: couldn't find remote ref no-such-branch"));
+    }
 }

@@ -291,7 +291,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
-    let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
+    let opened = Env::open_home_persistent(home.clone(), Persist::new(log, || false));
     let Env { home, config, store, ports, .. } = match opened {
         Ok(env) => env,
         Err(e) => {
@@ -1202,7 +1202,9 @@ mod tests {
     #[test]
     fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
         use Decision::*;
-        let table: &[(&str, Option<&str>, Option<&str>, u64, Option<u64>, Decision)] = &[
+        // A case of the table: the columns the test names below, then the expected Decision.
+        type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, u64, Option<u64>, Decision);
+        let table: &[Case] = &[
             ("working", Some("stop"), None, 3, None, Wait),
             ("working", Some("stop"), None, 5, Some(3), Wait),
             ("working", Some("error"), None, 3, None, Wait),

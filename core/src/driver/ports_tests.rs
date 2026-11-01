@@ -699,7 +699,7 @@ fn a_failed_linear_attempt_resets_the_lead_branch() {
         let mut u = universe.lock().unwrap();
         let blob = u.blob(repo.id(), b"failed\n");
         let tree = u.tree(repo.id(), &[("f.txt", &blob)]);
-        let commit = u.commit(repo.id(), &tree, &[base.clone()], "the failed Attempt");
+        let commit = u.commit(repo.id(), &tree, std::slice::from_ref(&base), "the failed Attempt");
         u.set_ref(repo.id(), &format!("refs/heads/{lead}"), &commit, "commit: failed");
     }
     let worktree = root.join("r.lead");

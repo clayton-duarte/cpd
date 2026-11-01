@@ -10,7 +10,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 use crate::clock::{Clock, ManualClock, SystemClock};
-use crate::host::runner::{Call, Reply, Runner};
+use crate::host::runner::{Call, Reply};
 use crate::host::spawn::{Launch, Spawn};
 use crate::ports::{Fakes, Ports};
 

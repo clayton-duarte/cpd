@@ -284,7 +284,7 @@ fn follow_whose_binary_is_replaced_restarts_through_spawn_from_after_the_last_ro
     let h = home("[events]\npoll_ms = 250\n");
     let mut writer = store(&h.home);
     event(&mut writer, "old");
-    let cursor = writer.read(|conn| highest_id(conn)).unwrap();
+    let cursor = writer.read(highest_id).unwrap();
     // The installed cpd: a file that a new install replaces by a rename, so the path holds another inode.
     let bin_dir = tempfile::tempdir().unwrap();
     let exe = bin_dir.path().join("cpd");

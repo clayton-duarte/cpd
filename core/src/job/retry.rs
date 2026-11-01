@@ -16,6 +16,8 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "job retry";
 
+// The variant carries the one value this enum exists to hand back; boxing is a type change out of scope.
+#[allow(clippy::large_enum_variant)]
 enum Decision {
     /// Already `queued` with this `retry_tier` and no Attempt since.
     Already,

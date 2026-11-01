@@ -41,7 +41,7 @@ struct Live {
 }
 
 fn live(conn: &rusqlite::Connection, context: &ContextId) -> Result<Option<Live>, CpdError> {
-    Ok(conn
+    conn
         .query_row(
             "SELECT id, name, cwd, state, tmux_pane, runner FROM sessions
               WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
@@ -52,7 +52,7 @@ fn live(conn: &rusqlite::Connection, context: &ContextId) -> Result<Option<Live>
         .map(|(id, name, cwd, state, pane, runner)| {
             Ok::<_, CpdError>(Live { id: SessionId::parse(&id)?, name, cwd, state, pane, runner })
         })
-        .transpose()?)
+        .transpose()
 }
 
 /// The window of the Session's latest `session-moved` Event, if any.

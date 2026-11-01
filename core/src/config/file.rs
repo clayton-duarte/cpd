@@ -167,7 +167,7 @@ impl std::fmt::Display for TickSeconds {
 /// A whole number of seconds is shown as an integer, as it was when the key was one.
 impl Serialize for TickSeconds {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.0 % 1000 == 0 { serializer.serialize_u32(self.0 / 1000) } else { serializer.serialize_f64(f64::from(self.0) / 1000.0) }
+        if self.0.is_multiple_of(1000) { serializer.serialize_u32(self.0 / 1000) } else { serializer.serialize_f64(f64::from(self.0) / 1000.0) }
     }
 }
 

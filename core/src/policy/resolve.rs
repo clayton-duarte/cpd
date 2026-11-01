@@ -189,7 +189,7 @@ pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
         let files = entries(&entry)?;
         for file in &files {
             if is_dir(file) {
-                return Err(policy_invalid(&entry, None, &format!("{name}/ holds a directory; {OLD_LAYOUT}")));
+                return Err(policy_invalid(&entry, None, format!("{name}/ holds a directory; {OLD_LAYOUT}")));
             }
             key_of_scope_file(home, file)?;
         }
@@ -197,7 +197,7 @@ pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
             return Err(policy_invalid(
                 &entry,
                 None,
-                &format!("{name}/ has files but no owner.toml; {OLD_LAYOUT}"),
+                format!("{name}/ has files but no owner.toml; {OLD_LAYOUT}"),
             ));
         }
     }

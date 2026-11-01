@@ -13,7 +13,7 @@ use super::ledger::{self, Cause, End, Ladder, Stage};
 /// Inserts the Attempt `<job>-a<number>`: `running` with a driver, or ended `failed` / `cause` and counted.
 fn add(f: &mut Fixture, job: &str, number: u32, tier: &str, ended: Option<&str>) {
     let (status, outcome, cause) = match ended {
-        Some(cause) => ("ended", format!("'failed'"), format!("'{cause}'")),
+        Some(cause) => ("ended", "'failed'".to_string(), format!("'{cause}'")),
         None => ("running", "NULL".to_owned(), "NULL".to_owned()),
     };
     let ended_at = if ended.is_some() { "'t'" } else { "NULL" };

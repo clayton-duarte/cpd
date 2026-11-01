@@ -2,7 +2,7 @@
 //! (Plan `explore-roles`, R2-R6; contract §2.2 "Job kinds", commands.md §5). Every command runs in process on a temp
 //! `$CPD_HOME` with a fixed Catalog: no pi, no git, no process.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ use super::cancel::{Shape, cancel_in};
 use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
-use super::{AddArgs, CancelArgs, EditArgs, RetryArgs};
+use super::{AddArgs, EditArgs, RetryArgs};
 use crate::args::{PlanArg, PrArg, Text};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
@@ -148,12 +148,14 @@ impl Fixture {
         ));
     }
 
-    fn add(&mut self, key: &str, kind: &str, tier: &str, spec: &PathBuf, pr: Option<&str>, draft: bool, needs: &[&str]) -> Result<Output, CpdError> {
+    // Each argument is a field of `AddArgs`; a signature change is out of scope.
+    #[allow(clippy::too_many_arguments)]
+    fn add(&mut self, key: &str, kind: &str, tier: &str, spec: &Path, pr: Option<&str>, draft: bool, needs: &[&str]) -> Result<Output, CpdError> {
         let args = AddArgs {
             key: JobKey::parse(key).unwrap(),
             title: Text::from_str("T").unwrap(),
             tier: Some(Tier::parse(tier).unwrap()),
-            spec: Some(spec.clone()),
+            spec: Some(spec.to_path_buf()),
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             draft,
             urgent: false,

@@ -28,7 +28,6 @@ pub(crate) struct Pr {
     pub(crate) lead_branch: String,
     pub(crate) attempt: PathBuf,
     pub(crate) attempt_branch: String,
-    pub(crate) attempt_id: String,
 }
 
 impl Pr {
@@ -174,7 +173,7 @@ impl Rig {
             fp = "f".repeat(64),
             aw = attempt.display(),
         ));
-        self.prs.push(Pr { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch, attempt_id });
+        self.prs.push(Pr { key, status: if status == "dispatch" { "dispatch" } else if status == "merged" { "merged" } else if status == "cancelled" { "cancelled" } else { "open" }, lead, lead_branch, attempt, attempt_branch });
         self.prs.last().unwrap()
     }
 

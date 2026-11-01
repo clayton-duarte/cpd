@@ -71,6 +71,8 @@ struct Ran {
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
 /// `build`, the optional `list` and the `run` of the Job's named tests. HEAD is `sha`, the worktree clean.
+// Each argument is a distinct input of the check; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, policy: &Policy, root: &Path, lead: &str, diff_base: &str, sha: &str) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
     let tests = if job.kind == "impl" { guard::of(&all, &job).tests } else { guard::own(&job).0 };

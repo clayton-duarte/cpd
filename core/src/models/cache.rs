@@ -55,6 +55,8 @@ pub struct File {
 
 /// What reading one file gave.
 #[derive(Clone, Debug)]
+// The variant carries the one value this enum exists to hand back; boxing is a type change out of scope.
+#[allow(clippy::large_enum_variant)]
 pub enum Read {
     Good(File),
     /// Not JSON of the contract's shape: treated as missing, and reported.

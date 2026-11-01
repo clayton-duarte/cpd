@@ -112,7 +112,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 && logged.once(reload_due_with(&ports, &mut env, &dirs, &row.id), "cannot decide on restarting pi").unwrap_or(false)
                 && may_exec(&exe)
             {
-                print!("  new pi installed: restarting pi for {}…\n", row.name);
+                println!("  new pi installed: restarting pi for {}…", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
                 stop_pi_with(&ports, &mut pi, pi_stop);
@@ -125,7 +125,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                     "cannot read the adapter's state",
                 );
                 if missing.unwrap_or(false) {
-                    print!("  adapter missing: restarting pi for {}…\n", row.name);
+                    println!("  adapter missing: restarting pi for {}…", row.name);
                     let _ = std::io::stdout().flush();
                     stop_pi_with(&ports, &mut pi, pi_stop);
                     continue 'run;

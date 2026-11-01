@@ -3,7 +3,7 @@ use crate::pill::{spec, Spec};
 const SHIPPED: &str = include_str!("../../pi/lib/pill-spec.json");
 
 fn err(json: &str) -> String {
-    Spec::parse(json).err().expect("parse must be rejected")
+    Spec::parse(json).expect_err("parse must be rejected")
 }
 
 #[test]

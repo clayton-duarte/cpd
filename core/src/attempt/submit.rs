@@ -24,7 +24,6 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
 
 /// [`submit`] on an open `env`: what a test hands in.
 pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdError> {
-    let mut env = env;
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let attempt = env.store.read(|conn| row::load(conn, &plan, &id))?;
@@ -78,8 +77,8 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
     let sha = git::run::rev_parse(&root, "HEAD")?;
     // 5 and 6. The checks, in ONE `checks` span (contract §7.7): the Worker's clocks stop from the first check to the end of the
     // merge. Every way out ends the span once, before the error returns.
-    let span = span::open(&mut env, &plan, &id, &job.key)?;
-    let checked = run_checks(&mut env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha);
+    let span = span::open(env, &plan, &id, &job.key)?;
+    let checked = run_checks(env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha);
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
     let checked = checked.and_then(|files| match git::run::rev_parse(&root, "HEAD") {
@@ -91,7 +90,7 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
         Ok(files) => files,
         Err(e) => {
             // The refusal is what returns; a failed `end` is E2's to close (`died: true`).
-            let _ = span.end(&mut env);
+            let _ = span.end(env);
             return Err(e);
         }
     };
@@ -135,7 +134,7 @@ pub(super) fn submit_in(env: &mut Env, args: SubmitArgs) -> Result<Output, CpdEr
     let outcome = match written {
         Ok(outcome) => outcome,
         Err(e) => {
-            let _ = span.end(&mut env);
+            let _ = span.end(env);
             return Err(e);
         }
     };
