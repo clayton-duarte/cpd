@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::NewEvent;
 use super::kind::Kind;
 
-/// The `number` and `url` of a `pr-base-changed` Event (§5.2): the pull request's, for the poll's follow of GitHub's
+/// The `number` and `url` of a `workflow-base-changed` Event (§5.2): the pull request's, for the poll's follow of GitHub's
 /// repoint; explicit nulls for the poll's unstack of a PR with no pull request (hs-d301); absent for every other `by`.
 #[derive(Clone, Copy, Debug)]
 pub enum BasePull<'a> {
@@ -75,12 +75,12 @@ impl NewEvent {
 
     /// `plan lock`: the Jobs it queued and the PRs it started.
     pub fn plan_phase_locked(text: impl Into<String>, jobs: impl Serialize, workflows: impl Serialize) -> NewEvent {
-        make(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": jobs, "prs": workflows}))
+        make(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": jobs, "workflows": workflows}))
     }
 
     /// The last PR opened: the PRs that are open.
     pub fn plan_phase_deployed(text: impl Into<String>, workflows: impl Serialize) -> NewEvent {
-        make(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": workflows}))
+        make(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "workflows": workflows}))
     }
 
     /// A review that was just requested.
@@ -115,7 +115,7 @@ impl NewEvent {
     }
 
     pub fn plan_done(text: impl Into<String>, workflows: impl Serialize) -> NewEvent {
-        make(Kind::PlanDone, text, json!({"prs": workflows}))
+        make(Kind::PlanDone, text, json!({"workflows": workflows}))
     }
 
     pub fn job_added(
@@ -131,7 +131,7 @@ impl NewEvent {
         make(
             Kind::JobAdded,
             text,
-            json!({"pr": workflow, "kind": kind, "status": status, "appended": appended, "tier": tier, "needs": needs, "urgent": urgent}),
+            json!({"workflow": workflow, "kind": kind, "status": status, "appended": appended, "tier": tier, "needs": needs, "urgent": urgent}),
         )
     }
 
@@ -139,7 +139,7 @@ impl NewEvent {
     /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
     pub fn job_added_by_cpd(text: impl Into<String>, workflow: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
-            "pr": workflow, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "urgent": false, "by": by,
+            "workflow": workflow, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "urgent": false, "by": by,
         });
         if let Some(reason) = reason {
             data["reason"] = json!(reason);
@@ -159,7 +159,7 @@ impl NewEvent {
             data["cancel_too_late"] = json!(true);
         }
         if let Some((workflow, number, url)) = pull {
-            data["pr"] = json!(workflow);
+            data["workflow"] = json!(workflow);
             data["number"] = json!(number);
             data["url"] = json!(url);
         }
@@ -222,7 +222,7 @@ impl NewEvent {
     }
 
     pub fn all_merged(text: impl Into<String>, workflow: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
-        make(Kind::AllMerged, text, json!({"pr": workflow, "merged": merged, "cancelled": cancelled}))
+        make(Kind::AllMerged, text, json!({"workflow": workflow, "merged": merged, "cancelled": cancelled}))
     }
 
     pub fn pr_feedback(
@@ -242,7 +242,7 @@ impl NewEvent {
             Kind::PrFeedback,
             text,
             json!({
-                "pr": workflow, "number": number, "url": url, "state": state, "checks": checks,
+                "workflow": workflow, "number": number, "url": url, "state": state, "checks": checks,
                 "review_decision": review_decision, "mergeable": mergeable, "merge_state": merge_state,
                 "conflict": conflict, "reasons": reasons,
             }),
@@ -250,24 +250,24 @@ impl NewEvent {
     }
 
     pub fn workflow_added(text: impl Into<String>, workflow: impl Serialize, repo: &str, base: &str, title: &str, head_ref: Option<&str>, author: Option<&str>, needs: impl Serialize, appended: bool) -> NewEvent {
-        make(Kind::WorkflowAdded, text, json!({"pr": workflow, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
+        make(Kind::WorkflowAdded, text, json!({"workflow": workflow, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
     }
 
     pub fn workflow_edited(text: impl Into<String>, workflow: impl Serialize, fields: impl Serialize) -> NewEvent {
-        make(Kind::WorkflowEdited, text, json!({"pr": workflow, "fields": fields}))
+        make(Kind::WorkflowEdited, text, json!({"workflow": workflow, "fields": fields}))
     }
 
     pub fn workflow_described(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
-        make(Kind::WorkflowDescribed, text, json!({"pr": workflow}))
+        make(Kind::WorkflowDescribed, text, json!({"workflow": workflow}))
     }
 
     pub fn workflow_cancelled(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
-        make(Kind::WorkflowCancelled, text, json!({"pr": workflow}))
+        make(Kind::WorkflowCancelled, text, json!({"workflow": workflow}))
     }
 
-    /// `pr-cancelled` of a `dispatch` PR whose work another PR carried (§3.8, hs-d301): `superseded_by` is that PR as a reference.
+    /// `workflow-cancelled` of a `dispatch` Workflow whose work another Workflow carried (§3.8, hs-d301): `superseded_by` is that Workflow as a reference.
     pub fn workflow_cancelled_superseded(text: impl Into<String>, workflow: impl Serialize, superseded_by: &str) -> NewEvent {
-        make(Kind::WorkflowCancelled, text, json!({"pr": workflow, "superseded_by": superseded_by}))
+        make(Kind::WorkflowCancelled, text, json!({"workflow": workflow, "superseded_by": superseded_by}))
     }
 
     pub fn workflow_started(
@@ -286,13 +286,13 @@ impl NewEvent {
             Kind::WorkflowStarted,
             text,
             json!({
-                "pr": workflow, "repo": repo, "base": base, "lead_branch": lead_branch, "lead_worktree": lead_worktree,
+                "workflow": workflow, "repo": repo, "base": base, "lead_branch": lead_branch, "lead_worktree": lead_worktree,
                 "base_sha": base_sha, "reused": reused, "pushed": pushed, "by": by,
             }),
         )
     }
 
-    /// `pr-base-changed` (§5.2): `number` and `url` are in `data` for `by` `poll` only, see [`BasePull`].
+    /// `workflow-base-changed` (§5.2): `number` and `url` are in `data` for `by` `poll` only, see [`BasePull`].
     pub fn workflow_base_changed(
         text: impl Into<String>,
         workflow: impl Serialize,
@@ -301,7 +301,7 @@ impl NewEvent {
         by: &str,
         pull_request: BasePull<'_>,
     ) -> NewEvent {
-        let mut data = json!({"pr": workflow, "from": from, "to": to, "from_pr": from_workflow, "to_pr": to_workflow, "by": by});
+        let mut data = json!({"workflow": workflow, "from": from, "to": to, "from_workflow": from_workflow, "to_workflow": to_workflow, "by": by});
         match pull_request {
             BasePull::Absent => {}
             BasePull::Of(number, url) => {
@@ -317,11 +317,11 @@ impl NewEvent {
     }
 
     pub fn pr_opened(text: impl Into<String>, workflow: impl Serialize, number: i64, url: &str) -> NewEvent {
-        make(Kind::PrOpened, text, json!({"pr": workflow, "number": number, "url": url}))
+        make(Kind::PrOpened, text, json!({"workflow": workflow, "number": number, "url": url}))
     }
 
     pub fn pr_merged(text: impl Into<String>, workflow: impl Serialize, number: i64, url: &str, merged_at: Option<&str>) -> NewEvent {
-        make(Kind::PrMerged, text, json!({"pr": workflow, "number": number, "url": url, "merged_at": merged_at}))
+        make(Kind::PrMerged, text, json!({"workflow": workflow, "number": number, "url": url, "merged_at": merged_at}))
     }
 
     pub fn escalation(text: impl Into<String>, escalation: impl Serialize, question: &str) -> NewEvent {
@@ -487,7 +487,7 @@ impl NewEvent {
     pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "reason": reason, "started_at": started_at, "plans": plans});
         if let Some(until_workflow) = until_workflow {
-            data["until_pr"] = json!(until_workflow);
+            data["until_workflow"] = json!(until_workflow);
         }
         make(Kind::IncidentStarted, text, data)
     }
@@ -498,7 +498,7 @@ impl NewEvent {
     pub fn incident_plans(text: impl Into<String>, by: &str, plans: impl Serialize, until_workflow: Option<&str>) -> NewEvent {
         let mut data = json!({"by": by, "plans": plans});
         if let Some(until_workflow) = until_workflow {
-            data["until_pr"] = json!(until_workflow);
+            data["until_workflow"] = json!(until_workflow);
         }
         make(Kind::IncidentPlans, text, data)
     }
@@ -648,8 +648,7 @@ mod tests {
         for &kind in Kind::ALL {
             let made: BTreeSet<String> =
                 samples(kind).iter().flat_map(|e| e.data().as_object().unwrap().keys().cloned().collect::<Vec<_>>()).collect();
-            // `plan-phase`'s `pr` is the contract's, for a phase change about one PR; no command makes it yet.
-            for field in kind.spec().optional.iter().filter(|f| !(kind == Kind::PlanPhase && **f == "pr")) {
+            for field in kind.spec().optional.iter() {
                 assert!(made.contains(*field), "{kind}: no constructor makes the optional field {field:?}");
             }
         }

@@ -86,7 +86,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     if !why.is_empty() {
         let names: Vec<&str> = why.iter().map(|w| w.as_str()).collect();
         return Err(CpdError::new(
-            ErrorCode::WorkflowNotReady,
+            ErrorCode::PrNotReady,
             format!("PR {key} is not ready to post: {}.", names.join(", ")),
         )
         .with("pr", key.as_str())

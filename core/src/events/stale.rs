@@ -54,8 +54,8 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
                 (Some(plan), Some(workflow)) => exists(
                     conn,
                     "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2
-                     AND kind IN ('pr-started', 'pr-merged', 'pr-cancelled')
-                     AND json_extract(data, '$.pr') = ?3 LIMIT 1",
+                     AND kind IN ('workflow-started', 'pr-merged', 'workflow-cancelled')
+                     AND json_extract(data, '$.workflow') = ?3 LIMIT 1",
                     params![plan, id, workflow],
                 ),
                 _ => Ok(false),
@@ -80,13 +80,13 @@ fn later_of_job(conn: &Connection, event: &Event, kinds: &[&str]) -> Result<bool
 }
 
 fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
-    let (Some(plan), Some(workflow)) = (event.plan.as_deref(), event.data.get("pr").and_then(Value::as_str)) else {
+    let (Some(plan), Some(workflow)) = (event.plan.as_deref(), event.data.get("workflow").and_then(Value::as_str)) else {
         return Ok(false);
     };
     if exists(
         conn,
-        "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2 AND kind IN ('pr-merged', 'pr-cancelled')
-         AND json_extract(data, '$.pr') = ?3 LIMIT 1",
+        "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2 AND kind IN ('pr-merged', 'workflow-cancelled')
+         AND json_extract(data, '$.workflow') = ?3 LIMIT 1",
         params![plan, event.id, workflow],
     )? {
         return Ok(true);
