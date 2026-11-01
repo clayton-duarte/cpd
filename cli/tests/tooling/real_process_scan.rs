@@ -9,9 +9,9 @@ pub const REAL_GIT_SELF_FILES: &[&str] = &[
     "cli/tests/common/mod.rs",
     "core/tests/migrations.rs",
     "core/tests/repin.rs",
-    "cli/tests/pr/pr_adopt_life.rs",
-    "cli/tests/pr/pr_adopt_pub.rs",
-    "cli/tests/pr/pr_adopt_rebase.rs",
+    "cli/tests/workflow/workflow_adopt_life.rs",
+    "cli/tests/workflow/workflow_adopt_pub.rs",
+    "cli/tests/workflow/workflow_adopt_rebase.rs",
 ];
 
 /// The files whose subject is the real program: every file under `cli/tests/common/` and `cli/tests/tooling/` and the
@@ -40,21 +40,21 @@ pub const DEBT: &[(&str, &str, usize)] = &[
     // the gate flow test builds a real repo through TestEnv
     ("cli/tests/flow/gate.rs", "git", 5),
     // the git-layer test runs real git on temporary repos
-    ("cli/tests/pr/git.rs", "git", 1),
+    ("cli/tests/workflow/git.rs", "git", 1),
     // the git-layer test asks the real ps whether a pid is dead
-    ("cli/tests/pr/git.rs", "ps", 1),
+    ("cli/tests/workflow/git.rs", "ps", 1),
     // adopt tests build real repos through TestEnv
-    ("cli/tests/pr/pr_adopt_add.rs", "git", 4),
+    ("cli/tests/workflow/workflow_adopt_add.rs", "git", 4),
     // its local Fx forwards git to TestEnv (real git)
-    ("cli/tests/pr/pr_adopt_life.rs", "git", 21),
+    ("cli/tests/workflow/workflow_adopt_life.rs", "git", 21),
     // its local Fx forwards git to TestEnv (real git)
-    ("cli/tests/pr/pr_adopt_pub.rs", "git", 17),
+    ("cli/tests/workflow/workflow_adopt_pub.rs", "git", 17),
     // its local Fx forwards git to TestEnv (real git)
-    ("cli/tests/pr/pr_adopt_rebase.rs", "git", 39),
+    ("cli/tests/workflow/workflow_adopt_rebase.rs", "git", 39),
     // the lead-branch test builds a real repo through TestEnv
-    ("cli/tests/pr/pr_lead_branch.rs", "git", 3),
+    ("cli/tests/workflow/workflow_lead_branch.rs", "git", 3),
     // pr open tests build real repos through TestEnv
-    ("cli/tests/pr/pr_open.rs", "git", 4),
+    ("cli/tests/workflow/pr_open.rs", "git", 4),
     // a store test starts the real sh through TestEnv
     ("cli/tests/store/store.rs", "sh", 1),
     // a tui test runs the real env to read its environment
