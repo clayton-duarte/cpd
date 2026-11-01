@@ -1276,3 +1276,118 @@ fn list_refuses_what_does_not_exist() {
     );
     assert_eq!(ids(&fx.cpd(&["list", "--job", "idle"]).ok()), Vec::<&str>::new());
 }
+
+// ---------- attempt-ended carries the metrics (hs-d798) ----------
+
+impl Git {
+    /// [`Git::merge`] with `metrics` as A9's metrics: the driver computes them once (from the
+    /// Worker's session file or end report) and the same value ends the Attempt (contract §3.4 A9).
+    fn merge_with_metrics(&self, metrics: Value) {
+        let config = Config::load(&self.home).unwrap();
+        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+        let catalog = Catalog {
+            pi_version: "1.0.0".to_owned(),
+            o: model("p/opus"),
+            s: model("p/sonnet"),
+            h: model("p/haiku"),
+            g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+        };
+        let ctx = merge::Ctx { home: &self.home, config: &config, catalog: &catalog, source: "attempt test", metrics: &|_| Some(metrics.clone()) };
+        in_fakes(&self.fx, || merge::merge(&mut self.store(), &ctx, &plan(), &AttemptId::parse("api-a1").unwrap())).unwrap();
+    }
+
+    /// The `attempt-ended` Events of Attempt `api-a1`, read from the store: the Event is planned
+    /// (hs-d798) and `events list` refuses a kind it does not know, so the rows are read directly.
+    fn ended_events(&self) -> Vec<Value> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT data FROM events WHERE kind = 'attempt-ended' AND attempt = 'api-a1' ORDER BY id")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+            .iter()
+            .map(|d| serde_json::from_str(d).unwrap())
+            .collect()
+    }
+}
+
+#[test]
+fn attempt_ended_carries_the_metrics_of_a_pi_attempt() {
+    let fx = git_fixture(&[]);
+    fx.commit("src/a.rs", "fn a() {}\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+    let metrics = json!({
+        "turns": 2, "tokens_in": 110, "tokens_out": 55, "cache_read": 1000, "cache_write": 207,
+        "cost_usd": 0.0168, "duration_s": 20.25, "model": "claude-opus-y", "thinking_level": "high",
+        "stop_reason": "stop"
+    });
+    fx.merge_with_metrics(metrics.clone());
+    // Exactly one Event for the Attempt, whose `data` is the metrics blob itself.
+    let events = fx.ended_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0], metrics);
+    // The same transaction that writes `attempts.metrics` appends the Event.
+    let event_txn: i64 = fx.fx.env.query("SELECT txn FROM events WHERE kind = 'attempt-ended' AND attempt = 'api-a1'");
+    let metrics_txn: i64 = fx
+        .fx
+        .env
+        .query("SELECT txn FROM history WHERE tbl = 'attempts' AND pk LIKE '%api-a1%' AND json_extract(after, '$.metrics') IS NOT NULL ORDER BY txn DESC LIMIT 1");
+    assert_eq!(event_txn, metrics_txn, "the metrics and the Event share a transaction");
+}
+
+#[test]
+fn attempt_ended_carries_the_metrics_of_a_durable_attempt() {
+    let fx = git_fixture(&[]);
+    fx.fx.env.sql("UPDATE attempts SET runner = 'durable' WHERE id = 'api-a1'");
+    fx.commit("src/a.rs", "fn a() {}\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+    let metrics = json!({
+        "turns": 5, "tokens_in": 20, "tokens_out": 20, "cache_read": 0, "cache_write": 0,
+        "cost_usd": 0.0, "duration_s": 12.5, "model": "p/sonnet", "thinking_level": null,
+        "stop_reason": "end_turn"
+    });
+    fx.merge_with_metrics(metrics.clone());
+    let events = fx.ended_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0], metrics);
+}
+
+#[test]
+fn attempt_ended_carries_the_metrics_of_an_attempt_that_did_not_run_a_gate() {
+    let fx = git_fixture(&[]);
+    // The driver ends the Attempt before any merge: no gate ran, and the metrics still go with it.
+    let metrics = json!({
+        "turns": 0, "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cache_write": 0,
+        "cost_usd": 0.0, "duration_s": 0.0, "model": null, "thinking_level": null, "stop_reason": null
+    });
+    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+    let catalog = Catalog {
+        pi_version: "1.0.0".to_owned(),
+        o: model("p/opus"),
+        s: model("p/sonnet"),
+        h: model("p/haiku"),
+        g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+    };
+    let ladder = merge::Ladder { catalog: &catalog, retry_cap: 3 };
+    let mut store = fx.store();
+    let attempt = store.read(|conn| merge::load(conn, &plan(), &AttemptId::parse("api-a1").unwrap())).unwrap();
+    in_fakes(&fx.fx, || {
+        store.write("test", |tx| {
+            cpd_core::attempt::ledger::end(
+                tx,
+                &attempt,
+                &merge::End::Failed { cause: merge::Failure::Crashed, detail: "died".into() },
+                Some(&metrics),
+                &ladder,
+                cpd_core::attempt::ledger::Stage::Driver,
+            )
+        })
+    })
+    .unwrap();
+    let events = fx.ended_events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0], metrics);
+}
