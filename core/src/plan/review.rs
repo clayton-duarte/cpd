@@ -134,7 +134,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
         let plan_row = row::load(conn, id)?;
-        let findings = super::lint_cmd::find(conn, &plan_row, &prs, &jobs)?;
+        let findings = super::lint_cmd::find(&plan_row, &prs, &jobs);
         Ok(Snapshot {
             open_tier,
             base_prs: base_prs(conn, id)?,
