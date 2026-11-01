@@ -1384,6 +1384,14 @@ Callers: Lead; no cockpit. The about line (the clap doc comment, shown in `docs/
 | the phase is not `grounding` (`details` as `plan review`'s, §4.6) | `illegal_phase` | 3 |
 | the Plan exists | `plan_not_found` | 4 |
 | the Tier advice needs the catalog (§3.4b; no catalog read when no qualifying cell exists): the catalog is found and readable | `pi_not_found`, `catalog_failed`, `tier_model_unknown` | 1 |
+| at least one finding is an error; the message names the rules of the errors, in the order of the list below | `lint_failed` | 3 |
+
+The refusal `lint_failed` has the message `Plan <id> has <n> lint errors: <rules joined by ", ">. Fix them, then ask again.` and `details` `{plan, errors, warnings, findings}`, where `findings` is every finding, errors first, in the order of contract §2.7.
+
+**Output** on success, that is with no error finding:
+
+```json
+{"ok": true, "plan": "pay-4521", "errors": 0, "warnings": 1, "findings": [
   {"rule": "parallel_write_overlap", "severity": "warn",
    "message": "api-2 and api-3 have no dependency path and both name api/src/lib.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit api-2 --needs api-3, or narrow touches.",
    "pr": "api", "job": "api-2", "other": "api-3", "paths": ["api/src/lib.rs"], "details": {}}]}
@@ -1398,6 +1406,9 @@ The `parallel_write_overlap` message is exactly: `<job> and <other> have no depe
 A `tier_advice` finding has `pr` null, `job` the Job’s key, `other` null, `paths` `[]` and `details` `{}`. For a `draft` Job its message names `cpd job edit <job> --tier <A>`; for a `queued` Job (Locked), it does not suggest a change. The row in the summary (contract §2.7) is `<job> is <T>, history favours <A> for <kind>`.
 
 `plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding’s own code, never with `lint_failed`.
+
+Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
+
 ## 5. `job`
 
 Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except where stated.

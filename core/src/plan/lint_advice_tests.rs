@@ -1,8 +1,6 @@
 //! Red tests of the `tier_advice` rule (contract §2.7) and of the advice the lint computes (§3.4b): the rule is pure over
 //! `Input.advice`; the advice is read from a tempdir store with a fixed catalog (no pi, no PATH, no CPD_HOME).
 
-use std::collections::BTreeSet;
-
 use serde_json::json;
 
 use super::jobs::{Job, JobSpec};
@@ -79,9 +77,8 @@ fn adv(kind: &str, tier: &str) -> Advice {
 
 fn lint(jobs: &[Job], advice: &[Advice]) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
-    let waiting = BTreeSet::new();
     let prs = [pr("web")];
-    let input = Input::new(&plan, Phase::Dispatch, &prs, jobs, None, &waiting).with_advice(advice);
+    let input = Input::new(&plan, Phase::Dispatch, &prs, jobs, None).with_advice(advice);
     run(&input)
         .into_iter()
         .filter(|f| f.rule == Rule::TierAdvice)
@@ -183,7 +180,6 @@ fn tier_advice_needs_no_catalog_and_no_store() {
 #[test]
 fn tier_advice_findings_follow_the_overlaps_in_catalogue_order() {
     let plan = PlanId::parse("pl").unwrap();
-    let waiting = BTreeSet::new();
     let prs = [pr("web")];
     let mut x = job("x", "web", "impl", "draft", &["src/a.rs"], &[]);
     x.tier = Some("S2".into());
@@ -192,8 +188,7 @@ fn tier_advice_findings_follow_the_overlaps_in_catalogue_order() {
     b.spec.as_mut().unwrap().touches = json!(["src/b.rs"]);
     let jobs = [b, y, x];
     let advice = [adv("impl", "S1"), adv("work", "S1"), adv("docs", "S1")];
-    let input =
-        Input::new(&plan, Phase::Dispatch, &prs, &jobs, None, &waiting).with_advice(&advice);
+    let input = Input::new(&plan, Phase::Dispatch, &prs, &jobs, None).with_advice(&advice);
     let found = run(&input);
     let order: Vec<(Rule, Option<&str>)> = found
         .iter()
