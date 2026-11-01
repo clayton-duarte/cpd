@@ -349,7 +349,7 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
     let opened = commands(&fx);
     let [dialog] = &opened[..] else { panic!("{opened:?}") };
     assert!(dialog.starts_with("cpd tui view dialog text --title="), "a failure dialog: {dialog}");
-    assert!(dialog.to_lowercase().contains("no pr of plan ship points at acme/shop#4"), "{dialog}");
+    assert!(dialog.to_lowercase().contains("no workflow of plan ship has the pull request acme/shop#4"), "{dialog}");
 }
 
 #[test]

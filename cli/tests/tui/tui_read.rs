@@ -278,7 +278,7 @@ fn populate(store: &mut Store) {
         Some("beta"),
         Some("rel"),
         None,
-        r#"{"pr":"repo","number":7,"url":"https://github.com/acme/repo/pull/7","state":"open","checks":"failed","review_decision":"none","reasons":["checks_failed"]}"#,
+        r#"{"workflow":"repo","number":7,"url":"https://github.com/acme/repo/pull/7","state":"open","checks":"failed","review_decision":"none","reasons":["checks_failed"]}"#,
     );
     s += &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id()));
     sql(store, &s);

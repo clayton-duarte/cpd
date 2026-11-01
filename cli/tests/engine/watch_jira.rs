@@ -806,7 +806,7 @@ fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_stat
         json!({"tool": "transitionJiraIssue", "status_code": 400, "plan": "pay", "pr": "api", "ticket": API, "target": "done", "status": "Done"})
     );
     assert!(
-        text.starts_with(r#"The engine failed at E19 (Jira transitions) for the done move of PR api of Plan pay: ABC-123 could not be moved to "Done""#),
+        text.starts_with(r#"The engine failed at E19 (Jira transitions) for the done move of Workflow api of Plan pay: ABC-123 could not be moved to "Done""#),
         "{text}"
     );
     assert!(text.ends_with("See: cpd plan show --plan pay"), "{text}");
