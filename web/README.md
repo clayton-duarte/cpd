@@ -104,6 +104,8 @@ The tail parse rules — the plain-line grammar of `docs/contract.md` §6.20, wh
 3. A `tool` line ending ` (error)` is a failed tool result: `error: true`, and the marker is consumed — the text is what precedes it.
 4. Lines before the first prefixed line are ignored, so a fixture may carry a header label. The grammar carries no ids: messages take the synthetic ids `tail-1`, `tail-2`, … in output order.
 
+A tail message's `parts` are one `text` part — the plain grammar has nothing else; the full part kinds come from the pi parse (above) and the socket read (below).
+
 `toSnapshotFrame` produces `{ type: "snapshot", epoch, seq, snapshot: { messages } }` — the frame the existing fold's rule 3 reads (`web/src/fold/fold.ts`), so the live transcript enters the Chat through the same rendering engine, unchanged. The snapshot's `messages` are `TranscriptMessage[]`: the fold passes a snapshot's messages through as they are, and the view renders the role badge from them (`system` and `tool` included).
 
 **`web/src/api/live-server.ts`** — the dev-server route handler, framework-free and dependency-injected:
@@ -208,8 +210,9 @@ are **not used**. `Trace` (`/docs/components/base/trace`), `Marker` (`/docs/comp
 and the `item` and `collapsible` primitives **are** vendored: the turn now renders every part,
 not only its text (“The Chat column renders a whole turn”, below), and an `ask_user_question`
 call renders the registry's Confirmation shape (“An ask renders as a question card”, below).
-A durable `toolResult` still arrives as a plain `tool` message with a name and text and no
-structured input, and nothing carries citations or suggestions.
+A durable Session read over the socket pairs its `toolResult`s the same way (“The Chat column
+renders a whole turn”, below); the `cpd session tail` fallback keeps its plain `tool` message
+with a name and text and no structured input, and nothing carries citations or suggestions.
 
 #### The stock components, their doc pages and their extra deps
 
@@ -523,7 +526,7 @@ The card shows one `Item` per question: the question's `header` as a `Badge`, th
 
 ### The durable host-socket read (`chat-host`)
 
-A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` is untouched. The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
+A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` keeps its shape (the `transcript()` page method of the Chat column's contract, above, is the one method added since). The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
 
 #### The socket
 
@@ -587,7 +590,7 @@ export function applyHostFrame(state: HostState, frame: HostFrame): HostState;
 
 The rules are `docs/contract.md` §6.20's fold, in TS, over the wire's unchanged pi-durable shapes:
 
-1. A `snapshot` frame **replaces the whole state**, never merges — the base snapshot, a rebase, and a new epoch's snapshot are the same operation. Its `SnapshotEvent` entries render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message` (the role from the message type, the text from its text blocks joined; thinking blocks skipped); an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message gives role `"tool"` with `name` = `toolName` and `error: true` when `isError`.
+1. A `snapshot` frame **replaces the whole state**, never merges — the base snapshot, a rebase, and a new epoch's snapshot are the same operation. Its `SnapshotEvent` entries render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message` — the role from the message type, the blocks becoming the message's ordered `parts` exactly as the pi parse rules 3–4 (above) — and an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message pairs with the `toolCall` it answers, by `toolCallId`: its text becomes the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and it carries `name` = `toolName`, `durationMs` and `error: true` when `isError`. (The `cpd session tail` fallback keeps its plain grammar: a `tool` message with a name, text and no structured input.)
 2. An `events` frame applies its `AgentEvent`s in order: a completed message (`message_end`, or a `run_end` ending an in-flight message) appends its `TranscriptMessage`s; every other event updates nothing the transcript shows. The short-answer rule holds: a message arrives whole, the fold never waits for deltas.
 3. The cursor advances only with stream frames: a `snapshot` sets it to `(epoch, seq)`, an `events` frame likewise once its events are applied. `attached` fixes the mode and touches nothing else.
 4. `host_state`, `notice`, `status`, `ui_request`, `ui_resolved` and `error` leave the state unchanged.
