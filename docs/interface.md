@@ -62,12 +62,13 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd board post` | Post a message to a Session (it never starts a turn) | Lead, Manager | |
 | `cpd board list` | List the posts to a Session | Lead, Manager | |
 | `cpd board take` | Return and mark as read the unread posts to a Session (internal) | internal | |
-| `cpd pr` | Pull requests (commands.md §9) | | |
-| `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
-| `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
-| `cpd pr describe` | Store the PR's description, which becomes the pull request body (§9.5a) | Lead | |
-| `cpd pr cancel` | Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6) | Lead | |
-| `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
+| `cpd workflow` | The Plan's Workflows: add, edit, describe, cancel, start (commands.md §9) | | |
+| `cpd workflow add` | Add a Workflow to the Plan (§9.4) | Lead | |
+| `cpd workflow edit` | Change a waiting Workflow before the lock (§9.5) | Lead | |
+| `cpd workflow describe` | Store the Workflow's description, which becomes the pull request body (§9.5a) | Lead | |
+| `cpd workflow cancel` | Remove a Workflow from the Plan before the lock; after it, end a Workflow with nothing to open, or whose work another Workflow carried (`--superseded-by`) (§9.6) | Lead | |
+| `cpd workflow start` | Start a waiting Workflow whose needs are merged, after a failed start (§9.7) | Lead | |
+| `cpd pr` | Pull requests, through gh (commands.md §9) | | |
 | `cpd pr open` | Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
