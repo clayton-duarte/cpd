@@ -929,7 +929,7 @@ impl Driver {
         .with("attempt", target.id.to_string())
         .with("minutes", minutes);
         let text = error.message().to_owned();
-        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text))?;
+        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, self.config.watch.error_repeat()))?;
         log(&format!("A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled", path.display()));
         Ok(())
     }
