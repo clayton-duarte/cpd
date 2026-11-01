@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension};
 
 use super::fingerprint::{load_prs, plan_fingerprint};
-use super::row;
 use super::jobs::{self, Job};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, PrKey};
@@ -144,18 +143,4 @@ pub fn door(
     .with("job", job.key.as_str())
     .with("pr", job.pr_str())
     .with("needs", job.needs.clone()))
-}
-/// The set of Job keys whose PR is waiting (parked).
-pub(super) fn waiting_set(
-    conn: &Connection,
-    plan: &PlanId,
-    jobs: &[Job],
-) -> Result<BTreeSet<String>, CpdError> {
-    let phase = row::load(conn, plan)?.phase;
-    let waiting_prs = waiting_prs(conn, plan, phase.as_str())?;
-    Ok(jobs
-        .iter()
-        .filter(|j| waiting_prs.contains(j.pr_str()))
-        .map(|j| j.key.clone())
-        .collect())
 }

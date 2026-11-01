@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 
 use super::jobs::{self, Job};
 use super::lint::{Finding, Input, Severity, run};
-use super::parked;
 use super::prs::{PrRow, load_prs};
 use super::row::{self, Phase, PlanRow};
 use crate::args::PlanArg;
@@ -19,21 +18,14 @@ pub struct LintArgs {
 }
 
 /// The one place that lints a Plan that is already loaded.
-pub(super) fn find(
-    conn: &rusqlite::Connection,
-    plan: &PlanRow,
-    prs: &[PrRow],
-    jobs: &[Job],
-) -> Result<Vec<Finding>, CpdError> {
-    let waiting = parked::waiting_set(conn, &plan.id, jobs)?;
-    Ok(run(&Input::new(
+pub(super) fn find(plan: &PlanRow, prs: &[PrRow], jobs: &[Job]) -> Vec<Finding> {
+    run(&Input::new(
         &plan.id,
         plan.phase,
         prs,
         jobs,
         plan.outline.as_ref(),
-        &waiting,
-    )))
+    ))
 }
 
 /// `plan lint` (§4.15).
@@ -54,7 +46,7 @@ pub(super) fn lint(args: LintArgs) -> Result<Output, CpdError> {
             .with("phase", plan.phase.as_str()));
         }
         let (prs, jobs) = (load_prs(conn, &id)?, jobs::load(conn, &id)?);
-        let findings = find(conn, &plan, &prs, &jobs)?;
+        let findings = find(&plan, &prs, &jobs);
         Ok((plan, findings))
     })?;
     let errors: Vec<&Finding> = findings

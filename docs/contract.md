@@ -839,7 +839,7 @@ Nothing else is shared: not a substring (`Cargo.lock.bak`, `my-Cargo.lock`), not
 
 | # | Rule | Severity | Fires when | Refusal it carries |
 |---|---|---|---|---|
-| 1 | `draft_incomplete` | error | a `draft` Job that does not wait (§2.2 "A parked draft") lacks its Tier or its Spec | `draft_incomplete` (exit 3), `details.jobs`; the check `check_drafts_complete` |
+| 1 | `draft_incomplete` | error | a `draft` Job lacks its Tier or its Spec, a stub that waits too (§2.2 "A parked draft", hs-d822: a stub is incomplete, form (a), and no review covers it, so neither `plan review` nor the lint exempts it) | `draft_incomplete` (exit 3), `details.jobs`; the check `check_drafts_complete` |
 | 2 | `outline_missing` | error | the Plan has no outline | `outline_missing` (exit 3); the check `check_outline` |
 | 3 | `outline_incomplete` | error | a PR that is not `cancelled` and has a `draft` Job has no entry in the outline's `done_when` | `outline_incomplete` (exit 3), `details.prs`; the check `check_outline` |
 | 4 | `test_job_required` | error | a draft `impl` Job needs no `test` Job of its PR | `test_job_required` (exit 3), `details.jobs`; the check `shape::check` |
