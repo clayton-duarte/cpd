@@ -42,7 +42,7 @@ fn count(fx: &Fx, table: &str) -> i64 {
 fn a_new_plan_stores_the_runner_it_was_asked_for() {
     let fx = Fx::with_ports();
     setup(&fx, "lead_runner = \"pi\"");
-    let out = plan_new(&fx, "p", Some("durable")).ok();
+    let out = plan_new(&fx, "pl", Some("durable")).ok();
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
     assert_eq!(out["lead"]["pane"], Value::Null, "{out}");
     assert_eq!(runner_of(&fx, &lead), "durable");
@@ -52,7 +52,7 @@ fn a_new_plan_stores_the_runner_it_was_asked_for() {
 fn a_runner_flag_overrides_the_config_default() {
     let fx = Fx::with_ports();
     setup(&fx, "lead_runner = \"durable\"");
-    let out = plan_new(&fx, "p", Some("pi")).ok();
+    let out = plan_new(&fx, "pl", Some("pi")).ok();
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
     assert!(!out["lead"]["pane"].is_null(), "{out}");
     assert_eq!(runner_of(&fx, &lead), "pi");
@@ -63,7 +63,7 @@ fn an_invalid_runner_is_refused_before_anything_is_written() {
     let fx = Fx::with_ports();
     setup(&fx, "");
     // A durable Plan first, so the test is red before the flag exists.
-    plan_new(&fx, "p", Some("durable")).ok();
+    plan_new(&fx, "pl", Some("durable")).ok();
 
     let plans = count(&fx, "plans");
     let sessions = count(&fx, "sessions");
@@ -76,8 +76,8 @@ fn an_invalid_runner_is_refused_before_anything_is_written() {
 fn a_rerun_with_a_different_runner_is_refused() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    let out = plan_new(&fx, "p", Some("pi")).ok();
+    let out = plan_new(&fx, "pl", Some("pi")).ok();
     let lead = out["lead"]["session"].as_str().unwrap().to_owned();
-    common::refused(&plan_new(&fx, "p", Some("durable")), "plan_exists", 3);
+    common::refused(&plan_new(&fx, "pl", Some("durable")), "plan_exists", 3);
     assert_eq!(runner_of(&fx, &lead), "pi");
 }
