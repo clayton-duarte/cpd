@@ -357,7 +357,7 @@ repair`), [commands §22](../commands.md) (`policy`), [commands
 §23](../commands.md) (`secret`), [commands §24](../commands.md) (`mcp`). Records:
 `hs-d795`, `hs-d798` (`cpd context show --record <id>`); model: `hs-d802`.
 
-**Verdict:** partly confirmed / partly unverified. GitHub, 1Password,
+**Verdict:** partly confirmed. GitHub, 1Password,
 install/host repair, migrations and the socket protocol are documented; the
 "OpenRouter = the model plane" and the dotfiles chain are not what the docs say;
 the LGTM exporter is not in the docs at all.
