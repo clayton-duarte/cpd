@@ -7,6 +7,7 @@
 //! Also: the `cpd metrics` command (hs-d798, commands.md §14.7), a read-only aggregate
 //! of the machine's Ledger.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::common::fx::Fx;
@@ -164,6 +165,7 @@ fn attempt_metrics(cost_usd: f64, duration_s: f64, model: Option<&str>) -> Strin
 fn fixture_metrics() -> Fx {
     let fx = Fx::with_ports();
     let env = &fx.env;
+    env.write_config("version = 1\nmachine = \"m1\"\n");
     env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -194,6 +196,7 @@ fn fixture_metrics() -> Fx {
 fn fixture_metrics_failed() -> Fx {
     let fx = Fx::with_ports();
     let env = &fx.env;
+    env.write_config("version = 1\nmachine = \"m1\"\n");
     env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -217,12 +220,14 @@ fn fixture_metrics_failed() -> Fx {
 #[test]
 fn cpd_metrics_aggregates_a_fixture_store() {
     let fx = fixture_metrics();
+    let store = fx.env.cpd_home().join("cpd.db").display().to_string();
     let run = fx.cpd(&["metrics"]);
     let out = run.ok();
     assert_eq!(
         out,
         json!({
-            "store": "<store>",
+            "ok": true,
+            "store": store,
             "per_tier": {
                 "S2": {
                     "attempts": 1,
@@ -248,6 +253,53 @@ fn cpd_metrics_aggregates_a_fixture_store() {
     );
 }
 
+/// The parsed Prometheus text exposition format: the families' `# HELP`/`# TYPE` and their series.
+#[derive(Default)]
+struct Prometheus {
+    help: BTreeMap<String, String>,
+    types: BTreeMap<String, String>,
+    /// family name -> the label set as written -> its value.
+    series: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
+/// Parses `body` enforcing the text format: `# HELP` and `# TYPE` before each family's first series, a known gauge
+/// type, and no duplicate series. Panics on a violation.
+fn parse_prometheus(body: &str) -> Prometheus {
+    let mut prom = Prometheus::default();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    for line in body.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# HELP ") {
+            let (name, text) = rest.split_once(' ').expect("a HELP line needs a name and text");
+            assert!(prom.help.insert(name.to_owned(), text.to_owned()).is_none(), "duplicate HELP for {name}");
+            assert!(prom.series.get(name).map_or(true, BTreeMap::is_empty), "HELP for {name} comes after its series");
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# TYPE ") {
+            let (name, kind) = rest.split_once(' ').expect("a TYPE line needs a name and kind");
+            assert_eq!(kind, "gauge", "{name} is not a gauge");
+            assert!(prom.types.insert(name.to_owned(), kind.to_owned()).is_none(), "duplicate TYPE for {name}");
+            continue;
+        }
+        assert!(!line.starts_with('#'), "an unknown comment line: {line}");
+        let (name, labels, value) = if let Some(open) = line.find('{') {
+            let close = line.rfind('}').expect("a series needs a closing brace");
+            (&line[..open], line[open + 1..close].to_owned(), line[close + 1..].trim())
+        } else {
+            let (name, value) = line.split_once(' ').expect("a series needs a name and a value");
+            (name, String::new(), value.trim())
+        };
+        assert!(prom.help.contains_key(name), "series {name} before its HELP");
+        assert!(prom.types.contains_key(name), "series {name} before its TYPE");
+        assert!(seen.insert((name.to_owned(), labels.clone())), "duplicate series {name}{{{labels}}}");
+        let value: f64 = value.parse().unwrap_or_else(|e| panic!("series {name} has value {value:?}: {e}"));
+        prom.series.entry(name.to_owned()).or_default().insert(labels, value);
+    }
+    prom
+}
+
 #[test]
 fn prometheus_output_parses() {
     let fx = fixture_metrics();
@@ -255,5 +307,44 @@ fn prometheus_output_parses() {
     let out = run.ok();
     assert_eq!(out["ok"], true);
     let body = out["data"].as_str().unwrap();
-    assert_eq!(body, "cpd_attempts{tier=\"S2\",model=\"claude-sonnet-x\"} 1\n");
+    let prom = parse_prometheus(body);
+
+    // Every family of the Spec is a gauge with its # HELP and # TYPE before its series.
+    for family in [
+        "cpd_attempts",
+        "cpd_attempts_merged",
+        "cpd_attempts_failed",
+        "cpd_attempt_duration_seconds",
+        "cpd_attempt_cost_usd_total",
+        "cpd_attempt_cost_usd_avg",
+        "cpd_model_attempts",
+        "cpd_model_cost_usd_total",
+        "cpd_attempt_retries",
+        "cpd_plan_cost_usd_per_merged_pr",
+        "cpd_queue_wait_seconds",
+        "cpd_job_blocked_episodes",
+    ] {
+        assert!(prom.help.contains_key(family), "no HELP for {family}");
+        assert_eq!(prom.types.get(family).map(String::as_str), Some("gauge"), "no TYPE gauge for {family}");
+    }
+
+    let series = |name: &str, labels: &str| {
+        *prom
+            .series
+            .get(name)
+            .and_then(|s| s.get(labels))
+            .unwrap_or_else(|| panic!("no series {name}{{{labels}}}"))
+    };
+    assert_eq!(series("cpd_attempts", "tier=\"S2\",model=\"claude-sonnet-x\""), 1.0);
+    assert_eq!(series("cpd_attempts_merged", "tier=\"S2\""), 1.0);
+    assert_eq!(series("cpd_attempt_duration_seconds", "tier=\"S2\",stat=\"avg\""), 62.5);
+    assert_eq!(series("cpd_attempt_duration_seconds", "tier=\"S2\",stat=\"median\""), 62.5);
+    assert_eq!(series("cpd_attempt_cost_usd_total", "tier=\"S2\""), 1.234);
+    assert_eq!(series("cpd_attempt_cost_usd_avg", "tier=\"S2\""), 1.234);
+    assert_eq!(series("cpd_model_attempts", "model=\"claude-sonnet-x\""), 1.0);
+    assert_eq!(series("cpd_model_cost_usd_total", "model=\"claude-sonnet-x\""), 1.234);
+    assert_eq!(series("cpd_plan_cost_usd_per_merged_pr", "plan=\"pl\""), 1.234);
+    assert_eq!(series("cpd_queue_wait_seconds", "phase=\"added_to_started\",stat=\"avg\""), 0.0);
+    assert_eq!(series("cpd_queue_wait_seconds", "phase=\"added_to_started\",stat=\"max\""), 0.0);
+    assert_eq!(series("cpd_job_blocked_episodes", ""), 0.0);
 }

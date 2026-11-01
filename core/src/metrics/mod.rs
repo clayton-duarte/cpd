@@ -15,6 +15,10 @@
 //! and `thinking_level` their starting values, because a fork that never changes
 //! them still runs with them (assumption: the contract does not say).
 
+pub mod report;
+
+pub use report::{Format, MetricsArgs, run};
+
 use std::path::Path;
 
 use serde::Deserialize;
