@@ -1969,7 +1969,7 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
         let fx = Fx::new();
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
-        // `a` is queued after the lock: a stub that needs it waits (the door, hs-d731).
+        // `a` is queued after the lock; a stub is legal on its own, whether or not it waits (hs-d822).
         job_add(&fx, "pl", "a", "S2", &[]).ok();
 
         let out = stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();

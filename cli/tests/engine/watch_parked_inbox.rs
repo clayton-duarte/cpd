@@ -1,5 +1,5 @@
-//! Engine step E8, the `drafts-parked` Inbox item (contract §2.2 "Inbox item" `drafts-parked`, §3.7 "Parked drafts"; hs-d731,
-//! hs-d733; Plan `draft-never-parked`): a Plan whose `parked_drafts` is not empty, with a wake W newer than T (the last Event
+//! Engine step E8, the `drafts-parked` Inbox item (contract §2.2 "Inbox item" `drafts-parked`, §3.7 "Parked drafts"; hs-d822,
+//! which supersedes hs-d731; hs-d733; Plan `draft-never-parked`): a Plan whose `parked_drafts` is not empty, with a wake W newer than T (the last Event
 //! that changes a draft's legality) and a turn its Lead finished after W (a `session-state` Event `working` → `idle`), is one
 //! open magenta item linked to the Plan and its Lead. W is written here by hand (what E20 sends is `watch_parked.rs`'s), as an
 //! Event with `data.from` null; the engine runs in-process on virtual time with the fake tmux server.

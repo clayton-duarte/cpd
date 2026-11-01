@@ -2022,7 +2022,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = fx.keyed_repo("web");
-    // It waits for PR `pay` (a need that is not merged), so its stubs are legal after the lock (hs-d731).
+    // Its stubs are legal after the lock on their own, incomplete (hs-d822); a complete draft that waits would be parked.
     fx.cpd(&[
         "pr",
         "add",
