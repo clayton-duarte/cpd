@@ -164,6 +164,155 @@ test("the Inbox column renders its placeholder", async () => {
   expect(columns_[2]!.textContent).toContain("The Inbox lands here.");
 });
 
+/**
+ * sidebar-09's registry sample data (`data.mails`), verbatim and in its order
+ * (web/README.md "The Inbox rail in the right column"): the ten mails the rail lists, each with
+ * the name, the date pushed right, the subject and the two-line teaser. Rows and classes are the
+ * block's, so the tests read the rendered text and the block's row classes, never a source file.
+ */
+const INBOX_MAILS = [
+  {
+    name: "William Smith",
+    date: "09:34 AM",
+    subject: "Meeting Tomorrow",
+    teaser:
+      "Hi team, just a reminder about our meeting tomorrow at 10 AM.\nPlease come prepared with your project updates.",
+  },
+  {
+    name: "Alice Smith",
+    date: "Yesterday",
+    subject: "Re: Project Update",
+    teaser:
+      "Thanks for the update. The progress looks great so far.\nLet's schedule a call to discuss the next steps.",
+  },
+  {
+    name: "Bob Johnson",
+    date: "2 days ago",
+    subject: "Weekend Plans",
+    teaser:
+      "Hey everyone! I'm thinking of organizing a team outing this weekend.\nWould you be interested in a hiking trip or a beach day?",
+  },
+  {
+    name: "Emily Davis",
+    date: "2 days ago",
+    subject: "Re: Question about Budget",
+    teaser:
+      "I've reviewed the budget numbers you sent over.\nCan we set up a quick call to discuss some potential adjustments?",
+  },
+  {
+    name: "Michael Wilson",
+    date: "1 week ago",
+    subject: "Important Announcement",
+    teaser:
+      "Please join us for an all-hands meeting this Friday at 3 PM.\nWe have some exciting news to share about the company's future.",
+  },
+  {
+    name: "Sarah Brown",
+    date: "1 week ago",
+    subject: "Re: Feedback on Proposal",
+    teaser:
+      "Thank you for sending over the proposal. I've reviewed it and have some thoughts.\nCould we schedule a meeting to discuss my feedback in detail?",
+  },
+  {
+    name: "David Lee",
+    date: "1 week ago",
+    subject: "New Project Idea",
+    teaser:
+      "I've been brainstorming and came up with an interesting project concept.\nDo you have time this week to discuss its potential impact and feasibility?",
+  },
+  {
+    name: "Olivia Wilson",
+    date: "1 week ago",
+    subject: "Vacation Plans",
+    teaser:
+      "Just a heads up that I'll be taking a two-week vacation next month.\nI'll make sure all my projects are up to date before I leave.",
+  },
+  {
+    name: "James Martin",
+    date: "1 week ago",
+    subject: "Re: Conference Registration",
+    teaser:
+      "I've completed the registration for the upcoming tech conference.\nLet me know if you need any additional information from my end.",
+  },
+  {
+    name: "Sophia White",
+    date: "1 week ago",
+    subject: "Team Dinner",
+    teaser:
+      "To celebrate our recent project success, I'd like to organize a team dinner.\nAre you available next Friday evening? Please let me know your preferences.",
+  },
+] as const;
+
+/** The Inbox rail: the shell's right column. */
+function inboxRail(): HTMLElement {
+  const columns_ = columns();
+  expect(columns_).toHaveLength(3);
+  return columns_[2]!;
+}
+
+test("the right column lists the Inbox rail's ten mails with their name, date, subject and teaser", async () => {
+  await renderShell();
+
+  // The block's mail list: one anchor per mail, rows and classes verbatim (web/README.md).
+  const rows = [...inboxRail().querySelectorAll("a")];
+  expect(rows).toHaveLength(INBOX_MAILS.length);
+
+  INBOX_MAILS.forEach((mail, index) => {
+    const row = rows[index]!;
+    // The name leads the row; the date is pushed right (`ml-auto`), the subject is `font-medium`,
+    // and the teaser is the two-line `line-clamp-2` span (its two lines separated by a newline).
+    expect(row.textContent).toContain(mail.name);
+    expect(row.querySelector(".ml-auto")?.textContent).toBe(mail.date);
+    expect(row.querySelector(".font-medium")?.textContent).toBe(mail.subject);
+    const teaser = row.querySelector(".line-clamp-2");
+    expect(teaser?.textContent).toBe(mail.teaser);
+    expect(mail.teaser.split("\n")).toHaveLength(2);
+  });
+});
+
+test("the Inbox rail's header carries the title and no search input, and no Unreads switch", async () => {
+  await renderShell();
+
+  const rail = inboxRail();
+  // The header is the title alone: the `Inbox` element, not the placeholder's sentence.
+  const title = [...rail.querySelectorAll<HTMLElement>("*")].find(
+    (el) => el.textContent?.trim() === "Inbox",
+  );
+  expect(title).toBeDefined();
+
+  // The block's `SidebarInput` (`Type to search...`) is deliberately not vendored: no input at all.
+  expect(rail.querySelectorAll("input")).toHaveLength(0);
+  expect(rail.querySelector('[data-slot="sidebar-input"]')).toBeNull();
+
+  // The block's `Unreads` switch is deliberately not vendored.
+  expect(rail.textContent).not.toContain("Unreads");
+});
+
+test("the Inbox rail has no icon column", async () => {
+  await renderShell();
+
+  const rail = inboxRail();
+  // The rail is the block's second sidebar (its mail list), not the placeholder.
+  expect(rail.textContent).toContain("William Smith");
+  // The block's first sidebar — its icon column (Drafts, Sent, Junk, Trash) — is not vendored.
+  for (const label of ["Drafts", "Sent", "Junk", "Trash"]) {
+    expect(rail.textContent).not.toContain(label);
+  }
+});
+
+test("the Context rail cannot be collapsed: it renders no rail toggle", async () => {
+  await renderShell();
+
+  // The Context column and its rail are still there...
+  const columns_ = columns();
+  expect(columns_).toHaveLength(3);
+  expect(columns_[0]!.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  // ...but sidebar-03's `SidebarRail` — the 4px strip that collapsed the rail on a stray click —
+  // is not, in either rail.
+  expect(container.querySelector('[data-slot="sidebar-rail"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Toggle Sidebar"]')).toBeNull();
+});
+
 test("the Context column defaults to 20rem and a double-click restores it", async () => {
   await renderShell();
 
