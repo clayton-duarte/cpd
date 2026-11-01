@@ -65,6 +65,7 @@ fn world() -> World {
         runner: Arc::new(runner.clone()),
         spawn: Arc::new(FakeSpawn::new()),
         host_socket: host_socket.clone(),
+        host_conn: Arc::new(crate::session::tail::FakeHostConn::new()),
     };
     unsafe { std::env::set_var("TMUX_TMPDIR", dir.path()) };
     Tmux::new("t")

@@ -4721,6 +4721,114 @@ The wait is through the port, not a raw `UnixStream`, so a test fakes it: `core/
 - `engine/src/doctor/runner_tests.rs` (`cpd_engine::doctor::runner_tests::host_runner_check_fails_without_the_adapter`): a config with `lead_runner = "durable"` and a `pi_adapter` dir without `pi/durable-host/main.ts` fails the check.
 - `cli/src/ambient_run_with_tests.rs` (`cpd::ambient_run_with_tests::session_open_waits_for_the_socket`): `run_with` + `Fakes`, a durable Session, the socket absent then accepting through `FakeHostSocket`: the command waits and returns, and opens no pane. Nothing real runs: the port is the fake, the clock is the `ManualClock`, no socket opens.
 
+### 6.20 The socket tail and the end-to-end verify (P1.11)
+
+The read path of a durable Session before `cpd chat` exists (P2.1) is `cpd session tail <id>`: a small socket tail (Q33 Decided A) that connects to the host socket of §6.14, folds the frames onto the `SnapshotEvent` (Q9 Decided A) and prints the transcript as plain lines; the row's flow test verifies the durable Lead end to end with a mocked pi-durable (research §7.2 row P1.11; the checkpoint CP3 of §7.4). The research is `docs/research/durable-leads.md` row P1.11 of §7.2 and the `Decided:` lines of Q33 (A: a small socket tail, because a second store reader corrupts it — measured, research 4.7), Q34 (A: a unix socket only, no TCP listener) and Q35 (A: a shared Rust fold in `core` — one library used by the CLI tail and by `cpd chat`; the wire unchanged); the fold rules are research §4.3 "The fold" and the wire is §6.14's, unchanged. The seam survey is the plan's explore artefact `/home/clayton/.cpd/run/durable-host/explore/scout-engine.md` (§7 there surveys the cli seams this section registers into). This section is the P1.11 slice: it changes no rule of §6.12 to §6.19 — the tail adds no message type, no error code and no field to the host socket wire, and it writes nothing: the host is the one owner of the store (Q33), and the socket is the tail's only path (§6.14).
+
+**Modules** (paths; the table gives the pinned names and exports):
+
+| File | Exports |
+|---|---|
+| `core/src/session/tail.rs` | the Rust wire of §6.14, decoded once and not copied: `ToHost`, `ToClient`, `Frame` (a `snapshot` or `events` frame), `Cursor` — serde tagged on `type`, `snake_case` fields, `#[serde(other)] Unknown`, per research §4.2 "Rust shape"; `Fold` (below); the port `HostConn` and its adapters `SystemHostConn`, `FakeHostConn`; `tail(home: &CpdHome, session: &SessionId, out: &mut dyn Write) -> Result<(), CpdError>` (the command's body, what `session::run`'s dispatch calls) |
+| `core/src/session/mod.rs` | `Command::Tail(TailArgs)` in the `Command` enum (mod.rs:56-130) and its dispatch arm (mod.rs:368-386), beside the other `session` commands |
+| `core/src/ports.rs` | `Ports` gains `host_conn: Arc<dyn HostConn>` as its fifth seam, beside `clock`, `runner`, `spawn` and `host_socket` (ports.rs:25); `Fakes` gains `host_conn: Arc<FakeHostConn>` |
+| `cli/src/interface.rs` | the TABLE entry `("session tail", &[Lead, Manager, Worker], false)`, in clap's order (interface.rs:21-139; a runnable command with no entry panics at interface.rs:166-168) |
+| `core/src/error.rs` | `NoHostSocket = "no_host_socket" => Refused` (exit 3): the named Session's `runner` is `pi`, so it has no host socket to tail |
+| `engine/src/watch/durable_flow_tests.rs` | the flow test (below), registered in `engine/src/watch/mod.rs` beside `durable_e2_tests.rs` (mod.rs:104-108) |
+| `core/src/session/tail_tests.rs` | the fold's and the client's tests (below) |
+
+#### `core/src/session/tail.rs` — the fold (Q35 A)
+
+The fold is one library: the CLI tail uses it (P1.11) and `cpd chat` will use it (P2.1, Q35). Its state is the decoded `SnapshotEvent` of the base `snapshot` frame — `entries`, `run`, `generation`, `tools`, `nestedTools`, `compactions`, `compactionFailure`, `inbox`, `agent`, `usage` (`@earendil-works/pi-durable` 1.3.0 `dist/harness/events.d.ts:35-64`, verified) — and it applies each `AgentEvent` of an `events` frame in order (research §4.3 "The fold"; the event types are `events.d.ts:66-171`, read there, not copied here: the exact per-event fold is the impl Job's to write from those types, and the rendering rules below are the contract).
+
+```rust
+pub struct Fold { /* the SnapshotEvent state and the frames applied */ }
+impl Fold {
+    /// A fold with no state yet: the base `snapshot` frame of the next attach fills it.
+    pub fn new() -> Fold;
+    /// Applies one wire frame. Returns the transcript lines the frame completes (§10.19's
+    /// plain lines): the base snapshot renders its entries; `message_end` and a `run_end`
+    /// that ends an in-flight message complete lines; a later `snapshot` frame (a rebase,
+    /// or a new epoch after a reconnect) replaces the state and returns nothing.
+    pub fn apply(&mut self, frame: &Frame) -> Vec<String>;
+    /// The cursor of the last frame applied (`epoch`, `seq`): what a reconnect sends.
+    pub fn cursor(&self) -> Cursor;
+}
+```
+
+Rules:
+
+1. **A `snapshot` frame replaces the whole state**, never merges — the base, a rebase at 256/4096 frames, and the snapshot of a new epoch are the same operation (research §4.3 "Rebase"; §6.14 ring rules 2 and 5).
+2. **A short answer has no `message_update`**: the message arrives whole in `message_start`, `message_end` follows in the same or the next commit, and the fold never waits for a delta — the no-`message_update` rule is what the spike changed for `events` (research §4.9 row 1, applied in §4.3 "The fold"). A message is a printed line when it completes: at its `message_end`, or at `run_end` while it is still in flight (the `generation.message` partial, whole).
+3. **Rendering** (this section's grammar, what §10.19 shows):
+   - one line per text block of each completed `Message` (`@earendil-works/pi-ai` 1.3.0 `dist/types.d.ts:432`: `SystemMessage`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`);
+   - the prefix is the message's role: `system: `, `user: `, `assistant: `; a `toolResult` message prints `tool <toolName>: <text>` and appends ` (error)` when its `isError` is true (`toolName`, `isError` and the text blocks of `content` verified, `dist/types.d.ts:414-431`);
+   - a text with newlines prints one line per source line, the prefix on the first line only;
+   - thinking blocks stay in the state and are not printed (the tail is a transcript read; a thinking view is P2's, G57);
+   - an entry whose `kind` carries no `model` messages (`EntryRecord.model` absent, `@earendil-works/pi-durable` `dist/types.d.ts:290`) is bookkeeping and prints nothing.
+4. **The cursor** is `epoch` and `seq` of the last frame applied (§6.14's `Cursor`): `Fold::cursor` is what a reconnect attaches with. The fold never opens the store and never touches the filesystem: its input is decoded frames, its output lines. That is what makes it one library for the CLI tail and for `cpd chat` (Q35), and it is also why the tail can never write the store (the rule of Q33 needs no check at runtime — the module holds no store type to call).
+
+#### The client (`core/src/session/tail.rs::tail`)
+
+`tail(home, session, out)` connects, handshakes, attaches and prints, in this order:
+
+1. **Connect** to `socket_path` = `$CPD_HOME/run/host/<session>.sock` (§6.14) through the port: `Ports::current().host_conn.connect(path)`. A path whose UTF-8 length is over `SOCKET_PATH_MAX` (107 bytes) is a `usage` `CpdError` naming `socket_path_too_long`, exit 2, before anything opens — the host's own rule of §6.14 step 1, applied symmetrically.
+2. **Handshake.** One line `hello { protocol: 1, min_protocol: 1, client: "cpd session tail" }` (§6.14 row 1). `welcome` is answered by `attach { req, cursor? }`: the cursor is the fold's from a previous connection of the same invocation, absent on the first. An `error protocol_mismatch` prints the §4.2 sentence (`this host speaks protocol <host>, the client speaks <client range>: restart the host with the installed cpd`) and exits non-zero (research §4.2; the exit is the envelope's `Failure`).
+3. **Apply and print.** `attached`'s frames (§6.14 rule 5: `snapshot` or `events`, in `seq` order, none skipped) go through `Fold::apply`, and each line it returns is written to `out` at once. After the frames, live frames stream in and are printed as they complete. `host_state` frames update nothing printed (the tail is a transcript read, not a state view).
+4. **Reconnect (the rule the acceptance pins).** On `bye { reconnect: true }` (`shutdown`, `restart`, `storage_failed`, `slow_client` — §6.14's reasons) or on a lost socket (any read error, or EOF), the client closes the connection, naps on `Ports::current().clock.sleep` with the back-off of §6.19's wait (`core/src/session/moves.rs:287-289`: 100 ms doubling to a 1 s cap, over a 30 s deadline — design defaults, not measured), reconnects and attaches with the saved cursor. Past the deadline the command ends `host_timeout`, exit 5, `details {session, socket}` — the same bound and code as `cpd session open`'s wait (§6.19, `moves.rs:287-340`). A new epoch after a reconnect gives `mode: 'snapshot'`: the fold replaces its state (rule 1 above), one line is printed on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the transcript stream never repeats lines it printed.
+5. **End.** The command ends with exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (the only §6.14 reason with `reconnect: false` is `detached`, which a tail that never detaches cannot cause; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
+
+The client sends `hello` and `attach` and nothing else: read-only (Q33, Q35). It never sends `submit`, `abort`, `detach` or `ping`, and it never opens the store: a check that the store is untouched is a test that the module compiles without a store in reach, and the flow test asserts no row changes.
+
+#### The port (`HostConn`)
+
+```rust
+/// One connection to a host socket: one wire line in, one wire line out.
+/// The real adapter reads with an internal line buffer and splits at `\n`,
+/// the same one-line-per-frame rule as the host's `LineSplitter` (§6.14 step 5).
+pub trait Conn {
+    fn send(&mut self, line: &str) -> std::io::Result<()>;
+    /// The next complete line, or `None` at EOF.
+    fn recv(&mut self) -> std::io::Result<Option<String>>;
+}
+pub trait HostConn: Send + Sync {
+    /// Required: a real adapter implements every member; none is optional (§6.19's port rule).
+    fn connect(&self, path: &Path) -> std::io::Result<Box<dyn Conn>>;
+}
+```
+
+`SystemHostConn` is one `UnixStream` (Q34: no TCP anywhere — the tail connects to the same unix path the host binds). `FakeHostConn::connect` never opens anything: it hands back the client side of a pipe the test holds the other end of — the fake socket accept the flow test hands to the client under test. The port is the one Rust seam this PR adds, as §6.19's `HostSocket` was its PR's; `reach` (the wait's probe) and `connect` (the tail's stream) stay two ports, because a probe needs one `UnixStream::connect` and a tail needs a bidirectional stream, and faking them together would make one test lie about the other.
+
+#### The command `cpd session tail <id>`
+
+Read-only. Refuses before any connect, in this order:
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists (the short forms of §1.3) | `session_not_found` | 4 |
+| it is a `lead` or a `manager` (a Worker's runner is its Attempt, and its transcripts live nowhere to tail) | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` (an archived Session has no host: §6.19's stop hooks stopped it) | `archived` | 3 |
+| its `runner` is `durable`; a `pi` Session has no host socket, and its pane is read in tmux, not over a socket. Message: `Session <id> runs on pi: it has no host socket to tail. Open it with cpd session open.` | `no_host_socket` | 3 |
+| the socket path is at most `SOCKET_PATH_MAX` bytes (above: `usage` naming `socket_path_too_long`) | `usage` | 2 |
+
+Then the client runs; a host that does not accept within the 30 s deadline ends `host_timeout` (exit 5), as the wait of §6.19 does. The command has **no effects**: no row, no Event, no tmux, never the store. It is the next exception of §1.2's list (amendment 10) that prints something other than one JSON value: plain transcript lines on stdout (commands.md §10.19), diagnostics on stderr only.
+
+**Not in P1.11.** The `cpd chat` crate and TUI (P2.1: the fold is shared, the UI is P2) and every rendered view (markdown, balloons, folds — P2.3). A TCP listener (Q34): the socket is a unix path. A change to the §6.14 wire (Q35: the fold is the client's; the host forwards untouched). The P1.10 engine internals: the start, the flock, the bound and the config keys (§6.19). Paging or a windowed snapshot of the whole history (Q5's real-snapshot measurement stands). A `--follow`-less, one-shot tail: the tail streams, because "tail" without reconnecting cannot survive the host's restarts, which is the one thing P1.11 verifies.
+
+**Tests.** Their home is fixed here; nothing real runs: no socket, no pi-durable, no model, no process, no real tmux; time moves only on the `ManualClock`.
+
+- `core/src/session/tail_tests.rs`, on `core::ports::Fakes` and a `FakeHostConn` the test plays the host end of: the fold (the base snapshot renders its entries in order; `message_end` completes a line; a short answer whole at `message_start`; a `run_end` completes the in-flight partial; a rebase replaces the state and prints nothing on stdout; the grammar's prefixes, the ` (error)` suffix, newlines, thinking kept unprinted, bookkeeping entries silent; the cursor advances frame by frame); the client (hello and attach, the frames printed in order; the reconnect with the cursor after `bye {reconnect: true}` — a second attach carries the saved cursor and no line repeats; a new epoch's snapshot prints the stderr line and no stdout line; `host_timeout` at the 30 s deadline driven by the `ManualClock`; exit 0 on a closed stdout); the command's refusals through `core::session::run` under `Ports::scope` (`no_host_socket` for a `pi` Session, `archived`, `not_a_lead`, and the too-long path's `usage`).
+- `engine/src/watch/durable_flow_tests.rs` — the flow test, the checkpoint CP3's proof-with-mock of research row P1.11 (`durable-leads.md:1006`), written on the `Fx` fixture of `engine/src/watch/testkit.rs` with the fake ports (`ManualClock`, `FakeRunner`, `FakeSpawn`, `FakeHostConn`) and the scenario pinned step by step:
+  1. A fixture config with `lead_runner = "durable"`; `plan new` (through `core::plan::run`, `Ports::scope`d over the fixture's ports) makes a durable Lead: `state = 'stopped'`, `runner = 'durable'`, `pane` null, and no launch (`spawn.launches()` empty).
+  2. The hosts step (`hosts::run`, §6.19) launches the mocked host: `spawn.launches()` names `durable-host/main.ts --session <id> --model <pattern>` with `CPD_HOME`, `CPD_SESSION` and `PATH` set. The mock host is the test's fake `Deps` per §6.14 — a fake that speaks the wire over the `FakeHostConn` it accepted (welcome, then `attached` with a base snapshot), and reports `idle` the way the real host does, §6.13 step 6, through the same `core::session::run(Command::State(..))` call (`cpd session state idle`, a `stopped -> idle`).
+  3. `cpd session send <id> <text> --unblocks <reason>` (through `core::session::run`) writes the `session-message` Event; the mock host's follower delivers it (§6.13 "Delivery"), and the mocked reply lands in the transcript: the test, playing the mock host's follower, writes the reply's `events` frames into the accepted `FakeHostConn`, then runs `cpd session tail` (the client under test) against it and asserts the folded stdout names the reply.
+  4. The mock host is killed: the `FakeSpawn` pid dies (the `kill -9` of the row). No real process starts; the fake reports the pid gone.
+  5. The engine restarts it within the bound (hs-d785): `hosts::run` launches again while the restart window has room (§6.19's rule 2), a second launch.
+  6. E2 leaves it alone (`engine/src/watch/liveness.rs:392-393`): `liveness::run` changes neither state nor pane and records no restart.
+  7. The archive stops it: the Lead of the flow test is its Plan's own Lead, so `cpd session archive` is refused `archive_blocked` (§10.10) and the archive is the Plan cascade — the engine's E14 (`engine/src/watch/archive_leads.rs`), which archives the Plan's Lead through the `plan archive` cascade and stops the host through `stop_hosts` → `hosts::stop` (`archive_leads.rs:42,55-67`). **This supersedes §6.19's sentence that the archive command stops the host through `core::host::host::stop`: the merged implementation of P1.10 (fd121feaa) put the stop in the engine's hooks (`sleep.rs:100`, `archive_leads.rs:67`), the module `core/src/host/host.rs` was never built, and the archive commands themselves write no stop.** Assertions: the host is stopped (SIGTERM through the fake `Spawn`), the Session reads archived, and `hosts::run` launches nothing further.
+
+  Assertions read `spawn.launches()`, the store rows (`fx.query`, `fx.count`) and the fake transcript (the lines the tail printed). No real tmux, node, pi-durable, socket or model.
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
