@@ -451,7 +451,7 @@ pub(super) fn repo_required(home: &crate::home::CpdHome, repo: &str) -> Result<V
     let (owner, name) = repo.split_once('/').ok_or_else(bad)?;
     let (owner, name) = (OwnerLogin::parse(owner)?, RepoName::parse(name)?);
     let resolved = resolve_unowned_row(home, &PolicyKey::Repo(owner.clone(), name.clone()))?;
-    if resolved.sources.get(Domain::Workflow).source != Source::DefaultNoOwnerFile {
+    if resolved.sources.get(Domain::Pr).source != Source::DefaultNoOwnerFile {
         return Ok(resolved.policy.pr.required_checks);
     }
     Ok(load_scope_file(&repo_path(home, &owner, &name), ScopeKind::Repo)?.and_then(|(_, scope)| scope.pr).and_then(|pr| pr.required_checks).unwrap_or_default())
