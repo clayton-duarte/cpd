@@ -224,7 +224,7 @@ fn explore_add_scout_in_grounding_is_queued_with_derived_touches() {
     assert_eq!(out["job"]["status"], "queued");
     assert_eq!(out["job"]["pr"], Value::Null);
     assert_eq!(f.column("s1", "status").as_deref(), Some("queued"));
-    assert_eq!(f.column("s1", "pr"), None);
+    assert_eq!(f.column("s1", "workflow"), None);
     assert!(f.column("s1", "fingerprint").is_some_and(|fp| fp.len() == 64), "a Locked-Job fingerprint");
     let touches: Value = serde_json::from_str(&f.column("s1", "touches").unwrap()).unwrap();
     assert_eq!(touches, json!(["run/pay/explore/s1.md"]));
@@ -262,7 +262,7 @@ fn explore_add_needs_no_pr_flag_when_the_plan_has_two_prs() {
             assert_ne!(e.code(), ErrorCode::PrRequired, "an explore Job belongs to the Plan, not to a PR");
         }
         assert_eq!(fields(out)["job"]["pr"], Value::Null, "phase {phase}");
-        assert_eq!(f.column("s1", "pr"), None);
+        assert_eq!(f.column("s1", "workflow"), None);
     }
 }
 

@@ -137,7 +137,7 @@ fn incident_lead(store: &mut Store) -> Option<String> {
 fn incident_until(store: &mut Store) -> Option<(Option<String>, Option<String>)> {
     store
         .read(|c| {
-            Ok(c.query_row("SELECT until_plan, until_pr FROM incident WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            Ok(c.query_row("SELECT until_plan, until_workflow FROM incident WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
                 .optional()?)
         })
         .unwrap()
