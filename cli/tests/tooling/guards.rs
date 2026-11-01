@@ -372,3 +372,229 @@ fn the_conflict_marker_scan_names_each_marker_and_spares_a_lone_setext_line() {
     assert!(conflict_marker_lines("f.md", "Title\n=======\n\n| a |\n").is_empty());
     assert!(conflict_marker_lines("f.md", "x <<<<<<< y\n  >>>>>>> z\n").is_empty());
 }
+
+use super::real_process_scan::{
+    ALLOW, DEBT, REAL_GIT_SELF_FILES, real_process_mismatches, retries_problems,
+};
+
+/// A synthetic (path, text) file.
+fn file(path: &str, text: &str) -> (String, String) {
+    (path.to_owned(), text.to_owned())
+}
+
+#[test]
+fn the_real_process_scan_fails_a_new_real_git_site_and_passes_the_exact_debt() {
+    let files = [
+        file(
+            "cli/tests/pr/pr_open.rs",
+            "    let env = TestEnv::new();\n    env.git(&[\"init\"]);\n    repo.git_repo(&[\"add\", \".\"]);\n    fx.git(&[\"fake\"]);\n    // env.git(&[\"commented\"]);\n",
+        ),
+        file(
+            "cli/tests/common/mod.rs",
+            "    self.git(&[\"x\"]);\n    env.git(&[\"y\"]);\n",
+        ),
+    ];
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[]),
+        ["cli/tests/pr/pr_open.rs: git 2 sites (allowed 0)"],
+        "a new site fails; the allowlisted file and the fake `fx.git(` do not count"
+    );
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[("cli/tests/pr/pr_open.rs", "git", 2)]),
+        Vec::<String>::new(),
+        "the exact debt passes"
+    );
+    let adopt = [file(
+        "cli/tests/pr/pr_adopt_life.rs",
+        "    fx.git(&[\"a\"]);\n    self.git_repo(&[\"b\"]);\n",
+    )];
+    assert!(REAL_GIT_SELF_FILES.contains(&"cli/tests/pr/pr_adopt_life.rs"));
+    assert_eq!(
+        real_process_mismatches(&adopt, ALLOW, &[]),
+        ["cli/tests/pr/pr_adopt_life.rs: git 2 sites (allowed 0)"],
+        "in a listed file `fx.git(` and `self.git_repo(` are real"
+    );
+}
+
+#[test]
+fn the_real_process_scan_counts_a_call_that_rustfmt_split_over_lines_and_skips_comments_and_fakes()
+{
+    let files = [file(
+        "cli/tests/pr/pr_open.rs",
+        concat!(
+            "    let out = Command::new(\"git\")\n",
+            "        .args([\"status\"])\n",
+            "        .output()\n",
+            "        .unwrap();\n",
+            "    let mut cmd = Command::new(\"git\");\n",
+            "    cmd.args([\"log\"]);\n",
+            "    runner.output(&mut cmd, 5);\n",
+            "    // Command::new(\"git\").output();\n",
+            "    let s = env\n",
+            "        .git(&[\"init\"]);\n",
+        ),
+    )];
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[]),
+        ["cli/tests/pr/pr_open.rs: git 1 sites (allowed 0)"],
+        "the split chain counts; the runner's command and the comment do not"
+    );
+}
+
+#[test]
+fn the_real_process_scan_fails_a_listed_file_whose_count_dropped_until_the_debt_is_lowered() {
+    let files = [file(
+        "cli/tests/pr/pr_open.rs",
+        "    env.git(&[\"init\"]);\n",
+    )];
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[("cli/tests/pr/pr_open.rs", "git", 3)]),
+        ["cli/tests/pr/pr_open.rs: git 1 sites (allowed 3)"]
+    );
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[("cli/tests/pr/gone.rs", "git", 1)]),
+        [
+            "cli/tests/pr/gone.rs: git 0 sites (allowed 1)",
+            "cli/tests/pr/pr_open.rs: git 1 sites (allowed 0)"
+        ]
+    );
+}
+
+#[test]
+fn the_real_process_scan_fails_a_new_sh_python_node_ps_or_tmux_start_outside_the_allowlist() {
+    let files = [
+        file(
+            "cli/tests/pr/pr_open.rs",
+            concat!(
+                "    Command::new(\"sh\").arg(\"-c\").status().unwrap();\n",
+                "    Command::new(\"python3\").output().unwrap();\n",
+                "    Command::new(\"node\")\n",
+                "        .arg(\"x\")\n",
+                "        .output()\n",
+                "        .unwrap();\n",
+                "    env.command(\"ps\");\n",
+                "    Command::new(\"tmux\").status().unwrap();\n",
+                "    let shim = \"#!/bin/sh\\nexit 1\";\n",
+            ),
+        ),
+        file(
+            "cli/tests/tooling/slot.rs",
+            "    Command::new(\"tmux\").status().unwrap();\n",
+        ),
+    ];
+    assert_eq!(
+        real_process_mismatches(&files, ALLOW, &[]),
+        [
+            "cli/tests/pr/pr_open.rs: node 1 sites (allowed 0)",
+            "cli/tests/pr/pr_open.rs: ps 1 sites (allowed 0)",
+            "cli/tests/pr/pr_open.rs: python3 1 sites (allowed 0)",
+            "cli/tests/pr/pr_open.rs: sh 1 sites (allowed 0)",
+            "cli/tests/pr/pr_open.rs: tmux 1 sites (allowed 0)",
+        ],
+        "a deny shim's `#!/bin/sh` text is not a start; the tooling file is allowlisted"
+    );
+}
+
+#[test]
+fn the_nextest_scan_requires_retries_zero_in_the_default_profile_and_names_any_other_retries_in_a_profile_an_override_or_a_script()
+ {
+    assert_eq!(
+        retries_problems("[profile.default]\nretries = 0\n", &[]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        retries_problems("[profile.default]\nfail-fast = false\n", &[]),
+        ["[profile.default] has no `retries = 0`"]
+    );
+    assert_eq!(
+        retries_problems(
+            "[profile.default]\nretries = 0\n[profile.ci]\nretries = 2\n",
+            &[]
+        ),
+        ["[profile.ci] retries is not 0"]
+    );
+    assert_eq!(
+        retries_problems(
+            "[profile.default]\nretries = { count = 3, backoff = \"fixed\", delay = \"1s\" }\n",
+            &[]
+        ),
+        ["[profile.default] has no `retries = 0`"]
+    );
+    assert_eq!(
+        retries_problems(
+            "[profile.default]\nretries = 0\n[[profile.default.overrides]]\nfilter = 'test(x)'\nretries = 1\n",
+            &[]
+        ),
+        ["[[profile.default.overrides]] retries is not 0"]
+    );
+    let scripts = [
+        file(
+            "package.json",
+            "{\"test\": \"cargo nextest run --retries 2\"}",
+        ),
+        file("scripts/ci.sh", "NEXTEST_RETRIES=1 cargo nextest run\n"),
+        file("scripts/ok.sh", "cargo nextest run\n"),
+    ];
+    assert_eq!(
+        retries_problems("[profile.default]\nretries = 0\n", &scripts),
+        [
+            "package.json: `--retries` in a script",
+            "scripts/ci.sh: `NEXTEST_RETRIES` in a script"
+        ]
+    );
+}
+
+/// The `.rs` files of the repository as (repo-relative path, text), by the walker of the conflict-marker scan.
+fn repo_rs_files(root: &std::path::Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    source_files(root, &mut found);
+    found
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(p).ok()?;
+            let rel = p.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+            Some((rel, text))
+        })
+        .collect()
+}
+
+#[test]
+fn no_test_starts_a_real_process_beyond_the_debt() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let files = repo_rs_files(&root);
+    assert!(files.len() > 200, "the scan saw {} files", files.len());
+    let found = real_process_mismatches(&files, ALLOW, DEBT);
+    assert!(
+        found.is_empty(),
+        "a test starts a real process: mock it, or lower DEBT when a site goes away:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn nextest_retries_are_pinned_to_zero() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let toml = std::fs::read_to_string(root.join(".config/nextest.toml")).unwrap();
+    let mut scripts = Vec::new();
+    let mut found = Vec::new();
+    source_files(&root, &mut found);
+    for path in found {
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let is_script = rel == "package.json"
+            || rel.starts_with("scripts/")
+            || (rel.starts_with(".github/workflows/") && rel.ends_with(".yml"));
+        if is_script && let Ok(text) = std::fs::read_to_string(&path) {
+            scripts.push((rel, text));
+        }
+    }
+    if let Ok(ci) = std::fs::read_to_string(root.join(".github/workflows/ci.yml")) {
+        scripts.push((".github/workflows/ci.yml".to_owned(), ci));
+    }
+    let problems = retries_problems(&toml, &scripts);
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
