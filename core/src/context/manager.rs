@@ -130,9 +130,10 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
     let runner = match &found {
         Some(m) => {
             let stored = WorkerRunner::parse(&m.runner).unwrap_or(config.manager_runner);
-            if let Some(wanted) = args.runner {
-                if wanted != stored {
-                    return Err(CpdError::new(
+            if let Some(wanted) = args.runner
+                && wanted != stored
+            {
+                return Err(CpdError::new(
                         ErrorCode::Usage,
                         format!(
                             "Manager {} of Context {context} runs on the {} runner; --runner {} differs.",
@@ -143,7 +144,6 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
                     )
                     .with("context", context.as_str())
                     .with("runner", stored.as_str()));
-                }
             }
             stored
         }
