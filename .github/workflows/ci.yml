@@ -46,9 +46,15 @@ jobs:
         run: scripts/gate-run.sh pnpm run typecheck
       - name: pi check
         run: scripts/gate-run.sh pnpm run verify:pi
+      # Formatting: rustfmt in check mode, cheaper than a build.
+      - name: Format
+        run: scripts/gate-run.sh pnpm run verify:fmt
       # The Rust compiler: a compile error or warning shows here, apart from a failing test.
       - name: Rust build
         run: scripts/gate-run.sh pnpm run verify:build
+      # Lint: clippy with warnings denied, after the build it shares.
+      - name: Clippy
+        run: scripts/gate-run.sh pnpm run verify:clippy
       - name: Web
         run: scripts/gate-run.sh pnpm run verify:web
       - name: Node tests

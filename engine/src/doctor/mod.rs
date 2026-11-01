@@ -111,11 +111,9 @@ pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdE
         Severity::Error,
         &worker_runner::worker_runner,
     ));
-    checks.push(with_config(
-        "host_runner",
-        Severity::Error,
-        &|config| host_runner::check_with(config, durable_session, &*Ports::current().runner),
-    ));
+    checks.push(with_config("host_runner", Severity::Error, &|config| {
+        host_runner::check_with(config, durable_session, &*Ports::current().runner)
+    }));
     checks.push(with_config(
         "lead_packages",
         Severity::Warn,
