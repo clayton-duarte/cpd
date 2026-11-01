@@ -37,7 +37,7 @@ There is no approvals UI here: no tree, inbox or plan wiring, no `ui_response` a
 
 - The routes mount **only with `CPD_WEB_LIVE=1`** in the dev server's environment (exactly the value `1`; any other value, including unset, changes nothing — the existing dev and build flows are exactly as before).
 - The token is **`CPD_WEB_TOKEN`**, default **`dev-token`**. Every `/__cpd/` request must carry it as the `x-cpd-token` header **or** the `?token=` query parameter. A request without the token — or with the wrong one — is refused **401** `{"ok":false,"error":"missing or wrong token"}` before any read or send runs.
-- `GET /__cpd/health` is the probe: `main.tsx` calls it (with the token) before mounting and uses `createLiveApi` **only when it answers `ok`**. When the probe fails — adapter off, dev server restarted without the flag, anything — **the mock remains the default**: `createMockApi()` and the existing Chat render exactly as today, and the mock's tests are unchanged.
+- `GET /__cpd/health` is the probe: `main.tsx` calls it (with the token) before mounting and uses `createLiveApi` **only when it answers `ok`**. When the probe fails — adapter off, dev server restarted without the flag, anything — `main.tsx` builds `createMockApi()` and hands `App` no `live` API; the single-screen chat then shows its explicit no-adapter state (see “The chat surface (shadcn AI Elements)”). The mock's API and tests are unchanged.
 
 ### The `/__cpd/` routes
 
@@ -168,9 +168,197 @@ export interface LiveChatProps {
 }
 ```
 
-`LiveChat` lists `api.sessions()` in a picker (lead and manager Sessions — the route returns nothing else), subscribes to the selected Session, folds each snapshot frame onto a `ChatView` through the existing fold (rule 3: a snapshot replaces the whole view), renders the messages and sends the prompt's text through `api.send(id, text)`. The chat surface is the **shadcn AI Elements** conversation composition — **`Conversation`, `Message`, `PromptInput`** (or the registry's current ids; the wiring Job pins the exact ids it adds at run time and records them in the PR body) — added as **stock copy-in components** under `web/src/components`, the same pattern as the existing `web/src/components/ui` primitives: no new runtime beyond what the entries declare.
+`LiveChat` lists `api.sessions()` in a picker (lead and manager Sessions — the route returns nothing else), subscribes to the selected Session, folds each snapshot frame onto a `ChatView` through the existing fold (rule 3: a snapshot replaces the whole view), renders the messages and sends the prompt's text through `api.send(id, text)`. The chat surface is the **shadcn AI Elements** composition pinned in “The chat surface (shadcn AI Elements)” below — **Chat**, **Message** and **Prompt Input** on Message Scroller, Message, Bubble, Input Group, Code Block and Empty — added as **stock copy-in components** under `web/src/components/ui`, the same pattern as the existing primitives: no new runtime beyond what the entries declare.
 
-`main.tsx` probes `GET /__cpd/health` with the token before mounting: on `ok` it builds `createLiveApi({ token: DEV_TOKEN })` and hands it to `App` as a new optional **`live?: LiveApi`** prop; otherwise it builds `createMockApi()` exactly as today. On the `/chat` route, `App` renders `<LiveChat api={live} token={token}/>` when `live` is set, and the existing `<Chat …/>` otherwise. The mock, its API and its tests are unchanged.
+`main.tsx` probes `GET /__cpd/health` with the token before mounting: on `ok` it builds `createLiveApi({ token: DEV_TOKEN })` and hands it to `App` as a new optional **`live?: LiveApi`** prop; otherwise it builds `createMockApi()` and hands no `live`. `App` renders only the single-screen chat (`LiveChat`), which shows its explicit no-adapter state when `live` is absent — the full composition, the message render and that state are pinned in “The chat surface (shadcn AI Elements)” below. The mock's API and its tests are unchanged; it is simply no longer rendered.
+
+### The chat surface (shadcn AI Elements)
+
+`web/src/views/live-chat.tsx` is the whole screen and it is the only thing rendered: no app
+header, no nav, no Tree/Plan/Inbox/Logs panes, no mock Chat. It is built from the shadcn **AI
+Elements** patterns below, copied in as stock components under `web/src/components/ui` — the
+same hand-copied pattern as the existing primitives, no package, no runtime beyond what each
+entry declares.
+
+#### The patterns it uses, and the ones it does not
+
+| Pattern | Doc URL | The part it plays |
+|---|---|---|
+| Chat | https://ui.shadcn.com/docs/ai-elements/base/chat | the thread: Message turns in a Message Scroller |
+| Message | https://ui.shadcn.com/docs/ai-elements/base/message | one turn: the person's Bubble, the agent's Markdown |
+| Prompt Input | https://ui.shadcn.com/docs/ai-elements/base/prompt-input | the field: an Input Group with a textarea and a send button |
+
+Reasoning, Tool, Chain of Thought, Sources and Suggestion
+(`/docs/ai-elements/base/reasoning`, `/tool`, `/chain-of-thought`, `/sources`, `/suggestion`)
+are **not used**, and `Trace` (`/docs/components/base/trace`) is not vendored: the adapter
+hands whole text messages only (fold rule 3). `parsePiSession` drops the `thinking` and
+`toolCall` blocks, a durable `toolResult` arrives as a plain `tool` message with a name and
+text and no structured input, and nothing carries citations or suggestions — so there is no
+step to put in a Trace, and Code Block is reached only from fenced code in Markdown (below).
+
+#### The stock components, their doc pages and their extra deps
+
+| Component | Doc URL | The exports this chat uses | Declares |
+|---|---|---|---|
+| `message-scroller` | https://ui.shadcn.com/docs/components/base/message-scroller | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton` | `@shadcn/react` |
+| `message` | https://ui.shadcn.com/docs/components/base/message | `Message`, `MessageContent` | — |
+| `bubble` | https://ui.shadcn.com/docs/components/base/bubble | `Bubble`, `BubbleContent` | `radix-ui` (already present) |
+| `input-group` | https://ui.shadcn.com/docs/components/base/input-group | `InputGroup`, `InputGroupTextarea`, `InputGroupButton` | — |
+| `code-block` | https://ui.shadcn.com/docs/components/base/code-block | `CodeBlock`, `CodeBlockHeader`, `CodeBlockTitle`, `CodeBlockActions`, `CodeBlockCopyButton`, `CodeBlockContent`, `CodeBlockLine` | `shiki` (through `hooks/use-highlighted-code`) |
+| `empty` | https://ui.shadcn.com/docs/components/base/empty | `Empty`, `EmptyHeader`, `EmptyMedia`, `EmptyTitle`, `EmptyDescription` | — |
+
+**Markdown** is not a registry entry. The docs' `/docs/ai-elements/base/message` imports a
+local `@/components/markdown`; this repo keeps its existing `react-markdown` and adds
+`web/src/components/markdown.tsx`, a `Markdown` wrapper that renders the reply with
+`react-markdown` (plus `remark-gfm`) and maps `pre` to a `CodeBlock` (the `MarkdownPre` shape of
+the chatbot template's `components/markdown-code.tsx`), so fenced code gets a language title and
+a copy button instead of a bare `<pre>`.
+
+#### Vendoring into THIS repo (verified)
+
+The repo has **no `web/components.json`**. `npx shadcn@latest init` is not the path: it first
+fails without a tsconfig path alias, and once it runs (checked with the default base preset) it
+rewrites `src/index.css`, `ui/button.tsx` and `lib/utils.ts` and adds an Inter font import — it
+takes over the theme. The steps below were run against a copy of this repo's `web/`; with the
+new entries imported, `tsc --noEmit` (`pnpm run typecheck`) and `vite build`
+(`pnpm run build`) both pass.
+
+1. **Import alias.** Add to `web/tsconfig.json`'s `compilerOptions`:
+
+   ```json
+   "paths": { "@/*": ["./src/*"] }
+   ```
+
+   No `baseUrl` — TypeScript 7 removed it. Vite 8 reads the tsconfig `paths`, so
+   `web/vite.config.ts` needs no alias of its own. The copied entries import
+   `@/components/ui/*`, so this must be in place **before** the add.
+
+2. **`web/components.json`.** The AI Elements pages render the `base-rhea` style, which pulls
+   `@base-ui/react`. The radix twin carries the same components on the repo's existing
+   `radix-ui`, so pin **`radix-rhea`**:
+
+   ```json
+   {
+     "$schema": "https://ui.shadcn.com/schema.json",
+     "style": "radix-rhea",
+     "rsc": false,
+     "tsx": true,
+     "tailwind": { "config": "", "css": "src/index.css", "baseColor": "neutral", "cssVariables": true, "prefix": "" },
+     "iconLibrary": "lucide",
+     "aliases": { "components": "@/components", "utils": "@/lib/utils", "ui": "@/components/ui", "lib": "@/lib", "hooks": "@/hooks" }
+   }
+   ```
+
+3. **Add the entries.** From `web/`:
+
+   ```
+   npx shadcn@latest add message-scroller message bubble input-group code-block empty -o -y
+   ```
+
+   It creates `web/src/components/ui/{message-scroller,message,bubble,code-block,empty}.tsx`,
+   `web/src/hooks/use-highlighted-code.ts` and `web/src/lib/highlighter.tsx`, and (`-o`) it
+   rewrites the shared primitives `ui/{button,input,textarea,input-group}.tsx` to the same
+   `radix-rhea` preset, so the whole `ui/` directory is one style.
+
+4. **The extra deps.** The add writes `@shadcn/react`, `cn` and `shiki` into
+   `web/package.json`; `radix-ui` is already there. The Markdown wrapper adds `remark-gfm`
+   (`react-markdown` is already a dep). Nothing here needs `@base-ui/react`: the `base-rhea`
+   twins of `bubble`, `tooltip` and `collapsible` would, and none of those is vendored (no
+   message actions, no Trace).
+
+#### The full-screen composition
+
+One root fills the viewport; the message list is the only scrolling region and the prompt is a
+sibling below it, outside that region, so it never scrolls away:
+
+```tsx
+<MessageScrollerProvider autoScroll>
+  <div className="flex h-dvh flex-col">
+    {/* the session picker (below) */}
+    <div className="flex items-center gap-2 border-b p-2 text-sm">…</div>
+
+    <MessageScroller className="min-h-0 flex-1">
+      <MessageScrollerViewport>
+        <MessageScrollerContent>
+          {messages.map((message) => …)}
+        </MessageScrollerContent>
+      </MessageScrollerViewport>
+      <MessageScrollerButton />
+    </MessageScroller>
+
+    {/* the prompt input: a sibling of the scroller, pinned below the viewport */}
+    <form className="border-t p-2" onSubmit={…}>
+      <InputGroup>
+        <InputGroupTextarea placeholder="Send a message" />
+        <InputGroupButton type="submit">…</InputGroupButton>
+      </InputGroup>
+    </form>
+  </div>
+</MessageScrollerProvider>
+```
+
+**Scroll behaviour.** `MessageScrollerProvider autoScroll` follows the reply while the person
+stays at the live edge; the person's turn is the `scrollAnchor`, so a new question settles near
+the top and the reply streams in under it; `MessageScrollerButton` jumps back to the live edge.
+Enter sends, Shift+Enter adds a line.
+
+#### How one message renders
+
+Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The role
+picks the branch; the text is **never** dumped as a bare `{message.text}`:
+
+```tsx
+message.role === "user" ? (
+  <MessageScrollerItem messageId={message.id} scrollAnchor>
+    <Message align="end">
+      <MessageContent>
+        <Bubble align="end" variant="muted">
+          <BubbleContent>{message.text}</BubbleContent>
+        </Bubble>
+      </MessageContent>
+    </Message>
+  </MessageScrollerItem>
+) : (
+  <MessageScrollerItem messageId={message.id}>
+    <Message align="start">
+      <MessageContent>
+        <Markdown>{message.text}</Markdown>
+      </MessageContent>
+    </Message>
+  </MessageScrollerItem>
+)
+```
+
+- The **person** is `Message align="end"` with `Bubble align="end" variant="muted"` and the
+text inside `BubbleContent`.
+- The **agent** (and every non-`user` role) is `Message align="start"` and the text goes
+through `Markdown`; a fenced block becomes a `CodeBlock` with its language title and copy
+button.
+
+#### Sessions, the live wiring and the no-adapter state
+
+The picker, the fold and the send are the existing `LiveApi` wiring unchanged: on mount
+`api.sessions()` lists the lead and manager Sessions and the first is selected; the selected id
+`api.subscribe(id, onFrame)`s and every `SnapshotFrame` folds onto the view through the existing
+`fold` (rule 3: a snapshot replaces the whole view); the composer's text goes out through
+`api.send(id, text)`. The picker is a `<select>` over `session.title ?? session.id` with the
+`state`/`role` in a `Badge`. The dev adapter and its routes are untouched.
+
+When no live adapter answers — the `/__cpd/health` probe failed, so `main.tsx` hands `App` no
+`live` API — the same single screen shows an explicit **Empty** state (an `Empty` block titled
+“Live adapter off” with the one line “Start the dev server with `CPD_WEB_LIVE=1` to read a real
+Session”), with the picker and the prompt disabled. It does not fall back to the mock Chat.
+
+#### What leaves the render path
+
+`web/src/app/App.tsx` renders the chat and nothing else: the shell header, the nav and the
+Tree/Plan/Inbox/Logs routes (and the mock `/chat` route) leave the render path. The cockpit view
+files stay where they are; they are simply no longer rendered.
+
+The old AI SDK Elements regression under `web/src/components/ai-elements/`
+(`conversation.tsx`, `message.tsx`, `prompt-input.tsx`) is **deleted** — nothing but
+`live-chat.tsx` imported it. With it go the deps only those files used: `use-stick-to-bottom`
+(`conversation.tsx`), `nanoid` and the `ai` SDK (`prompt-input.tsx`, `message.tsx`).
 
 ### The durable host-socket read (`chat-host`)
 
