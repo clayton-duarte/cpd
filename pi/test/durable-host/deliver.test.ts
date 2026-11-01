@@ -51,7 +51,7 @@ test("inputOf maps job-merged without data.turn to nothing", () => {
 });
 
 test("inputOf maps the kinds that add nothing to nothing", () => {
-  for (const kind of ["attempt-retry", "job-cancelled", "pr-started", "pr-base-changed", "pr-merged", "all-merged", "attempt-nudge"]) {
+  for (const kind of ["attempt-retry", "job-cancelled", "workflow-started", "workflow-base-changed", "pr-merged", "all-merged", "attempt-nudge"]) {
     assert.equal(inputOf(event(16, kind, { data: { prompt: "x" } }), "s1", LEAD), undefined, kind);
   }
 });

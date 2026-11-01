@@ -5,7 +5,7 @@ import { zoneTime } from "./time.ts";
 /**
  * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
  * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
- * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and the rest (`attempt-retry`, `job-cancelled`, `pr-started`, `pr-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the PR's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
+ * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and the rest (`attempt-retry`, `job-cancelled`, `workflow-started`, `workflow-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the Workflow's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
  */
 export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: SendOptions["deliverAs"] }>> = {
   "job-merged": { turn: true, deliverAs: "followUp" },
