@@ -24,6 +24,8 @@ fn text(resources: &[String]) -> String {
         resources,
         quick_check: &[],
         protected: &[],
+        generated: &[],
+        approved_touches: &[],
         previous: &[],
         answers: &[],
     })

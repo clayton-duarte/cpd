@@ -40,6 +40,8 @@ fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -
         resources: &[],
         quick_check: &lists.quick_check,
         protected: &[],
+        generated: &[],
+        approved_touches: &[],
         previous: &[],
         answers: &[],
     }
@@ -123,6 +125,8 @@ fn later() -> String {
         resources: &[],
         quick_check: &[],
         protected: &protected,
+        generated: &[],
+        approved_touches: &[],
         previous: &previous,
         answers: &answers,
     })

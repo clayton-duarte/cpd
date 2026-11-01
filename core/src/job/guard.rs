@@ -50,6 +50,16 @@ pub fn resources(job: &Job) -> Vec<String> {
     texts(job.resources.as_ref())
 }
 
+/// The Job's Spec `touches` (contract §7.5); empty when the Job has no Spec (a stub never checks).
+pub fn touches(job: &Job) -> Vec<String> {
+    job.spec.as_ref().map(|s| texts(Some(&s.touches))).unwrap_or_default()
+}
+
+/// The paths the Lead approved for the Job (`jobs.touches_approved`); empty when it approved none.
+pub fn approved_touches(job: &Job) -> Vec<String> {
+    texts(job.touches_approved.as_ref())
+}
+
 /// A `test` Job's own named tests and files, as [`Guard`] holds a derived set.
 pub fn own(job: &Job) -> (Vec<String>, Vec<String>) {
     (texts(job.tests.as_ref()), texts(job.test_files.as_ref()))
@@ -75,6 +85,7 @@ mod tests {
             tests: None,
             test_files: None,
             test_approved: None,
+            touches_approved: None,
             resources: None,
             urgent: false,
             fingerprint: None,

@@ -194,6 +194,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
         test_files: wanted.spec.as_ref().and_then(|s| s.test_files.as_ref()).map(|t| json!(t)),
         resources: wanted.spec.as_ref().and_then(|s| s.resources.as_ref()).map(|r| json!(r)),
         test_approved: None,
+        touches_approved: None,
         urgent: wanted.urgent,
         fingerprint: None,
         retry_tier: None,
@@ -277,6 +278,7 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
         test_files: None,
         resources: None,
         test_approved: None,
+        touches_approved: None,
         urgent: wanted.urgent,
         fingerprint: None,
         retry_tier: None,
@@ -468,7 +470,7 @@ pub(super) fn check_touches(pr: &PrRow, prs: &[PrRow], touches: &[String]) -> Re
 }
 
 /// Whether `path` matches `pattern`: `?` is one character but `/`, `*` any run but `/`, `**` any run, `[...]` one of a set.
-fn glob_matches(pattern: &str, path: &str) -> bool {
+pub(crate) fn glob_matches(pattern: &str, path: &str) -> bool {
     fn go(p: &[char], s: &[char]) -> bool {
         match p.first() {
             None => s.is_empty(),

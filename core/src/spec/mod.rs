@@ -180,6 +180,10 @@ pub struct Input<'a> {
     pub quick_check: &'a [String],
     /// The PR policy's `protected.paths` (§7.5); the always-protected paths are added here.
     pub protected: &'a [String],
+    /// The repo policy's `[generated] paths` (§7.5, §8.3): a change to one needs no approval.
+    pub generated: &'a [String],
+    /// The Job's `touches_approved` (§2.2, §7.5): the paths the Lead approved beyond its Spec `touches`.
+    pub approved_touches: &'a [String],
     /// Earlier ended Attempts of this Job, oldest first.
     pub previous: &'a [Previous],
     /// Answered Escalations of earlier Attempts, oldest first.
@@ -280,10 +284,8 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("resources", Value::from(input.resources.to_vec())),
         ("quick_check", Value::from(quick_check)),
         ("protected", Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>())),
-        // Stub (`guard-impl` adds the Input fields and the store reads): the two variables the template of §16.4 names for
-        // the enforced touches check (hs-n641). Empty here, so a Spec renders with the sections left out.
-        ("generated", Value::from(Vec::<String>::new())),
-        ("approved_touches", Value::from(Vec::<String>::new())),
+        ("generated", Value::from(input.generated.to_vec())),
+        ("approved_touches", Value::from(input.approved_touches.to_vec())),
         ("previous", Value::from(previous)),
         ("answers", Value::from(answers)),
     ]);

@@ -202,6 +202,12 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
         let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
+        // The Job as stored now, for the touches check and the red-test guard (an approval reaches an Attempt already merging).
+        let (all, job) = store.read(|conn| {
+            let all = crate::plan::jobs::load(conn, &target.plan)?;
+            let job = crate::job::find(&all, &target.plan, &target.job)?.clone();
+            Ok((all, job))
+        })?;
         // A linear Attempt diffs `base_sha...submitted_sha`; every other Attempt `old...branch`.
         let (lead_compare, diff_base, diff_head): (&str, &str, &str) =
             if linear { (base_sha.as_str(), base_sha.as_str(), submitted) } else { (&old, &old, &target.branch) };
@@ -210,14 +216,19 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
             return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
         }
+        // The Job's Spec `touches` (§7.5, hs-n641): the same diff may not change a path outside them, unless a base merge
+        // brought it, the repo's `[generated] paths` match it, or the Lead approved it (`job approve-touches`).
+        let touches = crate::job::guard::touches(&job);
+        let approved = crate::job::guard::approved_touches(&job);
+        let check = git::tamper::Touches { kind: &job.kind, touches: &touches, generated: &policy.generated.paths, approved: &approved };
+        let outside = git::tamper::touched_outside(repo, lead_compare, &check, &base_refs, diff_base, diff_head)?;
+        if !outside.is_empty() {
+            let detail = format!("The diff changes paths outside the Job's touches: {}.", outside.join(", "));
+            return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+        }
         // The red tests (§7.5, §7.7): an `impl` Job's diff does not change a file a `test` Job it needs guards, unless the Lead approved
         // the path (read now, so an approval reaches an Attempt already merging).
         if target.kind == "impl" {
-            let (all, job) = store.read(|conn| {
-                let all = crate::plan::jobs::load(conn, &target.plan)?;
-                let job = crate::job::find(&all, &target.plan, &target.job)?.clone();
-                Ok((all, job))
-            })?;
             let guard = crate::job::guard::of(&all, &job);
             let changed = git::tamper::touched_guarded(repo, lead_compare, diff_base, diff_head, &guard.files, &guard.approved)?;
             if !changed.is_empty() {

@@ -297,6 +297,7 @@ mod tests {
             ("hooks", "[hooks]\npre-start = \"x\"\n"),
             ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n"),
             ("protected", "[protected]\npaths = []\n"),
+            ("generated", "[generated]\npaths = []\n"),
         ] {
             let err = invalid(text);
             assert_eq!(err.details()["key"], domain);

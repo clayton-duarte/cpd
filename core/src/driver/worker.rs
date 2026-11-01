@@ -120,12 +120,14 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let answers = answers(conn, target)?;
     // An explore Job has no PR, no quick check and no protected path of a policy: its Worker works in no repository.
     let explore = crate::plan::jobs::is_explore(&job.kind);
-    let (quick_check, protected) = if explore {
-        (Vec::new(), Vec::new())
+    let (quick_check, protected, generated) = if explore {
+        (Vec::new(), Vec::new(), Vec::new())
     } else {
         let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
-        (spec::quick_check(&policy.hooks.pre_commit), policy.protected.paths.clone())
+        (spec::quick_check(&policy.hooks.pre_commit), policy.protected.paths.clone(), policy.generated.paths.clone())
     };
+    // The paths the Lead approved for the Job (`job approve-touches`), read as stored now (§7.7).
+    let approved_touches = crate::job::guard::approved_touches(job);
     let artefact = super::explore::artefact_in(&target.worktree, &job.key);
     let job_spec = if matches!(job.kind.as_str(), "open" | "update") {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
@@ -178,6 +180,8 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             resources: &resources,
             quick_check: &quick_check,
             protected: &protected,
+            generated: &generated,
+            approved_touches: &approved_touches,
             previous: &previous,
             answers: &answers,
         },

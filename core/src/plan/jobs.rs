@@ -56,6 +56,9 @@ pub struct Job {
     pub resources: Option<Value>,
     /// An `impl` Job's approved red-test paths (`jobs.test_approved`): not a Locked field, in no fingerprint.
     pub test_approved: Option<Value>,
+    /// The paths the Lead approved a Job to change beyond its Spec `touches` (`jobs.touches_approved`): not a Locked
+    /// field, in no fingerprint (§2.2, §7.5).
+    pub touches_approved: Option<Value>,
     /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
     pub urgent: bool,
     pub fingerprint: Option<String>,
@@ -167,7 +170,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
-                kind, tests, test_files, test_approved, resources
+                kind, tests, test_files, test_approved, resources, touches_approved
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -179,12 +182,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
                 (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
-                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?),
+                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?, r.get::<_, Option<String>>(25)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources, touches_approved))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -208,6 +211,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 tests: optional("tests", tests)?,
                 test_files: optional("test_files", test_files)?,
                 test_approved: optional("test_approved", test_approved)?,
+                touches_approved: optional("touches_approved", touches_approved)?,
                 resources: optional("resources", resources)?,
                 kind,
                 spec,
@@ -330,6 +334,7 @@ mod tests {
             test_files: None,
             resources: None,
             test_approved: None,
+            touches_approved: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

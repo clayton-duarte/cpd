@@ -80,9 +80,6 @@ pub fn touched_protected_over(
 
 /// What the widened tamper check needs beyond the protected list (contract §7.5 "The Job's touches", hs-n641): the Job's
 /// kind, its Spec `touches`, the repo's `[generated] paths` and the Job's `touches_approved`.
-///
-/// Stub: `guard-tests` names the API; `guard-impl` implements [`touched_outside`], wires it into `attempt submit` and the
-/// merge, and widens the matching to the `touches` globs.
 #[derive(Clone, Copy, Debug)]
 pub struct Touches<'a> {
     /// The Job's kind: `open`, `update` and the explore kinds run no touches check.
@@ -103,16 +100,48 @@ impl Touches<'_> {
 }
 
 /// The paths `diff_base...branch` changes outside the Job's `touches`, with the three exemptions of §7.5 (a base merge,
-/// the repo's `[generated] paths`, the Job's `touches_approved`), in the diff's order.
+/// the repo's `[generated] paths`, the Job's `touches_approved`), in the diff's order. A skipped kind returns none.
 pub fn touched_outside(
-    _dir: &Path,
-    _lead: &str,
-    _touches: &Touches<'_>,
-    _base_refs: &[&str],
-    _diff_base: &str,
-    _branch: &str,
+    dir: &Path,
+    lead: &str,
+    touches: &Touches<'_>,
+    base_refs: &[&str],
+    diff_base: &str,
+    branch: &str,
 ) -> Result<Vec<String>, CpdError> {
-    unimplemented!("the Job's touches check is guard-impl's (hs-n641): the red tests of guard-tests pin it")
+    if touches.skipped() {
+        return Ok(Vec::new());
+    }
+    let mut outside = Vec::new();
+    for path in changed_paths(dir, diff_base, branch)? {
+        let listed = touches.touches.iter().any(|e| touches_matches(e, &path))
+            || touches.generated.iter().any(|e| path_matches(e, &path))
+            || touches.approved.iter().any(|e| path_matches(e, &path));
+        if listed {
+            continue;
+        }
+        // A base merge brings it: its version on the branch equals the one on the Lead tip or a base ref (§7.5).
+        let mine = blob(dir, branch, &path)?;
+        let mut brought = mine == blob(dir, lead, &path)?;
+        for base_ref in base_refs {
+            brought = brought || mine == blob(dir, base_ref, &path)?;
+        }
+        if !brought {
+            outside.push(path);
+        }
+    }
+    Ok(outside)
+}
+
+/// Whether `path` matches a `touches` entry (contract §7.5): equal, a directory prefix when the entry ends in `/`, or a
+/// glob under the repo's glob rules (`job add`'s tree check: `?` one character but not `/`, `*` a run but not `/`, `**`
+/// any run, `[...]` a set). `touches` supports globs, unlike `protected`.
+fn touches_matches(entry: &str, path: &str) -> bool {
+    if entry.ends_with('/') {
+        path.starts_with(entry)
+    } else {
+        crate::job::add::glob_matches(entry, path)
+    }
 }
 
 /// Whether `path` is the file `entry` names, or inside it when `entry` ends in `/` (the matching of §7.5: no globs).

@@ -228,9 +228,7 @@ impl HasText for Protected {
 }
 
 /// The `generated` domain (repo scope only, no `text`): the repo's generated paths (§7.5, hs-n641), which the Job
-/// `touches` check allows a change to without an approval.
-///
-/// Stub: `guard-tests` names the domain and its typed key `paths`; `guard-impl` resolves it from the repo file.
+/// `touches` check allows a change to without an approval. A generated path is not protected; changing it is allowed.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Generated {
@@ -587,9 +585,8 @@ impl Set for ProtectedSet {
 impl Set for GeneratedSet {
     type Value = Generated;
 
-    /// Stub (`guard-impl` resolves it): the table resolves to cpd's default, never to the file's paths.
     fn fill(&self, base: &Generated) -> (Generated, Vec<&'static str>) {
-        (base.clone(), vec![PATHS])
+        (Generated { paths: self.paths.clone().unwrap_or_else(|| base.paths.clone()) }, left_out([(PATHS, self.paths.is_none())]))
     }
 
     fn complete(&self) -> Option<Generated> {
