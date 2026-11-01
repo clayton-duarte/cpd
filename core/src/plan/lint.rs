@@ -146,7 +146,6 @@ pub struct Input<'a> {
     pub prs: &'a [PrRow],
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
-    pub waiting: &'a BTreeSet<String>,
     pub advice: &'a [crate::plan::tier_advice::Advice],
 }
 
@@ -157,7 +156,6 @@ impl<'a> Input<'a> {
         prs: &'a [PrRow],
         jobs: &'a [Job],
         outline: Option<&'a Outline>,
-        waiting: &'a BTreeSet<String>,
     ) -> Self {
         Input {
             plan,
@@ -165,7 +163,6 @@ impl<'a> Input<'a> {
             prs,
             jobs,
             outline,
-            waiting,
             advice: &[],
         }
     }
@@ -230,10 +227,7 @@ fn one(rule: Rule, e: Option<CpdError>) -> Vec<Finding> {
 }
 
 fn draft_incomplete_rule(i: &Input) -> Vec<Finding> {
-    one(
-        Rule::DraftIncomplete,
-        drafts_incomplete(i.plan, i.jobs, i.waiting),
-    )
+    one(Rule::DraftIncomplete, drafts_incomplete(i.plan, i.jobs))
 }
 
 fn outline_missing_rule(i: &Input) -> Vec<Finding> {

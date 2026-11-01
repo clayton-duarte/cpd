@@ -86,16 +86,9 @@ fn outline(prs: &[&str]) -> Outline {
     }
 }
 
-fn lint_with(
-    phase: Phase,
-    prs: &[PrRow],
-    jobs: &[Job],
-    outline: Option<&Outline>,
-    waiting: &[&str],
-) -> Vec<Finding> {
+fn lint_with(phase: Phase, prs: &[PrRow], jobs: &[Job], outline: Option<&Outline>) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
-    let waiting: BTreeSet<String> = waiting.iter().map(|k| (*k).to_owned()).collect();
-    run(&Input::new(&plan, phase, prs, jobs, outline, &waiting))
+    run(&Input::new(&plan, phase, prs, jobs, outline))
 }
 
 /// Findings of the Plan with an outline for `web` and PR `web`, in phase `dispatch` (no pr_empty).
@@ -105,7 +98,6 @@ fn lint(jobs: &[Job]) -> Vec<Finding> {
         &[pr("web")],
         jobs,
         Some(&outline(&["web"])),
-        &[],
     )
 }
 
@@ -235,7 +227,6 @@ fn jobs_of_different_prs_are_not_compared() {
         &[pr("web"), pr("api")],
         &other,
         Some(&outline(&["web", "api"])),
-        &[],
     );
     assert!(overlaps(&findings).is_empty());
     let findings = lint_with(
@@ -243,7 +234,6 @@ fn jobs_of_different_prs_are_not_compared() {
         &[pr("web"), pr("api")],
         &same,
         Some(&outline(&["web", "api"])),
-        &[],
     );
     assert_eq!(overlaps(&findings).len(), 1);
 }
@@ -304,7 +294,7 @@ fn run_is_deterministic_and_orders_findings() {
         job("d", "api", "work", "draft", &["y.rs"], &[]),
         stub("s"),
     ];
-    let go = || lint_with(Phase::Dispatch, &prs, &jobs, None, &[]);
+    let go = || lint_with(Phase::Dispatch, &prs, &jobs, None);
     let findings = go();
     assert_eq!(findings, go());
     assert!(!findings.is_empty());
@@ -335,7 +325,7 @@ fn run_reports_every_error_not_only_the_first() {
         draft("b", &[], &["a"]),
         stub("s"),
     ];
-    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])), &[]);
+    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])));
     let got = rules(&findings);
     for rule in [
         Rule::DraftIncomplete,
@@ -350,7 +340,7 @@ fn run_reports_every_error_not_only_the_first() {
 fn first_error_is_the_refusal_of_the_first_error_finding() {
     let prs = [tdd("web")];
     let jobs = [job("t", "web", "test", "draft", &[], &[]), stub("s")];
-    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])), &[]);
+    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])));
     assert!(rules(&findings).contains(&Rule::ShapeIncomplete));
     let err = first_error(&findings).expect("an error finding");
     assert_eq!(err.code(), ErrorCode::DraftIncomplete);
@@ -360,18 +350,20 @@ fn first_error_is_the_refusal_of_the_first_error_finding() {
     );
     assert!(err.message().contains('s'));
     assert!(err.message().contains("s."), "{}", err.message());
-    // A waiting stub is exempt: the shape gap is then the first error.
-    let findings = lint_with(
-        Phase::Dispatch,
-        &prs,
-        &jobs,
-        Some(&outline(&["web"])),
-        &["s"],
-    );
-    assert!(of(&findings, Rule::DraftIncomplete).is_empty());
+}
+
+#[test]
+fn a_waiting_stub_is_not_exempt_the_review_refuses_a_stub_whether_it_waits_or_not() {
+    // The PR `web` waits (status `waiting`, phase Dispatch): its stub is a finding all the same.
+    let prs = [tdd("web")];
+    let jobs = [job("t", "web", "test", "draft", &[], &[]), stub("s")];
+    let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])));
+    assert_eq!(of(&findings, Rule::DraftIncomplete).len(), 1);
+    let err = first_error(&findings).expect("an error finding");
+    assert_eq!(err.code(), ErrorCode::DraftIncomplete);
     assert_eq!(
-        first_error(&findings).unwrap().code(),
-        ErrorCode::ShapeIncomplete
+        err.details()["jobs"],
+        json!([{"key": "s", "missing": ["tier", "spec"]}])
     );
 }
 
@@ -396,17 +388,17 @@ fn pr_empty_fires_only_in_phase_plan() {
     let prs = [pr("web"), pr("api")];
     let jobs = [draft("a", &[], &[])];
     let o = outline(&["web"]);
-    let in_plan = lint_with(Phase::Plan, &prs, &jobs, Some(&o), &[]);
+    let in_plan = lint_with(Phase::Plan, &prs, &jobs, Some(&o));
     let hits = of(&in_plan, Rule::PrEmpty);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].details["prs"], json!(["api"]));
-    let later = lint_with(Phase::Dispatch, &prs, &jobs, Some(&o), &[]);
+    let later = lint_with(Phase::Dispatch, &prs, &jobs, Some(&o));
     assert!(of(&later, Rule::PrEmpty).is_empty());
 }
 
 #[test]
 fn pr_empty_with_no_live_pr_names_pr_add() {
-    let findings = lint_with(Phase::Plan, &[], &[], Some(&outline(&[])), &[]);
+    let findings = lint_with(Phase::Plan, &[], &[], Some(&outline(&[])));
     let hits = of(&findings, Rule::PrEmpty);
     assert_eq!(hits.len(), 1);
     assert!(
@@ -442,16 +434,10 @@ fn dependency_cycle_finding_lists_the_cycle() {
 #[test]
 fn outline_findings_follow_the_outline() {
     let jobs = [draft("a", &[], &[])];
-    let missing = lint_with(Phase::Dispatch, &[pr("web")], &jobs, None, &[]);
+    let missing = lint_with(Phase::Dispatch, &[pr("web")], &jobs, None);
     assert_eq!(of(&missing, Rule::OutlineMissing).len(), 1);
     assert!(of(&missing, Rule::OutlineIncomplete).is_empty());
-    let incomplete = lint_with(
-        Phase::Dispatch,
-        &[pr("web")],
-        &jobs,
-        Some(&outline(&[])),
-        &[],
-    );
+    let incomplete = lint_with(Phase::Dispatch, &[pr("web")], &jobs, Some(&outline(&[])));
     let hits = of(&incomplete, Rule::OutlineIncomplete);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].details["prs"], json!(["web"]));
@@ -463,7 +449,7 @@ fn outline_findings_follow_the_outline() {
 fn shape_findings_are_separate_rules() {
     let prs = [tdd("web")];
     let o = outline(&["web"]);
-    let run_it = |jobs: &[Job]| lint_with(Phase::Dispatch, &prs, jobs, Some(&o), &[]);
+    let run_it = |jobs: &[Job]| lint_with(Phase::Dispatch, &prs, jobs, Some(&o));
     let impl_only = run_it(&[job("i", "web", "impl", "draft", &[], &[])]);
     assert_eq!(of(&impl_only, Rule::TestJobRequired).len(), 1);
     let verify_only = run_it(&[job("v", "web", "verify", "draft", &[], &[])]);

@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 
 use super::jobs::{self, Job};
 use super::lint::{Finding, Input, Severity, run};
-use super::parked;
 use super::prs::{PrRow, load_prs};
 use super::row::{self, Phase, PlanRow};
 use super::tier_advice::{self, Advice, FLOOR, recommend};
@@ -28,9 +27,6 @@ pub(super) fn find(
     prs: &[PrRow],
     jobs: &[Job],
 ) -> Result<Vec<Finding>, CpdError> {
-    let waiting = env
-        .store
-        .read(|conn| parked::waiting_set(conn, &plan.id, jobs))?;
     let advice = advice(env, plan.context.as_str())?;
     Ok(run(&Input::new(
         &plan.id,
@@ -38,7 +34,6 @@ pub(super) fn find(
         prs,
         jobs,
         plan.outline.as_ref(),
-        &waiting,
     )
     .with_advice(&advice)))
 }
