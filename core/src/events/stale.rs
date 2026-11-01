@@ -28,6 +28,9 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             )
         }
         Kind::JobFailed => later_of_job(conn, event, &["job-retried", "job-merged", "job-cancelled"]),
+        Kind::JobAddendum => {
+            later_of_job(conn, event, &["attempt-started", "job-merged", "job-failed", "job-cancelled"])
+        }
         Kind::AttemptNudge => {
             later_of_job(conn, event, &["attempt-started", "job-merged", "job-failed", "job-cancelled"])
         }

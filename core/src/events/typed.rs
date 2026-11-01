@@ -188,8 +188,7 @@ impl NewEvent {
     }
 
     pub fn job_addendum(text: impl Into<String>, addendum: &str) -> NewEvent {
-        let _ = (text.into(), addendum);
-        todo!("job-addendum")
+        make(Kind::JobAddendum, text, json!({"text": addendum}))
     }
 
     pub fn attempt_started(text: impl Into<String>, number: impl Serialize, tier: &str, origin: &str) -> NewEvent {
