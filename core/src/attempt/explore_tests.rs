@@ -318,6 +318,25 @@ fn explore_job_merges_without_a_git_merge_and_stores_the_summary() {
 }
 
 #[test]
+fn an_explore_attempt_stores_an_empty_actual_files() {
+    let mut rig = Rig::new();
+    rig.add_job("look", "scout", "H2");
+    let attempt = rig.start("look");
+    let body = "# Findings\n";
+    rig.write_artefact("look", body);
+    let summary = rig.summary_file("Found it.\n");
+    let before = rig.fakes.runner.calls().len();
+
+    let result = rig.submit(&attempt, Some(&summary));
+    assert!(result.is_ok(), "{result:?}");
+
+    let column = |rig: &mut Rig, c: &str| rig.one::<Option<String>>(&format!("SELECT {c} FROM attempts WHERE id = '{attempt}'"));
+    assert_eq!(column(&mut rig, "submitted_sha").as_deref(), Some(sha256_hex(body.as_bytes()).as_str()), "submitted_sha is set");
+    assert_eq!(column(&mut rig, "actual_files").as_deref(), Some("[]"), "an explore Attempt writes no repo file");
+    assert_eq!(rig.fakes.runner.calls().len(), before, "no git call was made");
+}
+
+#[test]
 fn job_merged_event_of_an_explore_job_carries_summary_and_artefact() {
     let mut rig = Rig::new();
     rig.add_job("look", "scout", "H2");

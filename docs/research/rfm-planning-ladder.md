@@ -878,23 +878,23 @@ ALTER TABLE attempts ADD COLUMN gate_exit    INTEGER CHECK (gate_exit IS NULL OR
 
 ### Priority 2: `attempt-footprint`
 
-- **PR/Jobs.** One PR, `tdd`: `fp-docs`, `fp-tests`, `fp-impl`, `open-fp`. Optionally a first `work` Job `fp-shared` that adds the shared-file predicate (`core/src/plan/shared.rs`) if `plan-lint` has not landed.
+- **PR/Jobs.** One PR, `tdd`: `fp-docs`, `fp-tests`, `fp-impl`, `open-fp`. The Plan is two `tdd` PRs because a `tdd` PR allows no `work` Job (pro-n283): `fp` records and shows `actual_files`, and `fp-derive` derives the footprint class on top of the shared-file predicate `core/src/plan/shared.rs`, which Plan plan-lint owns (pro-n290).
 - **DDL.**
 
 ```sql
 -- cpd-migration: additive
--- The whole diff of the submitted commit: `git diff --name-only --no-renames base_sha...submitted_sha`.
+-- The paths of `base_sha...submitted_sha` that differ from the Lead tip and from every comparison ref (pro-d304, pro-n296).
 -- NULL: not captured (before this migration, or never submitted). '[]': a submit with no changed path.
 ALTER TABLE attempts ADD COLUMN actual_files TEXT
   CHECK (actual_files IS NULL OR (json_valid(actual_files) AND json_type(actual_files) = 'array'));
 ```
 
-- **Code.** `core/src/attempt/submit.rs`, `submit_in`: after `run_checks`, `let actual = git::tamper::changed_paths(&root, &base, &sha)?;` and add `actual_files = ?4` to the `UPDATE attempts SET status = 'merging', submitted_sha = ?3 ...` (the `attempts_ended` trigger forbids any later write). New pure module `core/src/attempt/footprint.rs`: `enum FootprintClass { Match, Subset, UndeclaredWrite }` and `fn classify(touches: &[String], actual: &[String], shared: &dyn Fn(&str) -> bool) -> Footprint { class, undeclared, untouched }`, using `git::tamper::path_matches`. Read side: `attempt show` and `job show` add `footprint`.
+- **Code.** `core/src/attempt/submit.rs`, `submit_in`: after `run_checks`, `let actual = git::tamper::written_paths(&root, &base, &sha, &compare_with)?;` and add `actual_files = ?4` to the `UPDATE attempts SET status = 'merging', submitted_sha = ?3 ...` (the `attempts_ended` trigger forbids any later write). New pure module `core/src/attempt/footprint.rs`: `enum FootprintClass { Match, Subset, UndeclaredWrite }` and `fn classify(touches: &[String], actual: &[String], shared: &dyn Fn(&str) -> bool) -> Footprint { class, undeclared, untouched }`, using `git::tamper::path_matches`. Read side: `attempt show` and `job show` add `footprint`.
 - **CLI.** No new command or flag; new keys in `attempt show` / `job show` output (adapter-impact unverified, check `docs/contract.md` §5.2 for a protocol bump).
 - **Rules.** None in lint. The class is a read-side derivation; shared-file exemption is lockfiles only (P1 (iv.2)).
 - **Tests (red first).** `footprint::equal_sets_match`; `footprint::untouched_declared_entry_is_a_subset`; `footprint::a_changed_file_outside_touches_is_undeclared_write`; `footprint::a_directory_entry_covers_files_below_it`; `footprint::lockfiles_never_make_undeclared_write`; `footprint::a_rename_counts_both_paths` (`--no-renames`); `submit::records_the_diff_list_it_is_given_in_the_submit_update` (the list is a parameter; git is not run); `schema::actual_files_is_additive_and_old_rows_read_null`; `schema::actual_files_must_be_a_json_array` (CHECK); `attempt_show::prints_footprint_for_a_captured_attempt_and_null_for_an_old_one`.
 - **Verification.** (1) After deployment, `SELECT count(*) FROM attempts WHERE status = 'ended' AND submitted_sha IS NOT NULL AND actual_files IS NULL AND started_at > '<deploy>'` = 0. (2) After one month, recompute Table 10 from the captured whole diffs: the undeclared share is at least the 21.6% (lower-bound claim of caveat 8) or the claim is wrong and the doc is corrected. (3) The shared-file list for a policy key is generated from `SELECT value, count(*) FROM attempts, json_each(actual_files) ...` for files undeclared in at least 5% of Jobs (a threshold chosen here, not measured), then reviewed by the User (D3).
-- **Risk.** False positives (a)-(d) of P1 (iv.3); a Worker that merges the base into its branch inflates the list. Mitigation to verify in the tests: compare blobs with the Lead as `touched_guarded` does (unverified that it is worth the extra git calls).
+- **Risk.** False positives (a)-(d) of P1 (iv.3); a Worker that merges the base into its branch inflates the list. Measured (pro-n296): 13.8% of 1,605 Attempts contain a merge commit; unfiltered, a merge adds about 50 to 270 phantom paths. Mitigation (pro-d304): one tree diff per comparison ref (the Lead tip for a parallel Attempt, and each `tamper_bases` ref) against the submitted commit, which leaves out what a merge brought, with no per-path blob call.
 
 ### Priority 3: `tier-advice`
 
