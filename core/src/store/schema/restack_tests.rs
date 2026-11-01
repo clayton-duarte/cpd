@@ -13,7 +13,7 @@ fn write(store: &mut Store, sql: &str) -> Result<(), CpdError> {
 
 fn assert_locked(store: &mut Store, sql: &str) {
     let err = write(store, sql).expect_err(sql);
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{sql}: {err:?}");
     assert_eq!(err.exit().code(), 3);
 }
 

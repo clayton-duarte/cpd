@@ -66,7 +66,7 @@ mod view;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::args::{PlanArg, PrArg, PrTitle};
+use crate::args::{PlanArg, WorkflowArg, WorkflowTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::hooks::{Detached, Log as HookLog};
@@ -76,8 +76,8 @@ use crate::ids::{ContextId, OwnerLogin, PlanId, WorkflowKey, RepoName};
 use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::PrRow;
-use row::PlanPrs;
+use crate::plan::WorkflowRow;
+use row::PlanWorkflows;
 
 pub use gh::close_pr;
 pub use open::{Pulled, description_required, jira_required, jira_required_of, stored_description_of, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
@@ -119,7 +119,7 @@ pub enum Command {
 #[derive(clap::Args, Debug)]
 pub struct Args {
     #[command(flatten)]
-    pr: PrArg,
+    pr: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -152,7 +152,7 @@ pub struct AddArgs {
     repo: PathBuf,
     /// The PR's own title: names its change; 1-72 characters on one line
     #[arg(long, value_name = "text")]
-    title: PrTitle,
+    title: WorkflowTitle,
     /// The PR's own Jira ticket key, e.g. ABC-123 (optional)
     #[arg(long, value_name = "KEY")]
     jira: Option<crate::context::Jira>,
@@ -161,7 +161,7 @@ pub struct AddArgs {
     base: Option<String>,
     /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
     #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Vec<add::PrRef>,
+    needs: Vec<add::WorkflowRef>,
     /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
@@ -194,13 +194,13 @@ pub struct EditArgs {
     base: Option<String>,
     /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
     #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Option<Vec<add::PrRef>>,
+    needs: Option<Vec<add::WorkflowRef>>,
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
     /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
     #[arg(long, value_name = "text")]
-    title: Option<PrTitle>,
+    title: Option<WorkflowTitle>,
     /// The PR's Jira ticket key, e.g. ABC-123: sets or replaces it, in any phase while the PR is not merged or cancelled
     #[arg(long, value_name = "KEY")]
     jira: Option<crate::context::Jira>,
@@ -227,7 +227,7 @@ pub struct CancelArgs {
     key: WorkflowKey,
     /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
     #[arg(long = "superseded-by", value_name = "ref")]
-    superseded_by: Option<add::PrRef>,
+    superseded_by: Option<add::WorkflowRef>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -262,7 +262,7 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
 }
 
 impl Env {
-    fn plan(&mut self, id: &PlanId) -> Result<PlanPrs, CpdError> {
+    fn plan(&mut self, id: &PlanId) -> Result<PlanWorkflows, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
 }
@@ -316,7 +316,7 @@ pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId,
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
-fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
+fn illegal_phase(plan: &PlanWorkflows, command: &str, needs: &str) -> CpdError {
     wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
@@ -337,7 +337,7 @@ fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdEr
 /// `pr_locked` (exit 3): the Plan is past the phases where its PRs change (§3.8).
 fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
     CpdError::new(
-        ErrorCode::PrLocked,
+        ErrorCode::WorkflowLocked,
         format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its PRs are Locked.", phase.as_str()),
     )
     .with("plan", plan.as_str())
@@ -356,9 +356,9 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a PrRow, CpdError> {
+fn find_pr<'a>(prs: &'a [WorkflowRow], plan: &PlanId, key: &WorkflowKey) -> Result<&'a WorkflowRow, CpdError> {
     prs.iter().find(|p| p.key == *key).ok_or_else(|| {
-        CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
     })
@@ -388,7 +388,7 @@ struct Refused {
 }
 
 /// How the Gate runs for PR `pr` (contract §7.3, §7.6): the two hook pipelines and their logs.
-fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
+fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a WorkflowRow) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
         lead_branch: &pr.lead_branch,
@@ -401,7 +401,7 @@ fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -
 }
 
 /// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
-fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
+fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &WorkflowRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
     gate_in(env, policy, plan, pr, worktree, sha, false, again)
 }
 
@@ -412,7 +412,7 @@ fn gate_in(
     env: &Env,
     policy: &Policy,
     plan: &PlanId,
-    pr: &PrRow,
+    pr: &WorkflowRow,
     worktree: &std::path::Path,
     sha: &str,
     pre_start: bool,
@@ -442,7 +442,7 @@ fn gate_in(
 /// `lead_worktree_dirty` (exit 3): the Lead worktree has tracked local changes, which a Gate
 /// run there must not test (hs-d679). Untracked files are hidden for the Gate's run
 /// ([`hide_untracked`]) and put back after it, so they are not refused.
-fn require_clean_lead(lead: &std::path::Path, plan: &PlanId, pr: &PrRow) -> Result<(), CpdError> {
+fn require_clean_lead(lead: &std::path::Path, plan: &PlanId, pr: &WorkflowRow) -> Result<(), CpdError> {
     let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
     if dirty.trim().is_empty() {
         return Ok(());
@@ -535,7 +535,7 @@ impl Drop for Hidden {
 /// is `gate_failed` (exit 3); a `pre-merge` that could not be judged, or a
 /// `pre-start` that did not pass in any way, is `gate_error` (exit 1). Both carry
 /// the hook's last 60 lines in `details.tail` and its log in `details.log`. `then` follows a failed `pre-merge` in its message.
-fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -> CpdError {
+fn refusal(plan: &PlanId, pr: &WorkflowRow, sha: &str, refused: Refused, then: &str) -> CpdError {
     let tail = refused.tail.unwrap_or_default();
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();

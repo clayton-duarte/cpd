@@ -27,8 +27,8 @@ fn pull(number: i64) -> Pull {
     }
 }
 
-fn pr_with(key: &str, pull: Option<Pull>) -> read::PrNode {
-    read::PrNode { pull, ..sample_pr(key) }
+fn pr_with(key: &str, pull: Option<Pull>) -> read::WorkflowNode {
+    read::WorkflowNode { pull, ..sample_pr(key) }
 }
 
 fn draw(ui: &mut Ui, centre: &Centre, height: u16) -> Buffer {

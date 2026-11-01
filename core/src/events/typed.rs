@@ -250,24 +250,24 @@ impl NewEvent {
     }
 
     pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, head_ref: Option<&str>, author: Option<&str>, needs: impl Serialize, appended: bool) -> NewEvent {
-        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
+        make(Kind::WorkflowAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
     }
 
     pub fn pr_edited(text: impl Into<String>, pr: impl Serialize, fields: impl Serialize) -> NewEvent {
-        make(Kind::PrEdited, text, json!({"pr": pr, "fields": fields}))
+        make(Kind::WorkflowEdited, text, json!({"pr": pr, "fields": fields}))
     }
 
     pub fn pr_described(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
-        make(Kind::PrDescribed, text, json!({"pr": pr}))
+        make(Kind::WorkflowDescribed, text, json!({"pr": pr}))
     }
 
     pub fn pr_cancelled(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
-        make(Kind::PrCancelled, text, json!({"pr": pr}))
+        make(Kind::WorkflowCancelled, text, json!({"pr": pr}))
     }
 
     /// `pr-cancelled` of a `dispatch` PR whose work another PR carried (§3.8, hs-d301): `superseded_by` is that PR as a reference.
     pub fn pr_cancelled_superseded(text: impl Into<String>, pr: impl Serialize, superseded_by: &str) -> NewEvent {
-        make(Kind::PrCancelled, text, json!({"pr": pr, "superseded_by": superseded_by}))
+        make(Kind::WorkflowCancelled, text, json!({"pr": pr, "superseded_by": superseded_by}))
     }
 
     pub fn pr_started(
@@ -283,7 +283,7 @@ impl NewEvent {
         by: &str,
     ) -> NewEvent {
         make(
-            Kind::PrStarted,
+            Kind::WorkflowStarted,
             text,
             json!({
                 "pr": pr, "repo": repo, "base": base, "lead_branch": lead_branch, "lead_worktree": lead_worktree,
@@ -313,7 +313,7 @@ impl NewEvent {
                 data["url"] = Value::Null;
             }
         }
-        make(Kind::PrBaseChanged, text, data)
+        make(Kind::WorkflowBaseChanged, text, data)
     }
 
     pub fn pr_opened(text: impl Into<String>, pr: impl Serialize, number: i64, url: &str) -> NewEvent {
@@ -562,12 +562,12 @@ mod tests {
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
-            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
-            Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
-            Kind::PrDescribed => vec![NewEvent::pr_described(T, s)],
-            Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
-            Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
-            Kind::PrBaseChanged => vec![
+            Kind::WorkflowAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
+            Kind::WorkflowEdited => vec![NewEvent::pr_edited(T, s, [s])],
+            Kind::WorkflowDescribed => vec![NewEvent::pr_described(T, s)],
+            Kind::WorkflowCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
+            Kind::WorkflowStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
+            Kind::WorkflowBaseChanged => vec![
                 NewEvent::pr_base_changed(T, s, (s, s), (None, Some(s)), s, BasePull::Absent),
                 NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, BasePull::Of(1, s)),
                 NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, BasePull::Null),

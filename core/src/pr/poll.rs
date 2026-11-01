@@ -15,7 +15,7 @@ use super::feedback;
 use super::gh::{self, Listed};
 use super::posts;
 use super::pulls::{self, Change, Excused, PostFacts, Reason};
-use super::row::PlanPrs;
+use super::row::PlanWorkflows;
 use super::start::unstack;
 use super::status::{ChecksSummary, PrState};
 use super::{Env, PollArgs};
@@ -635,7 +635,7 @@ pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &Workflo
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
+fn plan_prs(env: &mut Env, plan: &PlanWorkflows) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
             .map(|pr| {

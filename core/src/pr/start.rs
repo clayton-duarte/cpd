@@ -18,7 +18,7 @@ use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
-use crate::plan::{Phase, PrRow};
+use crate::plan::{Phase, WorkflowRow};
 
 /// Every PR of a Plan in key order (`plan::fingerprint::load_prs`), as E7 and `pr start` read them.
 pub use crate::plan::fingerprint::load_prs as load;
@@ -32,7 +32,7 @@ const COMMAND: &str = "pr start";
 pub enum By {
     Lock,
     Engine,
-    PrStart,
+    WorkflowStart,
 }
 
 impl By {
@@ -40,7 +40,7 @@ impl By {
         match self {
             By::Lock => "lock",
             By::Engine => "engine",
-            By::PrStart => COMMAND,
+            By::WorkflowStart => COMMAND,
         }
     }
 
@@ -48,7 +48,7 @@ impl By {
         match self {
             By::Lock => "plan lock",
             By::Engine => "watch",
-            By::PrStart => COMMAND,
+            By::WorkflowStart => COMMAND,
         }
     }
 }
@@ -113,7 +113,7 @@ pub(crate) fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &Workfl
 
 /// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
 /// `base`), `None` when it is not stacked.
-pub(super) fn base_pr(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrRow) -> Result<Option<String>, CpdError> {
+pub(super) fn base_pr(conn: &rusqlite::Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
         .query_row("SELECT plan || '/' || key FROM workflows WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
@@ -182,7 +182,7 @@ pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &WorkflowKey, by: &
 
 /// [`unstack`] in a transaction of its own when the PR needs it (a PR already unstacked writes nothing), then the PR as
 /// it is stored.
-pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<PrRow, CpdError> {
+pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &WorkflowKey, by: &str) -> Result<WorkflowRow, CpdError> {
     if store.read(|conn| Ok(merged_base(conn, plan, key)?.is_some()))? {
         store.write(source, |tx| unstack(tx, plan, key, by))?;
     }
@@ -231,7 +231,7 @@ pub fn tamper_bases(conn: &rusqlite::Connection, dir: &Path, repo: &str, base: &
 /// Nothing is pushed and nothing is in the database.
 #[derive(Debug)]
 pub struct Prepared {
-    pr: PrRow,
+    pr: WorkflowRow,
     lead: git::Prepared,
 }
 
@@ -307,13 +307,13 @@ fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &WorkflowKey) -> PathBuf {
 
 /// Creates the PR's Lead worktree and runs `pre-start` in it (§7.2), in the PR's repo, for a PR that is not
 /// stacked: the one `plan lock` starts (§3.1: it starts only PRs with no base PR).
-pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow) -> Result<Prepared, Failed> {
+pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &WorkflowRow) -> Result<Prepared, Failed> {
     prepare_as(home, config, store, plan, pr, false)
 }
 
 /// [`prepare`], `stacked` being whether the PR is stacked on a base PR: its Lead Branch is then cut from that
 /// PR's Lead Branch head (§7.2).
-fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
+fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &WorkflowRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &pr.key;
     let policy = store.read(|conn| super::policy_of_pr(conn, home, plan, key)).map_err(Failed::Other)?;
     let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
@@ -376,7 +376,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 /// Starts one PR of a Plan in `dispatch` (E7, `pr start`): [`prepare`], push,
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
-pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
+pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &WorkflowRow, by: By) -> Result<Pushed, Failed> {
     // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
     let pr = &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
     let stacked = store.read(|conn| base_pr(conn, plan, pr)).map_err(Failed::Other)?.is_some();
@@ -412,7 +412,7 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &Work
         }
         let message = format!("PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message());
         let text = format!("{message} The engine does not try again. Fix the cause, then: cpd pr start {key} --plan {plan}");
-        let event = NewEvent::error(text, source, ErrorCode::PrStartFailed.as_str(), &message, details);
+        let event = NewEvent::error(text, source, ErrorCode::WorkflowStartFailed.as_str(), &message, details);
         append(tx, event.plan(plan.clone()))?;
         Ok(true)
     })
@@ -428,7 +428,7 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
         return Err(wrong_phase(&plan, phase, COMMAND, "dispatch"));
     }
     let Some(pr) = prs.iter().find(|p| p.key == key) else {
-        return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
+        return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str()));
     };
@@ -456,7 +456,7 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
         if let Some(base_pr) = &held.base_pr {
             why.push(format!("is stacked on {base_pr}, which has not opened yet"));
         }
-        let mut error = CpdError::new(ErrorCode::PrNotReady, format!("PR {key} of Plan {plan} {}.", why.join(" and ")))
+        let mut error = CpdError::new(ErrorCode::WorkflowNotReady, format!("PR {key} of Plan {plan} {}.", why.join(" and ")))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("needs", held.needs);
@@ -465,6 +465,6 @@ pub(super) fn run(args: StartArgs) -> Result<Output, CpdError> {
         }
         return Err(error);
     }
-    let pushed = start(&env.home, &env.config, &mut env.store, &plan, pr, By::PrStart).map_err(Failed::into_error)?;
+    let pushed = start(&env.home, &env.config, &mut env.store, &plan, pr, By::WorkflowStart).map_err(Failed::into_error)?;
     Ok(Output::success(json!({"pr": pushed.to_json()})))
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use super::jobs::Job;
 use super::overlap::Overlap;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::render::{cell, inline};
 use super::row::PlanRow;
 
@@ -27,7 +27,7 @@ pub enum Kind<'a> {
 /// What the summary reads besides the Plan row.
 pub struct Input<'a> {
     pub plan: &'a PlanRow,
-    pub prs: &'a [PrRow],
+    pub prs: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
@@ -44,12 +44,12 @@ fn locked(job: &Job) -> bool {
     !job.is_draft() && job.status != "cancelled"
 }
 
-fn repo_name(pr: &PrRow) -> String {
+fn repo_name(pr: &WorkflowRow) -> String {
     pr.name.clone().or_else(|| Path::new(&pr.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| pr.repo.clone())
 }
 
 /// `Order:` and `Stacked on:` (block 7): empty when no PR counts.
-fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
+fn order(i: &Input, counting: &[&WorkflowRow]) -> Vec<String> {
     if counting.is_empty() {
         return Vec::new();
     }
@@ -100,11 +100,11 @@ fn list(head: &str, rows: Vec<String>) -> Vec<String> {
 pub fn markdown(kind: &Kind, i: &Input) -> String {
     let plan = i.plan;
     let outline = plan.outline.as_ref();
-    let mut counting: Vec<&PrRow> = i.prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut counting: Vec<&WorkflowRow> = i.prs.iter().filter(|p| p.status != "cancelled").collect();
     counting.sort_by(|a, b| a.key.cmp(&b.key));
     let mut reviewed: Vec<&Job> = i.jobs.iter().filter(|j| under_review(j)).collect();
     reviewed.sort_by(|a, b| (&a.pr, &a.key).cmp(&(&b.pr, &b.key)));
-    let has_review = |pr: &PrRow| reviewed.iter().any(|j| j.pr_str() == pr.key.as_str());
+    let has_review = |pr: &WorkflowRow| reviewed.iter().any(|j| j.pr_str() == pr.key.as_str());
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {

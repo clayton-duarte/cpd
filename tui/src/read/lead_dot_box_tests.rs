@@ -9,7 +9,7 @@ use cpd_core::store::Store;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, PlanBoxes, PrNode};
+use crate::read::{self, Dot, PlanBoxes, WorkflowNode};
 
 const AT: &str = "'2026-01-02T00:00:00.000Z'";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -62,12 +62,12 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
     (dir, boxes)
 }
 
-fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a PrNode {
+fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
     b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 
 /// The foreground of the spinner cell in row 0 of the box of `pr` drawn alone among all the Plan's Jobs.
-fn title_dot(b: &PlanBoxes, pr: &PrNode, frame: usize) -> Option<ratatui::style::Color> {
+fn title_dot(b: &PlanBoxes, pr: &WorkflowNode, frame: usize) -> Option<ratatui::style::Color> {
     let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])

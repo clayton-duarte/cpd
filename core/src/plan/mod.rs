@@ -48,7 +48,7 @@ mod sql_trace;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, PrTitle, Text, Title};
+use crate::args::{Name, PlanArg, WorkflowTitle, Text, Title};
 use crate::config::Tier;
 use crate::context::Jira;
 use crate::env::Env;
@@ -59,7 +59,7 @@ use crate::output::Output;
 pub use fingerprint::plan_fingerprint;
 pub use outline::Outline;
 pub use jobs::locked_fingerprint;
-pub use prs::{PrRow, Pull};
+pub use prs::{WorkflowRow, Pull};
 pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
 pub(crate) use new::lead_message;
@@ -163,7 +163,7 @@ pub struct ReviewArgs {
     plan: PlanArg,
     /// What the drafts under review do: the heading of the review; 1-72 characters on one line
     #[arg(long, value_name = "text")]
-    title: PrTitle,
+    title: WorkflowTitle,
 }
 
 #[derive(clap::Args, Debug)]

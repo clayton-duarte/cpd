@@ -694,12 +694,12 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
 
 /// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
 #[cfg(test)]
-fn sample_pr(key: &str) -> read::PrNode {
-    read::PrNode {
+fn sample_pr(key: &str) -> read::WorkflowNode {
+    read::WorkflowNode {
         key: cpd_core::ids::WorkflowKey::parse(key).unwrap(),
         repo_name: format!("{key}-repo"),
         base: "main".into(),
-        status: read::PrStatus::Dispatch,
+        status: read::WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: None,
         waiting_on: Vec::new(),
@@ -734,7 +734,7 @@ fn sample_job(pr: &str, key: &str) -> read::JobNode {
 
 /// What the view reads for a Plan of `prs` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
 #[cfg(test)]
-fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
+fn sample_centre(prs: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -> Centre {
     let needs_user = read::NeedsUser::default();
     let boxes = boxes::layout(&prs, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
     let plan = PlanBoxes {
@@ -836,7 +836,7 @@ mod tests {
 
     use super::*;
     use crate::dialog::scroll::WHEEL_ROWS;
-    use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
+    use crate::read::{JobNode, JobStatus, WorkflowNode, WorkflowStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey, SessionId};
 
@@ -883,11 +883,11 @@ mod tests {
     /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
     fn scroll_centre(plan_id: &str, jobs: usize) -> Centre {
         let pr = WorkflowKey::parse("web").unwrap();
-        let node = PrNode {
+        let node = WorkflowNode {
             key: pr.clone(),
             repo_name: "repo".into(),
             base: "main".into(),
-            status: PrStatus::Dispatch,
+            status: WorkflowStatus::Dispatch,
             needs: Vec::new(),
             pull: None,
             waiting_on: Vec::new(),

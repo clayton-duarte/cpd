@@ -51,7 +51,7 @@ pub struct PlanBoxes {
     pub plan: PlanId,
     pub context: ContextId,
     /// The PRs, in key order.
-    pub prs: Vec<PrNode>,
+    pub prs: Vec<WorkflowNode>,
     /// Every Job of the Plan, in creation order; `pr` is `None` exactly for an explore Job (`jobs.pr` NULL).
     pub jobs: Vec<JobNode>,
     /// What of the Plan needs the User, from the same transaction.
@@ -95,7 +95,7 @@ impl NeedsUser {
 
 /// A PR's status (contract §3.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrStatus {
+pub enum WorkflowStatus {
     Waiting,
     Dispatch,
     Open,
@@ -103,27 +103,27 @@ pub enum PrStatus {
     Cancelled,
 }
 
-impl PrStatus {
+impl WorkflowStatus {
     /// As stored.
     pub fn as_str(self) -> &'static str {
         match self {
-            PrStatus::Waiting => "waiting",
-            PrStatus::Dispatch => "dispatch",
-            PrStatus::Open => "open",
-            PrStatus::Merged => "merged",
-            PrStatus::Cancelled => "cancelled",
+            WorkflowStatus::Waiting => "waiting",
+            WorkflowStatus::Dispatch => "dispatch",
+            WorkflowStatus::Open => "open",
+            WorkflowStatus::Merged => "merged",
+            WorkflowStatus::Cancelled => "cancelled",
         }
     }
 }
 
 /// One PR of a Plan, for its box's title and its place among the boxes.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PrNode {
+pub struct WorkflowNode {
     pub key: WorkflowKey,
     /// The repo's directory name: the last component of `prs.repo`.
     pub repo_name: String,
     pub base: String,
-    pub status: PrStatus,
+    pub status: WorkflowStatus,
     /// The PRs it needs, sorted (none is `cancelled`: `pr cancel` refuses a PR another one needs).
     pub needs: Vec<WorkflowKey>,
     /// Its pull request, once it has one.
@@ -336,7 +336,7 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
 }
 
 /// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the PR the working Lead's turn concerns, `lead_work` the Plan phase's work.
-fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<PrNode>, CpdError> {
+fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<WorkflowNode>, CpdError> {
     let mut events = Vec::new();
     let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
     for row in stmt.query_map([lead], |r| Ok((r.get::<_, String>(0)?, r.get::<_, rusqlite::types::Value>(1)?)))? {
@@ -412,11 +412,11 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
         let update: Option<String> = r.get(10)?;
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
-            "waiting" => PrStatus::Waiting,
-            "dispatch" => PrStatus::Dispatch,
-            "open" => PrStatus::Open,
-            "merged" => PrStatus::Merged,
-            "cancelled" => PrStatus::Cancelled,
+            "waiting" => WorkflowStatus::Waiting,
+            "dispatch" => WorkflowStatus::Dispatch,
+            "open" => WorkflowStatus::Open,
+            "merged" => WorkflowStatus::Merged,
+            "cancelled" => WorkflowStatus::Cancelled,
             _ => return Err(bad_row(format!("{what} has status {status:?}"))),
         };
         // `pr_number` is set with `pull_request` (contract §2.5), so a pull request has its row's url
@@ -426,7 +426,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
                 let mergeable = mergeable.ok_or_else(|| bad_row(format!("{what} has no mergeable")))?;
                 Ok::<_, CpdError>(Pull {
                     number,
-                    state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
+                    state: PrState::of(status == WorkflowStatus::Merged, row_state.as_deref()),
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     clean,
@@ -440,9 +440,9 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
         let row = pr_rows.iter().find(|p| p.key.as_str() == key);
-        let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, PrStatus::Merged | PrStatus::Cancelled))
+        let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, WorkflowStatus::Merged | WorkflowStatus::Cancelled))
             .then(|| Dot::working(failed_prs.contains(&key), lead_work));
-        out.push(PrNode {
+        out.push(WorkflowNode {
             lead_dot,
             waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),

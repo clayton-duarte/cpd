@@ -11,7 +11,7 @@ use super::auto_merge::{self, Outcome};
 use super::postable::unready;
 use super::posts::{self, PostRecord};
 use super::{Env, pr_policy};
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, WorkflowArg};
 use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
@@ -26,7 +26,7 @@ const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 #[derive(clap::Args, Debug)]
 pub struct PostArgs {
     #[command(flatten)]
-    pr: PrArg,
+    pr: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -46,7 +46,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     // (a)
     if pr.status != "open" {
         return Err(CpdError::new(
-            ErrorCode::PrNotOpen,
+            ErrorCode::WorkflowNotOpen,
             format!("PR {key} of Plan {id} is {}: pr post needs an open PR.", pr.status),
         )
         .with("pr", key.as_str())
@@ -86,7 +86,7 @@ pub(super) fn post(ports: &Ports, args: PostArgs) -> Result<Output, CpdError> {
     if !why.is_empty() {
         let names: Vec<&str> = why.iter().map(|w| w.as_str()).collect();
         return Err(CpdError::new(
-            ErrorCode::PrNotReady,
+            ErrorCode::WorkflowNotReady,
             format!("PR {key} is not ready to post: {}.", names.join(", ")),
         )
         .with("pr", key.as_str())

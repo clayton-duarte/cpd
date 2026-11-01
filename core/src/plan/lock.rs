@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
 use super::{Env, LockArgs};
@@ -75,7 +75,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let live: Vec<&WorkflowRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> =
         live.iter().filter(|p| !drafts.iter().any(|j| j.pr_str() == p.key.as_str())).map(|p| p.key.as_str()).collect();
     if live.is_empty() || !empty.is_empty() {
@@ -84,7 +84,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         } else {
             format!("Plan {id} has PRs without a draft Job: {}.", empty.join(", "))
         };
-        let mut error = CpdError::new(ErrorCode::PrEmpty, message).with("plan", id.as_str()).with("prs", empty);
+        let mut error = CpdError::new(ErrorCode::WorkflowEmpty, message).with("plan", id.as_str()).with("prs", empty);
         if live.is_empty() {
             error = error.with("next", format!("cpd pr add <key> --repo <path> --plan {id}"));
         }
@@ -155,7 +155,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
 /// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
 /// key order. A PR started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
-fn listed(prs: &[PrRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
+fn listed(prs: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
     prs.iter()
         .filter(|p| p.status != "cancelled")
         .map(|pr| {

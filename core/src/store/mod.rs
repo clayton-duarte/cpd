@@ -804,12 +804,12 @@ const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 5] = [
     ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
     (
         "workflow_locked",
-        ErrorCode::PrLocked,
+        ErrorCode::WorkflowLocked,
         "The Workflow is Locked: its repo, base and needs cannot change after the Plan's lock.",
     ),
     (
         "needs_other_workflow",
-        ErrorCode::NeedsOtherPr,
+        ErrorCode::NeedsOtherWorkflow,
         "A Dependency can only link Jobs of the same Workflow.",
     ),
     (
@@ -998,7 +998,7 @@ mod tests {
     #[test]
     fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
         const SUPERSEDED: [(&str, ErrorCode); 2] =
-            [("pr_locked", ErrorCode::PrLocked), ("needs_other_pr", ErrorCode::NeedsOtherPr)];
+            [("pr_locked", ErrorCode::WorkflowLocked), ("needs_other_pr", ErrorCode::NeedsOtherWorkflow)];
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
         let mut seen = std::collections::BTreeSet::new();
         for file in fs::read_dir(dir).unwrap() {

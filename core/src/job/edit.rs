@@ -192,7 +192,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
         if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
-            return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}."))
+            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}."))
                 .with("plan", plan.as_str())
                 .with("pr", pr.as_str()));
         }
@@ -234,7 +234,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
         let needing: Vec<&str> = all.iter().filter(|j| j.needs.contains(&before.key)).map(|j| j.key.as_str()).collect();
         if !needing.is_empty() {
             return Err(CpdError::new(
-                ErrorCode::NeedsOtherPr,
+                ErrorCode::NeedsOtherWorkflow,
                 format!("Job {key} cannot change PR: {} need{} it.", needing.join(", "), if needing.len() == 1 { "s" } else { "" }),
             )
             .with("plan", plan.as_str())

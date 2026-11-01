@@ -8,7 +8,7 @@ use ratatui::style::Style;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{JobNode, JobStatus, NeedsUser, PrNode, PrStatus};
+use crate::read::{JobNode, JobStatus, NeedsUser, WorkflowNode, WorkflowStatus};
 use crate::widgets::legend;
 
 const MOONS: [&str; 28] = [
@@ -19,12 +19,12 @@ const MOONS: [&str; 28] = [
 ];
 const CLOSE_CIRCLE: &str = "\u{F0159}";
 
-fn pr() -> PrNode {
-    PrNode {
+fn pr() -> WorkflowNode {
+    WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: None,
         waiting_on: Vec::new(),

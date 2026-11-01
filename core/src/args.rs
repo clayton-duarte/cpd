@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, WorkflowKey, SessionId};
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 
 /// `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2).
 #[derive(clap::Args, Clone, Debug, PartialEq)]
@@ -36,31 +36,31 @@ impl PlanArg {
 
 /// `--pr <key>`, selected within a Plan's PRs (commands.md §1.3).
 #[derive(clap::Args, Clone, Debug, PartialEq)]
-pub struct PrArg {
+pub struct WorkflowArg {
     /// The PR [default: the Plan's one PR that is not cancelled]
     #[arg(long = "pr", value_name = "key")]
     pub pr: Option<WorkflowKey>,
 }
 
-impl PrArg {
+impl WorkflowArg {
     /// The PR among `prs` (the Plan's, `cancelled` ones included): the one
     /// named, else the Plan's only PR that is not `cancelled`.
     /// A key that is not a PR of the Plan is `pr_not_found` (exit 4); without
     /// `--pr`, zero or two or more PRs that are not `cancelled` is
     /// `pr_required` (exit 2).
-    pub fn select<'a>(&self, plan: &PlanId, prs: &'a [PrRow]) -> Result<&'a PrRow, CpdError> {
+    pub fn select<'a>(&self, plan: &PlanId, prs: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
         if let Some(key) = &self.pr {
             return prs.iter().find(|p| p.key == *key).ok_or_else(|| {
-                CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
+                CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
                     .with("plan", plan.as_str())
                     .with("pr", key.as_str())
             });
         }
-        let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+        let live: Vec<&WorkflowRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
         match live.as_slice() {
             [only] => Ok(only),
             [] => Err(CpdError::new(
-                ErrorCode::PrRequired,
+                ErrorCode::WorkflowRequired,
                 format!("Plan {plan} has no PR: add one with cpd pr add, then pass --pr <key>."),
             )
             .with("plan", plan.as_str())
@@ -68,7 +68,7 @@ impl PrArg {
             many => {
                 let keys: Vec<&str> = many.iter().map(|p| p.key.as_str()).collect();
                 Err(CpdError::new(
-                    ErrorCode::PrRequired,
+                    ErrorCode::WorkflowRequired,
                     format!("Plan {plan} has {} PRs ({}): pass --pr <key>.", keys.len(), keys.join(", ")),
                 )
                 .with("plan", plan.as_str())
@@ -211,9 +211,9 @@ impl From<Title> for Text {
 /// characters on one line, no control characters; else `usage` (commands.md §9.4). The
 /// squash merge makes it the commit subject on `main`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrTitle(String);
+pub struct WorkflowTitle(String);
 
-impl PrTitle {
+impl WorkflowTitle {
     pub const MAX_CHARS: usize = 72;
 
     pub fn as_str(&self) -> &str {
@@ -221,22 +221,22 @@ impl PrTitle {
     }
 }
 
-impl FromStr for PrTitle {
+impl FromStr for WorkflowTitle {
     type Err = CpdError;
-    fn from_str(s: &str) -> Result<PrTitle, CpdError> {
+    fn from_str(s: &str) -> Result<WorkflowTitle, CpdError> {
         let chars = s.chars().count();
-        if chars == 0 || chars > PrTitle::MAX_CHARS || s.chars().any(char::is_control) {
+        if chars == 0 || chars > WorkflowTitle::MAX_CHARS || s.chars().any(char::is_control) {
             return Err(CpdError::new(
                 ErrorCode::Usage,
-                format!("A PR title must be 1 to {} characters on one line, with no control characters.", PrTitle::MAX_CHARS),
+                format!("A PR title must be 1 to {} characters on one line, with no control characters.", WorkflowTitle::MAX_CHARS),
             )
             .with("chars", chars));
         }
-        Ok(PrTitle(s.to_owned()))
+        Ok(WorkflowTitle(s.to_owned()))
     }
 }
 
-impl fmt::Display for PrTitle {
+impl fmt::Display for WorkflowTitle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -293,10 +293,10 @@ mod tests {
     #[test]
     fn a_pr_title_is_1_to_72_characters_on_one_line() {
         for ok in ["a", "é".repeat(72).as_str(), "a b"] {
-            assert_eq!(ok.parse::<PrTitle>().unwrap().as_str(), ok);
+            assert_eq!(ok.parse::<WorkflowTitle>().unwrap().as_str(), ok);
         }
         for bad in ["", "a".repeat(73).as_str(), "a\nb", "a\r\nb", "a\tb", "a\0b", "a\u{7f}b"] {
-            assert_eq!(bad.parse::<PrTitle>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+            assert_eq!(bad.parse::<WorkflowTitle>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
         }
     }
 
@@ -312,16 +312,16 @@ mod tests {
     #[test]
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
-        let pr = |key: &str, status: &str| PrRow::fixture(key, "/r", "main", &[], status);
-        let arg = |key: Option<&str>| PrArg { pr: key.map(|k| WorkflowKey::parse(k).unwrap()) };
+        let pr = |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
+        let arg = |key: Option<&str>| WorkflowArg { pr: key.map(|k| WorkflowKey::parse(k).unwrap()) };
         let prs = [pr("a", "cancelled"), pr("b", "waiting")];
         assert_eq!(arg(None).select(&plan, &prs).unwrap().key.as_str(), "b");
         assert_eq!(arg(Some("a")).select(&plan, &prs).unwrap().key.as_str(), "a");
         let err = arg(Some("z")).select(&plan, &prs).unwrap_err();
-        assert_eq!((err.code(), err.exit().code()), (ErrorCode::PrNotFound, 4));
+        assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowNotFound, 4));
         for many in [&[pr("a", "waiting"), pr("b", "open")][..], &[pr("a", "cancelled")][..], &[][..]] {
             let err = arg(None).select(&plan, many).unwrap_err();
-            assert_eq!((err.code(), err.exit().code()), (ErrorCode::PrRequired, 2));
+            assert_eq!((err.code(), err.exit().code()), (ErrorCode::WorkflowRequired, 2));
         }
     }
 

@@ -26,7 +26,7 @@ use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
+use crate::read::{JobNode, NeedsUser, PrFacts, WorkflowNode, WorkflowStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the row of the `│` above the needing box's top border, where the line lands in a `┴`.
 const GAP: u16 = 2;
@@ -70,7 +70,7 @@ pub struct Boxes {
 /// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
 /// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
 /// The `cancelled` PRs are all one level below the last of the others (the first when there is none); their needs count for nothing.
-pub fn levels(prs: &[PrNode]) -> Vec<usize> {
+pub fn levels(prs: &[WorkflowNode]) -> Vec<usize> {
     fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
             return l;
@@ -90,7 +90,7 @@ pub fn levels(prs: &[PrNode]) -> Vec<usize> {
     // by the needs alone
     let mut memo = vec![None; prs.len()];
     let base: Vec<usize> = (0..prs.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
-    let merged = |i: usize| prs[i].status == PrStatus::Merged;
+    let merged = |i: usize| prs[i].status == WorkflowStatus::Merged;
     let by_needs = match (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() {
         None => base,
         Some(m) => {
@@ -99,16 +99,16 @@ pub fn levels(prs: &[PrNode]) -> Vec<usize> {
             (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
         }
     };
-    let below = (0..prs.len()).filter(|&i| prs[i].status != PrStatus::Cancelled).map(|i| by_needs[i] + 1).max().unwrap_or(0);
-    (0..prs.len()).map(|i| if prs[i].status == PrStatus::Cancelled { below } else { by_needs[i] }).collect()
+    let below = (0..prs.len()).filter(|&i| prs[i].status != WorkflowStatus::Cancelled).map(|i| by_needs[i] + 1).max().unwrap_or(0);
+    (0..prs.len()).map(|i| if prs[i].status == WorkflowStatus::Cancelled { below } else { by_needs[i] }).collect()
 }
 
 /// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` PR, and none on one.
-fn live_needs(prs: &[PrNode], i: usize) -> Vec<usize> {
-    if prs[i].status == PrStatus::Cancelled {
+fn live_needs(prs: &[WorkflowNode], i: usize) -> Vec<usize> {
+    if prs[i].status == WorkflowStatus::Cancelled {
         return Vec::new();
     }
-    prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != PrStatus::Cancelled)).collect()
+    prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != WorkflowStatus::Cancelled)).collect()
 }
 
 /// The word and colour a title shows: the conflict word when there is one, else the state word (`pr_look`). The title and
@@ -140,7 +140,7 @@ pub(crate) fn format_elapsed(seconds: u64) -> String {
 
 /// The text on a box's bottom border, the only place it is built: the counter and the cost, the segments that exist,
 /// joined by ` · ` inside one pair of outer spaces; `None` when neither exists.
-fn footer_text(pr: &PrNode) -> Option<String> {
+fn footer_text(pr: &WorkflowNode) -> Option<String> {
     let parts: Vec<String> = pr.elapsed_seconds.map(format_elapsed).into_iter().chain(pr.cost_usd.map(cpd_core::metrics::format_cost)).collect();
     (!parts.is_empty()).then(|| format!(" {} ", parts.join(" · ")))
 }
@@ -148,14 +148,14 @@ fn footer_text(pr: &PrNode) -> Option<String> {
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
 /// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. The Lead's dot
-/// (`PrNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
+/// (`WorkflowNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
 #[cfg(test)]
-pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
+pub fn title(pr: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
     title_of(pr, asked, frame)
 }
 
 /// [`title`] at spinner `frame`: the box's own `lead_dot`, if any, after the state word or the status text.
-fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
+fn title_of(pr: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -174,8 +174,8 @@ fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
         None => spans.push(match (pr.status, &pr.superseded_by) {
-            (PrStatus::Cancelled, Some(by)) => format!("cancelled · superseded by {by}").into(),
-            (PrStatus::Waiting, _) if !pr.waiting_on.is_empty() => {
+            (WorkflowStatus::Cancelled, Some(by)) => format!("cancelled · superseded by {by}").into(),
+            (WorkflowStatus::Waiting, _) if !pr.waiting_on.is_empty() => {
                 Span::styled(format!("waiting on {}", pr.waiting_on.join(", ")), palette::muted_text())
             }
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
@@ -187,7 +187,7 @@ fn title_of(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
         }
     }
     spans.push(" ".into());
-    if pr.status == PrStatus::Cancelled {
+    if pr.status == WorkflowStatus::Cancelled {
         // the whole title is muted: the PR is shown, counted nowhere
         spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::muted_text()));
     }
@@ -214,7 +214,7 @@ impl Drop for LayoutGuard {
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
-pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
+pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     #[cfg(test)]
     LAYOUTS.with(|n| n.set(n.get() + 1));
     // The explore Jobs (no PR) draw in one Plan-level box above the PR boxes (D1-A); every other Job is its PR's.
@@ -407,12 +407,12 @@ mod tests {
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, WorkflowKey};
 
-    fn pr(key: &str, needs: &[&str]) -> PrNode {
-        PrNode {
+    fn pr(key: &str, needs: &[&str]) -> WorkflowNode {
+        WorkflowNode {
             key: WorkflowKey::parse(key).unwrap(),
             repo_name: format!("{key}-repo"),
             base: "main".into(),
-            status: PrStatus::Dispatch,
+            status: WorkflowStatus::Dispatch,
             needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(),
             pull: None,
             waiting_on: Vec::new(),
@@ -465,8 +465,8 @@ mod tests {
         assert_eq!(levels(&[pr("a", &["b"]), pr("b", &["a"])]).len(), 2);
     }
 
-    fn merged(key: &str, needs: &[&str]) -> PrNode {
-        PrNode { status: PrStatus::Merged, ..pr(key, needs) }
+    fn merged(key: &str, needs: &[&str]) -> WorkflowNode {
+        WorkflowNode { status: WorkflowStatus::Merged, ..pr(key, needs) }
     }
 
     #[test]
@@ -477,7 +477,7 @@ mod tests {
             merged("drafts", &[]),
             merged("followups", &["cpd"]),
             pr("cleanup", &[]),
-            PrNode { status: PrStatus::Waiting, ..pr("flake", &[]) },
+            WorkflowNode { status: WorkflowStatus::Waiting, ..pr("flake", &[]) },
             pr("status", &["cleanup"]),
         ];
         assert_eq!(levels(&prs), [0, 0, 1, 2, 2, 3]);
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_pr_is_one_level_below_every_other_and_has_no_needs() {
-        let cancelled = |key: &str, needs: &[&str]| PrNode { status: PrStatus::Cancelled, ..pr(key, needs) };
+        let cancelled = |key: &str, needs: &[&str]| WorkflowNode { status: WorkflowStatus::Cancelled, ..pr(key, needs) };
         // `aaa` sorts first and needs `web`; `web` needs the cancelled `old`, which counts for nothing
         let prs = [cancelled("aaa", &["web"]), cancelled("old", &[]), pr("web", &["old"]), pr("z", &["web"])];
         assert_eq!(levels(&prs), [2, 2, 0, 1]);
@@ -532,8 +532,8 @@ mod tests {
     #[test]
     fn with_no_merged_pr_or_with_all_merged_the_levels_are_the_needs_alone() {
         let names = [("api", &["schema"][..]), ("docs", &[]), ("e2e", &["docs", "web"]), ("schema", &[]), ("web", &["api", "schema"])];
-        let none: Vec<PrNode> = names.iter().map(|(k, n)| pr(k, n)).collect();
-        let all: Vec<PrNode> = names.iter().map(|(k, n)| merged(k, n)).collect();
+        let none: Vec<WorkflowNode> = names.iter().map(|(k, n)| pr(k, n)).collect();
+        let all: Vec<WorkflowNode> = names.iter().map(|(k, n)| merged(k, n)).collect();
         assert_eq!(levels(&none), [1, 0, 3, 0, 2]);
         assert_eq!(levels(&all), [1, 0, 3, 0, 2]);
     }
@@ -674,7 +674,7 @@ mod tests {
         }
         // no pull request yet: nothing to show beside
         let mut waiting = pr("web", &["api"]);
-        waiting.status = PrStatus::Waiting;
+        waiting.status = WorkflowStatus::Waiting;
         assert_eq!(title(&waiting, false, 4).to_string(), " web · web-repo 󱦰 main · waiting ");
     }
 
@@ -690,7 +690,7 @@ mod tests {
         let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[5]), "{top}");
         // one frame later: the next glyph
-        let w2 = layout(&[PrNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let w2 = layout(&[WorkflowNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
         let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
     }
@@ -733,7 +733,7 @@ mod tests {
             assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
         }
         let mut waiting = pr("web", &["api"]);
-        waiting.status = PrStatus::Waiting;
+        waiting.status = WorkflowStatus::Waiting;
         let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
         assert_eq!(t.spans[3].style, palette::muted_text(), "the status before a pull request exists is muted");

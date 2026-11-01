@@ -8,7 +8,7 @@ use rusqlite::OptionalExtension;
 use crate::config::Tier;
 use crate::home::CpdHome;
 use crate::ids::PlanId;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::store::Store;
 
 use super::open::{Cause, queue_update};
@@ -77,8 +77,8 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     let mut f = fixture();
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
-    let pay_pr = PrRow::fixture("api", "/r", "main", &[], "open");
-    let ops_pr = PrRow::fixture("web", "/r", "main", &[], "open");
+    let pay_pr = WorkflowRow::fixture("api", "/r", "main", &[], "open");
+    let ops_pr = WorkflowRow::fixture("web", "/r", "main", &[], "open");
 
     // `ops` is held: the poll's conflict cause queues nothing.
     let queued = f.store.write("pr poll", |tx| queue_update(tx, &ops, &ops_pr, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();

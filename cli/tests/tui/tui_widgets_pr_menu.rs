@@ -329,7 +329,7 @@ fn a_refused_post_opens_the_error_dialog_and_a_post_with_no_matching_pr_row_says
     let fx = shop(vec![owned("ready for user review")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    refuse(&["pr", "post"], ErrorCode::PrNotReady, "The pull request is not ready.");
+    refuse(&["pr", "post"], ErrorCode::WorkflowNotReady, "The pull request is not ready.");
     let screen = first_rows(&fx);
     run(&fx, pick(&screen, "shop#4 ready for user review", 0));
     let opened = commands(&fx);

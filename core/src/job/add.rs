@@ -19,18 +19,18 @@ use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
-use crate::args::PrArg;
+use crate::args::WorkflowArg;
 use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 
 const COMMAND: &str = "job add";
 
 /// What `job add` was asked for, parsed.
 struct Wanted {
     key: JobKey,
-    pr: PrArg,
+    pr: WorkflowArg,
     title: String,
     /// Given always, but for a stub draft.
     tier: Option<String>,
@@ -64,7 +64,7 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     if explore {
         // An explore Job belongs to the Plan, and is never a draft (R2, R3).
         if let Some(pr) = &args.pr.pr {
-            return Err(CpdError::new(ErrorCode::ExplorePrForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."))
+            return Err(CpdError::new(ErrorCode::ExploreWorkflowForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."))
                 .with("kind", kind.as_str())
                 .with("pr", pr.as_str()));
         }
@@ -412,7 +412,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
 }
 
 /// The `(PR key, root)` pairs the primary-check searches: each PR of the Plan and its stored repo path.
-pub(super) fn primary_roots(prs: &[PrRow]) -> Vec<(String, PathBuf)> {
+pub(super) fn primary_roots(prs: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
     prs.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
 }
 
@@ -420,7 +420,7 @@ pub(super) fn primary_roots(prs: &[PrRow]) -> Vec<(String, PathBuf)> {
 /// the PR started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
 /// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a PR that has not started and
 /// is stacked on a base PR that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
-pub(super) fn check_touches(pr: &PrRow, prs: &[PrRow], touches: &[String]) -> Result<(), CpdError> {
+pub(super) fn check_touches(pr: &WorkflowRow, prs: &[WorkflowRow], touches: &[String]) -> Result<(), CpdError> {
     // A PR whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
     if touches.is_empty() || !std::path::Path::new(&pr.repo).is_dir() {
         return Ok(());

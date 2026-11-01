@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::jobs::Job;
 use crate::error::CpdError;
 use crate::ids::PlanId;
@@ -91,7 +91,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
 
 /// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
 /// `cancelled`.
-fn is_open(pr: &PrRow) -> bool {
+fn is_open(pr: &WorkflowRow) -> bool {
     !matches!(pr.status.as_str(), "merged" | "cancelled")
 }
 
@@ -100,7 +100,7 @@ fn is_open(pr: &PrRow) -> bool {
 /// `merged` PR is on its base already). One overlap per (Job, other Plan,
 /// other PR) that has a Job overlapping it, ordered by this Job's key, then the
 /// other Plan, then the PR. Pure.
-pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
+pub fn find(prs: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     let mut open: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();

@@ -291,13 +291,13 @@ fn incident_start_records_until_pr_and_refuses_a_foreign_plan() {
 
     // A PR of a Plan not named is until_pr_not_incident (exit 3).
     let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("ops/web")).expect_err("a foreign Plan's PR is refused");
-    assert_eq!(err.code(), ErrorCode::UntilPrNotIncident);
+    assert_eq!(err.code(), ErrorCode::UntilWorkflowNotIncident);
     assert_eq!(err.exit().code(), 3);
     assert!(incident_row(&mut f.store).is_none(), "a refused start writes no row");
 
     // A PR of a named Plan that does not exist is pr_not_found (exit 4).
     let err = incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", Some("pay/nope")).expect_err("an unknown PR is refused");
-    assert_eq!(err.code(), ErrorCode::PrNotFound);
+    assert_eq!(err.code(), ErrorCode::WorkflowNotFound);
     assert_eq!(err.exit().code(), 4);
 
     // A value that is not `<plan>/<key>` is usage (exit 2).

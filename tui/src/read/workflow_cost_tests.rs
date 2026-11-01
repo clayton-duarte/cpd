@@ -1,4 +1,4 @@
-//! The cost of a Workflow (`PrNode.cost_usd`, Context record pro-d179): the total of the costs of every Attempt of every
+//! The cost of a Workflow (`WorkflowNode.cost_usd`, Context record pro-d179): the total of the costs of every Attempt of every
 //! Job of the PR, by the rule of the Plan row. Read by `plan_boxes_at` at a fixed `now`: no wall clock, no sleeps; the
 //! session files are written into the test's own temporary directory.
 

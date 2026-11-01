@@ -4,8 +4,8 @@
 
 use serde_json::json;
 
-use super::row::PlanPrs;
-use crate::plan::PrRow;
+use super::row::PlanWorkflows;
+use crate::plan::WorkflowRow;
 use super::open::{agent, hold_refused};
 use super::{Args, Env, gate, hide_untracked, illegal_phase, pr_policy, require_clean_lead};
 use crate::error::{CpdError, ErrorCode};
@@ -67,7 +67,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+fn require_open<'a>(plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }

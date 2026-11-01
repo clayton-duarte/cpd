@@ -15,7 +15,7 @@ use super::cancel::cancel_jobs;
 use super::fingerprint::plan_fingerprint;
 use super::review::latest_approved_for;
 use super::{LockArgs, ReviewArgs, ShowArgs};
-use crate::args::{PlanArg, PrTitle};
+use crate::args::{PlanArg, WorkflowTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -171,7 +171,7 @@ fn lock() -> Result<Output, CpdError> {
 }
 
 fn review() -> Result<Output, CpdError> {
-    super::review::review(ReviewArgs { plan: plan_arg(), title: "Pay".parse::<PrTitle>().unwrap() })
+    super::review::review(ReviewArgs { plan: plan_arg(), title: "Pay".parse::<WorkflowTitle>().unwrap() })
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn adding_an_explore_job_keeps_an_approved_review_approved() {
     assert_eq!(still.as_deref(), Some("r1"), "the review is still approved for the current plan");
     let e = refused(lock());
     assert_ne!(e.code(), ErrorCode::PlanNotApproved, "{e}");
-    assert_eq!(e.code(), ErrorCode::PrEmpty, "{e}");
+    assert_eq!(e.code(), ErrorCode::WorkflowEmpty, "{e}");
 }
 
 #[test]

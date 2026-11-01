@@ -42,14 +42,14 @@ use std::path::PathBuf;
 use clap::builder::PossibleValuesParser;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::args::{PlanArg, PrArg, Text};
+use crate::args::{PlanArg, WorkflowArg, Text};
 use crate::config::{self, Tier};
 use crate::driver;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::output::Output;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::plan::jobs::{Job, KINDS, STATUSES};
 
 #[derive(clap::Subcommand, Debug)]
@@ -104,7 +104,7 @@ pub struct AddArgs {
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
     kind: Option<String>,
     #[command(flatten)]
-    pr: PrArg,
+    pr: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -351,7 +351,7 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
 
 /// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
 /// (§5.1). An `open` PR allows only `work`.
-fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str) -> Result<(), CpdError> {
+fn check_shape_allows(prs: &[WorkflowRow], plan: &PlanId, pr: &str, kind: &str) -> Result<(), CpdError> {
     let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else { return Ok(()) };
     let allowed = kinds_allowed(&row.shape);
     if row.status == "open" {
@@ -459,7 +459,7 @@ fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) 
     let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr_str() != pr).map(|j| j.key.as_str()).collect();
     if !others.is_empty() {
         return Err(CpdError::new(
-            ErrorCode::NeedsOtherPr,
+            ErrorCode::NeedsOtherWorkflow,
             format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {pr}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
         )
         .with("plan", plan.as_str())
@@ -470,10 +470,10 @@ fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) 
 }
 
 /// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
-fn check_pr_live(prs: &[PrRow], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
+fn check_pr_live(prs: &[WorkflowRow], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
     match prs.iter().find(|p| p.key.as_str() == pr) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
-            ErrorCode::PrEnded,
+            ErrorCode::WorkflowEnded,
             format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
         )
         .with("plan", plan.as_str())

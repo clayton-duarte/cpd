@@ -20,7 +20,7 @@ use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, WorkflowKey, RepoName};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_prs;
 
 const COMMAND: &str = "pr edit";
@@ -51,8 +51,8 @@ impl Edits {
 
 enum Decision {
     /// No value changes.
-    Already(PrRow),
-    Update { before: PrRow, after: PrRow, fields: Vec<&'static str> },
+    Already(WorkflowRow),
+    Update { before: WorkflowRow, after: WorkflowRow, fields: Vec<&'static str> },
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
@@ -76,7 +76,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     if stored.head_ref.is_some()
         && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
     {
-        return Err(CpdError::new(ErrorCode::PrAdopted, format!("PR {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
+        return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("PR {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
             .with("pr", key.as_str())
             .with("flag", flag));
     }
@@ -140,11 +140,11 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &WorkflowKey, ti
 /// `--title`), the Plan is in `grounding` or `plan` and the PR `waiting` (`illegal_transition`); `--title` alone
 /// meets neither rule. After the lock only a restack (`restack`: the flags have its shape) of a `waiting` PR passes;
 /// anything else is `pr_locked`, and `decide` checks the rest of the restack.
-fn editable_pr(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(PrRow, Option<String>), CpdError> {
+fn editable_pr(conn: &Connection, plan: &PlanId, key: &WorkflowKey, title: bool, others: bool, restack: bool) -> Result<(WorkflowRow, Option<String>), CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::PrEnded, format!("PR {key} of Plan {plan} is {}: its title and ticket are history.", pr.status))
+        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its title and ticket are history.", pr.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("status", pr.status.as_str()));
@@ -194,7 +194,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
         let in_use = stacked_on(&known_prs(conn, plan)?, &before.repo, &before.lead_branch);
         if !in_use.is_empty() {
             return Err(CpdError::new(
-                ErrorCode::PrInUse,
+                ErrorCode::WorkflowInUse,
                 format!("PR {key} keeps its repo: {} {} stacked on it.", in_use.join(", "), if in_use.len() == 1 { "is" } else { "are" }),
             )
             .with("plan", plan.as_str())
@@ -222,7 +222,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, edits: &Edits) ->
 
 /// After the lock, a restack is allowed only onto `A`, the base PR the edit resolves to, when `A` is a current need or
 /// already the base PR, and the needs after the edit are the current needs without `A` (§3.8 step 10).
-fn check_restack(conn: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, base_pr: Option<&str>) -> Result<(), ()> {
+fn check_restack(conn: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, base_pr: Option<&str>) -> Result<(), ()> {
     let a = base_pr.and_then(|p| p.split_once('/')).map(|(_, k)| k).ok_or(())?;
     let prs = load_prs(conn, plan).map_err(|_| ())?;
     let already = prs.iter().any(|q| q.key.as_str() == a && q.repo == before.repo && q.lead_branch == before.base);
@@ -239,7 +239,7 @@ fn check_restack(conn: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a PR that has it already is not touched).
-fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {
+fn update(tx: &Connection, plan: &PlanId, before: &WorkflowRow, after: &WorkflowRow, name: Option<&RepoName>, title: Option<&str>, jira: Option<&str>) -> Result<(), CpdError> {
     if let Some(title) = title {
         tx.execute(
             "UPDATE workflows SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",

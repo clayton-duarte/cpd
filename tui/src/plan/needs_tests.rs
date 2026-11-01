@@ -67,13 +67,13 @@ fn no_chat_slot_needs_no_clock() {
 fn tests_centre(jobs: usize) -> Centre {
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey};
-    use crate::read::{JobNode, PrNode, PrStatus};
+    use crate::read::{JobNode, WorkflowNode, WorkflowStatus};
     let pr = WorkflowKey::parse("web").unwrap();
-    let node = PrNode {
+    let node = WorkflowNode {
         key: pr.clone(),
         repo_name: "repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: None,
         waiting_on: Vec::new(),

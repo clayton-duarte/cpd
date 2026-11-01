@@ -10,7 +10,7 @@ use crate::config::Tier;
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::plan::jobs::{Job, JobSpec, locked_fingerprint};
 use crate::store::WriteTxn;
 
@@ -21,13 +21,13 @@ pub const BY_ENGINE: &str = "engine";
 pub const BY_TEMPLATE: &str = "pr add";
 
 /// The title of a Job cpd adds to a PR: the PR's own title, else its key (a PR that existed before migration `pr-title` has none).
-fn pr_title(pr: &PrRow) -> &str {
+fn pr_title(pr: &WorkflowRow) -> &str {
     pr.title.as_deref().unwrap_or(pr.key.as_str())
 }
 
 /// The key of a PR's `open` or `update` Job: the first free of `<prefix>-<pr>`, `<prefix>-<pr>-2`, … (`open` or `up`; at most 32
 /// characters, the PR key having at most 24).
-fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdError> {
+fn free_key(taken: &[String], prefix: &str, pr: &WorkflowRow) -> Result<JobKey, CpdError> {
     let stem = format!("{prefix}-{}", pr.key);
     (1u32..)
         .map(|n| if n == 1 { stem.clone() } else { format!("{stem}-{n}") })
@@ -37,7 +37,7 @@ fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdErr
 }
 
 /// The fixed Spec of an `open` Job of `pr` (§2.2 "Job kinds", §3.4 A3).
-pub(crate) fn spec(pr: &PrRow) -> JobSpec {
+pub(crate) fn spec(pr: &WorkflowRow) -> JobSpec {
     let (base, lead) = (&pr.base, &pr.lead_branch);
     let remote = format!("origin/{base}");
     if let Some(head_ref) = &pr.head_ref {
@@ -73,7 +73,7 @@ pub(crate) fn spec(pr: &PrRow) -> JobSpec {
 }
 
 /// The fixed Spec of an `open` Job of an adopted PR: the pull request exists, and cpd updates it by pushing to its head branch.
-fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
+fn adopted_spec(pr: &WorkflowRow, head_ref: &str) -> JobSpec {
     let mut spec = update_spec(pr, Cause::Conflict);
     spec.goal = format!(
         "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it and push it to {head_ref}, the head of the pull request that exists already: merge origin/{base} into it only if the two conflict, resolve the conflicts, and submit.",
@@ -94,14 +94,14 @@ fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
 /// The fixed Spec of `pr`'s `open` Job, or its `update` Job when `update`: the one choice, for the insert and for the render at A3.
 /// The `cause` is the `update` Job's (`None` for an `open` Job); a missing cause is the conflict, so a row inserted before the
 /// widened trigger keeps today's text.
-pub(crate) fn fixed_spec(pr: &PrRow, update: bool, cause: Option<Cause>) -> JobSpec {
+pub(crate) fn fixed_spec(pr: &WorkflowRow, update: bool, cause: Option<Cause>) -> JobSpec {
     if update { update_spec(pr, cause.unwrap_or(Cause::Conflict)) } else { spec(pr) }
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists. The
 /// cause says what the Worker merges: a conflict merges the base only on a conflict, a base PR's merge merges the new base even
 /// without one (§3.7 E5, hs-d794).
-fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
+fn update_spec(pr: &WorkflowRow, cause: Cause) -> JobSpec {
     let (base, lead) = (&pr.base, &pr.lead_branch);
     let remote = format!("origin/{base}");
     let (goal, context, touches, out_of_scope) = match cause {
@@ -165,7 +165,7 @@ fn update_spec(pr: &PrRow, cause: Cause) -> JobSpec {
 
 /// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` the caller's) in the same transaction. Returns its key.
-pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
+pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &WorkflowRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
     insert(tx, plan, pr, tier, "open", by, None, draft)
 }
 
@@ -209,7 +209,7 @@ pub fn cause_of(conn: &Connection, plan: &PlanId, key: &str) -> Result<Cause, Cp
 /// Queues PR `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the PR has one `queued` or `running`: one transaction writes the
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
-pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &WorkflowRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
     // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract §3.7 E5).
     if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
         return Ok(None);
@@ -227,7 +227,7 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
 
 /// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction. The
 /// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
-fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
+fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &WorkflowRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
@@ -378,8 +378,8 @@ mod tests {
         }
     }
 
-    fn pr(key: &str) -> PrRow {
-        PrRow::fixture(key, "/r", "main", &[], "dispatch")
+    fn pr(key: &str) -> WorkflowRow {
+        WorkflowRow::fixture(key, "/r", "main", &[], "dispatch")
     }
 
     #[test]

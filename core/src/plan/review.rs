@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
 use super::parked;
@@ -87,7 +87,7 @@ struct Snapshot {
     /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
     open_tier: String,
     plan: PlanRow,
-    prs: Vec<PrRow>,
+    prs: Vec<WorkflowRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").

@@ -1,6 +1,6 @@
 //! The read model of the Plan view carries a Plan's explore Jobs (`jobs.pr` NULL, kind `scout`/`research`) beside its PR
 //! Jobs, as nodes: `plan_boxes_at(...).jobs` and `flow(...).jobs` (Plan `explore-view`, D1-A). An explore Job has no PR,
-//! so its Attempts count in no Workflow's cost (`PrNode.cost_usd`) and no Workflow's active time (`PrNode.elapsed_seconds`)
+//! so its Attempts count in no Workflow's cost (`WorkflowNode.cost_usd`) and no Workflow's active time (`WorkflowNode.elapsed_seconds`)
 //! and stay in the Plan's cost (decision pro-d237, unchanged by the visibility).
 //! Fixed `now_ms`: no wall clock, no sleep, no git, no tmux.
 

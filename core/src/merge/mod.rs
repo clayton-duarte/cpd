@@ -479,7 +479,7 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
 }
 
 /// The PR row of the Attempt's Job: all the base check and the merged-on-GitHub check need.
-fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, CpdError> {
+fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::WorkflowRow, CpdError> {
     store.read(|conn| {
         let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
         prs.into_iter().find(|p| p.key.as_str() == target.pr_str()).ok_or_else(|| CpdError::bad_row(format!("Plan {} has no PR {}", target.plan, target.pr_str())))
@@ -487,11 +487,11 @@ fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, Cpd
 }
 
 /// The PR of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
-fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
+fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::WorkflowRow, String, Option<String>), CpdError> {
     let pr = pr_row(store, target)?;
     let title = pr.title.clone().ok_or_else(|| {
         CpdError::new(
-            ErrorCode::PrTitleRequired,
+            ErrorCode::WorkflowTitleRequired,
             format!("PR {} of Plan {} has no title: run cpd pr edit {} --title \"<text>\" (1-72 characters).", pr.key, target.plan, pr.key),
         )
         .with("plan", target.plan.as_str())
@@ -503,7 +503,7 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
 
 /// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
 fn is_refusal(code: ErrorCode) -> bool {
-    matches!(code, ErrorCode::PrTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
+    matches!(code, ErrorCode::WorkflowTitleRequired | ErrorCode::DescriptionRequired | ErrorCode::JiraRequired | ErrorCode::BaseNotFound)
 }
 
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).

@@ -1,4 +1,4 @@
-//! The active time of a Workflow (`PrNode.elapsed_seconds`, Context record pro-d175), read by `plan_boxes_at` at a given
+//! The active time of a Workflow (`WorkflowNode.elapsed_seconds`, Context record pro-d175), read by `plan_boxes_at` at a given
 //! `now_ms`: no wall clock, no sleeps.
 
 use cpd_core::error::CpdError;

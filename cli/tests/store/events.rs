@@ -940,8 +940,8 @@ fn kind_data(kind: Kind) -> Value {
             "mergeable": "mergeable", "merge_state": "clean", "conflict": false, "reasons": ["checks_failed"]
         }),
         PrMerged => json!({"pr": "r1", "number": 1, "url": "u", "merged_at": "t"}),
-        PrCancelled => json!({"pr": "r1"}),
-        PrStarted => json!({
+        WorkflowCancelled => json!({"pr": "r1"}),
+        WorkflowStarted => json!({
             "pr": "r1", "repo": "/r", "base": "main", "lead_branch": "b", "lead_worktree": "/w", "base_sha": "s",
             "reused": false, "pushed": false, "by": "cpd"
         }),
@@ -1163,13 +1163,13 @@ fn follow_session_drops_a_pr_error_that_a_later_pr_start_merge_or_cancel_clears(
     let mut s = Stale::new();
     let err = |pr: &str| json!({"details": {"pr": pr}});
     let _e1 = s.ev(Kind::Error, "pay", None, err("a")); // 1 error of PR a, pr-started a 2
-    let ps1 = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "a"}));
+    let ps1 = s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "a"}));
     let _e2 = s.ev(Kind::Error, "pay", None, err("b")); // 3 error of PR b, pr-merged b 4
     let pm2 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "b"}));
     let _e3 = s.ev(Kind::Error, "pay", None, err("c")); // 5 error of PR c, pr-cancelled c 6
-    let pc3 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "c"}));
+    let pc3 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"pr": "c"}));
     let e4 = s.ev(Kind::Error, "pay", None, err("d")); // 7 error of PR d, pr-started e: streams
-    let pse = s.ev(Kind::PrStarted, "pay", None, json!({"pr": "e"}));
+    let pse = s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "e"}));
     let e5 = s.ev(Kind::Error, "pay", None, err("f")); // 9 error of PR f, pr-merged f in another Plan: streams
     let _other = s.ev(Kind::PrMerged, "other", None, json!({"pr": "f"}));
     assert_eq!(s.lead(), vec![ps1, pm2, pc3, e4, pse, e5]);
@@ -1185,7 +1185,7 @@ fn follow_session_keeps_every_other_error_and_every_kind_that_reports_a_complete
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
     live.push(s.ev(Kind::JobCancelled, "pay", Some("j1"), json!({})));
-    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "x"})));
     live.push(s.ev(Kind::AttemptStarted, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
@@ -1193,7 +1193,7 @@ fn follow_session_keeps_every_other_error_and_every_kind_that_reports_a_complete
     live.push(s.ev(Kind::JobMerged, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "5"})));
     live.push(s.ev(Kind::PrMerged, "pay", None, json!({"pr": "x"})));
-    live.push(s.ev(Kind::PrStarted, "pay", None, json!({"pr": "x"})));
+    live.push(s.ev(Kind::WorkflowStarted, "pay", None, json!({"pr": "x"})));
     live.push(s.ev(Kind::PlanReview, "pay", None, json!({"status": "approved"})));
     live.push(s.ev(Kind::EscalationAnswered, "pay", Some("j1"), json!({})));
     live.push(s.ev(Kind::PlanDone, "pay", None, json!({}))); // supersedes 1
@@ -1209,7 +1209,7 @@ fn follow_session_drops_a_pr_feedback_that_a_later_pr_merge_or_cancel_ends() {
     let _f1 = s.feedback("pay", "a", json!(["checks_failed"])); // 1 feedback of a, pr-merged a 2
     let pm1 = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "a"}));
     let _f2 = s.feedback("pay", "b", json!(["checks_failed"])); // 3 feedback of b, pr-cancelled b 4
-    let pc2 = s.ev(Kind::PrCancelled, "pay", None, json!({"pr": "b"}));
+    let pc2 = s.ev(Kind::WorkflowCancelled, "pay", None, json!({"pr": "b"}));
     let f3 = s.feedback("pay", "c", json!(["checks_failed"])); // 5 feedback of c, nothing after: streams
     let f4 = s.feedback("pay", "d", json!(["checks_failed"])); // 6 feedback of d, pr-merged e: streams
     let pme = s.ev(Kind::PrMerged, "pay", None, json!({"pr": "e"}));

@@ -677,12 +677,12 @@ fn prs_locked_refuses_every_lead_branch_rename_even_of_a_merged_pr() {
         "UPDATE workflows SET lead_branch = 'cpd/di/pay' WHERE plan = 'di'",
     ] {
         let err = refused(&mut store, sql);
-        assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
     // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
     let err = refused(&mut store, "UPDATE workflows SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
 }
 
 // ---------- migration 6 ----------
@@ -980,11 +980,11 @@ fn after_migration_6_prs_locked_refuses_the_legacy_lead_branch_rename_of_a_merge
         "UPDATE workflows SET repo = '/src/other' WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
-        assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{sql}: {err:?}");
     }
     // `lead-branch-name` (pro-d113 A3) removed the exception: the rename itself is refused too.
     let err = refused(&mut store, "UPDATE workflows SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
 }
 
 // ---------- migration 12 (the Inbox) ----------
@@ -1474,7 +1474,7 @@ fn prs_locked_refuses_a_change_of_identity_repo_or_base_after_the_lock() {
         "UPDATE workflows SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
     ] {
         let err = refused(&mut store, sql);
-        assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{sql}: {err:?}");
         assert_eq!(err.exit().code(), 3);
     }
     // Before the lock they may change; after it, the other columns may.
@@ -1495,7 +1495,7 @@ fn pr_needs_locked_refuses_a_need_after_the_lock_unless_the_pr_is_new() {
     };
     write(&mut store, &add("old")).unwrap();
     let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'old', 'pr-2fa')");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
     // `pr add` in dispatch: the PR and its needs in one transaction.
     write(&mut store, &format!("{} INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
     // Before the lock, any time.
@@ -1521,7 +1521,7 @@ fn pr_needs_no_delete_refuses_after_the_lock_and_history_records_a_delete() {
                        UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'gr'")
         .unwrap();
     let err = refused(&mut store, "DELETE FROM workflow_needs WHERE plan = 'gr'");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
 }
 
 #[test]
@@ -1530,7 +1530,7 @@ fn dependencies_same_pr_refuses_a_dependency_across_prs() {
     let mut store = migrated(&dir);
     write(&mut store, WEB).unwrap();
     let err = refused(&mut store, "INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')");
-    assert_eq!(err.code(), ErrorCode::NeedsOtherPr, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::NeedsOtherWorkflow, "{err:?}");
     assert_eq!(err.exit().code(), 3);
     write(&mut store, "UPDATE jobs SET workflow = 'web' WHERE key = 'u' AND plan = 'gr';
                        INSERT INTO dependencies (plan, job, needs) VALUES ('gr', 'v', 'u')")
@@ -1547,7 +1547,7 @@ fn jobs_pr_dependencies_refuses_moving_a_job_with_dependencies() {
         .unwrap();
     for sql in ["UPDATE jobs SET workflow = 'pay' WHERE key = 'u' AND plan = 'gr'", "UPDATE jobs SET workflow = 'pay' WHERE key = 'v' AND plan = 'gr'"] {
         let err = refused(&mut store, sql);
-        assert_eq!(err.code(), ErrorCode::NeedsOtherPr, "{sql}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::NeedsOtherWorkflow, "{sql}: {err:?}");
     }
     // `job edit --pr --needs`: delete the Dependencies, move, insert again.
     write(&mut store, "DELETE FROM dependencies WHERE plan = 'gr';
@@ -2841,10 +2841,10 @@ fn stacked_prs_keeps_every_pr_and_need() {
 
     // pr_needs_locked: after the lock only a PR's own insert may add needs; the Plan `pl` is locked.
     let err = refused(&mut store, "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'a', 'c')");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
     // pr_needs_no_delete: and its history row for a delete holds the key.
     let err = refused(&mut store, "DELETE FROM workflow_needs WHERE plan = 'pl'");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
     write(&mut store, "DELETE FROM workflow_needs WHERE plan = 'other'").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'workflow_needs' ORDER BY id DESC LIMIT 1"),
@@ -2872,17 +2872,17 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     // After it, only an `open` PR and a PR whose `base` is the Lead Branch of a PR of its repo; `pl` is locked.
     for key in ["a", "c", "d", "x", "m"] {
         let err = refused(&mut store, &format!("UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"));
-        assert_eq!(err.code(), ErrorCode::PrLocked, "{key}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{key}: {err:?}");
     }
     for key in ["xs", "ms"] {
         let err = refused(&mut store, &format!("UPDATE workflows SET base = 'main' WHERE plan = 'pl' AND key = '{key}'"));
-        assert_eq!(err.code(), ErrorCode::PrLocked, "a {key} PR is not followed: {err:?}");
+        assert_eq!(err.code(), ErrorCode::WorkflowLocked, "a {key} PR is not followed: {err:?}");
     }
     // Nothing but `base` moves: not the identity, the repo or the Lead Branch, nor with the base.
     for set in ["key = 'z'", "repo = '/x'", "lead_branch = 'cpd/pl/z'", "plan = 'other'", "base = 'main', repo = '/x'", "base = 'main', lead_branch = 'cpd/pl/z'"] {
         for key in ["b", "e", "op"] {
             let err = refused(&mut store, &format!("UPDATE workflows SET {set} WHERE plan = 'pl' AND key = '{key}'"));
-            assert_eq!(err.code(), ErrorCode::PrLocked, "{set} on {key}: {err:?}");
+            assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{set} on {key}: {err:?}");
         }
     }
     write(
@@ -2897,7 +2897,7 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     );
     // `b` is no longer stacked, so its base is Locked again; the legacy rename of a merged PR is unchanged.
     let err = refused(&mut store, "UPDATE workflows SET base = 'develop' WHERE plan = 'pl' AND key = 'b'");
-    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    assert_eq!(err.code(), ErrorCode::WorkflowLocked, "{err:?}");
     // Before the lock any PR may change, as before.
     write(&mut store, "UPDATE workflows SET base = 'develop' WHERE plan = 'other'").unwrap();
 }

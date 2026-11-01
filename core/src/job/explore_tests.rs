@@ -13,7 +13,7 @@ use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
 use super::{AddArgs, CancelArgs, EditArgs, RetryArgs};
-use crate::args::{PlanArg, PrArg, Text};
+use crate::args::{PlanArg, WorkflowArg, Text};
 use crate::config::{Catalog, Tier, TierModel};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -158,7 +158,7 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            pr: PrArg { pr: pr.map(|p| WorkflowKey::parse(p).unwrap()) },
+            pr: WorkflowArg { pr: pr.map(|p| WorkflowKey::parse(p).unwrap()) },
             plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
         };
         add_in(&mut self.env, args)
@@ -259,7 +259,7 @@ fn explore_add_needs_no_pr_flag_when_the_plan_has_two_prs() {
         let spec = f.explore_spec("s.json");
         let out = f.add("s1", "scout", "H2", &spec, None, false, &[]);
         if let Err(e) = &out {
-            assert_ne!(e.code(), ErrorCode::PrRequired, "an explore Job belongs to the Plan, not to a PR");
+            assert_ne!(e.code(), ErrorCode::WorkflowRequired, "an explore Job belongs to the Plan, not to a PR");
         }
         assert_eq!(fields(out)["job"]["pr"], Value::Null, "phase {phase}");
         assert_eq!(f.column("s1", "workflow"), None);
@@ -272,7 +272,7 @@ fn explore_add_refuses_the_pr_flag() {
         let mut f = fixture_at("dispatch", &["api", "web"], None);
         let spec = f.explore_spec("s.json");
         let tier = if kind == "scout" { "H2" } else { "S2" };
-        let e = refused(f.add("s1", kind, tier, &spec, Some("api"), false, &[]), ErrorCode::ExplorePrForbidden);
+        let e = refused(f.add("s1", kind, tier, &spec, Some("api"), false, &[]), ErrorCode::ExploreWorkflowForbidden);
         assert_eq!(e.exit().code(), 3);
         assert_eq!(f.jobs(), 0, "nothing written");
         assert_eq!(f.events("job-added"), 0);

@@ -68,7 +68,7 @@ mod watch_tests;
 
 pub use age::age_text;
 pub use flow::{
-    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, UpdateState, WorkerRef, chat_slot, flow,
+    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, WorkflowNode, WorkflowStatus, Pull, Review, UpdateState, WorkerRef, chat_slot, flow,
     plan_boxes, plan_boxes_at,
 };
 pub use shared::{
@@ -82,5 +82,5 @@ pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, InboxMark, inbox_at, inbox_mark, snooze_end, snooze_end_at, tree, tree_at};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_pulls, slots, widgets,
+    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, WorkflowRow, ReviewDecision, Slots, Widgets, open_pulls, slots, widgets,
 };

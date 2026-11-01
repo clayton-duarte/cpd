@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 
 use super::lines_tests::violations;
 use super::{boxes, sample_pr};
-use crate::read::{NeedsUser, PrNode};
+use crate::read::{NeedsUser, WorkflowNode};
 use crate::test_text::rows;
 use cpd_core::ids::WorkflowKey;
 
@@ -14,7 +14,7 @@ fn chars(s: &str) -> Vec<String> {
     s.chars().map(String::from).collect()
 }
 
-fn canvas(prs: &[PrNode]) -> Buffer {
+fn canvas(prs: &[WorkflowNode]) -> Buffer {
     boxes::layout(prs, &[], &NeedsUser::default(), 0).chart.buf
 }
 
@@ -25,12 +25,12 @@ fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
     (y, chars(r[y].trim_end()))
 }
 
-fn with(key: &str, secs: Option<u64>, cost: Option<f64>) -> PrNode {
-    PrNode { elapsed_seconds: secs, cost_usd: cost, ..sample_pr(key) }
+fn with(key: &str, secs: Option<u64>, cost: Option<f64>) -> WorkflowNode {
+    WorkflowNode { elapsed_seconds: secs, cost_usd: cost, ..sample_pr(key) }
 }
 
 /// Box `a` of repo `r` and base `m`: 26 cells wide with no Jobs.
-fn small(secs: Option<u64>, cost: Option<f64>) -> PrNode {
+fn small(secs: Option<u64>, cost: Option<f64>) -> WorkflowNode {
     let mut p = with("a", secs, cost);
     p.repo_name = "r".into();
     p.base = "m".into();
@@ -108,7 +108,7 @@ fn a_box_is_widened_to_hold_the_time_and_the_cost_plus_four() {
 
 /// The `┬` columns of box `a`'s bottom border, that another PR `b` needs; and the canvas, the row, the box's width.
 fn exit(secs: Option<u64>, cost: Option<f64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = PrNode { needs: vec![WorkflowKey::parse("a").unwrap()], ..sample_pr("b") };
+    let web = WorkflowNode { needs: vec![WorkflowKey::parse("a").unwrap()], ..sample_pr("b") };
     let buf = canvas(&[small(secs, cost), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 
 use super::jobs::Job;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 use crate::job::open::unfinished;
@@ -73,7 +73,7 @@ impl Display {
 
     /// Without a store: the PRs of the Plan alone (every need is of the Plan), their bases found by Lead Branch.
     #[cfg(test)]
-    pub fn of(prs: &[PrRow]) -> Display {
+    pub fn of(prs: &[WorkflowRow]) -> Display {
         let mut display = Display::default();
         for p in prs {
             display.statuses.insert(p.key.to_string(), p.status.clone());
@@ -117,7 +117,7 @@ impl Display {
     }
 
     /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
-    pub fn pr_needs(&self, pr: &PrRow) -> Vec<String> {
+    pub fn pr_needs(&self, pr: &WorkflowRow) -> Vec<String> {
         let mut needs = pr.needs.clone();
         if let Some(base) = self.bases.get(pr.key.as_str()) {
             if !needs.contains(base) {
@@ -129,7 +129,7 @@ impl Display {
 
     /// What the PR that has not started cannot start until, sorted (PR references): the PRs it needs that are not `merged`, and
     /// its base PR when that has not started. Empty when it can start, and for a PR that has started.
-    pub fn pr_blockers(&self, pr: &PrRow) -> Vec<String> {
+    pub fn pr_blockers(&self, pr: &WorkflowRow) -> Vec<String> {
         if pr.status != "waiting" {
             return Vec::new();
         }

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::comments::{Kind, MARKER};
 use super::{Env, gh};
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
@@ -15,7 +15,7 @@ use crate::ports::Ports;
 #[derive(clap::Args, Debug)]
 pub struct ReplyArgs {
     #[command(flatten)]
-    pr: PrArg,
+    pr: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
     /// The id of the open item to answer (`cpd pr view`, `feedback`)
@@ -50,7 +50,7 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {
         return Err(CpdError::new(
-            ErrorCode::PrNotOpen,
+            ErrorCode::WorkflowNotOpen,
             format!("PR {} of Plan {id} is {}: pr reply needs an open PR.", pr.key, pr.status),
         )
         .with("plan", id.as_str())

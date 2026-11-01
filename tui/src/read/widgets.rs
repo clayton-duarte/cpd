@@ -84,12 +84,12 @@ pub struct PlanCard {
     /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any).
     pub lead_place: Place,
     /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
-    pub prs: Vec<PrRow>,
+    pub prs: Vec<WorkflowRow>,
 }
 
 /// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrRow {
+pub struct WorkflowRow {
     pub key: WorkflowKey,
     pub number: i64,
     pub state: PrState,
@@ -190,13 +190,13 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
 }
 
 /// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored in its `pull_requests` row.
-fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
+fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<WorkflowRow>>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT r.plan, r.key, r.pr_number, r.status, q.state, q.title, q.review_decision, q.checks
            FROM prs r JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
     )?;
     let mut rows = stmt.query([])?;
-    let mut out: BTreeMap<String, Vec<PrRow>> = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<WorkflowRow>> = BTreeMap::new();
     while let Some(r) = rows.next()? {
         let (plan, key, number, status, row_state): (String, String, i64, String, String) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
@@ -211,7 +211,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
         };
         let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
         let key = id("PR key", &key, WorkflowKey::parse)?;
-        out.entry(plan).or_default().push(PrRow { key, number, state, polled: Some(polled) });
+        out.entry(plan).or_default().push(WorkflowRow { key, number, state, polled: Some(polled) });
     }
     Ok(out)
 }

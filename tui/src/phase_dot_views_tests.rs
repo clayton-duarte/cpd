@@ -15,7 +15,7 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, Work, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull};
+use crate::read::{self, Dot, Work, JobNode, JobStatus, NeedsUser, WorkflowNode, PrState, WorkflowStatus, Pull};
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
 const PHASES: [(Phase, &str, &str); 5] = [
@@ -41,7 +41,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
     let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
-    // the read model hands the box its dot: `PrNode::lead_dot`, red when a Job of the box failed or an Escalation is open
+    // the read model hands the box its dot: `WorkflowNode::lead_dot`, red when a Job of the box failed or an Escalation is open
     let pr = |failed_here: bool, work: Option<Work>| pr_node(Some(Dot::working(failed_here, work)));
     for (work, colour) in [
         (Some(Work::Planning), palette::numbered::C13),
@@ -62,12 +62,12 @@ fn dots_plan_box_title_dot_follows_work() {
 }
 
 /// A PR of a Plan whose Lead works (or not), with one pull request.
-fn pr_node(lead_dot: Option<Dot>) -> PrNode {
-    PrNode {
+fn pr_node(lead_dot: Option<Dot>) -> WorkflowNode {
+    WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: Some(Pull {
             number: 12,
@@ -109,7 +109,7 @@ fn failed_job() -> JobNode {
 
 /// The foreground of the Lead's dot in the box title row, found by its spinner glyph: the whole title is a link, so
 /// the glyph rides in a cell's OSC 8 symbol while the cell keeps the dot's style.
-fn title_dot(pr: &PrNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
+fn title_dot(pr: &WorkflowNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
     let chart = boxes::layout(std::slice::from_ref(pr), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])

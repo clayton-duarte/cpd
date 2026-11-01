@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::row::PlanPrs;
-use crate::plan::PrRow;
+use super::row::PlanWorkflows;
+use crate::plan::WorkflowRow;
 use super::open::{agent, hold_refused, require_jobs_done};
 use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, pr_policy, short};
 use crate::config::{self, Catalog};
@@ -260,7 +260,7 @@ fn abort(args: Args) -> Result<Output, CpdError> {
 /// `merge-tree`'s list, for a stop with no unmerged path of its own. A rebase that finishes
 /// without stopping (a race: a merge landed after the snapshot) goes on as `--continue` does
 /// from guard U, then the Gate and the push.
-fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &Policy, listed: Vec<String>) -> Result<Output, CpdError> {
+fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, policy: &Policy, listed: Vec<String>) -> Result<Output, CpdError> {
     let lead = pr.lead(id)?;
     let repo = Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
@@ -302,7 +302,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
 
 /// Step 9 (and C6): the PR re-read after the Gate, R' pushed with the lease X0, then the merges that
 /// landed during the Gate, by rule P.
-fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, new: &str, lease: &str) -> Result<Output, CpdError> {
+fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, old: &str, new: &str, lease: &str) -> Result<Output, CpdError> {
     let key = &pr.key;
     let lead = pr.lead(id)?;
     let repo = Path::new(&pr.repo);
@@ -350,17 +350,17 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
 }
 
 /// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted PR (pro-d15).
-fn onto_of(pr: &PrRow) -> String {
+fn onto_of(pr: &WorkflowRow) -> String {
     format!("origin/{}", onto_branch(pr))
 }
 
-fn onto_branch(pr: &PrRow) -> &str {
+fn onto_branch(pr: &WorkflowRow) -> &str {
     pr.head_ref.as_deref().unwrap_or(&pr.base)
 }
 
 /// The push of an adopted PR (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
 /// during the Gate go after R' the same way.
-fn push_adopted(id: &PlanId, pr: &PrRow, old: &str, new: &str) -> Result<Output, CpdError> {
+fn push_adopted(id: &PlanId, pr: &WorkflowRow, old: &str, new: &str) -> Result<Output, CpdError> {
     let lead = pr.lead(id)?;
     let repo = Path::new(&pr.repo);
     let remote = pr.remote_branch();
@@ -380,7 +380,7 @@ fn push_adopted(id: &PlanId, pr: &PrRow, old: &str, new: &str) -> Result<Output,
     Ok(Output::success(json!({"plan": id, "pr": pr.key, "rebased": old != new, "old": old, "new": new, "pushed": pushed})))
 }
 
-fn rejected(id: &PlanId, pr: &PrRow, sha: &str, stderr: String) -> CpdError {
+fn rejected(id: &PlanId, pr: &WorkflowRow, sha: &str, stderr: String) -> CpdError {
     CpdError::new(
         ErrorCode::PushRejected,
         format!("{} was rebased onto origin/{}, but its push was rejected: the remote head moved again, run cpd pr rebase --pr {}.", short(sha), pr.remote_branch(), pr.key),
@@ -638,7 +638,7 @@ fn report_stale(env: &mut Env, plan: &PlanId, key: &WorkflowKey, lead: &Path, wh
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
 /// An adopted PR may also be `dispatch` once its Jobs but the `open` and `update` ones are done (A8).
-fn require_open<'a>(env: &mut Env, plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+fn require_open<'a>(env: &mut Env, plan: &'a PlanWorkflows, args: &Args) -> Result<&'a WorkflowRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }

@@ -13,7 +13,7 @@ use crate::pace::Reads;
 use crate::pump::Pump;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
-use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
+use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PlanBoxes, WorkflowNode, PrState, WorkflowStatus, Pull, ChatSlot};
 use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, JobKey, PlanId, WorkflowKey, SessionId};
 
@@ -68,12 +68,12 @@ fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
     assert_eq!(reads.take(), None);
 }
 
-fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> PrNode {
-    PrNode {
+fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> WorkflowNode {
+    WorkflowNode {
         key: WorkflowKey::parse("web").unwrap(),
         repo_name: "repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull,
         waiting_on: Vec::new(),

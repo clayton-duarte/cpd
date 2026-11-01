@@ -10,17 +10,17 @@ use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
 use crate::plan::boxes;
-use crate::read::{PrNode, PrState, PrStatus, Pull, UpdateState};
+use crate::read::{WorkflowNode, PrState, WorkflowStatus, Pull, UpdateState};
 use crate::widgets::legend;
 
 const RUNNING: Meaning = Meaning::InProgress;
 
-fn node(update: Option<UpdateState>) -> PrNode {
-    PrNode {
+fn node(update: Option<UpdateState>) -> WorkflowNode {
+    WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Open,
+        status: WorkflowStatus::Open,
         needs: Vec::new(),
         pull: Some(Pull {
             number: 12,

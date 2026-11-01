@@ -5,7 +5,7 @@ use cpd_core::config::Tier;
 use cpd_core::ids::{JobKey, WorkflowKey};
 use cpd_core::session::State;
 
-use super::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrState, PrStatus, Pull, UpdateState, pr_look};
+use super::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, WorkflowNode, PrState, WorkflowStatus, Pull, UpdateState, pr_look};
 use crate::palette::{self, Meaning};
 use crate::plan::boxes;
 
@@ -84,12 +84,12 @@ fn pull(state: PrState) -> Pull {
     }
 }
 
-fn pr_node(pull: Pull) -> PrNode {
-    PrNode {
+fn pr_node(pull: Pull) -> WorkflowNode {
+    WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Open,
+        status: WorkflowStatus::Open,
         needs: Vec::new(),
         pull: Some(pull),
         waiting_on: Vec::new(),
@@ -126,7 +126,7 @@ fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::C
 }
 
 fn box_top_dot(pull: Pull, lead_dot: Option<Dot>, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
-    let chart = boxes::layout(&[PrNode { lead_dot, ..pr_node(pull)}], jobs, &NeedsUser::default(), frame).chart;
+    let chart = boxes::layout(&[WorkflowNode { lead_dot, ..pr_node(pull)}], jobs, &NeedsUser::default(), frame).chart;
     (0..chart.buf.area.width).map(|x| chart.buf[(x, 0)].clone()).collect()
 }
 

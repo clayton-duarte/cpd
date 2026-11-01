@@ -154,7 +154,7 @@ fn an_open_jobs_worker_spec_names_the_base_an_unstack_set_when_its_base_pr_merge
     );
 
     let mut s = store(&fx);
-    cpd_core::pr::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::PrKey::parse("b").unwrap()).unwrap();
+    cpd_core::pr::start::unstack_for_open_job(&mut s, "test", &plan(), &cpd_core::ids::WorkflowKey::parse("b").unwrap()).unwrap();
     assert_eq!(base_of(&fx, "b"), "main");
 
     let spec = render(&fx, "open-b");

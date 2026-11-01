@@ -17,7 +17,7 @@ use crate::ids::{PlanId, WorkflowKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::fingerprint::load_prs;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::plan::jobs;
 use crate::store::WriteTxn;
 
@@ -223,7 +223,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, superseded: Optio
     needing.extend(stacked_on(conn, plan, pr)?);
     let in_use = |jobs: Vec<String>| {
         CpdError::new(
-            ErrorCode::PrInUse,
+            ErrorCode::WorkflowInUse,
             format!(
                 "PR {key} is in use: a running Job holds it (cancel it with cpd job cancel and wait for it to stop), a merged Job holds it unless --superseded-by \
                  names the PR that carried its work, and PRs that need it or are stacked on it hold it (edit them away with cpd pr edit) first."
@@ -294,7 +294,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &s
         .map(Some)
         .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?;
     let Some(status) = found else {
-        return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {by_key} in Plan {by_plan} to be superseded by."))
+        return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {by_key} in Plan {by_plan} to be superseded by."))
             .with("plan", by_plan)
             .with("pr", by_key));
     };
@@ -310,7 +310,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &s
 
 /// The PRs of `plan` that are not `cancelled` and stacked on `pr`: those of its repo whose `base` is its Lead Branch
 /// (§2.2 "The base PR"), by key.
-fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String>, CpdError> {
+fn stacked_on(conn: &Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Vec<String>, CpdError> {
     let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
     let found = stmt
         .query_map([plan.as_str(), pr.repo.as_str(), pr.lead_branch.as_str(), pr.key.as_str()], |r| r.get::<_, String>(0))?
@@ -320,7 +320,7 @@ fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String
 
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
 /// wrote) and no PR that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
-fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &PrRow, needing: &[String]) -> Result<Decision, CpdError> {
+fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &WorkflowRow, needing: &[String]) -> Result<Decision, CpdError> {
     let (Some(id), Some(pull), Some(worktree)) = (pr.pull_request, &pr.pull, &pr.lead_worktree) else {
         return Err(CpdError::bad_row(format!("PR {key} of Plan {plan} is open without a pull request or a Lead worktree")));
     };
@@ -338,7 +338,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &PrRow, 
     }
     if !needing.is_empty() {
         return Err(CpdError::new(
-            ErrorCode::PrInUse,
+            ErrorCode::WorkflowInUse,
             format!("PR {key} is in use: PRs that need it, or are stacked on it, would wait for a merge that cannot come; edit away the needs and the stacked PRs on it (cpd pr edit) first."),
         )
         .with("plan", plan.as_str())
@@ -425,7 +425,7 @@ mod tests {
         let (_dir, mut store) = fixture();
         store.write("fixture", |tx| Ok(tx.execute_batch("UPDATE jobs SET status = 'running' WHERE key = 'open-api';")?)).unwrap();
         let held = store.read(|conn| decide(conn, &plan, &key, None)).map(|_| ()).unwrap_err();
-        assert_eq!(held.code(), ErrorCode::PrInUse);
+        assert_eq!(held.code(), ErrorCode::WorkflowInUse);
         assert_eq!(held.details()["jobs"], json!(["open-api"]));
     }
 }

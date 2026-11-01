@@ -198,7 +198,7 @@ pub fn start(
         if let Some((until_plan, key)) = &until {
             if !plans.contains(until_plan) {
                 return Err(CpdError::new(
-                    ErrorCode::UntilPrNotIncident,
+                    ErrorCode::UntilWorkflowNotIncident,
                     format!("The --until-pr Plan {until_plan} is not one of the incident's Plans."),
                 )
                 .with("plan", until_plan.as_str())
@@ -211,7 +211,7 @@ pub fn start(
             )?;
             if !known {
                 return Err(CpdError::new(
-                    ErrorCode::PrNotFound,
+                    ErrorCode::WorkflowNotFound,
                     format!("No PR {until_plan}/{key}."),
                 )
                 .with("plan", until_plan.as_str())

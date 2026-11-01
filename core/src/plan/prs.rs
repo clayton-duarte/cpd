@@ -19,7 +19,7 @@ pub struct Pull {
 
 /// One PR of a Plan.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PrRow {
+pub struct WorkflowRow {
     pub key: WorkflowKey,
     /// As stored: the fingerprint and `pr add` compare it as text.
     pub repo: String,
@@ -50,7 +50,7 @@ pub struct PrRow {
     pub started_at: Option<String>,
 }
 
-impl PrRow {
+impl WorkflowRow {
     /// The branch every push, fetch, `gh pr list --head` and merged check names: `head_ref` of an adopted PR, else the Lead Branch.
     pub fn remote_branch(&self) -> &str {
         self.head_ref.as_deref().unwrap_or(&self.lead_branch)
@@ -68,10 +68,10 @@ impl PrRow {
 }
 
 #[cfg(test)]
-impl PrRow {
+impl WorkflowRow {
     /// A PR of the fields the fingerprint, `plan render` and `--pr` selection read.
-    pub fn fixture(key: &str, repo: &str, base: &str, needs: &[&str], status: &str) -> PrRow {
-        PrRow {
+    pub fn fixture(key: &str, repo: &str, base: &str, needs: &[&str], status: &str) -> WorkflowRow {
+        WorkflowRow {
             key: WorkflowKey::parse(key).unwrap(),
             repo: repo.to_owned(),
             base: base.to_owned(),
@@ -106,7 +106,7 @@ pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, V
 }
 
 /// Every PR of `plan` in key order, `cancelled` ones included.
-pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<WorkflowRow>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref, started_at, jira
@@ -125,7 +125,7 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
             };
-            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref, started_at, jira })
+            Ok(WorkflowRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref, started_at, jira })
         })
         .collect()
 }
@@ -139,7 +139,7 @@ mod tests {
     use crate::store::Store;
 
     /// commands-G3: one PR row, read once, with every column the three
-    /// readers (`PrSpec`, `start::Pr`, `row::PrRow`) had between them.
+    /// readers (`WorkflowSpec`, `start::Workflow`, `row::WorkflowRow`) had between them.
     #[test]
     fn a_pr_row_carries_the_columns_every_reader_needs() {
         let dir = tempfile::tempdir().unwrap();

@@ -6,15 +6,15 @@ use std::time::Duration;
 
 use cpd_core::error::ErrorCode;
 use cpd_core::git::{Cut, Setup, attempt_branch, create_attempt_worktree, pr_lead_worktree_path, prepare_pr_lead_worktree};
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
 use cpd_core::git::Pipeline;
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
 }
 
-fn key() -> PrKey {
-    PrKey::parse("api").unwrap()
+fn key() -> WorkflowKey {
+    WorkflowKey::parse("api").unwrap()
 }
 
 fn setup_in(fx: &Fx) -> Setup {

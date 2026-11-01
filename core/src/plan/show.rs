@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::fingerprint::{of_with as fingerprint_of, reviews_prs};
 use super::jobs::{self, Job};
-use super::prs::{PrRow, Pull, load_needs};
+use super::prs::{WorkflowRow, Pull, load_needs};
 use super::row::{self, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
@@ -117,14 +117,14 @@ fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
 }
 
 /// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
-/// [`PrRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
+/// [`WorkflowRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
 /// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
 fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
     let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
     let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
-    let rows: Vec<PrRow> = if reviews_prs(Some(plan.phase.as_str())) {
+    let rows: Vec<WorkflowRow> = if reviews_prs(Some(plan.phase.as_str())) {
         prs.iter()
-            .map(|p| PrRow {
+            .map(|p| WorkflowRow {
                 key: WorkflowKey::parse(&text(p, "key")).expect("a PR key"),
                 repo: text(p, "repo"),
                 base: text(p, "base"),

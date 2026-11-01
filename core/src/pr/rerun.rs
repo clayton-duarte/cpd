@@ -17,7 +17,7 @@ pub(super) fn rerun(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {
         return Err(CpdError::new(
-            ErrorCode::PrNotOpen,
+            ErrorCode::WorkflowNotOpen,
             format!("PR {} of Plan {id} is {}: pr rerun needs an open PR.", pr.key, pr.status),
         )
         .with("pr", pr.key.as_str())

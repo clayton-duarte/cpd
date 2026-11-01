@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::jobs::{self, Job, sha256_of};
 use super::outline::Outline;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -33,13 +33,13 @@ pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
 /// `null` (hs-d241), with `kind` only when it is not `work` and `tests` and `test_files` only when set (hs-d341);
 /// `prs` is `{key, repo, base, needs}` of every PR in `prs` that is not `cancelled`, with `shape` only when it is
 /// not `free` (hs-d497), ordered by key, `needs` sorted.
-pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
+pub fn of(jobs: &[Job], prs: &[WorkflowRow]) -> String {
     of_with(jobs, prs, None)
 }
 
 /// [`of`] with the Plan's outline: when it is set, the object is `{jobs, outline, prs}`, `outline` being its object
 /// (contract §2.3, hs-d502); when it is not, `{jobs, prs}` exactly, so a review made before the outline existed stays current.
-pub fn of_with(jobs: &[Job], prs: &[PrRow], outline: Option<&Outline>) -> String {
+pub fn of_with(jobs: &[Job], prs: &[WorkflowRow], outline: Option<&Outline>) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_under_review()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
     let jobs: Vec<Value> = drafts
@@ -53,7 +53,7 @@ pub fn of_with(jobs: &[Job], prs: &[PrRow], outline: Option<&Outline>) -> String
             Value::Object(fields)
         })
         .collect();
-    let mut prs: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut prs: Vec<&WorkflowRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     prs.sort_by(|a, b| a.key.cmp(&b.key));
     let prs: Vec<Value> = prs
         .into_iter()
@@ -108,8 +108,8 @@ mod tests {
         }
     }
 
-    fn pr(key: &str, needs: &[&str]) -> PrRow {
-        PrRow::fixture(key, &format!("/r/{key}"), "main", needs, "waiting")
+    fn pr(key: &str, needs: &[&str]) -> WorkflowRow {
+        WorkflowRow::fixture(key, &format!("/r/{key}"), "main", needs, "waiting")
     }
 
     #[test]

@@ -19,7 +19,7 @@ use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lea
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
 use cpd_core::merge::{self, End, Failure};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
@@ -222,7 +222,7 @@ impl Git {
     fn add_pr(&self, key: &str) -> Pr {
         let repo = self.fx.git_repo(key).canonicalize().unwrap();
         let branch = format!("cpd/pay/{key}");
-        let lead = pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+        let lead = pr_lead_worktree_path(&repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch).unwrap();
         in_fakes(&self.fx, || prepare_lead_worktree(&repo, &plan(), &lead, &branch, "main", &setup(&self.fx, "setup.log"))).map_err(|f| f.error).unwrap();
         self.fx.env.repo_policy("acme", key, "");
         self.fx.env.sql(&format!(

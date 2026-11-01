@@ -100,7 +100,7 @@ fn key_of_pr(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdEr
         .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, pr], |r| r.get(0))
         .optional()?;
     let name = name.ok_or_else(|| {
-        CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", pr)
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", pr)
     })?;
     pr_key(context_owner(conn, &context)?, name)
 }

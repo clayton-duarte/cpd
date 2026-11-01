@@ -9,7 +9,7 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, PlanBoxes, PrNode};
+use crate::read::{self, Dot, PlanBoxes, WorkflowNode};
 
 const AT: &str = "'2026-01-02T00:00:00.000Z'";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -99,7 +99,7 @@ impl Fixture {
     }
 }
 
-fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a PrNode {
+fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
     b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 

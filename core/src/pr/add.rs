@@ -24,7 +24,7 @@ use crate::job::spec::{Spec, parse as parse_spec};
 use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::Job;
 use crate::plan::locked_fingerprint;
@@ -146,24 +146,24 @@ enum Decision {
 /// A PR reference (contract §2.2): a bare `<key>`, a PR of the Plan the command is about, or
 /// `<plan>/<key>`, a PR of that Plan, the Plan's own included. Parsed once, at the flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrRef {
+pub struct WorkflowRef {
     plan: Option<PlanId>,
     key: WorkflowKey,
 }
 
-impl FromStr for PrRef {
+impl FromStr for WorkflowRef {
     type Err = CpdError;
     fn from_str(s: &str) -> Result<Self, CpdError> {
         match s.split_once('/') {
-            Some((plan, key)) => Ok(PrRef { plan: Some(PlanId::parse(plan)?), key: WorkflowKey::parse(key)? }),
-            None => Ok(PrRef { plan: None, key: WorkflowKey::parse(s)? }),
+            Some((plan, key)) => Ok(WorkflowRef { plan: Some(PlanId::parse(plan)?), key: WorkflowKey::parse(key)? }),
+            None => Ok(WorkflowRef { plan: None, key: WorkflowKey::parse(s)? }),
         }
     }
 }
 
 /// `needs` as the sorted references of `own`'s Plan: the bare key for a PR of the Plan however it was written, `<plan>/<key>`
 /// for another Plan's (which `resolve_refs` refuses, `pr_other_plan`); a repeat is refused with `usage` (§9.4).
-pub(super) fn needs_refs(own: &PlanId, needs: &[PrRef]) -> Result<Vec<String>, CpdError> {
+pub(super) fn needs_refs(own: &PlanId, needs: &[WorkflowRef]) -> Result<Vec<String>, CpdError> {
     let mut refs: Vec<String> = needs
         .iter()
         .map(|n| match &n.plan {
@@ -274,7 +274,7 @@ pub(super) struct Resolved {
 /// A reference naming another Plan (`pr_other_plan`): needs and base PRs are PRs of the PR's own Plan.
 fn other_plan(subject: &Subject<'_>, plan: &str, key: &str) -> CpdError {
     CpdError::new(
-        ErrorCode::PrOtherPlan,
+        ErrorCode::WorkflowOtherPlan,
         format!("PR {plan}/{key} is a PR of Plan {plan}, not of {}: needs and base PRs are PRs of the PR's own Plan.", subject.plan),
     )
     .with("pr", subject.key.as_str())
@@ -305,14 +305,14 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
     let (branch, base_pr) = match base {
         BaseWanted::Pr(_, base_key) => {
             let Some(pr) = find(base_key.as_str()) else {
-                return Err(CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {base_key} to stack on."))
+                return Err(CpdError::new(ErrorCode::BaseWorkflowUnknown, format!("Plan {plan} has no PR {base_key} to stack on."))
                     .with("plan", plan.as_str())
                     .with("pr", base_key.as_str()));
             };
             check_base_pr_state(pr)?;
             if pr.repo != subject.repo {
                 return Err(CpdError::new(
-                    ErrorCode::BasePrOtherRepo,
+                    ErrorCode::BaseWorkflowOtherRepo,
                     format!("PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.", pr.key, pr.repo, subject.repo),
                 )
                 .with("pr", pr.key.as_str())
@@ -368,7 +368,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
 fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
     if matches!(pr.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
-            ErrorCode::BasePrUnavailable,
+            ErrorCode::BaseWorkflowUnavailable,
             format!("PR {} is {}: there is nothing to stack on, name its base branch instead.", pr.key, pr.status),
         )
         .with("pr", pr.key.as_str())
@@ -607,7 +607,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
                 needs: existing.needs.clone(),
             });
         }
-        return Err(CpdError::new(ErrorCode::PrExists, format!("Plan {plan} already has a PR {} with other flags.", wanted.key))
+        return Err(CpdError::new(ErrorCode::WorkflowExists, format!("Plan {plan} already has a PR {} with other flags.", wanted.key))
             .with("plan", plan.as_str())
             .with("pr", wanted.key.as_str())
             .with("repo", existing.repo.as_str())
@@ -752,7 +752,7 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
             .find(|p| p.key == key.as_str())
             .map(|p| p.lead_branch)
             .ok_or_else(|| {
-                CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {key} to stack on."))
+                CpdError::new(ErrorCode::BaseWorkflowUnknown, format!("Plan {plan} has no PR {key} to stack on."))
                     .with("plan", plan.as_str())
                     .with("pr", key.as_str())
             }),
@@ -760,7 +760,7 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
 }
 
 /// The keys of the `merged` PRs, in key order (A3).
-fn merged_keys(prs: &[PrRow]) -> Vec<String> {
+fn merged_keys(prs: &[WorkflowRow]) -> Vec<String> {
     let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
     keys.sort();
     keys
@@ -769,7 +769,7 @@ fn merged_keys(prs: &[PrRow]) -> Vec<String> {
 /// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
 /// after the reopen sees the Plan in `dispatch`, where the default is none. `title` is the
 /// stored one (null for a PR that existed before migration `pr-title`: it never matches).
-fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], base: &str) -> bool {
+fn same(existing: &WorkflowRow, title: Option<&str>, wanted: &Wanted, prs: &[WorkflowRow], base: &str) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),

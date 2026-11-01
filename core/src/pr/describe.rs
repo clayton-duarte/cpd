@@ -82,12 +82,12 @@ fn decide(conn: &Connection, plan: &PlanId, key: &WorkflowKey, text: Option<&str
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if pr.head_ref.is_some() {
-        return Err(CpdError::new(ErrorCode::PrAdopted, format!("PR {key} is an adopted pull request: its own body is kept, so it is not described."))
+        return Err(CpdError::new(ErrorCode::WorkflowAdopted, format!("PR {key} is an adopted pull request: its own body is kept, so it is not described."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str()));
     }
     if matches!(pr.status.as_str(), "merged" | "cancelled") {
-        return Err(CpdError::new(ErrorCode::PrEnded, format!("PR {key} of Plan {plan} is {}: its description is history.", pr.status))
+        return Err(CpdError::new(ErrorCode::WorkflowEnded, format!("PR {key} of Plan {plan} is {}: its description is history.", pr.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
             .with("status", pr.status.as_str()));
