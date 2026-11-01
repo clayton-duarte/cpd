@@ -929,7 +929,8 @@ impl Driver {
         .with("attempt", target.id.to_string())
         .with("minutes", minutes);
         let text = error.message().to_owned();
-        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text))?;
+        // The stall is deduped per episode by the watch, so no repeat window (contract §3.4 A4).
+        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, Duration::ZERO))?;
         log(&format!("A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled", path.display()));
         Ok(())
     }
