@@ -8,7 +8,7 @@
 import * as React from "react"
 import { GalleryVerticalEnd } from "lucide-react"
 
-import type { LiveSession } from "../api/live-server"
+import type { LivePlan, LiveSession } from "../api/live-server"
 import {
   Sidebar,
   SidebarContent,
@@ -117,6 +117,8 @@ function ContextRow({
 /** The tree's props; `onSelectSession` is named so it does not collide with the DOM's `onSelect`. */
 export interface AppSidebarProps {
   sessions: readonly LiveSession[]
+  /** The Plans read; when absent the rail draws its Session tree as before, and when present it draws the Plan tree (web/README.md "Context tree rows"). */
+  plans?: readonly LivePlan[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }
@@ -124,10 +126,16 @@ export interface AppSidebarProps {
 /** The Context tree: the left rail's only navigation. */
 export function AppSidebar({
   sessions,
+  plans,
   selectedId,
   onSelectSession,
   ...props
 }: React.ComponentProps<typeof Sidebar> & AppSidebarProps): React.ReactElement {
+  // STUB: the Plan tree is the impl Job's. Until it lands the plans branch draws nothing, so the
+  // Plan tree tests are red against this stub; only the Session fallback below is implemented.
+  if (plans !== undefined) {
+    return <Sidebar {...props} />
+  }
   const contexts = groupSessions(sessions)
   const contextCount =
     contexts.length === 0
