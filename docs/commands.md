@@ -4703,7 +4703,7 @@ The line is prefixed with an RFC 3339 time by the existing view log mechanism (c
 - **Pulse** re-reads every 60 s (the window moves and ages tick; a running Attempt is not an Event) and on pane resize (the bucket count changes), coalesced as other views.
 - The **Dispatch column** follows `session-state` Events (a Lead's dot is a fact it draws) and its `Follow` reads on the reader thread like the others. Each view follows Events with no selection and filters by kind itself, through `cpd events follow` or the same poll in process (§5.4): one `PRAGMA data_version` read per `events.poll_ms`, which costs no I/O while nothing changes (§5.4). The follow also reads `count(*)` and `max(changed_at)` of `pull_requests` with each poll of the Events to detect row changes (the poll sets `changed_at` with every change, contract §4.4) and says the rows moved when they differ from the last poll (the first poll says so).
 - A view draws only when its model, its error, its size (a resize is an input event), its input or a clock changed, never on a bare tick. While a spinner is on screen the view draws once per 50 ms frame; with no spinner it draws only on change (§17 redraw rule). The spinners: a working dot in the tree, including the red loader (hs-d581), a turning failed pill in the plan view (hs-d586), or in Pulse, a running Job's pill in the plan view; the tree redraws every second while its Inbox section shows an item's age and the Dispatch column when the CPU, GPU or memory % it shows changed (sampled every 2 s; on Linux the GPUs come from one long-running `nvidia-smi -lms 2000`, so no tool is spawned per sample).
-- Clocks such as "running 4 m" are redrawn every second from timestamps already read, without a read. The spinner (`` on the tree's dots, on a `running` Job's pill, on a turning failed pill with the moon loader (hs-d586), beside the state of a PR whose Lead works on the Dispatch row and in the Plan view's box title) is redrawn every 50 ms, while one is on screen, from data already read, without a read.
+- Clocks such as "running 4 m" are redrawn every second from timestamps already read, without a read. The spinner (`` on the tree's dots, on a `running` Job's pill, on a turning failed pill with the moon loader (hs-d586), beside the pull request state of a Workflow whose Lead works on the Dispatch row and in the Plan view's box title) is redrawn every 50 ms, while one is on screen, from data already read, without a read.
 - If a follower ends, the view takes a new snapshot and follows again from its `events_cursor`.
 
 | View | Clocks needed besides a signal | Safety read covers |
@@ -4805,7 +4805,7 @@ Applied to contract.md by Job contract-amend.
 
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
-Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 28–31 were added by Job `docs-followups` of Plan `tree-menu` (PR `followups`); rows 28 and 29 are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15 and R36); the checklist behind them is [cockpit-parity.md](archive/cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
+Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 28–31 were added by Job `docs-followups` of Plan `tree-menu` (Workflow `followups`); rows 28 and 29 are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15 and R36); the checklist behind them is [cockpit-parity.md](archive/cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
 
 | # | contract.md section | Amendment | Where here |
 |---|---|---|---|
@@ -5698,7 +5698,7 @@ cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-workf
 |---|---|
 | `--plan <id>` | required, repeatable at least once; names an existing Plan in this Context |
 | `--reason <text>` | optional; 1 or more characters, explanation of the incident; required only on a fresh start |
-| `--until-workflow <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
+| `--until-workflow <plan>/<key>` | optional; Workflow key in format `<plan>/<key>` of one of the named Plans; incident ends when this Workflow's pull request merges |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -5706,7 +5706,7 @@ cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-workf
 | at least one `--plan` is present | `usage` | 2 |
 | when incident is off, `--reason` is present and at least 1 character | `usage` | 2 |
 | no `--plan` argument, or every one names an existing Plan in the store | `plan_not_found` | 4 |
-| `--until-workflow` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
+| `--until-workflow` is absent, or its value is a Workflow of one of the named Plans and exists | `workflow_not_found` | 4 |
 | `--until-workflow` is absent, or its value's Plan is one of the named Plans | `until_workflow_not_incident` | 3 |
 | `--until-workflow` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
