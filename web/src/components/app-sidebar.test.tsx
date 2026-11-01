@@ -163,7 +163,7 @@ test("the header reads cpd with the Context count, never Documentation", () => {
   expect(header()).toContain("2 contexts");
 
   // One Context: the singular.
-  render([SESSIONS[0]]);
+  render(SESSIONS.slice(0, 1));
   expect(header()).toContain("1 context");
 
   // No Sessions: the empty state's own pluralisation.
