@@ -1063,11 +1063,11 @@ Explore Jobs (`scout`, `research`) are in no review (Plan `explore-roles`, R3): 
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed; a `draft` `open` Job does not count, it is not under review, hs-d573) | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
+| every PR that has a `draft` Job (under review, since the previous row passed) has an entry in the outline's `done_when`; `details.prs` lists the PR keys without one, in key order | `outline_incomplete` | 3 |
 | every `impl` Job that is a `draft` needs at least one `test` Job of its PR (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
 | every `verify` Job that is a `draft` needs at least one `impl` Job of its PR that is not `cancelled` (pro-d80; `details` `{plan, job, jobs}`; checked after `test_job_required` and before `shape_incomplete`) | `impl_job_required` | 3 |
 | every PR of shape `tdd` that has not opened has at least one `test` and one `impl` Job that is not `cancelled` (hs-d497, contract §2.2 "Job kinds"; `details` `{pr, missing}`) | `shape_incomplete` | 3 |
-| the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
-| every PR that has a `draft` Job (under review, since the previous row passed) has an entry in the outline's `done_when`; `details.prs` lists the PR keys without one, in key order | `outline_incomplete` | 3 |
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies the summary to `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 13) and no other difference; it is what the User reviews (§15.5). The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
@@ -1355,6 +1355,47 @@ Output without `--yes` (preview) or with `--yes` after a delete:
 Idempotent: yes; a Plan already deleted returns `"already": true` and writes nothing to the store.
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `plan_rows` of `cli/tests/flow/plan_delete.rs` counts Sessions with `plan = <id>` and Events with `plan = <id>`, but the Lead's row stays with its `plan` and the `plan-deleted` Event names the Plan; the Jobs, Attempts, PRs, the other Sessions and the other Events are what is gone.
+
+### 4.15 `plan lint`
+
+```
+cpd plan lint [--plan <id>]
+```
+
+Checks the Plan's drafts and its shape, and returns every error and warning in one list. The rules, their severities and the refusal each error carries are in contract §2.7; this section does not repeat them. The lint reads the Plan's Jobs, PRs and outline and writes nothing: no row, no Event, no file. It runs fresh on every call.
+
+| Flag | Meaning |
+|---|---|
+| `--plan <id>` | the Plan (§1.3) |
+
+Callers: Lead; no cockpit. The about line (the clap doc comment, shown in `docs/interface.md`): `Check the Plan's drafts: every error and warning in one list (§4.15)`.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the phase is not `grounding` (`details` as `plan review`'s, §4.6) | `illegal_phase` | 3 |
+| the Plan exists | `plan_not_found` | 4 |
+| at least one finding is an error; the message names the rules of the errors, in the order of the list below | `lint_failed` | 3 |
+
+The refusal `lint_failed` has the message `Plan <id> has <n> lint errors: <rules joined by ", ">. Fix them, then ask again.` and `details` `{plan, errors, warnings, findings}`, where `findings` is every finding, errors first, in the order of contract §2.7.
+
+**Output** on success, that is with no error finding:
+
+```json
+{"ok": true, "plan": "pay-4521", "errors": 0, "warnings": 1, "findings": [
+  {"rule": "parallel_write_overlap", "severity": "warn",
+   "message": "api-2 and api-3 have no dependency path and both name api/src/lib.rs. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit api-2 --needs api-3, or narrow touches.",
+   "pr": "api", "job": "api-2", "other": "api-3", "paths": ["api/src/lib.rs"], "details": {}}]}
+```
+
+Every finding has every key, so the output is byte-stable: `{"rule": "<id>", "severity": "error"|"warn", "message": "<text>", "pr": <key|null>, "job": <key|null>, "other": <key|null>, "paths": [<sorted paths>], "details": {<the refusal's details for an error rule; {} for a warning>}}`.
+- An error finding has `job` and `other` null and `paths` `[]`: its subjects are in `details`, as in the refusal it carries. Its `pr` is null, except for `shape_incomplete`, whose `pr` is the PR it names.
+- A `parallel_write_overlap` finding has `pr`, `job`, `other` and `paths` set, and `details` `{}`.
+
+The `parallel_write_overlap` message is exactly: `<job> and <other> have no dependency path and both name <paths joined by ", ">. A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict. Settle it with cpd job edit <job> --needs <other>, or narrow touches.` The pair is defined in contract §2.7: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job. The rule is a warning and never a refusal; it covers equal files only, exempts the lockfiles, and its limits are in contract §2.7.
+
+`plan review` and `plan render` also return the warnings, and `plan review` refuses with the first error finding's own code, never with `lint_failed` (added by PR lint-review).
+
+Idempotent: yes. The same Plan twice gives byte-equal stdout, and nothing is written.
 
 ## 5. `job`
 
