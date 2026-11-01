@@ -150,13 +150,14 @@ test("the chat is the only element on the screen, with no nav and no other panes
   }
 
   // The Chat is the centre column of the shell: the Context rail is to its left and the Inbox
-  // placeholder to its right. The shell's three columns and 20rem default are App.test.tsx's.
+  // rail to its right. The shell's three columns and 20rem default are App.test.tsx's.
   const chat = container.querySelector("textarea")?.closest<HTMLElement>("[data-panel]");
   expect(chat).not.toBeNull();
   const context = chat!.previousElementSibling?.previousElementSibling as HTMLElement | null;
   expect(context?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
   const inbox = chat!.nextElementSibling?.nextElementSibling as HTMLElement | null;
-  expect(inbox?.textContent).toContain("The Inbox lands here.");
+  expect(inbox?.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  expect(inbox?.textContent).toContain("William Smith");
 });
 
 test("the transcript renders inside a scroll container and the composer stays visible", async () => {
