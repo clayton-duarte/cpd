@@ -9,6 +9,7 @@
 //! - [`cancel`]: `plan cancel`, which abandons a Plan;
 //! - [`lint`]: the Plan lint rules and the pure run (contract §2.7);
 //! - [`shared`]: `is_shared`, the predicate for lockfile paths (contract §2.6);
+//! - `lint_cmd`: `plan lint`, the command over [`lint`];
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
@@ -25,6 +26,7 @@ pub mod fingerprint;
 pub mod jobs;
 mod lead;
 pub mod lint;
+mod lint_cmd;
 #[cfg(test)]
 mod lint_tests;
 mod list;
@@ -88,6 +90,8 @@ pub enum Command {
     Phase(PhaseArgs),
     /// Render the Plan to run/<plan>/plan.md (§4.5)
     Render(RenderArgs),
+    /// Check the Plan's drafts: every error and warning in one list (§4.15)
+    Lint(lint_cmd::LintArgs),
     /// Request the User's approval of the draft Jobs (§4.6)
     Review(ReviewArgs),
     /// Record the User's decision on a Plan review (§4.7)
@@ -259,6 +263,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Show(args) => show::show(args),
         Command::Phase(args) => phase::phase(args),
         Command::Render(args) => review::render(args),
+        Command::Lint(args) => lint_cmd::lint(args),
         Command::Review(args) => review::review(args),
         Command::Decide(args) => review::decide(args),
         Command::Outline(args) => outline::outline(args),

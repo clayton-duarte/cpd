@@ -838,6 +838,17 @@
     },
     "required": []
   },
+  "plan lint": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "plan list": {
     "flags": {
       "--context": true,
