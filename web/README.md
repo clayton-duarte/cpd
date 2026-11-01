@@ -600,6 +600,52 @@ Plan panes are not in this contract** — the shell does not mount them. Pinned 
 `web/src/views/live-chat.test.tsx` (the Chat viewport) and `web/src/components/inbox-rail.test.tsx`
 (the rail).
 
+### The Dango theme
+
+The shell's dark theme is the **Dango v3 palette** (hs-d836, approved by the User on the dev preview, 2026-11-02). The shell **ships DARK only**: the palette is written in the **`.dark` block of `web/src/index.css`**, and only `.dark` carries Dango — the light theme (`:root`) is unchanged and is **not** Dango. The shell's `@theme inline` block maps the CSS custom properties to Tailwind's `--color-*` slots; it carries no colours of its own.
+
+Every token is a Dango v3 value, mapped the way the TUI uses the palette. The mapping, one row per CSS custom property:
+
+| CSS custom property | Hex |
+|---|---|
+| `--background` | `#1c1a20` |
+| `--foreground` | `#d8d2cc` |
+| `--card` | `#24222a` |
+| `--card-foreground` | `#d8d2cc` |
+| `--popover` | `#24222a` |
+| `--popover-foreground` | `#d8d2cc` |
+| `--primary` | `#7aa2ce` |
+| `--primary-foreground` | `#1c1a20` |
+| `--secondary` | `#2a2730` |
+| `--secondary-foreground` | `#d8d2cc` |
+| `--muted` | `#2a2730` |
+| `--muted-foreground` | `#aba3af` |
+| `--accent` | `#2a2730` |
+| `--accent-foreground` | `#d8d2cc` |
+| `--destructive` | `#e17f6e` |
+| `--border` | `#5a504a` |
+| `--input` | `#5a504a` |
+| `--ring` | `#7aa2ce` |
+| `--chart-1` | `#7aa2ce` |
+| `--chart-2` | `#8da96e` |
+| `--chart-3` | `#c29653` |
+| `--chart-4` | `#ca88a3` |
+| `--chart-5` | `#67ada7` |
+| `--sidebar` | `#1c1a20` |
+| `--sidebar-foreground` | `#d8d2cc` |
+| `--sidebar-primary` | `#7aa2ce` |
+| `--sidebar-primary-foreground` | `#1c1a20` |
+| `--sidebar-accent` | `#2a2730` |
+| `--sidebar-accent-foreground` | `#d8d2cc` |
+| `--sidebar-border` | `#5a504a` |
+| `--sidebar-ring` | `#7aa2ce` |
+
+Plus the selection rule, a `.dark ::selection` of **`#5a504a` over `#d8d2cc`**.
+
+**The palette's own rules**, quoted from its source: colour indices **0–8 are read-only and 9–15 clickable**; **0 (bamboo `#5a504a`) draws lines and sticks**; **7 (`#aba3af`) is secondary text**; **8 (`#87808c`) is dim text**; and **15 (shiro `#f3ead9`) is the brightest**. The accent the cockpit's own theme calls `accent` is **index 4, ramune** — `#7aa2ce`, what the table writes to `--primary`, `--ring` and `--sidebar-primary`.
+
+**Source of truth**: the Ghostty theme `~/.config/ghostty/themes/Dango` (v3) and the pi theme `dango.json` (`~/.local/share/cpd/pi/themes/dango.json`). The web theme **MUST agree with the table above**, so the test that pins it can fail when either drifts: the palette is pinned in `web/src/index.css`'s `.dark` block, and the test that pins it is the Dango assertions of `web/src/views/live-chat-shell.test.tsx` alongside the `index.css` clamp test there.
+
 ### The markdown a turn renders
 
 A turn's text is markdown, and the Chat parses it as **CommonMark plus GFM**. `react-markdown` alone parses CommonMark only, so a markdown table — which a Lead's status message is largely made of — rendered as a paragraph of pipe characters, and a task list, a strikethrough and a bare URL were lost. The prose parser therefore runs through **`remark-gfm`, pinned `4.0.1` and declared in `web/package.json`**; the mapping lives in `web/src/components/markdown.tsx` (the same file that maps a fenced block onto the Code Block). What a turn's text may contain, measured on the preview branch, 2026-11-01:
