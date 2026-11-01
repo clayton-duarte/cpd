@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::lint::{self, Severity};
 use super::outline::Outline;
 use super::overlap::{self, Overlap};
 use super::parked;
@@ -124,6 +125,8 @@ struct Snapshot {
     display: Display,
     review: Option<Review>,
     fingerprint: String,
+    /// The lint findings of the Plan, in catalogue order.
+    findings: Vec<lint::Finding>,
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
@@ -131,16 +134,19 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     env.store.read(|conn| {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
+        let plan_row = row::load(conn, id)?;
+        let findings = super::lint_cmd::find(conn, &plan_row, &prs, &jobs)?;
         Ok(Snapshot {
             open_tier,
             base_prs: base_prs(conn, id)?,
             display: Display::load(conn, id)?,
-            plan: row::load(conn, id)?,
+            plan: plan_row,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
             prs,
             jobs,
             overlaps,
+            findings,
         })
     })
 }
@@ -210,6 +216,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "draft_jobs": s.jobs.iter().filter(|j| j.is_under_review()).count(),
         "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
         "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
+        "warnings": warnings(&s),
     })))
 }
 
@@ -235,10 +242,9 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    env.store
-        .read(|conn| check_drafts_complete(conn, &id, jobs))?;
-    check_outline(&id, &s)?;
-    super::shape::check(&id, &s.prs, jobs)?;
+    if let Some(refusal) = lint::first_error(&s.findings) {
+        return Err(refusal);
+    }
     if let Some(r) = latest_review
         .as_ref()
         .filter(|r| r.status == "pending" && r.fingerprint == fingerprint)
@@ -248,6 +254,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
             "summary": summary_review_md(&env.home, &id, r.id).display().to_string(),
             "next": REVIEW_NEXT,
             "already": true,
+            "warnings": warnings(&s),
         })));
     }
 
@@ -308,7 +315,17 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         "review": {"id": review, "fingerprint": fingerprint, "status": "pending", "requested_at": requested_at},
         "summary": summary.display().to_string(),
         "next": REVIEW_NEXT,
+        "warnings": warnings(&s),
     })))
+}
+
+/// The findings of severity `warn`, as JSON, in finding order.
+fn warnings(s: &Snapshot) -> Vec<Value> {
+    s.findings
+        .iter()
+        .filter(|f| f.severity() == Severity::Warn)
+        .map(lint::Finding::to_json)
+        .collect()
 }
 
 /// Why [`close_reviews`] closes the pending reviews of a Plan.
@@ -364,15 +381,6 @@ pub fn close_reviews(
         closed.push(review);
     }
     Ok(closed)
-}
-
-/// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
-/// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
-fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
-    let Some(outline) = &s.plan.outline else {
-        return Err(outline_missing(id));
-    };
-    outline_incomplete(id, outline, &s.prs, &s.jobs).map_or(Ok(()), Err)
 }
 
 /// `outline_missing`: the Plan has no outline.
