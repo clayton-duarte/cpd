@@ -83,6 +83,7 @@ fn tests_centre(jobs: usize) -> Centre {
         lead_dot: None,
     };
     let job = |n: usize| JobNode {
+        kind: "work".into(),
         key: JobKey::parse(&format!("job-{n}")).unwrap(),
         pr: Some(pr.clone()),
         seq: 0,

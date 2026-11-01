@@ -124,7 +124,7 @@ fn plan_render_prints_the_shown_tier_in_the_table_and_the_section() {
     let text = store
         .read(|conn| {
             let display = Display::load(conn, &plan)?;
-            Ok(markdown(&Heading::Plan { title: "T" }, "ctx", "dispatch", &load_prs(conn, &plan)?, &jobs::load(conn, &plan)?, &[], "O1", &display))
+            Ok(markdown(&Heading::Plan { title: "T", plan: "p1" }, "ctx", "dispatch", &load_prs(conn, &plan)?, &jobs::load(conn, &plan)?, &[], "O1", &display))
         })
         .unwrap();
     let row = text.lines().find(|l| l.contains("Retried") && l.starts_with('|')).expect("the Job's table row");

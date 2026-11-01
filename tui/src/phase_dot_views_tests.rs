@@ -89,6 +89,7 @@ fn pr_node(lead_dot: Option<Dot>) -> PrNode {
 /// A failed Job of `api`, so the box title's Lead dot is the red loader.
 fn failed_job() -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse("j1").unwrap(),
         pr: Some(PrKey::parse("api").unwrap()),
         seq: 0,

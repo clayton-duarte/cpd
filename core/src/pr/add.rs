@@ -855,6 +855,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
                 cancel_requested_at: None,
                 failed_cause: None,
                 merged_sha: None,
+                summary: None,
                 created_at: String::new(),
                 needs: stub.needs.iter().cloned().collect(),
             };

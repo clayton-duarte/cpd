@@ -19,6 +19,10 @@ pub mod jobs;
 mod display_tier_tests;
 #[cfg(test)]
 mod explore_tests;
+#[cfg(test)]
+mod explore_render_tests;
+#[cfg(test)]
+mod render_all_jobs_tests;
 mod lead;
 mod list;
 pub(crate) mod lock;

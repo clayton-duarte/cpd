@@ -187,6 +187,8 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobNode {
     pub key: JobKey,
+    /// The Job's kind (`jobs.kind`, §2.2 "Job kinds").
+    pub kind: String,
     /// The Job's PR (`jobs.pr`), `None` exactly for an explore Job of the Plan.
     pub pr: Option<PrKey>,
     pub seq: i64,
@@ -484,6 +486,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
             };
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
+                kind: j.kind.clone(),
                 pr,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,

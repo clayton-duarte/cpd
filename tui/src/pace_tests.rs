@@ -90,6 +90,7 @@ fn pull() -> Pull {
 
 fn job_node(key: &str, status: JobStatus) -> JobNode {
     JobNode {
+        kind: "work".into(),
         key: JobKey::parse(key).unwrap(),
         pr: Some(PrKey::parse("web").unwrap()),
         seq: 0,

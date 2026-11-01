@@ -67,6 +67,8 @@ pub struct Job {
     pub cancel_requested_at: Option<String>,
     pub failed_cause: Option<String>,
     pub merged_sha: Option<String>,
+    /// An explore Job's bounded summary (`jobs.summary`): set exactly when an explore Job is `merged`.
+    pub summary: Option<String>,
     pub created_at: String,
     /// Keys of the Jobs it needs, sorted.
     pub needs: Vec<String>,
@@ -170,7 +172,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
-                kind, tests, test_files, test_approved, resources, touches_approved
+                kind, tests, test_files, test_approved, resources, summary, touches_approved
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -182,12 +184,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
                 (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
-                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?, r.get::<_, Option<String>>(25)?),
+                (r.get::<_, String>(20)?, r.get::<_, Option<String>>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?, r.get::<_, Option<String>>(25)?, r.get::<_, Option<String>>(26)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources, touches_approved))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, urgent), (kind, tests, test_files, test_approved, resources, summary, touches_approved))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -230,6 +232,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 cancel_requested_at,
                 failed_cause,
                 merged_sha,
+                summary,
                 created_at,
             })
         })
@@ -342,6 +345,7 @@ mod tests {
             cancel_requested_at: None,
             failed_cause: None,
             merged_sha: None,
+            summary: None,
             created_at: "t".into(),
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
         }
