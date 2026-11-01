@@ -22,13 +22,36 @@ test("parsePiSession reads a real pi session JSONL into user and assistant messa
   const messages = parsePiSession(piJsonl());
   // Only the two roles are kept, one message per line, in file order (rules 1-2, 4).
   expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
-  expect(messages[0]).toEqual({ id: "3ad4fe91", role: "user", text: "ping" });
+  expect(messages[0]).toEqual({
+    id: "3ad4fe91",
+    role: "user",
+    text: "ping",
+    parts: [{ kind: "text", text: "ping" }],
+  });
   expect(messages[1]).toEqual({
     id: "79cefd99",
     role: "assistant",
     text: "Pong. What can I help you with?",
+    parts: [
+      { kind: "thinking", text: "The user is saying ping, a test message." },
+      { kind: "text", text: "Pong. What can I help you with?" },
+    ],
   });
-  expect(messages[2]).toEqual({ id: "eca18d09", role: "assistant", text: "Now edit." });
+  expect(messages[2]).toEqual({
+    id: "eca18d09",
+    role: "assistant",
+    text: "Now edit.",
+    parts: [
+      { kind: "text", text: "Now edit." },
+      {
+        kind: "tool",
+        id: "toolu_01MXiEMgHDHN3YqwrJipagP7",
+        name: "bash",
+        args: { command: "sed -n '1,5p' docs/contract.md" },
+        state: "running",
+      },
+    ],
+  });
 });
 
 test("parsePiSession keeps text blocks and skips thinking, toolCall and system", () => {
@@ -48,7 +71,9 @@ test("parsePiSession keeps text blocks and skips thinking, toolCall and system",
   const strung = parsePiSession(
     '{"type":"message","id":"s1","message":{"role":"user","content":"as is"}}',
   );
-  expect(strung).toEqual([{ id: "s1", role: "user", text: "as is" }]);
+  expect(strung).toEqual([
+    { id: "s1", role: "user", text: "as is", parts: [{ kind: "text", text: "as is" }] },
+  ]);
 });
 
 test("parseTailOutput reads the cpd session tail grammar into messages", () => {
