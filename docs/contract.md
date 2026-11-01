@@ -4716,6 +4716,10 @@ The wait is through the port, not a raw `UnixStream`, so a test fakes it: `core/
 - `engine/src/doctor/runner_tests.rs` (`cpd_engine::doctor::runner_tests::host_runner_check_fails_without_the_adapter`): a config with `lead_runner = "durable"` and a `pi_adapter` dir without `pi/durable-host/main.ts` fails the check.
 - `cli/src/ambient_run_with_tests.rs` (`cpd::ambient_run_with_tests::session_open_waits_for_the_socket`): `run_with` + `Fakes`, a durable Session, the socket absent then accepting through `FakeHostSocket`: the command waits and returns, and opens no pane. Nothing real runs: the port is the fake, the clock is the `ManualClock`, no socket opens.
 
+### 6.20 The socket tail and the end-to-end verify (P1.11)
+
+<!-- p1-11-docs-r-a1: section written in progress -->
+
 ## 7. git and the Gate
 
 cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).

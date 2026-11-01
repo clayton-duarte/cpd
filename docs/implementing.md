@@ -829,6 +829,10 @@ Contract §6.19 fixes how the engine starts and supervises one durable session h
 
 **3. The tests.** Their home is contract §6.19's "Tests". `engine/src/watch/hosts_tests.rs` is registered like `durable_e2_tests.rs` in `engine/src/watch/mod.rs:52-53` and is written on the `Fx` fixture of `engine/src/watch/testkit.rs:46-215` with the fake ports (`ManualClock`, `FakeRunner`, `FakeSpawn`): the eight cases of §6.19 (the start's command, env and cwd; no host for a pi Session; one host per Session; the restart; the bound and its `host crash loop` label; the window reset; the sleep/archive stop; the lock file and the second start's `host_running`). `core/src/config/runner_tests.rs` holds the two keys' default and independence; `engine/src/doctor/runner_tests.rs` holds the `host_runner` failure without the adapter; `cli/src/ambient_run_with_tests.rs` holds the durable `session open` wait through `run_with` and `Fakes` (the socket absent then accepting). The config and doctor tests are pure; the step tests call `hosts::run` once per tick; the cli test drives the command with the fake socket. No test opens a socket, starts a process, runs real tmux or pi-durable, or sleeps. The statement §6.19 marks unverified (that an inherited `flock` survives the spawn) is pinned by the tests that exercise the lock with `FakeSpawn`, not by a real run.
 
+## The socket tail and the end-to-end verify (P1.11)
+
+<!-- p1-11-docs-r-a1: section written in progress -->
+
 ## Measuring tool-result bloat (hs-d737)
 
 **Command.** `node pi/measure/session-bloat.ts [--root <dir>] [--since <ISO time>] [--until <ISO time>] [--top <n>] [--json]`; it reads every `*.jsonl` file one directory below `--root` (default: pi's agent sessions directory, `~/.pi/agent/sessions`), never writes or changes a file, and exits 0 with a report. A bad option, a bad time or an unreadable root exits 2 with one line on stderr (no silent default).

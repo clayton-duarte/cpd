@@ -3080,6 +3080,10 @@ Effects:
 
 `event` is the id of the `session-resumed` Event. Idempotent: no; each call is one Event. A second call finds the Session no longer blocked once the adapter has acted.
 
+### 10.19 `session tail` (P1.11)
+
+<!-- p1-11-docs-r-a1: section written in progress -->
+
 ## 10a. `board` (hs-d514)
 
 The message board: a SQLite table whose posts name who they are for (to), read by `cpd board list` and picked up at an agent's turn start by `cpd board take`. Posts are written by `cpd board post` and never start a turn (hs-d514). Important facts stay Context records.
