@@ -818,6 +818,17 @@ The command surface of PRs; `commands.md` specifies each command in full.
 
 ### 2.6 Shared files
 
+A **shared file** is a lockfile that every Job of a repo may legitimately touch. The predicate `is_shared(path: &str) -> bool` (decision pro-q8, `core/src/plan/shared.rs`) is true exactly when the **file name**, the part of `path` after its last `/` (the whole string when it has no `/`), is one of the four names below, at any depth:
+
+| File name | Shared when |
+|---|---|
+| `Cargo.lock` | the file name is exactly `Cargo.lock`, at any depth |
+| `pnpm-lock.yaml` | the file name is exactly `pnpm-lock.yaml`, at any depth |
+| `package-lock.json` | the file name is exactly `package-lock.json`, at any depth |
+| `yarn.lock` | the file name is exactly `yarn.lock`, at any depth |
+
+Nothing else is shared: not a substring (`Cargo.lock.bak`, `my-Cargo.lock`), not a directory (a path ending in `/` has the empty name), not another lockfile (`bun.lockb`, `go.sum`). The match is case-sensitive (`cargo.lock` is not shared). The predicate reads the string only and does no file system access. It is a pure function of the path string; its callers decide what to do with it (the overlap warning of Plan lint exempts shared files, the only caller defined so far).
+
 ## 3. State machines
 
 Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E15) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
