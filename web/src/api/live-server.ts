@@ -55,9 +55,40 @@ const SESSION_ROUTE = /^\/__cpd\/sessions\/([^/]+)\/(transcript|frames|send)$/;
 const TOKEN_QUERY = "token";
 /** How often the frames stream checks for a change. */
 const POLL_MS = 1000;
+/**
+ * How many of the newest messages one `frames` snapshot carries. A whole pi transcript reaches
+ * tens of megabytes, and Chrome's `EventSource` silently drops an event that large (measured
+ * 2026-11-01: a 20 MB single `data:` line never fired `onmessage`, a 53-byte one did). The live
+ * frame is the tail; older turns arrive through the transcript route's paging.
+ */
+const SNAPSHOT_TAIL = 40;
+/**
+ * The bytes one `frames` snapshot may hold, oldest turns dropped first. Measured on Chrome
+ * 2026-11-01: a 1 MB and a 2 MB event fired `onmessage`, a 4 MB, 8 MB and 20 MB one never did.
+ * The budget sits at half the smallest size known to fail, and the dropped turns are a paged read
+ * away, so nothing is lost.
+ */
+const SNAPSHOT_BUDGET_BYTES = 1_000_000;
+/** The most messages one paged transcript read returns. */
+const PAGE_MAX = 500;
 /** The body limits of contract 10.13. */
 const TEXT_MAX = 20_000;
 const UNBLOCKS_MAX = 200;
+
+/** The newest turns within `SNAPSHOT_TAIL` and `SNAPSHOT_BUDGET_BYTES`; never nothing. */
+function snapshotTail(messages: readonly TranscriptMessage[]): readonly TranscriptMessage[] {
+  const tail: TranscriptMessage[] = [];
+  let bytes = 0;
+  for (let at = messages.length - 1; at >= 0 && tail.length < SNAPSHOT_TAIL; at -= 1) {
+    const message = messages[at]!;
+    const size = JSON.stringify(message).length;
+    // The newest turn goes in whatever its size; an empty snapshot would blank the Chat.
+    if (tail.length > 0 && bytes + size > SNAPSHOT_BUDGET_BYTES) break;
+    bytes += size;
+    tail.unshift(message);
+  }
+  return tail;
+}
 
 /** The configured token; `dev-token` until `CPD_WEB_TOKEN` says otherwise. */
 function expectedToken(): string {
@@ -106,13 +137,34 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     return readDurable(session);
   };
 
-  const handleTranscript = async (res: ServerResponse, id: string): Promise<void> => {
+  const handleTranscript = async (res: ServerResponse, id: string, url: URL): Promise<void> => {
     const session = (await deps.list()).find((candidate) => candidate.id === id);
     if (session === undefined) {
       sendJson(res, 404, { ok: false, error: "session not found" });
       return;
     }
-    sendJson(res, 200, { ok: true, session: id, messages: await readTranscript(session) });
+    const all = await readTranscript(session);
+    // No paging asked for: the whole transcript, as before.
+    if (!url.searchParams.has("limit")) {
+      sendJson(res, 200, { ok: true, session: id, messages: all });
+      return;
+    }
+    const limit = Math.min(
+      Math.max(Number(url.searchParams.get("limit") ?? "") || SNAPSHOT_TAIL, 1),
+      PAGE_MAX,
+    );
+    // `before` is the oldest id the client holds; the page ends just above it. An unknown id
+    // (a compacted transcript, a restarted adapter) answers the newest page rather than guessing.
+    const before = url.searchParams.get("before");
+    const at = before === null ? all.length : all.findIndex((message) => message.id === before);
+    const end = at < 0 ? all.length : at;
+    const start = Math.max(0, end - limit);
+    sendJson(res, 200, {
+      ok: true,
+      session: id,
+      messages: all.slice(start, end),
+      more: start > 0,
+    });
   };
 
   const handleSend = async (req: IncomingMessage, res: ServerResponse, id: string): Promise<void> => {
@@ -153,9 +205,11 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     });
 
     let seq = 0;
+    // The frame carries the newest turns only: a whole transcript is too large for EventSource.
     const writeFrame = (messages: readonly TranscriptMessage[]): void => {
       seq += 1;
-      res.write(`data: ${JSON.stringify(toSnapshotFrame(messages, "live", seq))}\n\n`);
+      const tail = snapshotTail(messages);
+      res.write(`data: ${JSON.stringify(toSnapshotFrame(tail, "live", seq))}\n\n`);
     };
 
     // The change signal is read before the first snapshot, so a change after it is seen.
@@ -235,7 +289,7 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
       const id = decodeURIComponent(match[1] ?? "");
       const action = match[2];
       if (action === "transcript" && method === "GET") {
-        await handleTranscript(res, id);
+        await handleTranscript(res, id, url);
         return true;
       }
       if (action === "send" && method === "POST") {
