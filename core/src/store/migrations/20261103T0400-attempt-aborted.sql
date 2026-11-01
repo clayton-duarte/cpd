@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 86
+-- cpd-migration: breaking after 91
 -- `aborted` joins the `attempts.cause` and `attempts.stop_request` CHECKs (contract §3.4 "attempt abort",
 -- commands.md §6.5, hs-a8): `attempt abort` ends a running Attempt `failed` / `aborted` and, when a merge step
 -- is running, sets `stop_request = 'aborted'`. `ALTER TABLE` cannot change a CHECK, so `attempts` is rebuilt as
