@@ -950,11 +950,9 @@ fn cancel_cancels_a_draft_dependent() {
     plan(&fx.env, "pl", "plan");
     job_add(&fx, "pl", "q", "S2", &[]).ok();
     lock(&fx.env, "pl");
-    // A draft appended after the lock, needing the queued Job `q`.
-    let spec = spec_file(&fx.env);
+    // A stub draft appended after the lock, needing the queued Job `q` (a complete one would be a parked draft).
     let run = fx.cpd(&[
-        "job", "add", "dd", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "q",
-        "--draft", "--plan", "pl",
+        "job", "add", "dd", "--title", "T", "--needs", "q", "--draft", "--plan", "pl",
     ]);
     run.ok();
     assert_eq!(job_row(&fx.env, "pl", "dd", "status"), "draft");
@@ -1843,6 +1841,8 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         job_add(&fx, "pl", "a", "S2", &[]).ok();
+        // `a` is merged: a complete draft that needs it does not wait, so the door accepts `d`.
+        engine(&fx.env, "pl", "a", "merged");
 
         let out = job_add_draft(&fx, "pl", "d", &["a"], &[]).ok();
         assert_eq!(
@@ -1944,9 +1944,9 @@ fn a_queued_job_may_not_need_a_draft() {
         (txns, evs, rows)
     );
 
-    // As drafts both are added: they are queued together when the review of the drafts is approved.
+    // A stub draft may need both the queued `a` and the draft `d`: only its incompleteness keeps it legal.
     assert_eq!(
-        job_add_draft(&fx, "pl", "q", &["a", "d"], &[]).ok()["job"]["status"],
+        stub_add(&fx, "pl", "q", &["--needs", "a,d"]).ok()["job"]["status"],
         "draft"
     );
 }
@@ -2158,9 +2158,9 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         setup(&fx.env);
         plan(&fx.env, "pl", phase);
         let spec = spec_file(&fx.env);
-        // `a` is queued after the lock: the stubs that need it wait (the door, hs-d731).
+        // `a` is queued after the lock; a stub that needs it is legal (hs-d822).
         job_add(&fx, "pl", "a", "S2", &[]).ok();
-        stub_add(&fx, "pl", "k", &["--needs", "a"]).ok();
+        stub_add(&fx, "pl", "k", &[]).ok();
 
         let out = job(&fx, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
         assert_eq!(
@@ -2208,7 +2208,7 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         );
 
         // The Tier alone, then the Spec alone, complete a stub in two edits.
-        stub_add(&fx, "pl", "two", &["--needs", "a"]).ok();
+        stub_add(&fx, "pl", "two", &[]).ok();
         assert_eq!(
             job(&fx, &["edit", "two", "--tier", "S3"], "pl").ok()["fields"],
             json!(["tier"]),
@@ -2234,7 +2234,7 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
             (json!("S3"), json!("Do it."))
         );
 
-        // A title edit leaves a stub a stub.
+        // A title edit leaves a waiting stub a stub: a stub that needs a queued Job is legal on its own.
         stub_add(&fx, "pl", "three", &["--needs", "a"]).ok();
         assert_eq!(
             job(&fx, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"],
