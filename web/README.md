@@ -433,6 +433,8 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 - A root row's label is the manager's `name`, falling back to the context; a nested row's label is the lead's `name`, falling back to its id.
 - The rail's header carries `cpd` with the Context count beneath it (`1 context`, `4 contexts`, `No contexts` at zero) — never the `sidebar-03` block's `Documentation` / `v1.0.0`.
 
+The rail cannot be collapsed: by the User's decision of 2026-11-01 it no longer renders `sidebar-03`'s `SidebarRail` — the 4px strip at the rail's edge, which an accidental click collapsed the whole rail through — so it has no collapse affordance at all.
+
 **The ids.** Every row is a real `<button>` — not a link — carrying `data-session-id` (the full uuid) and `title` (the same uuid), and showing the id's first 8 characters muted beside the label.
 
 **The selection.** The rail is the Chat's only navigation:
@@ -452,9 +454,9 @@ The right column stops being a placeholder ("The Inbox lands here.") and becomes
 
 **What the block is.** `sidebar-09` ("Collapsible nested sidebars", https://ui.shadcn.com/r/styles/new-york-v4/sidebar-09.json) is two sidebars side by side: an icon column — Inbox, Drafts, Sent, Junk, Trash under an Acme Inc header and the sample user — and, beside it, the mail list.
 
-**What is vendored.** Only the block's second sidebar — its header (the title over the `SidebarInput` whose placeholder is `Type to search...`) and its mail list. Each row is an anchor and renders the name with its date pushed right (`ml-auto text-xs`), the subject in `font-medium`, then the teaser in `line-clamp-2 w-[260px] text-xs whitespace-break-spaces`, under the block's row classes `flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground` — rows and classes verbatim.
+**What is vendored.** Only the block's second sidebar — its header (the title alone) and its mail list. Each row is an anchor and renders the name with its date pushed right (`ml-auto text-xs`), the subject in `font-medium`, then the teaser in `line-clamp-2 w-[260px] text-xs whitespace-break-spaces`, under the block's row classes `flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground` — rows and classes verbatim.
 
-**What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column) and the `Unreads` switch in the second sidebar's header.
+**What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column), the `Unreads` switch in the second sidebar's header, and the `Type to search...` input the block puts under the title — so the header carries the title `Inbox` alone and the rail has no input at all.
 
 **The data.** The ten mails are the registry's own sample data (`data.mails`), verbatim and in its order. Reading the real Inbox is a named follow-up: this rail is the block's sample list, not the store.
 
