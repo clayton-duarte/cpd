@@ -49,7 +49,7 @@ type Owned = (PlanId, WorkflowKey, pulls::PullRequest);
 /// An owned PR whose policy did not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`).
 struct Unresolved {
     plan: PlanId,
-    pr: WorkflowKey,
+    workflow: WorkflowKey,
     number: i64,
     error: CpdError,
 }
@@ -57,7 +57,7 @@ struct Unresolved {
 /// A PR whose pull request GitHub repointed: the PR's `base` follows it (§7.6 step 6, hs-d325).
 struct Follow {
     plan: PlanId,
-    pr: WorkflowKey,
+    workflow: WorkflowKey,
     from: String,
     to: String,
     number: i64,
@@ -75,7 +75,7 @@ struct Follow {
 /// whether that default branch holds commits the Lead Branch lacks without a conflict.
 struct Ahead {
     plan: PlanId,
-    pr: WorkflowKey,
+    workflow: WorkflowKey,
     /// True when the default branch holds commits the Lead Branch lacks and the two merge cleanly.
     ahead: bool,
 }
@@ -110,14 +110,14 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     for (plan, key, row) in &owned {
         match super::workflow_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
             Ok(policy) => checks.push(Resolved { plan: plan.clone(), key: key.clone(), checks: policy.workflow.feedback.checks, post_enabled: policy.workflow.post.enabled, human_gated: policy.workflow.human_gated_contexts.clone(), excused_labels: policy.workflow.excused_labels.clone(), excused: false, required: policy.workflow.required_checks.clone() }),
-            Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
+            Err(error) => unresolved.push(Unresolved { plan: plan.clone(), workflow: key.clone(), number: row.number, error }),
         }
     }
 
     // The stored open pull requests a search missed are read directly (§7.6 step 3): owned and listed by neither search,
     // or flagged for a search that did not list them. A search's absence deletes, moves and unflags nothing.
     let stored = env.store.read(pulls::stored_open)?;
-    let listed_in = |row: &pulls::PullRequest| search.workflows.iter().find(|l| l.workflow.repo == row.repo && l.workflow.number == row.number);
+    let listed_in = |row: &pulls::PullRequest| search.prs.iter().find(|l| l.pr.repo == row.repo && l.pr.number == row.number);
     let candidates: Vec<&pulls::PullRequest> = stored
         .iter()
         .filter(|row| {
@@ -128,18 +128,18 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         .collect();
     let keys: Vec<(String, i64)> = candidates.iter().map(|row| (row.repo.clone(), row.number)).collect();
     let read = gh::read_absent(&*env.ports.runner, &root, &keys, &env.config.inbox.bot_reviewers)?;
-    let mut seen: Vec<Listed> = search.workflows.iter().filter(|l| !keys.contains(&(l.workflow.repo.clone(), l.workflow.number))).cloned().collect();
+    let mut seen: Vec<Listed> = search.prs.iter().filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number))).cloned().collect();
     for (row, read) in candidates.iter().zip(read) {
         let found = listed_in(row);
         match read {
             // `OPEN`: the read is fresher; each flag a search listed it in stays, and the read adds its own.
-            Some(Listed { workflow, membership }) if workflow.state == PrState::Open => {
+            Some(Listed { pr, membership }) if pr.state == PrState::Open => {
                 let search_flags = found.map(|l| l.membership).unwrap_or_default();
                 let membership = gh::Membership {
                     authored: search_flags.authored || membership.authored,
                     review_requested: search_flags.review_requested || membership.review_requested,
                 };
-                seen.push(Listed { workflow, membership });
+                seen.push(Listed { pr, membership });
             }
             // `MERGED` or `CLOSED`: the row takes the state, with no flag.
             Some(decided) => seen.push(decided),
@@ -162,8 +162,8 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut confirm: Vec<(String, i64)> = Vec::new();
     let mut lists: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     for listed in &seen {
-        let (repo, number) = (&listed.workflow.repo, listed.workflow.number);
-        if listed.workflow.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
+        let (repo, number) = (&listed.pr.repo, listed.pr.number);
+        if listed.pr.state != PrState::Open || confirm.contains(&(repo.clone(), number)) {
             continue;
         }
         let mine = owned.iter().filter(|(_, _, row)| row.repo == *repo && row.number == number).filter_map(|(plan, key, _)| checks_of(&checks, plan, key));
@@ -173,7 +173,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         if policies.is_empty() {
             policies.push((false, Vec::new(), repo_required(&env.home, repo).unwrap_or_default())); // an unreadable policy is reported for the owned PRs above
         }
-        let wanted = |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.workflow.checks {
+        let wanted = |(any, gated, required): &&(bool, Vec<String>, Vec<String>)| match listed.pr.checks {
             ChecksSummary::Failed => *any,
             ChecksSummary::Pending => !gated.is_empty(),
             ChecksSummary::Passed | ChecksSummary::None => !required.is_empty(),
@@ -185,8 +185,8 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
     let confirmed = gh::read_checks(&*env.ports.runner, &root, &confirm)?;
     for listed in &mut seen {
-        if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.workflow.repo && *number == listed.workflow.number) {
-            listed.workflow.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
+        if let Some(i) = confirm.iter().position(|(repo, number)| *repo == listed.pr.repo && *number == listed.pr.number) {
+            listed.pr.checks = ChecksSummary::of(&confirmed[i].checks, &lists[i].0, &lists[i].1);
         }
     }
 
@@ -198,14 +198,14 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     }
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
-    let follows = env.store.read(|conn| follows(conn, &owned, &search.workflows))?;
+    let follows = env.store.read(|conn| follows(conn, &owned, &search.prs))?;
     // The base PR's merge repoints whose default branch is ahead of the Lead Branch (§3.7 E5, hs-d794): the git
     // check of the read phase (§7.6), before the write transaction of D5.
     let ahead = env.store.read(|conn| ahead_of(conn, &follows))?;
 
     let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
-            match pulls::find(conn, &listed.workflow.repo, listed.workflow.number)? {
+            match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
                 Some(row) if row.holds(listed, read_of(&reads, listed))? => {}
                 _ => return Ok(true),
             }
@@ -230,7 +230,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
 
     let pair = |(plan, workflow): &(PlanId, WorkflowKey)| json!({"plan": plan, "pr": workflow});
     let mut out = json!({
-        "polled": search.workflows.len(),
+        "polled": search.prs.len(),
         "changed": outcome.changed,
         "base_changed": outcome.base_changed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
@@ -288,10 +288,10 @@ fn apply(
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
         let mut listed = listed.clone();
-        if listed.workflow.state == PrState::Merged && listed.workflow.merged_at.is_none() {
-            listed.workflow.merged_at = Some(pulls::txn_time(tx)?);
+        if listed.pr.state == PrState::Merged && listed.pr.merged_at.is_none() {
+            listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
-        let polled = &listed.workflow;
+        let polled = &listed.pr;
         let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else { continue };
         let after = &change.after;
         if after.state == "merged" {
@@ -336,7 +336,7 @@ fn apply(
 
 /// The comments read of the pull request `listed`, if this poll made one.
 fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
-    reads.iter().find(|r| r.repo == listed.workflow.repo && r.number == listed.workflow.number)
+    reads.iter().find(|r| r.repo == listed.pr.repo && r.number == listed.pr.number)
 }
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
@@ -352,20 +352,20 @@ fn follows(conn: &rusqlite::Connection, owned: &[Owned], listed: &[Listed]) -> R
     };
     let mut found = Vec::new();
     for (plan, key, row) in owned {
-        let Some(listing) = listed.iter().find(|l| (&l.workflow.repo, l.workflow.number) == (&row.repo, row.number)) else { continue };
-        let Some(to) = listing.workflow.base_ref.as_ref() else { continue };
+        let Some(listing) = listed.iter().find(|l| (&l.pr.repo, l.pr.number) == (&row.repo, row.number)) else { continue };
+        let Some(to) = listing.pr.base_ref.as_ref() else { continue };
         let stored: Option<(String, String)> = stored.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         if let Some((from, repo)) = stored.filter(|(from, _)| from != to) {
             found.push(Follow {
                 plan: plan.clone(),
-                pr: key.clone(),
+                workflow: key.clone(),
                 from_workflow: base_workflow(&repo, &from)?,
                 to_workflow: base_workflow(&repo, to)?,
                 from,
                 to: to.clone(),
                 number: row.number,
                 url: row.url.clone(),
-                default_branch: listing.workflow.default_branch.clone(),
+                default_branch: listing.pr.default_branch.clone(),
             });
         }
     }
@@ -391,7 +391,7 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow, ahead: bool, tier: Tier) -> R
         _ => "the base changed on GitHub".to_owned(),
     };
     let text = format!(
-        "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
+        "PR {workflow} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
          Read it with cpd plan show --plan {plan}."
     );
     let event = NewEvent::workflow_base_changed(text, workflow, (from, to), (from_workflow.as_deref(), to_workflow.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
@@ -419,7 +419,7 @@ fn ahead_of(conn: &rusqlite::Connection, follows: &[Follow]) -> Result<Vec<Ahead
             })
             .optional()?;
         let Some((repo, lead)) = row else { continue };
-        out.push(Ahead { plan: follow.plan.clone(), pr: follow.workflow.clone(), ahead: base_ahead(Path::new(&repo), &follow.to, &lead) });
+        out.push(Ahead { plan: follow.plan.clone(), workflow: follow.workflow.clone(), ahead: base_ahead(Path::new(&repo), &follow.to, &lead) });
     }
     Ok(out)
 }
@@ -500,10 +500,10 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
     }
     env.store.write(COMMAND, |tx| {
         for Unresolved { plan, workflow, number, error } in &fresh {
-            let message = format!("The policy of PR {pr} (#{number}) of Plan {plan} did not resolve: {}", error.message());
+            let message = format!("The policy of PR {workflow} (#{number}) of Plan {plan} did not resolve: {}", error.message());
             let next = match error.details().get("next").and_then(Value::as_str) {
                 Some(next) => next.to_owned(),
-                None => format!("cpd policy show --pr {pr} --plan {plan}"),
+                None => format!("cpd policy show --pr {workflow} --plan {plan}"),
             };
             let text = format!("{message} The poll sends this PR no pr-feedback until it does; every other PR is polled. Next: {next}");
             let mut details = error.details().clone();
@@ -675,10 +675,10 @@ fn due_reads(owned: &[(PlanId, WorkflowKey, pulls::PullRequest)], seen: &[Listed
     for (_, _, row) in owned {
         let open_feedback = row.feedback.as_ref().is_some_and(|items| !items.is_empty());
         let is_due = seen.iter().any(|l| {
-            l.workflow.repo == row.repo
-                && l.workflow.number == row.number
-                && l.workflow.state == PrState::Open
-                && (open_feedback || row.updated_at.as_deref() != Some(l.workflow.updated_at.as_str()))
+            l.pr.repo == row.repo
+                && l.pr.number == row.number
+                && l.pr.state == PrState::Open
+                && (open_feedback || row.updated_at.as_deref() != Some(l.pr.updated_at.as_str()))
         });
         if is_due && !due.contains(&(row.repo.clone(), row.number)) {
             due.push((row.repo.clone(), row.number));

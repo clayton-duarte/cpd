@@ -57,7 +57,7 @@ pub enum Command {
     Board(board::Command),
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
-    Pr(pr::Command),
+    Workflow(pr::Command),
     /// The GitHub review (commands.md §31.1)
     #[command(subcommand)]
     Review(pr::review::Command),
@@ -181,7 +181,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
-        Command::Pr(c) => pr::run(ports, c),
+        Command::Workflow(c) => pr::run(ports, c),
         Command::Review(c) => pr::review::run(ports, c),
         Command::Policy(c) => policy::run(c),
         Command::Mcp(c) => mcp::run(c),

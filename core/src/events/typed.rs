@@ -74,12 +74,12 @@ impl NewEvent {
     }
 
     /// `plan lock`: the Jobs it queued and the PRs it started.
-    pub fn plan_phase_locked(text: impl Into<String>, jobs: impl Serialize, prs: impl Serialize) -> NewEvent {
+    pub fn plan_phase_locked(text: impl Into<String>, jobs: impl Serialize, workflows: impl Serialize) -> NewEvent {
         make(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": jobs, "prs": workflows}))
     }
 
     /// The last PR opened: the PRs that are open.
-    pub fn plan_phase_deployed(text: impl Into<String>, prs: impl Serialize) -> NewEvent {
+    pub fn plan_phase_deployed(text: impl Into<String>, workflows: impl Serialize) -> NewEvent {
         make(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": workflows}))
     }
 
@@ -114,13 +114,13 @@ impl NewEvent {
         make(Kind::PlanOutlined, text, json!({"replaced": replaced}))
     }
 
-    pub fn plan_done(text: impl Into<String>, prs: impl Serialize) -> NewEvent {
+    pub fn plan_done(text: impl Into<String>, workflows: impl Serialize) -> NewEvent {
         make(Kind::PlanDone, text, json!({"prs": workflows}))
     }
 
     pub fn job_added(
         text: impl Into<String>,
-        pr: impl Serialize,
+        workflow: impl Serialize,
         kind: &str,
         status: &str,
         appended: bool,
@@ -137,7 +137,7 @@ impl NewEvent {
 
     /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its PR remains) and `appended`, and its
     /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict`).
-    pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
+    pub fn job_added_by_cpd(text: impl Into<String>, workflow: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
             "pr": workflow, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "urgent": false, "by": by,
         });
@@ -221,13 +221,13 @@ impl NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
     }
 
-    pub fn all_merged(text: impl Into<String>, pr: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
+    pub fn all_merged(text: impl Into<String>, workflow: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
         make(Kind::AllMerged, text, json!({"pr": workflow, "merged": merged, "cancelled": cancelled}))
     }
 
     pub fn pr_feedback(
         text: impl Into<String>,
-        pr: &str,
+        workflow: &str,
         number: i64,
         url: &str,
         state: &str,
@@ -249,30 +249,30 @@ impl NewEvent {
         )
     }
 
-    pub fn workflow_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, head_ref: Option<&str>, author: Option<&str>, needs: impl Serialize, appended: bool) -> NewEvent {
+    pub fn workflow_added(text: impl Into<String>, workflow: impl Serialize, repo: &str, base: &str, title: &str, head_ref: Option<&str>, author: Option<&str>, needs: impl Serialize, appended: bool) -> NewEvent {
         make(Kind::WorkflowAdded, text, json!({"pr": workflow, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
     }
 
-    pub fn workflow_edited(text: impl Into<String>, pr: impl Serialize, fields: impl Serialize) -> NewEvent {
+    pub fn workflow_edited(text: impl Into<String>, workflow: impl Serialize, fields: impl Serialize) -> NewEvent {
         make(Kind::WorkflowEdited, text, json!({"pr": workflow, "fields": fields}))
     }
 
-    pub fn workflow_described(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
+    pub fn workflow_described(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
         make(Kind::WorkflowDescribed, text, json!({"pr": workflow}))
     }
 
-    pub fn workflow_cancelled(text: impl Into<String>, pr: impl Serialize) -> NewEvent {
+    pub fn workflow_cancelled(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
         make(Kind::WorkflowCancelled, text, json!({"pr": workflow}))
     }
 
     /// `pr-cancelled` of a `dispatch` PR whose work another PR carried (§3.8, hs-d301): `superseded_by` is that PR as a reference.
-    pub fn workflow_cancelled_superseded(text: impl Into<String>, pr: impl Serialize, superseded_by: &str) -> NewEvent {
+    pub fn workflow_cancelled_superseded(text: impl Into<String>, workflow: impl Serialize, superseded_by: &str) -> NewEvent {
         make(Kind::WorkflowCancelled, text, json!({"pr": workflow, "superseded_by": superseded_by}))
     }
 
     pub fn workflow_started(
         text: impl Into<String>,
-        pr: impl Serialize,
+        workflow: impl Serialize,
         repo: &str,
         base: &str,
         lead_branch: &str,
@@ -295,7 +295,7 @@ impl NewEvent {
     /// `pr-base-changed` (§5.2): `number` and `url` are in `data` for `by` `poll` only, see [`BasePull`].
     pub fn workflow_base_changed(
         text: impl Into<String>,
-        pr: impl Serialize,
+        workflow: impl Serialize,
         (from, to): (&str, &str),
         (from_workflow, to_workflow): (Option<&str>, Option<&str>),
         by: &str,
@@ -316,11 +316,11 @@ impl NewEvent {
         make(Kind::WorkflowBaseChanged, text, data)
     }
 
-    pub fn pr_opened(text: impl Into<String>, pr: impl Serialize, number: i64, url: &str) -> NewEvent {
+    pub fn pr_opened(text: impl Into<String>, workflow: impl Serialize, number: i64, url: &str) -> NewEvent {
         make(Kind::PrOpened, text, json!({"pr": workflow, "number": number, "url": url}))
     }
 
-    pub fn pr_merged(text: impl Into<String>, pr: impl Serialize, number: i64, url: &str, merged_at: Option<&str>) -> NewEvent {
+    pub fn pr_merged(text: impl Into<String>, workflow: impl Serialize, number: i64, url: &str, merged_at: Option<&str>) -> NewEvent {
         make(Kind::PrMerged, text, json!({"pr": workflow, "number": number, "url": url, "merged_at": merged_at}))
     }
 

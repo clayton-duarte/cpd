@@ -32,13 +32,13 @@ struct Fixture {
 
 /// Plan `pay` in `phase` with `prs` PRs (`api`, `web`), in a temp `$CPD_HOME` whose Catalog has every effort 0-5 of every model.
 /// `repo` is the PRs' repo path.
-fn fixture_at(phase: &str, prs: &[&str], repo: Option<&std::path::Path>) -> Fixture {
+fn fixture_at(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>) -> Fixture {
     fixture_with(phase, workflows, repo, false)
 }
 
 /// [`fixture_at`], or, with `repo_is_temp_dir`, with the PRs' repo the temp dir that holds `$CPD_HOME` (known once the dir exists,
 /// and fixed at insert: the `prs_locked` trigger refuses a later change of `repo`).
-fn fixture_with(phase: &str, prs: &[&str], repo: Option<&std::path::Path>, repo_is_temp_dir: bool) -> Fixture {
+fn fixture_with(phase: &str, workflows: &[&str], repo: Option<&std::path::Path>, repo_is_temp_dir: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let dir_path = dir.path().to_owned();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
@@ -72,7 +72,7 @@ fn fixture_with(phase: &str, prs: &[&str], repo: Option<&std::path::Path>, repo_
     for workflow in workflows {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '{repo}', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
+               VALUES ('pay', '{workflow}', '{repo}', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
         ));
     }
     let mut f = Fixture { dir, env };
@@ -115,7 +115,7 @@ impl Fixture {
         let _ = self.env.store.write("fingerprint", |tx| {
             tx.execute_batch(&format!(
                 "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
-                   VALUES ('pay', {pr}, 'twin', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', 'draft', 1, cpd_txn(), '{T}');"
+                   VALUES ('pay', {workflow}, 'twin', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', 'draft', 1, cpd_txn(), '{T}');"
             ))?;
             for need in needs {
                 tx.execute_batch(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'twin', '{need}');"))?;
@@ -131,7 +131,7 @@ impl Fixture {
         let first_fingerprint = if needs.is_empty() { format!("'{fingerprint}'") } else { "NULL".to_owned() };
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
-               VALUES ('pay', {pr}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
+               VALUES ('pay', {workflow}, '{key}', 'J', '{tier}', 'g', 'c', '{touches}', '[\"b\"]', '[]', '{kind}', '{first}', 1, {first_fingerprint}, cpd_txn(), '{T}');"
         ));
         for need in needs {
             self.sql(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');"));
@@ -148,7 +148,7 @@ impl Fixture {
         ));
     }
 
-    fn add(&mut self, key: &str, kind: &str, tier: &str, spec: &PathBuf, pr: Option<&str>, draft: bool, needs: &[&str]) -> Result<Output, CpdError> {
+    fn add(&mut self, key: &str, kind: &str, tier: &str, spec: &PathBuf, workflow: Option<&str>, draft: bool, needs: &[&str]) -> Result<Output, CpdError> {
         let args = AddArgs {
             key: JobKey::parse(key).unwrap(),
             title: Text::from_str("T").unwrap(),
@@ -158,7 +158,7 @@ impl Fixture {
             draft,
             urgent: false,
             kind: Some(kind.to_owned()),
-            pr: WorkflowArg { pr: workflow.map(|p| WorkflowKey::parse(p).unwrap()) },
+            workflow: WorkflowArg { workflow: workflow.map(|p| WorkflowKey::parse(p).unwrap()) },
             plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
         };
         add_in(&mut self.env, args)
@@ -452,7 +452,7 @@ fn explore_spec_edit_while_queued_without_attempt() {
         spec,
         needs: None,
         no_needs: false,
-        pr: None,
+        workflow: None,
         kind: None,
         plan: PlanArg { plan: Some(PlanId::parse("pay").unwrap()) },
     };

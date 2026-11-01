@@ -26,7 +26,7 @@ pub struct PostRecord {
 }
 
 /// The post of PR `pr` of `plan`, if it has one.
-pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord>, CpdError> {
+pub fn find(conn: &Connection, plan: &str, workflow: &str) -> Result<Option<PostRecord>, CpdError> {
     Ok(conn
         .query_row(
             "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND workflow = ?2",
@@ -39,7 +39,7 @@ pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord
 }
 
 /// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
-pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Result<bool, CpdError> {
+pub fn insert(tx: &WriteTxn<'_>, plan: &str, workflow: &str, post: &PostRecord) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
          ON CONFLICT (plan, workflow) DO NOTHING",
@@ -50,7 +50,7 @@ pub fn insert(tx: &WriteTxn<'_>, plan: &str, pr: &str, post: &PostRecord) -> Res
 
 /// Sets the auto-merge request of a `pending` post to `state` (`enabled`, `refused` or `none`); `enabled` and `refused` set
 /// `auto_merge_at` to the transaction's time. `false` when the post is not `pending` (nothing changed).
-pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> Result<bool, CpdError> {
+pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, workflow: &str, state: &str) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "UPDATE pr_posts SET auto_merge = ?3,
            auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
@@ -64,7 +64,7 @@ pub fn set_auto_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str, state: &str) -> R
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
     /// The GitHub repo, `owner/name`.
     pub repo: String,
     pub number: i64,
@@ -83,7 +83,7 @@ pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
                AND NOT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = r.base)
              ORDER BY p.posted_at, p.plan, p.pr LIMIT 1",
             [],
-            |r| Ok(Pending { plan: r.get(0)?, pr: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
+            |r| Ok(Pending { plan: r.get(0)?, workflow: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
         )
         .optional()?)
 }

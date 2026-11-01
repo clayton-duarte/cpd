@@ -100,33 +100,33 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent, j.seq, j.skipped
 /// `Parallel`; a PR with no live Attempt starts one Job `Linear`, two or more all `Parallel`. One entry per Job of
 /// `ready`, in its order.
 fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Option<Allocation>>, CpdError> {
-    let mut prs = Vec::with_capacity(ready.len());
+    let mut workflows = Vec::with_capacity(ready.len());
     for (plan, key) in ready {
-        let pr: Option<String> = conn.query_row(
+        let workflow: Option<String> = conn.query_row(
             "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
             params![plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
-        prs.push((plan.clone(), pr));
+        workflows.push((plan.clone(), workflow));
     }
     let mut out = Vec::with_capacity(ready.len());
-    for (plan, pr) in &prs {
+    for (plan, workflow) in &workflows {
         // An explore Job belongs to the Plan, no PR: it never holds or is held by a PR's Attempts.
-        let Some(pr) = pr else {
+        let Some(workflow) = workflow else {
             out.push(Some(Allocation::Parallel));
             continue;
         };
-        if driver::pr_has_live_linear(conn, plan, pr.as_str(), "")? {
+        if driver::workflow_has_live_linear(conn, plan, workflow.as_str(), "")? {
             out.push(None);
             continue;
         }
         let live: i64 = conn.query_row(
             "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended'",
-            params![plan.as_str(), pr.as_str()],
+            params![plan.as_str(), workflow.as_str()],
             |r| r.get(0),
         )?;
-        let siblings = prs.iter().filter(|p| *p == &(plan.clone(), Some(pr.clone()))).count();
+        let siblings = workflows.iter().filter(|p| *p == &(plan.clone(), Some(workflow.clone()))).count();
         out.push(Some(if live == 0 && siblings == 1 { Allocation::Linear } else { Allocation::Parallel }));
     }
     Ok(out)
@@ -157,7 +157,7 @@ fn pick(conn: &Connection, home: &cpd_core::home::CpdHome, concurrency: u32, rea
         let mut needs = vec![0];
         if let Some(wanted) = resource::wanted(conn, &e.plan, e.key.as_str())? {
             // A name the policy does not resolve fails in the starter, which reports it.
-            if let Ok(policy) = WorkflowKey::parse(&wanted.pr).and_then(|pr| cpd_core::pr::policy_of_pr(conn, home, &e.plan, &pr)) {
+            if let Ok(policy) = WorkflowKey::parse(&wanted.workflow).and_then(|workflow| cpd_core::pr::policy_of_workflow(conn, home, &e.plan, &workflow)) {
                 for pool in resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;

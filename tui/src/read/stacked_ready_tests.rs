@@ -45,7 +45,7 @@ pub(crate) fn store_with(base_ref: &str, default_branch: &str) -> (tempfile::Tem
 /// `Pull.clean` of the Plan view's one PR box.
 fn box_clean(store: &mut Store) -> bool {
     let boxes = read::plan_boxes(store, &PlanId::parse("pay").unwrap()).unwrap();
-    boxes.prs[0].pull.as_ref().expect("the PR has a pull request").clean
+    boxes.workflows[0].pull.as_ref().expect("the PR has a pull request").clean
 }
 
 /// A stacked PR (clean against its base, which is not the default branch): its `open` is not yellow.

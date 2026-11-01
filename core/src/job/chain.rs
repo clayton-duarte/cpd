@@ -10,7 +10,7 @@ use crate::plan::jobs::Job;
 /// The chain is the non-cancelled Jobs after the open Job (the open Job and every Job that transitively needs it),
 /// minus `key` and whoever needs `key` (a rerun of the same add); drafts and `update` Jobs are never members. A leaf is a member
 /// no other member needs; a `failed` leaf refuses `needs_unavailable`.
-pub(super) fn leaves(all: &[Job], plan: &PlanId, pr: &str, workflow_status: &str, key: &str) -> Result<Option<Vec<String>>, CpdError> {
+pub(super) fn leaves(all: &[Job], plan: &PlanId, workflow: &str, workflow_status: &str, key: &str) -> Result<Option<Vec<String>>, CpdError> {
     if workflow_status != "open" {
         return Ok(None);
     }
@@ -38,7 +38,7 @@ pub(super) fn leaves(all: &[Job], plan: &PlanId, pr: &str, workflow_status: &str
     if !failed.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsUnavailable,
-            format!("A Job added to PR {pr} chains after {}, which failed: retry or cancel it first.", failed.join(", ")),
+            format!("A Job added to PR {workflow} chains after {}, which failed: retry or cancel it first.", failed.join(", ")),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)

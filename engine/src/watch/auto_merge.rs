@@ -93,7 +93,7 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         }
     };
     let written = engine.store.write("engine E18", |tx| {
-        posts::set_auto_merge(tx, &post.plan, &post.pr, match (&refused, &not_allowed) {
+        posts::set_auto_merge(tx, &post.plan, &post.workflow, match (&refused, &not_allowed) {
             (Some(_), _) => "refused",
             (None, true) => "none",
             (None, false) => "enabled",
@@ -101,7 +101,7 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         if let Some(why) = &refused {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
-                format!("Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.", post.plan, post.pr, post.number, post.repo),
+                format!("Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.", post.plan, post.workflow, post.number, post.repo),
             ));
             let text = format!("{} See: cpd plan show --plan {}", failure.message, post.plan);
             let plan = PlanId::parse(&post.plan).expect("a stored Plan id");
@@ -114,9 +114,9 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             engine.auto_merge.last_end = None;
             engine.clear(Step::E18, &about);
             if not_allowed {
-                engine.log.line(&format!("E18: the repo of PR {}/{} does not allow auto-merge: row set to none", post.plan, post.pr));
+                engine.log.line(&format!("E18: the repo of PR {}/{} does not allow auto-merge: row set to none", post.plan, post.workflow));
             } else if refused.is_none() {
-                engine.log.line(&format!("E18: enabled auto-merge for PR {}/{}", post.plan, post.pr));
+                engine.log.line(&format!("E18: enabled auto-merge for PR {}/{}", post.plan, post.workflow));
             }
         }
         Err(e) => {

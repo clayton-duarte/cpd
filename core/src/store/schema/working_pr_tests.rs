@@ -63,8 +63,8 @@ fn fixture() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-fn name(pr: &str) -> String {
-    format!("UPDATE sessions SET working_pr = '{pr}' WHERE id = 'lead-pay'")
+fn name(workflow: &str) -> String {
+    format!("UPDATE sessions SET working_pr = '{workflow}' WHERE id = 'lead-pay'")
 }
 
 #[test]

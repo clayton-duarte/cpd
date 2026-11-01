@@ -43,10 +43,10 @@ fn fixture(lead_state: &str) -> Fixture {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'P', 'dispatch', 'l-pay', '{T}', '{T}');"
     );
-    for pr in ["p1", "p2", "p3"] {
+    for workflow in ["p1", "p2", "p3"] {
         sql.push_str(&format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '/r', 'main', 'dispatch', 'cpd/pay/{pr}', '/lw', 1, '{T}', '{T}');"
+               VALUES ('pay', '{workflow}', '/r', 'main', 'dispatch', 'cpd/pay/{workflow}', '/lw', 1, '{T}', '{T}');"
         ));
     }
     f.sql(&sql);
@@ -64,19 +64,19 @@ impl Fixture {
     }
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
-    fn job(&mut self, pr: &str, key: &str, status: &str) {
+    fn job(&mut self, workflow: &str, key: &str, status: &str) {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         self.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha)
-               VALUES ('pay', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha});"
+               VALUES ('pay', '{workflow}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, '{FP}', cpd_txn(), '{T}', {cause}, {sha});"
         ));
     }
 
     /// A failed Job and its `job-failed` Event, in two transactions.
-    fn failed(&mut self, pr: &str, key: &str) {
-        self.job(pr, key, "failed");
+    fn failed(&mut self, workflow: &str, key: &str) {
+        self.job(workflow, key, "failed");
         self.sql(&format!(
             "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
              VALUES (cpd_txn(), '{T}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');"
@@ -139,7 +139,7 @@ fn a_failed_pill_turns_while_a_fix_job_of_its_pr_is_underway_and_its_lead_is_idl
     let plan = PlanId::parse("pay").unwrap();
     let b = read::plan_boxes(&mut f.store, &plan).unwrap();
     for frame in 0..30 {
-        let chart = boxes::layout(&b.prs, &b.jobs, &b.needs_user, frame).chart;
+        let chart = boxes::layout(&b.workflows, &b.jobs, &b.needs_user, frame).chart;
         let pill = chart.pills.iter().find(|p| p.key == "j-a").expect("the failed Job's pill");
         let cell = &chart.buf[(pill.rect.x + 1, pill.rect.y)];
         assert_eq!(cell.symbol(), MOONS[frame % 28], "frame {frame}");

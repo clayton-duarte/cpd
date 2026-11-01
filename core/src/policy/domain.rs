@@ -48,7 +48,7 @@ impl GateAlias {
 #[serde(deny_unknown_fields)]
 pub struct Gates {
     pub merge: Gate,
-    pub pr: Gate,
+    pub workflow: Gate,
     pub text: String,
 }
 
@@ -155,7 +155,7 @@ pub struct PrSet {
 #[serde(deny_unknown_fields)]
 pub struct GatesSet {
     pub merge: Option<Gate>,
-    pub pr: Option<Gate>,
+    pub workflow: Option<Gate>,
     pub text: Option<String>,
 }
 
@@ -396,14 +396,14 @@ impl Set for GatesSet {
         let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.workflow.is_none())]);
         let value = Gates {
             merge: self.merge.unwrap_or(base.merge),
-            pr: self.workflow.unwrap_or(base.workflow),
+            workflow: self.workflow.unwrap_or(base.workflow),
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
         (value, left_out)
     }
 
     fn complete(&self) -> Option<Gates> {
-        Some(Gates { merge: self.merge?, pr: self.workflow?, text: self.text.clone()? })
+        Some(Gates { merge: self.merge?, workflow: self.workflow?, text: self.text.clone()? })
     }
 }
 

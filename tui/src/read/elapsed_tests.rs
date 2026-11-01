@@ -13,7 +13,7 @@ use crate::read;
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// A store of Context `ctx`, Lead `lead1` and Plan `pay` with the given PRs (keys), each in `dispatch`.
-pub(super) fn store_with(prs: &[&str]) -> (tempfile::TempDir, Store) {
+pub(super) fn store_with(workflows: &[&str]) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -28,7 +28,7 @@ pub(super) fn store_with(prs: &[&str]) -> (tempfile::TempDir, Store) {
            VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', '2026-01-01T00:00:00.000Z', {at}, NULL);
          UPDATE sessions SET plan = 'pay' WHERE id = 'lead1';"
     );
-    for key in prs {
+    for key in workflows {
         sql += &format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{key}', '/repo', 'main', 'dispatch', 'cpd/pay/{key}', '/wt/{key}', cpd_txn(), '2026-01-01T00:00:00.000Z', {at});"
@@ -48,26 +48,26 @@ pub(super) fn run(store: &mut Store, sql: &str) {
 }
 
 /// A Job `key` of kind `kind` of PR `pr`, queued or running.
-pub(super) fn job(pr: &str, key: &str, kind: &str, status: &str) -> String {
+pub(super) fn job(workflow: &str, key: &str, kind: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
-         VALUES ('pay', '{pr}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
+         VALUES ('pay', '{workflow}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', '{kind}');"
     )
 }
 
 /// A Job `key` of PR `pr` (kind `work`) with one Attempt from `from` to `to` (`None`: still running); times are `HH:MM:SS[.mmm]`.
-fn worked(pr: &str, key: &str, from: &str, to: Option<&str>) -> String {
-    worked_kind(pr, key, "work", from, to)
+fn worked(workflow: &str, key: &str, from: &str, to: Option<&str>) -> String {
+    worked_kind(workflow, key, "work", from, to)
 }
 
-fn worked_kind(pr: &str, key: &str, kind: &str, from: &str, to: Option<&str>) -> String {
+fn worked_kind(workflow: &str, key: &str, kind: &str, from: &str, to: Option<&str>) -> String {
     let (status, outcome, cause, ended_at) = match to {
         Some(at) => ("ended", "'failed'", "'crashed'", format!("'{}'", stamp(at))),
         None => ("running", "NULL", "NULL", "NULL".to_owned()),
     };
-    job(pr, key, kind, "running")
+    job(workflow, key, kind, "running")
         + &format!(
             "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
              VALUES ('pay', '{key}-a1', '{key}', 1, 'S3', 'ladder', '{status}', {outcome}, {cause}, 'cpd/pay--{key}-a1', '/w/{key}',
@@ -99,7 +99,7 @@ fn now_ms(t: &str) -> i64 {
 /// The `elapsed_seconds` of each PR of Plan `pay` read at `now`, in key order.
 fn elapsed(store: &mut Store, now: &str) -> Vec<Option<u64>> {
     let boxes = read::plan_boxes_at(store, &PlanId::parse("pay").unwrap(), now_ms(now)).unwrap();
-    boxes.prs.iter().map(|p| p.elapsed_seconds).collect()
+    boxes.workflows.iter().map(|p| p.elapsed_seconds).collect()
 }
 
 #[test]

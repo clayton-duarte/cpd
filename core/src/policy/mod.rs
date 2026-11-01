@@ -177,7 +177,7 @@ pub fn owner_unset(context: &ContextId) -> CpdError {
 }
 
 /// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have PR rows.
-pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> CpdError {
+pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, workflows: &[String]) -> CpdError {
     CpdError::new(
         ErrorCode::OwnerInUse,
         format!(

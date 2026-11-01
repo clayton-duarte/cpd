@@ -17,7 +17,7 @@ const NOW: &str = "2026-10-18T15:07:30.000Z";
 /// Job `key` of PR `pr` (kind `kind`) with Attempt `<key>-a<number>` and its Worker Session `w-<key>-a<number>`; `metrics`
 /// is the stored JSON of an ended Attempt, `None` for a live one (NULL `metrics`, running); `file` the Session's file.
 /// `with_job` adds the Job's own row (once per Job).
-fn attempt(pr: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, file: Option<&str>, with_job: bool) -> String {
+fn attempt(workflow: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, file: Option<&str>, with_job: bool) -> String {
     let id = format!("{key}-a{number}");
     let (status, outcome, cause, ended, metrics) = match metrics {
         Some(m) => ("ended", "'failed'", "'crashed'", "'2026-01-02T02:00:00.000Z'", format!("'{m}'")),
@@ -30,7 +30,7 @@ fn attempt(pr: &str, key: &str, kind: &str, number: u32, metrics: Option<&str>, 
          VALUES ('pay', '{id}', '{key}', {number}, 'S3', 'ladder', '{status}', {outcome}, {cause}, 'cpd/pay--{id}', '/w',
                  '2026-01-02T01:00:00.000Z', {ended}, 'w-{id}', {metrics});
          {}",
-        if with_job { job(pr, key, kind, "running") } else { String::new() },
+        if with_job { job(workflow, key, kind, "running") } else { String::new() },
         session(&format!("w-{id}"), "worker", "ctx", Some("pay"), Some(&id), file, "")
     )
 }
@@ -43,7 +43,7 @@ fn write(dir: &tempfile::TempDir, name: &str, costs: &[f64]) -> String {
 
 fn costs(store: &mut Store) -> Vec<Option<f64>> {
     let boxes = read::plan_boxes_at(store, &PlanId::parse("pay").unwrap(), NOW_MS).unwrap();
-    boxes.prs.iter().map(|p| p.cost_usd).collect()
+    boxes.workflows.iter().map(|p| p.cost_usd).collect()
 }
 
 fn stored(c: &str) -> String {

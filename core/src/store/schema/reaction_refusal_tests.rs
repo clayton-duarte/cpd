@@ -91,7 +91,7 @@ fn a_database_with_queued_merge_reactions_migrates_to_linked_rows() {
     let (_dir, home) = before_refusal();
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, pr: Value| {
+    let row = |ts: &str, emoji: &str, q: &str, reacted: Value, plan: Value, workflow: Value| {
         serde_json::json!({"ts": ts, "emoji": emoji, "queued_at": q, "reacted_at": reacted, "plan": plan, "pr": workflow, "refused_at": null, "refusal": null})
     };
     let expected = vec![

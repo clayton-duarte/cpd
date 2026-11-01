@@ -15,7 +15,7 @@ use crate::ports::Ports;
 #[derive(clap::Args, Debug)]
 pub struct ReplyArgs {
     #[command(flatten)]
-    pr: WorkflowArg,
+    workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
     /// The id of the open item to answer (`cpd pr view`, `feedback`)

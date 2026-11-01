@@ -92,7 +92,7 @@ fn a_plan_with_only_explore_jobs_is_not_empty() {
     run(&mut store, &explore("look", None));
 
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert!(boxes.prs.is_empty(), "no PR box");
+    assert!(boxes.workflows.is_empty(), "no PR box");
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is the Plan's content");
     assert_every_cockpit_read_is_ok(&mut store);
 }
@@ -118,8 +118,8 @@ fn an_explore_attempts_cost_is_in_no_pr_box_and_in_the_plan_total() {
     let (_dir, mut store) = mixed();
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
-    assert_eq!(boxes.prs.len(), 1);
-    near(boxes.prs[0].cost_usd, 0.25); // the explore Attempt is in no PR box
+    assert_eq!(boxes.workflows.len(), 1);
+    near(boxes.workflows[0].cost_usd, 0.25); // the explore Attempt is in no PR box
 
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
     let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
@@ -142,6 +142,6 @@ fn an_explore_attempts_active_time_is_in_no_pr_box() {
     );
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     assert!(job_node(&boxes.jobs, "look").is_some(), "the explore Job is a node");
-    assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].elapsed_seconds, Some(60), "only the PR Job's Attempt counts");
+    assert_eq!(boxes.workflows.len(), 1);
+    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60), "only the PR Job's Attempt counts");
 }

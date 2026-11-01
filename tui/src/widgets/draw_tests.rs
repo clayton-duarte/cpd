@@ -42,7 +42,7 @@ fn context(id: &str) -> String {
 
 /// A Plan; `pr` is `(number, polled)`, where `polled` is the pull request row's `(title, review decision, checks)`: what `pr open`
 /// writes (the Plan's title, no review, no checks) until the first poll changes it.
-fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, &str))>) -> String {
+fn plan_row(id: &str, phase: &str, created: &str, workflow: Option<(i64, (&str, &str, &str))>) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
@@ -53,7 +53,7 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
         "deploy" => "open",
         _ => "merged",
     };
-    let (row, number, url, opened, pull_request) = match pr {
+    let (row, number, url, opened, pull_request) = match workflow {
         Some((n, (title, decision, checks))) => {
             let (state, merged) = if status == "merged" { ("merged", "'2026-01-09T00:00:00.000Z'") } else { ("open", "NULL") };
             (
@@ -124,9 +124,9 @@ fn populate(store: &mut Store) {
         ("away", "away lead", "done", Some((9, ("away", "approved", "pending"))), "2026-01-02T00:00:04.000Z", Some("work")),
         ("never", "never lead", "dispatch", None, "2026-01-02T00:00:05.000Z", None),
     ];
-    for (n, (id, name, phase, pr, created, place)) in plans.into_iter().enumerate() {
+    for (n, (id, name, phase, workflow, created, place)) in plans.into_iter().enumerate() {
         s += &lead_row(id, name);
-        s += &plan_row(id, phase, created, pr);
+        s += &plan_row(id, phase, created, workflow);
         if let Some(place) = place {
             s += &moved(&format!("2026-01-03T00:00:0{n}.000Z"), id, place);
         }

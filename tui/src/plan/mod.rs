@@ -90,7 +90,7 @@ impl Centre {
     pub(crate) fn spins(&self) -> bool {
         false
             || spins(&self.plan.jobs, &self.plan.needs_user) // a running Job's pill icon, or a failed one's while the Lead works
-            || self.plan.prs.iter().any(|p| p.lead_dot.is_some()) // a PR box title's Lead dot
+            || self.plan.workflows.iter().any(|p| p.lead_dot.is_some()) // a PR box title's Lead dot
     }
 
     /// Turn the spinners to `frame`, from the layout already done (R2: no layout at a frame change), when a spinner is on
@@ -165,7 +165,7 @@ fn snapshot_timed(ports: &Ports, store: &mut Store, width: u16, now_ms: i64, tim
     let plan = read::plan_boxes_at(store, &slot.plan, now_ms)?;
     let frame = frame_now(ports);
     let began = timed.then(|| ports.clock.now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
     let layout = began.map_or(Duration::ZERO, |b| ports.clock.now().saturating_duration_since(b));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
 }
@@ -216,7 +216,7 @@ fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>
     let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::error())).collect();
     match centre {
         None => parts.push(Span::styled(" no Lead session in the centre", palette::muted_text())),
-        Some(c) if c.plan.prs.is_empty() => parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text())),
+        Some(c) if c.plan.workflows.is_empty() => parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text())),
         Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::muted_text())),
         Some(_) => {}
     }
@@ -694,7 +694,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
 
 /// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
 #[cfg(test)]
-fn sample_pr(key: &str) -> read::WorkflowNode {
+fn sample_workflow(key: &str) -> read::WorkflowNode {
     read::WorkflowNode {
         key: cpd_core::ids::WorkflowKey::parse(key).unwrap(),
         repo_name: format!("{key}-repo"),
@@ -712,10 +712,10 @@ fn sample_pr(key: &str) -> read::WorkflowNode {
 
 /// A queued Job `key` of PR `pr`, of Tier S1, with no needs.
 #[cfg(test)]
-fn sample_job(pr: &str, key: &str) -> read::JobNode {
+fn sample_job(workflow: &str, key: &str) -> read::JobNode {
     read::JobNode {
         key: cpd_core::ids::JobKey::parse(key).unwrap(),
-        pr: Some(cpd_core::ids::WorkflowKey::parse(pr).unwrap()),
+        workflow: Some(cpd_core::ids::WorkflowKey::parse(workflow).unwrap()),
         seq: 0,
         title: String::new(),
         status: read::JobStatus::Queued,
@@ -734,13 +734,13 @@ fn sample_job(pr: &str, key: &str) -> read::JobNode {
 
 /// What the view reads for a Plan of `prs` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
 #[cfg(test)]
-fn sample_centre(prs: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -> Centre {
+fn sample_centre(workflows: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -> Centre {
     let needs_user = read::NeedsUser::default();
-    let boxes = boxes::layout(&prs, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&workflows, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
     let plan = PlanBoxes {
         plan: PlanId::parse("p1").unwrap(),
         context: cpd_core::ids::ContextId::parse("ctx").unwrap(),
-        prs,
+        workflows,
         jobs,
         needs_user,
         events_cursor: 0,
@@ -758,16 +758,16 @@ fn sample_centre(prs: Vec<read::WorkflowNode>, jobs: Vec<read::JobNode>) -> Cent
 pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::PlanCase) -> crate::layout_tests::Sample {
     use crate::layout_tests::{Exempt, Kind, PlanCase, Placed, Rule, Sample, Scroll};
     use ratatui::backend::TestBackend;
-    let (scroll, prs, jobs) = match case {
-        PlanCase::Empty(scroll) => (scroll, vec![sample_pr("api")], Vec::new()),
+    let (scroll, workflows, jobs) = match case {
+        PlanCase::Empty(scroll) => (scroll, vec![sample_workflow("api")], Vec::new()),
         PlanCase::Three(scroll) => (
             scroll,
-            vec![sample_pr("api"), sample_pr("web")],
+            vec![sample_workflow("api"), sample_workflow("web")],
             vec![sample_job("api", "api-1"), sample_job("api", "api-2"), sample_job("web", "web-1")],
         ),
     };
-    let expected = prs.len();
-    let centre = sample_centre(prs, jobs);
+    let expected = workflows.len();
+    let centre = sample_centre(workflows, jobs);
     let canvas = &centre.boxes.chart.buf;
     let mut ui = Ui::default();
     if scroll == Scroll::Middle {
@@ -882,9 +882,9 @@ mod tests {
 
     /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
     fn scroll_centre(plan_id: &str, jobs: usize) -> Centre {
-        let pr = WorkflowKey::parse("web").unwrap();
+        let workflow = WorkflowKey::parse("web").unwrap();
         let node = WorkflowNode {
-            key: pr.clone(),
+            key: workflow.clone(),
             repo_name: "repo".into(),
             base: "main".into(),
             status: WorkflowStatus::Dispatch,
@@ -898,7 +898,7 @@ mod tests {
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),
-            pr: Some(pr.clone()),
+            workflow: Some(workflow.clone()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
@@ -916,12 +916,12 @@ mod tests {
         let plan = PlanBoxes {
             plan: PlanId::parse(plan_id).unwrap(),
             context: ContextId::parse("ctx").unwrap(),
-            prs: vec![node],
+            workflows: vec![node],
             jobs: (0..jobs).map(job).collect(),
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+        let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),

@@ -26,7 +26,7 @@ const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 #[derive(clap::Args, Debug)]
 pub struct PostArgs {
     #[command(flatten)]
-    pr: WorkflowArg,
+    workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
 }

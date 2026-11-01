@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 
 use super::lines_tests::{reaches, violations};
 use super::flow::Pill;
-use super::{boxes, sample_pr};
+use super::{boxes, sample_workflow};
 use crate::read::{NeedsUser, WorkflowNode};
 use crate::test_text::rows;
 use cpd_core::ids::WorkflowKey;
@@ -15,8 +15,8 @@ fn chars(s: &str) -> Vec<String> {
     s.chars().map(String::from).collect()
 }
 
-fn canvas(prs: &[WorkflowNode]) -> Buffer {
-    boxes::layout(prs, &[], &NeedsUser::default(), 0).chart.buf
+fn canvas(workflows: &[WorkflowNode]) -> Buffer {
+    boxes::layout(workflows, &[], &NeedsUser::default(), 0).chart.buf
 }
 
 /// The first row of `buf` that starts with `╰`, as cells.
@@ -27,7 +27,7 @@ fn bottom(buf: &Buffer) -> (usize, Vec<String>) {
 }
 
 fn with(key: &str, secs: Option<u64>) -> WorkflowNode {
-    WorkflowNode { elapsed_seconds: secs, ..sample_pr(key) }
+    WorkflowNode { elapsed_seconds: secs, ..sample_workflow(key) }
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn the_counter_shows_only_once_the_workflow_has_an_attempt() {
 
 #[test]
 fn a_box_is_widened_to_hold_its_counter_plus_four() {
-    let mut p = sample_pr("a");
+    let mut p = sample_workflow("a");
     p.repo_name = "r".into();
     p.base = "m".into();
     p.elapsed_seconds = Some(u64::MAX);
@@ -112,7 +112,7 @@ fn a_box_is_widened_to_hold_its_counter_plus_four() {
 
 /// The `┬` columns of the first box's bottom border, its width and the canvas.
 fn exit(secs: Option<u64>) -> (Buffer, usize, usize, Vec<usize>) {
-    let web = WorkflowNode { needs: vec![WorkflowKey::parse("api").unwrap()], ..sample_pr("web") };
+    let web = WorkflowNode { needs: vec![WorkflowKey::parse("api").unwrap()], ..sample_workflow("web") };
     let buf = canvas(&[with("api", secs), web]);
     let r = rows(&buf);
     let y = r.iter().position(|l| l.starts_with('╰')).unwrap();

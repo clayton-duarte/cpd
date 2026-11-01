@@ -27,7 +27,7 @@ struct Edits {
     title: Option<String>,
     tier: Option<String>,
     spec: Option<Spec>,
-    pr: Option<String>,
+    workflow: Option<String>,
     needs: Option<Vec<String>>,
     kind: Option<String>,
     /// `CPD_ATTEMPT` is set: a Worker's pane, not the Lead's.
@@ -79,7 +79,7 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         title: args.title.map(|t| t.as_str().to_owned()),
         tier: args.tier.map(|t| t.to_string()),
         spec,
-        pr: args.workflow.map(|p| p.as_str().to_owned()),
+        workflow: args.workflow.map(|p| p.as_str().to_owned()),
         needs,
         kind: args.kind,
         worker: std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()),
@@ -192,7 +192,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     if let Some(workflow) = &edits.workflow {
         let workflows = load_workflows(conn, plan)?;
         if !workflows.iter().any(|p| p.key.as_str() == workflow.as_str()) {
-            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}."))
+            return Err(CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {workflow} in Plan {plan}."))
                 .with("plan", plan.as_str())
                 .with("pr", workflow.as_str()));
         }

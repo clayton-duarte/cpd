@@ -48,7 +48,7 @@ fn incident_includes(engine: &mut Engine, plan: &str) {
 
 /// A Plan `pay` in `dispatch`: the `dispatch` PR `api` (E4 has an `open` Job to add) and the
 /// `waiting` PR `ship` (E7 has it to start).
-fn seed_dispatch_pr(engine: &mut Engine) {
+fn seed_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
         .write("test", |tx| {
@@ -68,7 +68,7 @@ fn seed_dispatch_pr(engine: &mut Engine) {
 }
 
 /// A second Plan `ops` in `dispatch`: the `dispatch` PR `web` and the `waiting` PR `app`.
-fn seed_held_dispatch_pr(engine: &mut Engine) {
+fn seed_held_dispatch_workflow(engine: &mut Engine) {
     engine
         .store
         .write("test", |tx| {
@@ -110,8 +110,8 @@ fn held(engine: &mut Engine, plan: &str) -> bool {
 fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
     let mut fx = engine_fixture();
     let engine = &mut fx.engine;
-    seed_dispatch_pr(engine);
-    seed_held_dispatch_pr(engine);
+    seed_dispatch_workflow(engine);
+    seed_held_dispatch_workflow(engine);
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
@@ -147,8 +147,8 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
 fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     let mut fx = engine_fixture();
     let engine = &mut fx.engine;
-    seed_dispatch_pr(engine);
-    seed_held_dispatch_pr(engine);
+    seed_dispatch_workflow(engine);
+    seed_held_dispatch_workflow(engine);
     incident_on(engine);
     incident_includes(engine, "pay");
 
@@ -161,7 +161,7 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     assert_eq!(open_jobs(engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's PR");
 
     // E7 selects only the incident Plan's `waiting` PR; the held Plan's PR is left alone.
-    let startable = engine::startable_prs(engine).unwrap();
+    let startable = engine::startable_workflows(engine).unwrap();
     assert_eq!(
         startable,
         vec![(PlanId::parse("pay").unwrap(), WorkflowKey::parse("ship").unwrap())],

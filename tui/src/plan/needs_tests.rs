@@ -44,8 +44,8 @@ fn a_running_job_needs_the_frame_clock() {
 #[test]
 fn a_lead_working_dot_on_a_pr_box_title_needs_the_frame_clock() {
     let mut c = tests_centre(1);
-    c.plan.prs[0].pull = Some(pull());
-    c.plan.prs[0].lead_dot = Some(crate::read::Dot::working(false, None));
+    c.plan.workflows[0].pull = Some(pull());
+    c.plan.workflows[0].lead_dot = Some(crate::read::Dot::working(false, None));
     let n = needs(&snap(Some(c), None), Instant::now());
     assert!(n.frame && !n.second && n.at.is_none());
 }
@@ -68,9 +68,9 @@ fn tests_centre(jobs: usize) -> Centre {
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, WorkflowKey};
     use crate::read::{JobNode, WorkflowNode, WorkflowStatus};
-    let pr = WorkflowKey::parse("web").unwrap();
+    let workflow = WorkflowKey::parse("web").unwrap();
     let node = WorkflowNode {
-        key: pr.clone(),
+        key: workflow.clone(),
         repo_name: "repo".into(),
         base: "main".into(),
         status: WorkflowStatus::Dispatch,
@@ -84,7 +84,7 @@ fn tests_centre(jobs: usize) -> Centre {
     };
     let job = |n: usize| JobNode {
         key: JobKey::parse(&format!("job-{n}")).unwrap(),
-        pr: Some(pr.clone()),
+        workflow: Some(workflow.clone()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Queued,
@@ -102,12 +102,12 @@ fn tests_centre(jobs: usize) -> Centre {
     let plan = PlanBoxes {
         plan: PlanId::parse("plan-a").unwrap(),
         context: ContextId::parse("ctx").unwrap(),
-        prs: vec![node],
+        workflows: vec![node],
         jobs: (0..jobs).map(job).collect(),
         needs_user: read::NeedsUser::default(),
         events_cursor: 0,
     };
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
     let slot = ChatSlot {
         session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
         name: "lead".into(),

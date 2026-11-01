@@ -9,13 +9,13 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 
 /// A PR of shape `tdd` that has not opened: its pull request does not exist yet, so its Jobs are still being laid out.
-fn is_open_for_work(pr: &WorkflowRow) -> bool {
+fn is_open_for_work(workflow: &WorkflowRow) -> bool {
     workflow.shape == "tdd" && matches!(workflow.status.as_str(), "waiting" | "dispatch")
 }
 
 /// The kinds (`test`, `impl`) a PR of shape `tdd` that has not opened lacks, ignoring the Job `without` and every `cancelled` one.
 /// Empty for a PR of another shape or one that has opened.
-pub(crate) fn missing(pr: &WorkflowRow, jobs: &[Job], without: Option<&str>) -> Vec<&'static str> {
+pub(crate) fn missing(workflow: &WorkflowRow, jobs: &[Job], without: Option<&str>) -> Vec<&'static str> {
     if !is_open_for_work(workflow) {
         return Vec::new();
     }
@@ -26,7 +26,7 @@ pub(crate) fn missing(pr: &WorkflowRow, jobs: &[Job], without: Option<&str>) -> 
 }
 
 /// `shape_incomplete`, `details` `{pr, missing}`.
-pub(crate) fn incomplete(plan: &PlanId, pr: &WorkflowRow, missing: &[&str], what: &str) -> CpdError {
+pub(crate) fn incomplete(plan: &PlanId, workflow: &WorkflowRow, missing: &[&str], what: &str) -> CpdError {
     CpdError::new(
         ErrorCode::ShapeIncomplete,
         format!(
@@ -43,7 +43,7 @@ pub(crate) fn incomplete(plan: &PlanId, pr: &WorkflowRow, missing: &[&str], what
 
 /// `plan review` and `plan lock` (§4.6, §4.8): every `impl` Job that is a `draft` needs a `test` Job of its PR
 /// (`test_job_required`), then every `tdd` PR that has not opened has a `test` and an `impl` Job (`shape_incomplete`).
-pub(super) fn check(plan: &PlanId, prs: &[WorkflowRow], jobs: &[Job]) -> Result<(), CpdError> {
+pub(super) fn check(plan: &PlanId, workflows: &[WorkflowRow], jobs: &[Job]) -> Result<(), CpdError> {
     let mut lacking: Vec<&Job> = jobs
         .iter()
         .filter(|j| {

@@ -260,7 +260,7 @@ fn abort(args: Args) -> Result<Output, CpdError> {
 /// `merge-tree`'s list, for a stop with no unmerged path of its own. A rebase that finishes
 /// without stopping (a race: a merge landed after the snapshot) goes on as `--continue` does
 /// from guard U, then the Gate and the push.
-fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, policy: &Policy, listed: Vec<String>) -> Result<Output, CpdError> {
+fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, workflow: &WorkflowRow, policy: &Policy, listed: Vec<String>) -> Result<Output, CpdError> {
     let lead = workflow.lead(id)?;
     let repo = Path::new(&workflow.repo);
     let branch = workflow.lead_branch.as_str();
@@ -302,7 +302,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, pol
 
 /// Step 9 (and C6): the PR re-read after the Gate, R' pushed with the lease X0, then the merges that
 /// landed during the Gate, by rule P.
-fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, old: &str, new: &str, lease: &str) -> Result<Output, CpdError> {
+fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, workflow: &WorkflowRow, old: &str, new: &str, lease: &str) -> Result<Output, CpdError> {
     let key = &workflow.key;
     let lead = workflow.lead(id)?;
     let repo = Path::new(&workflow.repo);
@@ -350,17 +350,17 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &WorkflowRow, old: 
 }
 
 /// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted PR (pro-d15).
-fn onto_of(pr: &WorkflowRow) -> String {
+fn onto_of(workflow: &WorkflowRow) -> String {
     format!("origin/{}", onto_branch(workflow))
 }
 
-fn onto_branch(pr: &WorkflowRow) -> &str {
+fn onto_branch(workflow: &WorkflowRow) -> &str {
     workflow.head_ref.as_deref().unwrap_or(&workflow.base)
 }
 
 /// The push of an adopted PR (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
 /// during the Gate go after R' the same way.
-fn push_adopted(id: &PlanId, pr: &WorkflowRow, old: &str, new: &str) -> Result<Output, CpdError> {
+fn push_adopted(id: &PlanId, workflow: &WorkflowRow, old: &str, new: &str) -> Result<Output, CpdError> {
     let lead = workflow.lead(id)?;
     let repo = Path::new(&workflow.repo);
     let remote = workflow.remote_branch();
@@ -380,7 +380,7 @@ fn push_adopted(id: &PlanId, pr: &WorkflowRow, old: &str, new: &str) -> Result<O
     Ok(Output::success(json!({"plan": id, "pr": workflow.key, "rebased": old != new, "old": old, "new": new, "pushed": pushed})))
 }
 
-fn rejected(id: &PlanId, pr: &WorkflowRow, sha: &str, stderr: String) -> CpdError {
+fn rejected(id: &PlanId, workflow: &WorkflowRow, sha: &str, stderr: String) -> CpdError {
     CpdError::new(
         ErrorCode::PushRejected,
         format!("{} was rebased onto origin/{}, but its push was rejected: the remote head moved again, run cpd pr rebase --pr {}.", short(sha), workflow.remote_branch(), workflow.key),

@@ -30,7 +30,7 @@ const COMMAND: &str = "job add";
 /// What `job add` was asked for, parsed.
 struct Wanted {
     key: JobKey,
-    pr: WorkflowArg,
+    workflow: WorkflowArg,
     title: String,
     /// Given always, but for a stub draft.
     tier: Option<String>,
@@ -64,7 +64,7 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     if explore {
         // An explore Job belongs to the Plan, and is never a draft (R2, R3).
         if let Some(workflow) = &args.workflow.workflow {
-            return Err(CpdError::new(ErrorCode::ExploreWorkflowForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {pr}."))
+            return Err(CpdError::new(ErrorCode::ExploreWorkflowForbidden, format!("A {kind} Job belongs to the Plan, not to a PR: drop --pr {workflow}."))
                 .with("kind", kind.as_str())
                 .with("pr", workflow.as_str()));
         }
@@ -94,7 +94,7 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
     }
     let wanted = Wanted {
         key: args.key,
-        pr: args.workflow,
+        workflow: args.workflow,
         title: args.title.as_str().to_owned(),
         tier: args.tier.map(|t| t.to_string()),
         spec,
@@ -183,7 +183,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted) -> 
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
-        pr: Some(workflow),
+        workflow: Some(workflow),
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         spec: wanted.spec.as_ref().map(Spec::stored),
@@ -266,7 +266,7 @@ fn decide_explore(conn: &Connection, plan: &PlanId, wanted: &Wanted, phase: &str
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
-        pr: None,
+        workflow: None,
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         spec: wanted.spec.as_ref().map(Spec::stored),
@@ -320,7 +320,7 @@ pub(super) fn check_needs_explore_only(all: &[Job], plan: &PlanId, key: &str, ex
 
 /// Every resource of a Spec is declared by the policy of the PR's repo (`resource_undeclared`, commands.md §5.1):
 /// the first one that is not fails, with the names the repo declares and the file that declares them.
-pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, pr: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
+pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: &PlanId, workflow: &str, job: &str, resources: Option<&[String]>) -> Result<(), CpdError> {
     let Some(resources) = resources else { return Ok(()) };
     let key = WorkflowKey::parse(workflow)?;
     let declared = crate::pr::policy_of_workflow(conn, home, plan, &key)?.resources.names;
@@ -338,7 +338,7 @@ pub(crate) fn check_resources_declared(conn: &Connection, home: &CpdHome, plan: 
     Err(CpdError::new(
         ErrorCode::ResourceUndeclared,
         format!(
-            "Job {job} takes the resource {missing}, which the policy of PR {pr} does not declare ({}). Declare it as [resources.{missing}] in {}, or take one of the declared names.",
+            "Job {job} takes the resource {missing}, which the policy of PR {workflow} does not declare ({}). Declare it as [resources.{missing}] in {}, or take one of the declared names.",
             if declared.is_empty() { "none are declared".to_owned() } else { declared.join(", ") },
             file.display()
         ),
@@ -412,7 +412,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
 }
 
 /// The `(PR key, root)` pairs the primary-check searches: each PR of the Plan and its stored repo path.
-pub(super) fn primary_roots(prs: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
+pub(super) fn primary_roots(workflows: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
     workflows.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
 }
 
@@ -420,7 +420,7 @@ pub(super) fn primary_roots(prs: &[WorkflowRow]) -> Vec<(String, PathBuf)> {
 /// the PR started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
 /// file, or its fixed prefix directory must exist. Nothing is read, and the check passes, for a PR that has not started and
 /// is stacked on a base PR that is `waiting` or `dispatch` (its Lead Branch is not in the repo yet). `touches_missing`, `details: {missing, tree}`.
-pub(super) fn check_touches(pr: &WorkflowRow, prs: &[WorkflowRow], touches: &[String]) -> Result<(), CpdError> {
+pub(super) fn check_touches(workflow: &WorkflowRow, workflows: &[WorkflowRow], touches: &[String]) -> Result<(), CpdError> {
     // A PR whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
     if touches.is_empty() || !std::path::Path::new(&workflow.repo).is_dir() {
         return Ok(());

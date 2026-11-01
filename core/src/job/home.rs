@@ -12,7 +12,7 @@ pub enum JobHome {
 
 impl JobHome {
     /// Parse `jobs.pr` once: a present key must be a valid [`WorkflowKey`] (else `StoreFailed` naming `what`), `None` is `Plan`.
-    pub fn of(what: &str, pr: Option<&str>) -> Result<JobHome, CpdError> {
+    pub fn of(what: &str, workflow: Option<&str>) -> Result<JobHome, CpdError> {
         match workflow {
             None => Ok(JobHome::Plan),
             Some(v) => WorkflowKey::parse(v).map(JobHome::Workflow).map_err(|_| {

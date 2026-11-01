@@ -13,7 +13,7 @@ use super::report::{About, Step};
 use cpd_core::error::CpdError;
 use cpd_core::ids::{PlanId, WorkflowKey};
 use cpd_core::job::open;
-use cpd_core::plan::fingerprint::load_prs;
+use cpd_core::plan::fingerprint::load_workflows;
 use cpd_core::store::WriteTxn;
 
 /// The PRs E4 is for; `?1` and `?2` are one PR's Plan and key, or NULL for every PR.
@@ -63,8 +63,8 @@ pub(super) fn run(engine: &mut Engine) {
     }
     match engine.store.write(SOURCE, |tx| Ok((add_all(tx, &missing, tier)?, promote_all(tx)?))) {
         Ok((added, promoted)) => {
-            for (plan, pr, key) in added {
-                engine.log.line(&format!("E4: added the open Job {key} to PR {pr} of Plan {plan}"));
+            for (plan, workflow, key) in added {
+                engine.log.line(&format!("E4: added the open Job {key} to PR {workflow} of Plan {plan}"));
             }
             for (plan, key) in promoted {
                 engine.log.line(&format!("E4: queued the draft open Job {key} of Plan {plan}: no draft of its PR remains"));
@@ -110,14 +110,14 @@ fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, WorkflowKey)], tier: cpd_core:
         if !still {
             continue;
         }
-        let prs = load_prs(tx, plan)?;
-        let Some(pr) = prs.iter().find(|p| p.key == *key) else { continue };
+        let workflows = load_workflows(tx, plan)?;
+        let Some(workflow) = workflows.iter().find(|p| p.key == *key) else { continue };
         let draft: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND status = 'draft' AND kind NOT IN ('open', 'update'))",
             [plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
-        let job = open::add(tx, plan, pr, tier, draft, open::BY_ENGINE)?;
+        let job = open::add(tx, plan, workflow, tier, draft, open::BY_ENGINE)?;
         added.push((plan.clone(), key.clone(), job));
     }
     Ok(added)

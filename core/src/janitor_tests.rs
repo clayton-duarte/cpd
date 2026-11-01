@@ -54,7 +54,7 @@ pub(crate) struct Rig {
     pub(crate) universe: Arc<Mutex<Universe>>,
     pub(crate) repo: Repo,
     pub(crate) home: CpdHome,
-    pub(crate) prs: Vec<Workflow>,
+    pub(crate) workflows: Vec<Workflow>,
     number: i64,
     /// The Attempts [`Rig::pr`] stores next are `running`, not `ended`.
     pub(crate) running: bool,
@@ -80,7 +80,7 @@ impl Rig {
         let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
         std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
         std::fs::write(home.config(), "version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"s\"\n").unwrap();
-        let rig = Rig { tmp, fakes, universe, repo, home, prs: Vec::new(), number: 800, running: false };
+        let rig = Rig { tmp, fakes, universe, repo, home, workflows: Vec::new(), number: 800, running: false };
         rig.sql(
             "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -190,7 +190,7 @@ impl Rig {
 
     /// Everything of the PR still on disk or in git: `(lead directory, lead registration, lead branch, attempt
     /// directory, attempt registration, attempt branch)`.
-    pub(crate) fn left(&self, pr: &Workflow) -> [bool; 6] {
+    pub(crate) fn left(&self, workflow: &Workflow) -> [bool; 6] {
         [
             workflow.lead.exists(),
             self.registered(&workflow.lead),

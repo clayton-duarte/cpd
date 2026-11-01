@@ -46,7 +46,7 @@ fn the_pr_boxes_are_drawn_by_the_box_widget() {
 
 #[test]
 fn a_pr_box_title_follows_the_corner_and_one_dash() {
-    let centre = sample_centre(vec![sample_pr("api")], Vec::new());
+    let centre = sample_centre(vec![sample_workflow("api")], Vec::new());
     let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
     let mut ui = Ui::default();
     terminal.draw(|f| ui.draw(f, Some(&centre))).unwrap();
@@ -72,13 +72,13 @@ fn text(c: &flow::Chart) -> String {
 fn a_need_connector_reaches_the_top_border_with_no_arrowhead() {
     use cpd_core::ids::{JobKey, WorkflowKey};
 
-    let mut web = sample_pr("web");
+    let mut web = sample_workflow("web");
     web.needs = vec![WorkflowKey::parse("api").unwrap()];
-    let prs = [sample_pr("api"), web];
+    let workflows = [sample_workflow("api"), web];
     let mut b = sample_job("api", "b");
     b.needs = vec![JobKey::parse("a").unwrap()];
     let jobs = [sample_job("api", "a"), b, sample_job("web", "c")];
-    let c = boxes::layout(&prs, &jobs, &read::NeedsUser::default(), 0).chart;
+    let c = boxes::layout(&workflows, &jobs, &read::NeedsUser::default(), 0).chart;
 
     let want = "\
 ╭─ api · api-repo 󱦰 main · dispatch ─╮

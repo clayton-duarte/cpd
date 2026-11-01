@@ -195,7 +195,7 @@ pub(crate) fn sections() -> Vec<Section> {
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
     pr_rows.push(vec![sample(palette::PR_UPDATING_RUNNING), plain("its update Job is fixing the conflict")]);
     pr_rows.push(vec![sample(palette::PR_UPDATING_QUEUED), plain("its update Job is queued")]);
-    let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
+    let workflows = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
         title: "PR Checks",
         header: None,
@@ -236,7 +236,7 @@ pub(crate) fn sections() -> Vec<Section> {
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
-    vec![meanings, jobs, dots, prs, inbox, pulse, checks]
+    vec![meanings, jobs, dots, workflows, inbox, pulse, checks]
 }
 
 /// The vertical constraints of the body: each section after a gap.
@@ -497,17 +497,17 @@ mod tests {
 
     #[test]
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
-        let prs = &sections()[3];
-        let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
+        let workflows = &sections()[3];
+        let names: Vec<String> = workflows.rows.iter().map(|r| text(&r[0])).collect();
         assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict", "#2 updating", "#2 updating"]);
-        let conflict = &prs.rows[4][0].spans[0];
+        let conflict = &workflows.rows[4][0].spans[0];
         assert_eq!(conflict.style, palette::fg_clickable(palette::Meaning::Failed));
     }
 
     #[test]
     fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
-        let prs = &sections()[3];
-        let (handled, asked) = (&prs.rows[2], &prs.rows[3]);
+        let workflows = &sections()[3];
+        let (handled, asked) = (&workflows.rows[2], &workflows.rows[3]);
         assert_eq!(handled[0].spans[0].style, palette::fg_clickable(Meaning::Waiting));
         assert_eq!(asked[0].spans[0].style, palette::fg_clickable(Meaning::Failed));
         assert_eq!((text(&handled[1]), text(&asked[1])), ("its Lead handles it".to_owned(), "its Lead asks you".to_owned()));

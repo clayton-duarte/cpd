@@ -187,7 +187,7 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     // The update Job is queued from the PR row BEFORE the edit: its stored text names `develop`.
     let mut s = store(&fx);
     let key = {
-        let prs = s.read(|c| cpd_core::plan::fingerprint::load_prs(c, &plan())).unwrap();
+        let prs = s.read(|c| cpd_core::plan::fingerprint::load_workflows(c, &plan())).unwrap();
         let pr = prs.iter().find(|p| p.key.as_str() == "b").unwrap().clone();
         s.write("test", |tx| queue_update(tx, &plan(), &pr, Tier::parse("H3")?, "test", Cause::Conflict)).unwrap().expect("an update Job")
     };

@@ -34,8 +34,8 @@ fn workflow(plan: &str, key: &str, repo: &str) -> String {
     )
 }
 
-fn need(pr: &str, needs: &str) -> String {
-    format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{pr}', '{needs}');")
+fn need(workflow: &str, needs: &str) -> String {
+    format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{workflow}', '{needs}');")
 }
 
 const LOCK: &str = "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';";

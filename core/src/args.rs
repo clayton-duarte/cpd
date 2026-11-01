@@ -39,7 +39,7 @@ impl PlanArg {
 pub struct WorkflowArg {
     /// The PR [default: the Plan's one PR that is not cancelled]
     #[arg(long = "pr", value_name = "key")]
-    pub pr: Option<WorkflowKey>,
+    pub workflow: Option<WorkflowKey>,
 }
 
 impl WorkflowArg {
@@ -48,7 +48,7 @@ impl WorkflowArg {
     /// A key that is not a PR of the Plan is `pr_not_found` (exit 4); without
     /// `--pr`, zero or two or more PRs that are not `cancelled` is
     /// `pr_required` (exit 2).
-    pub fn select<'a>(&self, plan: &PlanId, prs: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
+    pub fn select<'a>(&self, plan: &PlanId, workflows: &'a [WorkflowRow]) -> Result<&'a WorkflowRow, CpdError> {
         if let Some(key) = &self.workflow {
             return workflows.iter().find(|p| p.key == *key).ok_or_else(|| {
                 CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {key} in Plan {plan}."))
@@ -313,7 +313,7 @@ mod tests {
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
         let workflow = |key: &str, status: &str| WorkflowRow::fixture(key, "/r", "main", &[], status);
-        let arg = |key: Option<&str>| WorkflowArg { pr: key.map(|k| WorkflowKey::parse(k).unwrap()) };
+        let arg = |key: Option<&str>| WorkflowArg { workflow: key.map(|k| WorkflowKey::parse(k).unwrap()) };
         let workflows = [workflow("a", "cancelled"), workflow("b", "waiting")];
         assert_eq!(arg(None).select(&plan, &workflows).unwrap().key.as_str(), "b");
         assert_eq!(arg(Some("a")).select(&plan, &workflows).unwrap().key.as_str(), "a");

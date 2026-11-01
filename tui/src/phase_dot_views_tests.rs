@@ -42,7 +42,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
 fn dots_plan_box_title_dot_follows_work() {
     let needs = |work: Option<Work>| NeedsUser { lead_working: true, lead_work: work, ..NeedsUser::default() };
     // the read model hands the box its dot: `WorkflowNode::lead_dot`, red when a Job of the box failed or an Escalation is open
-    let pr = |failed_here: bool, work: Option<Work>| pr_node(Some(Dot::working(failed_here, work)));
+    let workflow = |failed_here: bool, work: Option<Work>| workflow_node(Some(Dot::working(failed_here, work)));
     for (work, colour) in [
         (Some(Work::Planning), palette::numbered::C13),
         (Some(Work::Dispatch), palette::numbered::C14),
@@ -50,19 +50,19 @@ fn dots_plan_box_title_dot_follows_work() {
         (None, palette::numbered::C15),
     ] {
         for frame in [0, 5, 27] {
-            assert_eq!(title_dot(&pr(false, work), &[], &needs(work), frame), Some(colour), "{work:?} frame {frame}");
+            assert_eq!(title_dot(&workflow(false, work), &[], &needs(work), frame), Some(colour), "{work:?} frame {frame}");
         }
     }
     for work in [Some(Work::Planning), Some(Work::Review), None] {
-        assert_eq!(title_dot(&pr(true, work), &[failed_job()], &needs(work), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
-        assert_eq!(title_dot(&pr(true, work), &[], &needs(work), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
+        assert_eq!(title_dot(&workflow(true, work), &[failed_job()], &needs(work), 3), Some(palette::numbered::C9), "a failed Job beats {work:?}");
+        assert_eq!(title_dot(&workflow(true, work), &[], &needs(work), 3), Some(palette::numbered::C9), "an Escalation beats {work:?}");
     }
     let idle = NeedsUser { lead_working: false, lead_work: Some(Work::Dispatch), ..NeedsUser::default() };
-    assert_eq!(title_dot(&pr_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
+    assert_eq!(title_dot(&workflow_node(None), &[], &idle, 0), None, "a Lead not working: no spinner");
 }
 
 /// A PR of a Plan whose Lead works (or not), with one pull request.
-fn pr_node(lead_dot: Option<Dot>) -> WorkflowNode {
+fn workflow_node(lead_dot: Option<Dot>) -> WorkflowNode {
     WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
@@ -90,7 +90,7 @@ fn pr_node(lead_dot: Option<Dot>) -> WorkflowNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("j1").unwrap(),
-        pr: Some(WorkflowKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,
@@ -109,8 +109,8 @@ fn failed_job() -> JobNode {
 
 /// The foreground of the Lead's dot in the box title row, found by its spinner glyph: the whole title is a link, so
 /// the glyph rides in a cell's OSC 8 symbol while the cell keeps the dot's style.
-fn title_dot(pr: &WorkflowNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
-    let chart = boxes::layout(std::slice::from_ref(pr), jobs, needs, frame).chart;
+fn title_dot(workflow: &WorkflowNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
+    let chart = boxes::layout(std::slice::from_ref(workflow), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))

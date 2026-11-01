@@ -28,7 +28,7 @@ pub struct Due {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeOf {
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
 }
 
 /// The emoji the PR's policy names (`""` when none) and the policy file that sets, or should set, `pr.post.merged_reaction`.
@@ -57,7 +57,7 @@ pub fn queue(tx: &WriteTxn<'_>, channel: &str, ts: &str, emoji: &str) -> Result<
 }
 
 /// Queues the reaction of PR `pr` of Plan `plan`'s post when its `pr_posts.reaction` is not NULL; `true` when newly queued.
-pub fn queue_merge(tx: &WriteTxn<'_>, plan: &str, pr: &str) -> Result<bool, CpdError> {
+pub fn queue_merge(tx: &WriteTxn<'_>, plan: &str, workflow: &str) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, workflow)
          SELECT channel, ts, reaction, (SELECT at FROM txns WHERE id = cpd_txn()), plan, workflow FROM pr_posts
@@ -163,7 +163,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, reason: &str, file: Opti
 /// The emoji PR `pr` of `plan` names for its merge (`pr.post.merged_reaction`, `""` when none), resolved with the PR's repo and
 /// owner policy, and the file to edit: the repo's file when it sets the key, else the owner's `owner.toml`.
 /// A policy that does not resolve is its error, unchanged.
-pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, pr: &str) -> Result<PolicyEmoji, CpdError> {
+pub fn policy_emoji(conn: &Connection, home: &CpdHome, plan: &str, workflow: &str) -> Result<PolicyEmoji, CpdError> {
     let plan_id = PlanId::parse(plan)?;
     let key = WorkflowKey::parse(workflow)?;
     let emoji = super::policy_of_workflow(conn, home, &plan_id, &key)?.workflow.post.merged_reaction;
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(store.read(|c| next_due(c, &[])).unwrap().map(|d| d.id), Some(2), "a parked row is never due");
         let parked_rows = store.read(parked).unwrap();
         assert_eq!(parked_rows.len(), 1);
-        assert_eq!(parked_rows[0].merge, Some(MergeOf { plan: "pay".into(), pr: "api".into() }));
+        assert_eq!(parked_rows[0].merge, Some(MergeOf { plan: "pay".into(), workflow: "api".into() }));
         assert!(!store.write("t", |tx| set_emoji(tx, 1, "x")).unwrap(), "a refused row keeps its emoji");
         assert!(store.write("t", |tx| reopen(tx, 1, "git-merged")).unwrap());
         assert_eq!(store.read(|c| next_due(c, &[])).unwrap().map(|d| (d.id, d.emoji)), Some((1, "git-merged".to_owned())));

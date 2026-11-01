@@ -84,7 +84,7 @@ fn pull(state: PrState) -> Pull {
     }
 }
 
-fn pr_node(pull: Pull) -> WorkflowNode {
+fn workflow_node(pull: Pull) -> WorkflowNode {
     WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
@@ -103,7 +103,7 @@ fn pr_node(pull: Pull) -> WorkflowNode {
 fn failed_job() -> JobNode {
     JobNode {
         key: JobKey::parse("api-1").unwrap(),
-        pr: Some(WorkflowKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,
@@ -126,7 +126,7 @@ fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::C
 }
 
 fn box_top_dot(pull: Pull, lead_dot: Option<Dot>, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::Cell> {
-    let chart = boxes::layout(&[WorkflowNode { lead_dot, ..pr_node(pull)}], jobs, &NeedsUser::default(), frame).chart;
+    let chart = boxes::layout(&[WorkflowNode { lead_dot, ..workflow_node(pull)}], jobs, &NeedsUser::default(), frame).chart;
     (0..chart.buf.area.width).map(|x| chart.buf[(x, 0)].clone()).collect()
 }
 

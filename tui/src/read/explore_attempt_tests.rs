@@ -67,8 +67,8 @@ fn plan_boxes_reads_a_plan_with_an_explore_attempt() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].key.as_str(), "api");
+    assert_eq!(boxes.workflows.len(), 1);
+    assert_eq!(boxes.workflows[0].key.as_str(), "api");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn plan_boxes_reads_a_plan_with_only_explore_attempts() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert!(boxes.prs.is_empty());
+    assert!(boxes.workflows.is_empty());
     assert!(boxes.jobs.iter().any(|j| j.key.as_str() == "look"), "the explore Job is a JobNode of the Plan");
 }
 
@@ -88,8 +88,8 @@ fn an_explore_attempts_cost_is_in_no_workflow() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    near(boxes.prs[0].cost_usd, 0.25);
+    assert_eq!(boxes.workflows.len(), 1);
+    near(boxes.workflows[0].cost_usd, 0.25);
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
     let flow = read::flow(&mut store, &pay()).unwrap();
     let keys: Vec<&str> = flow.jobs.iter().map(|j| j.key.as_str()).collect();
     assert!(keys.contains(&"work") && keys.contains(&"look"), "{keys:?}");
-    assert!(flow.jobs.iter().find(|j| j.key.as_str() == "look").unwrap().pr.is_none(), "the explore Job has no PR");
+    assert!(flow.jobs.iter().find(|j| j.key.as_str() == "look").unwrap().workflow.is_none(), "the explore Job has no PR");
 }
 
 #[test]
@@ -152,8 +152,8 @@ fn an_explore_attempts_time_is_in_no_workflows_active_time() {
             + &explore_run),
     );
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].elapsed_seconds, Some(60));
+    assert_eq!(boxes.workflows.len(), 1);
+    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn a_queued_explore_job_with_no_attempt_is_a_node_beside_the_pr_job() {
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     let keys: Vec<&str> = boxes.jobs.iter().map(|j| j.key.as_str()).collect();
     assert!(keys.contains(&"work") && keys.contains(&"look"), "{keys:?}");
-    near(boxes.prs[0].cost_usd, 0.25);
+    near(boxes.workflows[0].cost_usd, 0.25);
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn a_queued_explore_job_with_an_ended_attempt_is_read_by_every_cockpit_read() {
     run(&mut store, &(work() + &explore_job("look", "queued") + &explore_attempt("look", Some(r#"{"cost_usd":0.40}"#))));
     assert_every_cockpit_read_is_ok(&mut store);
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    near(boxes.prs[0].cost_usd, 0.25);
+    near(boxes.workflows[0].cost_usd, 0.25);
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
     let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| p.head.id.as_str() == "pay").unwrap();
     near(plan.cost_usd, 0.65);

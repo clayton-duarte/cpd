@@ -17,7 +17,7 @@ use crate::ids::PlanId;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Other {
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
     /// The PR's repo as stored (`prs.repo`, a realpath).
     pub repo: String,
     pub job: String,
@@ -37,7 +37,7 @@ pub struct OtherJob {
 pub struct Overlap {
     pub job: String,
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
     /// The Jobs of `pr` that overlap `job`, in the order of the others given to [`find`].
     pub other_jobs: Vec<OtherJob>,
     /// The paths of `job` that overlap a path of one of `other_jobs`, each once, in the order of its `touches`.
@@ -91,7 +91,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
 
 /// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
 /// `cancelled`.
-fn is_open(pr: &WorkflowRow) -> bool {
+fn is_open(workflow: &WorkflowRow) -> bool {
     !matches!(workflow.status.as_str(), "merged" | "cancelled")
 }
 
@@ -100,7 +100,7 @@ fn is_open(pr: &WorkflowRow) -> bool {
 /// `merged` PR is on its base already). One overlap per (Job, other Plan,
 /// other PR) that has a Job overlapping it, ordered by this Job's key, then the
 /// other Plan, then the PR. Pure.
-pub fn find(prs: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
+pub fn find(workflows: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     let mut open: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
@@ -129,7 +129,7 @@ pub fn find(prs: &[WorkflowRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap>
             out.push(Overlap {
                 job: job.key.clone(),
                 plan: other_plan.to_owned(),
-                pr: other_workflow.to_owned(),
+                workflow: other_workflow.to_owned(),
                 other_jobs,
                 paths: overlapped.into_iter().map(|i| paths[i].to_owned()).collect(),
             });

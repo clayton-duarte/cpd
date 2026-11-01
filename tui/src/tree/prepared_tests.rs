@@ -123,12 +123,12 @@ fn context(id: &str) -> String {
 }
 
 /// `pr`: the Plan has a PR (the schema ties phases `deploy` and `done` to one).
-fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: bool) -> String {
+fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, workflow: bool) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
     let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-    let (row, number, url, opened, pull_request) = if pr {
+    let (row, number, url, opened, pull_request) = if workflow {
         let state = if phase == "done" { "merged" } else { "open" };
         let merged = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
         (

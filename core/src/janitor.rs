@@ -85,7 +85,7 @@ fn log(env: &Env, status: &str) {
 /// What a pass did to one path.
 struct Entry {
     plan: PlanId,
-    pr: WorkflowKey,
+    workflow: WorkflowKey,
     status: String,
     path: String,
     outcome: &'static str,
@@ -137,13 +137,13 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
     let reason = e.reason.clone().unwrap_or_default();
     let (status, workflow, plan, path) = (&e.status, &e.workflow, &e.plan, &e.path);
     let (message, text) = if e.outcome == "kept" {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} kept {path} untouched: {reason}");
+        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} kept {path} untouched: {reason}");
         (m.clone(), m)
     } else if e.renamed {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} removed {path}, but not everything: {reason}");
+        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} removed {path}, but not everything: {reason}");
         (m.clone(), format!("{m}. The next janitor pass retries."))
     } else {
-        let m = format!("The clean-up of the {status} PR {pr} of Plan {plan} did not remove {path}: {reason}");
+        let m = format!("The clean-up of the {status} PR {workflow} of Plan {plan} did not remove {path}: {reason}");
         (m.clone(), format!("{m}. The next janitor pass retries."))
     };
     let details = json!({"plan": plan, "pr": workflow, "status": status, "outcome": e.outcome, "path": path, "reason": reason});
@@ -154,7 +154,7 @@ fn event(e: &Entry) -> (PlanId, NewEvent) {
 /// Attempts of merged Jobs, never its Lead worktree (contract §7.2 "Ended Attempts of merged Jobs on a live PR").
 pub(crate) struct Merged {
     pub(crate) plan: PlanId,
-    pub(crate) pr: WorkflowKey,
+    pub(crate) workflow: WorkflowKey,
     /// The PR's status in the store: `merged`, `cancelled`, or (for the swept Attempts only) `dispatch` or `open`.
     pub(crate) status: String,
     pub(crate) repo: String,
@@ -274,7 +274,7 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged, tmux: &Tmux, work: &str, pan
     paths.extend(merged.lead_path().cloned());
     let entry = |path: &str, outcome: &'static str, reason: Option<String>, renamed: bool| Entry {
         plan: merged.plan.clone(),
-        pr: merged.workflow.clone(),
+        workflow: merged.workflow.clone(),
         status: merged.status.clone(),
         path: path.to_owned(),
         outcome,

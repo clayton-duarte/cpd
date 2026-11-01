@@ -2666,7 +2666,7 @@ fn dispatch_card(fx: &Poll) -> (String, Option<(i64, PrState, Option<(String, Re
     let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
     assert_eq!(widgets.plans.len(), 1);
     let card = widgets.plans.into_iter().next().unwrap();
-    let pr = card.prs.into_iter().next().map(|pr| (pr.number, pr.state, pr.polled.map(|p| (p.title, p.decision, p.checks))));
+    let pr = card.workflows.into_iter().next().map(|pr| (pr.number, pr.state, pr.polled.map(|p| (p.title, p.decision, p.checks))));
     (card.label, pr)
 }
 

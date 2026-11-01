@@ -28,7 +28,7 @@ pub(super) fn run(engine: &mut Engine) {
             continue;
         }
         match wake(engine, &row, &lead) {
-            Ok(true) => engine.log.line(&format!("E20: woke the Lead of Plan {}: PR {} has a closed pull request", row.plan, row.pr)),
+            Ok(true) => engine.log.line(&format!("E20: woke the Lead of Plan {}: PR {} has a closed pull request", row.plan, row.workflow)),
             Ok(false) => {}
             Err(e) => engine.fail(Step::E20, About::Plan(row.plan.clone()), &e),
         }
@@ -38,7 +38,7 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// What the message begins with: identifies (PR key, pull request number).
 fn prefix(plan: &PlanId, row: &ClosedUnmerged) -> String {
-    format!("PR {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.", row.pr, row.number)
+    format!("PR {} of Plan {plan} is open in cpd but its pull request #{} was closed without a merge.", row.workflow, row.number)
 }
 
 fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
@@ -48,7 +48,7 @@ fn text(plan: &PlanId, row: &ClosedUnmerged) -> String {
          with `cpd pr cancel --pr {}`.",
         prefix(plan, row),
         row.url,
-        row.pr
+        row.workflow
     )
 }
 

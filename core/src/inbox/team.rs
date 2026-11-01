@@ -121,7 +121,7 @@ pub struct Review {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lookup {
     pub me: String,
-    pub prs: BTreeMap<(String, u64), Option<GhPr>>,
+    pub workflows: BTreeMap<(String, u64), Option<GhPr>>,
 }
 
 /// hermes' statuses (`classify.py` `STATUS_*`); [`Status::Hidden`] is `None` there.
@@ -143,7 +143,7 @@ pub const CLAIMED_BY_ME: &str = "you claimed this — approve or request changes
 pub const TAGGED: &str = "you were tagged in the thread";
 
 /// `classify.classify`: the status from GitHub alone. `me` is the User's GitHub login, `bots` `inbox.bot_reviewers`.
-pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
+pub fn classify(workflow: &GhPr, me: &str, bots: &[String]) -> Status {
     if workflow.draft {
         return Status::Draft;
     }
@@ -171,7 +171,7 @@ pub fn classify(pr: &GhPr, me: &str, bots: &[String]) -> Status {
 /// `classify` and then the Slack overrides of `refresh.build`: a claim in Slack makes `NEEDS_REVIEW` `IN_REVIEW`,
 /// unless the User's own `:eyes:` is the only claim; a mention of the User in the thread makes `IN_REVIEW` or
 /// `NEEDS_REVIEW` `NEEDS_REVIEW` again.
-pub fn status(post: &Post, pr: &GhPr, me: &str, bots: &[String]) -> Status {
+pub fn status(post: &Post, workflow: &GhPr, me: &str, bots: &[String]) -> Status {
     let mut status = classify(workflow, me, bots);
     if matches!(status, Status::NeedsReview(_)) && post.claim.is_some() {
         status = if post.eyes_me == Some(true) && !post.reactions.is_empty() { Status::NeedsReview(CLAIMED_BY_ME) } else { Status::InReview };
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn the_memo_asks_again_only_for_other_posts_or_after_the_ttl() {
         let (a, b) = (vec![("acme/pay".to_owned(), 1)], vec![("acme/pay".to_owned(), 2)]);
-        let lookup = Lookup { me: ME.to_owned(), prs: BTreeMap::new() };
+        let lookup = Lookup { me: ME.to_owned(), workflows: BTreeMap::new() };
         let mut calls = 0;
         let mut memo = Memo::default();
         let t0 = Instant::now();

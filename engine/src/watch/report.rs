@@ -109,7 +109,7 @@ impl About {
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
             About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
-            About::Move(p, pr, t) => format!("the {} move of PR {pr} of Plan {p}", t.as_str()),
+            About::Move(p, workflow, t) => format!("the {} move of PR {workflow} of Plan {p}", t.as_str()),
         }
     }
 
@@ -158,7 +158,7 @@ impl From<&CpdError> for Failure {
 /// What every message about a group's stuck Jobs begins with: the record that it was sent ([`tell_stuck_jobs`]).
 fn stuck_prefix(group: &StuckGroup) -> String {
     match &group.home {
-        JobHome::Pr(pr) => format!("Jobs of PR {}/{pr} failed ", group.plan),
+        JobHome::Workflow(workflow) => format!("Jobs of PR {}/{workflow} failed ", group.plan),
         JobHome::Plan => format!("Explore Jobs of Plan {} failed ", group.plan),
     }
 }
@@ -507,10 +507,10 @@ mod tests {
     }
 
     /// The Job as the stuck query reads it: failed `minutes` ago, whose `job-failed` Event is `event`, for `crashed`.
-    fn stuck(context: &str, plan: &str, pr: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
+    fn stuck(context: &str, plan: &str, workflow: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
         StuckJob {
             plan: PlanId::parse(plan).unwrap(),
-            home: JobHome::Pr(WorkflowKey::parse(pr).unwrap()),
+            home: JobHome::Workflow(WorkflowKey::parse(workflow).unwrap()),
             job: JobKey::parse(job).unwrap(),
             context: ContextId::parse(context).unwrap(),
             event,
@@ -520,14 +520,14 @@ mod tests {
     }
 
     /// The text of a group's message: each `(job, minutes)` entry, oldest first, with the group's `<plan>/<pr>` prefix.
-    fn text_of(plan: &str, pr: &str, jobs: &[(&str, i64)]) -> String {
+    fn text_of(plan: &str, workflow: &str, jobs: &[(&str, i64)]) -> String {
         let entries = jobs
             .iter()
             .map(|(job, minutes)| format!("{plan}/{job} ({minutes} min ago, crashed)"))
             .collect::<Vec<_>>()
             .join("; ");
         format!(
-            "Jobs of PR {plan}/{pr} failed and their Lead has not retried or cancelled them: {entries}. \
+            "Jobs of PR {plan}/{workflow} failed and their Lead has not retried or cancelled them: {entries}. \
              Retry each (cpd job retry <key> --plan {plan} --tier <T>), nudge the Lead, or ask the User."
         )
     }

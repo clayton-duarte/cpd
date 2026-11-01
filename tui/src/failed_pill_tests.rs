@@ -19,7 +19,7 @@ const MOONS: [&str; 28] = [
 ];
 const CLOSE_CIRCLE: &str = "\u{F0159}";
 
-fn pr() -> WorkflowNode {
+fn workflow() -> WorkflowNode {
     WorkflowNode {
         key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
@@ -38,7 +38,7 @@ fn pr() -> WorkflowNode {
 fn job(key: &str, status: JobStatus) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(WorkflowKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status,
@@ -66,7 +66,7 @@ fn key(k: &str) -> JobKey {
 
 /// The icon cell's glyph and the pill's colours, for each Job of `jobs`, at `frame`.
 fn pills(jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Vec<(String, Style)> {
-    let b = boxes::layout(&[pr()], jobs, needs, frame);
+    let b = boxes::layout(&[workflow()], jobs, needs, frame);
     b.chart
         .pills
         .iter()

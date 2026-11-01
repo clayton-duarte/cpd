@@ -27,7 +27,7 @@ const OPEN_NEEDS: &str = "every other Job of the PR";
 /// The `open` Job a PR that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
 /// Only for a PR whose Plan holds no `open` Job (an older PR): a template's opener stub is a real Job and is shown as its own row.
 struct OpenPlaceholder<'a> {
-    pr: &'a WorkflowRow,
+    workflow: &'a WorkflowRow,
     tier: &'a str,
 }
 
@@ -156,7 +156,7 @@ fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
 /// The PRs in the order of the needs graph: a PR comes after every PR it
 /// needs, ties by key. Needs outside `prs` are ignored; a cycle (the schema
 /// forbids none, `pr add` does) ends the order with the rest by key.
-fn ordered<'a>(prs: &[&'a WorkflowRow], display: &Display) -> Vec<&'a WorkflowRow> {
+fn ordered<'a>(workflows: &[&'a WorkflowRow], display: &Display) -> Vec<&'a WorkflowRow> {
     let mut rest: Vec<&WorkflowRow> = workflows.to_vec();
     rest.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out: Vec<&WorkflowRow> = Vec::new();
@@ -226,7 +226,7 @@ struct Shown<'a> {
 /// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked. `jobs` include the cancelled ones: they are
 /// in the table, in no graph and with no Spec.
-fn workflow_section(out: &mut Vec<String>, pr: &WorkflowRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
+fn workflow_section(out: &mut Vec<String>, workflow: &WorkflowRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
     // A PR that has not started, and whose Plan holds no `open` Job (an older PR), has no opener stub: its placeholder is the last row and the last section.
     let placeholder = (workflow.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(OpenPlaceholder { workflow, tier: open_tier });
     out.extend([
@@ -382,7 +382,7 @@ pub enum Heading<'a> {
 /// `overlaps` are those of [`super::overlap::find`]; `open_tier` is the config key of that name, the Tier of the
 /// placeholder `open` Job of a PR that has not started (§4.5, hs-d497). Pure: the same PRs, Jobs
 /// and overlaps give the same text.
-pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[WorkflowRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
+pub fn markdown(heading: &Heading, context: &str, phase: &str, workflows: &[WorkflowRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str, display: &Display) -> String {
     let shown = Shown { all_jobs: jobs, display, anchors: Anchors::new(jobs) };
     let (cancelled, workflows): (Vec<&WorkflowRow>, Vec<&WorkflowRow>) = workflows.iter().partition(|p| p.status == "cancelled");
     let mut out = match heading {
@@ -486,11 +486,11 @@ mod tests {
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
 
-    fn job(key: &str, pr: &str, kind: &str) -> Job {
+    fn job(key: &str, workflow: &str, kind: &str) -> Job {
         Job {
             seq: 1,
             key: key.into(),
-            pr: Some(workflow.into()),
+            workflow: Some(workflow.into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),
@@ -514,7 +514,7 @@ mod tests {
     }
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
-    fn plain(phase: &str, prs: &[WorkflowRow], jobs: &[Job], open_tier: &str) -> String {
+    fn plain(phase: &str, workflows: &[WorkflowRow], jobs: &[Job], open_tier: &str) -> String {
         markdown(&Heading::Plan { title: "T" }, "ctx", phase, workflows, jobs, &[], open_tier, &Display::of(workflows))
     }
 

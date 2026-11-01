@@ -149,7 +149,7 @@ pub fn archived_with_drafts(conn: &Connection) -> Result<Vec<PlanId>, CpdError> 
 /// Every `draft` Job of the archived `plan` is `cancelled` in the caller's transaction, one `job-cancelled` Event each; nothing
 /// when it has none (engine E20).
 pub fn cancel_archived_drafts(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
-    let prs: Vec<String> = {
+    let workflows: Vec<String> = {
         let mut stmt = tx.prepare("SELECT DISTINCT workflow FROM jobs WHERE plan = ?1 AND status = 'draft' ORDER BY workflow")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
@@ -310,7 +310,7 @@ fn check_superseding(conn: &Connection, plan: &PlanId, key: &WorkflowKey, by: &s
 
 /// The PRs of `plan` that are not `cancelled` and stacked on `pr`: those of its repo whose `base` is its Lead Branch
 /// (§2.2 "The base PR"), by key.
-fn stacked_on(conn: &Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Vec<String>, CpdError> {
+fn stacked_on(conn: &Connection, plan: &PlanId, workflow: &WorkflowRow) -> Result<Vec<String>, CpdError> {
     let mut stmt = conn.prepare("SELECT key FROM workflows WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
     let found = stmt
         .query_map([plan.as_str(), workflow.repo.as_str(), workflow.lead_branch.as_str(), workflow.key.as_str()], |r| r.get::<_, String>(0))?
@@ -320,7 +320,7 @@ fn stacked_on(conn: &Connection, plan: &PlanId, pr: &WorkflowRow) -> Result<Vec<
 
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
 /// wrote) and no PR that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked: its `draft`, `queued` and `failed` ones go with it.
-fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, pr: &WorkflowRow, needing: &[String]) -> Result<Decision, CpdError> {
+fn decide_open(conn: &Connection, plan: &PlanId, key: &WorkflowKey, workflow: &WorkflowRow, needing: &[String]) -> Result<Decision, CpdError> {
     let (Some(id), Some(pull), Some(worktree)) = (workflow.pull_request, &workflow.pull, &workflow.lead_worktree) else {
         return Err(CpdError::bad_row(format!("PR {key} of Plan {plan} is open without a pull request or a Lead worktree")));
     };

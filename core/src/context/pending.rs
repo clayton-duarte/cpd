@@ -126,7 +126,7 @@ fn workflows(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job])
 
 /// The PR's Jobs not `cancelled`, in `seq` order. The PR is not merged, so a
 /// `merged` Job is on the Lead Branch and not yet on the base.
-fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
+fn jobs(conn: &Connection, plan: &str, workflow: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT key, status, title, touches FROM jobs
           WHERE plan = ?1 AND workflow = ?2 AND status <> 'cancelled' ORDER BY seq",

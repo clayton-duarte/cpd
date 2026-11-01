@@ -194,7 +194,7 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool
 }
 
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
-fn summary(plan: &PlanRow, prs: &[Value]) -> Value {
+fn summary(plan: &PlanRow, workflows: &[Value]) -> Value {
     json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase.as_str(),
            "lead_session": plan.lead_session, "workflows": workflows})
 }

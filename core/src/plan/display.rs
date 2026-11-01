@@ -73,7 +73,7 @@ impl Display {
 
     /// Without a store: the PRs of the Plan alone (every need is of the Plan), their bases found by Lead Branch.
     #[cfg(test)]
-    pub fn of(prs: &[WorkflowRow]) -> Display {
+    pub fn of(workflows: &[WorkflowRow]) -> Display {
         let mut display = Display::default();
         for p in workflows {
             display.statuses.insert(p.key.to_string(), p.status.clone());
@@ -117,7 +117,7 @@ impl Display {
     }
 
     /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
-    pub fn workflow_needs(&self, pr: &WorkflowRow) -> Vec<String> {
+    pub fn workflow_needs(&self, workflow: &WorkflowRow) -> Vec<String> {
         let mut needs = workflow.needs.clone();
         if let Some(base) = self.bases.get(workflow.key.as_str()) {
             if !needs.contains(base) {
@@ -129,7 +129,7 @@ impl Display {
 
     /// What the PR that has not started cannot start until, sorted (PR references): the PRs it needs that are not `merged`, and
     /// its base PR when that has not started. Empty when it can start, and for a PR that has started.
-    pub fn workflow_blockers(&self, pr: &WorkflowRow) -> Vec<String> {
+    pub fn workflow_blockers(&self, workflow: &WorkflowRow) -> Vec<String> {
         if workflow.status != "waiting" {
             return Vec::new();
         }

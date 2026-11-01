@@ -32,7 +32,7 @@ fn run(store: &mut Store, sql: &str) {
 
 /// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with PR `api` (`/repo`, base `main`).
 fn db() -> (tempfile::TempDir, Store) {
-    let (dir, mut store) = db_without_pr();
+    let (dir, mut store) = db_without_workflow();
     run(
         &mut store,
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
@@ -42,7 +42,7 @@ fn db() -> (tempfile::TempDir, Store) {
 }
 
 /// [`db`] without the PR: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
-fn db_without_pr() -> (tempfile::TempDir, Store) {
+fn db_without_workflow() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -59,11 +59,11 @@ fn db_without_pr() -> (tempfile::TempDir, Store) {
 }
 
 /// A PR Job `key` of PR `pr`, queued or running, Tier S3.
-fn pr_job(pr: &str, key: &str, status: &str) -> String {
+fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
-         VALUES ('pay', '{pr}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
+         VALUES ('pay', '{workflow}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'work');"
     )
 }
@@ -92,13 +92,13 @@ fn explore_running(key: &str) -> String {
 /// The chart of Plan `pay` as the Plan view draws it, at spinner `frame`.
 fn chart(store: &mut Store, frame: usize) -> super::flow::Chart {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
-    boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).chart
+    boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame).chart
 }
 
 /// A [`Centre`] as the Plan view holds it, its read straight from `store` at spinner `frame`.
 fn centre(store: &mut Store, frame: usize) -> Centre {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame);
     let slot = read::ChatSlot { session: SessionId::parse("lead1").unwrap(), name: "lead1".into(), plan: plan.plan.clone(), moved_event: 1 };
     Centre { slot, plan, boxes, frame }
 }
@@ -113,7 +113,7 @@ fn pill(chart: &super::flow::Chart, key: &str) -> (String, ratatui::style::Style
 #[test]
 fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let (_dir, mut store) = db();
-    run(&mut store, &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(&mut store, &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")));
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
 
@@ -126,7 +126,7 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
 
 #[test]
 fn an_explore_only_plans_chart_is_the_explore_box_alone() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &explore_job("look", "queued"));
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
@@ -153,8 +153,8 @@ fn a_running_explore_job_spins_and_a_failed_one_turns() {
     let plan = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     let mut needs = plan.needs_user.clone();
     needs.worked_on = vec![JobKey::parse("look").unwrap()];
-    let working = boxes::layout(&plan.prs, &plan.jobs, &needs, 0).chart;
-    let turning = boxes::layout(&plan.prs, &plan.jobs, &needs, 1).chart;
+    let working = boxes::layout(&plan.workflows, &plan.jobs, &needs, 0).chart;
+    let turning = boxes::layout(&plan.workflows, &plan.jobs, &needs, 1).chart;
     let (icon0, style0) = pill(&working, "look");
     let (icon1, _) = pill(&turning, "look");
     let red = palette::job_pill(JobStatus::Failed, false, true);
@@ -165,7 +165,7 @@ fn a_running_explore_job_spins_and_a_failed_one_turns() {
 #[test]
 fn exact_rendered_rows_for_one_pr_box_and_one_explore_box() {
     let (_dir, mut store) = db();
-    run(&mut store, &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")));
+    run(&mut store, &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")));
     let chart = chart(&mut store, 0);
     let got = rows(&chart.buf).join("\n");
     let want = "\

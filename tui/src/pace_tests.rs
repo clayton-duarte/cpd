@@ -68,7 +68,7 @@ fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
     assert_eq!(reads.take(), None);
 }
 
-fn pr_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> WorkflowNode {
+fn workflow_node(pull: Option<Pull>, lead_dot: Option<Dot>) -> WorkflowNode {
     WorkflowNode {
         key: WorkflowKey::parse("web").unwrap(),
         repo_name: "repo".into(),
@@ -91,7 +91,7 @@ fn pull() -> Pull {
 fn job_node(key: &str, status: JobStatus) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(WorkflowKey::parse("web").unwrap()),
+        workflow: Some(WorkflowKey::parse("web").unwrap()),
         seq: 0,
         title: String::new(),
         status,
@@ -113,12 +113,12 @@ fn centre(lead_dot: Option<Dot>, jobs: Vec<JobNode>) -> Centre {
     let plan = PlanBoxes {
         plan: PlanId::parse("plan-a").unwrap(),
         context: ContextId::parse("ctx").unwrap(),
-        prs: vec![pr_node(Some(pull()), lead_dot)],
+        workflows: vec![workflow_node(Some(pull()), lead_dot)],
         jobs,
         needs_user: NeedsUser::default(),
         events_cursor: 0,
     };
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
     let slot = ChatSlot {
         session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
         name: "lead".into(),
@@ -150,7 +150,7 @@ fn the_plan_view_lays_out_once_per_snapshot_and_a_frame_change_draws_the_same_ce
     assert_eq!(LAYOUTS.with(|n| n.get()), before + 1, "a frame change lays nothing out");
 
     for (frame, buf) in cells.iter().take(8) {
-        let full = boxes::layout(&c.plan.prs, &c.plan.jobs, &c.plan.needs_user, *frame).with_margin(CHART_MARGIN);
+        let full = boxes::layout(&c.plan.workflows, &c.plan.jobs, &c.plan.needs_user, *frame).with_margin(CHART_MARGIN);
         assert_eq!(&full.chart.buf, buf, "frame {frame}");
     }
 }

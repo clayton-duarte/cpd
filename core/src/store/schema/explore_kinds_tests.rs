@@ -47,18 +47,18 @@ fn fresh() -> (tempfile::TempDir, Store) {
 }
 
 /// A queued Job row: `pr` is SQL (`NULL` or `'api'`).
-fn job(key: &str, kind: &str, pr: &str) -> String {
+fn job(key: &str, kind: &str, workflow: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-         VALUES ('pay', {pr}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
+         VALUES ('pay', {workflow}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
     )
 }
 
 /// The same queued Job row before `workflow-rename`: the column is `pr`.
-fn job_before(key: &str, kind: &str, pr: &str) -> String {
+fn job_before(key: &str, kind: &str, workflow: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
-         VALUES ('pay', {pr}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
+         VALUES ('pay', {workflow}, '{key}', 'T', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{kind}', '{FP}', cpd_txn(), 't');"
     )
 }
 

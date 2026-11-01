@@ -27,7 +27,7 @@ pub enum Kind<'a> {
 /// What the summary reads besides the Plan row.
 pub struct Input<'a> {
     pub plan: &'a PlanRow,
-    pub prs: &'a [WorkflowRow],
+    pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
@@ -44,7 +44,7 @@ fn locked(job: &Job) -> bool {
     !job.is_draft() && job.status != "cancelled"
 }
 
-fn repo_name(pr: &WorkflowRow) -> String {
+fn repo_name(workflow: &WorkflowRow) -> String {
     workflow.name.clone().or_else(|| Path::new(&workflow.repo).file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| workflow.repo.clone())
 }
 
@@ -104,7 +104,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
     counting.sort_by(|a, b| a.key.cmp(&b.key));
     let mut reviewed: Vec<&Job> = i.jobs.iter().filter(|j| under_review(j)).collect();
     reviewed.sort_by(|a, b| (&a.workflow, &a.key).cmp(&(&b.workflow, &b.key)));
-    let has_review = |pr: &WorkflowRow| reviewed.iter().any(|j| j.workflow_str() == workflow.key.as_str());
+    let has_review = |workflow: &WorkflowRow| reviewed.iter().any(|j| j.workflow_str() == workflow.key.as_str());
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {

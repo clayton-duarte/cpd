@@ -155,7 +155,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
 /// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
 /// key order. A PR started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
-fn listed(prs: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
+fn listed(workflows: &[WorkflowRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
     workflows.iter()
         .filter(|p| p.status != "cancelled")
         .map(|workflow| {

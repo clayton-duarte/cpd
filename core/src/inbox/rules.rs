@@ -1453,8 +1453,8 @@ mod tests {
         GhPr { reviews: vec![Review { author: login.to_owned(), state: "COMMENTED".to_owned() }], ..open_pr() }
     }
 
-    fn lookup(prs: &[(&str, u64, GhPr)]) -> Lookup {
-        Lookup { me: ME_LOGIN.to_owned(), prs: workflows.iter().map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone()))).collect() }
+    fn lookup(workflows: &[(&str, u64, GhPr)]) -> Lookup {
+        Lookup { me: ME_LOGIN.to_owned(), workflows: workflows.iter().map(|(repo, n, workflow)| (((*repo).to_owned(), *n), Some(workflow.clone()))).collect() }
     }
 
     fn team<'a>(github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>) -> Team<'a> {
@@ -1463,7 +1463,7 @@ mod tests {
     }
 
     /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
-    fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
+    fn reviews(f: &mut Fixture, posts: &[Value], workflows: &[(&str, u64, GhPr)]) -> Vec<Condition> {
         write_cache(f, posts);
         let lookup = lookup(workflows);
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
@@ -1629,7 +1629,7 @@ mod tests {
 
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
-        let blind = Lookup { me: ME_LOGIN.to_owned(), prs: [(("acme/pay".to_owned(), 1), None)].into() };
+        let blind = Lookup { me: ME_LOGIN.to_owned(), workflows: [(("acme/pay".to_owned(), 1), None)].into() };
         let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every PR unreadable: the queue stays");
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));

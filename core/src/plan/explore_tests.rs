@@ -80,7 +80,7 @@ fn fixture(phase: &str, extra_workflow: bool) -> Fixture {
     for workflow in if extra_workflow { vec!["api", "web"] } else { vec!["api"] } {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '/r', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
+               VALUES ('pay', '{workflow}', '/r', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
         ));
     }
     let mut f = Fixture { _dir: dir, env, saved, _lock: lock };
@@ -270,7 +270,7 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     assert_eq!(work["pr"], "api");
     for workflow in out["workflows"].as_array().unwrap() {
         let listed: Vec<&str> = workflow["jobs"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {pr}");
+        assert!(!listed.contains(&"s1") && !listed.contains(&"r1"), "no PR row mentions an explore Job: {workflow}");
     }
     assert_eq!(out["counts"]["queued"], 3);
 }

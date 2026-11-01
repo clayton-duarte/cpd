@@ -68,7 +68,7 @@ impl Fixture {
 fn row(plan: &str, key: &str, lead: &str, n: i64) -> ClosedUnmerged {
     ClosedUnmerged {
         plan: PlanId::parse(plan).unwrap(),
-        pr: WorkflowKey::parse(key).unwrap(),
+        workflow: WorkflowKey::parse(key).unwrap(),
         context: ContextId::parse("ctx").unwrap(),
         lead_session: Some(SessionId::parse(lead).unwrap()),
         repo: "acme/api".to_owned(),

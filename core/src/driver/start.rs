@@ -64,7 +64,7 @@ pub struct Started {
 
 /// Whether the PR has a live (not `ended`) linear Attempt other than `except` (pro-d52): its branch is the PR's Lead
 /// Branch. The one place that derives it, for the starter and E3.
-pub fn workflow_has_live_linear(conn: &Connection, plan: &PlanId, pr: &str, except: &str) -> Result<bool, CpdError> {
+pub fn workflow_has_live_linear(conn: &Connection, plan: &PlanId, workflow: &str, except: &str) -> Result<bool, CpdError> {
     let n: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
            JOIN workflows ON workflows.plan = j.plan AND workflows.key = j.workflow
@@ -250,7 +250,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
         require_ready_explore(conn, &all, job, plan, &phase)?;
         (String::new(), String::new())
     } else {
-        let pr: (String, String) = conn.query_row(
+        let workflow: (String, String) = conn.query_row(
             "SELECT r.repo, r.status FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",
             [plan.as_str(), key.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -414,9 +414,9 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, workflow_st
     } else if !matches!(phase, "dispatch" | "deploy") {
         format!("Plan {plan} is in phase {phase}")
     } else if !matches!(workflow_status, "dispatch" | "open") {
-        format!("its PR {} is {pr_status}", job.workflow_str())
+        format!("its PR {} is {workflow_status}", job.workflow_str())
     } else if job.kind == "open" && workflow_status != "dispatch" {
-        format!("its PR {} is {pr_status}, and an open Job runs only while its PR is dispatch", job.workflow_str())
+        format!("its PR {} is {workflow_status}, and an open Job runs only while its PR is dispatch", job.workflow_str())
     } else if !waiting.is_empty() && derived.is_some() {
         format!("it waits for {}, not finished yet", waiting.join(", "))
     } else if !waiting.is_empty() {
@@ -471,7 +471,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
         return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again.")));
     }
     // An explore Job has no PR, so no Jira transition.
-    let pr: Option<String> = tx.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
+    let workflow: Option<String> = tx.query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", params![plan.as_str(), key.as_str()], |r| r.get(0))?;
     if let Some(workflow) = workflow {
         crate::pr::jira_sync::queue(tx, plan.as_str(), &workflow, crate::pr::jira_sync::Target::InProgress)?;
     }

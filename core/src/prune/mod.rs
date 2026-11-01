@@ -205,12 +205,12 @@ fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
 }
 
 /// True when `base` reaches main through merged PRs.
-fn reached(prs: &[Merged], base: &str, level: usize) -> bool {
+fn reached(workflows: &[Merged], base: &str, level: usize) -> bool {
     base == "main" || (level < MAX_LEVELS && workflows.iter().any(|p| p.head == base && reached(workflows, &p.base, level + 1)))
 }
 
 /// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
-fn merged_via_pr(ports: &Ports, repo: &Path, prs: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
+fn merged_via_pr(ports: &Ports, repo: &Path, workflows: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
     let lead = lead_of(branch);
     let attempt_plan = attempt_plan(branch);
     let legacy = lead.strip_prefix("cpd/").and_then(|rest| rest.split_once('/')).map(|(plan, _)| format!("cpd/{plan}"));

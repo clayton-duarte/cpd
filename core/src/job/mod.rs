@@ -104,7 +104,7 @@ pub struct AddArgs {
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
     kind: Option<String>,
     #[command(flatten)]
-    pr: WorkflowArg,
+    workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -131,7 +131,7 @@ pub struct EditArgs {
     no_needs: bool,
     /// Move the Job to this PR (it keeps no old Dependency)
     #[arg(long = "pr", value_name = "key")]
-    pr: Option<WorkflowKey>,
+    workflow: Option<WorkflowKey>,
     /// The new kind (§2.2 "Job kinds"): work, docs, test or impl. open and update are cpd's
     #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
     kind: Option<String>,
@@ -226,14 +226,14 @@ impl Env {
     ///
     /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
-    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&WorkflowKey>, tier: Tier) -> Result<(), CpdError> {
+    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, workflow: Option<&WorkflowKey>, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
             plan_phase(conn, plan)?;
             match workflow {
                 Some(workflow) => crate::policy::model::models_of_workflow(conn, &home, plan, workflow),
                 None => {
-                    let pr: Option<Option<String>> = conn
+                    let workflow: Option<Option<String>> = conn
                         .query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
                         .optional()?;
                     match workflow {
@@ -351,7 +351,7 @@ fn kinds_allowed(shape: &str) -> &'static [&'static str] {
 
 /// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
 /// (§5.1). An `open` PR allows only `work`.
-fn check_shape_allows(prs: &[WorkflowRow], plan: &PlanId, pr: &str, kind: &str) -> Result<(), CpdError> {
+fn check_shape_allows(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str, kind: &str) -> Result<(), CpdError> {
     let Some(row) = workflows.iter().find(|p| p.key.as_str() == workflow) else { return Ok(()) };
     let allowed = kinds_allowed(&row.shape);
     if row.status == "open" {
@@ -360,7 +360,7 @@ fn check_shape_allows(prs: &[WorkflowRow], plan: &PlanId, pr: &str, kind: &str) 
         }
         return Err(CpdError::new(
             ErrorCode::ShapeViolation,
-            format!("PR {pr} has opened: a feedback fix is one work Job, not {kind}."),
+            format!("PR {workflow} has opened: a feedback fix is one work Job, not {kind}."),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)
@@ -374,7 +374,7 @@ fn check_shape_allows(prs: &[WorkflowRow], plan: &PlanId, pr: &str, kind: &str) 
     }
     Err(CpdError::new(
         ErrorCode::ShapeViolation,
-        format!("PR {pr} has the shape {}: it allows the kinds {}, not {kind}. The shape is fixed; cancel the PR and add another to change it.", row.shape, allowed.join(", ")),
+        format!("PR {workflow} has the shape {}: it allows the kinds {}, not {kind}. The shape is fixed; cancel the PR and add another to change it.", row.shape, allowed.join(", ")),
     )
     .with("plan", plan.as_str())
     .with("pr", workflow)
@@ -455,12 +455,12 @@ pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[St
 }
 
 /// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
-fn check_needs_same_workflow(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
+fn check_needs_same_workflow(jobs: &[Job], plan: &PlanId, workflow: &str, needs: &[String]) -> Result<(), CpdError> {
     let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.workflow_str() != workflow).map(|j| j.key.as_str()).collect();
     if !others.is_empty() {
         return Err(CpdError::new(
             ErrorCode::NeedsOtherWorkflow,
-            format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {pr}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
+            format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {workflow}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)
@@ -470,11 +470,11 @@ fn check_needs_same_workflow(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[Str
 }
 
 /// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
-fn check_workflow_live(prs: &[WorkflowRow], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
+fn check_workflow_live(workflows: &[WorkflowRow], plan: &PlanId, workflow: &str) -> Result<(), CpdError> {
     match workflows.iter().find(|p| p.key.as_str() == workflow) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
             ErrorCode::WorkflowEnded,
-            format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
+            format!("PR {workflow} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
         )
         .with("plan", plan.as_str())
         .with("pr", workflow)

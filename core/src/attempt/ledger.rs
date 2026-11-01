@@ -43,7 +43,7 @@ pub struct Attempt {
     /// The Job's kind (§2.2 "Job kinds"): `open` and `update` Jobs are merged without a rebase and with a push (§7.4).
     pub kind: String,
     /// The Job's PR (R34 A7).
-    pub pr: Option<String>,
+    pub workflow: Option<String>,
 }
 
 impl Attempt {

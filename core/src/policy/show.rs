@@ -23,7 +23,7 @@ use crate::store::Store;
 pub struct KeyArgs {
     /// The PR of the selected Plan whose repo policy to show
     #[arg(long, value_name = "key", conflicts_with_all = ["context", "owner"])]
-    pr: Option<WorkflowKey>,
+    workflow: Option<WorkflowKey>,
     /// The Plan of `--pr` [default: $CPD_PLAN]
     #[arg(long, value_name = "id", env = "CPD_PLAN", hide_env = true)]
     plan: Option<PlanId>,
@@ -92,7 +92,7 @@ fn workflow_key(owner: OwnerLogin, name: Option<String>) -> Result<PolicyKey, Cp
 }
 
 /// The key of PR `pr` of Plan `plan`, and of the Context of the Plan.
-fn key_of_workflow(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey, CpdError> {
+fn key_of_workflow(conn: &Connection, plan: &str, workflow: &str) -> Result<PolicyKey, CpdError> {
     let context: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan], |r| r.get(0)).optional()?;
     let context = context.ok_or_else(|| not_found(ErrorCode::PlanNotFound, "Plan", "plan", plan))?;
@@ -100,7 +100,7 @@ fn key_of_workflow(conn: &Connection, plan: &str, pr: &str) -> Result<PolicyKey,
         .query_row("SELECT name FROM workflows WHERE plan = ?1 AND key = ?2", [plan, workflow], |r| r.get(0))
         .optional()?;
     let name = name.ok_or_else(|| {
-        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {pr} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
+        CpdError::new(ErrorCode::WorkflowNotFound, format!("No PR {workflow} in Plan {plan}.")).with("plan", plan).with("pr", workflow)
     })?;
     workflow_key(context_owner(conn, &context)?, name)
 }

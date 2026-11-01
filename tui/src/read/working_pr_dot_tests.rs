@@ -100,13 +100,13 @@ impl Fixture {
 }
 
 fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
-    b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
+    b.workflows.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 
 /// The foreground of the spinner cell in row 0 of the box of `key` drawn alone.
 fn title_dot(b: &PlanBoxes, key: &str, frame: usize) -> Option<Color> {
-    let pr = node(b, key);
-    let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
+    let workflow = node(b, key);
+    let chart = boxes::layout(std::slice::from_ref(workflow), &b.jobs, &b.needs_user, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))

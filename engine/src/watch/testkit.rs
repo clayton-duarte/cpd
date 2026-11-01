@@ -131,15 +131,15 @@ impl Fx {
     }
 
     /// `add_job` in PR `pr` of Plan `pay`.
-    pub(super) fn add_job_in(&mut self, pr: &str, key: &str, needs: &[&str], then: &str) {
-        self.add_job_on("S2", pr, key, needs, then);
+    pub(super) fn add_job_in(&mut self, workflow: &str, key: &str, needs: &[&str], then: &str) {
+        self.add_job_on("S2", workflow, key, needs, then);
     }
 
     /// `add_job_in` with the Job's Tier `tier`.
-    pub(super) fn add_job_on(&mut self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
+    pub(super) fn add_job_on(&mut self, tier: &str, workflow: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");

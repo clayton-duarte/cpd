@@ -24,7 +24,7 @@ pub enum Outcome {
 }
 
 /// Whether PR `pr` of `plan` is stacked: its stored `base` is the `lead_branch` of any `prs` row (any Plan, any status).
-pub fn stacked(conn: &Connection, plan: &str, pr: &str) -> Result<bool, CpdError> {
+pub fn stacked(conn: &Connection, plan: &str, workflow: &str) -> Result<bool, CpdError> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = (SELECT base FROM workflows WHERE plan = ?1 AND key = ?2))",
         [plan, workflow],

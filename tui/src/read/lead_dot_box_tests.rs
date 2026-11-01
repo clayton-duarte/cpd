@@ -63,12 +63,12 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
 }
 
 fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
-    b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
+    b.workflows.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 
 /// The foreground of the spinner cell in row 0 of the box of `pr` drawn alone among all the Plan's Jobs.
-fn title_dot(b: &PlanBoxes, pr: &WorkflowNode, frame: usize) -> Option<ratatui::style::Color> {
-    let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
+fn title_dot(b: &PlanBoxes, workflow: &WorkflowNode, frame: usize) -> Option<ratatui::style::Color> {
+    let chart = boxes::layout(std::slice::from_ref(workflow), &b.jobs, &b.needs_user, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| palette::SPINNER.iter().any(|glyph| cell.symbol().contains(glyph)))

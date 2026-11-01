@@ -105,7 +105,7 @@ pub(super) fn run(engine: &mut Engine) {
     if let Some(merge) = next.merge.clone() {
         let about = About::Plan(PlanId::parse(&merge.plan).expect("a stored Plan id"));
         let home = engine.home.clone();
-        let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr));
+        let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.workflow));
         let resolved = match resolved {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -151,10 +151,10 @@ fn reopen_parked(engine: &mut Engine) {
         }
     };
     for row in parked {
-        let Some(MergeOf { plan, pr }) = row.merge.clone() else { continue };
+        let Some(MergeOf { plan, workflow }) = row.merge.clone() else { continue };
         let about = About::Plan(PlanId::parse(&plan).expect("a stored Plan id"));
         let home = engine.home.clone();
-        match engine.store.read(|conn| reactions::policy_emoji(conn, &home, &plan, &pr)) {
+        match engine.store.read(|conn| reactions::policy_emoji(conn, &home, &plan, &workflow)) {
             Err(e) => engine.fail(Step::E17, about, Failure::from(&e)),
             Ok(resolved) => {
                 engine.clear(Step::E17, &about);
@@ -175,7 +175,7 @@ fn park(engine: &mut Engine, due: &Due, reason: &str) -> Result<(), Failure> {
     let file = match &due.merge {
         Some(merge) => {
             let home = engine.home.clone();
-            let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.pr)).map_err(|e| Failure::from(&e))?;
+            let resolved = engine.store.read(|conn| reactions::policy_emoji(conn, &home, &merge.plan, &merge.workflow)).map_err(|e| Failure::from(&e))?;
             Some(resolved.file)
         }
         None => None,

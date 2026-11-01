@@ -38,10 +38,10 @@ fn add_draft(fx: &mut Fx, key: &str) {
 }
 
 /// `add_draft` in PR `pr`.
-fn add_draft_in(fx: &mut Fx, pr: &str, key: &str) {
+fn add_draft_in(fx: &mut Fx, workflow: &str, key: &str) {
     fx.fixture(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
+         VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     ));
 }
 
@@ -52,16 +52,16 @@ fn add_cpd_job(fx: &mut Fx, key: &str, kind: &str, then: &str) {
 }
 
 /// `add_cpd_job` in PR `pr`.
-fn add_cpd_job_in(fx: &mut Fx, pr: &str, key: &str, kind: &str, then: &str) {
+fn add_cpd_job_in(fx: &mut Fx, workflow: &str, key: &str, kind: &str, then: &str) {
     fx.fixture(&format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
+         VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, then);
 }
 
 /// PR `web` of Plan `pay`, `dispatch`, beside PR `repo`.
-fn add_web_pr(fx: &mut Fx) {
+fn add_web_workflow(fx: &mut Fx) {
     let (repo, lead) = (fx.engine.home.root().join("repo"), fx.engine.home.root().join("lead"));
     fx.fixture(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
@@ -181,7 +181,7 @@ fn e4_queues_the_open_job_at_once_when_its_pr_has_no_draft_and_adds_no_second_to
     let mut fx = Fx::with_plan("");
     add_merged_api(&mut fx);
     add_draft(&mut fx, "later");
-    add_web_pr(&mut fx);
+    add_web_workflow(&mut fx);
     // A running Job keeps E3 from starting the open Job of PR web, and is no draft.
     fx.add_job_in("web", "ui", &[], "UPDATE jobs SET status = 'running' WHERE key = 'ui';");
 
@@ -251,7 +251,7 @@ fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
         add_merged_api(&mut fx);
         add_draft(&mut fx, "later");
         add_cpd_job(&mut fx, "open-repo", "open", then);
-        add_web_pr(&mut fx);
+        add_web_workflow(&mut fx);
         fx.add_job_in("web", "ui", &[], &merged("ui"));
         add_draft_in(&mut fx, "web", "later-web");
 
@@ -291,7 +291,7 @@ fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
         "open",
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'never to be opened', cancel_requested_at = 't' WHERE key = 'open-repo';",
     );
-    add_web_pr(&mut fx);
+    add_web_workflow(&mut fx);
     add_draft_in(&mut fx, "web", "later-web");
 
     for _ in 0..2 {

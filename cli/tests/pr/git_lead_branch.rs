@@ -5,7 +5,7 @@ use crate::common::fx::Fx;
 use std::time::Duration;
 
 use cpd_core::error::ErrorCode;
-use cpd_core::git::{Cut, Setup, attempt_branch, create_attempt_worktree, pr_lead_worktree_path, prepare_pr_lead_worktree};
+use cpd_core::git::{Cut, Setup, attempt_branch, create_attempt_worktree, workflow_lead_worktree_path, prepare_workflow_lead_worktree};
 use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
 use cpd_core::git::Pipeline;
 
@@ -23,8 +23,8 @@ fn setup_in(fx: &Fx) -> Setup {
 
 /// Starts the Lead worktree of `branch`; the error is the start's.
 fn start(fx: &Fx, repo: &std::path::Path, branch: &str) -> Result<cpd_core::git::Prepared, cpd_core::git::StartFailure> {
-    let path = fx.scoped(|| pr_lead_worktree_path(repo, &plan(), &key(), branch)).unwrap();
-    fx.scoped(|| prepare_pr_lead_worktree(repo, &plan(), &path, branch, "main", Cut::Base, &setup_in(fx), &Pipeline::default()))
+    let path = fx.scoped(|| workflow_lead_worktree_path(repo, &plan(), &key(), branch)).unwrap();
+    fx.scoped(|| prepare_workflow_lead_worktree(repo, &plan(), &path, branch, "main", Cut::Base, &setup_in(fx), &Pipeline::default()))
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn guard_the_lead_worktree_path_of_a_pr() {
     let fx = Fx::with_ports();
     let repo = fx.git_repo("pay");
     let parent = repo.parent().unwrap();
-    let path = |branch: &str| fx.scoped(|| pr_lead_worktree_path(&repo, &plan(), &key(), branch)).unwrap();
+    let path = |branch: &str| fx.scoped(|| workflow_lead_worktree_path(&repo, &plan(), &key(), branch)).unwrap();
 
     assert_eq!(path("pay-4521/api"), parent.join("pay.pay-4521.api"));
     assert_eq!(path("cpd/pay-4521"), parent.join("pay.pay-4521"));

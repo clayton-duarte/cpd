@@ -41,7 +41,7 @@ fn fixture(lead_state: &str) -> Fixture {
     for (plan, workflow) in [("pay", "p1"), ("pay", "p2"), ("ops", "p1")] {
         sql.push_str(&format!(
             "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('{plan}', '{pr}', '/r', 'main', 'dispatch', 'cpd/{plan}/{pr}', '/lw', 1, '{T}', '{T}');"
+               VALUES ('{plan}', '{workflow}', '/r', 'main', 'dispatch', 'cpd/{plan}/{workflow}', '/lw', 1, '{T}', '{T}');"
         ));
     }
     f.sql(&sql);
@@ -59,7 +59,7 @@ impl Fixture {
     }
 
     /// A Job in its own transaction (so `created_txn` grows with each call).
-    fn job(&mut self, plan: &str, pr: &str, key: &str, status: &str) {
+    fn job(&mut self, plan: &str, workflow: &str, key: &str, status: &str) {
         let cause = if status == "failed" { "'crashed'" } else { "NULL" };
         let sha = if status == "merged" { "'abc'" } else { "NULL" };
         let reason = if status == "cancelled" { "'r'" } else { "NULL" };
@@ -68,7 +68,7 @@ impl Fixture {
         self.sql(&format!(
             "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha, cancel_reason, cancel_requested_at)
-               VALUES ('{plan}', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, {fp}, cpd_txn(), '{T}', {cause}, {sha}, {reason}, {reason_at});"
+               VALUES ('{plan}', '{workflow}', '{key}', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, {fp}, cpd_txn(), '{T}', {cause}, {sha}, {reason}, {reason_at});"
         ));
     }
 
@@ -81,7 +81,7 @@ impl Fixture {
     }
 
     /// A failed Job with its Event.
-    fn failed(&mut self, plan: &str, pr: &str, key: &str) {
+    fn failed(&mut self, plan: &str, workflow: &str, key: &str) {
         self.job(plan, workflow, key, "failed");
         self.failure(plan, key);
     }

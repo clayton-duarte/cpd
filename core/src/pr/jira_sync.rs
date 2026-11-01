@@ -60,7 +60,7 @@ impl Outcome {
 pub struct Due {
     pub id: i64,
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
     pub target: Target,
     pub ticket: String,
 }
@@ -91,12 +91,12 @@ fn due(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Due, Option<String>)> {
     let target: String = r.get(3)?;
     let target = Target::parse(&target).ok_or_else(|| corrupt(format!("unknown jira target {target}")))?;
     let ticket: Option<String> = r.get(4)?;
-    let row = Due { id: r.get(0)?, plan: r.get(1)?, pr: r.get(2)?, target, ticket: ticket.unwrap_or_default() };
+    let row = Due { id: r.get(0)?, plan: r.get(1)?, workflow: r.get(2)?, target, ticket: ticket.unwrap_or_default() };
     Ok((row, r.get(5)?))
 }
 
 /// Queues `target` for PR `pr` of `plan`; `true` when newly queued, `false` when the row exists.
-pub fn queue(tx: &WriteTxn<'_>, plan: &str, pr: &str, target: Target) -> Result<bool, CpdError> {
+pub fn queue(tx: &WriteTxn<'_>, plan: &str, workflow: &str, target: Target) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES (?1, ?2, ?3, (SELECT at FROM txns WHERE id = cpd_txn()))
          ON CONFLICT (plan, pr, target) DO NOTHING",
@@ -142,7 +142,7 @@ pub fn refuse(tx: &WriteTxn<'_>, source: &str, id: i64, refusal: &Refusal) -> Re
         "id": id, "plan": plan, "pr": workflow, "ticket": refusal.ticket, "target": target, "status": refusal.status, "reason": refusal.reason,
     });
     let text = format!(
-        "Jira refused to move ticket {} of PR {pr} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the PR's ticket (cpd pr edit {pr} --jira <KEY>) or the policy key pr.jira.{target} changes.",
+        "Jira refused to move ticket {} of PR {workflow} of Plan {plan} to `{}`: {} ({}). Nothing is tried again until the PR's ticket (cpd pr edit {workflow} --jira <KEY>) or the policy key pr.jira.{target} changes.",
         refusal.ticket, refusal.status, refusal.reason, refusal.message
     );
     let event = NewEvent::error(text.clone(), source, ErrorCode::JiraRefused.as_str(), &text, details).plan(PlanId::parse(&plan)?);
@@ -209,7 +209,7 @@ mod tests {
         (dir, store)
     }
 
-    fn q(store: &mut Store, pr: &str, target: Target) -> bool {
+    fn q(store: &mut Store, workflow: &str, target: Target) -> bool {
         store.write("t", |tx| queue(tx, "pay", workflow, target)).unwrap()
     }
 

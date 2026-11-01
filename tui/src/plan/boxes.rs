@@ -70,7 +70,7 @@ pub struct Boxes {
 /// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
 /// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
 /// The `cancelled` PRs are all one level below the last of the others (the first when there is none); their needs count for nothing.
-pub fn levels(prs: &[WorkflowNode]) -> Vec<usize> {
+pub fn levels(workflows: &[WorkflowNode]) -> Vec<usize> {
     fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
             return l;
@@ -86,29 +86,29 @@ pub fn levels(prs: &[WorkflowNode]) -> Vec<usize> {
         memo[i] = Some(l);
         l
     }
-    let needs: Vec<Vec<usize>> = (0..prs.len()).map(|i| live_needs(prs, i)).collect();
+    let needs: Vec<Vec<usize>> = (0..workflows.len()).map(|i| live_needs(workflows, i)).collect();
     // by the needs alone
-    let mut memo = vec![None; prs.len()];
-    let base: Vec<usize> = (0..prs.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
-    let merged = |i: usize| prs[i].status == WorkflowStatus::Merged;
-    let by_needs = match (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() {
+    let mut memo = vec![None; workflows.len()];
+    let base: Vec<usize> = (0..workflows.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
+    let merged = |i: usize| workflows[i].status == WorkflowStatus::Merged;
+    let by_needs = match (0..workflows.len()).filter(|&i| merged(i)).map(|i| base[i]).max() {
         None => base,
         Some(m) => {
             // the merged keep their level; the others are floored below them
-            let mut memo: Vec<Option<usize>> = (0..prs.len()).map(|i| merged(i).then_some(base[i])).collect();
-            (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
+            let mut memo: Vec<Option<usize>> = (0..workflows.len()).map(|i| merged(i).then_some(base[i])).collect();
+            (0..workflows.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
         }
     };
-    let below = (0..prs.len()).filter(|&i| prs[i].status != WorkflowStatus::Cancelled).map(|i| by_needs[i] + 1).max().unwrap_or(0);
-    (0..prs.len()).map(|i| if prs[i].status == WorkflowStatus::Cancelled { below } else { by_needs[i] }).collect()
+    let below = (0..workflows.len()).filter(|&i| workflows[i].status != WorkflowStatus::Cancelled).map(|i| by_needs[i] + 1).max().unwrap_or(0);
+    (0..workflows.len()).map(|i| if workflows[i].status == WorkflowStatus::Cancelled { below } else { by_needs[i] }).collect()
 }
 
 /// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` PR, and none on one.
-fn live_needs(prs: &[WorkflowNode], i: usize) -> Vec<usize> {
-    if prs[i].status == WorkflowStatus::Cancelled {
+fn live_needs(workflows: &[WorkflowNode], i: usize) -> Vec<usize> {
+    if workflows[i].status == WorkflowStatus::Cancelled {
         return Vec::new();
     }
-    prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != WorkflowStatus::Cancelled)).collect()
+    workflows[i].needs.iter().filter_map(|n| workflows.iter().position(|q| &q.key == n && q.status != WorkflowStatus::Cancelled)).collect()
 }
 
 /// The word and colour a title shows: the conflict word when there is one, else the state word (`pr_look`). The title and
@@ -140,8 +140,8 @@ pub(crate) fn format_elapsed(seconds: u64) -> String {
 
 /// The text on a box's bottom border, the only place it is built: the counter and the cost, the segments that exist,
 /// joined by ` · ` inside one pair of outer spaces; `None` when neither exists.
-fn footer_text(pr: &WorkflowNode) -> Option<String> {
-    let parts: Vec<String> = pr.elapsed_seconds.map(format_elapsed).into_iter().chain(pr.cost_usd.map(cpd_core::metrics::format_cost)).collect();
+fn footer_text(workflow: &WorkflowNode) -> Option<String> {
+    let parts: Vec<String> = workflow.elapsed_seconds.map(format_elapsed).into_iter().chain(workflow.cost_usd.map(cpd_core::metrics::format_cost)).collect();
     (!parts.is_empty()).then(|| format!(" {} ", parts.join(" · ")))
 }
 
@@ -150,44 +150,44 @@ fn footer_text(pr: &WorkflowNode) -> Option<String> {
 /// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. The Lead's dot
 /// (`WorkflowNode::lead_dot`, already the red loader or the phase's colour), `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`, or the status text when there is no pull request.
 #[cfg(test)]
-pub fn title(pr: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
-    title_of(pr, asked, frame)
+pub fn title(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
+    title_of(workflow, asked, frame)
 }
 
 /// [`title`] at spinner `frame`: the box's own `lead_dot`, if any, after the state word or the status text.
-fn title_of(pr: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
+fn title_of(workflow: &WorkflowNode, asked: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
-        Span::styled(pr.key.to_string(), read_only.add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" · {} {TO} {} · ", pr.repo_name, pr.base), read_only),
+        Span::styled(workflow.key.to_string(), read_only.add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" · {} {TO} {} · ", workflow.repo_name, workflow.base), read_only),
     ];
-    match &pr.pull {
+    match &workflow.pull {
         Some(pull) => {
             // the title is a hit target (the link): clickable text and the bright pairs
             spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
-            if let Some(dot) = pr.lead_dot {
+            if let Some(dot) = workflow.lead_dot {
                 spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
-        None => spans.push(match (pr.status, &pr.superseded_by) {
+        None => spans.push(match (workflow.status, &workflow.superseded_by) {
             (WorkflowStatus::Cancelled, Some(by)) => format!("cancelled · superseded by {by}").into(),
-            (WorkflowStatus::Waiting, _) if !pr.waiting_on.is_empty() => {
-                Span::styled(format!("waiting on {}", pr.waiting_on.join(", ")), palette::muted_text())
+            (WorkflowStatus::Waiting, _) if !workflow.waiting_on.is_empty() => {
+                Span::styled(format!("waiting on {}", workflow.waiting_on.join(", ")), palette::muted_text())
             }
             (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
     }
-    if pr.pull.is_none() {
-        if let Some(dot) = pr.lead_dot {
+    if workflow.pull.is_none() {
+        if let Some(dot) = workflow.lead_dot {
             spans.extend([" ".into(), palette::dot_span(dot, frame, false)]);
         }
     }
     spans.push(" ".into());
-    if pr.status == WorkflowStatus::Cancelled {
+    if workflow.status == WorkflowStatus::Cancelled {
         // the whole title is muted: the PR is shown, counted nowhere
         spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::muted_text()));
     }
@@ -214,19 +214,19 @@ impl Drop for LayoutGuard {
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
-pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
+pub fn layout(workflows: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     #[cfg(test)]
     LAYOUTS.with(|n| n.set(n.get() + 1));
     // The explore Jobs (no PR) draw in one Plan-level box above the PR boxes (D1-A); every other Job is its PR's.
-    let explore: Vec<&JobNode> = jobs.iter().filter(|j| j.pr.is_none()).collect();
-    let charts: Vec<Chart> = prs
+    let explore: Vec<&JobNode> = jobs.iter().filter(|j| j.workflow.is_none()).collect();
+    let charts: Vec<Chart> = workflows
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr.as_ref() == Some(&p.key)), &needs_user.worked_on), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.workflow.as_ref() == Some(&p.key)), &needs_user.worked_on), frame))
         .collect();
     let explore_chart = (!explore.is_empty())
         .then(|| flow::layout(&flow::flow_jobs(explore.iter().copied(), &needs_user.worked_on), frame));
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
-    let footers: Vec<Option<String>> = prs.iter().map(footer_text).collect();
+    let titles: Vec<Line> = workflows.iter().map(|p| title_of(p, needs_user.lead_dialog, frame)).collect();
+    let footers: Vec<Option<String>> = workflows.iter().map(footer_text).collect();
     let footer_w: Vec<u16> = footers.iter().map(|f| f.as_ref().map_or(0, |t| Line::from(t.as_str()).width() as u16)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title plus 4 (the
     // corner, a dash, the title, at least one dash, the corner)
@@ -248,20 +248,20 @@ pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, fr
     });
 
     // y: each row of boxes as tall as its tallest box, `GAP` between; x: a row's boxes side by side by key, one apart
-    let level = levels(prs);
+    let level = levels(workflows);
     let nrows = level.iter().max().map_or(0, |m| m + 1);
     let mut rows: Vec<Vec<usize>> = vec![Vec::new(); nrows];
     for (i, &l) in level.iter().enumerate() {
         rows[l].push(i);
     }
     for r in &mut rows {
-        r.sort_by(|a, b| prs[*a].key.cmp(&prs[*b].key));
+        r.sort_by(|a, b| workflows[*a].key.cmp(&workflows[*b].key));
     }
     let row_h: Vec<u16> = rows.iter().map(|r| r.iter().map(|&i| size[i].1).max().unwrap_or(0)).collect();
     // the explore box takes its own row at the top, `GAP` above the first row of PR boxes
     let top0 = explore_size.map_or(0, |(_, h)| h + GAP);
     let ys: Vec<u16> = row_h.iter().scan(top0, |y, h| Some(std::mem::replace(y, *y + h + GAP))).collect();
-    let mut at = vec![(0u16, 0u16); prs.len()];
+    let mut at = vec![(0u16, 0u16); workflows.len()];
     for (l, r) in rows.iter().enumerate() {
         let mut x = 0;
         for &i in r {
@@ -279,8 +279,8 @@ pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, fr
     let run = |l: usize| ys[l] + row_h[l]; // the row of the run below row of boxes `l`
 
     // the arrows: needs that do not point down (a cycle) are not drawn
-    let edges: Vec<(usize, usize)> = (0..prs.len())
-        .flat_map(|c| live_needs(prs, c).into_iter().map(move |p| (p, c)))
+    let edges: Vec<(usize, usize)> = (0..workflows.len())
+        .flat_map(|c| live_needs(workflows, c).into_iter().map(move |p| (p, c)))
         .filter(|&(p, c)| level[p] < level[c])
         .collect();
     // a line that skips rows keeps a column clear of their boxes and of the columns beside them
@@ -301,7 +301,7 @@ pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, fr
         hs.push((run(lc - 1), x, land(c)));
         vs.push((land(c), run(lc - 1), ys[lc] - 1));
     }
-    let boxes_w = (0..prs.len()).map(|i| at[i].0 + size[i].0).max().unwrap_or(0);
+    let boxes_w = (0..workflows.len()).map(|i| at[i].0 + size[i].0).max().unwrap_or(0);
     let explore_w = explore_size.map_or(0, |(w, _)| w);
     let width = vs.iter().map(|v| v.0 + 1).fold(boxes_w.max(explore_w), u16::max);
     let height = if nrows == 0 { explore_size.map_or(0, |(_, h)| h) } else { ys[nrows - 1] + row_h[nrows - 1] };
@@ -329,7 +329,7 @@ pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, fr
         if let Some(text) = &footers[i] {
             buf.set_string(at[i].0 + 2, at[i].1 + size[i].1 - 1, text, lines);
         }
-        if let Some(pull) = &prs[i].pull {
+        if let Some(pull) = &workflows[i].pull {
             // the title starts after the corner and the dash and ends with one space; the link is the title's tail before its last space:
             // `#<number> <state>`, the Lead's dot when it works (the title's spans after the repo), then the cue
             let spans = &titles[i].spans;
@@ -355,14 +355,14 @@ pub fn layout(prs: &[WorkflowNode], jobs: &[JobNode], needs_user: &NeedsUser, fr
 
     // the pills on the whole buffer; the columns row of boxes by row, box by box, then by each box's own chart columns
     // a box's body starts where its widget puts it
-    let body: Vec<(u16, u16)> = (0..prs.len())
+    let body: Vec<(u16, u16)> = (0..workflows.len())
         .map(|i| {
             let inner = geometry(&Walls::Full, Rect::new(at[i].0, at[i].1, size[i].0, size[i].1)).inner;
             (inner.x, inner.y)
         })
         .collect();
     let explore_body = explore_size.map(|(w, h)| geometry(&Walls::Full, Rect::new(0, 0, w, h)).inner).map(|inner| (inner.x, inner.y));
-    let mut base = Vec::with_capacity(prs.len());
+    let mut base = Vec::with_capacity(workflows.len());
     let mut pills: Vec<Pill> = Vec::new();
     if let (Some(chart), Some((bx, by))) = (explore_chart.as_ref(), explore_body) {
         pills.extend(chart.pills.iter().map(|p| Pill { key: p.key.clone(), rect: Rect { x: p.rect.x + bx, y: p.rect.y + by, ..p.rect } }));
@@ -407,7 +407,7 @@ mod tests {
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, WorkflowKey};
 
-    fn pr(key: &str, needs: &[&str]) -> WorkflowNode {
+    fn workflow(key: &str, needs: &[&str]) -> WorkflowNode {
         WorkflowNode {
             key: WorkflowKey::parse(key).unwrap(),
             repo_name: format!("{key}-repo"),
@@ -427,10 +427,10 @@ mod tests {
         Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, update: None, draft: false }
     }
 
-    fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
+    fn job(workflow: &str, key: &str, needs: &[&str]) -> JobNode {
         JobNode {
             key: JobKey::parse(key).unwrap(),
-            pr: Some(WorkflowKey::parse(pr).unwrap()),
+            workflow: Some(WorkflowKey::parse(workflow).unwrap()),
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
@@ -458,32 +458,32 @@ mod tests {
     #[test]
     fn a_level_is_one_more_than_the_highest_level_of_its_needs() {
         // web needs api and schema; api needs schema; docs needs nothing; e2e needs web and docs
-        let prs = [pr("api", &["schema"]), pr("docs", &[]), pr("e2e", &["docs", "web"]), pr("schema", &[]), pr("web", &["api", "schema"])];
-        assert_eq!(levels(&prs), [1, 0, 3, 0, 2]);
+        let workflows = [workflow("api", &["schema"]), workflow("docs", &[]), workflow("e2e", &["docs", "web"]), workflow("schema", &[]), workflow("web", &["api", "schema"])];
+        assert_eq!(levels(&workflows), [1, 0, 3, 0, 2]);
         assert_eq!(levels(&[]), Vec::<usize>::new());
         // a cycle is laid out without looping
-        assert_eq!(levels(&[pr("a", &["b"]), pr("b", &["a"])]).len(), 2);
+        assert_eq!(levels(&[workflow("a", &["b"]), workflow("b", &["a"])]).len(), 2);
     }
 
     fn merged(key: &str, needs: &[&str]) -> WorkflowNode {
-        WorkflowNode { status: WorkflowStatus::Merged, ..pr(key, needs) }
+        WorkflowNode { status: WorkflowStatus::Merged, ..workflow(key, needs) }
     }
 
     #[test]
     fn the_prs_not_merged_are_below_every_merged_one_ordered_by_needs() {
         // merged: cpd, drafts, followups (needs cpd); not merged: cleanup (no needs), flake (waiting), status (needs cleanup)
-        let prs = [
+        let workflows = [
             merged("cpd", &[]),
             merged("drafts", &[]),
             merged("followups", &["cpd"]),
-            pr("cleanup", &[]),
-            WorkflowNode { status: WorkflowStatus::Waiting, ..pr("flake", &[]) },
-            pr("status", &["cleanup"]),
+            workflow("cleanup", &[]),
+            WorkflowNode { status: WorkflowStatus::Waiting, ..workflow("flake", &[]) },
+            workflow("status", &["cleanup"]),
         ];
-        assert_eq!(levels(&prs), [0, 0, 1, 2, 2, 3]);
+        assert_eq!(levels(&workflows), [0, 0, 1, 2, 2, 3]);
         // laid out: every pill of a PR not merged is below every pill of a merged one
-        let jobs: Vec<JobNode> = prs.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
-        let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
+        let jobs: Vec<JobNode> = workflows.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
+        let c = layout(&workflows, &jobs, &NeedsUser::default(), 0).chart;
         let y = |key: &str| c.pills.iter().find(|p| p.key == format!("j-{key}")).unwrap().rect.y;
         let last_merged = ["cpd", "drafts", "followups"].iter().map(|k| y(k)).max().unwrap();
         let first_other = ["cleanup", "flake", "status"].iter().map(|k| y(k)).min().unwrap();
@@ -494,18 +494,18 @@ mod tests {
 
     #[test]
     fn a_cancelled_pr_is_one_level_below_every_other_and_has_no_needs() {
-        let cancelled = |key: &str, needs: &[&str]| WorkflowNode { status: WorkflowStatus::Cancelled, ..pr(key, needs) };
+        let cancelled = |key: &str, needs: &[&str]| WorkflowNode { status: WorkflowStatus::Cancelled, ..workflow(key, needs) };
         // `aaa` sorts first and needs `web`; `web` needs the cancelled `old`, which counts for nothing
-        let prs = [cancelled("aaa", &["web"]), cancelled("old", &[]), pr("web", &["old"]), pr("z", &["web"])];
-        assert_eq!(levels(&prs), [2, 2, 0, 1]);
+        let workflows = [cancelled("aaa", &["web"]), cancelled("old", &[]), workflow("web", &["old"]), workflow("z", &["web"])];
+        assert_eq!(levels(&workflows), [2, 2, 0, 1]);
         assert_eq!(levels(&[cancelled("old", &[])]), [0]);
     }
 
     #[test]
     fn a_pr_not_merged_that_needs_a_merged_one_sits_below_it_with_an_arrow() {
-        let prs = [merged("api", &[]), pr("web", &["api"])];
-        assert_eq!(levels(&prs), [0, 1]);
-        let b = layout(&prs, &[], &NeedsUser::default(), 0);
+        let workflows = [merged("api", &[]), workflow("web", &["api"])];
+        assert_eq!(levels(&workflows), [0, 1]);
+        let b = layout(&workflows, &[], &NeedsUser::default(), 0);
         snap(&b.chart, "
 ╭─ api · api-repo 󱦰 main · merged ─╮
 │ no Jobs                          │
@@ -520,19 +520,19 @@ mod tests {
     #[test]
     fn a_pr_not_merged_with_no_needs_is_floored_below_the_merged_ones() {
         // the merged chain is two rows deep: the independent open PR goes to the third, not the first
-        let prs = [merged("a", &[]), merged("b", &["a"]), pr("c", &[])];
-        assert_eq!(levels(&prs), [0, 1, 2]);
+        let workflows = [merged("a", &[]), merged("b", &["a"]), workflow("c", &[])];
+        assert_eq!(levels(&workflows), [0, 1, 2]);
         // needs still win over the floor
-        let prs = [merged("a", &[]), pr("b", &["a"]), pr("c", &["b"])];
-        assert_eq!(levels(&prs), [0, 1, 2]);
-        let prs = [merged("a", &[]), pr("x", &[]), pr("y", &["x"]), pr("z", &["y"])];
-        assert_eq!(levels(&prs), [0, 1, 2, 3]);
+        let workflows = [merged("a", &[]), workflow("b", &["a"]), workflow("c", &["b"])];
+        assert_eq!(levels(&workflows), [0, 1, 2]);
+        let workflows = [merged("a", &[]), workflow("x", &[]), workflow("y", &["x"]), workflow("z", &["y"])];
+        assert_eq!(levels(&workflows), [0, 1, 2, 3]);
     }
 
     #[test]
     fn with_no_merged_pr_or_with_all_merged_the_levels_are_the_needs_alone() {
         let names = [("api", &["schema"][..]), ("docs", &[]), ("e2e", &["docs", "web"]), ("schema", &[]), ("web", &["api", "schema"])];
-        let none: Vec<WorkflowNode> = names.iter().map(|(k, n)| pr(k, n)).collect();
+        let none: Vec<WorkflowNode> = names.iter().map(|(k, n)| workflow(k, n)).collect();
         let all: Vec<WorkflowNode> = names.iter().map(|(k, n)| merged(k, n)).collect();
         assert_eq!(levels(&none), [1, 0, 3, 0, 2]);
         assert_eq!(levels(&all), [1, 0, 3, 0, 2]);
@@ -548,8 +548,8 @@ mod tests {
     #[test]
     fn boxes_of_one_level_sit_side_by_side_by_key() {
         // given out of key order: the row still puts them by key, one column apart
-        let prs = [pr("zed", &[]), pr("alpha", &[])];
-        let b = layout(&prs, &[job("zed", "z", &[]), job("alpha", "a", &[])], &NeedsUser::default(), 0);
+        let workflows = [workflow("zed", &[]), workflow("alpha", &[])];
+        let b = layout(&workflows, &[job("zed", "z", &[]), job("alpha", "a", &[])], &NeedsUser::default(), 0);
         let c = &b.chart;
         let rect = |key: &str| c.pills.iter().find(|p| p.key == key).unwrap().rect;
         assert!(rect("a").x < rect("z").x && rect("a").y == rect("z").y, "alpha left of zed");
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
-        let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
+        let c = layout(&[workflow("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
         let single = flow::layout(&flow::flow_jobs(&jobs, &[]), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
@@ -589,7 +589,7 @@ mod tests {
     fn a_box_has_rounded_corners_and_straight_edges() {
         // hs-d474: ╭ ╮ ╰ ╯, not ┌ ┐ └ ┘; the edges stay ─ and │
         for jobs in [vec![], vec![job("api", "a", &[]), job("api", "b", &["a"])]] {
-            let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
+            let c = layout(&[workflow("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
             assert_eq!(corners(&c), ["╭", "╮", "╰", "╯"], "{} Jobs", jobs.len());
             let (w, h) = (c.buf.area.width, c.buf.area.height);
             assert_eq!((c.buf[(w / 2, h - 1)].symbol(), c.buf[(0, 1)].symbol(), c.buf[(w - 1, 1)].symbol()), ("─", "│", "│"));
@@ -600,8 +600,8 @@ mod tests {
 
     #[test]
     fn every_box_of_a_canvas_is_rounded_and_the_links_still_join_with_t_junctions() {
-        let prs = [pr("api", &[]), pr("web", &["api"])];
-        let c = layout(&prs, &[job("api", "a", &[]), job("web", "c", &[])], &NeedsUser::default(), 0).chart;
+        let workflows = [workflow("api", &[]), workflow("web", &["api"])];
+        let c = layout(&workflows, &[job("api", "a", &[]), job("web", "c", &[])], &NeedsUser::default(), 0).chart;
         let shown = text(&c);
         assert_eq!([('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()), [2, 3, 3, 2], "two boxes, four corners each, and the need line turns with a ╰ and a ╮ to land after the title: {shown}");
         assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn a_pr_with_no_jobs_is_an_empty_box() {
-        let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart;
+        let c = layout(&[workflow("api", &[])], &[], &NeedsUser::default(), 0).chart;
         snap(&c, "
 ╭─ api · api-repo 󱦰 main · dispatch ─╮
 │ no Jobs                            │
@@ -626,7 +626,7 @@ mod tests {
     fn an_open_pull_request_that_conflicts_reads_conflict_in_the_waiting_colour() {
         // every box is a PR a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
         let failed = palette::fg_clickable(Meaning::Waiting).fg;
-        let mut p = pr("api", &[]);
+        let mut p = workflow("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󱆭 ");
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn a_working_lead_puts_its_dot_after_the_state_word_and_turns_with_the_frame() {
-        let mut p = pr("api", &[]);
+        let mut p = workflow("api", &[]);
         p.pull = Some(pull(12, PrState::Open));
         p.lead_dot = Some(crate::read::Dot::working(false, None));
         for frame in 0..palette::SPINNER.len() {
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn an_idle_lead_shows_no_dot_and_a_pr_without_a_pull_request_none() {
-        let mut p = pr("api", &[]);
+        let mut p = workflow("api", &[]);
         p.pull = Some(pull(12, PrState::Open));
         for frame in 0..palette::SPINNER.len() {
             let text = title(&p, false, frame).to_string();
@@ -673,14 +673,14 @@ mod tests {
             assert!(!palette::SPINNER.iter().any(|g| text.contains(g)), "{text}");
         }
         // no pull request yet: nothing to show beside
-        let mut waiting = pr("web", &["api"]);
+        let mut waiting = workflow("web", &["api"]);
         waiting.status = WorkflowStatus::Waiting;
         assert_eq!(title(&waiting, false, 4).to_string(), " web · web-repo 󱦰 main · waiting ");
     }
 
     #[test]
     fn the_working_dot_is_drawn_in_the_box_title_inside_the_link_and_widens_the_box_by_its_cell() {
-        let mut p = pr("api", &[]);
+        let mut p = workflow("api", &[]);
         p.pull = Some(pull(12, PrState::Open));
         let mut w = p.clone();
         w.lead_dot = Some(crate::read::Dot::working(false, None));
@@ -690,14 +690,14 @@ mod tests {
         let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[5]), "{top}");
         // one frame later: the next glyph
-        let w2 = layout(&[WorkflowNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let w2 = layout(&[WorkflowNode { pull: Some(pull(12, PrState::Open)), lead_dot: Some(crate::read::Dot::working(false, None)), ..workflow("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
         let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
         assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
     }
 
     #[test]
     fn a_closed_pull_request_is_waiting_and_red_only_when_its_lead_asked_the_user() {
-        let mut p = pr("api", &[]);
+        let mut p = workflow("api", &[]);
         p.pull = Some(pull(12, PrState::Closed));
         let colour = |asked| title(&p, asked, 0).spans[4].style.fg;
         assert_eq!(colour(false), palette::fg_clickable(Meaning::Waiting).fg, "its Lead handles it");
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn the_title_names_the_pull_request_in_its_colour_else_the_status_dim() {
-        let mut open = pr("api", &[]);
+        let mut open = workflow("api", &[]);
         open.pull = Some(pull(12, PrState::Open));
         let t = title(&open, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󱆭 ");
@@ -732,7 +732,7 @@ mod tests {
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
         }
-        let mut waiting = pr("web", &["api"]);
+        let mut waiting = workflow("web", &["api"]);
         waiting.status = WorkflowStatus::Waiting;
         let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn a_conflicting_pull_request_links_exactly_its_number_conflict_and_arrow() {
-        let mut api = pr("api", &[]);
+        let mut api = workflow("api", &[]);
         api.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let b = layout(&[api], &[], &NeedsUser::default(), 0);
         snap(&b.chart, "
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
         let _guard = LayoutGuard;
-        let mut api = pr("api", &[]);
+        let mut api = workflow("api", &[]);
         let before = layout(&[api.clone()], &[], &NeedsUser::default(), 0);
         api.pull = Some(pull(12, PrState::Open));
         let b = layout(&[api], &[], &NeedsUser::default(), 0);
@@ -782,9 +782,9 @@ mod tests {
 
     #[test]
     fn two_prs_in_a_chain_are_two_boxes_one_below_the_other_linked_by_an_arrow() {
-        let prs = [pr("api", &[]), pr("web", &["api"])];
+        let workflows = [workflow("api", &[]), workflow("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
-        let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
+        let c = layout(&workflows, &jobs, &NeedsUser::default(), 0).chart;
         snap(&c, "
 ╭─ api · api-repo 󱦰 main · dispatch ─╮
 │ 󰝦 a│S1─────󰝦 b│S1              │
@@ -801,9 +801,9 @@ mod tests {
 
     #[test]
     fn one_pr_feeding_two_shares_one_run_into_both() {
-        let prs = [pr("docs", &["schema"]), pr("schema", &[]), pr("web", &["schema"])];
+        let workflows = [workflow("docs", &["schema"]), workflow("schema", &[]), workflow("web", &["schema"])];
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
-        snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
+        snap(&layout(&workflows, &jobs, &NeedsUser::default(), 0).chart, "
 ╭─ schema · schema-repo 󱦰 main · dispatch ─╮
 │ 󰝦 types│S1─────󰝦 gql│S1              │
 ╰────────────────────┬─────────────────────╯
@@ -816,9 +816,9 @@ mod tests {
 
     #[test]
     fn two_prs_feeding_one_join_one_run_into_it() {
-        let prs = [pr("api", &[]), pr("db", &[]), pr("web", &["api", "db"])];
+        let workflows = [workflow("api", &[]), workflow("db", &[]), workflow("web", &["api", "db"])];
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
-        snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
+        snap(&layout(&workflows, &jobs, &NeedsUser::default(), 0).chart, "
 ╭─ api · api-repo 󱦰 main · dispatch ─╮ ╭─ db · db-repo 󱦰 main · dispatch ─╮
 │ 󰝦 a│S1                           │ │ 󰝦 d│S1                         │
 ╰─────────────────┬──────────────────╯ ╰────────────────┬─────────────────╯
@@ -831,8 +831,8 @@ mod tests {
 
     #[test]
     fn a_need_that_skips_a_row_rides_a_column_free_of_boxes() {
-        let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
-        snap(&layout(&prs, &[], &NeedsUser::default(), 0).chart, "
+        let workflows = [workflow("a", &[]), workflow("b", &["a"]), workflow("c", &["a", "b"])];
+        snap(&layout(&workflows, &[], &NeedsUser::default(), 0).chart, "
 ╭─ a · a-repo 󱦰 main · dispatch ─╮
 │ no Jobs                        │
 ╰───────────────┬────────────────╯
@@ -856,9 +856,9 @@ mod tests {
     #[test]
     fn boxes_in_a_row_have_their_columns_side_by_side() {
         // api and docs side by side; web below them
-        let prs = [pr("api", &[]), pr("docs", &[]), pr("web", &["api"])];
+        let workflows = [workflow("api", &[]), workflow("docs", &[]), workflow("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("docs", "d", &[]), job("web", "w", &[])];
-        let b = layout(&prs, &jobs, &NeedsUser::default(), 0);
+        let b = layout(&workflows, &jobs, &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
         assert_eq!(b.chart.columns, [vec![at("a")], vec![at("b")], vec![at("d")], vec![at("w")]]);
         let r = b.chart.pills[at("w")].rect;
@@ -868,7 +868,7 @@ mod tests {
 
     /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
     fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
-        let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
+        let c = layout(&[workflow("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
         c.blit(&mut dst, Rect::new(0, 0, w, h), scroll);
         (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()

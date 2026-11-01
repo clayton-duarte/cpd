@@ -46,7 +46,7 @@ pub(super) fn pull_json(pull: &Pull) -> Value {
 pub(super) struct PlanWorkflows {
     pub plan: PlanRow,
     /// Every PR in key order, `cancelled` ones included.
-    pub prs: Vec<WorkflowRow>,
+    pub workflows: Vec<WorkflowRow>,
 }
 
 impl PlanWorkflows {
@@ -63,5 +63,5 @@ impl PlanWorkflows {
 
 /// The Plan `id` with its PRs, else `plan_not_found`.
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanWorkflows, CpdError> {
-    Ok(PlanWorkflows { plan: plan::row::load(conn, id)?, prs: load_workflows(conn, id)? })
+    Ok(PlanWorkflows { plan: plan::row::load(conn, id)?, workflows: load_workflows(conn, id)? })
 }

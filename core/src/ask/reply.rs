@@ -54,7 +54,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
                 .job(job.clone())
                 .attempt(AttemptId::clone(&attempt)),
         )?;
-        let pr: Option<String> = tx
+        let workflow: Option<String> = tx
             .query_row("SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.as_str()], |r| r.get(0))
             .optional()?
             .flatten();

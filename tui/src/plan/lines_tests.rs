@@ -147,7 +147,7 @@ pub(super) fn reaches(buf: &Buffer, pills: &[Pill], from: &str, to: &str) -> boo
 fn node(key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
     JobNode {
         key: JobKey::parse(key).unwrap(),
-        pr: Some(WorkflowKey::parse("p").unwrap()),
+        workflow: Some(WorkflowKey::parse("p").unwrap()),
         seq: 0,
         title: String::new(),
         status,

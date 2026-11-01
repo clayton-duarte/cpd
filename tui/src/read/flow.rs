@@ -17,7 +17,7 @@ use cpd_core::job::worked_on::failed_worked_on;
 use cpd_core::job::home::JobHome;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, WorkflowKey, SessionId};
 use cpd_core::plan::display::Display;
-use cpd_core::plan::fingerprint::load_prs;
+use cpd_core::plan::fingerprint::load_workflows;
 use cpd_core::plan::{jobs, plan_fingerprint, Phase};
 use cpd_core::session::State;
 use cpd_core::store::Store;
@@ -51,7 +51,7 @@ pub struct PlanBoxes {
     pub plan: PlanId,
     pub context: ContextId,
     /// The PRs, in key order.
-    pub prs: Vec<WorkflowNode>,
+    pub workflows: Vec<WorkflowNode>,
     /// Every Job of the Plan, in creation order; `pr` is `None` exactly for an explore Job (`jobs.pr` NULL).
     pub jobs: Vec<JobNode>,
     /// What of the Plan needs the User, from the same transaction.
@@ -188,7 +188,7 @@ fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
 pub struct JobNode {
     pub key: JobKey,
     /// The Job's PR (`jobs.pr`), `None` exactly for an explore Job of the Plan.
-    pub pr: Option<WorkflowKey>,
+    pub workflow: Option<WorkflowKey>,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -327,7 +327,7 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan, lead_working.then_some(working_pr).flatten().as_deref(), Some(head.work()), &lead, &jobs, now_ms)?,
+            workflows: workflow_nodes(conn, plan, lead_working.then_some(working_pr).flatten().as_deref(), Some(head.work()), &lead, &jobs, now_ms)?,
             jobs,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
@@ -336,7 +336,7 @@ fn boxes(conn: &Connection, plan: &PlanId, now: Option<String>, now_ms: i64) -> 
 }
 
 /// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `working_pr`: the PR the working Lead's turn concerns, `lead_work` the Plan phase's work.
-fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<WorkflowNode>, CpdError> {
+fn workflow_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_work: Option<Work>, lead: &str, jobs: &[JobNode], now_ms: i64) -> Result<Vec<WorkflowNode>, CpdError> {
     let mut events = Vec::new();
     let mut stmt = conn.prepare("SELECT at, json_extract(data, '$.to') FROM events WHERE session = ?1 AND kind = 'session-state' ORDER BY id")?;
     for row in stmt.query_map([lead], |r| Ok((r.get::<_, String>(0)?, r.get::<_, rusqlite::types::Value>(1)?)))? {
@@ -350,12 +350,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     let mut spans: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
     // An explore Job belongs to the Plan, not to a PR: its Attempts count in no Workflow's active time (pro-d237).
     for job in jobs {
-        let Some(pr) = job.pr.as_ref() else { continue };
+        let Some(workflow) = job.workflow.as_ref() else { continue };
         for a in &job.attempts {
             let what = format!("Attempt {}", a.id);
             let start = active::parse_ms(&what, &a.started_at)?;
             let end = a.ended_at.as_deref().map(|e| active::parse_ms(&what, e)).transpose()?.unwrap_or(now_ms);
-            spans.entry(pr.as_str()).or_default().push((start, end.max(start)));
+            spans.entry(workflow.as_str()).or_default().push((start, end.max(start)));
         }
     }
     let mut costs: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
@@ -368,12 +368,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
     for row in stmt.query_map([plan.as_str()], |r| {
         Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
     })? {
-        let (pr, stored, no_metrics, file) = row?;
-        let JobHome::Pr(pr) = JobHome::of("PR key", pr.as_deref())? else {
+        let (workflow, stored, no_metrics, file) = row?;
+        let JobHome::Workflow(workflow) = JobHome::of("PR key", workflow.as_deref())? else {
             // An explore Attempt belongs to no PR box (contract §2.2 Totals): only the Plan's cost holds it.
             continue;
         };
-        costs.entry(pr.to_string()).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
+        costs.entry(workflow.to_string()).or_default().push(super::cost::attempt_cost(stored, no_metrics, file.as_deref()));
     }
     let mut failed_prs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stmt = conn.prepare(
@@ -385,12 +385,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
         failed_prs.insert(row?);
     }
     let display = Display::load(conn, plan)?;
-    let pr_rows = load_prs(conn, plan)?;
+    let workflow_rows = load_workflows(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<WorkflowKey>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (pr, need) = row?;
-        needs.entry(pr).or_default().push(id("PR key", &need, WorkflowKey::parse)?);
+        let (workflow, need) = row?;
+        needs.entry(workflow).or_default().push(id("PR key", &need, WorkflowKey::parse)?);
     }
     let ready = cpd_core::pr::pulls::ready_to_merge_sql("q");
     let mut stmt = conn.prepare(&format!(
@@ -439,17 +439,17 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, working_pr: Option<&str>, lead_wor
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
-        let row = pr_rows.iter().find(|p| p.key.as_str() == key);
+        let row = workflow_rows.iter().find(|p| p.key.as_str() == key);
         let lead_dot = (working_pr == Some(key.as_str()) && !matches!(status, WorkflowStatus::Merged | WorkflowStatus::Cancelled))
             .then(|| Dot::working(failed_prs.contains(&key), lead_work));
         out.push(WorkflowNode {
             lead_dot,
-            waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
+            waiting_on: row.map(|p| display.workflow_blockers(p)).unwrap_or_default(),
             superseded_by: display.superseded_by(&key).map(str::to_owned),
             needs: {
                 let mut n = needs.remove(&key).unwrap_or_default();
                 // the implied need: the base PR of the Plan (a base PR of another Plan has no node here)
-                if let Some(base) = row.and_then(|p| display.pr_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
+                if let Some(base) = row.and_then(|p| display.workflow_needs(p).into_iter().find(|b| !p.needs.contains(b))).filter(|b| !b.contains('/')) {
                     n.push(id("PR key", &base, WorkflowKey::parse)?);
                     n.sort();
                 }
@@ -478,13 +478,13 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
             // An explore Job belongs to the Plan, not to a PR: its node carries no PR (`JobHome::Plan`).
-            let pr = match JobHome::of("PR key", j.pr.as_deref())? {
-                JobHome::Pr(pr) => Some(pr),
+            let workflow = match JobHome::of("PR key", j.workflow.as_deref())? {
+                JobHome::Workflow(workflow) => Some(workflow),
                 JobHome::Plan => None,
             };
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
-                pr,
+                workflow,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,

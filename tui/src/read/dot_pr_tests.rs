@@ -56,13 +56,13 @@ fn a_pr_ready_item_fills_its_leads_dot_only_when_it_is_yellow_or_red() {
 fn a_cyan_or_white_pr_ready_item_leaves_a_lower_item_the_dot() {
     let pp = plan("pp");
     let s = id("s-lead");
-    let pr = |u| item(Kind::PrReady, u, None, Some("pp"));
+    let workflow = |u| item(Kind::PrReady, u, None, Some("pp"));
     let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
     let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
-    assert_eq!(urgency(&[pr(Urgency::Cyan), unread.clone()], &s, Some(&pp)), Some(Urgency::White));
-    assert_eq!(urgency(&[pr(Urgency::White), cyan_dialog], &s, Some(&pp)), Some(Urgency::Cyan));
-    assert_eq!(urgency(&[pr(Urgency::Cyan)], &s, Some(&pp)), None);
-    assert_eq!(urgency(&[pr(Urgency::Yellow), unread], &s, Some(&pp)), Some(Urgency::Yellow));
+    assert_eq!(urgency(&[workflow(Urgency::Cyan), unread.clone()], &s, Some(&pp)), Some(Urgency::White));
+    assert_eq!(urgency(&[workflow(Urgency::White), cyan_dialog], &s, Some(&pp)), Some(Urgency::Cyan));
+    assert_eq!(urgency(&[workflow(Urgency::Cyan)], &s, Some(&pp)), None);
+    assert_eq!(urgency(&[workflow(Urgency::Yellow), unread], &s, Some(&pp)), Some(Urgency::Yellow));
 }
 
 #[test]

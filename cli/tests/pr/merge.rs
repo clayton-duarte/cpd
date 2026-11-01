@@ -24,7 +24,7 @@ use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::fakes::git::{Oid, parse};
 use cpd_core::git::worktree::prepare_stacked_lead_worktree;
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, workflow_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::{AttemptId, PlanId, WorkflowKey};
@@ -306,7 +306,7 @@ impl Fx {
     /// `cpd/pay/<key>` and its Lead worktree, pushed when the repo has an `origin`.
     fn add_pr(&self, key: &str, repo: &Path, origin: Option<PathBuf>) -> Pr {
         let branch = format!("cpd/pay/{key}");
-        let path = self.scoped(|| pr_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
+        let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
         let prepared = self.scoped(|| prepare_lead_worktree(repo, &plan(), &path, &branch, "main", &setup)).map_err(|f| f.error).unwrap();
         self.scoped(|| prepared.push()).unwrap();
@@ -330,7 +330,7 @@ impl Fx {
     fn add_stacked_pr(&self, key: &str, base_pr: &Pr) -> Pr {
         let repo = &base_pr.repo;
         let branch = format!("cpd/pay/{key}");
-        let path = self.scoped(|| pr_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
+        let path = self.scoped(|| workflow_lead_worktree_path(repo, &plan(), &WorkflowKey::parse(key).unwrap(), &branch)).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
         let prepared = self.scoped(|| prepare_stacked_lead_worktree(repo, &plan(), &path, &branch, &base_pr.branch, &setup)).map_err(|f| f.error).unwrap();
         self.scoped(|| prepared.push()).unwrap();

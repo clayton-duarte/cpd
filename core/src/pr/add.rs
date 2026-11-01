@@ -49,13 +49,13 @@ struct Stub {
 /// The stub drafts a PR of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
 /// implementation (needs the tests); `docs` its docs; `config` one `work` Job. Every shape ends with the PR's opener stub
 /// (`open-<pr>`, kind `open`, no needs): its Ready rule is derived (contract §2.2 "Job kinds", §3.2, hs-d573).
-fn template(shape: &str, pr: &WorkflowKey, title: &str) -> Vec<Stub> {
+fn template(shape: &str, workflow: &WorkflowKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &'static str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
-        key: format!("{pr}-{suffix}"),
+        key: format!("{workflow}-{suffix}"),
         suffix,
         kind,
         title: format!("{prefix}: {title}"),
-        needs: needs.map(|n| format!("{pr}-{n}")),
+        needs: needs.map(|n| format!("{workflow}-{n}")),
     };
     let mut stubs = match shape {
         "tdd" => vec![
@@ -66,7 +66,7 @@ fn template(shape: &str, pr: &WorkflowKey, title: &str) -> Vec<Stub> {
         "docs" => vec![stub("docs", "docs", "Docs", None)],
         _ => vec![stub("config", "work", "Config", None)],
     };
-    stubs.push(Stub { key: format!("open-{pr}"), suffix: "open", kind: "open", title: format!("Open the pull request: {title}"), needs: None });
+    stubs.push(Stub { key: format!("open-{workflow}"), suffix: "open", kind: "open", title: format!("Open the pull request: {title}"), needs: None });
     stubs
 }
 
@@ -92,7 +92,7 @@ struct Wanted {
 
 /// `--jobs <file.json>` (§9.4): one object keyed by the suffixes of `shape`'s template (every one, no other), each
 /// `{"tier", "spec"}`. A fault is the code `job add` uses for the same one (`spec_invalid`, `tier_invalid`, ...), never `usage`.
-fn read_jobs(path: &Path, shape: &str, pr: &WorkflowKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
+fn read_jobs(path: &Path, shape: &str, workflow: &WorkflowKey, title: &str) -> Result<BTreeMap<&'static str, (Tier, Spec)>, CpdError> {
     let invalid = |at: &str, why: String| {
         CpdError::new(ErrorCode::SpecInvalid, format!("The --jobs file is invalid at {at}: {why}.")).with("path", at).with("file", path.display().to_string())
     };
@@ -365,7 +365,7 @@ pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &Base
 }
 
 /// A base PR is not `cancelled` or `merged` (`base_pr_unavailable`).
-fn check_base_workflow_state(pr: &Known) -> Result<(), CpdError> {
+fn check_base_workflow_state(workflow: &Known) -> Result<(), CpdError> {
     if matches!(workflow.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
             ErrorCode::BaseWorkflowUnavailable,
@@ -685,7 +685,7 @@ fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<
     if let Some((plan, workflow)) = holder {
         return Err(CpdError::new(
             ErrorCode::AdoptTaken,
-            format!("The head branch {} is already adopted by PR {pr} of Plan {plan}.", pull.head_ref),
+            format!("The head branch {} is already adopted by PR {workflow} of Plan {plan}.", pull.head_ref),
         )
         .with("head_ref", pull.head_ref.as_str())
         .with("plan", plan)
@@ -760,7 +760,7 @@ fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError>
 }
 
 /// The keys of the `merged` PRs, in key order (A3).
-fn merged_keys(prs: &[WorkflowRow]) -> Vec<String> {
+fn merged_keys(workflows: &[WorkflowRow]) -> Vec<String> {
     let mut keys: Vec<String> = workflows.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
     keys.sort();
     keys
@@ -769,7 +769,7 @@ fn merged_keys(prs: &[WorkflowRow]) -> Vec<String> {
 /// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
 /// after the reopen sees the Plan in `dispatch`, where the default is none. `title` is the
 /// stored one (null for a PR that existed before migration `pr-title`: it never matches).
-fn same(existing: &WorkflowRow, title: Option<&str>, wanted: &Wanted, prs: &[WorkflowRow], base: &str) -> bool {
+fn same(existing: &WorkflowRow, title: Option<&str>, wanted: &Wanted, workflows: &[WorkflowRow], base: &str) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(workflows).contains(n)),
@@ -836,7 +836,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
             let mut job = Job {
                 seq: 0,
                 key: stub.key.clone(),
-                pr: Some(wanted.key.as_str().to_owned()),
+                workflow: Some(wanted.key.as_str().to_owned()),
                 title: stub.title.clone(),
                 tier: Some(tier.to_string()),
                 spec: Some(spec.stored()),
@@ -923,7 +923,7 @@ fn insert_stubs(tx: &Connection, home: &CpdHome, plan: &PlanId, wanted: &Wanted,
 }
 
 /// One `pr_needs` row per need.
-pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &WorkflowKey, needs: &[String]) -> Result<(), CpdError> {
+pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, workflow: &WorkflowKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
         tx.execute("INSERT INTO workflow_needs (plan, workflow, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), workflow.as_str(), need.as_str()])?;
     }

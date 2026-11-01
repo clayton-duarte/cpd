@@ -116,7 +116,7 @@ fn jira_transitions_keeps_one_row_per_pr_and_target() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     write(&mut store, &two_prs()).unwrap();
-    let row = |pr: &str, target: &str| format!("INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{pr}', '{target}', 'q');");
+    let row = |workflow: &str, target: &str| format!("INSERT INTO jira_transitions (plan, pr, target, queued_at) VALUES ('pay', '{workflow}', '{target}', 'q');");
     write(&mut store, &row("a", "done")).expect("first row");
     let text = message(write(&mut store, &row("a", "done")), "same plan, pr and target");
     assert!(text.contains("UNIQUE"), "{text}");

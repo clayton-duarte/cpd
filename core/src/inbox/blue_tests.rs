@@ -109,7 +109,7 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     std::fs::write(path, cache.to_string()).unwrap();
 
     let workflow = GhPr { title: "Add retries".to_owned(), draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() };
-    let lookup = Lookup { me: "clayton-duarte".to_owned(), prs: [(("acme/pay".to_owned(), 812), Some(workflow))].into_iter().collect() };
+    let lookup = Lookup { me: "clayton-duarte".to_owned(), workflows: [(("acme/pay".to_owned(), 812), Some(workflow))].into_iter().collect() };
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };
     let team = Team { bot_reviewers: &bots, github: &mut github };

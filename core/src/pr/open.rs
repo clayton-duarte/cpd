@@ -34,14 +34,14 @@ pub(super) fn agent() -> bool {
 /// `incident_hold` (exit 3, contract §7.6, commands.md §9.1/§9.3/§9.9, hs-d643): `plan` is held
 /// by incident mode and the caller is an agent. `pr` names the PR the caller resolved, for
 /// `details.pr`; `details.incident` is the incident as `cpd incident status` prints it.
-pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &WorkflowKey, agent: bool) -> Result<(), CpdError> {
+pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, workflow: &WorkflowKey, agent: bool) -> Result<(), CpdError> {
     if !agent || !crate::incident::is_held(conn, plan) {
         return Ok(());
     }
     let incident = crate::incident::row(conn)?.unwrap_or(serde_json::Value::Null);
     Err(CpdError::new(
         ErrorCode::IncidentHold,
-        format!("Plan {plan} is held by incident mode: an agent cannot open, push or rebase PR {pr}. The Manager ends the incident (cpd incident end) to release it."),
+        format!("Plan {plan} is held by incident mode: an agent cannot open, push or rebase PR {workflow}. The Manager ends the incident (cpd incident end) to release it."),
     )
     .with("pr", workflow.as_str())
     .with("plan", plan.as_str())
@@ -84,7 +84,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 /// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
 /// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
 /// A stacked PR's base is on the remote: the PR's base PR, read from `store` by [`base_check`].
-fn require_base_on_remote_pr(repo: &Path, pr: &WorkflowRow, base_workflow: Option<&str>, then: &str) -> Result<(), CpdError> {
+fn require_base_on_remote_pr(repo: &Path, workflow: &WorkflowRow, base_workflow: Option<&str>, then: &str) -> Result<(), CpdError> {
     let Some(base_workflow) = base_workflow else { return Ok(()) };
     if !git::run::has_origin(repo)? {
         return Ok(());
@@ -95,7 +95,7 @@ fn require_base_on_remote_pr(repo: &Path, pr: &WorkflowRow, base_workflow: Optio
         2 => Err(CpdError::new(
             ErrorCode::BaseNotFound,
             format!(
-                "PR {}'s base {}, the Lead Branch of {base_pr}, is not on origin: the pull request cannot target it. {then}",
+                "PR {}'s base {}, the Lead Branch of {base_workflow}, is not on origin: the pull request cannot target it. {then}",
                 workflow.key, workflow.base
             ),
         )
@@ -115,7 +115,7 @@ pub fn base_check(
     plan: &PlanId,
     repo: &Path,
     worktree: &Path,
-    pr: &WorkflowRow,
+    workflow: &WorkflowRow,
     sha: &str,
     again: &str,
 ) -> Result<(), CpdError> {
@@ -140,7 +140,7 @@ fn fresh_base(repo: &Path, base: &str) -> Result<String, CpdError> {
 /// unless its head conflicts with its base; a base that merely moved ahead is no refusal. `details.files` are the
 /// conflicted paths, `details.next` what the caller runs, as written: the merge in `worktree` (the Lead worktree, or a Worker's
 /// Attempt worktree), then `again`, the command that tries the check again. `into` names the branch the base is merged into.
-fn require_no_conflict(repo: &Path, worktree: &Path, pr: &WorkflowRow, base_sha: &str, sha: &str, again: &str, into: &str) -> Result<(), CpdError> {
+fn require_no_conflict(repo: &Path, worktree: &Path, workflow: &WorkflowRow, base_sha: &str, sha: &str, again: &str, into: &str) -> Result<(), CpdError> {
     let Some(files) = git::merge_conflicts(repo, base_sha, sha)? else { return Ok(()) };
     let remote = if git::run::has_origin(repo)? { format!("origin/{}", workflow.base) } else { workflow.base.clone() };
     Err(CpdError::new(
@@ -164,7 +164,7 @@ fn require_no_conflict(repo: &Path, worktree: &Path, pr: &WorkflowRow, base_sha:
 /// The open pull request step 0 found, else a new one; when `gh pr create` fails, the head's pull request created at or after the
 /// PR's start (an adopted PR: any) is looked up again and adopted if it is open now (another `pr open` of the PR created it). This runs at
 /// the merge of an `open` Job (§7.4 step 8b), not at submit.
-fn find_or_create(lead: &Path, pr: &WorkflowRow, existing: Option<PrRef>, title: &str, description: Option<&str>) -> Result<PrRef, CpdError> {
+fn find_or_create(lead: &Path, workflow: &WorkflowRow, existing: Option<PrRef>, title: &str, description: Option<&str>) -> Result<PrRef, CpdError> {
     if let Some(found) = existing {
         return Ok(found);
     }
@@ -208,7 +208,7 @@ impl Pulled {
 /// request of the branch created at or after the PR's start (`prs.started_at`; an adopted PR has no such bound) decides, in any state, `gh pr list --head <lead branch> --state all`; an older one is not the PR's and is ignored. `MERGED` is adopted as it is; `CLOSED` is
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `description` the PR's stored description (§9.5a), the body verbatim.
-pub fn pull_request(lead: &Path, pr: &WorkflowRow, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<Pulled, CpdError> {
+pub fn pull_request(lead: &Path, workflow: &WorkflowRow, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<Pulled, CpdError> {
     match gh::head_pr(lead, workflow.remote_branch(), workflow.bound_since()?)? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head, bots)?, merged: true }),
         Some(head) if head.state == HeadState::Closed => Err(closed(&workflow.key, workflow.remote_branch(), &head)),
@@ -219,7 +219,7 @@ pub fn pull_request(lead: &Path, pr: &WorkflowRow, stored_title: &str, descripti
 
 /// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0): the merge of an
 /// `open` Job adopts it (§7.4 step 8b), with no Gate and no push.
-pub fn is_merged_on_github(lead: &Path, pr: &WorkflowRow) -> Result<bool, CpdError> {
+pub fn is_merged_on_github(lead: &Path, workflow: &WorkflowRow) -> Result<bool, CpdError> {
     Ok(gh::head_pr(lead, workflow.remote_branch(), workflow.bound_since()?)?.is_some_and(|head| head.state == HeadState::Merged))
 }
 
@@ -240,7 +240,7 @@ pub fn closed(key: &WorkflowKey, branch: &str, head: &gh::HeadPr) -> CpdError {
 /// The row of the open pull request `existing` (an earlier run died before its transaction), else of a new one: `gh pr create`
 /// (never `--draft`), and when that fails the Lead Branch's pull request is looked up again ([`find_or_create`]). GitHub's creation time is
 /// read by the poller's own lookup, which a pull request it cannot find fails as `gh_failed`; a rerun adopts the one created.
-fn opened_row(lead: &Path, pr: &WorkflowRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<PolledPr, CpdError> {
+fn opened_row(lead: &Path, workflow: &WorkflowRow, existing: Option<PrRef>, stored_title: &str, description: Option<&str>, bots: &[String]) -> Result<PolledPr, CpdError> {
     let title = github_title(stored_title);
     let found = find_or_create(lead, workflow, existing, &title, description)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {

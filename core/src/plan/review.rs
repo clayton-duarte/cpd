@@ -87,7 +87,7 @@ struct Snapshot {
     /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
     open_tier: String,
     plan: PlanRow,
-    prs: Vec<WorkflowRow>,
+    workflows: Vec<WorkflowRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
@@ -131,7 +131,7 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind) -> String {
         kind,
         &summary::Input {
             plan: &s.plan,
-            prs: &s.workflows,
+            workflows: &s.workflows,
             jobs: &s.jobs,
             overlaps: &s.overlaps,
             base_workflows: &s.base_workflows,

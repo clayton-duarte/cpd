@@ -84,7 +84,7 @@ pub struct PlanCard {
     /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any).
     pub lead_place: Place,
     /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
-    pub prs: Vec<WorkflowRow>,
+    pub workflows: Vec<WorkflowRow>,
 }
 
 /// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
@@ -165,8 +165,8 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
                 .get(head.id.as_str())
                 .cloned()
                 .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
-            let prs = pulls.remove(head.id.as_str()).unwrap_or_default();
-            Ok(PlanCard { label, lead_place, prs, head })
+            let workflows = pulls.remove(head.id.as_str()).unwrap_or_default();
+            Ok(PlanCard { label, lead_place, workflows, head })
         })
         .collect()
 }

@@ -9,7 +9,7 @@ use crate::ids::{ContextId, PlanId, WorkflowKey, SessionId};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClosedUnmerged {
     pub plan: PlanId,
-    pub pr: WorkflowKey,
+    pub workflow: WorkflowKey,
     pub context: ContextId,
     /// The Plan's Lead session; `None` when it has none.
     pub lead_session: Option<SessionId>,
@@ -39,7 +39,7 @@ pub fn closed_unmerged(conn: &Connection, plan: Option<&str>) -> Result<Vec<Clos
         .map(|(plan, workflow, context, lead, repo, number, url, title)| {
             Ok(ClosedUnmerged {
                 plan: PlanId::parse(&plan)?,
-                pr: WorkflowKey::parse(&workflow)?,
+                workflow: WorkflowKey::parse(&workflow)?,
                 context: ContextId::parse(&context)?,
                 lead_session: lead.as_deref().map(SessionId::parse).transpose()?,
                 repo,

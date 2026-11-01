@@ -42,7 +42,7 @@ fn a_checking_attempt_has_the_review_meaning_like_a_merging_one() {
 fn job(status: AttemptStatus) -> JobNode {
     JobNode {
         key: JobKey::parse("a").unwrap(),
-        pr: Some(WorkflowKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Running,

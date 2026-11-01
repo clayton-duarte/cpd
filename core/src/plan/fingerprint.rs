@@ -33,13 +33,13 @@ pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
 /// `null` (hs-d241), with `kind` only when it is not `work` and `tests` and `test_files` only when set (hs-d341);
 /// `prs` is `{key, repo, base, needs}` of every PR in `prs` that is not `cancelled`, with `shape` only when it is
 /// not `free` (hs-d497), ordered by key, `needs` sorted.
-pub fn of(jobs: &[Job], prs: &[WorkflowRow]) -> String {
+pub fn of(jobs: &[Job], workflows: &[WorkflowRow]) -> String {
     of_with(jobs, workflows, None)
 }
 
 /// [`of`] with the Plan's outline: when it is set, the object is `{jobs, outline, prs}`, `outline` being its object
 /// (contract §2.3, hs-d502); when it is not, `{jobs, prs}` exactly, so a review made before the outline existed stays current.
-pub fn of_with(jobs: &[Job], prs: &[WorkflowRow], outline: Option<&Outline>) -> String {
+pub fn of_with(jobs: &[Job], workflows: &[WorkflowRow], outline: Option<&Outline>) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_under_review()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
     let jobs: Vec<Value> = drafts
@@ -53,9 +53,9 @@ pub fn of_with(jobs: &[Job], prs: &[WorkflowRow], outline: Option<&Outline>) -> 
             Value::Object(fields)
         })
         .collect();
-    let mut prs: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
+    let mut workflows: Vec<&WorkflowRow> = workflows.iter().filter(|p| p.status != "cancelled").collect();
     workflows.sort_by(|a, b| a.key.cmp(&b.key));
-    let prs: Vec<Value> = workflows
+    let workflows: Vec<Value> = workflows
         .into_iter()
         .map(|p| {
             let mut needs = p.needs.clone();
@@ -85,7 +85,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: Some("web".into()),
+            workflow: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),

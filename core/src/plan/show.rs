@@ -119,7 +119,7 @@ fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
 /// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
 /// [`WorkflowRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
 /// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
-fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
+fn current_fingerprint(plan: &PlanRow, jobs: &[Job], workflows: &[Value]) -> String {
     let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
     let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
     let rows: Vec<WorkflowRow> = if reviews_prs(Some(plan.phase.as_str())) {
@@ -195,7 +195,7 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
 /// The latest Plan review, with `current`: whether its fingerprint is still
 /// the plan fingerprint of `jobs` and `prs` (already read, `pr_values`). Null
 /// when the Plan has none.
-fn latest_review(conn: &Connection, id: &PlanId, plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> Result<Value, CpdError> {
+fn latest_review(conn: &Connection, id: &PlanId, plan: &PlanRow, jobs: &[Job], workflows: &[Value]) -> Result<Value, CpdError> {
     let review = conn
         .query_row(
             "SELECT id, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews

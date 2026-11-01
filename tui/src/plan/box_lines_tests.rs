@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 
 use super::flow::{Chart, Live, Pill};
 use super::lines_tests::{reaches, violations};
-use super::{Ui, boxes, sample_centre, sample_job, sample_pr};
+use super::{Ui, boxes, sample_centre, sample_job, sample_workflow};
 use crate::read::{JobNode, JobStatus, NeedsUser, WorkflowNode, PrState, WorkflowStatus, Pull};
 use crate::test_text::rows;
 use cpd_core::config::Tier;
@@ -29,17 +29,17 @@ fn sp(n: usize) -> String {
 }
 
 /// A PR `key` of repo `repo`, base `main`, `dispatch`, needing `needs`.
-fn pr(key: &str, repo: &str, needs: &[&str]) -> WorkflowNode {
-    WorkflowNode { repo_name: repo.into(), needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(), ..sample_pr(key) }
+fn workflow(key: &str, repo: &str, needs: &[&str]) -> WorkflowNode {
+    WorkflowNode { repo_name: repo.into(), needs: needs.iter().map(|n| WorkflowKey::parse(n).unwrap()).collect(), ..sample_workflow(key) }
 }
 
-fn job(pr: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
+fn job(workflow: &str, key: &str, status: JobStatus, tier: Option<&str>, needs: &[&str]) -> JobNode {
     JobNode {
         status,
         tier: tier.map(|t| Tier::parse(t).unwrap()),
         shown_tier: tier.map(|t| Tier::parse(t).unwrap()),
         needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
-        ..sample_job(pr, key)
+        ..sample_job(workflow, key)
     }
 }
 
@@ -60,8 +60,8 @@ fn pill(live: Live, key: &str, tier: &str) -> String {
 /// The rectangle of each PR's box, read off the canvas: the title starts two cells after the box's `╭`, the box's `╮` is the
 /// first one after the title on that row and its `╰` the first one down the box's left column. (Chart lines inside a box use
 /// `╭` and `╮` too, so the corners are found from the titles, not by scanning for them.) In the order of `prs`.
-fn box_rects(buf: &Buffer, prs: &[WorkflowNode]) -> Vec<Rect> {
-    prs.iter()
+fn box_rects(buf: &Buffer, workflows: &[WorkflowNode]) -> Vec<Rect> {
+    workflows.iter()
         .map(|p| {
             let t: Vec<String> = title(p).chars().map(String::from).collect();
             let at = |x: u16, y: u16| buf[(x, y)].symbol();
@@ -93,7 +93,7 @@ fn landing(r: Rect, p: &WorkflowNode) -> u16 {
 
 /// Whether a line leads from box `from`'s `┬` to box `to`'s `┴`: [`reaches`] on a copy of the canvas where the boxes are
 /// blank but for those two junctions (a path along a box's own border is no line), with a one-cell pill to stand for each.
-fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_pr: &WorkflowNode) -> bool {
+fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_workflow: &WorkflowNode) -> bool {
     let mut clean = buf.clone();
     for r in boxes {
         for y in r.y..r.bottom() {
@@ -107,40 +107,40 @@ fn joins(buf: &Buffer, boxes: &[Rect], from: usize, to: usize, to_pr: &WorkflowN
     }
     let (f, t) = (boxes[from], boxes[to]);
     let start = f.x + (f.width - 1) / 2;
-    let goal = landing(t, to_pr);
+    let goal = landing(t, to_workflow);
     let stand = |key: &str, x: u16, y: u16| Pill { key: key.into(), rect: Rect::new(x, y, 1, 1) };
     let pills = [stand("from", start - 1, f.bottom() - 1), stand("to", goal + 1, t.y)];
     reaches(&clean, &pills, "from", "to")
 }
 
-fn canvas_of(prs: &[WorkflowNode], jobs: &[JobNode]) -> Chart {
-    boxes::layout(prs, jobs, &NeedsUser::default(), 0).chart
+fn canvas_of(workflows: &[WorkflowNode], jobs: &[JobNode]) -> Chart {
+    boxes::layout(workflows, jobs, &NeedsUser::default(), 0).chart
 }
 
 fn shown(buf: &Buffer) -> String {
     rows(buf).join("\n")
 }
 
-fn assert_canvas(c: &Chart, prs: &[WorkflowNode], want: &[String]) {
+fn assert_canvas(c: &Chart, workflows: &[WorkflowNode], want: &[String]) {
     let got = rows(&c.buf);
     assert_eq!(got, want, "\ngot:\n{}\nwant:\n{}", got.join("\n"), want.join("\n"));
-    let found = check(&c.buf, &c.pills, &box_rects(&c.buf, prs), c.buf.area);
+    let found = check(&c.buf, &c.pills, &box_rects(&c.buf, workflows), c.buf.area);
     assert!(found.is_empty(), "a connector does not touch what it joins: {found:#?}\n{}", got.join("\n"));
 }
 
 fn screenshot_1() -> (Vec<WorkflowNode>, Vec<JobNode>) {
-    let prs = vec![pr("api", "api-repo", &[]), pr("web", "web-repo", &["api"])];
+    let workflows = vec![workflow("api", "api-repo", &[]), workflow("web", "web-repo", &["api"])];
     let jobs = vec![
         job("api", "api-job-long-name-for-wide-chart", JobStatus::Queued, Some("S1"), &[]),
         job("web", "web-job", JobStatus::Queued, Some("S1"), &[]),
     ];
-    (prs, jobs)
+    (workflows, jobs)
 }
 
 fn screenshot_2() -> (Vec<WorkflowNode>, Vec<JobNode>) {
-    let prs = vec![
-        WorkflowNode { status: WorkflowStatus::Merged, ..pr("dotfiles-prev", "dotfiles", &[]) },
-        pr("leakflake", "dotfiles", &["dotfiles-prev"]),
+    let workflows = vec![
+        WorkflowNode { status: WorkflowStatus::Merged, ..workflow("dotfiles-prev", "dotfiles", &[]) },
+        workflow("leakflake", "dotfiles", &["dotfiles-prev"]),
     ];
     let jobs = vec![
         job("dotfiles-prev", "prev-job", JobStatus::Merged, Some("S1"), &[]),
@@ -148,59 +148,59 @@ fn screenshot_2() -> (Vec<WorkflowNode>, Vec<JobNode>) {
         job("leakflake", "leakflake-fix", JobStatus::Merged, Some("S2"), &[]),
         job("leakflake", "open-leakflake", JobStatus::Queued, Some("S1"), &["leakflake-config", "leakflake-fix"]),
     ];
-    (prs, jobs)
+    (workflows, jobs)
 }
 
 fn skipped_row() -> (Vec<WorkflowNode>, Vec<JobNode>) {
-    let prs = vec![pr("a", "a-repo", &[]), pr("b", "b-repo", &["a"]), pr("c", "c-repo", &["b", "a"])];
+    let workflows = vec![workflow("a", "a-repo", &[]), workflow("b", "b-repo", &["a"]), workflow("c", "c-repo", &["b", "a"])];
     let jobs = ["a", "b", "c"].map(|k| job(k, &format!("j-{k}"), JobStatus::Queued, Some("S1"), &[])).to_vec();
-    (prs, jobs)
+    (workflows, jobs)
 }
 
 #[test]
 fn a_need_line_that_turns_ends_in_a_junction_on_the_needing_boxes_top_border() {
-    let (prs, jobs) = screenshot_1();
-    let c = canvas_of(&prs, &jobs);
+    let (workflows, jobs) = screenshot_1();
+    let c = canvas_of(&workflows, &jobs);
     let q = Live::Queued;
     // api's box is 43 cells (its pill 39 and the walls and padding), web's 38 (its title 34 plus 4): the line leaves api's `┬`
     // at column 21, runs to column 36, the first `─` after web's title, and drops onto web's top border
     let want = [
-        format!("╭─{}{}╮", title(&prs[0]), rep("─", 6)),
+        format!("╭─{}{}╮", title(&workflows[0]), rep("─", 6)),
         format!("│ {} │", pill(q, "api-job-long-name-for-wide-chart", "S1")),
         format!("╰{}┬{}╯", rep("─", 20), rep("─", 20)),
         format!("{}╰{}╮", sp(21), rep("─", 14)),
         format!("{}│", sp(36)),
-        format!("╭─{}┴╮", title(&prs[1])),
+        format!("╭─{}┴╮", title(&workflows[1])),
         format!("│ {}{}│", pill(q, "web-job", "S1"), sp(21)),
         format!("╰{}╯", rep("─", 36)),
     ];
-    assert_canvas(&c, &prs, &want);
-    let boxes = box_rects(&c.buf, &prs);
-    assert!(joins(&c.buf, &boxes, 0, 1, &prs[1]), "no line from api's `┬` to web's `┴`\n{}", shown(&c.buf));
+    assert_canvas(&c, &workflows, &want);
+    let boxes = box_rects(&c.buf, &workflows);
+    assert!(joins(&c.buf, &boxes, 0, 1, &workflows[1]), "no line from api's `┬` to web's `┴`\n{}", shown(&c.buf));
 }
 
 #[test]
 fn a_need_line_lands_after_the_title_when_the_title_covers_the_middle_column() {
-    let (prs, jobs) = screenshot_2();
-    let c = canvas_of(&prs, &jobs);
+    let (workflows, jobs) = screenshot_2();
+    let c = canvas_of(&workflows, &jobs);
     let (m, q, k) = (Live::Merged, Live::Queued, Live::Cancelled);
     // prev's box is 46 cells (its title 42 plus 4), leakflake's 52 (its chart 48 plus 4): leakflake's title (40) covers its
     // middle column 25, so the `┴` is at column 42; fix's line starts at fix's own right cap (column 20 of the chart)
     let want = [
-        format!("╭─{}─╮", title(&prs[0])),
+        format!("╭─{}─╮", title(&workflows[0])),
         format!("│ {}{}│", pill(m, "prev-job", "S1"), sp(28)),
         format!("╰{}┬{}╯", rep("─", 21), rep("─", 22)),
         format!("{}╰{}╮", sp(22), rep("─", 19)),
         format!("{}│", sp(42)),
-        format!("╭─{}┴{}╮", title(&prs[1]), rep("─", 8)),
+        format!("╭─{}┴{}╮", title(&workflows[1]), rep("─", 8)),
         format!("│ {}{}│", pill(k, "leakflake-config", "—"), sp(27)),
         format!("│ {}╭──{} │", sp(24), pill(q, "open-leakflake", "S1")),
         format!("│ {}{}╯{}│", pill(m, "leakflake-fix", "S2"), rep("─", 4), sp(24)),
         format!("╰{}╯", rep("─", 50)),
     ];
-    assert_canvas(&c, &prs, &want);
-    let boxes = box_rects(&c.buf, &prs);
-    assert!(joins(&c.buf, &boxes, 0, 1, &prs[1]), "no line from prev's `┬` to leakflake's `┴`\n{}", shown(&c.buf));
+    assert_canvas(&c, &workflows, &want);
+    let boxes = box_rects(&c.buf, &workflows);
+    assert!(joins(&c.buf, &boxes, 0, 1, &workflows[1]), "no line from prev's `┬` to leakflake's `┴`\n{}", shown(&c.buf));
 }
 
 /// Strips the links (`ESC ] 8 ; ; … BEL`) the title's pull request carries in its cells.
@@ -232,9 +232,9 @@ fn a_box_keeps_a_dash_after_its_title() {
             update: None,
             draft: false,
         }),
-        ..pr("long-pr-title-key", "long-pr-title-key-repo", &[])
+        ..workflow("long-pr-title-key", "long-pr-title-key-repo", &[])
     };
-    for p in [pr("long-pr-title-key", "long-pr-title-key-repo", &[]), open] {
+    for p in [workflow("long-pr-title-key", "long-pr-title-key-repo", &[]), open] {
         let t = title(&p);
         let c = canvas_of(std::slice::from_ref(&p), &[]);
         let width = t.chars().count() + 4; // `╭`, `─`, the title, at least one `─`, `╮`
@@ -253,33 +253,33 @@ fn a_box_keeps_a_dash_after_its_title() {
 
 #[test]
 fn a_need_line_that_skips_a_row_of_boxes_touches_both_boxes() {
-    let (prs, jobs) = skipped_row();
-    let c = canvas_of(&prs, &jobs);
+    let (workflows, jobs) = skipped_row();
+    let c = canvas_of(&workflows, &jobs);
     let q = Live::Queued;
     // every box is 34 cells (its title 30 plus 4), its `┬` at column 16 and every landing at column 32, the first `─` after the
     // title; the line a -> c rides the free column 35, past b's right wall
-    let t = title(&prs[0]).chars().count();
+    let t = title(&workflows[0]).chars().count();
     assert_eq!(t, 30);
     let body = |k: &str, wall: &str| format!("│ {}{}│{wall}", pill(q, k, "S1"), sp(21));
     let want = [
-        format!("╭─{}─╮", title(&prs[0])),
+        format!("╭─{}─╮", title(&workflows[0])),
         body("j-a", ""),
         format!("╰{}┬{}╯", rep("─", 15), rep("─", 16)),
         format!("{}╰{}┬──╮", sp(16), rep("─", 15)),
         format!("{}│  │", sp(32)),
-        format!("╭─{}┴╮ │", title(&prs[1])),
+        format!("╭─{}┴╮ │", title(&workflows[1])),
         body("j-b", " │"),
         format!("╰{}┬{}╯ │", rep("─", 15), rep("─", 16)),
         format!("{}╰{}┬──╯", sp(16), rep("─", 15)),
         format!("{}│", sp(32)),
-        format!("╭─{}┴╮", title(&prs[2])),
+        format!("╭─{}┴╮", title(&workflows[2])),
         body("j-c", ""),
         format!("╰{}╯", rep("─", 32)),
     ];
-    assert_canvas(&c, &prs, &want);
-    let boxes = box_rects(&c.buf, &prs);
+    assert_canvas(&c, &workflows, &want);
+    let boxes = box_rects(&c.buf, &workflows);
     for (from, to) in [(0, 1), (1, 2), (0, 2)] {
-        assert!(joins(&c.buf, &boxes, from, to, &prs[to]), "no line from box {from} to box {to}\n{}", shown(&c.buf));
+        assert!(joins(&c.buf, &boxes, from, to, &workflows[to]), "no line from box {from} to box {to}\n{}", shown(&c.buf));
     }
 }
 
@@ -290,10 +290,10 @@ fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
     let mut cases = 0;
     for keys in key_sets {
         for needs in 0..64u32 {
-            let prs: Vec<WorkflowNode> = (0..4)
+            let workflows: Vec<WorkflowNode> = (0..4)
                 .map(|k| {
                     let n: Vec<&str> = pairs.iter().enumerate().filter(|(b, (_, kk))| *kk == k && needs >> b & 1 == 1).map(|(_, (i, _))| keys[*i]).collect();
-                    pr(keys[k], &format!("{}-repo", keys[k]), &n)
+                    workflow(keys[k], &format!("{}-repo", keys[k]), &n)
                 })
                 .collect();
             let jobs: Vec<JobNode> = (0..4)
@@ -304,15 +304,15 @@ fn every_line_of_a_sweep_of_small_plans_touches_what_it_joins() {
                     ]
                 })
                 .collect();
-            let c = canvas_of(&prs, &jobs);
+            let c = canvas_of(&workflows, &jobs);
             cases += 1;
             let case = format!("keys {keys:?}, needs {needs:06b}\n{}", shown(&c.buf));
-            let boxes = box_rects(&c.buf, &prs);
+            let boxes = box_rects(&c.buf, &workflows);
             let found = check(&c.buf, &c.pills, &boxes, c.buf.area);
             assert!(found.is_empty(), "{case}\n{found:#?}");
-            for (k, p) in prs.iter().enumerate() {
+            for (k, p) in workflows.iter().enumerate() {
                 for need in &p.needs {
-                    let i = prs.iter().position(|q| &q.key == need).unwrap();
+                    let i = workflows.iter().position(|q| &q.key == need).unwrap();
                     let at = landing(boxes[k], p);
                     assert!(at < boxes[k].right() - 1, "{case}\nthe landing of box {k} is on its corner");
                     assert_eq!(c.buf[(at, boxes[k].y)].symbol(), "┴", "{case}\nno `┴` on box {k}'s top border at column {at}");
@@ -347,10 +347,10 @@ fn drawn(centre: &super::Centre, pane: (u16, u16), offset: (u16, u16)) -> (Buffe
 #[test]
 fn the_lines_touch_in_every_window_of_the_drawn_view_scrolled_or_not() {
     // the Plan of the view, laid out as `snapshot` does (`sample_centre`, with the canvas margin)
-    for (name, (prs, jobs)) in [("screenshot 2", screenshot_2()), ("skipped row", skipped_row())] {
-        let centre = sample_centre(prs.clone(), jobs);
+    for (name, (workflows, jobs)) in [("screenshot 2", screenshot_2()), ("skipped row", skipped_row())] {
+        let centre = sample_centre(workflows.clone(), jobs);
         let canvas = &centre.boxes.chart.buf;
-        let boxes = box_rects(canvas, &prs);
+        let boxes = box_rects(canvas, &workflows);
         for pane in [(40, 12), (70, 20)] {
             for offset in [(0, 0), (0, 3), (5, 0), (7, 4), (u16::MAX, u16::MAX)] {
                 let (put, window, pane_buf) = drawn(&centre, pane, offset);

@@ -40,7 +40,7 @@ pub struct Job {
     pub seq: i64,
     pub key: String,
     /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
-    pub pr: Option<String>,
+    pub workflow: Option<String>,
     pub title: String,
     pub tier: Option<String>,
     pub spec: Option<JobSpec>,
@@ -319,7 +319,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: Some("web".into()),
+            workflow: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),

@@ -30,7 +30,7 @@ use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{AttemptId, ContextId, PlanId, WorkflowKey, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
-use cpd_core::pr::start::{self as start_pr, By, Failed};
+use cpd_core::pr::start::{self as start_workflow, By, Failed};
 use cpd_core::store::{Persist, Store};
 
 /// Set by SIGTERM, SIGINT and SIGHUP: the loop ends at its next check.
@@ -276,13 +276,13 @@ fn startable() -> String {
         "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
           WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL AND {}
           ORDER BY p.created_at, r.plan, r.key",
-        start_pr::READY
+        start_workflow::READY
     )
 }
 
 /// The ready `waiting` PRs E7 starts, the Plan-scoped incident hold applied (contract §3.7): a PR of
 /// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
-pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
+pub(super) fn startable_workflows(engine: &mut Engine) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
     engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -304,7 +304,7 @@ pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, Workflow
 /// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
-    let waiting = match startable_prs(engine) {
+    let waiting = match startable_workflows(engine) {
         Ok(waiting) => {
             engine.clear(Step::E7, &About::Machine);
             waiting
@@ -316,22 +316,22 @@ fn start_prs(engine: &mut Engine) {
             return;
         }
         let about = About::Plan(plan.clone());
-        let pr = engine.store.read(|conn| Ok(start_pr::load(conn, &plan)?.into_iter().find(|p| p.key == key)));
-        let pr = match pr {
-            Ok(Some(pr)) => pr,
+        let workflow = engine.store.read(|conn| Ok(start_workflow::load(conn, &plan)?.into_iter().find(|p| p.key == key)));
+        let workflow = match workflow {
+            Ok(Some(workflow)) => workflow,
             Ok(None) => continue,
             Err(e) => {
                 engine.fail(Step::E7, about, &e);
                 continue;
             }
         };
-        match start_pr::start(&engine.home, &engine.config, &mut engine.store, &plan, &pr, By::Engine) {
+        match start_workflow::start(&engine.home, &engine.config, &mut engine.store, &plan, &workflow, By::Engine) {
             Ok(started) => {
                 engine.log.line(&format!("E7: started PR {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
                 engine.clear(Step::E7, &about);
             }
             Err(Failed::Setup { step, error }) => {
-                match start_pr::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
+                match start_workflow::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
                     Ok(true) => {
                         engine.log.line(&format!("E7: PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
                         engine.clear(Step::E7, &about);

@@ -291,7 +291,7 @@ pub fn take(home: &CpdHome, pools: &[Pool], holder: &Holder) -> Result<Take, Cpd
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wanted {
     /// The Job's PR.
-    pub pr: String,
+    pub workflow: String,
     pub owner: OwnerLogin,
     pub repo: RepoName,
     /// The names, sorted.
@@ -314,7 +314,7 @@ pub fn wanted(conn: &rusqlite::Connection, plan: &PlanId, key: &str) -> Result<O
         serde_json::from_str(&listed).map_err(|_| CpdError::bad_row(format!("Job {key} of Plan {plan} has resources {listed:?}")))?;
     names.sort();
     let (Some(owner), Some(repo)) = (owner, repo) else {
-        return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its PR {pr} has no repo")));
+        return Err(CpdError::bad_row(format!("Job {key} of Plan {plan} lists resources but its PR {workflow} has no repo")));
     };
     Ok(Some(Wanted { workflow, owner: OwnerLogin::parse(&owner)?, repo: RepoName::parse(&repo)?, names }))
 }
