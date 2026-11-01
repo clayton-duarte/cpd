@@ -474,6 +474,20 @@ The rail cannot be collapsed: by the User's decision of 2026-11-01 it no longer 
 
 **The adapter carries the tree's fields.** `web/src/api/live-server.ts`'s `LiveSession` gains `context` and `name`, which the dev adapter's `realDeps().list()` in `web/vite.config.ts` fills from each `cpd session list` row's `context` and `name`.
 
+### Context tree rows
+
+Each rail row renders a **glyph**, then the row's **key**, then — a gap away — its **Job counters** (hs-d838). The glyph is the row's Session state dot — `working`, `waiting`, `blocked` or `idle` — in the same state colours the Inbox rail and the Tree view use. The key is the Context's id on a Context row and the Plan's key on a Plan row.
+
+The counters are the cockpit's four roles in its order: **planned** (draft + queued), **active** (running + merging), **failed**, **merged**. A zero is dropped; a single dot (`·`) separates two drawn roles; and each drawn number takes its status colour — **muted** for planned, the **ramune** primary for active, the **anko** destructive for failed, the **matcha** chart-2 for merged.
+
+Counters are drawn on **Plan rows only**: a Context row is glyph + key and carries **no numbers**, because the cockpit draws cost on a Context row and cost per Plan is not in cpd's CLI yet (a separate read would be its own Workflow).
+
+The tree lists every **non-archived** Plan of each Context — never an archived one (hs-d837). It is a Plan tree: a Context row, then one row per Plan beneath it, sorted by Context name and then by Plan key. A Plan row selects that Plan's **Lead Session**, so clicking still opens the Chat.
+
+**Where the numbers come from.** A read-only `GET /__cpd/plans` route on the dev live adapter, carrying the token like its sibling `/__cpd/` routes, backed by `cpd plan list` — the CLI's own rows: `id` (the key), `context`, `phase`, `lead_session` and the counts. It answers `{"ok":true,"plans":[...]}`, and `{"ok":true,"plans":[]}` when the read is not wired. Its types live in `web/src/api/live-server.ts`, beside `LiveSession`.
+
+**The fallback.** An API without the plans read — a Chat-only fake — leaves the rail drawing its Session tree exactly as before, so nothing regresses.
+
 ### The Inbox rail in the right column
 
 The right column stops being a placeholder and becomes the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, decided by the User on 2026-11-01 from the working dev preview (`preview/chat-shell`, `1624176c7`). It is vendored 1:1 into `web/src/components/inbox-rail.tsx` under the same registry rule as the Context rail (**`new-york-v4` only**, above): `cn` imported relatively from `web/src/lib/utils.ts`, no `@` alias.
