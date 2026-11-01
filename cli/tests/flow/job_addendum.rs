@@ -186,7 +186,7 @@ fn an_addendum_refuses_a_draft_merged_or_cancelled_job_and_an_attempt_that_is_no
     for (key, status) in [("s", "starting"), ("g", "merging"), ("e", "ended")] {
         let (ended, ended_values) = match status {
             "ended" => (", outcome, cause, ended_at", ", 'failed', 'timed_out', 't'"),
-            "merging" => (", submitted_sha", ", 'abc123'"),
+            "merging" => (", submitted_sha, submitted_at", ", 'abc123', 't'"),
             _ => ("", ""),
         };
         fixture(
