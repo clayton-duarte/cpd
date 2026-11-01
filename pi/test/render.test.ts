@@ -155,7 +155,7 @@ test("an `error` Event (it has an id) is an Event: its text", () => {
 
 const record = (n: number): ContextRecord => ({ seq: 40 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}` });
 const planEvent = (n: number): PlanEvent => ({ event: 300 + n, at: "2026-10-18T09:00:00Z", plan: "pay-4521", text: `Plan phase ${n}.`, kind: "plan-phase", data: {} });
-const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key: "api", status: "dispatch", number: 212, jobs: [{ key: "j1", status: "queued", title: "T" }] }] }];
+const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", jobs: [], prs: [{ key: "api", status: "dispatch", number: 212, jobs: [{ key: "j1", status: "queued", title: "T" }] }] }];
 const context = () => timed(contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!);
 const FULL = [
   "Context ctx: 2 new records since your last turn.",

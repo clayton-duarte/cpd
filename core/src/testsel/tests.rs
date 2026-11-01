@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{ChangedArgs, Kind, build, changed, kind_of, list, pi_name, run};
+use super::{ChangedArgs, Kind, build, changed, kind_of, list, pi_name, run, web_has};
 use crate::error::CpdError;
 use crate::host::runner::{Call, FakeRunner, Reply};
 use crate::ports::Fakes;
@@ -914,17 +914,18 @@ fn list_web_unknown_title() {
 }
 
 /// A web title the package contains but that is red is still found: `list` exits 0 by asking vitest in collection mode
-/// (`list --reporter=json`), never by `run`ning the title (which only a green test would survive).
+/// (`list <file> --json`), never by `run`ning the title (which only a green test would survive).
 #[test]
 fn list_web_finds_existing_red_test() {
     let s = Sample::new();
     write(&s.root, "web/package.json", "{\"name\":\"cpd-web-client\"}\n");
     let title = "renders a button";
-    let collected = json!({ "testResults": [{ "assertionResults": [{ "fullName": title }] }] }).to_string();
+    // vitest 5's `list --json` prints `[{name, file, location}]` to stdout, with the title as the last `> ` segment.
+    let collected = json!([{ "name": "web/sample.test.tsx > renders a button", "file": "web/sample.test.tsx", "location": { "line": 1, "column": 1 } }]).to_string();
     let fakes = s.fakes(|r| {
         r.on(
             "pnpm",
-            |c| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == "--reporter=json"),
+            |c| c.args.iter().any(|a| a == "list") && c.args.iter().any(|a| a == "--json"),
             Reply::ok(&collected),
         )
     });
@@ -947,6 +948,27 @@ fn list_web_finds_existing_red_test() {
         "vitest never `run`s the title: {}",
         out.what()
     );
+    for call in &vitest {
+        assert!(
+            !call.iter().any(|a| a.starts_with("--reporter")),
+            "the collection form is `--json`, not `--reporter`: {}",
+            out.what()
+        );
+        let file = call.iter().position(|a| a == &"web/sample.test.tsx").unwrap_or_else(|| panic!("the file positional is there: {}", out.what()));
+        let json = call.iter().position(|a| a == &"--json").unwrap_or_else(|| panic!("--json is there: {}", out.what()));
+        assert!(file < json, "the file positional precedes --json: {}", out.what());
+    }
+}
+
+/// The matcher behind a web `list`: the title matches a collected name that is the title itself, or whose last `> `
+/// segment is the title; an unrelated name does not.
+#[test]
+fn web_has_matches_trailing_segment() {
+    let report = |name: &str| json!([{ "name": name, "file": "web/sample.test.tsx", "location": { "line": 1, "column": 1 } }]).to_string();
+    let has = |name: &str| web_has(report(name).as_bytes(), "renders a button");
+    assert!(has("renders a button"), "a name equal to the title matches");
+    assert!(has("web/sample.test.tsx > renders a button"), "a name whose last `> ` segment is the title matches");
+    assert!(!has("web/sample.test.tsx > something else"), "an unrelated name does not match");
 }
 
 /// `test build` typechecks the web client only when `web/package.json` exists; without it the web client is skipped.

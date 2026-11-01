@@ -61,7 +61,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
-    check_drafts_complete(&id, &jobs)?;
+    env.store.read(|conn| check_drafts_complete(conn, &id, &jobs))?;
     super::shape::check(&id, &prs, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;

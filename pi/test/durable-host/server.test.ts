@@ -34,7 +34,7 @@ const flush = async () => {
 function setup(over: Partial<ServerDeps> = {}) {
   const timers: Timer[] = [];
   let n = 0;
-  const calls = { submit: [] as any[], abort: [] as any[], abortSubmission: [] as any[], answerUi: [] as any[] };
+  const calls = { submit: [] as any[], abort: [] as any[], abortSubmission: [] as any[], answerUi: [] as any[], compact: [] as any[], configure: [] as any[], models: [] as any[], fork: [] as any[], history: [] as any[] };
   const ring = new Ring("e1", snap);
   const state = { current: { state: "idle" as const, held_ui: 0 } as any };
   const deps: ServerDeps = {
@@ -57,6 +57,26 @@ function setup(over: Partial<ServerDeps> = {}) {
       return "aborted";
     },
     reload: async () => ({ reloaded: true }),
+    compact: async (instructions) => {
+      calls.compact.push(instructions);
+      throw new Error("not implemented");
+    },
+    configure: async (change) => {
+      calls.configure.push(change);
+      throw new Error("not implemented");
+    },
+    models: async () => {
+      calls.models.push(undefined);
+      throw new Error("not implemented");
+    },
+    fork: async (at, ownership) => {
+      calls.fork.push([at, ownership]);
+      throw new Error("not implemented");
+    },
+    history: async (before, limit) => {
+      calls.history.push([before, limit]);
+      throw new Error("not implemented");
+    },
     hostState: () => state.current,
     held: () => [],
     answerUi: async (id, value) => {
@@ -346,7 +366,7 @@ test("a port that throws another error gets error internal and the connection is
 test("an unknown type gets unknown_type and the connection is kept", () => {
   const { open } = setup();
   const { c, h } = open();
-  h.receive(JSON.stringify({ type: "compact", req: "k1" }));
+  h.receive(JSON.stringify({ type: "frobnicate", req: "k1" }));
   const m = c.msgs()[1];
   assert.equal(m.type, "error");
   assert.equal(m.code, "unknown_type");
@@ -604,4 +624,119 @@ test("a late ui_response after the resolver changed nothing answers ui_unknown o
   assert.deepEqual(c.msgs().slice(m), [{ type: "error", req: "r2", code: "ui_unknown", message: "no held request u1" }]);
   assert.equal(c.closes, 0);
   assert.deepEqual(calls.answerUi.map((a) => a.id), ["u1", "u1"]);
+});
+
+test("compact dispatches to the deps and answers result with the task_id", async () => {
+  const { attached, calls } = setup({
+    compact: async (instructions) => {
+      calls.compact.push(instructions);
+      return { task_id: 12 };
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "compact", req: "k1", instructions: "summarize" }));
+  await flush();
+  assert.deepEqual(calls.compact, ["summarize"]);
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "k1", data: { task_id: 12 } }]);
+});
+
+test("configure dispatches to the deps and answers result with the new agent", async () => {
+  const agent = { model: { provider: "anthropic", model_id: "sonnet" }, thinking_level: "high" };
+  const { attached, calls } = setup({
+    configure: async (change) => {
+      calls.configure.push(change);
+      return { agent };
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "configure", req: "c1", model: "anthropic/sonnet" }));
+  await flush();
+  assert.deepEqual(calls.configure, [{ model: "anthropic/sonnet" }]);
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "c1", data: { agent } }]);
+});
+
+test("configure maps a deps refusal to the error refused and keeps the connection", async () => {
+  const { attached } = setup({
+    configure: async () => {
+      throw new ProtocolError("refused", "a run is pending");
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "configure", req: "c1", model: "anthropic/sonnet" }));
+  await flush();
+  assert.deepEqual(c.msgs().slice(n), [{ type: "error", req: "c1", code: "refused", message: "a run is pending" }]);
+  assert.equal(c.closes, 0);
+});
+
+test("list_models answers the models of the deps verbatim", async () => {
+  const models = [{ provider: "anthropic", model_id: "sonnet", name: "Sonnet", thinking_levels: ["high", "low"], context_window: 200000 }];
+  const { attached } = setup({ models: async () => models });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "list_models", req: "m1" }));
+  await flush();
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "m1", data: { models } }]);
+});
+
+test("fork answers the new conversation_id of the deps", async () => {
+  const { attached, calls } = setup({
+    fork: async (at, ownership) => {
+      calls.fork.push([at, ownership]);
+      return { conversation_id: "sess-2" };
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "fork", req: "f1", at: 7 }));
+  await flush();
+  assert.deepEqual(calls.fork, [[7, undefined]]);
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "f1", data: { conversation_id: "sess-2" } }]);
+});
+
+test("history answers the paged entries and the next cursor of the deps", async () => {
+  const entries = [{ id: 3, conversationId: "root", kind: "message" }];
+  const { attached, calls } = setup({
+    history: async (before, limit) => {
+      calls.history.push([before, limit]);
+      return { entries, next: "Y3Vyc29y" };
+    },
+  });
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "history", req: "h1", limit: 10 }));
+  await flush();
+  assert.deepEqual(calls.history, [[undefined, 10]]);
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "h1", data: { entries, next: "Y3Vyc29y" } }]);
+});
+
+test("a command before attach gets not_attached", () => {
+  const { open, calls } = setup();
+  const { c, h } = open();
+  const sent = [
+    { type: "compact", req: "k1" },
+    { type: "configure", req: "k2", model: "anthropic/sonnet" },
+    { type: "list_models", req: "k3" },
+    { type: "fork", req: "k4", at: 7 },
+    { type: "history", req: "k5" },
+  ];
+  for (const m of sent) h.receive(JSON.stringify(m));
+  assert.deepEqual(
+    c.msgs().slice(1).map((m) => [m.type, m.code, m.req]),
+    sent.map((m) => ["error", "not_attached", m.req]),
+  );
+  assert.equal(c.closes, 0);
+  assert.deepEqual([calls.compact, calls.configure, calls.fork, calls.history], [[], [], [], []]);
+});
+
+test("submit with images passes them through to the deps submit", async () => {
+  const { attached, calls } = setup();
+  const { c, h } = attached();
+  const n = c.lines.length;
+  h.receive(JSON.stringify({ type: "submit", req: "s1", text: "look", images: [{ mime_type: "image/png", data: "aGk=" }] }));
+  await flush();
+  assert.deepEqual(calls.submit, [{ text: "look", whenBusy: "followUp", images: [{ mimeType: "image/png", data: "aGk=" }] }]);
+  assert.deepEqual(c.msgs().slice(n), [{ type: "result", req: "s1", data: { submission_id: 7, status: "accepted" } }]);
 });

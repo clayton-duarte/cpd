@@ -38,6 +38,7 @@ export class Facts {
   private prompts = 0;
   private own = 0;
   private verdict: string | undefined;
+  private waiters = new Set<() => void>();
 
   open(key: string, label: string, kind: Kind): boolean {
     if (this.opened.some((o) => o.key === key)) return false;
@@ -52,8 +53,36 @@ export class Facts {
     return true;
   }
 
-  /** Runs one of the adapter's own prompts (the plan review's select and editor): the `ui_prompt_start` and `ui_prompt_end` that arrive meanwhile change no reason, the plan-review reason stands for it. */
-  async ownPrompt<T>(show: () => Promise<T>): Promise<T> {
+  /** Whether a tool dialog holds pi's one editor slot (`ui_prompt_start` with no adapter prompt open, §15.5). */
+  get held(): boolean {
+    return this.prompts > 0;
+  }
+
+  /**
+   * Resolves at once when no tool dialog holds the editor slot; else when the held prompt ends (`prompt(false)` with `prompts` back to 0) or `signal` aborts.
+   * Event-driven: no polling, no timer, no sleep (§15.5).
+   */
+  waitForSlot(signal?: AbortSignal): Promise<void> {
+    if (this.prompts === 0 || signal?.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const wake = () => {
+        this.waiters.delete(wake);
+        signal?.removeEventListener("abort", wake);
+        resolve();
+      };
+      signal?.addEventListener("abort", wake, { once: true });
+      this.waiters.add(wake);
+    });
+  }
+
+  /** Wakes every slot waiter (no tool dialog is held any more) and clears the list. */
+  private wakeWaiters(): void {
+    for (const wake of [...this.waiters]) wake();
+  }
+
+  /** Runs one of the adapter's own prompts (the plan review's select and editor, and the approval tools): waits for the editor slot first, then the `ui_prompt_start` and `ui_prompt_end` that arrive meanwhile change no reason, the plan-review reason stands for it. */
+  async ownPrompt<T>(show: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.waitForSlot(signal);
     this.own += 1;
     try {
       return await show();
@@ -67,9 +96,14 @@ export class Facts {
     this.verdict = verdictOption(input);
   }
 
-  /** The `tool_result` of an `ask_user_question`: no dialog is left to name. */
+  /** The `tool_result` of an `ask_user_question`: no dialog is left to name. As the safety release (§15.5), it also frees the editor slot a displaced or stuck ask left held: the count drops to 0 and the waiters wake. */
   release(): void {
     this.verdict = undefined;
+    if (this.prompts > 0) {
+      this.prompts = 0;
+      this.close("ui_prompt");
+      this.wakeWaiters();
+    }
   }
 
   /** pi's `ui_prompt_start` (`active: true`) and `ui_prompt_end`: one reason, `dialog`, while any prompt is open. An end with nothing open changes nothing. */
@@ -83,7 +117,9 @@ export class Facts {
     this.prompts -= 1;
     if (this.prompts > 0) return false;
     this.verdict = undefined;
-    return this.close("ui_prompt");
+    const closed = this.close("ui_prompt");
+    this.wakeWaiters();
+    return closed;
   }
 
   /** `blocked` with the label of the latest human reason while any is open; else `waiting` with the label of the latest agent reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */

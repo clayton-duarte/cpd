@@ -202,12 +202,15 @@ pub fn list(ports: &Ports, cwd: &Path, name: &str, err: &mut dyn Write) -> Resul
                 write(err, &no_title(&file, &title))?;
                 return Ok(1);
             }
-            // vitest list --reporter=json <file> imports the file and prints the collected tests without running
-            // them, so an existing-but-red test still lists as found and only an absent title or a file that does
-            // not collect is refused; `run` would exit non-zero on a red test and read as 'not found' (the list
-            // command of vitest's CLI has existed since 2.x). The report is the JSON reporter's object, one
-            // `testResults[]` per file, each with an `assertionResults[]` of `{ fullName, title, … }` per test.
-            let args = ["--filter", "cpd-web-client", "exec", "vitest", "list", "--reporter=json", file.as_str()];
+            // `vitest list <file> --json` imports the file and prints the collected tests without running them, so
+            // an existing-but-red test still lists as found and only an absent title or a file that does not collect
+            // is refused; `run` would exit non-zero on a red test and read as 'not found'. The pinned vitest 5
+            // ignores `--reporter` in list mode and prints plain lines, so the file positional must come *before*
+            // `--json`: `--json [true/path]` consumes the next positional as its output file unless it follows the
+            // filters (verified against vitest 5.0.5's `list --help` and a throwaway package: `list <file> --json`
+            // prints `[{ name, file, location }, …]` to stdout with `name` the `' > '`-joined suite chain, while
+            // `list --json <file>` writes the array to `<file>` and prints nothing).
+            let args = ["--filter", "cpd-web-client", "exec", "vitest", "list", file.as_str(), "--json"];
             let answered = process(ports, "pnpm", "pnpm", &args, &root)?;
             if answered.status.success() && web_has(&answered.stdout, &title) {
                 return Ok(0);
@@ -275,13 +278,16 @@ fn pi_name(name: &str) -> Option<(&str, &str)> {
     is_pi.then_some((file, title))
 }
 
-/// Whether the vitest `list --reporter=json` report of the collected tests names `title` exactly: the `fullName` or
-/// `title` of an `assertionResult` of a `testResult`.
+/// Whether the collected tests name `title`: an item's `name` equals the title, or its last `' > '`-separated
+/// segment does (vitest joins suite chains like `'<file> > <suite> > <title>'`). The `list --json` array is the
+/// report; when the output is not a JSON array (the reporter was ignored and vitest printed plain lines), each
+/// line's trailing `' > '` segment is matched instead.
 fn web_has(report: &[u8], title: &str) -> bool {
-    let Ok(json) = serde_json::from_slice::<Value>(report) else { return false };
-    json["testResults"].as_array().into_iter().flatten().filter_map(|file| file["assertionResults"].as_array()).flatten().any(|test| {
-        test["fullName"].as_str().is_some_and(|name| name == title) || test["title"].as_str().is_some_and(|at| at == title)
-    })
+    let segments = |name: &str| name.rsplit(" > ").next() == Some(title);
+    match serde_json::from_slice::<Value>(report) {
+        Ok(Value::Array(items)) => items.iter().any(|item| item["name"].as_str().is_some_and(|name| name == title || segments(name))),
+        _ => text(report).lines().any(segments),
+    }
 }
 
 /// Whether `title` is in a `test(` or `it(` call of the file, quoted `'`, `"` or `` ` ``.

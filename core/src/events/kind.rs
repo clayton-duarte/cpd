@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -252,11 +252,12 @@ mod tests {
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
-    /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`) and
-    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6).
+    /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
+    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6) and 19 (`context pending`'s plan-level
+    /// `jobs`, commands.md §3.12, Plan explore-view).
     #[test]
-    fn the_protocol_is_18_with_the_session_model_changed_kind() {
-        assert_eq!(PROTOCOL, 18);
+    fn the_protocol_is_19_with_the_pending_plan_jobs_field() {
+        assert_eq!(PROTOCOL, 19);
     }
 
     #[test]

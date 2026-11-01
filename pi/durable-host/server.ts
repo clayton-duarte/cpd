@@ -1,4 +1,4 @@
-import { encode, LIMITS, negotiate, PROTOCOL_VERSIONS, parseLine, ProtocolError, type ToClient, type ToHost, type HostState } from "./protocol.ts";
+import { encode, LIMITS, negotiate, PROTOCOL_VERSIONS, parseLine, ProtocolError, type AgentState, type ToClient, type ToHost, type HostState } from "./protocol.ts";
 import { type Frame, type Ring } from "./ring.ts";
 
 export type Connection = { write(line: string): void; buffered(): number; close(): void };
@@ -24,7 +24,13 @@ export type ServerDeps = {
   piDurable: string;
   epoch: string;
   ring: Ring;
-  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string }): Promise<{ submissionId: number; status: string }>;
+  submit(input: { text: string; whenBusy: "followUp" | "steer" | "reject"; requestId?: string; images?: readonly { mimeType: string; data: string }[] }): Promise<{ submissionId: number; status: string }>;
+  /** Contract §6.17: the five conversation commands; each port settles one reply or throws a `ProtocolError`. */
+  compact(instructions?: string): Promise<{ task_id: number }>;
+  configure(change: { model?: string; thinkingLevel?: string | null }): Promise<{ agent: AgentState }>;
+  models(): Promise<readonly { provider: string; model_id: string; name: string; thinking_levels: readonly string[]; context_window: number }[]>;
+  fork(at: number, ownership?: "lead" | "manager"): Promise<{ conversation_id: string }>;
+  history(before?: string, limit?: number): Promise<{ entries: readonly unknown[]; next?: string }>;
   abort(opts: { background: boolean }): Promise<void>;
   abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found">;
   /** Rebuilds and installs the adapter extension (contract §6.18); the answer is one `result { reloaded: true }`. */
@@ -135,8 +141,27 @@ export function createServer(deps: ServerDeps): Server {
         }
         if (msg.type === "submit") {
           run(st, msg.req, async () => {
-            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }) });
+            const imgs = msg.images === undefined ? {} : { images: msg.images.map((i) => ({ mimeType: i.mime_type, data: i.data })) };
+            const r = await deps.submit({ text: msg.text, whenBusy: msg.when_busy, ...(msg.request_id === undefined ? {} : { requestId: msg.request_id }), ...imgs });
             return { submission_id: r.submissionId, status: r.status };
+          });
+        } else if (msg.type === "compact") {
+          run(st, msg.req, async () => ({ task_id: (await deps.compact(msg.instructions)).task_id }));
+        } else if (msg.type === "configure") {
+          run(st, msg.req, async () => {
+            const change: { model?: string; thinkingLevel?: string | null } = {};
+            if (msg.model !== undefined) change.model = msg.model;
+            if (msg.thinking_level !== undefined) change.thinkingLevel = msg.thinking_level;
+            return { agent: (await deps.configure(change)).agent };
+          });
+        } else if (msg.type === "list_models") {
+          run(st, msg.req, async () => ({ models: await deps.models() }));
+        } else if (msg.type === "fork") {
+          run(st, msg.req, async () => ({ conversation_id: (await deps.fork(msg.at, msg.ownership)).conversation_id }));
+        } else if (msg.type === "history") {
+          run(st, msg.req, async () => {
+            const r = await deps.history(msg.before, msg.limit);
+            return { entries: r.entries, ...(r.next === undefined ? {} : { next: r.next }) };
           });
         } else if (msg.type === "abort") {
           run(st, msg.req, async () => {

@@ -42,7 +42,7 @@ pub(super) fn pending(args: PendingArgs) -> Result<Output, CpdError> {
 }
 
 /// Every Plan of the Context not `done` and not archived, in creation order,
-/// each with its unmerged PRs and their Jobs.
+/// each with its plan-level explore Jobs and its unmerged PRs with their Jobs.
 fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, phase, lead_session FROM plans
@@ -56,8 +56,36 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
     heads
         .into_iter()
         .map(|(id, title, phase, lead_session)| {
-            let prs = prs(conn, &id)?;
-            Ok(json!({"id": id, "title": title, "phase": phase, "lead_session": lead_session, "prs": prs}))
+            let plan_id = PlanId::parse(&id)?;
+            let display = Display::load(conn, &plan_id)?;
+            let all_jobs = plan_jobs::load(conn, &plan_id)?;
+            Ok(json!({
+                "id": id, "title": title, "phase": phase, "lead_session": lead_session,
+                "jobs": explore_jobs(&display, &all_jobs), "prs": prs(conn, &id, &display, &all_jobs)?,
+            }))
+        })
+        .collect()
+}
+
+/// The Plan's explore Jobs (`jobs.pr` NULL, commands.md §3.12) not `cancelled`, in `seq` order: beside `prs`, each
+/// `{key, kind, status, tier, title, touches}` with `waiting_on` only when it cannot start (`status` is then `waiting`,
+/// the same display rule as a PR Job). `tier` is the displayed Tier, `touches` the parsed JSON (`[]` when null).
+fn explore_jobs(display: &Display, all: &[Job]) -> Vec<Value> {
+    all.iter()
+        .filter(|job| job.pr.is_none() && job.status != "cancelled")
+        .map(|job| {
+            let blockers = display.job_blockers(all, job);
+            let touches = job.spec.as_ref().map(|spec| spec.touches.clone()).unwrap_or_else(|| json!([]));
+            let mut value = json!({
+                "key": job.key.clone(),
+                "kind": job.kind.clone(),
+                "status": if blockers.is_empty() { job.status.clone() } else { "waiting".to_owned() },
+                "tier": display.job_tier(job).unwrap_or_default(),
+                "title": job.title.clone(),
+                "touches": touches,
+            });
+            add_waiting_on(&mut value, blockers);
+            value
         })
         .collect()
 }
@@ -65,10 +93,9 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
 /// The Plan's PRs not `merged` and not `cancelled`, in key order. A PR that cannot start yet has `waiting_on`: the keys of
 /// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
 /// hs-d523: a display status, the stored one is `queued`); see [`Display`].
-fn prs(conn: &Connection, plan: &str) -> Result<Vec<Value>, CpdError> {
+fn prs(conn: &Connection, plan: &str, display: &Display, all_jobs: &[Job]) -> Result<Vec<Value>, CpdError> {
     let plan_id = PlanId::parse(plan)?;
-    let display = Display::load(conn, &plan_id)?;
-    let (all_prs, all_jobs) = (load_prs(conn, &plan_id)?, plan_jobs::load(conn, &plan_id)?);
+    let all_prs = load_prs(conn, &plan_id)?;
     let mut stmt = conn.prepare(
         "SELECT p.key, p.repo, p.base, p.status, p.lead_branch, g.number, g.url, g.state
            FROM prs p LEFT JOIN pull_requests g ON g.id = p.pull_request
@@ -88,7 +115,7 @@ fn prs(conn: &Connection, plan: &str) -> Result<Vec<Value>, CpdError> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(key, mut pr)| {
-            pr["jobs"] = json!(jobs(conn, plan, &key, &display, &all_jobs)?);
+            pr["jobs"] = json!(jobs(conn, plan, &key, display, all_jobs)?);
             if let Some(row) = all_prs.iter().find(|p| p.key.as_str() == key) {
                 add_waiting_on(&mut pr, display.pr_blockers(row));
             }
@@ -184,6 +211,25 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
                     out,
                     "- {} {status}: {} ({})",
                     text(&job["key"]),
+                    text(&job["title"]),
+                    touches.join(", ")
+                );
+            }
+        }
+        let jobs = plan["jobs"].as_array().expect("jobs");
+        if !jobs.is_empty() {
+            let _ = write!(out, "\n### Jobs\n\n");
+            for job in jobs {
+                let touches: Vec<String> = job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let status = match waiting_on(job) {
+                    Some(keys) => format!("{} on {keys}", text(&job["status"])),
+                    None => text(&job["status"]),
+                };
+                let _ = writeln!(
+                    out,
+                    "- {} {} {status}: {} ({})",
+                    text(&job["key"]),
+                    text(&job["kind"]),
                     text(&job["title"]),
                     touches.join(", ")
                 );
