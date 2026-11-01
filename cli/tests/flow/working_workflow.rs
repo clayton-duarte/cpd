@@ -234,7 +234,6 @@ fn working_pr_cmd_pr_describe_names_the_leads_workflow() {
         &[
             "workflow",
             "describe",
-            "--workflow",
             "b",
             "--file",
             file.to_str().unwrap(),

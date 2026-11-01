@@ -102,7 +102,7 @@ fn the_job_merged_text_of_a_work_job_names_the_open_review_comments_left() {
 
     assert!(
         text.ends_with(
-            "PR repo still has 2 open review comments: cpd pr view --pr repo, then cpd pr reply."
+            "Workflow repo still has 2 open review comments: cpd pr view --workflow repo, then cpd pr reply."
         ),
         "{text:?}"
     );

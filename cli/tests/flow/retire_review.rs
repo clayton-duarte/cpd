@@ -59,7 +59,7 @@ fn job_add_and_its_job_added_event_carry_no_review_field() {
         "key", "pr", "kind", "status", "appended", "tier", "needs", "urgent",
     ]);
     let data = set(&[
-        "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+        "workflow", "kind", "status", "appended", "tier", "needs", "urgent",
     ]);
     for (phase, status) in [("plan", "draft"), ("dispatch", "queued")] {
         let fx = Fx::new();
