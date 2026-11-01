@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 
-use super::job::{store, count, engine, events, fixture, job, job_add, job_row, lock, plan, setup};
+use super::job::{store, count, engine, events, fixture, job, job_add, job_row, lock, plan, setup, spec_file};
 use crate::common::fx::Fx;
 use crate::common::{Run, TestEnv, refused};
 use cpd_core::ids::PlanId;
@@ -179,7 +179,8 @@ fn an_addendum_refuses_a_draft_merged_or_cancelled_job_and_an_attempt_that_is_no
         job_add(&fx, "pl", key, "S2", &[]).ok();
     }
     lock(&fx.env, "pl");
-    job_add(&fx, "pl", "d", "S2", &[]).ok(); // a draft appended after the lock
+    let spec = spec_file(&fx.env);
+    fx.cpd(&["job", "add", "d", "--title", "Title of d", "--tier", "S2", "--spec", &spec, "--draft", "--plan", "pl"]).ok(); // a draft appended after the lock
     job(&fx, &["cancel", "gone", "--reason", "Not needed."], "pl").ok();
     engine(&fx.env, "pl", "m", "merged");
     // A running Job whose latest Attempt is `starting`, `merging` or `ended`, inserted in that status.
