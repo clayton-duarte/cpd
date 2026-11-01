@@ -78,6 +78,43 @@ pub fn touched_protected_over(
     Ok(touched)
 }
 
+/// What the widened tamper check needs beyond the protected list (contract §7.5 "The Job's touches", hs-n641): the Job's
+/// kind, its Spec `touches`, the repo's `[generated] paths` and the Job's `touches_approved`.
+///
+/// Stub: `guard-tests` names the API; `guard-impl` implements [`touched_outside`], wires it into `attempt submit` and the
+/// merge, and widens the matching to the `touches` globs.
+#[derive(Clone, Copy, Debug)]
+pub struct Touches<'a> {
+    /// The Job's kind: `open`, `update` and the explore kinds run no touches check.
+    pub kind: &'a str,
+    /// The Job's Spec `touches`; an entry is an exact path, a directory ending in `/`, or a glob.
+    pub touches: &'a [String],
+    /// The repo policy's `[generated] paths` (§8.3), matched by the `protected` rule.
+    pub generated: &'a [String],
+    /// The Job's `touches_approved` (§2.2), read from the store when the check runs.
+    pub approved: &'a [String],
+}
+
+impl Touches<'_> {
+    /// Whether the Job's kind runs no touches check (contract §7.5): `open`, `update`, `scout` and `research`.
+    pub fn skipped(&self) -> bool {
+        matches!(self.kind, "open" | "update" | "scout" | "research")
+    }
+}
+
+/// The paths `diff_base...branch` changes outside the Job's `touches`, with the three exemptions of §7.5 (a base merge,
+/// the repo's `[generated] paths`, the Job's `touches_approved`), in the diff's order.
+pub fn touched_outside(
+    _dir: &Path,
+    _lead: &str,
+    _touches: &Touches<'_>,
+    _base_refs: &[&str],
+    _diff_base: &str,
+    _branch: &str,
+) -> Result<Vec<String>, CpdError> {
+    unimplemented!("the Job's touches check is guard-impl's (hs-n641): the red tests of guard-tests pin it")
+}
+
 /// Whether `path` is the file `entry` names, or inside it when `entry` ends in `/` (the matching of §7.5: no globs).
 pub fn path_matches(entry: &str, path: &str) -> bool {
     if entry.ends_with('/') { path.starts_with(entry) } else { path == entry }

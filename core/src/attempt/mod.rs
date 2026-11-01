@@ -31,6 +31,10 @@ pub(crate) mod explore_tests;
 #[cfg(test)]
 mod submit_tests;
 
+#[cfg(test)]
+#[path = "touches_tests.rs"]
+mod touches_tests;
+
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;

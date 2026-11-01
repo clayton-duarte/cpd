@@ -227,6 +227,29 @@ impl HasText for Protected {
     }
 }
 
+/// The `generated` domain (repo scope only, no `text`): the repo's generated paths (§7.5, hs-n641), which the Job
+/// `touches` check allows a change to without an approval.
+///
+/// Stub: `guard-tests` names the domain and its typed key `paths`; `guard-impl` resolves it from the repo file.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Generated {
+    pub paths: Vec<String>,
+}
+
+impl HasText for Generated {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[generated]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedSet {
+    pub paths: Option<Vec<String>>,
+}
+
 /// The `resources` domain (any scope, no `text`): the visible resources, resolved per name over host, owner and repo
 /// (contract §8.3 "The `resources` domain"); `names` is sorted.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -561,6 +584,19 @@ impl Set for ProtectedSet {
     }
 }
 
+impl Set for GeneratedSet {
+    type Value = Generated;
+
+    /// Stub (`guard-impl` resolves it): the table resolves to cpd's default, never to the file's paths.
+    fn fill(&self, base: &Generated) -> (Generated, Vec<&'static str>) {
+        (base.clone(), vec![PATHS])
+    }
+
+    fn complete(&self) -> Option<Generated> {
+        Some(Generated { paths: self.paths.clone()? })
+    }
+}
+
 impl Set for DeploysSet {
     type Value = Deploys;
 
@@ -814,6 +850,7 @@ domains! {
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;
+    generated, Generated, [], [Repo], Generated, GeneratedSet;
     resources, Resources, [], [Machine, Owner, Repo], Resources, ResourcesSet;
     deploys, Deploys, [], [Repo], Deploys, DeploysSet;
 }

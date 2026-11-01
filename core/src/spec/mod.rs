@@ -280,6 +280,10 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("resources", Value::from(input.resources.to_vec())),
         ("quick_check", Value::from(quick_check)),
         ("protected", Value::from(protected.iter().map(|p| p.to_string()).collect::<Vec<_>>())),
+        // Stub (`guard-impl` adds the Input fields and the store reads): the two variables the template of §16.4 names for
+        // the enforced touches check (hs-n641). Empty here, so a Spec renders with the sections left out.
+        ("generated", Value::from(Vec::<String>::new())),
+        ("approved_touches", Value::from(Vec::<String>::new())),
         ("previous", Value::from(previous)),
         ("answers", Value::from(answers)),
     ]);

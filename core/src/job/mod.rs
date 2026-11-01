@@ -12,10 +12,15 @@
 //! writes is what it checked.
 
 #[cfg(test)]
+#[path = "approve_touches_tests.rs"]
+mod approve_touches_tests;
+
+#[cfg(test)]
 mod incident_tests;
 
 pub(crate) mod add;
 mod approve;
+mod approve_touches;
 mod chain;
 pub(crate) mod cancel;
 mod edit;
@@ -66,6 +71,8 @@ pub enum Command {
     Urgent(UrgentArgs),
     /// The Lead approves an impl Job to change red tests (§5.9)
     ApproveTests(ApproveArgs),
+    /// The Lead approves a Job to change a path outside its touches (§5.9a)
+    ApproveTouches(ApproveTouchesArgs),
     /// Start one Ready Job now (§5.5)
     Dispatch(driver::DispatchArgs),
     /// List the Jobs (§5.6)
@@ -188,6 +195,21 @@ pub struct ApproveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ApproveTouchesArgs {
+    /// The Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// A path, or a directory ending in `/`, that the touches check refuses (repeatable)
+    #[arg(long = "path", value_name = "p", required = true)]
+    paths: Vec<String>,
+    /// Why
+    #[arg(long, value_name = "text")]
+    reason: Text,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Only Jobs in this status (repeatable)
     #[arg(long = "status", value_name = "status", value_parser = PossibleValuesParser::new(STATUSES))]
@@ -213,6 +235,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),
         Command::ApproveTests(args) => approve::approve(args),
+        Command::ApproveTouches(args) => approve_touches::approve(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),
         Command::Show(args) => show::show(args),

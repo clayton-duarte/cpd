@@ -13,6 +13,10 @@ mod recover;
 #[cfg(test)]
 mod linear_tests;
 
+#[cfg(test)]
+#[path = "touches_tests.rs"]
+mod touches_tests;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
