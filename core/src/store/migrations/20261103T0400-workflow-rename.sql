@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 86
+-- cpd-migration: breaking after 94
 -- The object is a Workflow (Plan glossary-rename, Context hs-d805; design docs/research/glossary-rename.md §3.4
 -- and §3.11): the object tables `prs` and `pr_needs` become `workflows` and `workflow_needs`, their object columns
 -- rename, the hand-written triggers are recreated under the new names, `history_tables` follows, the stored
