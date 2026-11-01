@@ -187,6 +187,10 @@ impl NewEvent {
         make(Kind::JobCancelled, text, json!({"reason": reason}))
     }
 
+    pub fn job_addendum(text: impl Into<String>, addendum: &str) -> NewEvent {
+        make(Kind::JobAddendum, text, json!({"text": addendum}))
+    }
+
     /// `job-blocked` (§5.2, hs-d798): E3 skipped a Ready Job for want of a pool slot, one Event per
     /// waiting episode; `waiting` is the number of Ready Jobs skipped that tick.
     pub fn job_blocked(text: impl Into<String>, waiting: u64) -> NewEvent {
@@ -223,6 +227,12 @@ impl NewEvent {
         )
     }
 
+    /// `attempt abort` (contract §5.2, commands.md §6.5): the Lead ended a running Attempt `failed` / `aborted`.
+    /// `by` is the calling Session's id.
+    pub fn attempt_aborted(text: impl Into<String>, tier: &str, by: &str) -> NewEvent {
+        make(Kind::AttemptAborted, text, json!({"tier": tier, "by": by}))
+    }
+
     pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
         make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
     }
@@ -240,15 +250,14 @@ impl NewEvent {
             "turns": null, "tokens_in": null, "tokens_out": null, "cache_read": null, "cache_write": null,
             "cost_usd": null, "duration_s": null, "model": null, "stop_reason": null, "thinking_level": null,
         });
-        if let Some(blob) = metrics {
-            if let Some(obj) = blob.as_object() {
+        if let Some(blob) = metrics
+            && let Some(obj) = blob.as_object() {
                 for key in KEYS {
                     if let Some(value) = obj.get(key) {
                         data[key] = value.clone();
                     }
                 }
             }
-        }
         make(Kind::AttemptEnded, text, data)
     }
 
@@ -582,6 +591,7 @@ mod tests {
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
+            Kind::JobAddendum => vec![NewEvent::job_addendum(T, s)],
             Kind::JobBlocked => vec![NewEvent::job_blocked(T, 1)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![
@@ -591,6 +601,7 @@ mod tests {
                 NewEvent::attempt_check_end(T, s, true),
             ],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
+            Kind::AttemptAborted => vec![NewEvent::attempt_aborted(T, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AttemptEnded => vec![
                 NewEvent::attempt_ended(T, Some(&json!({"turns": 1, "tokens_in": 2, "tokens_out": 3, "cache_read": 4, "cache_write": 5, "cost_usd": 0.0, "duration_s": 6.0, "model": "m", "stop_reason": "stop", "thinking_level": "high"}))),

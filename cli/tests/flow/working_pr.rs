@@ -107,6 +107,15 @@ fn working_pr_cmd_job_approve_tests_names_the_leads_workflow() {
 }
 
 #[test]
+fn working_pr_cmd_job_addendum_names_the_leads_workflow() {
+    let fx = world(Some("a"));
+    seed(&fx, "k", "b");
+    lock(&fx.env, "pl");
+    as_lead(&fx, &["job", "addendum", "k", "A note.", "--plan", "pl"]).ok();
+    assert_eq!(named(&fx).as_deref(), Some("b"));
+}
+
+#[test]
 fn working_pr_cmd_answer_names_the_leads_workflow() {
     let fx = world(Some("a"));
     seed(&fx, "k", "b");

@@ -153,6 +153,6 @@ fn incident_interrupted_attempts_do_not_count_for_the_ladder() {
         })
         .unwrap();
 
-    let counted = f.store.write("test", |tx| Ok(ledger::automatic_attempts(tx, "pay", "a")?)).unwrap();
+    let counted = f.store.write("test", |tx| ledger::automatic_attempts(tx, "pay", "a")).unwrap();
     assert_eq!(counted, 1, "only the failed Attempt counts; the Interrupted one is ignored");
 }

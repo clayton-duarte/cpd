@@ -6,6 +6,8 @@ mod common;
 
 mod ask;
 mod attempt;
+mod attempt_abort;
+mod attempt_abort_teardown;
 mod worker_runner;
 mod working_pr;
 mod worker_runner_durable;
@@ -38,6 +40,7 @@ mod driver_stall;
 mod context_inbox_cyan;
 mod host_repair;
 mod job;
+mod job_addendum;
 mod job_open_description;
 mod job_open_jira;
 mod job_resources;

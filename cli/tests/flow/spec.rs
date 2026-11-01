@@ -44,6 +44,7 @@ fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -
         approved_touches: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     }
 }
 
@@ -129,6 +130,7 @@ fn later() -> String {
         approved_touches: &[],
         previous: &previous,
         answers: &answers,
+        addenda: &[],
     })
     .unwrap()
 }

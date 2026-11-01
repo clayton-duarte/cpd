@@ -160,20 +160,27 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     // Incident mode asked the Attempt to stop but the Job carries no cancel request: it ends `Interrupted`,
     // which requeues the Job at the same Tier (contract §3.7).
     let incident_stop = cancel.is_none() && active.stop_request.as_deref() == Some("cancelled");
+    // The Lead's `attempt abort` set the request but the driver died before consuming it: end `failed` / `aborted`,
+    // never `crashed`, then kill the orphan below.
+    let aborted = active.stop_request.as_deref() == Some("aborted");
     // An install or a store migration ended the driver, not the Worker (hs-n278): no `driver_pid`, so the
     // ladder keeps the Tier and `retry_cap` does not count the Attempt, as for a driver that never started.
-    let infra = match (cancel.is_some(), incident_stop) {
-        (true, _) | (false, true) => None,
-        (false, false) => engine.home.infra(plan, id)?,
+    let infra = match (cancel.is_some(), incident_stop, aborted) {
+        (true, _, _) | (false, true, _) | (false, false, true) => None,
+        (false, false, false) => engine.home.infra(plan, id)?,
     };
-    let end = match (&cancel, incident_stop, &infra) {
-        (Some(_), _, _) => End::Cancelled,
-        (None, true, _) => End::Interrupted,
-        (None, false, Some((why, message))) => End::Failed {
+    let end = match (&cancel, incident_stop, aborted, &infra) {
+        (Some(_), _, _, _) => End::Cancelled,
+        (None, true, _, _) => End::Interrupted,
+        (None, false, true, _) => End::Failed {
+            cause: Cause::Aborted,
+            detail: format!("The Lead aborted Attempt {id}; its driver was already dead."),
+        },
+        (None, false, false, Some((why, message))) => End::Failed {
             cause: Cause::Crashed,
             detail: format!("Its driver ended on {} ({message}), not through its Worker.", why.code()),
         },
-        (None, false, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
+        (None, false, false, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
     };
     let catalog = engine.catalog_of_job(plan, target.job.as_str())?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };

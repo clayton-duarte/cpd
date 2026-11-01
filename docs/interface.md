@@ -48,6 +48,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
 | `cpd job approve-touches` | The Lead approves a Job to change a path outside its touches (§5.9a) | Lead | |
+| `cpd job addendum` | Add information to a Job without changing its Spec (§5.10) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
@@ -56,6 +57,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead | |
 | `cpd attempt show` | Show an Attempt (§6.3) | Lead | |
 | `cpd attempt list` | List Attempts (§6.3) | Lead | |
+| `cpd attempt abort` | End a running Attempt failed/aborted (Lead) (§6.5) | Lead | |
 | `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
 | `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
 | `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |

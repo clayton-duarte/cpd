@@ -5,7 +5,7 @@ import { zoneTime } from "./time.ts";
 /**
  * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
  * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
- * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and the rest (`attempt-retry`, `job-cancelled`, `pr-started`, `pr-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the PR's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
+ * `pr-feedback` (every reason) and a Worker's `escalation` and `job-addendum` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and the rest (`attempt-retry`, `job-cancelled`, `pr-started`, `pr-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the PR's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
  */
 export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: SendOptions["deliverAs"] }>> = {
   "job-merged": { turn: true, deliverAs: "followUp" },
@@ -23,6 +23,7 @@ export const leadRule = (ev: CpdEvent) => (ev.kind === "job-merged" && ev.data.t
 export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions): SendOptions => ((r?.firstPending || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });
+export const STEER = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "steer" });
 
 /** §15.3: `{customType: "cpd", content: event.text, details: {...event, delivered_to}}`. `delivered_to` is what the cursor counts. */
 export function eventMessage(event: CpdEvent, sessionId: string, content: string = event.text): Message {

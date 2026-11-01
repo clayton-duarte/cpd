@@ -126,7 +126,7 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
 
     // Step 5: the registry, listed at apply time (`--all`), through the host runner.
     let answer = Helper::new(&config, &home)?.all().run()?;
-    check_registry(&name, &preset, &answer)?;
+    check_registry(&name, preset, &answer)?;
 
     // Steps 6–7: the byte-preserving rewrite, then one Event per changed live Lead or Manager, all in one
     // store transaction. The pre-write models are read before the file is replaced.

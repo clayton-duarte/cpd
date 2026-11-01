@@ -33,6 +33,17 @@
     },
     "required": []
   },
+  "attempt abort": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
   "attempt list": {
     "flags": {
       "--active": false,
@@ -600,6 +611,18 @@
     "required": [
       "--title"
     ]
+  },
+  "job addendum": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 2,
+      "min": 1
+    },
+    "required": []
   },
   "job approve-tests": {
     "flags": {

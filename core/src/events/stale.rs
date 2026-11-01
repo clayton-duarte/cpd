@@ -28,12 +28,15 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             )
         }
         Kind::JobFailed => later_of_job(conn, event, &["job-retried", "job-merged", "job-cancelled"]),
+        Kind::JobAddendum => {
+            later_of_job(conn, event, &["attempt-started", "job-merged", "job-failed", "job-cancelled"])
+        }
         Kind::AttemptNudge => {
             later_of_job(conn, event, &["attempt-started", "job-merged", "job-failed", "job-cancelled"])
         }
         Kind::Escalation => {
-            if let (Some(plan), Some(escalation)) = (plan, event.data.get("escalation").and_then(Value::as_str)) {
-                if exists(
+            if let (Some(plan), Some(escalation)) = (plan, event.data.get("escalation").and_then(Value::as_str))
+                && exists(
                     conn,
                     "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2
                      AND kind IN ('escalation-answered', 'escalation-expired')
@@ -42,7 +45,6 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
                 )? {
                     return Ok(true);
                 }
-            }
             later_of_job(conn, event, &["job-merged", "job-cancelled"])
         }
         Kind::Error => {

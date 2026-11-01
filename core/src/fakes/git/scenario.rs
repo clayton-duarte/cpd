@@ -232,7 +232,7 @@ impl Drop for World {
         // that must be cleaned up with `git worktree remove`, not just by deleting the directory.
         for (wt_path, repo_dir) in &self.worktrees {
             let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(repo_dir).args(&["worktree", "remove", "--force", "--force", p(wt_path)]);
+            cmd.arg("-C").arg(repo_dir).args(["worktree", "remove", "--force", "--force", p(wt_path)]);
             let _ = self.runner.output(&mut cmd, "git", Duration::from_secs(60));
         }
     }

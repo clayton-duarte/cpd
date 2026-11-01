@@ -348,6 +348,10 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     // The incident pill is red on a red block in the `incident` click range: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
     let incident = pill::range("incident", &format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}")));
+    // The red branch: the bright red clickable pair of the failed meaning, in the click range.
+    let alert = pill::range("host", &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}")));
+    // The plain branch: the grey pill, only while `@cpd_version` is set.
+    let plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}", status(m.nothing, "#{@cpd_version}"));
     format!(
         "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
@@ -360,10 +364,8 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
         incident = incident,
-        // The red branch: the bright red clickable pair of the failed meaning, in the click range.
-        alert = pill::range("host", &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
-        // The plain branch: the grey pill, only while `@cpd_version` is set.
-        plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}", status(m.nothing, "#{@cpd_version}")),
+        alert = alert,
+        plain = plain,
     )
 });
 

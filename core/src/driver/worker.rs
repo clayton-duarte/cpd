@@ -107,6 +107,15 @@ fn answers(conn: &Connection, target: &Target) -> Result<Vec<Answer>, CpdError> 
         .collect()
 }
 
+/// The Job's addenda, oldest first (§5.10).
+fn addenda(conn: &Connection, target: &Target) -> Result<Vec<spec::Addendum>, CpdError> {
+    let mut stmt = conn.prepare("SELECT number, text FROM job_addenda WHERE plan = ?1 AND job = ?2 ORDER BY number")?;
+    let rows = stmt
+        .query_map(params![target.plan.as_str(), target.job.as_str()], |r| Ok(spec::Addendum { number: r.get(0)?, text: r.get(1)? }))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
     value
         .as_array()
@@ -118,6 +127,7 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
+    let addenda = addenda(conn, target)?;
     // An explore Job has no PR, no quick check and no protected path of a policy: its Worker works in no repository.
     let explore = crate::plan::jobs::is_explore(&job.kind);
     let (quick_check, protected, generated) = if explore {
@@ -184,6 +194,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             approved_touches: &approved_touches,
             previous: &previous,
             answers: &answers,
+            addenda: &addenda,
         },
     )?;
     Ok(path)

@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use parking_lot::ReentrantMutex;
 use std::sync::Arc;
 
+/// A `panes` row joined with its session: id, window, session, argv, cwd, dead, dead status.
+type PaneRow = (i64, i64, i64, String, String, bool, Option<i32>);
+
 /// One socket's connection, shared by the calls that run on it and the read views of it. Reentrant: a
 /// `run-shell` child on the same thread calls the fake again while its parent waits (the parent has committed).
 pub type Shared = Arc<ReentrantMutex<Connection>>;
@@ -119,7 +122,7 @@ impl State {
                  JOIN windows w ON w.id = p.window ORDER BY p.id",
             )
             .expect("prepare");
-        let rows: Vec<(i64, i64, i64, String, String, bool, Option<i32>)> = st
+        let rows: Vec<PaneRow> = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
             .expect("query")
             .map(|r| r.expect("row"))

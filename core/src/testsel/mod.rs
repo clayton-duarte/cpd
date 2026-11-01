@@ -527,7 +527,7 @@ fn process(ports: &Ports, tool: &str, program: &str, args: &[&str], cwd: &Path) 
 
 /// The exit status of a process, as the shell reports it: `128 + n` for a signal `n`.
 fn status_of(output: &Output) -> u8 {
-    output.status.code().map_or_else(|| 128 + output.status.signal().unwrap_or(0), |c| c) as u8
+    output.status.code().unwrap_or_else(|| 128 + output.status.signal().unwrap_or(0)) as u8
 }
 
 fn forward(out: &mut dyn Write, err: &mut dyn Write, output: &Output) -> Result<(), CpdError> {

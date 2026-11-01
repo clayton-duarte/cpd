@@ -58,12 +58,11 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
     scope.hooks = hooks;
     // The deprecated `[pr] gate` alias: `local` -> both gates `local`, `ci`/`none` -> both `none`.
     // An explicit `[gate]` table in the same file wins over it.
-    if scope.gate.is_none() {
-        if let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
+    if scope.gate.is_none()
+        && let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
             let gate = alias.gate();
             scope.gate = Some(GatesSet { merge: Some(gate), pr: Some(gate), text: None });
         }
-    }
     if let Some(set) = &scope.resources {
         for (name, decl) in &set.0 {
             if name.as_str() == crate::resource::WORKERS {
@@ -139,11 +138,10 @@ pub(super) fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
         for (k, v) in table {
             path.push(k.clone());
             if fails::<T>(path, v.clone()) {
-                if let Value::Table(sub) = v {
-                    if !fails::<T>(path, Value::Table(Table::new())) && walk::<T>(sub, path) {
+                if let Value::Table(sub) = v
+                    && !fails::<T>(path, Value::Table(Table::new())) && walk::<T>(sub, path) {
                         return true;
                     }
-                }
                 return true;
             }
             path.pop();

@@ -34,6 +34,8 @@ struct Edits {
     worker: bool,
 }
 
+// The variant carries the one value this enum exists to hand back; boxing is a type change out of scope.
+#[allow(clippy::large_enum_variant)]
 enum Decision {
     /// No value changes.
     Already(Job),
@@ -262,7 +264,7 @@ fn decide(conn: &Connection, home: &CpdHome, plan: &PlanId, key: &JobKey, edits:
     }
     // A stub gets its whole Spec at once: it is one field, `spec`, not the five columns.
     let completed = before.spec.is_none() && after.spec.is_some();
-    for (_, (name, _)) in columns(&before).into_iter().zip(columns(&after)).filter(|(b, a)| b.1 != a.1) {
+    for (_, (name, _)) in columns(before).into_iter().zip(columns(&after)).filter(|(b, a)| b.1 != a.1) {
         match name {
             "tier" => fields.push("tier"),
             _ if !completed => fields.push(name),

@@ -28,6 +28,7 @@ fn text(resources: &[String]) -> String {
         approved_touches: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     })
     .unwrap()
 }

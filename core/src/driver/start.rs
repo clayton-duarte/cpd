@@ -246,7 +246,7 @@ fn decide(conn: &Connection, home: &CpdHome, catalog: &Catalog, plan: &PlanId, k
     // The repo and status of the Job's PR (R34 A7).
     // An explore Job has no PR: it is Ready by its own rule (`require_ready_explore`).
     let explore = jobs::is_explore(&job.kind);
-    let (repo, pr_status): (String, String) = if explore {
+    let (repo, _pr_status): (String, String) = if explore {
         require_ready_explore(conn, &all, job, plan, &phase)?;
         (String::new(), String::new())
     } else {

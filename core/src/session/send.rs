@@ -54,11 +54,10 @@ pub fn plan_inactive(conn: &rusqlite::Connection, plan: &str) -> Result<(), CpdE
 /// The guards of an agent's send (hs-d507, hs-d514): the target's Plan is live, and the same trimmed text went neither to
 /// another Session (`broadcast`) nor to this one (`duplicate`) in the last 60 minutes.
 fn guard(tx: &WriteTxn<'_>, target: &Row, from: &SessionId, text: &str) -> Result<(), CpdError> {
-    if target.role == Role::Lead {
-        if let Some(plan) = &target.plan {
+    if target.role == Role::Lead
+        && let Some(plan) = &target.plan {
             plan_inactive(tx, plan.as_str())?;
         }
-    }
     let earlier = |same: bool| -> Result<Option<(String, String)>, CpdError> {
         Ok(tx
             .query_row(

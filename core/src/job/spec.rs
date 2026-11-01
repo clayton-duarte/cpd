@@ -91,12 +91,11 @@ impl Spec {
     pub fn without_artefacts(&self, cpd_home: &Path, plan: &str, user_home: &Path) -> Spec {
         let tail = format!("run/{plan}/explore/");
         let mut forms = vec![format!("{}/{tail}", cpd_home.display())];
-        if let Ok(rest) = cpd_home.strip_prefix(user_home).map(|r| r.to_string_lossy().into_owned()) {
-            if !user_home.as_os_str().is_empty() {
+        if let Ok(rest) = cpd_home.strip_prefix(user_home).map(|r| r.to_string_lossy().into_owned())
+            && !user_home.as_os_str().is_empty() {
                 let rest = if rest.is_empty() { String::new() } else { format!("/{rest}") };
                 forms.extend(["~", "$HOME", "${HOME}"].map(|p| format!("{p}{rest}/{tail}")));
             }
-        }
         let strip = |s: &str| forms.iter().fold(s.to_owned(), |acc, f| acc.replace(f.as_str(), ""));
         let strips = |v: &[String]| v.iter().map(|s| strip(s)).collect::<Vec<_>>();
         Spec {

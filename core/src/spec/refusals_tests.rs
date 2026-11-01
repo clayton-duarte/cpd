@@ -29,6 +29,7 @@ fn text(kind: JobKind) -> String {
         approved_touches: &[],
         previous: &[],
         answers: &[],
+        addenda: &[],
     })
     .unwrap()
 }

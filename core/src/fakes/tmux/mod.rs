@@ -564,11 +564,10 @@ fn store_env(db: &Connection, scope: &str, owner: i64, pairs: &[&str]) -> rusqli
 
 fn new_session(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("new-session", args, "dDAEPXs:n:c:e:x:y:F:t:f:")?;
-    if let Some(name) = o.val('s') {
-        if s::<i64>(cx.db, "SELECT id FROM sessions WHERE name = ?1", [name]).is_some() {
+    if let Some(name) = o.val('s')
+        && s::<i64>(cx.db, "SELECT id FROM sessions WHERE name = ?1", [name]).is_some() {
             return Err(format!("duplicate session: {name}"));
         }
-    }
     let session = next_id(cx.db, "session").map_err(|e| e.to_string())?;
     let name = o.val('s').map_or_else(|| session.to_string(), str::to_string);
     cx.db.execute("INSERT INTO sessions (id, name, cur_window) VALUES (?1, ?2, NULL)", (session, name)).map_err(|e| e.to_string())?;
@@ -801,11 +800,10 @@ fn show_environment(cx: &mut Cx, args: &[String]) -> R<()> {
     let rows: Vec<(String, Option<String>)> =
         st.query_map((scope, owner), |r| Ok((r.get(0)?, r.get(1)?))).expect("query").map(|r| r.expect("row")).collect();
     let wanted = o.rest.first();
-    if let Some(n) = wanted {
-        if !rows.iter().any(|(k, _)| k == n) {
+    if let Some(n) = wanted
+        && !rows.iter().any(|(k, _)| k == n) {
             return Err(format!("unknown variable: {n}"));
         }
-    }
     for (k, v) in rows.iter().filter(|(k, _)| wanted.is_none_or(|w| w == k)) {
         match v {
             Some(v) => cx.out.push_str(&format!("{k}={v}\n")),

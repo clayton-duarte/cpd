@@ -649,7 +649,7 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
     let failed = |message: String| CpdError::new(ErrorCode::StoreFailed, message);
     let source = home.old_contexts_dir();
     let destination = home.archived_contexts_dir();
-    let folders = legacy::folders(&source).map_err(&failed)?;
+    let folders = legacy::folders(&source).map_err(failed)?;
     if folders.is_empty() {
         return Ok(());
     }

@@ -273,9 +273,12 @@ fn parse_pr(raw: &Value) -> Result<GhPr, String> {
 
 /// The last GitHub answer and when it came, so E8's tick does not ask again for the same posts within [`GITHUB_TTL`].
 /// A failure is held as well: a broken `gh` is asked again after the same time, not every tick.
+/// The posted pull requests asked, when, and the answer.
+type Held = (Vec<(String, u64)>, Instant, Result<Lookup, CpdError>);
+
 #[derive(Default)]
 pub struct Memo {
-    held: Option<(Vec<(String, u64)>, Instant, Result<Lookup, CpdError>)>,
+    held: Option<Held>,
 }
 
 impl Memo {
@@ -286,11 +289,10 @@ impl Memo {
         now: Instant,
         fetch: impl FnOnce(&[(String, u64)]) -> Result<Lookup, CpdError>,
     ) -> Result<Lookup, CpdError> {
-        if let Some((held, at, answer)) = &self.held {
-            if held == refs && now.saturating_duration_since(*at) < GITHUB_TTL {
+        if let Some((held, at, answer)) = &self.held
+            && held == refs && now.saturating_duration_since(*at) < GITHUB_TTL {
                 return answer.clone();
             }
-        }
         let answer = fetch(refs);
         self.held = Some((refs.to_vec(), now, answer.clone()));
         answer

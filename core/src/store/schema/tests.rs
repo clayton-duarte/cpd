@@ -136,7 +136,7 @@ fn pull_requests_history_lists_every_column_and_their_checks_hold() {
 
     for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2", "mergeable = 'maybe'", "merge_state = 'ready'"] {
         let sql = format!("UPDATE pull_requests SET {bad} WHERE number = 7");
-        let err = store.write("test", |tx| Ok::<(), CpdError>({ tx.execute(&sql, [])?; })).unwrap_err();
+        let err = store.write("test", |tx| { tx.execute(&sql, [])?; Ok::<(), CpdError>(()) }).unwrap_err();
         assert!(err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"), "{bad}: {err:?}");
     }
 }
@@ -1792,7 +1792,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(rows_after.remove("slack_reactions").map(|r| r.len()), Some(0)); // `slack-reactions`: a new empty table
         assert_eq!(rows_after.remove("jira_transitions"), Some(Vec::new())); // `jira-transitions`: a new empty table
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(24)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts` and `job_pools`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(25)); // 17, `board_posts`, `record_retirements`, `record_curations`, `incident`, `incident_plans`, `pr_posts`, `job_pools` and `job_addenda`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1821,6 +1821,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("pr_posts"), Some(Vec::new()));
         // `job-tenancy` made `job_pools`, and it is empty.
         assert_eq!(rows_after.remove("job_pools"), Some(Vec::new()));
+        // `20261103T0400-job-addenda` made `job_addenda`, and it is empty.
+        assert_eq!(rows_after.remove("job_addenda"), Some(Vec::new()));
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
@@ -2315,6 +2317,9 @@ fn version_5_four_prs(home: &CpdHome) {
     database_at(home, 5, &sql);
 }
 
+/// A `prs` row: plan, status, pull_request, pr_number, merged_at.
+type PrsRow = (String, String, Option<i64>, Option<i64>, Option<String>);
+
 #[test]
 fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let dir = tempfile::tempdir().unwrap();
@@ -2356,7 +2361,7 @@ fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_
     );
 
     // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
-    let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
+    let prs: Vec<PrsRow> = conn
         .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
@@ -2895,8 +2900,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-ended` and the one of `job-blocked`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-aborted`, the one of `attempt-ended`, the one of `job-blocked` and the one of `20261103T0400-job-addenda`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
@@ -3239,7 +3244,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     let mut before = crate::store::tests::open_named(&home, &NAMED[..at]).unwrap();
     write(
         &mut before,
-        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
            ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
            ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
@@ -3253,8 +3258,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
                   ('live', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
          INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
            (cpd_txn(), 't', 'plan-created', 'ctx', 'pay', 'x', '{}'), (cpd_txn(), 't', 'plan-created', 'other', 'live', 'x', '{}'),
-           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');"
-            .to_owned(),
+           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');",
     )
     .unwrap();
     let rows_before = rows(&mut before, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans");

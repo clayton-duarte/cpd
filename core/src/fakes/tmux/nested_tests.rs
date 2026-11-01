@@ -28,12 +28,15 @@ fn call(m: &M, socket: &str, args: &[&str]) -> super::Outcome {
     m.tmux.run(&inv)
 }
 
+/// A shell call: program, arguments, directory and environment.
+type Shell = (String, Vec<String>, Option<PathBuf>, Vec<(String, Option<String>)>);
+
 /// What the product's test asserts on: the program, the arguments, the directory and the environment.
-fn shells(runner: &FakeRunner) -> Vec<(String, Vec<String>, Option<PathBuf>, Vec<(String, Option<String>)>)> {
+fn shells(runner: &FakeRunner) -> Vec<Shell> {
     runner.calls().into_iter().map(|c: Call| (c.program, c.args, c.cwd, c.envs)).collect()
 }
 
-fn sh(cmd: &str) -> (String, Vec<String>, Option<PathBuf>, Vec<(String, Option<String>)>) {
+fn sh(cmd: &str) -> Shell {
     let envs = env().into_iter().map(|(k, v)| (k, Some(v))).collect();
     ("/bin/sh".to_owned(), vec!["-c".to_owned(), cmd.to_owned()], Some(PathBuf::from(WORK)), envs)
 }

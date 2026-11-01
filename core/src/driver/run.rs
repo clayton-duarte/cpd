@@ -291,7 +291,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
-    let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
+    let opened = Env::open_home_persistent(home.clone(), Persist::new(log, || false));
     let Env { home, config, store, ports, .. } = match opened {
         Ok(env) => env,
         Err(e) => {
@@ -752,6 +752,14 @@ impl Driver {
                 }
             }
             let now = self.load()?;
+            // A5, the Lead's abort (contract §3.4): `attempt abort` may already have ended the Attempt in its own
+            // transaction. Stop the Worker through A9, clean up, and suppress the A4 restart. Do not end it a second
+            // time and do not surface a `cas_lost`. A `merging` Attempt is the merge's (§7.4): never torn down here.
+            if now.status != "merging" && now.stop_request.as_deref() == Some("aborted") {
+                log("A5: the Attempt was aborted; stopping the Worker and cleaning up");
+                self.cleanup(&now, false);
+                return Ok(Ended { outcome: "failed", cause: "aborted" });
+            }
             match now.status.as_str() {
                 "running" => self.reload_if_installed()?,
                 "merging" => return self.merge(dirs),
@@ -929,7 +937,8 @@ impl Driver {
         .with("attempt", target.id.to_string())
         .with("minutes", minutes);
         let text = error.message().to_owned();
-        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, self.config.watch.error_repeat()))?;
+        // The stall is deduped per episode by the watch, so no repeat window (contract §3.4 A4).
+        self.store.write(SOURCE, |tx| ledger::append_error(tx, target, STALL_SOURCE, &error, text, Duration::ZERO))?;
         log(&format!("A4: stall: the durable Worker has not written {} for {minutes} minutes; appended worker_stalled", path.display()));
         Ok(())
     }
@@ -1201,7 +1210,9 @@ mod tests {
     #[test]
     fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
         use Decision::*;
-        let table: &[(&str, Option<&str>, Option<&str>, u64, Option<u64>, Decision)] = &[
+        // A case of the table: the columns the test names below, then the expected Decision.
+        type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, u64, Option<u64>, Decision);
+        let table: &[Case] = &[
             ("working", Some("stop"), None, 3, None, Wait),
             ("working", Some("stop"), None, 5, Some(3), Wait),
             ("working", Some("error"), None, 3, None, Wait),

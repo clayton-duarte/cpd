@@ -83,6 +83,13 @@ pub struct Fakes {
 }
 
 #[cfg(feature = "fakes")]
+impl Default for Fakes {
+    fn default() -> Fakes {
+        Fakes::new()
+    }
+}
+
+#[cfg(feature = "fakes")]
 impl Fakes {
     /// A `ManualClock`, a `FakeRunner` on that clock, a `FakeSpawn` and a `FakeHostSocket`, and the `Ports` over them.
     pub fn new() -> Fakes {

@@ -8,7 +8,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::host::runner::Runner;
 use crate::ports::{Fakes, Ports};
 
 /// Whether `ports` holds the runner of `fakes` (the same `Arc`, not an equal one).

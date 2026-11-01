@@ -172,6 +172,9 @@ fn a_broken_pr_shows_its_causes_in_the_order_conflict_failing_changes_requested(
     is(&mut f, 2, Red, "failing");
 }
 
+/// A Job as (kind, status).
+type JobKindStatus<'a> = (&'a str, &'a str);
+
 #[test]
 fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_live() {
     let broken = [
@@ -180,7 +183,7 @@ fn an_owned_broken_pr_is_cyan_while_its_lead_works_or_an_update_or_work_job_is_l
         ("review_decision = 'changes_requested', merge_state = 'blocked'", "changes requested", "fixing"),
     ];
     // (Lead working, a Job of (kind, status), handled)
-    let cases: [(bool, Option<(&str, &str)>, bool); 10] = [
+    let cases: [(bool, Option<JobKindStatus>, bool); 10] = [
         (true, None, true),
         (false, Some(("update", "queued")), true),
         (false, Some(("update", "running")), true),

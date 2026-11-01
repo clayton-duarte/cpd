@@ -83,7 +83,7 @@ fn respawn_pane_without_a_target_in_a_hook_is_the_hooks_pane_not_the_active_one(
 fn pane_died_fires_inside_the_same_call() {
     let t = T::new();
     t.server();
-    t.ok(&["set-hook", "-g", "pane-died", &format!("set -g @seen #{{pane_id}}")]);
+    t.ok(&["set-hook", "-g", "pane-died", "set -g @seen #{pane_id}"]);
     t.ok(&["__ctl", "pane-exit", "%0", "--status", "0"]);
     assert_eq!(t.ok(&["show", "-gv", "@seen"]), "%0\n");
 }

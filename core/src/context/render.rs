@@ -142,12 +142,6 @@ pub fn markdown_retired(title: &str, jira: Option<&str>, records: &[Indexed], si
     out
 }
 
-/// An uncurated record in force, raw: `- [<id>] <kind>, <date>: <text>`, a multi-line text indented under it.
-pub fn raw(record: &Record) -> String {
-    let text = if record.kind() == RecordKind::Brief { record.first_line() } else { record.text.trim_end() };
-    format!("- [{}] {}, {}: {}", record.id, record.kind().as_str(), date(record), text.replace('\n', "\n  "))
-}
-
 /// One record in full (`context show --record`, commands.md §3.3): the Context's title, then the record's id, kind
 /// (a `plan` or `brief` with its Plan) and date, then its whole text.
 pub fn single(title: &str, jira: Option<&str>, record: &Record) -> String {

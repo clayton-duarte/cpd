@@ -69,6 +69,9 @@ pub(super) const LEGACY: &[Legacy] = &[
 /// (`verdict.rs`) never reads `$CPD_HOME`.
 pub(super) const IMPORTS_OLD_STORES: usize = 7;
 
+/// The Rust beside a migration's SQL.
+pub(super) type MigrationRun = fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>;
+
 /// A named migration (contract §4.5 N1–N4): a file of `migrations/`, listed by
 /// `build.rs`. `run` is the Rust beside its SQL, called after the SQL.
 #[derive(Clone, Copy)]
@@ -76,7 +79,7 @@ pub(super) struct Named {
     pub(super) name: &'static str,
     pub(super) compat: Compat,
     pub(super) sql: &'static str,
-    pub(super) run: Option<fn(&Connection, &CpdHome) -> std::result::Result<(), CpdError>>,
+    pub(super) run: Option<MigrationRun>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
@@ -110,7 +113,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "a4f74702356b29f8d5ad0a7f6fbb2791641d249533b52cb9d7f9f7b047b3a783";
+pub const SCHEMA_HASH: &str = "77573f5ffcb7a736f572cbf069fcb75c07a9409982d8a376368e916380825c04";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -453,7 +456,7 @@ fn delete_owner(table: &str) -> Option<String> {
         )
     };
     Some(match table {
-        "prs" | "pr_posts" | "job_pools" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        "prs" | "pr_posts" | "job_addenda" | "job_pools" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
         "context_records" | "record_retirements" | "record_curations" => context_deleted("OLD.context"),
         "events" | "inbox_items" | "sessions" => plan_row(),
         "board_posts" => session_row("to_session"),
@@ -903,3 +906,5 @@ mod jira_transitions_tests;
 mod explore_kinds_tests;
 #[cfg(test)]
 mod working_pr_tests;
+#[cfg(test)]
+mod job_addenda_tests;

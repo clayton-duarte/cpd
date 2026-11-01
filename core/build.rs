@@ -77,9 +77,9 @@ fn main() {
         let text = fs::read_to_string(dir.join(format!("{name}.sql"))).expect("a readable migration");
         let compat = compat(name, &text);
         let run = if *rust {
-            write!(
+            writeln!(
                 modules,
-                "mod named_{index} {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{DIR}/{name}.rs\")); }}\n"
+                "mod named_{index} {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{DIR}/{name}.rs\")); }}"
             )
             .unwrap();
             format!("Some(named_{index}::run)")

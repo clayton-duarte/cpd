@@ -107,7 +107,7 @@ fn read_records(folder: &Path, invalid: &dyn Fn(&Path, String) -> String) -> Res
         }
         for (index, line) in text.lines().enumerate() {
             let at = |message: String| invalid(&path, format!("line {}: {message}.", index + 1));
-            let record = Record::parse_line(line, &machine).map_err(&at)?;
+            let record = Record::parse_line(line, &machine).map_err(at)?;
             if records.iter().any(|r| r.id == record.id) {
                 return Err(at(format!("record {} appears twice", record.id)));
             }

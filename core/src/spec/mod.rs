@@ -69,6 +69,7 @@ fn explanation(cause: Stored, evidence: &Evidence) -> String {
         Stored::Failed(cause) => match cause {
             Cause::SetupFailed => "The worktree or its `pre-start` hook failed, so the Worker never started.".to_owned(),
             Cause::TimedOut => "The Worker ran out of time before it submitted.".to_owned(),
+            Cause::Aborted => "The Lead aborted the Attempt before its work was merged.".to_owned(),
             Cause::Crashed => "The Worker or its driver died before the work was merged.".to_owned(),
             Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.".to_owned(),
             Cause::MergeConflict if files.is_empty() => "Rebasing it onto the newer Lead Branch conflicted.".to_owned(),
@@ -111,6 +112,13 @@ pub struct Previous {
     pub tier: Tier,
     pub cause: Stored,
     pub evidence: Evidence,
+}
+
+/// An addendum of the Lead to the Job (§5.10).
+#[derive(Clone, Debug)]
+pub struct Addendum {
+    pub number: u32,
+    pub text: String,
 }
 
 /// An `answered` Escalation of an earlier Attempt.
@@ -188,6 +196,8 @@ pub struct Input<'a> {
     pub previous: &'a [Previous],
     /// Answered Escalations of earlier Attempts, oldest first.
     pub answers: &'a [Answer],
+    /// The Job's addenda, oldest first.
+    pub addenda: &'a [Addendum],
 }
 
 /// The commands of `pipeline` (the policy's `hooks.pre-commit`), verbatim and in file order; empty when it is not
@@ -252,6 +262,12 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         })
         .collect();
 
+    let addenda: Vec<Value> = input
+        .addenda
+        .iter()
+        .map(|a| Value::from_pairs([("number", Value::from(a.number)), ("text", Value::from(a.text.as_str()))]))
+        .collect();
+
     let (tests, test_files, test_jobs, approved): (&[String], &[String], String, &[String]) = match input.kind {
         JobKind::Test { tests, test_files } => (tests, test_files, String::new(), &[]),
         JobKind::Impl { test_jobs, tests, guarded, approved } => (tests, guarded, code_list(test_jobs), approved),
@@ -288,6 +304,7 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         ("approved_touches", Value::from(input.approved_touches.to_vec())),
         ("previous", Value::from(previous)),
         ("answers", Value::from(answers)),
+        ("addenda", Value::from(addenda)),
     ]);
     env.render_named_str("worker.md", TEMPLATE, vars).map_err(|e| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot render the Worker Spec: {e}."))

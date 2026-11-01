@@ -149,6 +149,10 @@ Where a Workflow is, stored as `waiting`, `dispatch`, `open`, `merged` or `cance
 A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
 _Avoid_: blocker; ask (as a noun)
 
+**Addendum** (entity):
+Information the Lead adds to a Job after its Spec is locked, stored beside the Spec, in no fingerprint, steered to a running Worker, and listed in the next Attempt's Spec; additive only (contract §3.4 "Addenda").
+_Avoid_: edit (an edit changes the Spec: `job edit --spec`)
+
 ## The CPD flow
 
 **Phase, stage and step** (entity, pro-d145, pro-d146):

@@ -25,6 +25,9 @@ pub struct Other {
     pub touches: Vec<String>,
 }
 
+/// The Jobs of one other PR that overlap this one, and which of its paths they overlap.
+type OverlapGroup = (Vec<OtherJob>, BTreeSet<usize>);
+
 /// A Job of another Plan's PR that overlaps a Job of this Plan.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OtherJob {
@@ -115,7 +118,7 @@ pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
             }
         }
         // By (other Plan, other PR): the Jobs there that overlap this one, and which of its paths they overlap.
-        let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
+        let mut groups: BTreeMap<(&str, &str), OverlapGroup> = BTreeMap::new();
         for other in others.iter().filter(|o| o.repo == pr.repo) {
             let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();
             if hit.is_empty() {

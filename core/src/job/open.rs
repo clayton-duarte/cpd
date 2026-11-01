@@ -227,6 +227,8 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
 
 /// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction. The
 /// `cause` is the `update` Job's (`None` for an `open` Job): it renders the Spec and spells the Event's `reason`.
+// Each argument is a column of the inserted row; a signature change is out of scope.
+#[allow(clippy::too_many_arguments)]
 fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, cause: Option<Cause>, draft: bool) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;

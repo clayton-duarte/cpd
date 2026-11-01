@@ -154,8 +154,8 @@ fn decide(
 ) -> Result<Start, CpdError> {
     // R3: an applied migration this binary knows, with another checksum.
     for (name, _, checksum) in applied {
-        if let Some(embedded) = known(name) {
-            if *checksum != embedded {
+        if let Some(embedded) = known(name)
+            && *checksum != embedded {
                 return Err(CpdError::new(
                     ErrorCode::MigrationChanged,
                     format!("The store applied migration {name} with other text than this cpd's: restore the migration's file from origin/main."),
@@ -164,7 +164,6 @@ fn decide(
                 .with("recorded", checksum.as_str())
                 .with("embedded", embedded));
             }
-        }
     }
     // R4: the floor is the breaking row with the highest `seq`. A binary that does not know it
     // lacks a breaking migration; one that does, lacks only additive ones (A1) and opens.
@@ -284,11 +283,10 @@ pub(super) fn subset_mismatch(
 fn reference_entries(catalog: &Catalog<'_>, home: &CpdHome) -> Result<Vec<Value>, CpdError> {
     static BUILT_IN: OnceLock<Vec<Value>> = OnceLock::new();
     let built_in = catalog.named.len() == schema::NAMED.len() && std::ptr::eq(catalog.named.as_ptr(), schema::NAMED.as_ptr());
-    if built_in {
-        if let Some(entries) = BUILT_IN.get() {
+    if built_in
+        && let Some(entries) = BUILT_IN.get() {
             return Ok(entries.clone());
         }
-    }
     let entries = schema::canonical_entries(&reference_database(catalog, home)?)?;
     if built_in {
         let _ = BUILT_IN.set(entries.clone());
