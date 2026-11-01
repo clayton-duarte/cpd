@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type PluginOption } from "vite";
-import { createLiveHandler, type LiveDeps, type LiveSession, type InboxItem } from "./src/api/live-server.ts";
+import { createLiveHandler, type LiveDeps, type LiveSession, type InboxItem, type LivePlan } from "./src/api/live-server.ts";
 
 // The web client dev/build config (docs/research/web-client-api.md §6, A2): React + the
 // Tailwind v4 plugin, and the dev server on port 5173 against the typed mock. With
@@ -38,6 +38,31 @@ interface SessionRow {
   title?: unknown;
   context?: unknown;
   file?: unknown;
+}
+
+/** One `plan list` row (only the fields realDeps reads). */
+interface PlanListRow {
+  id?: unknown;
+  context?: unknown;
+  title?: unknown;
+  phase?: unknown;
+  lead_session?: unknown;
+  archived_at?: unknown;
+  counts?: unknown;
+}
+
+/** The six Job counts `cpd plan list` prints, coerced to numbers with a missing one at zero. */
+function planCounts(value: unknown): LivePlan["counts"] {
+  const counts = (value ?? {}) as Record<string, unknown>;
+  const at = (key: string): number => (typeof counts[key] === "number" ? (counts[key] as number) : 0);
+  return {
+    draft: at("draft"),
+    queued: at("queued"),
+    running: at("running"),
+    merged: at("merged"),
+    failed: at("failed"),
+    cancelled: at("cancelled"),
+  };
 }
 
 /** Builds the real `LiveDeps`: it runs the cpd CLI and reads the pi session file it names. */
@@ -110,6 +135,24 @@ function realDeps(): LiveDeps {
     async inbox() {
       const parsed = JSON.parse(await runCpd(["inbox", "list"])) as { items?: readonly InboxItem[] };
       return parsed.items ?? [];
+    },
+    async plans() {
+      // The CLI's own rows; an archived Plan is never drawn (web/README.md "Context tree rows").
+      const parsed = JSON.parse(await runCpd(["plan", "list"])) as { plans?: readonly PlanListRow[] };
+      const plans: LivePlan[] = [];
+      for (const row of parsed.plans ?? []) {
+        if (row.archived_at !== null && row.archived_at !== undefined) continue;
+        plans.push({
+          id: String(row.id),
+          context: String(row.context ?? ""),
+          title: String(row.title ?? ""),
+          phase: String(row.phase ?? ""),
+          lead_session: typeof row.lead_session === "string" ? row.lead_session : null,
+          archived_at: null,
+          counts: planCounts(row.counts),
+        });
+      }
+      return plans;
     },
   };
 }

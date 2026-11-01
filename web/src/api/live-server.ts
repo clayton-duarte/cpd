@@ -309,6 +309,12 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
       sendJson(res, 200, { ok: true, items: (await deps.inbox?.()) ?? [] });
       return true;
     }
+    if (path === "/__cpd/plans" && method === "GET") {
+      // The read is optional: an adapter with no plans wiring answers an empty list, so the
+      // rail falls back to its Session tree (web/README.md "The fallback").
+      sendJson(res, 200, { ok: true, plans: (await deps.plans?.()) ?? [] });
+      return true;
+    }
 
     const match = SESSION_ROUTE.exec(path);
     if (match !== null) {
