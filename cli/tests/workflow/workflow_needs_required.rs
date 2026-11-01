@@ -19,9 +19,9 @@ fn assert_refused(f: &Added, key: &str, shape: &str) {
     let msg = e["message"].as_str().unwrap();
     assert!(msg.contains("--needs") && msg.contains("--no-needs"), "{msg}");
     // Nothing written.
-    let prs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM prs WHERE plan = 'pay' AND key = '{key}'"));
-    let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND pr = '{key}'"));
-    assert_eq!((prs, jobs), (0, 0), "{shape}");
+    let workflows: i64 = f.fx.env.query(&format!("SELECT count(*) FROM workflows WHERE plan = 'pay' AND key = '{key}'"));
+    let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND workflow = '{key}'"));
+    assert_eq!((workflows, jobs), (0, 0), "{shape}");
     assert!(f.pr_added().is_empty(), "{shape}");
 }
 
@@ -45,7 +45,7 @@ fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
     let f = added("dispatch");
     // Stacked on PR `repo`, which has not merged: a PR that starts at once is refused its stub drafts after the lock (`draft_parked`).
     let out = f.add("fix", &f.repo, &["--no-needs", "--base", "pay/repo"]).ok();
-    assert_eq!(out["pr"]["needs"], json!([]));
+    assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
 
@@ -54,7 +54,7 @@ fn pr_add_in_dispatch_with_needs_links_the_pr() {
     let f = added("dispatch");
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
     let out = f.add("fix", &other, &["--needs", "repo"]).ok();
-    assert_eq!(out["pr"]["needs"], json!(["repo"]));
+    assert_eq!(out["workflow"]["needs"], json!(["repo"]));
     assert_eq!(f.needs_of("fix"), ["repo"]);
 }
 
@@ -71,7 +71,7 @@ fn pr_add_in_plan_phase_needs_no_flag() {
            VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
     );
     let run = fx.cpd(&["workflow", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
-    assert_eq!(run.json()["pr"]["needs"], json!([]));
+    assert_eq!(run.json()["workflow"]["needs"], json!([]));
 }
 
 #[test]
@@ -86,9 +86,9 @@ fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
 fn assert_stacked_add_needs_no_flag(base: &str) {
     let f = added("dispatch");
     let out = f.add("fix", &f.repo, &["--base", base]).ok();
-    assert_eq!(out["pr"]["needs"], json!([]), "{out}");
-    assert_eq!(out["pr"]["base_pr"], "pay/repo", "{out}");
-    assert_eq!(out["pr"]["status"], "waiting", "{out}");
+    assert_eq!(out["workflow"]["needs"], json!([]), "{out}");
+    assert_eq!(out["workflow"]["base_pr"], "pay/repo", "{out}");
+    assert_eq!(out["workflow"]["status"], "waiting", "{out}");
     assert!(f.needs_of("fix").is_empty());
 }
 

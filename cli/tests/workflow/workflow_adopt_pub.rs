@@ -93,7 +93,7 @@ fn fx(status: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't');
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, head_ref, created_txn, created_at, started_at{columns})
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, head_ref, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', '{lead}', 'A local label', 'config', 'feat/x', cpd_txn(), 't', 't'{values});",
         repo = fx.repo.display(),
         lead = fx.lead.display(),
@@ -104,7 +104,7 @@ fn fx(status: &str) -> Fx {
         fx.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, merged_sha, created_txn, created_at)
                      VALUES ('pay', 'web', 'api', 'The API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                     params!["f".repeat(64), merged, tx.id()],
@@ -167,7 +167,7 @@ impl Fx {
     /// `(status, pr_number, pr_url)` of PR `web`.
     fn row(&self) -> (String, Option<i64>, Option<String>) {
         self.store()
-            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_url FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_url FROM workflows WHERE plan = 'pay' AND key = 'web'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
             .unwrap()
     }
 
@@ -200,7 +200,7 @@ fn submitted_open_job(fx: &Fx) -> AttemptId {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, fingerprint, created_txn, created_at)
                  VALUES ('pay', 'web', 'open-web', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, 'open', ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
@@ -240,7 +240,7 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["pr_adopt_pub::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args(["workflow_adopt_pub::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();
@@ -309,7 +309,7 @@ fn cancel_fx() -> TestEnv {
         format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/{repo}', {number}, 'https://github.com/acme/{repo}/pull/{number}', 'T', 0, 'open', 'none', 'none', 't', NULL, 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, head_ref, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, head_ref, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request)
                VALUES ('pay', '{key}', '/repos/{repo}', 'main', 'open', '{branch}', '/wt/{key}', 'T', 'config', {head_ref}, cpd_txn(), 't', 't',
                        {number}, 'https://github.com/acme/{repo}/pull/{number}', 't', (SELECT id FROM pull_requests WHERE repo = 'acme/{repo}'));"

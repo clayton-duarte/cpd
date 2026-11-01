@@ -1,6 +1,6 @@
 //! hs-d522: needs and base PRs stay inside one Plan. `pr add` and `pr edit` refuse a need or a base PR that names
 //! another Plan, `workflow_other_plan` (exit 3, `details` `{pr, reference, plan}`; contract §2.2 "Validation of a
-//! reference", commands.md §9.4, §9.5), and `pr_needs` has no `needs_plan` column. Two Plans of one Context.
+//! reference", commands.md §9.4, §9.5), and `workflow_needs` has no `needs_plan` column. Two Plans of one Context.
 
 use crate::common;
 
@@ -75,7 +75,7 @@ fn pr_add_refuses_a_need_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
     fx.refused(&fx.add("pay-1", "web", &["--needs", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"), 0);
+    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM workflows WHERE key = 'web'"), 0);
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn pr_add_refuses_a_base_pr_of_another_plan() {
     let fx = fx();
     let writes = fx.writes();
     fx.refused(&fx.add("pay-1", "web", &["--base", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM prs WHERE key = 'web'"), 0);
+    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM workflows WHERE key = 'web'"), 0);
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn pr_edit_refuses_a_need_of_another_plan() {
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
     fx.refused(&fx.edit("pay-1", &["web", "--needs", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM pr_needs WHERE pr = 'web'"), 0);
+    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM workflow_needs WHERE workflow = 'web'"), 0);
 }
 
 #[test]
@@ -101,19 +101,19 @@ fn pr_edit_refuses_a_base_pr_of_another_plan() {
     fx.add("pay-1", "web", &[]).ok();
     let writes = fx.writes();
     fx.refused(&fx.edit("pay-1", &["web", "--base", "ops-1/deploy"]), "web", "ops-1/deploy", writes);
-    assert_eq!(fx.fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "main");
+    assert_eq!(fx.fx.env.query::<String>("SELECT base FROM workflows WHERE plan = 'pay-1' AND key = 'web'"), "main");
 }
 
-/// What stays: a need and a base PR of the Plan itself, by bare key (a base as the Plan's own `<plan>/<key>` long form, which may stay). And `pr_needs` is keyed by the Plan alone
+/// What stays: a need and a base PR of the Plan itself, by bare key (a base as the Plan's own `<plan>/<key>` long form, which may stay). And `workflow_needs` is keyed by the Plan alone
 /// (no `needs_plan`, migration `local-needs`).
 #[test]
 fn needs_and_base_pr_of_the_same_plan_still_work() {
     let fx = fx();
     fx.add("pay-1", "web", &["--needs", "api"]).ok();
     let out = fx.add("pay-1", "ui", &["--base", "pay-1/api"]).ok();
-    assert_eq!(out["pr"]["base"], "pay-1/api", "{out}");
+    assert_eq!(out["workflow"]["base"], "pay-1/api", "{out}");
     fx.edit("pay-1", &["web", "--needs", "api"]).ok();
-    assert_eq!(fx.fx.env.query::<String>("SELECT group_concat(needs) FROM pr_needs WHERE pr = 'web'"), "api");
-    let columns: Value = fx.fx.env.query::<String>("SELECT json_group_array(name) FROM pragma_table_info('pr_needs')").parse().unwrap();
-    assert!(!columns.as_array().unwrap().iter().any(|c| c == "needs_plan"), "pr_needs still has needs_plan: {columns}");
+    assert_eq!(fx.fx.env.query::<String>("SELECT group_concat(needs) FROM workflow_needs WHERE workflow = 'web'"), "api");
+    let columns: Value = fx.fx.env.query::<String>("SELECT json_group_array(name) FROM pragma_table_info('workflow_needs')").parse().unwrap();
+    assert!(!columns.as_array().unwrap().iter().any(|c| c == "needs_plan"), "workflow_needs still has needs_plan: {columns}");
 }

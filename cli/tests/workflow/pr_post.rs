@@ -67,7 +67,7 @@ fn post_with_node(setup: Setup, node: Reply) -> Pay {
     env.repo_policy("acme", "pay", "");
     let sql = format!(
         "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
-         UPDATE prs SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
+         UPDATE workflows SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
          UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]'
            WHERE number = 812;"
     );
@@ -90,10 +90,10 @@ impl Pay {
         self.store()
             .read(|c| {
                 let mut statement = c.prepare(
-                    "SELECT plan, pr, channel, ts, link, posted_at, reaction, reacted_at FROM pr_posts ORDER BY plan, pr",
+                    "SELECT plan, workflow, channel, ts, link, posted_at, reaction, reacted_at FROM pr_posts ORDER BY plan, workflow",
                 )?;
                 let rows = statement.query_map([], |r| {
-                    Ok(json!({"plan": r.get::<_, String>(0)?, "pr": r.get::<_, String>(1)?, "channel": r.get::<_, String>(2)?,
+                    Ok(json!({"plan": r.get::<_, String>(0)?, "workflow": r.get::<_, String>(1)?, "channel": r.get::<_, String>(2)?,
                               "ts": r.get::<_, String>(3)?, "link": r.get::<_, String>(4)?, "posted_at": r.get::<_, String>(5)?,
                               "reaction": r.get::<_, Option<String>>(6)?, "reacted_at": r.get::<_, Option<String>>(7)?}))
                 })?;
@@ -138,7 +138,7 @@ fn posts_the_rendered_message_and_records_it() {
     assert_eq!(posts.len(), 1, "{posts:?}");
     let row = &posts[0];
     assert_eq!(
-        (&row["plan"], &row["pr"], &row["channel"], &row["ts"], &row["link"], &row["reaction"], &row["reacted_at"]),
+        (&row["plan"], &row["workflow"], &row["channel"], &row["ts"], &row["link"], &row["reaction"], &row["reacted_at"]),
         (
             &json!("pay"),
             &json!("repo"),
@@ -221,12 +221,12 @@ fn refuses_when_no_channel_is_configured() {
 #[test]
 fn a_second_post_of_the_same_pr_is_refused() {
     let pay = post(Setup::baseline());
-    let row = json!({"plan": "pay", "pr": "repo", "channel": "C0FIRST001", "ts": "1.2", "link": "https://acme.slack.com/archives/C0FIRST001/p12",
+    let row = json!({"plan": "pay", "workflow": "repo", "channel": "C0FIRST001", "ts": "1.2", "link": "https://acme.slack.com/archives/C0FIRST001/p12",
                      "posted_at": "earlier", "reaction": null, "reacted_at": null});
     pay.store()
         .write("fixture", |tx| {
             tx.execute_batch(
-                "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
                  VALUES ('pay', 'repo', 'C0FIRST001', '1.2', 'https://acme.slack.com/archives/C0FIRST001/p12', 'earlier', NULL, NULL);",
             )
             .map_err(Into::into)

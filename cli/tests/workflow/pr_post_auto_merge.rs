@@ -31,7 +31,7 @@ fn post_with_node(node: Reply) -> Pay {
     sql(
         &pay,
         "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
-         UPDATE prs SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
+         UPDATE workflows SET name = 'pay' WHERE plan = 'pay' AND key = 'repo';
          UPDATE pull_requests SET mergeable = 'mergeable', review_decision = 'none', checks = 'passed', authored = 1, feedback = '[]'
            WHERE number = 812;",
     );
@@ -51,7 +51,7 @@ fn sql(pay: &Pay, sql: &str) {
 fn row(pay: &Pay) -> Option<(String, Option<String>)> {
     pay.store()
         .read(|c| {
-            let mut statement = c.prepare("SELECT auto_merge, auto_merge_at FROM pr_posts WHERE plan = 'pay' AND pr = 'repo'")?;
+            let mut statement = c.prepare("SELECT auto_merge, auto_merge_at FROM pr_posts WHERE plan = 'pay' AND workflow = 'repo'")?;
             let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?.into_iter().next())
         })
@@ -126,9 +126,9 @@ fn a_repo_that_does_not_allow_auto_merge_still_posts_and_says_not_allowed() {
 fn stack(pay: &Pay) {
     sql(
         pay,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'base', '/nowhere', 'main', 'dispatch', 'cpd/pay/base', '/nowhere-base', cpd_txn(), 't', 't');
-         UPDATE prs SET base = 'cpd/pay/base' WHERE plan = 'pay' AND key = 'repo';",
+         UPDATE workflows SET base = 'cpd/pay/base' WHERE plan = 'pay' AND key = 'repo';",
     );
 }
 

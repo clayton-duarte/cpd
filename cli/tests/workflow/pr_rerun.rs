@@ -107,7 +107,7 @@ fn a_pr_that_is_not_open_is_refused_pr_not_open_and_calls_gh_not_at_all() {
     for status in ["waiting", "dispatch", "merged"] {
         let pay = if status == "merged" {
             let pay = fx("open");
-            pay.store().write("fixture", |tx| tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'repo';").map_err(Into::into)).unwrap();
+            pay.store().write("fixture", |tx| tx.execute_batch("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = 'repo';").map_err(Into::into)).unwrap();
             pay
         } else {
             fx(status)

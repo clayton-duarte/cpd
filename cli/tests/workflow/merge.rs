@@ -105,7 +105,7 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                    "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
                        VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Charge the card', 'A description', cpd_txn(), 't', 't');",
                     repo = fx.repo.display(),
                     lead = fx.lead.display()
@@ -268,14 +268,14 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, created_txn, created_at)
                      VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
                     params![key, "f".repeat(64), tx.id(), pr.key, i64::from(kind != "work"), kind],
                 )?;
                 if let Some(files) = guarded {
                     tx.execute(
-                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                            fingerprint, created_txn, created_at, kind, tests, test_files, merged_sha)
                          VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
                                  ?2, 't', 'test', '[\"t::one\"]', ?3, 'c0ffee')",
@@ -315,7 +315,7 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                    "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
                      VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, 'A title', 'A description', ?5, 't', 't')",
                     params![key, repo.to_str().unwrap(), branch, path.to_str().unwrap(), tx.id()],
                 )?;
@@ -339,7 +339,7 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
+                    "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, created_txn, created_at, started_at)
                      VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, 'A title', 'A description', ?6, 't', 't')",
                     params![key, repo.to_str().unwrap(), base_pr.branch, branch, path.to_str().unwrap(), tx.id()],
                 )?;
@@ -371,7 +371,7 @@ impl Fx {
             .read(|c| {
                 let mut stmt = c.prepare(
                     "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-                       JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+                       JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
                       WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
                 )?;
                 let rows = stmt.query_map([repo.to_str().unwrap()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;

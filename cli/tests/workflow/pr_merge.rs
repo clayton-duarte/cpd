@@ -370,7 +370,7 @@ fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay-1', 'ctx', 'Pay', 'deploy', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+         INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
                    7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
@@ -378,7 +378,7 @@ fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
     gh_read_back(&fx, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), Reply::exit(1, "", ""));
     fx.cpd(&["pr", "merge", REF]).ok();
     assert_ne!(fx.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
-    assert_eq!(env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged");
+    assert_eq!(env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
     let events = fx.cpd(&["events", "list", "--kind", "pr-merged", "--plan", "pay-1"]).ok();
     assert_eq!(events["events"].as_array().unwrap().len(), 1, "{events}");
 }

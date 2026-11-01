@@ -139,7 +139,7 @@ impl Fx {
         self.env.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                VALUES ('acme/pay', 7, '{URL}', 'T', 0, 'open', 'none', 'none', 't', 't');
-             UPDATE prs SET status = 'open', pr_number = 7, pr_url = '{URL}', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 7, pr_url = '{URL}', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pay') WHERE plan = 'pay' AND key = 'web';"
         ));
     }
@@ -157,7 +157,7 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, kind, created_txn, created_at)
                      VALUES ('pay', 'web', 'm', 'M', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, ?3, 't')",
                     params!["f".repeat(64), kind, tx.id()],
@@ -211,7 +211,7 @@ fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
     let out = fx
         .env
         .command(exe)
-        .args(["pr_adopt_life::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .args(["workflow_adopt_life::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
         .env(CHILD_ATTEMPT, attempt.to_string())
         .output()
         .unwrap();

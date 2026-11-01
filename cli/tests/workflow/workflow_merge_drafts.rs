@@ -32,14 +32,14 @@ fn world(fx: &Fx, with_draft: bool) {
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay-1', 'ctx', 'Pay', 'deploy', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+         INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
                    7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
     );
     if with_draft {
         env.sql(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay-1', 'api', 'late', 'Late work', 'S2', 'Goal.', 'Context.', '[\"src/late.rs\"]', '[\"cargo test\"]', '[]', 'draft', 1, cpd_txn(), 't');",
         );
     }
@@ -55,7 +55,7 @@ fn status(fx: &Fx, key: &str) -> String {
 
 /// The PR is merged, its draft is cancelled with the reason `pr merged` and one `job-cancelled` Event, and `pr-merged` is written.
 fn assert_draft_cancelled_with_the_merge(fx: &Fx) {
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
     assert_eq!(events(fx, "pr-merged").len(), 1);
     assert_eq!(status(fx, "late"), "cancelled");
     assert_eq!(fx.env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'late'"), "pr merged");
@@ -116,7 +116,7 @@ fn poll_merge_without_drafts_cancels_nothing() {
     world(&fx, false);
     fx.fake_gh(search_merged());
     fx.cpd(&["pr", "poll"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged");
     assert_eq!(events(&fx, "pr-merged").len(), 1);
     assert!(events(&fx, "job-cancelled").is_empty());
 }

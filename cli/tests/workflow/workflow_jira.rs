@@ -1,5 +1,5 @@
 //! A PR's Jira ticket (commands.md §9.4 `pr add --jira`, §9.5 `pr edit <key> --jira`, §9.8 `plan show` and `pr view`): stored in
-//! `prs.jira`, never filled from the Plan's own key, settable in any phase until the PR ends.
+//! `workflows.jira`, never filled from the Plan's own key, settable in any phase until the PR ends.
 
 use serde_json::json;
 
@@ -9,12 +9,12 @@ use super::pr_view;
 
 /// The stored `jira` of PR `key` of Plan `plan`.
 fn stored(mut store: cpd_core::store::Store, plan: &str, key: &str) -> Option<String> {
-    store.read(|c| Ok(c.query_row("SELECT jira FROM prs WHERE plan = ?1 AND key = ?2", [plan, key], |r| r.get(0))?)).unwrap()
+    store.read(|c| Ok(c.query_row("SELECT jira FROM workflows WHERE plan = ?1 AND key = ?2", [plan, key], |r| r.get(0))?)).unwrap()
 }
 
-/// How many `prs` rows there are.
+/// How many `workflows` rows there are.
 fn pr_rows(mut store: cpd_core::store::Store) -> i64 {
-    store.read(|c| Ok(c.query_row("SELECT count(*) FROM prs", [], |r| r.get(0))?)).unwrap()
+    store.read(|c| Ok(c.query_row("SELECT count(*) FROM workflows", [], |r| r.get(0))?)).unwrap()
 }
 
 #[test]
@@ -23,15 +23,15 @@ fn pr_add_with_jira_stores_the_key_and_a_pr_without_it_has_none() {
     let repo = fx.pay.to_str().unwrap().to_owned();
 
     let out = fx.pr(&["add", "k", "--repo", &repo, "--title", "T", "--jira", "ABC-12"]).ok();
-    assert_eq!(out["pr"]["jira"], "ABC-12");
+    assert_eq!(out["workflow"]["jira"], "ABC-12");
     let out = fx.pr(&["add", "j", "--repo", &repo, "--title", "U"]).ok();
-    assert_eq!(out["pr"]["jira"], json!(null));
+    assert_eq!(out["workflow"]["jira"], json!(null));
 
     let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
-    let jira = |key: &str| shown["prs"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap()["jira"].clone();
+    let jira = |key: &str| shown["workflows"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap()["jira"].clone();
     assert_eq!((jira("k"), jira("j")), (json!("ABC-12"), json!(null)));
-    assert_eq!(fx.env.query::<String>("SELECT jira FROM prs WHERE key = 'k'"), "ABC-12");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs WHERE key = 'j' AND jira IS NULL"), 1);
+    assert_eq!(fx.env.query::<String>("SELECT jira FROM workflows WHERE key = 'k'"), "ABC-12");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows WHERE key = 'j' AND jira IS NULL"), 1);
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn pr_add_refuses_a_malformed_jira_key() {
     for bad in ["abc-1", "A-1", "ABC", "ABC-", "ABC-x"] {
         let run = fx.pr(&["add", "k", "--repo", &repo, "--title", "T", "--jira", bad]);
         assert_eq!(code(&run), ("usage".into(), 2), "{bad}");
-        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 1, "{bad}: no PR row");
+        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 1, "{bad}: no PR row");
     }
 }
 
@@ -113,7 +113,7 @@ fn pr_edit_with_no_flag_names_jira_among_the_flags() {
 #[test]
 fn plan_show_and_pr_view_print_the_prs_jira_key() {
     let fx = pr_view::fx("open");
-    let show = || fx.fx.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["jira"].clone();
+    let show = || fx.fx.cpd(&["plan", "show", "--plan", "pay"]).ok()["workflows"][0]["jira"].clone();
     let view = || fx.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok()["pr"]["jira"].clone();
     assert_eq!((show(), view()), (json!(null), json!(null)));
 
@@ -131,7 +131,7 @@ fn a_plans_jira_key_is_never_its_prs_ticket() {
 
     assert_eq!(shown["plan"]["jira"], "PLAN-1");
     assert!(pr_rows(fx.store()) > 0);
-    for pr in shown["prs"].as_array().unwrap() {
+    for pr in shown["workflows"].as_array().unwrap() {
         assert!(pr.get("jira").is_some_and(|j| j.is_null()), "{pr}");
     }
     assert_eq!(stored(fx.store(), "pay", "repo"), None);

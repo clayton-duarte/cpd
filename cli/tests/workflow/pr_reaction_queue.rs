@@ -60,7 +60,7 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay-1', 'ctx', 'Pay', 'deploy', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+         INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request)
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
                    7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
@@ -68,7 +68,7 @@ pub(super) fn fixture(post: Option<Option<&str>>) -> Fx {
     if let Some(reaction) = post {
         let reaction = reaction.map_or("NULL".to_owned(), |r| format!("'{r}'"));
         env.sql(&format!(
-            "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+            "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
              VALUES ('pay-1', 'api', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 't', {reaction}, NULL);"
         ));
     }
@@ -83,7 +83,7 @@ fn queued(env: &TestEnv) -> i64 {
 
 pub(super) fn merge(fx: &Fx) {
     fx.cpd(&["pr", "merge", REF]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged", "the PR's merge is recorded");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM workflows WHERE key = 'api'"), "merged", "the PR's merge is recorded");
 }
 
 #[test]
@@ -128,8 +128,8 @@ fn a_merge_queues_its_reaction_linked_to_the_pr() {
     let fx = fixture(Some(Some("git-merged")));
     merge(&fx);
     let env = &fx.env;
-    let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'pr', pr) FROM slack_reactions")).unwrap();
-    assert_eq!(row, json!({"emoji": "git-merged", "plan": "pay-1", "pr": "api"}), "the row names the PR whose merge it is");
+    let row: serde_json::Value = serde_json::from_str(&env.query::<String>("SELECT json_object('emoji', emoji, 'plan', plan, 'workflow', workflow) FROM slack_reactions")).unwrap();
+    assert_eq!(row, json!({"emoji": "git-merged", "plan": "pay-1", "workflow": "api"}), "the row names the PR whose merge it is");
     assert_eq!(queued(env), 1);
     drop(fx);
 
@@ -144,7 +144,7 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
     let pay = super::pr_view::fx("open");
     let env = &pay.fx.env;
     env.sql(&format!(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction)
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction)
          VALUES ('pay', 'repo', '{CHANNEL}', '{TS}', 'https://acme.slack.com/archives/{CHANNEL}/p1793040197490209', 'opened', 'git-merge');"
     ));
     let view = || pay.fx.cpd(&["pr", "view", "--workflow", "repo", "--plan", "pay"]).ok();
@@ -154,7 +154,7 @@ fn pr_view_reads_the_reaction_from_the_row_of_the_pr_and_shows_its_refusal() {
     assert!(out["post"]["refusal"].is_null(), "{out}");
 
     env.sql(&format!(
-        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at, plan, pr) VALUES ('{CHANNEL}', '{TS}', 'git-merged', 'q', 'fresh', 'pay', 'repo');"
+        "INSERT INTO slack_reactions (channel, ts, emoji, queued_at, reacted_at, plan, workflow) VALUES ('{CHANNEL}', '{TS}', 'git-merged', 'q', 'fresh', 'pay', 'repo');"
     ));
     let out = view();
     assert_eq!(out["post"]["reaction"], "git-merged", "the emoji of the row, not of the post: {out}");

@@ -37,7 +37,7 @@ fn branch(fx: &Crud, repo: &std::path::Path, name: &str) {
 }
 
 fn base_of(fx: &Crud, key: &str) -> String {
-    fx.env.query::<String>(&format!("SELECT base FROM prs WHERE key = '{key}'"))
+    fx.env.query::<String>(&format!("SELECT base FROM workflows WHERE key = '{key}'"))
 }
 
 /// The stored row of Job `job`: `(goal, status, fingerprint)`; the tests compare the `goal`, since `render` moves the status
@@ -60,7 +60,7 @@ fn render(fx: &Crud, job: &str) -> String {
     };
     let worktree = fx.env.root().join(format!("worktrees/{job}-a1"));
     fx.env.sql(&format!(
-        "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/lead', started_at = 't' WHERE key = (SELECT pr FROM jobs WHERE key = '{job}') AND status = 'waiting';
+        "UPDATE workflows SET status = 'dispatch', lead_worktree = '/x/lead', started_at = 't' WHERE key = (SELECT workflow FROM jobs WHERE key = '{job}') AND status = 'waiting';
          UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key = '{job}';
          UPDATE jobs SET status = 'running' WHERE key = '{job}';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
@@ -144,12 +144,12 @@ fn an_open_jobs_worker_spec_names_the_base_an_unstack_set_when_its_base_pr_merge
     assert!(before.0.contains("pay-1/a"), "{before:?}");
     fx.env.sql(
         "UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z';
-         UPDATE prs SET status = 'dispatch', lead_worktree = '/x/a', started_at = 't' WHERE key = 'a';
+         UPDATE workflows SET status = 'dispatch', lead_worktree = '/x/a', started_at = 't' WHERE key = 'a';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 1, 'https://github.com/acme/pay/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
+         UPDATE workflows SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
                 pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE key = 'a';
-         UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'a';
+         UPDATE workflows SET status = 'merged', merged_at = 't' WHERE key = 'a';
          UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE number = 1;",
     );
 
@@ -171,7 +171,7 @@ fn an_open_jobs_worker_spec_names_the_repo_a_pr_edit_set() {
     assert!(before.0.contains(&format!("in the repo {pay}")) || !before.0.contains(&web), "{before:?}");
 
     fx.cpd(&["workflow", "edit", "b", "--repo", &web, "--plan", "pay-1"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT repo FROM prs WHERE key = 'b'"), web);
+    assert_eq!(fx.env.query::<String>("SELECT repo FROM workflows WHERE key = 'b'"), web);
 
     let spec = render(&fx, "open-b");
     assert!(spec.contains(&format!("in the repo {web}")), "the Spec lacks the live repo:\n{spec}");
@@ -187,8 +187,8 @@ fn an_update_jobs_worker_spec_names_the_base_a_pr_edit_set() {
     // The update Job is queued from the PR row BEFORE the edit: its stored text names `develop`.
     let mut s = store(&fx);
     let key = {
-        let prs = s.read(|c| cpd_core::plan::fingerprint::load_workflows(c, &plan())).unwrap();
-        let pr = prs.iter().find(|p| p.key.as_str() == "b").unwrap().clone();
+        let workflows = s.read(|c| cpd_core::plan::fingerprint::load_workflows(c, &plan())).unwrap();
+        let pr = workflows.iter().find(|p| p.key.as_str() == "b").unwrap().clone();
         s.write("test", |tx| queue_update(tx, &plan(), &pr, Tier::parse("H3")?, "test", Cause::Conflict)).unwrap().expect("an update Job")
     };
     let job = key.as_str().to_owned();

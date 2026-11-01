@@ -77,7 +77,7 @@ fn fx(status: &str) -> Fx {
         format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                VALUES ('acme/pay', 7, '{URL}', 'T', 0, 'open', 'none', 'none', 't', 't');
-             UPDATE prs SET status = 'open', pr_number = 7, pr_url = '{URL}', pr_opened_at = 't',
+             UPDATE workflows SET status = 'open', pr_number = 7, pr_url = '{URL}', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/pay') WHERE plan = 'pay' AND key = 'web';"
         )
     } else {
@@ -85,7 +85,7 @@ fn fx(status: &str) -> Fx {
     };
     env.sql(&format!(
         "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
-         UPDATE prs SET status = 'dispatch', lead_worktree = '{}', started_at = 't' WHERE plan = 'pay' AND key = 'web';
+         UPDATE workflows SET status = 'dispatch', lead_worktree = '{}', started_at = 't' WHERE plan = 'pay' AND key = 'web';
          {opened}",
         lead.display()
     ));
@@ -228,7 +228,7 @@ fn a_dispatch_pr_rebases_only_when_its_jobs_are_done() {
     let tip = fx.commit("a.txt", "a\n");
     let moved = fx.push_by_someone("feat/x", "remote.txt", "remote\n");
     fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
            VALUES ('pay', 'web', 'w', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 'work', cpd_txn(), 't');",
     );
 

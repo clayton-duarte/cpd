@@ -84,7 +84,7 @@ fn fx(status: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't', {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', cpd_txn(), 't', 't'{values});",
         repo = repo.display(),
         lead = lead.display(),
@@ -156,7 +156,7 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                      VALUES ('pay', 'repo', 'm', 'M', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                     params!["f".repeat(64), tx.id()],
@@ -496,7 +496,7 @@ fn push_of_a_pr_merged_during_its_gate_pushes_nothing() {
     let (out, ()) = fx.push_paused(&gate, || {
         fx.store()
             .write("pr poll", |tx| {
-                tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+                tx.execute_batch("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
                 Ok(())
             })
             .unwrap();

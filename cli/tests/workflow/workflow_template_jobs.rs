@@ -18,8 +18,8 @@ fn spec() -> Value {
 fn jobs_object(shape: &str) -> Value {
     let plain = json!({"tier": "S2", "spec": spec()});
     let mut test = spec();
-    test["tests"] = json!(["pr_x::it_works"]);
-    test["test_files"] = json!(["cli/tests/pr/pr_x.rs"]);
+    test["tests"] = json!(["workflow_x::it_works"]);
+    test["test_files"] = json!(["cli/tests/workflow/workflow_x.rs"]);
     match shape {
         "tdd" => json!({"docs": plain, "tests": {"tier": "S2", "spec": test}, "impl": plain}),
         "docs" => json!({"docs": plain}),
@@ -46,21 +46,21 @@ impl Crud {
     /// An unmerged PR `base` of the Plan, as the lock leaves one: what a PR that `--needs base` waits for.
     fn base_pr(&self) {
         self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
                VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'free', 'cpd/pay-1/base', '/w/base', 't', cpd_txn(), 't');",
             self.pay.display()
         ));
     }
 
-    /// The counts of `txns`, `events`, `prs` and `jobs`: unchanged by a refusal.
+    /// The counts of `txns`, `events`, `workflows` and `jobs`: unchanged by a refusal.
     fn rows(&self) -> (i64, i64, i64, i64) {
         let n = |table: &str| self.env.query::<i64>(&format!("SELECT count(*) FROM {table}"));
-        (n("txns"), n("events"), n("prs"), n("jobs"))
+        (n("txns"), n("events"), n("workflows"), n("jobs"))
     }
 
     /// `[key, kind, title, status, appended, has tier, has fingerprint, needs]` of every Job of PR `k`, in creation order.
     fn rows_of_k(&self) -> Value {
-        let keys: String = self.env.query("SELECT group_concat(key, ',') FROM (SELECT key FROM jobs WHERE pr = 'k' ORDER BY rowid)");
+        let keys: String = self.env.query("SELECT group_concat(key, ',') FROM (SELECT key FROM jobs WHERE workflow = 'k' ORDER BY rowid)");
         let rows: Vec<Value> = keys
             .split(',')
             .map(|key| {
@@ -108,7 +108,7 @@ fn refusal_writes_nothing() {
         assert_eq!(fx.rows(), before, "{phase}");
         // Not even the reopening of the Plan.
         assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay-1'"), plan, "{phase}");
-        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE pr = 'k'"), 0, "{phase}");
+        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE workflow = 'k'"), 0, "{phase}");
     }
 }
 
@@ -117,7 +117,7 @@ fn jobs_queue_the_template_after_lock() {
     let fx = crud("dispatch");
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
     let out = fx.add_k("tdd", &["--no-needs", "--jobs", &file]).ok();
-    assert_eq!(out["pr"]["jobs"], json!(["k-docs", "k-tests", "k-impl", "open-k"]));
+    assert_eq!(out["workflow"]["jobs"], json!(["k-docs", "k-tests", "k-impl", "open-k"]));
     assert_eq!(
         fx.rows_of_k(),
         json!([
@@ -127,8 +127,8 @@ fn jobs_queue_the_template_after_lock() {
             ["open-k", "open", "Open the pull request: Add retries", "draft", 1, true, false, ""],
         ])
     );
-    assert_eq!(fx.env.query::<String>("SELECT tests FROM jobs WHERE key = 'k-tests'"), "[\"pr_x::it_works\"]");
-    assert_eq!(fx.env.query::<String>("SELECT test_files FROM jobs WHERE key = 'k-tests'"), "[\"cli/tests/pr/pr_x.rs\"]");
+    assert_eq!(fx.env.query::<String>("SELECT tests FROM jobs WHERE key = 'k-tests'"), "[\"workflow_x::it_works\"]");
+    assert_eq!(fx.env.query::<String>("SELECT test_files FROM jobs WHERE key = 'k-tests'"), "[\"cli/tests/workflow/workflow_x.rs\"]");
     assert_eq!(fx.env.query::<String>("SELECT goal FROM jobs WHERE key = 'k-impl'"), "Do it.");
     // One `job-added` Event per Job, the three queued, the opener a draft.
     let added = fx.cpd(&["events", "list", "--kind", "job-added"]).ok();
@@ -211,7 +211,7 @@ fn jobs_on_a_pr_that_waits_for_another_pr_queue_the_jobs_too() {
     fx.base_pr();
     let file = fx.jobs_file("jobs.json", &jobs_object("tdd"));
     fx.add_k("tdd", &["--needs", "base", "--jobs", &file]).ok();
-    let statuses: String = fx.env.query("SELECT group_concat(key || '=' || status) FROM (SELECT key, status FROM jobs WHERE pr = 'k' ORDER BY rowid)");
+    let statuses: String = fx.env.query("SELECT group_concat(key || '=' || status) FROM (SELECT key, status FROM jobs WHERE workflow = 'k' ORDER BY rowid)");
     assert_eq!(statuses, "k-docs=queued,k-tests=queued,k-impl=queued,open-k=draft");
 }
 

@@ -1,4 +1,4 @@
-//! `pr add --adopt` and the `prs.head_ref` schema (commands.md §9.4, contract §2.3): the built binary against a
+//! `pr add --adopt` and the `workflows.head_ref` schema (commands.md §9.4, contract §2.3): the built binary against a
 //! temporary `$CPD_HOME`, a keyed repo and the fake `gh` answering `gh pr view` and `gh api user`.
 
 use crate::common;
@@ -94,7 +94,7 @@ impl Fx {
         (
             self.env.query("SELECT count(*) FROM txns"),
             self.env.query("SELECT count(*) FROM events"),
-            self.env.query("SELECT count(*) FROM prs"),
+            self.env.query("SELECT count(*) FROM workflows"),
         )
     }
 
@@ -111,11 +111,11 @@ impl Fx {
 fn adopts_a_pull_request_of_the_user_without_asking() {
     let fx = fx();
     let out = fx.adopt("web", &[]).ok();
-    assert_eq!(out["pr"]["head_ref"], "feat/x");
-    assert_eq!(out["pr"]["base"], "release");
-    assert_eq!(out["pr"]["status"], "waiting");
-    assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"), "feat/x");
+    assert_eq!(out["workflow"]["head_ref"], "feat/x");
+    assert_eq!(out["workflow"]["base"], "release");
+    assert_eq!(out["workflow"]["status"], "waiting");
+    assert_eq!(out["workflow"]["lead_branch"], "pay-1/web");
+    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"), "feat/x");
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn refuses_a_pull_request_of_another_author_until_the_author_is_confirmed() {
     assert_eq!(error["details"]["user"], "bob");
     assert_eq!(error["details"]["confirm"], "--confirm-author alice");
     assert_eq!(fx.writes(), before);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 0);
 }
 
 #[test]
@@ -137,8 +137,8 @@ fn adopts_a_pull_request_of_another_author_once_confirmed() {
     fx.view(json!({"author": {"login": "alice"}}));
     fx.refuse(&fx.adopt("web", &["--confirm-author", "bob"]), "adopt_foreign");
     let out = fx.adopt("web", &["--confirm-author", "Alice"]).ok();
-    assert_eq!(out["pr"]["head_ref"], "feat/x");
-    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM prs WHERE key = 'web'"), "feat/x");
+    assert_eq!(out["workflow"]["head_ref"], "feat/x");
+    assert_eq!(fx.env.query::<String>("SELECT head_ref FROM workflows WHERE key = 'web'"), "feat/x");
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn the_same_adopt_twice_is_already() {
     let before = fx.writes();
     let again = fx.adopt("web", &[]).ok();
     assert_eq!(again["already"], true);
-    assert_eq!(again["pr"], first["pr"]);
+    assert_eq!(again["workflow"], first["workflow"]);
     assert_eq!(fx.writes(), before);
 }
 
@@ -213,7 +213,7 @@ fn pr_edit_refuses_repo_and_base_of_an_adopted_pr() {
     let error = fx.refuse(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "workflow_adopted");
     assert_eq!(error["details"], json!({"pr": "web", "flag": "--repo"}));
     fx.pr(&["edit", "web", "--title", "Renamed"]).ok();
-    assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Renamed");
+    assert_eq!(fx.env.query::<String>("SELECT title FROM workflows WHERE key = 'web'"), "Renamed");
 }
 
 #[test]
@@ -228,8 +228,8 @@ fn the_event_and_plan_show_name_the_head_branch() {
     assert!(added[1]["data"]["head_ref"].is_null() && added[1]["data"].get("head_ref").is_some(), "{}", added[1]);
     assert!(added[1]["data"]["author"].is_null() && added[1]["data"].get("author").is_some(), "{}", added[1]);
     let shown = fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
-    let prs = shown["prs"].as_array().unwrap();
-    let head = |key: &str| prs.iter().find(|p| p["key"] == key).unwrap().get("head_ref").cloned();
+    let workflows = shown["workflows"].as_array().unwrap();
+    let head = |key: &str| workflows.iter().find(|p| p["key"] == key).unwrap().get("head_ref").cloned();
     assert_eq!(head("web"), Some(json!("feat/x")));
     assert_eq!(head("plain"), Some(Value::Null));
 }
@@ -240,14 +240,14 @@ fn the_head_branch_of_a_pr_cannot_change_and_is_unique_among_live_prs() {
     fx.plan("pay-2");
     let insert = |plan: &str, key: &str, status: &str| {
         format!(
-            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, head_ref, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, head_ref, created_txn, created_at)
              VALUES ('{plan}', '{key}', '{repo}', 'pay', 'main', '{status}', 'cpd/{plan}/{key}', 'feat/y', cpd_txn(), 't');",
             repo = fx.pay.display()
         )
     };
     let write = |sql: &str| fx.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?));
     write(&insert("pay-1", "a", "waiting")).expect("insert a PR with a head_ref");
-    let err = write("UPDATE prs SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
+    let err = write("UPDATE workflows SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
     assert!(format!("{err:?}").contains("workflow_locked"), "{err:?}");
     let err = write(&insert("pay-2", "b", "waiting")).expect_err("a second live PR with the head");
     assert!(format!("{err:?}").to_lowercase().contains("unique"), "{err:?}");

@@ -77,7 +77,7 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{columns})
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', '{DESCRIPTION}', 'config', cpd_txn(), 't', {started}{values});",
         started = if locked == "NULL" { "NULL" } else { "'2026-10-27T09:00:00.000Z'" },
         repo = repo.display(),
@@ -87,7 +87,7 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
         .write("fixture", |tx| {
             tx.execute_batch(&sql)?;
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
                  VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
                          iif(?4 = 'merged', ?2, NULL), iif(?4 = 'cancelled', 'not needed', NULL), iif(?4 = 'cancelled', 't', NULL), ?3, 't')",
@@ -112,7 +112,7 @@ pub(super) trait Rows {
             .read(|c| {
                 Ok(c.query_row(
                     "SELECT p.phase, r.pr_number, r.pr_url, r.pr_opened_at, r.pull_request, p.done_at
-                       FROM plans p JOIN prs r ON r.plan = p.id WHERE p.id = 'pay'",
+                       FROM plans p JOIN workflows r ON r.plan = p.id WHERE p.id = 'pay'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
                 )?)
@@ -126,7 +126,7 @@ pub(super) trait Rows {
             .read(|c| {
                 Ok(c.query_row(
                     "SELECT q.title, q.review_decision, q.checks, q.state
-                       FROM prs r JOIN pull_requests q ON q.id = r.pull_request WHERE r.plan = 'pay'",
+                       FROM workflows r JOIN pull_requests q ON q.id = r.pull_request WHERE r.plan = 'pay'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )?)
@@ -192,7 +192,7 @@ pub(super) trait Rows {
     }
 
     fn pr_status(&self, key: &str) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap()
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap()
     }
 }
 
@@ -216,13 +216,13 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
             "merged",
             "",
         ),
-        Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');"),
+        Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');"),
     };
     store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "{row}
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{open_columns})
+                 INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, description, shape, created_txn, created_at, started_at{open_columns})
                    VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', '{DESCRIPTION}', 'config', cpd_txn(), 't', {started}{open_values});
                  {needs}",
                 repo = repo.display(),
@@ -236,7 +236,7 @@ fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
                 },
             ))?;
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
                  VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?3, 0, ?1,
                          iif(?3 = 'merged', ?2, NULL), ?4, 't')",
@@ -339,7 +339,7 @@ fn pr_open_queues_a_fresh_open_job_at_open_tier() {
         ("open".to_owned(), "queued".to_owned(), "S3".to_owned(), 1, true, format!("Open the pull request: {REPO_TITLE}"))
     );
     let (goal, context, touches, acceptance, out_of_scope) = job_spec(&fx, "open-repo");
-    assert!(goal.contains(&format!("Make the Lead Branch {branch} of PR repo fit its base main", branch = fx.branch)), "{goal}");
+    assert!(goal.contains(&format!("Make the Lead Branch {branch} of Workflow repo fit its base main", branch = fx.branch)), "{goal}");
     assert!(context.contains("You push nothing, open nothing and run no Gate"), "{context}");
     for (what, value) in [("touches", &touches), ("acceptance", &acceptance), ("out_of_scope", &out_of_scope)] {
         assert!(value.as_array().is_some_and(|a| !a.is_empty()), "{what}: {value}");
@@ -358,7 +358,7 @@ fn pr_open_adds_the_opener_when_the_pr_has_none() {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, kind, fingerprint, created_txn, created_at)
                  VALUES ('pay', 'repo', 'up-repo', 'Bring the pull request up to date', 'S1', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
@@ -419,7 +419,7 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
         fx.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
                      VALUES ('pay', 'repo', 'ui', 'UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, ?1, ?2, 't')",
                     params!["f".repeat(64), tx.id()],
@@ -438,7 +438,7 @@ fn pr_open_refuses_jobs_not_done_and_a_missing_title() {
     }
 
     let fx = poll_fx("dispatch");
-    fx.store().write("fixture", |tx| Ok(tx.execute("UPDATE prs SET title = NULL", [])?)).unwrap();
+    fx.store().write("fixture", |tx| Ok(tx.execute("UPDATE workflows SET title = NULL", [])?)).unwrap();
     let txns = fx.txns();
 
     let run = fx.pr("open");
@@ -594,10 +594,10 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
+    assert_eq!(opened[0].1, json!({"workflow": "repo", "number": 812, "url": URL}));
     let events = fx.events("plan-phase");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
+    assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "workflows": [{"key": "repo", "number": 812, "url": URL}]}));
     assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
 }
 
@@ -631,7 +631,7 @@ fn open_ignores_a_merged_pull_request_created_before_the_pr_started() {
     assert_eq!(fx.gh_calls().iter().filter(|c| c[1] == "create").count(), 1, "{:?}", fx.gh_calls());
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1), ("deploy", Some(812)));
-    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
+    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'repo'", [], |r| r.get(0))?)).unwrap();
     assert_eq!(status, "open");
     assert!(fx.events("pr-merged").is_empty());
 }
@@ -706,12 +706,12 @@ fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     let merged = fx.events("pr-merged");
     assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert_eq!(merged[0].1, json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-opened").is_empty());
     assert_eq!(fx.events("plan-phase")[0].1["to"], "deploy");
     let done = fx.events("plan-done");
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].1["prs"][0]["key"], "repo");
+    assert_eq!(done[0].1["workflows"][0]["key"], "repo");
 
     // Again: already, nothing more.
     let txns = fx.txns();
@@ -823,7 +823,7 @@ fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_n
                 tx.execute_batch(&format!(
                     "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                        VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                     UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{URL}', pr_opened_at = 'opened',
+                     UPDATE workflows SET status = 'open', pr_number = 812, pr_url = '{URL}', pr_opened_at = 'opened',
                             pull_request = (SELECT id FROM pull_requests) WHERE plan = 'pay';"
                 ))?;
                 Ok(())
@@ -966,13 +966,13 @@ fn orphaned_merge(fx: &Poll) {
                    VALUES ('lead2', 'lead', 'ctx', 'oth', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('oth', 'ctx', 'Other', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('oth', 'repo', '{repo}', 'main', 'dispatch', 'cpd/oth', '{lead}', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
                 lead = lead.display()
             ))?;
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                  VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
@@ -1021,7 +1021,7 @@ fn unrecorded_merge(fx: &Poll) -> (PathBuf, String) {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                  VALUES ('pay', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
@@ -1377,7 +1377,7 @@ impl Poll {
 
     /// The `pull_request` of the Plan's PR, as `plan show` prints it.
     fn shown_pull_request(&self) -> Value {
-        self.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
+        self.cpd(&["plan", "show", "--plan", "pay"]).ok()["workflows"][0]["pull_request"].clone()
     }
 
     /// The argv, after `gh`, of every call of the fake `gh` so far.
@@ -1430,7 +1430,7 @@ impl Poll {
                 tx.execute_batch(&format!(
                     "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                        VALUES ('acme/pay', {number}, '{url}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                     UPDATE prs SET status = 'open', pr_number = {number}, pr_url = '{url}', pr_opened_at = 'opened',
+                     UPDATE workflows SET status = 'open', pr_number = {number}, pr_url = '{url}', pr_opened_at = 'opened',
                             pull_request = (SELECT id FROM pull_requests WHERE number = {number})
                       WHERE plan = 'pay' AND key = '{key}';"
                 ))?;
@@ -1441,11 +1441,11 @@ impl Poll {
 
     /// The `base` of PR `web` of Plan `pay`.
     fn web_base(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store().read(|c| Ok(c.query_row("SELECT base FROM workflows WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
     }
 
     fn web_status(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
     }
 
     /// The Lead Branch tip.
@@ -1489,7 +1489,7 @@ impl Poll {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
                      VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', iif(?1 = 'draft', NULL, ?2),
                              iif(?1 = 'merged', 'abc', NULL), iif(?1 = 'failed', 'crashed', NULL),
@@ -1673,7 +1673,7 @@ pub(super) fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&st
 
 /// `pr-feedback`'s data for PR `repo`, with the row's `mergeable` and `merge_state`; `conflict` follows `reasons`.
 fn feedback_merge(state: &str, checks: &str, decision: &str, mergeable: &str, merge_state: &str, reasons: &[&str]) -> Value {
-    json!({"pr": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision,
+    json!({"workflow": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision,
            "mergeable": mergeable, "merge_state": merge_state, "conflict": reasons.contains(&"conflict"), "reasons": reasons})
 }
 
@@ -1769,7 +1769,7 @@ impl Poll {
         let sql = format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', 814, 'https://github.com/acme/pay/pull/814', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request)
                VALUES ('pay', 'up', '{}', 'cpd/pay', 'open', 'cpd/pay/up', '/nonexistent/up', cpd_txn(), 't', 't',
                        814, 'https://github.com/acme/pay/pull/814', 'opened', (SELECT id FROM pull_requests WHERE number = 814));",
@@ -1781,7 +1781,7 @@ impl Poll {
     /// `(status, base)` of PR `key` of Plan `pay`.
     fn base_of(&self, key: &str) -> (String, String) {
         self.store()
-            .read(|c| Ok(c.query_row("SELECT status, base FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .read(|c| Ok(c.query_row("SELECT status, base FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))?))
             .unwrap()
     }
 
@@ -1809,14 +1809,14 @@ fn poll_stacked_pr(fx: &Poll) {
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pay' AND phase = 'done';
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
                    VALUES ('pay', 'web', '{repo}', 'pay', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
                 base = fx.branch,
                 path = path.display()
             ))?;
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
                  VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                 params!["f".repeat(64), merged, tx.id()],
@@ -1862,12 +1862,12 @@ fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!(
         told[0].0,
-        "PR up of Plan pay now targets main (was cpd/pay): its base PR pay/repo merged and GitHub repointed the pull request. \
+        "Workflow up of Plan pay now targets main (was cpd/pay): its base Workflow pay/repo merged and GitHub repointed the pull request. \
          Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
     );
     assert_eq!(
         told[0].1,
-        json!({"pr": "up", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll",
+        json!({"workflow": "up", "from": "cpd/pay", "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": "poll",
                "number": 814, "url": "https://github.com/acme/pay/pull/814"})
     );
     assert!(fx.events("pr-feedback").is_empty());
@@ -1900,7 +1900,7 @@ fn poll_follows_a_base_retargeted_by_hand_on_any_open_pr() {
     assert_eq!(told.len(), 1, "{told:?}");
     assert_eq!(
         told[0].0,
-        "PR repo of Plan pay now targets develop (was main): the base changed on GitHub. \
+        "Workflow repo of Plan pay now targets develop (was main): the base changed on GitHub. \
          Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
     );
     assert_eq!(told[0].1["from_pr"], Value::Null);
@@ -1932,7 +1932,7 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
     let run = fx.cpd(&["workflow", "cancel", "repo", "--plan", "pay"]);
     let error = common::refused(&run, "workflow_in_use", 3);
-    assert_eq!(error["details"]["prs"], json!(["up"]), "{error}");
+    assert_eq!(error["details"]["workflows"], json!(["up"]), "{error}");
     assert_eq!(fx.base_of("repo").0, "open");
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
 }
@@ -1941,12 +1941,12 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
 /// unstacked it, `number` and `url` are the poll's, both null.
 fn web_unstacked(from: &str, by: &str) -> (String, Value) {
     let data = match by {
-        "poll" => json!({"pr": "web", "from": from, "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll", "number": null, "url": null}),
-        _ => json!({"pr": "web", "from": from, "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": by}),
+        "poll" => json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": "poll", "number": null, "url": null}),
+        _ => json!({"workflow": "web", "from": from, "to": "main", "from_workflow": "pay/repo", "to_workflow": null, "by": by}),
     };
     (
         format!(
-            "PR web of Plan pay now targets main (was {from}): its base PR pay/repo merged before its pull request existed. \
+            "Workflow web of Plan pay now targets main (was {from}): its base Workflow pay/repo merged before its pull request existed. \
              Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
         ),
         data,
@@ -2003,7 +2003,7 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, feedback("open", "failed", "none", &["checks_failed"]));
-    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --workflow repo.");
+    assert_eq!(events[0].0, "Workflow repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --workflow repo.");
     assert_eq!(fx.plan_row().0, "deploy");
 
     // Still failing: nothing new. `ERROR` is `failed` too.
@@ -2065,7 +2065,7 @@ fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].1;
-    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["pr"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
+    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["workflow"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
     assert_eq!(fx.pr_status("repo"), "open");
 
     let txns = fx.txns();
@@ -2197,7 +2197,7 @@ fn a_draft_is_stored_and_printed() {
     fx.search(&[pay("OPEN", None, None).replace(r#""isDraft":false"#, r#""isDraft":true"#)]);
     let out = fx.poll();
     assert_eq!(out["changed"][0]["draft"], true);
-    assert_eq!(out["prs"][0]["pull_request"]["draft"], true);
+    assert_eq!(out["workflows"][0]["pull_request"]["draft"], true);
 }
 
 impl Poll {
@@ -2416,14 +2416,14 @@ fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
     fx.search(&[pay("OPEN", None, Some("PENDING"))]);
 
     let without = fx.poll_all();
-    assert!(without.get("prs").is_none(), "{without}");
+    assert!(without.get("workflows").is_none(), "{without}");
     let out = fx.poll();
 
     assert_eq!(out["polled"], 1);
-    assert_eq!(out["prs"].as_array().unwrap().len(), 2);
-    assert_eq!(out["prs"][0], json!({"key": "repo", "status": "open", "pull_request": fx.shown_pull_request()}));
-    assert_eq!(out["prs"][0]["pull_request"]["checks"], "pending");
-    assert_eq!(out["prs"][1], json!({"key": "web", "status": "waiting", "pull_request": null}));
+    assert_eq!(out["workflows"].as_array().unwrap().len(), 2);
+    assert_eq!(out["workflows"][0], json!({"key": "repo", "status": "open", "pull_request": fx.shown_pull_request()}));
+    assert_eq!(out["workflows"][0]["pull_request"]["checks"], "pending");
+    assert_eq!(out["workflows"][1], json!({"key": "web", "status": "waiting", "pull_request": null}));
 }
 
 #[test]
@@ -2431,7 +2431,7 @@ fn poll_has_no_phase_precondition_and_knows_its_plan() {
     let fx = poll_fx("plan");
     fx.search(&[]);
     let out = fx.poll();
-    assert_eq!(out["prs"], json!([{"key": "repo", "status": "waiting", "pull_request": null}]));
+    assert_eq!(out["workflows"], json!([{"key": "repo", "status": "waiting", "pull_request": null}]));
 
     let run = fx.cpd(&["pr", "poll", "--plan", "nope"]);
     assert_eq!(code(&run), ("plan_not_found".into(), 4));
@@ -2685,7 +2685,7 @@ fn kept_attempt(fx: &Poll) -> (PathBuf, String) {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
                  VALUES ('pay', 'repo', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, ?1, 'no', 't', ?2, 't')",
                 params!["f".repeat(64), tx.id()],
@@ -2720,7 +2720,7 @@ impl Poll {
                        VALUES ('bob', 'ctx2', 'Bob', 'deploy', 'lead2', 't', 't');
                      INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                        VALUES ('gone/shop', 20, '{GONE_URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', 'opened');
-                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                     INSERT INTO workflows (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                                       pr_number, pr_url, pr_opened_at, pull_request)
                        VALUES ('bob', 'shop', '/r', 'main', 'shop', 'open', 'cpd/bob/shop', '/w', cpd_txn(), 't', 't',
                                20, '{GONE_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 20));"
@@ -2780,7 +2780,7 @@ fn a_lookup_with_a_not_found_alias_and_exit_1_still_applies_the_others() {
     assert_eq!(fx.phase(), "deploy");
     let calls = fx.gh_calls();
     assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay")"#) && calls[1][3].contains(r#"p1: repository(owner: "acme", name: "web")"#), "{}", calls[1][3]);
-    assert_eq!(out["prs"][1]["pull_request"]["state"], "open");
+    assert_eq!(out["workflows"][1]["pull_request"]["state"], "open");
 }
 
 #[test]
@@ -2802,7 +2802,7 @@ fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
     assert!(fx.events("workflow-started").is_empty(), "pr poll never starts a PR");
     // Its need is merged now: it can start.
     let started = fx.cpd(&["workflow", "start", "web", "--plan", "pay"]).ok();
-    assert_eq!(started["pr"]["status"], "dispatch");
+    assert_eq!(started["workflow"]["status"], "dispatch");
     assert_eq!(fx.pr_status("web"), "dispatch");
 }
 
@@ -2856,7 +2856,7 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     assert_eq!(errors[0].1["details"]["plan"], "bob");
     assert_eq!(errors[0].1["details"]["pr"], "shop");
     assert_eq!(errors[0].1["details"]["owner"], "gone");
-    assert!(errors[0].1["message"].as_str().unwrap().contains("PR shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
+    assert!(errors[0].1["message"].as_str().unwrap().contains("Workflow shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
 
     // Once per episode: the next polls, still failing the same way, append nothing and write nothing.
     let events = fx.event_count();
@@ -2992,19 +2992,19 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     // The PR is stacked on an unmerged PR, `side`, so that it waits: a PR that starts at once is refused its stub drafts after the lock
     // (`draft_parked`). `side` is cancelled once the PR is added, so that it does not keep the Plan from `done`.
     fx.env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
         fx.repo.display()
     ));
     fx.cpd(&["workflow", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--base", "pay/side", "--plan", "pay"]).ok();
-    fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'side';");
+    fx.env.sql("UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'side';");
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
     // with the pull request's row `pr open` writes.
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "UPDATE prs SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
+                "UPDATE workflows SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
                  UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
                 lead = fx.lead.display()
             ))?;
@@ -3019,7 +3019,7 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     assert_eq!((fx.phase().as_str(), fx.pr_status("fix").as_str()), ("done", "merged"));
     let done = fx.events("plan-done");
     assert_eq!(done.len(), 2, "plan-done once each time the Plan reaches done");
-    let listed: Vec<&str> = done[1].1["prs"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap()).collect();
+    let listed: Vec<&str> = done[1].1["workflows"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap()).collect();
     assert_eq!(listed, ["fix", "repo"]);
 }
 
@@ -3093,7 +3093,7 @@ fn a_second_identical_poll_writes_nothing() {
     assert_eq!(
         again,
         json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
-               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
+               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "workflows": again["workflows"]})
     );
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
@@ -3161,17 +3161,17 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
     assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"}]));
-    assert_eq!(out["prs"], json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}]));
+    assert_eq!(out["workflows"], json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}]));
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     assert_eq!(fx.pr_data(), (TITLE.into(), "approved".into(), "passed".into(), "merged".into()));
     assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("done".to_owned(), "merged".to_owned()));
     assert!(fx.plan_row().5.is_some());
     let done = fx.events("plan-done");
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].1, json!({"prs": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]}));
+    assert_eq!(done[0].1, json!({"workflows": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]}));
     let merged = fx.events("pr-merged");
     assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert_eq!(merged[0].1, json!({"workflow": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-feedback").is_empty());
     // The poll cleans nothing (commands.md §9.2): the Attempt's worktree and branch, the Lead's, and the windows stay for `cpd janitor`.
     assert!(worktree.exists());
@@ -3630,7 +3630,7 @@ fn rebase_of_a_pr_merged_during_its_gate_pushes_nothing() {
         Store::open(&home, 5000)
             .unwrap()
             .write("pr poll", |tx| {
-                tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+                tx.execute_batch("UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
                 Ok(())
             })
             .unwrap();
@@ -3848,7 +3848,7 @@ pub(crate) fn added(phase: &str) -> Added {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't', {merged});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', '{REPO_TITLE}', 'config', cpd_txn(), 't', 't'{values});",
         repo = repo.display(),
         lead = lead.display(),
@@ -3859,7 +3859,7 @@ pub(crate) fn added(phase: &str) -> Added {
         .write("fixture", |tx| {
             tx.execute_batch(&sql)?;
             tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
                  VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                 params!["f".repeat(64), merged_sha, tx.id()],
@@ -3874,7 +3874,7 @@ impl Added {
     /// The `needs` of PR `key` in Plan `pay`, sorted.
     pub(crate) fn needs_of(&self, key: &str) -> Vec<String> {
         self.fx.env.read(|c| {
-            let mut q = c.prepare("SELECT needs FROM pr_needs WHERE plan = 'pay' AND pr = ?1 ORDER BY needs")?;
+            let mut q = c.prepare("SELECT needs FROM workflow_needs WHERE plan = 'pay' AND workflow = ?1 ORDER BY needs")?;
             let rows = q.query_map([key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -3907,7 +3907,7 @@ impl Added {
     /// so its stub drafts are legal after the lock (a PR that starts at once is refused `draft_parked`).
     fn side(&self, repo: &Path) {
         self.fx.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+            "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
                VALUES ('pay', 'side', '{}', 'pay', 'main', 'dispatch', 'cpd/pay/side', '/w/side', 'Side', 'config', cpd_txn(), 't', 't');",
             repo.display()
         ));
@@ -3919,7 +3919,7 @@ fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
     let f = added("done");
     f.side(&f.repo);
     let out = f.add_fix(&["--base", "pay/side"]).ok();
-    assert_eq!(out["pr"]["needs"], json!(["repo"]));
+    assert_eq!(out["workflow"]["needs"], json!(["repo"]));
     assert_eq!(f.needs_of("fix"), ["repo"]);
     assert_eq!(f.pr_added()[0]["needs"], json!(["repo"]));
     // A rerun (the Plan is in dispatch now) is `already`, not `workflow_exists`.
@@ -3932,7 +3932,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     {
         let a = added("done");
         a.side(&a.repo);
-        assert_eq!(a.add_fix(&["--no-needs", "--base", "pay/side"]).ok()["pr"]["needs"], json!([]));
+        assert_eq!(a.add_fix(&["--no-needs", "--base", "pay/side"]).ok()["workflow"]["needs"], json!([]));
         assert!(a.needs_of("fix").is_empty());
     }
     {
@@ -3940,7 +3940,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
         b.side(&b.repo);
         b.add("x", &b.repo, &["--no-needs", "--base", "pay/side"]).ok();
         // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
-        assert_eq!(b.add_fix(&["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
+        assert_eq!(b.add_fix(&["--needs", "x"]).ok()["workflow"]["needs"], json!(["x"]));
         assert_eq!(b.needs_of("fix"), ["x"]);
     }
     {
@@ -3957,7 +3957,7 @@ fn pr_add_on_a_plan_in_dispatch_with_no_needs_has_no_needs() {
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
     f.side(&other);
     let out = f.add("fix", &other, &["--no-needs", "--base", "pay/side"]).ok();
-    assert_eq!(out["pr"]["needs"], json!([]));
+    assert_eq!(out["workflow"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }
 
@@ -4050,7 +4050,7 @@ fn red_tests_answer(call: &Call) -> Reply {
 impl Poll {
     /// The Lead worktree path of PR `key` of Plan `pay`.
     fn lead_worktree_of(&self, key: &str) -> PathBuf {
-        let path: String = self.store().read(|c| Ok(c.query_row("SELECT lead_worktree FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap();
+        let path: String = self.store().read(|c| Ok(c.query_row("SELECT lead_worktree FROM workflows WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap();
         PathBuf::from(path)
     }
 
@@ -4064,7 +4064,7 @@ impl Poll {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
                      VALUES ('pay', ?4, ?1, 'Red', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'test', ?5, ?6)",
                     params![job, "f".repeat(64), tx.id(), key, r#"["t::one"]"#, r#"["tests/t.rs"]"#],
@@ -4123,7 +4123,7 @@ fn a_stacked_red_test_job_lists_its_test_as_found_once_the_base_fix_merges_to_ma
     // The base follow learns the repoint, and the poll queues exactly one update Job, `reason` `base-merged`.
     assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "web", "from": fx.branch, "to": "main"}]));
     assert_eq!(fx.update_jobs(), [("up-web".to_owned(), "queued".to_owned())]);
-    let added: Vec<_> = fx.events("job-added").into_iter().filter(|(_, data)| data["pr"] == json!("web")).collect();
+    let added: Vec<_> = fx.events("job-added").into_iter().filter(|(_, data)| data["workflow"] == json!("web")).collect();
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!(
         (&added[0].1["kind"], &added[0].1["by"], &added[0].1["reason"]),

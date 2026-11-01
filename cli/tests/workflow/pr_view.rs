@@ -135,7 +135,7 @@ pub(super) fn fx(status: &str) -> Pay {
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked});
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '/nowhere', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {started}{values});",
         phase = if status == "open" { "deploy" } else { "plan" },
         locked = if status == "open" { "'t'" } else { "NULL" },
@@ -257,7 +257,7 @@ fn view_prints_the_post_of_a_posted_pr() {
     store
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
                  VALUES ('pay', 'repo', 'C02JU6C2Z1D', '1793040197.490209', '{link}', 'opened', 'git-merge', NULL)"
             ))
             .map_err(Into::into)

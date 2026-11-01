@@ -86,7 +86,7 @@ impl Lb {
     }
 
     fn lead_branch(&self, key: &str) -> String {
-        self.env.query(&format!("SELECT lead_branch FROM prs WHERE key = '{key}'"))
+        self.env.query(&format!("SELECT lead_branch FROM workflows WHERE key = '{key}'"))
     }
 }
 
@@ -94,7 +94,7 @@ impl Lb {
 fn pr_add_names_the_lead_branch_plan_slash_key() {
     let fx = lb();
     let out = fx.add("api", &fx.pay).ok();
-    assert_eq!(out["pr"]["lead_branch"], "pay-1/api");
+    assert_eq!(out["workflow"]["lead_branch"], "pay-1/api");
     assert_eq!(fx.lead_branch("api"), "pay-1/api");
 }
 
@@ -112,7 +112,7 @@ fn pr_add_refuses_when_the_plan_branch_exists() {
     fx.git(&fx.web, &["branch", "pay-1"]);
     let error = fx.refuse(&fx.add("api", &fx.web), "branch_exists");
     assert_eq!(error["details"]["branch"], "pay-1");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 0);
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
     fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 1, 'u', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                           pr_number, pr_url, pr_opened_at, pull_request, merged_at)
            VALUES ('pay-1', 'old', '{}', 'main', 'merged', 'cpd/pay-1', '/w', cpd_txn(), 't', 't', 1, 'u', 't',
                    (SELECT id FROM pull_requests WHERE number = 1), 't');",
@@ -139,13 +139,13 @@ fn pr_add_leaves_a_merged_legacy_lead_branch_alone() {
     // `web` is stacked on an unmerged PR, `base`, so that it waits: after the lock a PR that starts at once is refused its stub
     // drafts (`draft_parked`).
     fx.env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay-1', 'base', '{}', 'main', 'dispatch', 'cpd/pay-1/base', '/w/base', cpd_txn(), 't', 't');",
         fx.pay.display()
     ));
     let out = fx.cpd(&["workflow", "add", "web", "--repo", fx.pay.to_str().unwrap(), "--title", "T", "--shape", "config", "--no-needs", "--base", "pay-1/base", "--plan", "pay-1"]).ok();
 
-    assert_eq!(out["pr"]["lead_branch"], "pay-1/web");
+    assert_eq!(out["workflow"]["lead_branch"], "pay-1/web");
     assert_eq!(fx.lead_branch("old"), "cpd/pay-1");
     assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1"]), sha, "the legacy branch stays");
     assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "", "and so does its remote branch");
@@ -166,7 +166,7 @@ fn pr_start_creates_the_plan_slash_key_lead_branch_and_worktree() {
     let out = fx.start("api").ok();
 
     let worktree = fx.pay.parent().unwrap().join("pay.pay-1.api");
-    assert_eq!(out["pr"]["lead_worktree"], worktree.display().to_string());
+    assert_eq!(out["workflow"]["lead_worktree"], worktree.display().to_string());
     assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "pay-1/api");
 }
 
@@ -189,7 +189,7 @@ fn pr_start_of_a_legacy_plan_key_branch_still_refuses_on_cpd_plan() {
     let fx = lb();
     fx.drop_unreachable_origin(&fx.pay);
     fx.env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay-1', 'api', '{}', 'main', 'waiting', 'cpd/pay-1/api', cpd_txn(), 't');",
         fx.pay.display()
     ));
@@ -260,12 +260,12 @@ fn pr_adopt_refuses_a_head_branch_that_is_a_stored_lead_branch() {
     fx.add("api", &[]).ok();
     let error = refused(&fx.add("web", &["--adopt", "7"]), "adopt_cpd_branch", 3);
     assert_eq!(error["details"], json!({"number": 7, "head_ref": "pay-1/api"}));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM workflows"), 1);
 }
 
 #[test]
 fn pr_adopt_accepts_a_cpd_prefixed_head_branch_that_is_no_lead_branch() {
     let fx = adopt_fx("cpd/somebody-elses");
     let out = fx.add("web", &["--adopt", "7"]).ok();
-    assert_eq!(out["pr"]["head_ref"], "cpd/somebody-elses");
+    assert_eq!(out["workflow"]["head_ref"], "cpd/somebody-elses");
 }

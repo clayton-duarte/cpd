@@ -50,7 +50,7 @@ fn fixture(posting: Posting, posted: bool, checks: &str) -> Poll {
         fx.store()
             .write("fixture", |tx| {
                 tx.execute_batch(
-                    "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+                    "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
                      VALUES ('pay', 'repo', 'C02JU6C2Z1D', '1793040197.490209', 'https://example.slack.com/p1', 'opened', NULL, NULL)",
                 )
                 .map_err(Into::into)

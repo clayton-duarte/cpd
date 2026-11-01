@@ -177,11 +177,11 @@ pub(super) fn add_second_owned_pr(fx: &Poll) {
             tx.execute_batch(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                    VALUES ('acme/pay', 813, 'https://github.com/acme/pay/pull/813', 'Pay the bills (web)', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at,
+                 INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at,
                                   pr_number, pr_url, pr_opened_at, pull_request)
                    SELECT 'pay', 'web', repo, 'web', 'main', 'open', 'cpd/pay/web', lead_worktree, 'Show the receipt', shape, cpd_txn(), 't', 't',
                           813, 'https://github.com/acme/pay/pull/813', 'opened', (SELECT id FROM pull_requests WHERE number = 813)
-                     FROM prs WHERE key = 'repo';",
+                     FROM workflows WHERE key = 'repo';",
             )?;
             Ok(())
         })

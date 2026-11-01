@@ -10,7 +10,7 @@ use super::workflow::{Poll, Rows, code, open_jobs, poll_fx};
 fn fx_with(policy: &str) -> Poll {
     let fx = poll_fx("dispatch");
     fx.env.owner_policy("acme", &format!("[pr]\ngate = \"local\"\n{policy}"));
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE prs SET description = 'A description'")?)).unwrap();
+    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE workflows SET description = 'A description'")?)).unwrap();
     fx
 }
 
@@ -27,7 +27,7 @@ fn pr_open_refuses_jira_required_without_a_ticket() {
 
     assert_eq!(code(&run), ("jira_required".into(), 3));
     let error = run.error();
-    assert!(error["message"].as_str().unwrap().contains("cpd pr edit repo --jira"), "{error}");
+    assert!(error["message"].as_str().unwrap().contains("cpd workflow edit repo --jira"), "{error}");
     assert_eq!(error["details"], json!({"plan": "pay", "pr": "repo"}));
     assert_eq!((fx.plan_row().0, fx.txns(), open_jobs(&fx)), ("dispatch".to_owned(), txns, Vec::<(String, String)>::new()));
     assert_eq!(fx.remote_branch("cpd/pay"), remote, "nothing pushed");
@@ -37,7 +37,7 @@ fn pr_open_refuses_jira_required_without_a_ticket() {
 #[test]
 fn pr_open_opens_the_pull_request_of_a_pr_with_a_jira_key_when_it_is_required() {
     let fx = fx_with("jira_required = true\n");
-    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE prs SET jira = 'ABC-1'")?)).unwrap();
+    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE workflows SET jira = 'ABC-1'")?)).unwrap();
 
     open(&fx).ok();
 
@@ -67,8 +67,8 @@ fn pr_open_opens_an_adopted_pr_with_no_ticket_when_required() {
     fx.store()
         .write("fixture", |tx| {
             Ok(tx.execute_batch(
-                "DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature/x';
-                 CREATE TRIGGER prs_head_ref_fixed BEFORE UPDATE OF head_ref ON prs\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
+                "DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature/x';
+                 CREATE TRIGGER workflows_head_ref_fixed BEFORE UPDATE OF head_ref ON workflows\nBEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;",
             )?)
         })
         .unwrap();
