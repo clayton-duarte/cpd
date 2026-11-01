@@ -831,7 +831,40 @@ Nothing else is shared: not a substring (`Cargo.lock.bak`, `my-Cargo.lock`), not
 
 ### 2.7 Plan lint rules
 
-Skeleton: the catalogue is written in the next commit.
+`cpd plan lint` (commands.md §4.15) runs the rules below over one Plan. The lint is **stateless**: it runs fresh on every call, with no table, no content hash and no write. Each rule has one id and one place in the `Rule` enum, and findings sort by that place. A finding has one of two severities:
+- `error`: it carries the refusal of the check it names (the same code, message and `details`); `plan review` and `plan lock` refuse with that code.
+- `warn`: a hint. It is never a refusal.
+
+**The catalogue** (the order of the `Rule` enum):
+
+| # | Rule | Severity | Fires when | Refusal it carries |
+|---|---|---|---|---|
+| 1 | `draft_incomplete` | error | a `draft` Job that does not wait (§2.2 "A parked draft") lacks its Tier or its Spec | `draft_incomplete` (exit 3), `details.jobs`; the check `check_drafts_complete` |
+| 2 | `outline_missing` | error | the Plan has no outline | `outline_missing` (exit 3); the check `check_outline` |
+| 3 | `outline_incomplete` | error | a PR that is not `cancelled` and has a `draft` Job has no entry in the outline's `done_when` | `outline_incomplete` (exit 3), `details.prs`; the check `check_outline` |
+| 4 | `test_job_required` | error | a draft `impl` Job needs no `test` Job of its PR | `test_job_required` (exit 3), `details.jobs`; the check `shape::check` |
+| 5 | `impl_job_required` | error | a draft `verify` Job needs no `impl` Job of its PR that is not `cancelled` | `impl_job_required` (exit 3), `details` `{plan, job, jobs}`; the check `shape::check` |
+| 6 | `shape_incomplete` | error | a `tdd` PR that has not opened lacks a `test` or an `impl` Job that is not `cancelled`; one finding per such PR | `shape_incomplete` (exit 3), `details` `{pr, missing}`; the check `shape::check` |
+| 7 | `pr_empty` | error, phase `plan` only | a PR that is not `cancelled` has no `draft` Job, or the Plan has no PR that is not `cancelled` | `pr_empty` (exit 3), `details.prs` (`details.next` = `cpd pr add` when the Plan has no PR at all); the lock's check, as one function |
+| 8 | `dependency_cycle` | error | the `needs` of the draft Jobs contain a cycle | `dependency_cycle` (exit 3), `details.cycle`; the check `jobs::cycle` |
+| 9 | `parallel_write_overlap` | warn | two Jobs of one PR both name a file, as the pair below defines | none (it is a warning) |
+
+**Error rules call the checks.** Each error rule calls the check named in its row and restates none of it; its finding's `details` are the refusal's `details`. An error rule yields at most one finding, except `shape_incomplete`, which yields one finding per PR that lacks a Job (sorted by PR key, each with `pr` set). The first six rows are in the order in which `plan review` (§4.6) runs its checks, so for `plan review` the first error finding is its refusal. `plan lock` (§4.8) runs the same checks in the same order, without the two outline rules, which it does not check, and with `plan_not_approved` (no lint rule) between `shape_incomplete` and `pr_empty`.
+
+**The pair of `parallel_write_overlap`.** The rule compares Jobs of ONE PR only: Jobs of different PRs are never compared, and neither are explore Jobs, which have no PR. Two Jobs `a` and `b` of one PR are a pair when all of these hold:
+1. neither is `cancelled` or `merged`;
+2. at least one is a draft under review (`Job::is_under_review`: a `draft` Job that is not `open`);
+3. neither is of kind `open` or `update`;
+4. there is no dependency path from either to the other: the closure of `needs` is taken over **all** Jobs of the PR, so a path through a third Job counts, even when that Job is `cancelled` or `merged`;
+5. they share an entry of `touches` that is equal in both, does not end in `/` (a directory is never compared) and is not shared (`is_shared`, contract §2.6 "Shared files").
+
+A pair is one finding: `job` is the draft under review (the smaller key when both are drafts under review), `other` the other Job, and `paths` the shared entries, sorted. The findings of this rule sort by `pr`, then `job`, then `other`. The message text is in commands §4.15.
+
+**The limits of `parallel_write_overlap`.** It is a hint, and its text says so:
+- It is a **warning, never a refusal**: no `plan review` and no `plan lock` refuses on it (decision pro-q8).
+- It compares **equal files only** (no glob, no directory) and **exempts the shared files** of §2.6: two Jobs that both touch `Cargo.lock` or another shared file are no pair.
+- It is **stateless**: each call computes it from the Jobs as they are; nothing is remembered between calls.
+- It is **a hint, not a prediction of a conflict**. Measured on 2026-10-30 on this machine's ledger: of 209 such pairs (lockfiles exempt), 5 hit a merge conflict (2.4% precision), and 4 of the 8 Jobs that conflicted were in such a pair (50% recall); 8 of the 11 conflicts sit in one Plan.
 
 ## 3. State machines
 
