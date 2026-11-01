@@ -371,7 +371,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
 | Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
-| Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
+| Inbox (right) | the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, vendored 1:1 (“The Inbox rail in the right column”, below) — the real Inbox and the Tree/Plan panes are still out of scope (the follow-up PR `chat-inbox-live` and the ui-parity Plan) |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
 **double-clicking its handle restores `20rem`** (checked in a real browser: initial 320 px,
