@@ -5,10 +5,11 @@
 // `react-resizable-panels` 4.15.3 through the vendored `resizable` wrapper; the Context column
 // defaults to 20rem and its handle restores that on double-click. `ApprovalDialog` stays
 // exported for the approval harness.
-import { useEffect, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
+import type { LiveSession } from "../api/live-server";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
 import { AppSidebar } from "../components/app-sidebar";
@@ -91,16 +92,24 @@ export function ApprovalDialog({
 }
 
 /**
- * The Context (left) column: the vendored `sidebar-03` block. Its desktop rail is
- * `position: fixed`, so it needs a `transform`ed containing block and `--sidebar-width: 100%`
- * so the rail and its gap spacer match the panel without adding a panel scrollbar
- * (web/README.md "Containing the fixed rail").
+ * The Context (left) column: the vendored `sidebar-03` block, now the Context tree. Its desktop
+ * rail is `position: fixed`, so it needs a `transform`ed containing block and
+ * `--sidebar-width: 100%` so the rail and its gap spacer match the panel without adding a panel
+ * scrollbar (web/README.md "Containing the fixed rail").
  */
-function ContextColumn(): ReactElement {
+function ContextColumn({
+  sessions,
+  selectedId,
+  onSelectSession,
+}: {
+  sessions: readonly LiveSession[];
+  selectedId?: string;
+  onSelectSession: (id: string) => void;
+}): ReactElement {
   return (
     <div className="h-full overflow-hidden [transform:translateZ(0)]">
       <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
-        <AppSidebar />
+        <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
       </SidebarProvider>
     </div>
   );
@@ -123,22 +132,41 @@ function InboxColumn(): ReactElement {
  */
 export function App({ token, live }: AppProps): ReactElement {
   const contextPanel = usePanelRef();
+  const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+
+  // Fetch the lead/manager Sessions once; the cancelled flag keeps the resolution from setting
+  // state after unmount (web/README.md "The Context tree").
+  useEffect(() => {
+    if (live === undefined) return;
+    let cancelled = false;
+    void live.sessions().then((list) => {
+      if (cancelled) return;
+      setSessions(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
 
   useEffect(() => {
     contextPanel.current?.resize(CONTEXT_DEFAULT);
   }, [contextPanel]);
 
+  // Nothing is selected on first render; the rail's `onSelectSession` fills it.
+  const selected = sessions.find((session) => session.id === selectedId);
+
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-svh">
       <ResizablePanel defaultSize={CONTEXT_DEFAULT} panelRef={contextPanel}>
-        <ContextColumn />
+        <ContextColumn sessions={sessions} selectedId={selectedId} onSelectSession={setSelectedId} />
       </ResizablePanel>
       <ResizableHandle
         disableDoubleClick
         onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT)}
       />
       <ResizablePanel defaultSize="60%">
-        <LiveChat api={live} token={token} />
+        <LiveChat api={live} token={token} session={selected} />
       </ResizablePanel>
       <ResizableHandle disableDoubleClick />
       <ResizablePanel defaultSize="20%">

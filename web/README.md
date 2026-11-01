@@ -370,7 +370,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 | Column | Filled by |
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
-| Chat (centre) | the existing `web/src/views/live-chat.tsx`, unchanged |
+| Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
 | Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
@@ -420,6 +420,31 @@ sidebar-03 block: components/app-sidebar.tsx + page.tsx
 
 New dep: `react-resizable-panels` exactly `4.15.3`; `radix-ui` and `lucide-react` are already
 in `web/package.json`.
+
+### The Context tree in the left rail selects the Chat
+
+The left rail stops being the `sidebar-03` block's sample menu and becomes the **Context tree** — one root row per Context (its manager) and one nested row per Lead — decided by the User on 2026-11-01 from the working dev preview on :5173. Every statement below is measured, not designed.
+
+**The tree.** `web/src/components/app-sidebar.tsx` (the vendored `sidebar-03` block) stops rendering the registry's sample rows and renders the live Context tree:
+
+- The Sessions arrive from the dev adapter's `GET /__cpd/sessions` — the same route and the same lead-and-manager list the old picker read.
+- They are grouped by their `context`; each Context's manager (role `"manager"`) is the root row, and each of that Context's leads (role `"lead"`) is a nested `SidebarMenuSub` row under it.
+- Contexts sort by name.
+- A root row's label is the manager's `name`, falling back to the context; a nested row's label is the lead's `name`, falling back to its id.
+- The rail's header carries `cpd` with the Context count beneath it (`1 context`, `4 contexts`, `No contexts` at zero) — never the `sidebar-03` block's `Documentation` / `v1.0.0`.
+
+**The ids.** Every row is a real `<button>` — not a link — carrying `data-session-id` (the full uuid) and `title` (the same uuid), and showing the id's first 8 characters muted beside the label.
+
+**The selection.** The rail is the Chat's only navigation:
+
+- `web/src/app/App.tsx` holds the selected id, hands the matching `LiveSession` to `LiveChat`, and hands the rail `selectedId` plus `onSelectSession`.
+- Clicking a row selects it, and the selected row carries `isActive`.
+- Nothing is selected on first render — the Chat shows its no-Session state until a row is clicked.
+- The callback is named `onSelectSession`, **not** `onSelect`: `React.ComponentProps<typeof Sidebar>` (a `div`) already declares the DOM's own `onSelect`, and the two collide in TypeScript.
+
+**The picker is gone.** `web/src/views/live-chat.tsx` no longer lists Sessions and no longer renders its `Session` `<select>` or its state/role badges. It takes the Session it is given (prop `session`), subscribes to it exactly as before, and with no Session renders "Pick a manager or a lead in the left rail to see its chat."
+
+**The adapter carries the tree's fields.** `web/src/api/live-server.ts`'s `LiveSession` gains `context` and `name`, which the dev adapter's `realDeps().list()` in `web/vite.config.ts` fills from each `cpd session list` row's `context` and `name`.
 
 ### The durable host-socket read (`chat-host`)
 
