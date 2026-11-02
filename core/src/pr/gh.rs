@@ -655,7 +655,8 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
 }
 
 /// `gh pr merge <number> --repo <repo> --<method> --match-head-commit <head>`: GitHub
-/// refuses when the branch is no longer at `head`. It does not pass `--delete-branch`: GitHub's own
+/// refuses when the branch is no longer at `head`. When GitHub refuses because the pull request is the base of a
+/// stack, it falls back to the asynchronous REST merge endpoint (`merge-async`, pro-d355). It still does not pass `--delete-branch`: GitHub's own
 /// `delete_branch_on_merge` deletes the branch and repoints a stacked pull request (pro-d240).
 pub fn merge_pr(
     runner: &dyn Runner,
@@ -677,7 +678,34 @@ pub fn merge_pr(
         "--match-head-commit",
         head,
     ];
-    run_on(runner, cwd, &args).map(drop)
+    match run_on(runner, cwd, &args) {
+        Ok(_) => Ok(()),
+        Err(err) if is_stack_refusal(&err) => run_on(
+            runner,
+            cwd,
+            &[
+                "api",
+                "--method",
+                "PUT",
+                &format!("repos/{repo}/pulls/{number}/merge-async"),
+                "-f",
+                &format!("merge_method={}", method.as_str()),
+                "-f",
+                &format!("sha={head}"),
+            ],
+        )
+        .map(drop),
+        Err(err) => Err(err),
+    }
+}
+
+/// Whether a refused `gh pr merge` says the pull request is the base of a stack (pro-d355).
+fn is_stack_refusal(err: &CpdError) -> bool {
+    let text = match err.details().get("stderr").and_then(|v| v.as_str()) {
+        Some(stderr) => stderr,
+        None => err.message(),
+    };
+    text.contains("asynchronous merge REST API") || text.contains("part of a stack")
 }
 
 /// `gh api --method POST repos/<repo>/pulls/<number>/reviews --input -` with `body` on stdin: GitHub's create-review
