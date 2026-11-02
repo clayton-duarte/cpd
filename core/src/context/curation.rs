@@ -74,14 +74,12 @@ impl Reason {
     }
 }
 
-/// One record's curation: its topic and short form, and whether it is a documentation candidate (with the paths where
-/// its id was found).
+/// One record's curation: its topic and short form.
 #[derive(Clone, Debug)]
 pub struct Curation {
     pub record: RecordId,
     pub topic: String,
     pub short: String,
-    pub doc_paths: Option<Vec<String>>,
 }
 
 /// A proposal to retire `record`; `target` is a record id or a doc path.
@@ -93,7 +91,7 @@ pub struct Proposal {
 }
 
 /// Writes `curations` and pending retirements for `proposals` and appends `context-curated`, in one transaction. A record that already has a
-/// retirement row (any status) gets no new proposal; a record whose doc_candidate is already set keeps it. Every
+/// retirement row (any status) gets no new proposal; Every
 /// proposed record has a curation (written now or before): the commands list a proposal by its short form.
 ///
 /// A proposal whose record, or whose `duplicate`/`superseded` target, is no longer in force when this transaction
@@ -119,16 +117,12 @@ pub fn propose_rejecting(
     store.write("context curate", |tx| {
         let at = clock::now();
         for c in curations {
-            let paths = c.doc_paths.as_ref().map(|p| json!(p).to_string());
-            let candidate = paths.as_ref().map(|_| "pending");
             tx.execute(
-                "INSERT INTO record_curations (context, record, topic, short, doc_candidate, doc_paths, curated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO record_curations (context, record, topic, short, curated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (context, record) DO UPDATE SET
-                   topic = excluded.topic, short = excluded.short, curated_at = excluded.curated_at,
-                   doc_paths = CASE WHEN doc_candidate IS NULL THEN excluded.doc_paths ELSE doc_paths END,
-                   doc_candidate = coalesce(doc_candidate, excluded.doc_candidate)",
-                rusqlite::params![context.as_str(), c.record.to_string(), c.topic, c.short, candidate, paths, at],
+                   topic = excluded.topic, short = excluded.short, curated_at = excluded.curated_at",
+                rusqlite::params![context.as_str(), c.record.to_string(), c.topic, c.short, at],
             )?;
         }
         let force = State::read(tx, context)?.in_force_ids();
@@ -155,15 +149,14 @@ pub fn propose_rejecting(
                     .with("record", p.record.to_string()));
             }
         }
-        let docs = curations.iter().filter(|c| c.doc_paths.is_some()).count();
         let text = format!(
-            "Context {context} curated: {} records, {rejected} lines rejected, {} retirements proposed, {docs} doc candidates.",
+            "Context {context} curated: {} records, {rejected} lines rejected, {} retirements proposed.",
             curations.len(),
             proposals.len()
         );
         append(
             tx,
-            NewEvent::context_curated(text, context.as_str(), curations.len() as u64, rejected as u64, proposals.len() as u64, docs as u64).context(context.clone()),
+            NewEvent::context_curated(text, context.as_str(), curations.len() as u64, rejected as u64, proposals.len() as u64).context(context.clone()),
         )?;
         Ok(proposals.len())
     })

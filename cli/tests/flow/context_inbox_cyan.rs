@@ -18,7 +18,7 @@ const CTX: &str = "building-cpd";
 const T0: &str = "2026-01-01T00:00:00.000Z";
 const T1: &str = "2026-01-01T01:00:00.000Z";
 
-/// A machine `hs` with Context `building-cpd`, a doc candidate and a pending retirement.
+/// A machine `hs` with Context `building-cpd`, a pending retirement.
 fn fx() -> TestEnv {
     let env = TestEnv::new();
     fs::create_dir_all(env.cpd_home()).unwrap();
@@ -40,17 +40,12 @@ fn fx() -> TestEnv {
     for text in ["Old fact.", "Same fact.", "Worth documenting."] {
         env.cpd(&["context", "note", text, "--context", CTX]).ok();
     }
-    let curation = |record: &str, doc: bool| Curation {
+    let curation = |record: &str| Curation {
         record: record.parse().unwrap(),
         topic: "engine".into(),
         short: format!("short of {record}"),
-        doc_paths: doc.then(|| vec!["docs/a.md".to_owned()]),
     };
-    let curations = [
-        curation("hs-n1", false),
-        curation("hs-n2", false),
-        curation("hs-n3", true),
-    ];
+    let curations = [curation("hs-n1"), curation("hs-n2"), curation("hs-n3")];
     let proposals = [Proposal {
         record: "hs-n1".parse().unwrap(),
         reason: Reason::Duplicate,

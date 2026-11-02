@@ -694,10 +694,8 @@ impl NewEvent {
         curated: u64,
         rejected: u64,
         retire: u64,
-        docs: u64,
     ) -> NewEvent {
-        let mut data =
-            json!({"context": context, "curated": curated, "retire": retire, "docs": docs});
+        let mut data = json!({"context": context, "curated": curated, "retire": retire});
         // `rejected` is there only when a line was rejected (contract §5.2).
         if rejected > 0 {
             data["rejected"] = json!(rejected);
@@ -981,8 +979,8 @@ mod tests {
                 vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())]
             }
             Kind::ContextCurated => vec![
-                NewEvent::context_curated(T, s, 0, 0, 0, 0),
-                NewEvent::context_curated(T, s, 1, 1, 0, 0),
+                NewEvent::context_curated(T, s, 0, 0, 0),
+                NewEvent::context_curated(T, s, 1, 1, 0),
             ],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],

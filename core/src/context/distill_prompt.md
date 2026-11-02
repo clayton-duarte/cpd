@@ -9,7 +9,7 @@ Your context also carries the User's axioms (AGENTS.md): they bind your judgemen
 
 Answer with JSON lines only, on standard output: one line for each record of `batch.md`, in the order of `batch.md`, each id exactly once, copied exactly from the headers, no other text, no code fence, no blank commentary. Each line is one JSON object:
 
-{"id": "<id>", "topic": "<topic>", "short": "<short form>", "retire": null, "doc": false}
+{"id": "<id>", "topic": "<topic>", "short": "<short form>", "retire": null}
 
 - `topic`: 1 to 40 characters, lowercase letters, digits and `-` only (no spaces, capitals or `_`). Reuse a topic of `known.md` when one fits; make a new short one only when none does.
 - `short`: at most 100 bytes, counted in BYTES and not characters (a non-ASCII character costs 2 to 3 bytes), one line, the record compressed for machines to read, not for humans: keep names, numbers, commands, paths and the reason when it matters; drop everything else. It must say what is true, so that a reader who never sees the record knows the decision, fact or question. It must be readable alone: it names its subject, and never says only `correction to <id>`. For an `answer` record, the short form names its question.
@@ -18,11 +18,9 @@ Answer with JSON lines only, on standard output: one line for each record of `ba
   - `{"reason": "superseded", "target": "<id>"}`: a NEWER record in force, in the batch or in `known.md`, overrules this one; the target is that newer record. Recency wins: a later record overrules an earlier one.
   - `{"reason": "documented", "target": "<repo>:<path>"}`: the record's content is written in the documentation; the target is one of the lines under the record's id in `docs.md`, copied exactly. Never invent one.
   Propose a retirement only when sure. The target is never the record itself.
-- `doc`: true only when `docs.md` lists no place for the record AND the record states something lasting (a rule, a contract, a name); false when `docs.md` lists any place for it.
 
-Four example lines, one per case (the ids and the path are made up; copy yours from the files):
+Three example lines, one per case (the ids and the path are made up; copy yours from the files):
 
-{"id": "hs-n3", "topic": "storage", "short": "sqlite file lives in ~/.cpd/store.db", "retire": null, "doc": false}
-{"id": "hs-d4", "topic": "storage", "short": "use WAL mode for the store", "retire": {"reason": "superseded", "target": "hs-d9"}, "doc": false}
-{"id": "hs-d5", "topic": "locking", "short": "distill: one run per Context at a time, flock on locks/distill-<context>.lock, freed when run dies", "retire": {"reason": "documented", "target": "cpd:docs/contract.md"}, "doc": false}
-{"id": "hs-d6", "topic": "naming", "short": "ids are <machine>-<kind><n>, e.g. hs-d6", "retire": null, "doc": true}
+{"id": "hs-n3", "topic": "storage", "short": "sqlite file lives in ~/.cpd/store.db", "retire": null}
+{"id": "hs-d4", "topic": "storage", "short": "use WAL mode for the store", "retire": {"reason": "superseded", "target": "hs-d9"}}
+{"id": "hs-d5", "topic": "locking", "short": "distill: one run per Context at a time, flock on locks/distill-<context>.lock, freed when run dies", "retire": {"reason": "documented", "target": "cpd:docs/contract.md"}}

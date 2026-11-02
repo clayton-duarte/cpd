@@ -40,12 +40,11 @@ fn fx() -> Fx {
     fx
 }
 
-fn curation(record: &str, short: &str, doc_paths: Option<&[&str]>) -> Curation {
+fn curation(record: &str, short: &str) -> Curation {
     Curation {
         record: record.parse().unwrap(),
         topic: "engine".into(),
         short: short.into(),
-        doc_paths: doc_paths.map(|p| p.iter().map(|s| (*s).to_owned()).collect()),
     }
 }
 
@@ -58,18 +57,14 @@ fn proposal(record: &str, reason: Reason, target: &str) -> Proposal {
 }
 
 /// Curates every record; proposes hs-n1 (duplicate of hs-n2), hs-n3 (documented in docs/a.md) and hs-n4
-/// (superseded by hs-d1) for retirement; flags hs-d1 as a doc candidate.
+/// (superseded by hs-d1) for retirement.
 fn proposed(fx: &Fx) {
     let curations = [
-        curation("hs-n1", "old fact", None),
-        curation("hs-n2", "same fact", None),
-        curation("hs-n3", "documented fact", None),
-        curation("hs-n4", "kept fact", None),
-        curation(
-            "hs-d1",
-            "worth documenting",
-            Some(&["docs/a.md", "docs/b.md"]),
-        ),
+        curation("hs-n1", "old fact"),
+        curation("hs-n2", "same fact"),
+        curation("hs-n3", "documented fact"),
+        curation("hs-n4", "kept fact"),
+        curation("hs-d1", "worth documenting"),
     ];
     let proposals = [
         proposal("hs-n1", Reason::Duplicate, "hs-n2"),
@@ -179,7 +174,7 @@ fn a_rejected_retirement_keeps_the_record_in_force_and_is_not_proposed_again() {
     propose(
         &mut fx.env.store(),
         &ContextId::parse(CTX).unwrap(),
-        &[curation("hs-n1", "old fact again", None)],
+        &[curation("hs-n1", "old fact again")],
         &[proposal("hs-n1", Reason::Superseded, "hs-n2")],
     )
     .unwrap();
@@ -357,34 +352,6 @@ fn show_labels_a_retired_record() {
     );
 }
 
-/// As `proposed`, plus hs-n2 as a second doc candidate: three retirements (hs-n1, hs-n3, hs-n4), two candidates
-/// (hs-n2, hs-d1; oldest first is record order).
-fn proposed_two_candidates(fx: &Fx) {
-    let curations = [
-        curation("hs-n1", "old fact", None),
-        curation("hs-n2", "same fact", Some(&["docs/c.md"])),
-        curation("hs-n3", "documented fact", None),
-        curation("hs-n4", "kept fact", None),
-        curation(
-            "hs-d1",
-            "worth documenting",
-            Some(&["docs/a.md", "docs/b.md"]),
-        ),
-    ];
-    let proposals = [
-        proposal("hs-n1", Reason::Duplicate, "hs-n2"),
-        proposal("hs-n3", Reason::Documented, "docs/a.md"),
-        proposal("hs-n4", Reason::Superseded, "hs-d1"),
-    ];
-    propose(
-        &mut fx.env.store(),
-        &ContextId::parse(CTX).unwrap(),
-        &curations,
-        &proposals,
-    )
-    .unwrap();
-}
-
 fn ids(list: &Value) -> Vec<String> {
     list.as_array()
         .unwrap()
@@ -396,7 +363,7 @@ fn ids(list: &Value) -> Vec<String> {
 #[test]
 fn curation_gives_each_entry_the_records_full_text() {
     let fx = fx();
-    proposed_two_candidates(&fx);
+    proposed(&fx);
     let out = fx.cpd(&["context", "curation", "--context", CTX]).ok();
     let texts = |list: &Value| {
         list.as_array()
@@ -419,7 +386,7 @@ fn curation_gives_each_entry_the_records_full_text() {
 #[test]
 fn curation_limit_returns_the_first_n_of_each_list_oldest_first() {
     let fx = fx();
-    proposed_two_candidates(&fx);
+    proposed(&fx);
     let out = fx
         .cpd(&["context", "curation", "--context", CTX, "--limit", "2"])
         .ok();
@@ -433,7 +400,7 @@ fn curation_limit_returns_the_first_n_of_each_list_oldest_first() {
 #[test]
 fn curation_totals_count_every_pending_entry_whatever_the_limit() {
     let fx = fx();
-    proposed_two_candidates(&fx);
+    proposed(&fx);
     let out = fx
         .cpd(&["context", "curation", "--context", CTX, "--limit", "1"])
         .ok();
@@ -450,7 +417,7 @@ fn curation_totals_count_every_pending_entry_whatever_the_limit() {
 #[test]
 fn curation_without_a_limit_returns_every_entry() {
     let fx = fx();
-    proposed_two_candidates(&fx);
+    proposed(&fx);
     let out = fx.cpd(&["context", "curation", "--context", CTX]).ok();
     assert_eq!(ids(&out["retire"]), ["hs-n1", "hs-n3", "hs-n4"], "{out}");
     assert_eq!(out["retire_total"], json!(3), "{out}");
@@ -459,7 +426,7 @@ fn curation_without_a_limit_returns_every_entry() {
 #[test]
 fn curation_refuses_a_limit_of_zero() {
     let fx = fx();
-    proposed_two_candidates(&fx);
+    proposed(&fx);
     refused(
         &fx.cpd(&["context", "curation", "--context", CTX, "--limit", "0"]),
         "args_invalid",

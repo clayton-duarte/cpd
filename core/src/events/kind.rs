@@ -329,7 +329,7 @@ impl Kind {
             DocsDecided => spec([Y, N, N, N, N], &["context", "sent", "dismissed"], &[]),
             ContextCurated => spec(
                 [Y, N, N, N, N],
-                &["context", "curated", "retire", "docs"],
+                &["context", "curated", "retire"],
                 &["rejected"],
             ),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),

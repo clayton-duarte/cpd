@@ -488,7 +488,7 @@ const SPEC: &[SpecRow] = &[
         "context-curated",
         "c",
         "",
-        &["context", "curated", "retire", "docs"],
+        &["context", "curated", "retire"],
         &[],
     ),
     ("context-renamed", "c", "", &["title"], &[]),

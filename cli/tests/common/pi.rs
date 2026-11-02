@@ -132,7 +132,9 @@ pub fn curates_all(inputs: &Inputs) -> String {
     batch
         .lines()
         .filter_map(|line| line.strip_prefix('[')?.split_once(']').map(|(id, _)| id))
-        .map(|id| format!("{{\"id\":\"{id}\",\"topic\":\"t\",\"short\":\"s {id}\",\"retire\":null,\"doc\":false}}\n"))
+        .map(|id| {
+            format!("{{\"id\":\"{id}\",\"topic\":\"t\",\"short\":\"s {id}\",\"retire\":null}}\n")
+        })
         .collect()
 }
 

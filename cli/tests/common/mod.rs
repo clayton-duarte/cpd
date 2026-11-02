@@ -78,7 +78,7 @@ pub const PI_REPLY: &str = r##"reply() {
 /// doc candidate, for every record of `batch.md` (the current directory is the Context's digest directory).
 pub const CURATES_ALL: &str = r##"while IFS= read -r line; do
   case "$line" in "["*) id=${line%%]*}; id=${id#[}
-    echo "{\"id\":\"$id\",\"topic\":\"t\",\"short\":\"s $id\",\"retire\":null,\"doc\":false}" ;;
+    echo "{\"id\":\"$id\",\"topic\":\"t\",\"short\":\"s $id\",\"retire\":null}" ;;
   esac
 done < batch.md"##;
 

@@ -59,15 +59,14 @@ impl Curate {
             .unwrap();
     }
 
-    /// Curates `ids` of `context`; proposes the retirement of `retire` (all duplicates of the last of `ids`) and flags `docs`.
-    fn propose(&self, context: &str, ids: &[&str], retire: &[&str], docs: &[&str]) {
+    /// Curates `ids` of `context`; proposes the retirement of `retire` (all duplicates of the last of `ids`).
+    fn propose(&self, context: &str, ids: &[&str], retire: &[&str]) {
         let curations: Vec<Curation> = ids
             .iter()
             .map(|id| Curation {
                 record: RecordId::parse(id).unwrap(),
                 topic: "engine".into(),
                 short: format!("short of {id}"),
-                doc_paths: docs.contains(id).then(|| vec!["docs/a.md".to_owned()]),
             })
             .collect();
         let proposals: Vec<Proposal> = retire
@@ -125,9 +124,8 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
         "building",
         &["hs-n1", "hs-n2", "hs-n3", "hs-n9"],
         &["hs-n1", "hs-n2"],
-        &[],
     );
-    fx.propose("control", &["hs-n4", "hs-n5"], &["hs-n4"], &[]);
+    fx.propose("control", &["hs-n4", "hs-n5"], &["hs-n4"]);
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
     fx.assert_item("curate-retire", "control", "control: 1 to retire");
@@ -176,12 +174,7 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
 fn e8_opens_the_curate_items_cyan() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
-    fx.propose(
-        "building",
-        &["hs-n1", "hs-n2", "hs-n3"],
-        &["hs-n1"],
-        &["hs-n3"],
-    );
+    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1"]);
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 1 to retire");
     assert!(
@@ -211,11 +204,8 @@ impl Curate {
         fs::write(&path, lines.join("\n") + "\n").unwrap();
     }
 
-    fn pending(&self, context: &str) -> (i64, i64) {
-        (
-            self.fx.env.query(&format!("SELECT count(*) FROM record_retirements WHERE context = '{context}' AND status = 'pending'")),
-            self.fx.env.query(&format!("SELECT count(*) FROM record_curations WHERE context = '{context}' AND doc_candidate = 'pending'")),
-        )
+    fn pending(&self, context: &str) -> i64 {
+        self.fx.env.query(&format!("SELECT count(*) FROM record_retirements WHERE context = '{context}' AND status = 'pending'"))
     }
 }
 
@@ -228,7 +218,6 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
         "building",
         &["hs-n1", "hs-n2", "hs-n3", "hs-n4"],
         &["hs-n1", "hs-n2"],
-        &["hs-n3"],
     );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
@@ -244,7 +233,7 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
         fx.items("curate-retire")
     );
     assert_eq!(fx.pending("building"), before, "the rows stay pending");
-    assert_eq!(before, (2, 1));
+    assert_eq!(before, 2);
 
     fx.fx
         .env
@@ -263,7 +252,6 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
         "building",
         &["hs-n1", "hs-n2", "hs-n3"],
         &["hs-n1", "hs-n2"],
-        &["hs-n3"],
     );
     fx.records(
         "control",
@@ -273,7 +261,6 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
         "control",
         &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"],
         &["hs-n4"],
-        &["hs-n9"],
     );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
