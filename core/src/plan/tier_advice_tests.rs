@@ -1,8 +1,8 @@
 //! The pure Tier advice (contract §3.4b): the rule over in-memory rows and the first-Attempt query over a tempdir store.
 
 use super::tier_advice::{Row, first_attempts, qualifying, recommend, recommend_in, wilson_lower};
-use crate::config::{Role, RoleTiers};
 use crate::config::{Catalog, Tier, TierModel};
+use crate::config::{Role, RoleTiers};
 use crate::home::CpdHome;
 use crate::store::Store;
 

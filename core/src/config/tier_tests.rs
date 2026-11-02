@@ -246,7 +246,6 @@ mod tier_g {
         assert_eq!(g.letter().as_char(), 'G');
         assert_eq!(g.level(), "off");
     }
-
 }
 
 #[cfg(test)]

@@ -2228,10 +2228,10 @@ fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier(
     assert_eq!(fx.attempt("api-a1").0, "ended");
 }
 
-/// pro-d53: a Job stored on H0, H1 or H2 is in the Worker range: E3 starts it at that Tier, not refused.
+/// A Job stored on a Tier of the worker range (H3..O1 on the default roles GX / H3 / O2 / O4 and this catalog) starts at that Tier.
 #[test]
-fn e3_starts_a_job_stored_on_h0_h1_or_h2_at_that_tier() {
-    for tier in ["H0", "H1", "H2"] {
+fn e3_starts_a_job_stored_on_a_tier_of_the_worker_range_at_that_tier() {
+    for tier in ["H3", "S1", "S3"] {
         let fx = engine_scheduling("");
         fx.add_job_on(tier, "repo", "api", &[], "");
 
@@ -2259,6 +2259,139 @@ fn e3_starts_a_job_stored_on_h0_h1_or_h2_at_that_tier() {
         fx.fakes.spawn.exit(pid, 1);
         fx.watch_first_tick().unwrap();
     }
+}
+
+/// The roles GX / H3 / `lead` / O3 on the catalog H [0-4], S [0,1,3,4], O [0,2,3,4], G []: the worker range is H3..S3
+/// for `lead` = S4 and H3..S1 for S2. S has no effort 2, so `S2` is a Tier the catalog refuses.
+fn ranged_roles(lead: &str) -> String {
+    format!(
+        "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n"
+    )
+}
+
+/// [`ranged_roles`]' catalog, over the engine Plan's.
+fn ranged_catalog(fx: &Ip) {
+    fx.env.sql(
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';
+         UPDATE tier_catalog SET efforts = '[0,1,3,4]' WHERE letter = 'S';
+         UPDATE tier_catalog SET efforts = '[0,2,3,4]' WHERE letter = 'O';",
+    );
+}
+
+/// The Job keys E3 raised a `tier_not_allowed` `error` Event for, with how many each got.
+fn tier_not_allowed_errors(fx: &Ip) -> Vec<(String, i64)> {
+    fx.env.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT job, count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_not_allowed' GROUP BY job ORDER BY job",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })
+}
+
+/// A stored Job Tier outside the worker range is never started: one `error` Event per Job (`tier_not_allowed`), the Job stays
+/// queued with no Attempt, and E3 goes on to the Jobs in range.
+#[test]
+fn e3_never_starts_a_job_stored_outside_the_worker_range() {
+    {
+        let fx = engine_scheduling(&ranged_roles("S4"));
+        ranged_catalog(&fx);
+        // Outside H3..S3: below the floor, above the ceiling, another letter.
+        fx.add_job_on("H2", "repo", "low", &[], "");
+        fx.add_job_on("S4", "repo", "high", &[], "");
+        fx.add_job_on("O2", "repo", "other", &[], "");
+        fx.add_job_on("S3", "repo", "ok", &[], "");
+
+        fx.watch_first_tick().unwrap();
+
+        assert_eq!(
+            tier_not_allowed_errors(&fx),
+            [("high".into(), 1), ("low".into(), 1), ("other".into(), 1)],
+            "{:?}",
+            fx.texts("error")
+        );
+        for key in ["low", "high", "other"] {
+            assert_eq!(fx.job_status(key), "queued", "{key}");
+        }
+        assert_eq!(
+            fx.env
+                .query::<String>("SELECT group_concat(job) FROM attempts"),
+            "ok",
+            "only the Job in range started"
+        );
+        assert_eq!(
+            fx.events("attempt-started")[0].3["tier"],
+            "S3",
+            "the ceiling is in range"
+        );
+        let (_, pid) = driver_launch(&fx, "ok-a1");
+        fx.fakes.spawn.exit(pid, 1);
+        fx.watch_first_tick().unwrap();
+    }
+
+    // A second config moves the ceiling: with lead_tier = S2 the range is H3..S1 and a Job on S3 is refused.
+    let fx = engine_scheduling(&ranged_roles("S2"));
+    ranged_catalog(&fx);
+    fx.add_job_on("S3", "repo", "high", &[], "");
+    fx.add_job_on("S1", "repo", "ok", &[], "");
+    fx.watch_first_tick().unwrap();
+    assert_eq!(tier_not_allowed_errors(&fx), [("high".into(), 1)]);
+    assert_eq!(fx.job_status("high"), "queued");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT group_concat(job) FROM attempts"),
+        "ok"
+    );
+    let (_, pid) = driver_launch(&fx, "ok-a1");
+    fx.fakes.spawn.exit(pid, 1);
+    fx.watch_first_tick().unwrap();
+}
+
+/// E2 steps an Attempt whose Tier the catalog refuses (S2) to the next valid rung of the worker range (S3); at the ceiling
+/// there is none: with lead_tier = S2 the range ends at S1, the Job fails and nothing is retried above it.
+#[test]
+fn e2_ladder_climbs_inside_the_worker_range_and_fails_at_its_ceiling() {
+    {
+        let fx = engine_with_plan(&format!(
+            "concurrency = 1\nretry_cap = 3\n{}",
+            ranged_roles("S4")
+        ));
+        ranged_catalog(&fx);
+        let _busy = fx.live_driver("busy-a1");
+        fx.add_running("busy", "running", &ago_in(&fx, 1));
+        fx.add_running("api", "starting", &ago_in(&fx, 1));
+        fx.watch_first_tick().unwrap();
+        assert_ne!(fx.attempt("api-a1").0, "starting");
+        assert_eq!(
+            fx.env
+                .query::<String>("SELECT tier FROM attempts WHERE id = 'api-a2'"),
+            "S3",
+            "the next valid rung inside H3..S3"
+        );
+    }
+
+    let fx = engine_with_plan(&format!(
+        "concurrency = 1\nretry_cap = 3\n{}",
+        ranged_roles("S2")
+    ));
+    ranged_catalog(&fx);
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago_in(&fx, 1));
+    fx.add_running("api", "starting", &ago_in(&fx, 1));
+    fx.watch_first_tick().unwrap();
+    assert_eq!(fx.attempt("api-a1").0, "ended");
+    assert_eq!(
+        fx.job_status("api"),
+        "failed",
+        "no rung of H3..S1 at or above S2"
+    );
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api' AND number > 1"),
+        0,
+        "no Attempt above the ceiling"
+    );
+    assert_eq!(fx.events("job-failed").len(), 1);
 }
 
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
@@ -2874,7 +3007,12 @@ fn polling(config_extra: &str) -> Ip {
 /// [`Says`] holds.
 fn open_pr() -> (Ip, Says) {
     // The update Job is queued at the config's `worker_tier` (default H3 since #383): this one is S1.
-    let fx = polling("worker_tier = \"S1\"");
+    open_pr_with("worker_tier = \"S1\"")
+}
+
+/// [`open_pr`] on the config `config_extra`.
+fn open_pr_with(config_extra: &str) -> (Ip, Says) {
+    let fx = polling(config_extra);
     fx.engine_plan();
     fx.env.sql(
         "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';
@@ -2893,6 +3031,25 @@ fn open_pr() -> (Ip, Says) {
     let text = says.0.clone();
     fx.route_fn("gh", move |_| Reply::ok(&text.lock().unwrap()));
     (fx, says)
+}
+
+/// The `update` Job runs at `worker_tier`, floored to a valid rung when it is not one: H4 is no rung (H offers 0-3 here), so the
+/// lowest valid rung at or above it is S1 (S offers 1-5; its effort 5 is no rung).
+#[test]
+fn an_open_job_runs_at_worker_tier_floored_to_a_valid_rung() {
+    let (fx, says) = open_pr_with("worker_tier = \"H4\"\nlead_tier = \"S4\"");
+    says.set("CONFLICTING", "DIRTY");
+    polls(&fx, 4);
+    assert_eq!(
+        fx.jobs_of_kind("update"),
+        [("up-repo".to_owned(), "queued".to_owned())]
+    );
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'up-repo'"),
+        "S1",
+        "worker_tier H4 floored to its rung"
+    );
 }
 
 /// Whether `call` is the poll's search (the one `gh api graphql` of a poll that no pull request is stored for).

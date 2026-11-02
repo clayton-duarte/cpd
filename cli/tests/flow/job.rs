@@ -3373,7 +3373,13 @@ fn the_worker_range_follows_worker_tier_and_lead_tier_in_config() {
             "worker_tier",
         );
     }
-    not_allowed_in(&job_add(&fx, "pl", "k", "S4", &[]), "S4", "S0", "S3", "worker_tier");
+    not_allowed_in(
+        &job_add(&fx, "pl", "k", "S4", &[]),
+        "S4",
+        "S0",
+        "S3",
+        "worker_tier",
+    );
     job_add(&fx, "pl", "b-s0", "S0", &[]).ok();
     // A Tier the catalog does not offer is `tier_invalid`, before the range: O1 is no effort of O.
     refused(&job_add(&fx, "pl", "k", "O1", &[]), "tier_invalid", 2);

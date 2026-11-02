@@ -114,7 +114,13 @@ fn not_allowed(run: &common::Run, tier: &str, floor: &str, ceiling: &str) {
         "{run:?}"
     );
     let message = e["message"].as_str().unwrap();
-    for part in [tier, "lead", &format!("{floor}-{ceiling}"), "lead_tier", "manager_tier"] {
+    for part in [
+        tier,
+        "lead",
+        &format!("{floor}-{ceiling}"),
+        "lead_tier",
+        "manager_tier",
+    ] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
