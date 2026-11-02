@@ -1659,7 +1659,7 @@ CREATE TABLE jobs (
   appended            INTEGER NOT NULL CHECK (appended IN (0, 1)),
   fingerprint         TEXT CHECK (fingerprint IS NULL OR length(fingerprint) = 64),
   created_txn         INTEGER NOT NULL REFERENCES txns(id),
-  retry_tier          TEXT,
+  retry_tier          TEXT CHECK (retry_tier IS NULL OR (length(retry_tier) = 2 AND substr(retry_tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(retry_tier, 2, 1) BETWEEN '0' AND '4' OR substr(retry_tier, 2, 1) = 'X'))),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   cancel_reason       TEXT,
   cancel_requested_at TEXT,
   failed_cause        TEXT,
@@ -1706,7 +1706,7 @@ CREATE TABLE attempts (
   id               TEXT NOT NULL,
   job              TEXT NOT NULL,
   number           INTEGER NOT NULL CHECK (number >= 1),
-  tier             TEXT NOT NULL CHECK (length(tier) = 2),
+  tier             TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   origin           TEXT NOT NULL CHECK (origin IN ('ladder', 'retry')),
   status           TEXT NOT NULL CHECK (status IN ('starting', 'running', 'merging', 'ended')),
   outcome          TEXT CHECK (outcome IN ('merged', 'failed', 'cancelled')),
@@ -1838,7 +1838,7 @@ CREATE TABLE sessions (
   file        TEXT,
   forked_from TEXT REFERENCES sessions(id),
   cwd         TEXT NOT NULL,
-  tier        TEXT NOT NULL CHECK (length(tier) = 2),
+  tier        TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   tmux_pane   TEXT CHECK (tmux_pane IS NULL OR tmux_pane GLOB '%[0-9]*'),
   state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'blocked', 'idle', 'stopped')),
   state_label TEXT,
@@ -2521,7 +2521,7 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
 - **`<YYYYMMDDTHHMM>-tier-syntax-g-x`** (Plan `status-config-tiers`, Tier model v2, pro-d328 to pro-d332; made with `scripts/new-migration.sh tier-syntax-g-x breaking`), declared **`breaking after <n>`**, where `<n>` is the number of migrations, legacy and named, that sort before it at submission. It makes the Tier syntax of §9 storable: `jobs.tier` admits the letter `G` and an `X` second character, and `tier_catalog.letter` admits `G` (§4.4). SQLite cannot alter a CHECK constraint, so it rebuilds both tables (K4), which makes it breaking. One transaction:
   1. `jobs_new` with the §4.4 definition, whose `tier` check is the one of §4.4 (`substr(tier, 1, 1) IN ('O', 'S', 'H', 'G')`, and the second character `0`–`4` or `X`: effort 5 is gone); every row copied with all columns and every `seq` kept, the old table dropped, the new one renamed, and every index and trigger of `jobs` recreated exactly as §4.4 has them. The copy writes no `history` row. A stored Tier with effort 5 fails the new CHECK and so the migration (no Worker, Lead or Manager could have one: every role refused effort 5).
   2. `tier_catalog` is rebuilt **empty** with the §4.4 definition (`letter IN ('O', 'S', 'H', 'G')`): it is a cache, and the next `cpd tiers` recomputes its rows, as `tier-catalog-source` did (above).
-  The reconcile (K4) keeps the history triggers of both tables. `PRAGMA foreign_key_check` is empty afterwards. The pinned `SCHEMA_HASH` changes (`scripts/repin.sh`, §4.3). Tests: every `jobs` row and `seq` survives; `tier_catalog` is empty; the CHECK accepts `GX` and `G4` and refuses `G9`.
+  The reconcile (K4) keeps the history triggers of both tables. `PRAGMA foreign_key_check` is empty afterwards. The pinned `SCHEMA_HASH` changes (`scripts/repin.sh`, §4.3). Tests: every `jobs` row and `seq` survives; `tier_catalog` is empty; the CHECK accepts `GX` and `G4` and refuses `G9`. `sessions.tier`, `attempts.tier` and `jobs.retry_tier` are not rebuilt here: `20261103T0700-tier-rows-v2` (§4.5) fixes them.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -2674,6 +2674,14 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
   - **The file clean-up**, last in the hook and only after all SQL succeeded; each step ignores "not found" and never fails the migration: remove `$CPD_HOME/engines/holographic/{eec-codereview,codereview,host,host-2}.db` (the engine index is rebuilt on the next search; a SQL-only merge would leave it silently stale); rename `$CPD_HOME/run/context-digests/eec-codereview` to `$CPD_HOME/run/context-digests/codereview` when the target does not exist.
   - **What it deliberately does not do**: create a Context row or an Event; rewrite Event text, Event `data` or `history` (they keep the old ids); change a Context id that is not one of the two calls above.
 
+- **`20261103T0700-tier-rows-v2`** (pro-d204, pro-n347, pro-d328 to pro-d330; the User's protocol pro-d204: a mitigation, then a root-cause fix as a tracked Job with regression tests; named by hand after `20261103T0600-permanent-contexts`, the newest on `main`, since `scripts/new-migration.sh` names by the UTC clock and would sort it before that one; `-- cpd-migration: breaking after 98`: the 98 `*.sql` migration files on `main` sort before it), declared **`breaking`**: it rebuilds three tables and tightens three CHECKs (A1), so a binary older than it is refused (`store_too_new`, R4). It is SQL only, no Rust hook, and runs in one transaction with `PRAGMA legacy_alter_table = ON` as `20261103T0501-tier-syntax-g-x` does (the runner already applies migrations with foreign keys off).
+  - **Why.** `20261103T0501-tier-syntax-g-x` rebuilt `jobs` and `tier_catalog` only. It left `sessions.tier` and `attempts.tier` with their length-only CHECK, left `jobs.retry_tier` with no CHECK, and did not rewrite stored effort-5 values. An archived Manager row `preco-manager` with `sessions.tier = 'O5'` survived on the machine `pro`, and `Tier::parse` failed on it at the read boundary (tui/src/read/shared.rs, tui/src/read/tree.rs: `store_failed`), which blanked the whole tree pane (pro-n347, reported 2026-11-02 14:27 EST). The row was retiered to `O3` by hand as a mitigation; this migration is the root-cause fix.
+  - **Rebuilds** (K4, the pattern of `tier-syntax-g-x`): `sessions`, `attempts` and `jobs`, each as `<t>_new` with its §4.4 definition, every row and every column copied with the primary key and `seq` kept (`INSERT INTO <t>_new (...) SELECT ... FROM <t> ORDER BY ...`), then `DROP TABLE <t>` and `ALTER TABLE <t>_new RENAME TO <t>`. Then every index and hand-written trigger the DROP removed is recreated from the live schema, none dropped or changed: `sessions_plan`, `sessions_one_manager`, `sessions_live`, `sessions_working_pr_new`, `sessions_working_pr_valid`, `sessions_working_pr_clear`, `attempts_one_active`, `attempts_active`, `jobs_plan_status`, `jobs_skipped_n` and the triggers of `attempts` and `jobs`. The history triggers and `jobs_no_delete` are generated by the reconcile (K4), as in the earlier rebuilds. The copy writes no `history` row.
+  - **The new CHECKs** (§4.4): `sessions.tier` and `attempts.tier` admit the Tier syntax of §9 (`length(tier) = 2`, first character `O`, `S`, `H` or `G`, second `0` to `4` or `X`), and `jobs.retry_tier` the same, `NULL` allowed. `jobs.tier` keeps the CHECK `tier-syntax-g-x` gave it.
+  - **The effort-5 rewrite, in the copy.** The Tier column of the `SELECT` is `CASE WHEN substr(tier, 2, 1) = '5' THEN substr(tier, 1, 1) || '4' ELSE tier END` for `sessions.tier` and `attempts.tier`, and the same on `retry_tier` for `jobs.retry_tier` (a `NULL` stays `NULL`): `O5` becomes `O4`. There is no separate `UPDATE`, since the new CHECK would refuse the row first. `jobs.tier` cannot hold effort 5 (the frozen `tier-syntax-g-x` refuses it), so it is copied as it is. Any other stored value outside the syntax (`Z9`, `s2`, three characters) is not rewritten: the new CHECK refuses it, the migration fails with the CHECK error and changes nothing.
+  - **`sessions_working_pr_valid` text fix.** It is recreated naming `workflows`: `EXISTS (SELECT 1 FROM workflows WHERE plan = NEW.plan AND key = NEW.working_pr)`. `20261103T0300-session-crash-loop.sql` still says `FROM prs`. `20261103T0400-workflow-rename` renamed `prs` to `workflows` and rewrote this trigger's text in a live store, but not in that file, so the file's text is stale.
+  - **Frozen.** `20261103T0501-tier-syntax-g-x` is not edited: it stays as merged, and this migration does for the three columns above what it did not do.
+  - **Derived files, by script only.** `scripts/sync-version.sh` (the version follows the migrations: `Cargo.toml`, `Cargo.lock`) and `scripts/repin.sh` (`SCHEMA_HASH` in core/src/store/schema.rs, §4.3) run after the migration is written; neither is edited by hand.
 
 ## 5. Events
 

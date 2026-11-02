@@ -1586,7 +1586,7 @@ fn archivable(fx: &Fx) {
     fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
-                  ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
+                  ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O4', 'idle', 't', 't0', NULL);
          INSERT INTO jobs (plan, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, cancel_reason, cancel_requested_at, appended, created_txn, created_at)
            VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 'a fixture', 't', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)

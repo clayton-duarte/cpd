@@ -63,7 +63,7 @@ fn resume_a_loop_guarded_manager_writes_one_session_resumed_event() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
     fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_label, state_at, created_at, forked_from)
-         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'blocked', 'φ: loop guard', 't5', 't5', NULL)",
+         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O4', 'blocked', 'φ: loop guard', 't5', 't5', NULL)",
     );
     let out = fx.cpd(&["session", "resume", "mgr1"]).ok();
     let events = resumed(&fx);
