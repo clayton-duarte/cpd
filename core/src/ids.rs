@@ -150,18 +150,28 @@ impl PermanentContext {
     ];
 
     pub fn id(self) -> &'static str {
-        todo!("perm-impl")
+        match self {
+            PermanentContext::Cpd => "cpd",
+            PermanentContext::Host => "host",
+            PermanentContext::Codereview => "codereview",
+        }
     }
 
     pub fn title(self) -> &'static str {
-        todo!("perm-impl")
+        match self {
+            PermanentContext::Cpd => "cpd",
+            PermanentContext::Host => "Host: local maintenance of this machine",
+            PermanentContext::Codereview => "codereview",
+        }
     }
 }
 
 impl ContextId {
     /// The Permanent Context this id names, if it is one of the three.
     pub fn permanent(&self) -> Option<PermanentContext> {
-        None
+        PermanentContext::ALL
+            .into_iter()
+            .find(|p| p.id() == self.as_str())
     }
 }
 

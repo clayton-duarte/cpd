@@ -387,8 +387,9 @@ pub fn agent_cwd() -> Result<String, CpdError> {
 }
 
 /// [`agent_cwd`] for a given home directory (`None`: unknown, `usage`).
-pub fn agent_cwd_in(_home: Option<PathBuf>) -> Result<String, CpdError> {
-    todo!("perm-impl")
+pub fn agent_cwd_in(home: Option<PathBuf>) -> Result<String, CpdError> {
+    let home = crate::host::pi::PiDirs::resolve(home, None, None)?.home;
+    Ok(home.canonicalize().unwrap_or(home).display().to_string())
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {

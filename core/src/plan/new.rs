@@ -46,21 +46,6 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     }))
 }
 
-/// The realpath of the directory `plan new` runs from: where the Lead starts (§6.4).
-fn caller_cwd() -> Result<String, CpdError> {
-    let setup = |e: std::io::Error| {
-        CpdError::new(
-            ErrorCode::SetupFailed,
-            format!("Cannot resolve the current directory: {e}."),
-        )
-    };
-    Ok(std::env::current_dir()
-        .and_then(|d| d.canonicalize())
-        .map_err(setup)?
-        .display()
-        .to_string())
-}
-
 pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     let brief: Option<Text> = args
         .brief_file
@@ -134,7 +119,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         .with("context", args.context.as_str())
         .with("next", format!("cpd context unarchive {}", args.context)));
     }
-    let cwd = caller_cwd()?;
+    let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
     let lead_runner = args.runner.unwrap_or(env.config.lead_runner);
 
