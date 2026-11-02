@@ -140,16 +140,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
-    let review = !env.config.inbox.review_context.is_empty()
-        && args.context.as_str() == env.config.inbox.review_context;
-    let tier = args
-        .tier
-        .unwrap_or(if review {
-            env.config.review_lead_tier
-        } else {
-            env.config.lead_tier
-        })
-        .to_string();
+    let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
     env.store.write("plan new", |tx| {
         let exists = tx.query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| Ok(())).optional()?;
         if exists.is_some() {

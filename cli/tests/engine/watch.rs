@@ -38,10 +38,11 @@ type EventRow = (Option<String>, Option<String>, Option<String>, Value);
 const PLAN: &str = "pay";
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [
+const EFFORTS: [(&str, &str, &str); 4] = [
     ("O", "p/opus", "[0,1,2,3,4,5]"),
     ("S", "p/sonnet", "[1,2,3,4,5]"),
     ("H", "p/haiku", "[0,1,2,3]"),
+    ("G", "p/gemini", "[]"),
 ];
 
 /// A time `minutes` ago, as cpd writes times (contract §1.3).
@@ -2872,8 +2873,8 @@ fn polling(config_extra: &str) -> Ip {
 /// Job `blocked` that waits for a draft, so no other Job of the PR could run: E3 starts nothing. `gh` answers the search with what
 /// [`Says`] holds.
 fn open_pr() -> (Ip, Says) {
-    // The update Job is queued at the config's `open_tier` (default H3 since #383): this one is S1.
-    let fx = polling("open_tier = \"S1\"");
+    // The update Job is queued at the config's `worker_tier` (default H3 since #383): this one is S1.
+    let fx = polling("worker_tier = \"S1\"");
     fx.engine_plan();
     fx.env.sql(
         "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';

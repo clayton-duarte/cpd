@@ -26,7 +26,7 @@ const ARCHIVED_LEAD: &str = "lead5";
 const ARCHIVED_MANAGER: &str = "manager0";
 
 /// `session.rs`'s fixture (Leads `lead1` on `pay` and `lead2` on `other`, Manager `manager1`, Worker `worker1`, every
-/// Lead on `O3`, the Manager on `O5`), with the config the User set on 2026-10-20 (`lead_tier = "O2"`, `manager_tier =
+/// Lead on `O3`, the Manager on `O2`), with the config the User set on 2026-10-20 (`lead_tier = "O2"`, `manager_tier =
 /// "O4"`, hs-d506) and more Sessions: a side fork `fork1` (a Lead on `O3`), a Lead already on its target `lead4`
 /// (`O2`), and an archived Lead `lead5` and an archived Manager `manager0`, both stale.
 fn fixture(env: &TestEnv) {
@@ -41,7 +41,7 @@ fn fixture(env: &TestEnv) {
            ('fork1', 'lead', 'ctx', 'pay', NULL, 'Side', 'lead1', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5', NULL),
            ('lead4', 'lead', 'ctx', 'pay', NULL, 'On target', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't6', NULL),
            ('lead5', 'lead', 'ctx', 'pay', NULL, 'Archived lead', NULL, '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7', 't9'),
-           ('manager0', 'manager', 'ctx', NULL, NULL, 'Old manager', NULL, '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't8', 't9');"
+           ('manager0', 'manager', 'ctx', NULL, NULL, 'Old manager', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't8', 't9');"
     ));
 }
 
@@ -109,7 +109,7 @@ fn retier_one_moves_a_lead_to_lead_tier_with_one_event() {
 
     // Only that Session.
     assert_eq!(tier(&fx, LEAD2), "O3");
-    assert_eq!(tier(&fx, MANAGER), "O5");
+    assert_eq!(tier(&fx, MANAGER), "O2");
 }
 
 /// A Manager goes to `manager_tier` (`O4` = `xhigh`), a Context's Event with no Plan.
@@ -126,7 +126,7 @@ fn retier_one_moves_a_manager_to_manager_tier() {
             out["retiered"][0]["from"].as_str(),
             out["retiered"][0]["to"].as_str()
         ),
-        (Some("manager"), Some("O5"), Some("O4"))
+        (Some("manager"), Some("O2"), Some("O4"))
     );
     assert_eq!(tier(&fx, MANAGER), "O4");
     let shown = show(&fx, MANAGER);
@@ -145,7 +145,7 @@ fn retier_one_moves_a_manager_to_manager_tier() {
         (
             Some(MANAGER),
             Value::Null,
-            json!({"from": "O5", "to": "O4"})
+            json!({"from": "O2", "to": "O4"})
         )
     );
 }
@@ -181,7 +181,7 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
             want(FORK, "O3", "O2"),
             want(LEAD1, "O3", "O2"),
             want(LEAD2, "O3", "O2"),
-            want(MANAGER, "O5", "O4")
+            want(MANAGER, "O2", "O4")
         ]
     );
     assert_eq!(
@@ -201,7 +201,7 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
     }
     assert_eq!(tier(&fx, WORKER), "S2");
     assert_eq!(tier(&fx, ARCHIVED_LEAD), "O3");
-    assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O5");
+    assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O2");
 
     // One Event per changed Session, none for the others.
     let mut sessions: Vec<String> = events(&fx, "session-retiered")
@@ -348,8 +348,8 @@ fn a_fresh_lead_started_after_a_retier_runs_on_the_new_tier() {
     );
 }
 
-/// `fixture` plus a config that sets `review_lead_tier` explicitly, with `review` as `inbox.review_context` (empty
-/// text for none); `lead2` moves to another Context, so `lead1` and `fork1` are review-Context Leads and `lead2` not.
+/// `fixture` plus a config with `review` as `inbox.review_context` (empty text for none); `lead2` moves to another
+/// Context, so `lead1` and `fork1` are review-Context Leads and `lead2` not.
 fn review_fixture(env: &TestEnv, review: &str) {
     fixture(env);
     let inbox = if review.is_empty() {
@@ -358,79 +358,29 @@ fn review_fixture(env: &TestEnv, review: &str) {
         format!("[inbox]\nreview_context = \"{review}\"\n")
     };
     env.write_tmux_config(&format!(
-        "lead_tier = \"O2\"\nreview_lead_tier = \"S3\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n{inbox}"
+        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n{inbox}"
     ));
     env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('elsewhere', 'Else', 't', 'm1')");
     env.sql("UPDATE sessions SET context = 'elsewhere' WHERE id = 'lead2'");
 }
 
-/// A Lead of the review Context goes to `review_lead_tier`, not `lead_tier`.
-/// Fails now: the config key `review_lead_tier` is unknown, the command refuses the config.
+/// `--all`: every Lead goes to `lead_tier` whatever its Context (the review Context included), the Manager to
+/// `manager_tier`.
+/// Fails now: a review-Context Lead goes to a separate review Lead Tier (S3).
 #[test]
-fn retier_one_moves_a_review_context_lead_to_review_lead_tier() {
-    let fx = Fx::new();
-    review_fixture(&fx.env, "ctx");
-
-    let out = fx.cpd(&["session", "retier", LEAD1]).ok();
-    let one = &out["retiered"][0];
-    assert_eq!(
-        (
-            one["session"].as_str(),
-            one["from"].as_str(),
-            one["to"].as_str()
-        ),
-        (Some(LEAD1), Some("O3"), Some("S3")),
-        "{out}"
-    );
-    assert_eq!(tier(&fx, LEAD1), "S3");
-    let shown = show(&fx, LEAD1);
-    assert_eq!(
-        (shown["model"].as_str(), shown["thinking"].as_str()),
-        (Some("p/sonnet"), Some("high")),
-        "{shown}"
-    );
-    let sent = events(&fx, "session-retiered");
-    assert_eq!(sent.len(), 1, "one Event: {sent:?}");
-    assert_eq!(sent[0]["session"], LEAD1);
-    assert_eq!(sent[0]["data"], json!({"from": "O3", "to": "S3"}));
-}
-
-/// `--all`: review-Context Leads to `review_lead_tier`, other Leads to `lead_tier`, the Manager to `manager_tier`.
-/// Fails now: the config key `review_lead_tier` is unknown.
-#[test]
-fn retier_all_moves_each_lead_to_the_tier_of_its_context() {
+fn retier_all_moves_every_lead_to_lead_tier_whatever_its_context() {
     let fx = Fx::new();
     review_fixture(&fx.env, "ctx");
 
     fx.cpd(&["session", "retier", "--all"]).ok();
-    assert_eq!(tier(&fx, LEAD1), "S3");
-    assert_eq!(tier(&fx, FORK), "S3");
-    assert_eq!(tier(&fx, LEAD2), "O2");
+    for id in [LEAD1, FORK, LEAD2] {
+        assert_eq!(tier(&fx, id), "O2", "{id}");
+    }
     assert_eq!(tier(&fx, MANAGER), "O4");
 }
 
-/// A side fork of a review-Context Lead goes to `review_lead_tier`.
-/// Fails now: the config key `review_lead_tier` is unknown.
-#[test]
-fn retier_one_moves_a_review_context_fork_to_review_lead_tier() {
-    let fx = Fx::new();
-    review_fixture(&fx.env, "ctx");
-
-    let out = fx.cpd(&["session", "retier", FORK]).ok();
-    assert_eq!(
-        (
-            out["retiered"][0]["from"].as_str(),
-            out["retiered"][0]["to"].as_str()
-        ),
-        (Some("O3"), Some("S3")),
-        "{out}"
-    );
-    assert_eq!(tier(&fx, FORK), "S3");
-}
-
-/// A review Lead on an override (`S2`, as `plan new --tier S2` leaves it) is reset to `review_lead_tier`; the Manager
+/// A review Lead on an override (`S2`, as `plan new --tier S2` leaves it) is reset to `lead_tier`; the Manager
 /// goes to `manager_tier`.
-/// Fails now: the config key `review_lead_tier` is unknown.
 #[test]
 fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
     let fx = Fx::new();
@@ -452,14 +402,13 @@ fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
             )
         })
         .collect();
-    assert!(moved.contains(&(LEAD1, "S2", "S3")), "{out}");
-    assert!(moved.contains(&(MANAGER, "O5", "O4")), "{out}");
-    assert_eq!(tier(&fx, LEAD1), "S3");
+    assert!(moved.contains(&(LEAD1, "S2", "O2")), "{out}");
+    assert!(moved.contains(&(MANAGER, "O2", "O4")), "{out}");
+    assert_eq!(tier(&fx, LEAD1), "O2");
     assert_eq!(tier(&fx, MANAGER), "O4");
 }
 
-/// With no `inbox.review_context`, every Lead goes to `lead_tier`, never `review_lead_tier`.
-/// Fails now: the config key `review_lead_tier` is unknown.
+/// With no `inbox.review_context`, every Lead goes to `lead_tier`.
 #[test]
 fn retier_with_an_empty_review_context_moves_every_lead_to_lead_tier() {
     let fx = Fx::new();

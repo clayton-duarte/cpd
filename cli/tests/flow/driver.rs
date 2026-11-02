@@ -44,10 +44,11 @@ pub(super) const PR_URL: &str = "https://github.com/acme/pay/pull/812";
 const ATTEMPT: &str = "api-a1";
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [
+const EFFORTS: [(&str, &str, &str); 4] = [
     ("O", "p/opus", "[0,1,2,3,4,5]"),
     ("S", "p/sonnet", "[1,2,3,4,5]"),
     ("H", "p/haiku", "[0,1,2,3]"),
+    ("G", "p/gemini", "[]"),
 ];
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
