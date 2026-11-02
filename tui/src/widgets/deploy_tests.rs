@@ -135,8 +135,8 @@ fn legend_inbox_section_lists_the_three_kind_lines_after_the_six_tiers() {
     );
     assert_eq!(
         inbox.rows.len(),
-        11,
-        "eight old lines and the three kind lines"
+        10,
+        "seven old lines and the three kind lines"
     );
 }
 
