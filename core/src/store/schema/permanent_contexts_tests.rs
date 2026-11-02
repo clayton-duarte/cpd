@@ -530,7 +530,13 @@ fn snapshot(store: &mut Store) -> Vec<Value> {
         "record_curations",
         "history",
     ] {
-        all.push(Value::from(rows(store, &format!("SELECT * FROM {table}"))));
+        let names = rows(
+            store,
+            &format!("SELECT name FROM pragma_table_info('{table}') ORDER BY cid"),
+        );
+        let columns: Vec<&str> = names.iter().map(|n| n[0].as_str().unwrap()).collect();
+        let sql = format!("SELECT {} FROM {table}", columns.join(", "));
+        all.push(Value::from(rows(store, &sql)));
     }
     all
 }
