@@ -12,9 +12,9 @@
 // fold, closed by default, hides only that Context's archived Plans while its live Plans always
 // show; clicking a Context row selects its manager Session (disabled only when there is none) and
 // clicking a Plan row selects its Lead Session. An awake row's dot takes its state's palette colour
-// (working and waiting mizu, blocked anko, idle and unknown dim, asleep plain with its row dim), and
-// no Tailwind hue is used anywhere. Given no Contexts read the rail keeps drawing its Session tree,
-// so a Chat-only fake never regresses.
+// (working and waiting mizu, blocked anko, idle and unknown plain, asleep dim with its whole row
+// dim), and no Tailwind hue is used anywhere. Given no Contexts read the rail keeps drawing its
+// Session tree, so a Chat-only fake never regresses.
 import * as React from "react"
 import { GalleryVerticalEnd, ChevronRight } from "lucide-react"
 
@@ -110,27 +110,51 @@ function RowLabel({ label, id }: { label: string; id: string }): React.ReactElem
 /**
  * A Session state's palette dot: the Dango custom property class plus whether the whole row is
  * muted (web/README.md "Context tree rows"). Working and waiting share the in-progress mizu;
- * blocked is anko; idle and an unknown state are the dim text; asleep is the plain grey.
+ * blocked is anko; idle and an unknown state are the plain grey; asleep is the dim text. A
+ * Session is asleep when the read's `asleep_at` is set, whatever its `state` string says; the
+ * `"asleep"`/`"sleeping"` state literals stay as a fallback.
  */
-function stateDot(state: string | undefined): { colour: string; asleep: boolean } {
+function stateDot(
+  state: string | undefined,
+  asleepAt?: string | null,
+): { colour: string; asleep: boolean } {
+  if (asleepAt != null || state === "asleep" || state === "sleeping") {
+    return { colour: "bg-[var(--dango-dim)]", asleep: true }
+  }
   switch (state) {
     case "working":
     case "waiting":
       return { colour: "bg-[var(--dango-mizu)]", asleep: false }
     case "blocked":
       return { colour: "bg-[var(--dango-anko)]", asleep: false }
-    case "asleep":
-    case "sleeping":
-      return { colour: "bg-[var(--dango-plain)]", asleep: true }
     case "idle":
     default:
-      return { colour: "bg-[var(--dango-dim)]", asleep: false }
+      return { colour: "bg-[var(--dango-plain)]", asleep: false }
   }
 }
 
+/**
+ * The dim grey with Tailwind's important modifier. The sidebar component's own
+ * `text-sidebar-foreground` sits on the same element (web/src/components/ui/sidebar.tsx,
+ * `sidebar-menu-sub-button`), and Tailwind's emitted order would let that win; the `!` makes the
+ * dim grey win (web/README.md "Context tree rows").
+ */
+const DIM_TEXT = "text-[var(--dango-dim)]!"
+
 /** The row's glyph: a Session state dot, no text, so a row's key is its only text. */
-function Glyph({ state }: { state: string | undefined }): React.ReactElement {
-  return <span aria-hidden className={`size-2 shrink-0 rounded-full ${stateDot(state).colour}`} />
+function Glyph({
+  state,
+  asleepAt,
+}: {
+  state: string | undefined
+  asleepAt?: string | null
+}): React.ReactElement {
+  return (
+    <span
+      aria-hidden
+      className={`size-2 shrink-0 rounded-full ${stateDot(state, asleepAt).colour}`}
+    />
+  )
 }
 
 /** One drawn Job counter: its number and the status colour it takes. */
@@ -154,16 +178,26 @@ export function planCounters(counts: LivePlanCounts): DrawnCounter[] {
   return drawn.filter((counter) => counter.value > 0)
 }
 
-/** A Plan row's Job counters, a dot between two drawn roles, each number in its status colour. */
-function PlanCounters({ counts }: { counts: LivePlanCounts }): React.ReactElement | null {
+/**
+ * A Plan row's Job counters, a dot between two drawn roles, each number in its status colour.
+ * An asleep row mutes the whole row, so every counter span — the `·` separator included — takes
+ * the dim grey with the important modifier (web/README.md "Context tree rows").
+ */
+function PlanCounters({
+  counts,
+  asleep,
+}: {
+  counts: LivePlanCounts
+  asleep: boolean
+}): React.ReactElement | null {
   const drawn = planCounters(counts)
   if (drawn.length === 0) return null
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1 text-xs tabular-nums">
       {drawn.map((counter, at) => (
         <React.Fragment key={counter.className}>
-          {at > 0 ? <span className="text-muted-foreground">·</span> : null}
-          <span className={counter.className}>{counter.value}</span>
+          {at > 0 ? <span className={asleep ? DIM_TEXT : "text-muted-foreground"}>·</span> : null}
+          <span className={asleep ? DIM_TEXT : counter.className}>{counter.value}</span>
         </React.Fragment>
       ))}
     </span>
@@ -247,14 +281,14 @@ function PlanRow({
 }): React.ReactElement {
   const lead = planSession(plan, sessions)
   const leadId = plan.lead_session
-  // An asleep Lead's whole row (key and counters) is the palette's dim grey, its dot still plain;
-  // an archived Plan's row is muted (web/README.md "Context tree rows").
-  const rowText =
-    stateDot(lead?.state).asleep
-      ? "text-[var(--dango-dim)]"
-      : plan.archived_at !== null
-        ? "text-muted-foreground"
-        : undefined
+  // An asleep Lead's whole row (key and counters) is the palette's dim grey, its dot too; an
+  // archived Plan's row is muted (web/README.md "Context tree rows").
+  const asleep = stateDot(lead?.state, lead?.asleep_at).asleep
+  const rowText = asleep
+    ? DIM_TEXT
+    : plan.archived_at !== null
+      ? "text-muted-foreground"
+      : undefined
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={leadId !== null && selectedId === leadId}>
@@ -267,9 +301,9 @@ function PlanRow({
             if (leadId !== null) onSelectSession(leadId)
           }}
         >
-          <Glyph state={lead?.state} />
+          <Glyph state={lead?.state} asleepAt={lead?.asleep_at} />
           <span>{plan.id}</span>
-          <PlanCounters counts={plan.counts} />
+          <PlanCounters counts={plan.counts} asleep={asleep} />
         </button>
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>

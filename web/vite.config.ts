@@ -35,6 +35,7 @@ interface SessionRow {
   runner?: unknown;
   name?: unknown;
   state?: unknown;
+  asleep_at?: unknown;
   title?: unknown;
   context?: unknown;
   file?: unknown;
@@ -93,6 +94,9 @@ function realDeps(): LiveDeps {
       const title = typeof row.title === "string" ? row.title : row.name;
       if (typeof title === "string") session.title = title;
       if (typeof row.state === "string") session.state = row.state;
+      if (row.asleep_at === null || typeof row.asleep_at === "string") {
+        session.asleep_at = row.asleep_at;
+      }
       if (typeof row.context === "string") session.context = row.context;
       if (typeof row.name === "string") session.name = row.name;
       sessions.push(session);

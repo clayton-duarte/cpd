@@ -486,8 +486,8 @@ Each rail row renders a **glyph**, then the row's **key**, then — a gap away �
 
 - **Working** and **waiting** are the palette's in-progress cyan **mizu `#67ada7`** — the cockpit draws both in that one colour and tells them apart by glyph, so the web does not invent a second colour.
 - **Blocked** is **anko `#e17f6e`**.
-- **Idle** is the dim text **`#87808c`**.
-- An **asleep** Session is the plain grey **`#aba3af`**, with its whole row **muted**.
+- **Idle** (and an unknown state) is the plain grey **`#aba3af`**.
+- An **asleep** Session — the read's **`asleep_at`** set, a durable Session put to sleep, never a `state` literal (a sleeping lead's `state` stays `stopped`) — is the dim grey **`#87808c`**, and its **whole row is muted**: both the row's button and every counter span, the `·` separator included, take the dim grey. The row's dim colour carries **Tailwind's important modifier** (`text-[var(--dango-dim)]!`) because the sidebar component's own `text-sidebar-foreground` sits on the same element (`web/src/components/ui/sidebar.tsx`, `sidebar-menu-sub-button`) and Tailwind's emitted order would otherwise let that win — a class string in the DOM is not a rendered colour.
 
 **No Tailwind hue (emerald, violet, red) is used anywhere in the rail.** These four colours are **custom properties of the dark theme in `web/src/index.css`**, named for the palette colour — `mizu`, `anko`, `plain`, `dim` — with their hexes in the Dango table (“The Dango theme”, above); **never a hex inside a component**.
 
