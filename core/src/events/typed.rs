@@ -897,10 +897,7 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
             Kind::PlanOutlined => vec![NewEvent::plan_outlined(T, b)],
-            Kind::PlanDone => vec![
-                NewEvent::plan_done(T, [s]),
-                NewEvent::plan_done_quiet(T),
-            ],
+            Kind::PlanDone => vec![NewEvent::plan_done(T, [s]), NewEvent::plan_done_quiet(T)],
             Kind::JobAdded => vec![
                 NewEvent::job_added(T, s, s, s, b, Some(s), [s], b),
                 NewEvent::job_added(T, s, s, s, b, None, [s], b),

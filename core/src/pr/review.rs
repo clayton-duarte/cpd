@@ -9,11 +9,11 @@ use serde_json::{Value, json};
 use super::gh;
 use super::merge::PullRef;
 use crate::error::{CpdError, ErrorCode};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::ids::{ContextId, PlanId};
 use crate::output::Output;
 use crate::ports::Ports;
-use crate::events::{NewEvent, append};
-use crate::ids::{ContextId, PlanId};
 use crate::store::{Store, WriteTxn};
 
 const STORE_BUSY_MS: u64 = 5000;
