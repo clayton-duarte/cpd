@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::file::{Config, Preset};
+use super::file::Config;
 use crate::atomic::write_atomic;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -70,10 +70,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::List => list(),
         Command::Show(args) => show(args),
         Command::Apply(args) => apply(args),
-        Command::Set(args) => {
-            let _ = (args.o, args.s, args.h, args.g);
-            todo!("stub: `preset set` is not implemented yet")
-        }
+        Command::Set(args) => set(args),
     }
 }
 
@@ -131,9 +128,33 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
         h: preset.h.clone(),
         g: preset.g.clone(),
     };
+    write_host(&home, &config, &preset_models, "preset apply", Some(&name))
+}
 
+/// `preset set` (commands.md §14.6a): steps 2–7 of `apply` with the four refs of the flags.
+fn set(args: SetArgs) -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let models = Models {
+        o: args.o,
+        s: args.s,
+        h: args.h,
+        g: args.g,
+    };
+    write_host(&home, &config, &models, "preset set", None)
+}
+
+/// Steps 2–7 of `preset apply`, shared with `preset set`: `name` is the preset's, `None` for `set`.
+fn write_host(
+    home: &CpdHome,
+    config: &Config,
+    preset_models: &Models,
+    command: &str,
+    name: Option<&str>,
+) -> Result<Output, CpdError> {
+    let label = name.map_or_else(|| "preset set".to_owned(), |n| format!("preset {n}"));
     // Step 2: host.toml must exist and hold a `[model]` table: there is nothing to rewrite without one.
-    let host_path = policy_dir(&home).join("host.toml");
+    let host_path = policy_dir(home).join("host.toml");
     let host_text = match std::fs::read_to_string(&host_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -167,29 +188,29 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
     }
 
     // Step 3: equality. The no-op opens no store and writes nothing.
-    let pre = resolve_machine(&home)?.policy.model;
-    if preset_models == pre {
+    let pre = resolve_machine(home)?.policy.model;
+    if *preset_models == pre {
         return Ok(Output::success(
             json!({"preset": name, "already": true, "changed": []}),
         ));
     }
 
     // Step 4: the one-provider invariant of the table to be written, before anything external runs.
-    check_one_provider(&preset_models, &host_path)?;
+    check_one_provider(preset_models, &host_path)?;
 
     // Step 5: the registry, listed at apply time (`--all`), through the host runner.
-    let answer = Helper::new(&config, &home)?.all().run()?;
-    check_registry(&name, preset, &answer)?;
+    let answer = Helper::new(config, home)?.all().run()?;
+    check_registry(&label, name, preset_models, &answer)?;
 
     // Steps 6–7: the byte-preserving rewrite, then one Event per changed live Lead or Manager, all in one
     // store transaction. The pre-write models are read before the file is replaced.
-    let new_text = rewrite_model(&host_text, &preset_models);
+    let new_text = rewrite_model(&host_text, preset_models);
     let mut env = Env::open()?;
     let pre_models: Vec<(row::ModelSwitchRow, String)> = env.store.read(|conn| {
         row::live_model_switch(conn)?
             .into_iter()
             .map(|r| {
-                let models = models_of_context(conn, &home, r.context.as_str())?;
+                let models = models_of_context(conn, home, r.context.as_str())?;
                 let (model, _) = row::model_and_level(&models, &r.id, &r.tier)?;
                 Ok((r, model))
             })
@@ -202,13 +223,13 @@ fn apply(args: ApplyArgs) -> Result<Output, CpdError> {
         )
         .with("file", host_path.display().to_string())
     })?;
-    let changed: Vec<Value> = env.store.write("preset apply", |tx| {
+    let changed: Vec<Value> = env.store.write(command, |tx| {
         let mut changed = Vec::new();
         for row in row::live_model_switch(tx)? {
             let Some((_, from)) = pre_models.iter().find(|(r, _)| r.id == row.id) else {
                 continue;
             };
-            let models = models_of_context(tx, &home, row.context.as_str())?;
+            let models = models_of_context(tx, home, row.context.as_str())?;
             let (to, _) = row::model_and_level(&models, &row.id, &row.tier)?;
             if *from == to {
                 continue;
@@ -245,7 +266,12 @@ fn listed_of(answer: &Answer) -> BTreeMap<&str, &Listed> {
 
 /// Step 5 of `preset apply` (commands.md §14.6): the preset's provider is in the registry, and every ref is
 /// `<provider>/<an offered id>`; else `preset_provider_unconfigured` / `preset_model_unoffered`, writing nothing.
-fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), CpdError> {
+fn check_registry(
+    label: &str,
+    name: Option<&str>,
+    preset: &Models,
+    answer: &Answer,
+) -> Result<(), CpdError> {
     let listed = listed_of(answer);
     for (letter, model_ref) in [
         ("O", &preset.o),
@@ -257,7 +283,7 @@ fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), Cp
         let entry = listed.get(provider).ok_or_else(|| {
             CpdError::new(
                 ErrorCode::PresetProviderUnconfigured,
-                format!("preset {name}: {letter} is {model_ref}, but provider {provider:?} is not in pi's registry on this machine."),
+                format!("{label}: {letter} is {model_ref}, but provider {provider:?} is not in pi's registry on this machine."),
             )
             .with("preset", name)
             .with("letter", letter)
@@ -271,7 +297,7 @@ fn check_registry(name: &str, preset: &Preset, answer: &Answer) -> Result<(), Cp
         if !entry.ids.iter().any(|offered| offered == id) {
             return Err(CpdError::new(
                 ErrorCode::PresetModelUnoffered,
-                format!("preset {name}: {letter} is {model_ref}, but provider {provider:?} does not offer model {id:?}."),
+                format!("{label}: {letter} is {model_ref}, but provider {provider:?} does not offer model {id:?}."),
             )
             .with("preset", name)
             .with("letter", letter)

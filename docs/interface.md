@@ -100,7 +100,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session send` | Send a message to a Lead or Manager (§10.13) | Lead, Manager | |
 | `cpd session tail` | Stream a durable Session's transcript, read-only (§10.19) | Lead, Manager, Worker | |
 | `cpd session resume` | Resume a Lead or Manager blocked by the loop guard (§10.17) | | yes |
-| `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
+| `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | yes |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
 | `cpd session first-message` | Render a Lead's or Manager's first message now and write its file (adapter) (§10.15) | internal | |
@@ -143,6 +143,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui action` | A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
+| `cpd config tiers` | Set the four Tier keys of config.toml (§14.2a) | | |
+| `cpd config tiers set` | Set the four Tier keys of config.toml (§14.2a) | | yes |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
 | `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
 | `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |
@@ -150,7 +152,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd preset` | The tier presets and their machine switch (commands.md §14.6) | | |
 | `cpd preset list` | Print the presets (§14.6) | Manager, Lead | |
 | `cpd preset show` | Print a preset and the current host model (§14.6) | Manager, Lead | |
-| `cpd preset apply` | Switch the machine to a preset's models (§14.6) | Manager | |
+| `cpd preset apply` | Switch the machine to a preset's models (§14.6) | Manager | yes |
+| `cpd preset set` | Switch the machine to four model refs given as flags (§14.6a) | Manager | yes |
 | `cpd metrics` | The read-only aggregate of the machine's Ledger (commands.md §14.7) | Lead, Manager | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
