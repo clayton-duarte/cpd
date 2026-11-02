@@ -23,6 +23,9 @@ const NEW: &str = "\u{F0B2A}";
 /// at the bottom, so it folds down and opens up): md-arrow_down_drop_circle_outline open, ..._up_... folded.
 const OPEN: &str = "\u{F0B26}";
 const FOLDED: &str = "\u{F0B2C}";
+/// A Context's closing rows keep their own rule: `collapse` (expanded) is U+F0B2C, `expand` (folded) is U+F0B26.
+const COLLAPSE: &str = "\u{F0B2C}";
+const EXPAND: &str = "\u{F0B26}";
 const CAP_LEFT: &str = "\u{E0B6}";
 const CAP_RIGHT: &str = "\u{E0B4}";
 
@@ -335,7 +338,7 @@ fn a_permanent_context_expands_to_its_plans_like_any_context() {
         plan("a2", false),
         plan("a1", false),
         plan("a0", false),
-        format!(" ╰{FOLDED} collapse"),
+        format!(" ╰{COLLAPSE} collapse"),
     ];
     assert_eq!(
         tree.screen(),
@@ -346,7 +349,7 @@ fn a_permanent_context_expands_to_its_plans_like_any_context() {
         title("cpd"),
         plan("a2", false),
         plan("a1", false),
-        format!(" ╰{OPEN} expand"),
+        format!(" ╰{EXPAND} expand"),
     ];
     assert_eq!(
         tree.screen(),
