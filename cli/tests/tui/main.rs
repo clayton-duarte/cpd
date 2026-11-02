@@ -43,6 +43,7 @@ mod tui_tree_no_inbox;
 mod tui_tree_standing;
 mod tui_view_worker_gone;
 mod tui_widgets;
+mod tui_widgets_async;
 mod tui_widgets_column;
 mod tui_widgets_flat;
 mod tui_widgets_inbox;
