@@ -60,7 +60,7 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
         let needs = super::open::shown_needs(&all, &job);
         let needed_by: Vec<&str> = all.iter().filter(|j| j.needs.contains(&job.key)).map(|j| j.key.as_str()).collect();
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
-        let attempts = attempts(conn, &plan, &job.key)?;
+        let attempts = attempts(conn, &plan, &job)?;
         // §5.7: only a queued Job that is not a tenant, for each resource it needs that has no free slot right now: `workers` first, then its Spec's.
         let wanted = crate::resource::wanted(conn, &plan, &job.key)?;
         let tenant: bool = conn.query_row(
@@ -123,14 +123,14 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
 }
 
 /// Every Attempt of the Job with all its fields, oldest first, each with its Escalations.
-fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, CpdError> {
+fn attempts(conn: &Connection, plan: &PlanId, job: &jobs::Job) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT id, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid, worker_session,
                 spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at, runner, worker_pid, gate_hook, gate_command, gate_exit, actual_files
            FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number",
     )?;
     let rows = stmt
-        .query_map([plan.as_str(), job], |r| {
+        .query_map([plan.as_str(), job.key.as_str()], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(19)?,
@@ -167,6 +167,7 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
                 CpdError::bad_row(format!("Attempt {plan}/{id} has actual_files {text:?}"))
             })?,
         };
+        attempt["footprint"] = crate::attempt::footprint::derive(job, &attempt["actual_files"])?;
         attempt["escalations"] = json!(escalations(conn, plan, &id)?);
         out.push(attempt);
     }

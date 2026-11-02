@@ -146,7 +146,7 @@ pub fn touched_outside(
 /// Whether `path` matches a `touches` entry (contract §7.5): equal, a directory prefix when the entry ends in `/`, or a
 /// glob under the repo's glob rules (`job add`'s tree check: `?` one character but not `/`, `*` a run but not `/`, `**`
 /// any run, `[...]` a set). `touches` supports globs, unlike `protected`.
-fn touches_matches(entry: &str, path: &str) -> bool {
+pub fn touches_matches(entry: &str, path: &str) -> bool {
     if entry.ends_with('/') {
         path.starts_with(entry)
     } else {

@@ -15,7 +15,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
     let mut env = Env::open()?;
-    let (attempt, escalations, worker_file, cursor) = env.store.read(|conn| {
+    let (attempt, escalations, worker_file, cursor, footprint) = env.store.read(|conn| {
         let attempt = row::load(conn, &plan, &id)?;
         let escalations = row::escalations(conn, &plan, &id)?;
         let file: Option<Option<String>> = match &attempt.worker_session {
@@ -24,7 +24,20 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
                 .optional()?,
             None => None,
         };
-        Ok((attempt, escalations, file.flatten(), highest_id(conn)?))
+        let job = crate::plan::jobs::load(conn, &plan)?
+            .into_iter()
+            .find(|j| j.key == attempt.job)
+            .ok_or_else(|| {
+                CpdError::bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job))
+            })?;
+        let footprint = super::footprint::derive(&job, &attempt.actual_files)?;
+        Ok((
+            attempt,
+            escalations,
+            file.flatten(),
+            highest_id(conn)?,
+            footprint,
+        ))
     })?;
     let check = env.home.hook_log(&plan, &id, Hook::PreCommit);
     let paths = json!({
@@ -33,8 +46,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "log": env.home.driver_log(&plan, &id).display().to_string(),
         "worker_file": worker_file,
     });
+    let mut shown = attempt.to_json();
+    shown["footprint"] = footprint;
     Ok(Output::success(json!({
-        "attempt": attempt.to_json(), "escalations": escalations, "paths": paths, "events_cursor": cursor,
+        "attempt": shown, "escalations": escalations, "paths": paths, "events_cursor": cursor,
     })))
 }
 
