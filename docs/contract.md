@@ -1659,7 +1659,7 @@ CREATE TABLE jobs (
   appended            INTEGER NOT NULL CHECK (appended IN (0, 1)),
   fingerprint         TEXT CHECK (fingerprint IS NULL OR length(fingerprint) = 64),
   created_txn         INTEGER NOT NULL REFERENCES txns(id),
-  retry_tier          TEXT,
+  retry_tier          TEXT CHECK (retry_tier IS NULL OR (length(retry_tier) = 2 AND substr(retry_tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(retry_tier, 2, 1) BETWEEN '0' AND '4' OR substr(retry_tier, 2, 1) = 'X'))),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   cancel_reason       TEXT,
   cancel_requested_at TEXT,
   failed_cause        TEXT,
@@ -1706,7 +1706,7 @@ CREATE TABLE attempts (
   id               TEXT NOT NULL,
   job              TEXT NOT NULL,
   number           INTEGER NOT NULL CHECK (number >= 1),
-  tier             TEXT NOT NULL CHECK (length(tier) = 2),
+  tier             TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   origin           TEXT NOT NULL CHECK (origin IN ('ladder', 'retry')),
   status           TEXT NOT NULL CHECK (status IN ('starting', 'running', 'merging', 'ended')),
   outcome          TEXT CHECK (outcome IN ('merged', 'failed', 'cancelled')),
@@ -1838,7 +1838,7 @@ CREATE TABLE sessions (
   file        TEXT,
   forked_from TEXT REFERENCES sessions(id),
   cwd         TEXT NOT NULL,
-  tier        TEXT NOT NULL CHECK (length(tier) = 2),
+  tier        TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
   tmux_pane   TEXT CHECK (tmux_pane IS NULL OR tmux_pane GLOB '%[0-9]*'),
   state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'blocked', 'idle', 'stopped')),
   state_label TEXT,
