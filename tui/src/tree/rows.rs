@@ -683,26 +683,9 @@ fn spacer(c: &ContextNode) -> FlatRow {
     }
 }
 
-/// The tree root's archive row: `󰬦 archive` folded, `󰬬 archive` expanded, colour 8 on every cell (hs-d698, hs-d707).
-fn archive_item(opened: &HashSet<Vec<Id>>) -> FlatRow {
-    let path = vec![ARCHIVE.to_owned()];
-    let glyph = if opened.contains(&path) {
-        fold::UP
-    } else {
-        fold::DOWN
-    };
-    FlatRow {
-        path,
-        line: Line::from(Span::styled(
-            format!("{glyph} archive"),
-            palette::muted_text(),
-        )),
-    }
-}
-
-/// The tree's visible rows for a column `width` wide: the live Contexts, then the archive row, then the archived
-/// Contexts when the archive path is open. `opened` is the tree state's open set: a Context not in it shows its title
-/// only. `frame` is the animation frame of the working dots.
+/// The tree's visible rows for a column `width` wide: the project tree's live Contexts, then the Standing section's rows
+/// and the Archive section's, each when its section is open. `opened` is the tree state's open set: a Context not in it
+/// shows its title only. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
     items_with_costs(tree, opened, width, frame, false)
 }
@@ -718,6 +701,37 @@ pub fn items_with_costs(
     let mut rows = project_items(tree, opened, width, frame, costs);
     if !opened.contains(&vec![STANDING.to_owned()]) {
         rows.extend(standing_items(tree, opened, width, frame, costs));
+    }
+    if opened.contains(&vec![ARCHIVE.to_owned()]) {
+        rows.extend(archive_items(tree, opened, width, frame, costs));
+    }
+    rows
+}
+
+/// The archived Contexts (a Permanent Context is never archived), in the read model's order.
+fn archived(tree: &Tree) -> Vec<&ContextNode> {
+    tree.contexts
+        .iter()
+        .filter(|c| c.id.permanent().is_none() && c.is_archived())
+        .collect()
+}
+
+/// The rows of the docked `Archive` section (the header not in them): each archived Context as the block the project tree
+/// draws for it (muted), one blank row between two of them.
+fn archive_items(
+    tree: &Tree,
+    opened: &HashSet<Vec<Id>>,
+    width: u16,
+    frame: usize,
+    costs: bool,
+) -> Vec<FlatRow> {
+    let contexts = archived(tree);
+    let mut rows = Vec::new();
+    for (i, c) in contexts.iter().enumerate() {
+        if i > 0 {
+            rows.push(spacer(contexts[i - 1]));
+        }
+        rows.extend(context_items(c, opened, width, frame, costs));
     }
     rows
 }
@@ -751,7 +765,7 @@ fn standing_items(
 }
 
 /// The scrolling project tree's rows: [`items_with_costs`] without the Permanent Contexts, which the `Standing` section
-/// holds (never in the archive row either).
+/// holds, and without the archived ones, which the `Archive` section holds.
 fn project_items(
     tree: &Tree,
     opened: &HashSet<Vec<Id>>,
@@ -759,31 +773,19 @@ fn project_items(
     frame: usize,
     costs: bool,
 ) -> Vec<FlatRow> {
-    let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree
+    let mut live: Vec<&ContextNode> = tree
         .contexts
         .iter()
-        .filter(|c| c.id.permanent().is_none())
-        .partition(|c| c.is_archived());
-    // The live Contexts by tier then creation, newest first (hs-d686, pro-d48); the archived ones keep their read-model order after them.
+        .filter(|c| c.id.permanent().is_none() && !c.is_archived())
+        .collect();
+    // The live Contexts by tier then creation, newest first (hs-d686, pro-d48).
     live.sort_by_key(|a| a.dot.order_key(&a.created_at));
     let mut rows: Vec<FlatRow> = Vec::new();
     let last_live = live.len().saturating_sub(1);
     for (i, c) in live.iter().enumerate() {
         rows.extend(context_items(c, opened, width, frame, costs));
-        if i != last_live || !archived.is_empty() {
+        if i != last_live {
             rows.push(spacer(c));
-        }
-    }
-    if !archived.is_empty() {
-        rows.push(archive_item(opened));
-        if opened.contains(&vec![ARCHIVE.to_owned()]) {
-            let last = archived.len().saturating_sub(1);
-            for (i, c) in archived.iter().enumerate() {
-                rows.extend(context_items(c, opened, width, frame, costs));
-                if i != last {
-                    rows.push(spacer(c));
-                }
-            }
         }
     }
     rows
@@ -804,9 +806,12 @@ pub struct Scroll {
     /// What the last [`draw`] drew: the click geometry (`draw` is called as a statement by the tests, so it hands the
     /// hits back through the state it already takes).
     hits: Hits,
-    /// The docked `Standing` section's own scroll, made by the first frame that draws it.
-    docked: Option<Box<Scroll>>,
+    /// The docked sections' own scrolls, `Standing` then `Archive` (see [`DOCKED`]), made by the first frame that draws them.
+    docked: [Option<Box<Scroll>>; 2],
 }
+
+/// The docked sections' path ids, top to bottom: the index of a section in [`Scroll::dock_hits`] and [`Scroll::wheel_dock`].
+const DOCKED: [&str; 2] = [STANDING, ARCHIVE];
 
 impl Scroll {
     /// The rows the last frame drew, with the path of each.
@@ -814,14 +819,20 @@ impl Scroll {
         &self.hits
     }
 
-    /// What the last frame drew of the docked `Standing` section: its header and rows.
-    pub fn standing_hits(&self) -> Option<&Hits> {
-        self.docked.as_deref().map(Scroll::hits)
+    /// What the last frame drew of each docked section: its path id (its header's row), its header and its rows.
+    pub fn dock_hits(&self) -> impl Iterator<Item = (&'static str, &Hits)> {
+        DOCKED
+            .into_iter()
+            .zip(&self.docked)
+            .filter_map(|(id, d)| Some((id, d.as_deref()?.hits())))
     }
 
-    /// A wheel notch over the docked section: its rows scroll, never the project tree's.
-    pub fn wheel_standing(&mut self, down: bool, rows: usize) {
-        if let Some(docked) = self.docked.as_deref_mut() {
+    /// A wheel notch over the docked section `id` ([`STANDING`] or [`ARCHIVE`]): its rows scroll, never another section's
+    /// nor the project tree's.
+    pub fn wheel_dock(&mut self, id: &str, down: bool, rows: usize) {
+        if let Some(i) = DOCKED.iter().position(|d| *d == id)
+            && let Some(docked) = self.docked[i].as_deref_mut()
+        {
             docked.wheel(down, rows);
         }
     }
@@ -892,57 +903,136 @@ pub fn draw(
             list: list_area(area),
             ..Hits::default()
         };
-        scroll.docked = None;
+        scroll.docked = [None, None];
         return;
     }
-    let standing = standing_items(tree, state.opened(), area.width, frame, costs);
-    let open = !state.opened().contains(&vec![STANDING.to_owned()]);
-    // the section (blank row, header, rows) is at most half the pane's height; with no room for the header it is not drawn
-    let section = if standing.is_empty() {
-        0
-    } else {
-        let wanted = if open { 4 + standing.len() } else { 2 };
-        let fits = usize::from(area.height / 2);
-        if fits < 2 { 0 } else { wanted.min(fits) }
-    };
-    let section = u16::try_from(section).unwrap_or(u16::MAX);
+    let opened = |id: &str| state.opened().contains(&vec![id.to_owned()]);
+    // the docked group, top to bottom: the sections that exist, Standing then Archive; an open one holds its rows
+    let mut docks: Vec<Dock> = Vec::new();
+    if !permanent(tree).is_empty() {
+        let open = !opened(STANDING);
+        docks.push(Dock {
+            path: STANDING,
+            title: "Standing",
+            open,
+            rows: if open {
+                standing_items(tree, state.opened(), area.width, frame, costs)
+            } else {
+                Vec::new()
+            },
+        });
+    }
+    if !archived(tree).is_empty() {
+        let open = opened(ARCHIVE);
+        docks.push(Dock {
+            path: ARCHIVE,
+            title: "Archive",
+            open,
+            rows: if open {
+                archive_items(tree, state.opened(), area.width, frame, costs)
+            } else {
+                Vec::new()
+            },
+        });
+    }
+    let (shown, group) = share(&docks, usize::from(area.height / 2));
+    let group = u16::try_from(group).unwrap_or(u16::MAX);
     let project = Rect {
-        height: area.height - section,
+        height: area.height - group,
         ..area
     };
     let flat = project_items(tree, state.opened(), area.width, frame, costs);
     let list = list_area(project);
     draw_list(f, project, list, flat, tree, state, cursor, costs, scroll);
-    if section == 0 {
-        scroll.docked = None;
-        return;
+    // a section that is no longer in the group forgets its scroll
+    for (id, slot) in DOCKED.iter().zip(&mut scroll.docked) {
+        if !docks.iter().any(|d| d.path == *id) {
+            *slot = None;
+        }
     }
-    let docked = scroll.docked.get_or_insert_with(Box::default);
-    let header = Rect::new(f.area().x, project.bottom() + 1, f.area().width, 1);
-    let glyph = if open { fold::DOWN } else { fold::UP };
-    f.render_widget(
-        Paragraph::new(crate::section::flush_title_with(
-            "Standing",
-            Some(glyph),
-            usize::from(header.width),
-        )),
-        header,
-    );
-    if !open {
-        docked.max = 0;
-        docked.hits = Hits {
-            header,
-            ..Hits::default()
-        };
-        return;
+    // the group's rows, drawn from its blank row at `y`; whatever does not fit in it is cut at the bottom
+    let bounds = Rect::new(area.x, project.bottom(), area.width, group);
+    let mut y = project.bottom() + 1;
+    let mut previous_open = true;
+    for (dock, rows_shown) in docks.into_iter().zip(shown) {
+        if !previous_open {
+            y += 1; // the blank row between a folded section and the next
+        }
+        previous_open = dock.open;
+        let at = DOCKED.iter().position(|d| *d == dock.path).unwrap_or(0);
+        let docked = scroll.docked[at].get_or_insert_with(Box::default);
+        let header = Rect::new(f.area().x, y, f.area().width, 1).intersection(bounds);
+        let glyph = if dock.open { fold::DOWN } else { fold::UP };
+        if header.height > 0 {
+            f.render_widget(
+                Paragraph::new(crate::section::flush_title_with(
+                    dock.title,
+                    Some(glyph),
+                    usize::from(header.width),
+                )),
+                header,
+            );
+        }
+        y += 1;
+        if !dock.open {
+            docked.max = 0;
+            docked.hits = Hits {
+                header,
+                ..Hits::default()
+            };
+            continue;
+        }
+        // the first and last rows are always the cue rows (blank when nothing is hidden), as the project tree's
+        let height = u16::try_from(2 + rows_shown).unwrap_or(u16::MAX);
+        let region = Rect::new(area.x, y, area.width, height).intersection(bounds);
+        y = y.saturating_add(height);
+        let list = list_area(region);
+        draw_list(
+            f, region, list, dock.rows, tree, state, cursor, costs, docked,
+        );
+        docked.hits.header = header;
     }
-    let region = Rect::new(area.x, header.bottom(), area.width, section - 2);
-    // the first and last rows are always the cue rows (blank when nothing is hidden), as the project tree's
-    let list = list_area(region);
-    draw_list(
-        f, region, list, standing, tree, state, cursor, costs, docked,
-    );
-    docked.hits.header = header;
+}
+
+/// A docked section of the group: the path id of its header's row, its title, whether it is open and, when open, its rows.
+struct Dock {
+    path: &'static str,
+    title: &'static str,
+    open: bool,
+    rows: Vec<FlatRow>,
+}
+
+/// How the docked group of `docks` is shared in a budget of `budget` rows (half the pane; none under 2 rows): the list rows
+/// each open section shows (0 for a folded one), and the group's height. The group is a blank row, then each section (its
+/// header and, open, its two reserved rows and its list rows), with one blank row after a folded section that another
+/// follows. It shows every row when it fits; else the rows left by the fixed ones are shared, the first section first, each
+/// later open section keeping one; with fewer than that the rows are all kept and the group is cut at the bottom.
+fn share(docks: &[Dock], budget: usize) -> (Vec<usize>, usize) {
+    if budget < 2 || docks.is_empty() {
+        return (vec![0; docks.len()], 0);
+    }
+    let separator = usize::from(docks.len() == 2 && !docks[0].open);
+    let fixed: usize = 1
+        + separator
+        + docks
+            .iter()
+            .map(|d| if d.open { 3 } else { 1 })
+            .sum::<usize>();
+    let mut shown: Vec<usize> = docks.iter().map(|d| d.rows.len()).collect();
+    if fixed + shown.iter().sum::<usize>() > budget {
+        let open = docks.iter().filter(|d| d.open).count();
+        if let Some(mut left) = budget.checked_sub(fixed).filter(|l| *l >= open) {
+            let mut later = open;
+            for (d, n) in docks.iter().zip(&mut shown) {
+                if d.open {
+                    later -= 1;
+                    *n = (*n).min(left - later);
+                    left -= *n;
+                }
+            }
+        }
+    }
+    (shown.clone(), (fixed + shown.iter().sum::<usize>()).min(budget))
 }
 
 /// Draw `flat` in `list`, the rows of `area` between its cue rows: the first row from the scroll (the cursor's Session is

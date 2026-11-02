@@ -426,11 +426,18 @@ impl View {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
                 if self
                     .tree_scroll
-                    .standing_hits()
-                    .is_some_and(|h| h.list.contains(at)) =>
+                    .dock_hits()
+                    .any(|(_, h)| h.list.contains(at)) =>
             {
-                self.tree_scroll
-                    .wheel_standing(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                let id = self
+                    .tree_scroll
+                    .dock_hits()
+                    .find(|(_, h)| h.list.contains(at))
+                    .map(|(id, _)| id);
+                if let Some(id) = id {
+                    self.tree_scroll
+                        .wheel_dock(id, m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                }
                 Effect::None
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
@@ -645,17 +652,18 @@ impl View {
 
     /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        if self
+        if let Some((id, _)) = self
             .tree_scroll
-            .standing_hits()
-            .is_some_and(|h| h.header.contains(at))
+            .dock_hits()
+            .find(|(_, h)| h.header.contains(at))
         {
-            return Some(vec![rows::STANDING.to_owned()]);
+            return Some(vec![id.to_owned()]);
         }
         let Hits { rows, paths, .. } = self
             .tree_scroll
-            .standing_hits()
-            .filter(|h| h.rows.contains(at))
+            .dock_hits()
+            .map(|(_, h)| h)
+            .find(|h| h.rows.contains(at))
             .unwrap_or_else(|| self.tree_scroll.hits());
         let path = rows
             .contains(at)
