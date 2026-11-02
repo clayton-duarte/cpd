@@ -26,6 +26,8 @@ mod buffer;
 mod cells;
 mod chat;
 mod cockpit;
+#[cfg(test)]
+mod cockpit_settings_tests;
 pub mod dialog;
 #[cfg(test)]
 mod failed_pill_tests;
