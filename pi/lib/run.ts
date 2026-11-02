@@ -69,6 +69,12 @@ export class Run {
   turnStarts: number[] = [];
   /** §15.15 L4: the loop guard has tripped: a send that would start a turn is queued for the next run instead. */
   tripped = false;
+  /** §15.15 L8: the consecutive read-only tool calls of this turn; reset at `before_agent_start` and `agent_end`. */
+  readStreak = 0;
+  /** §15.15 L8: the tool calls of this turn; reset at `before_agent_start` and `agent_end`. */
+  totalCalls = 0;
+  /** §15.15 L8: the calls refused in this turn; at 3 the breaker trips; reset at `before_agent_start` and `agent_end`. */
+  turnRefusals = 0;
   /** commands.md §15.23: the skill files changed since the baseline; told at the next turn, then cleared. */
   skillsNotice: SkillsNotice | undefined = undefined;
   unsubscribe: (() => void)[] = [];
