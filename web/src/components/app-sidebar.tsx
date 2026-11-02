@@ -18,7 +18,7 @@
 import * as React from "react"
 import { GalleryVerticalEnd, ChevronRight } from "lucide-react"
 
-import type { LiveContext, LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
+import type { InboxItem, LiveContext, LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
 import { cn } from "../lib/utils"
 import {
   Sidebar,
@@ -74,18 +74,76 @@ export interface ContextPlans {
 
 /**
  * The Plans of one Context, split into the live ones (always drawn) and the archived ones (behind
- * the Context row's fold), each sorted by Plan key (web/README.md "Context tree rows").
+ * the Context row's fold). The live rows take the cockpit's order key (hs-d842, `Dot::order_key`):
+ * the dot-urgency tier of the Plan's open Inbox items first, then the Plan's `created_at` newest
+ * first, the compare byte-wise as the cockpit's `Reverse<created_at>` does, and stable so a tie
+ * keeps the read order. The archived rows keep their Plan-key order after the live ones.
  */
-export function plansForContext(plans: readonly LivePlan[], context: string): ContextPlans {
+export function plansForContext(
+  plans: readonly LivePlan[],
+  context: string,
+  items: readonly InboxItem[] = [],
+): ContextPlans {
   const live: LivePlan[] = []
   const archived: LivePlan[] = []
   for (const plan of plans) {
     if (plan.context !== context) continue
     ;(plan.archived_at === null ? live : archived).push(plan)
   }
-  live.sort((a, b) => a.id.localeCompare(b.id))
+  live.sort((a, b) => {
+    const byTier = planTier(a, items) - planTier(b, items)
+    if (byTier !== 0) return byTier
+    const aKey = a.created_at ?? ""
+    const bKey = b.created_at ?? ""
+    if (aKey < bKey) return 1
+    if (aKey > bKey) return -1
+    return 0
+  })
   archived.sort((a, b) => a.id.localeCompare(b.id))
   return { live, archived }
+}
+
+/**
+ * The dot-urgency tier an Inbox urgency takes (hs-d842, `Dot::tier`): red 0, yellow 1, magenta 2,
+ * cyan 3, every other urgency (white, blue) 4. Colours of hs-d483, the palette's.
+ */
+function urgencyTier(urgency: string): number {
+  switch (urgency) {
+    case "red":
+      return 0
+    case "yellow":
+      return 1
+    case "magenta":
+      return 2
+    case "cyan":
+      return 3
+    default:
+      return 4
+  }
+}
+
+/** Whether an Inbox item is open: not closed, dismissed or snoozed (hs-d842). */
+function isOpen(item: InboxItem): boolean {
+  return item.closed_at === null && item.dismissed_at === null && item.snoozed_until === null
+}
+
+/** Whether an Inbox item belongs to `plan`: its `plan` is the Plan's id, or its `session` the Plan's Lead Session (hs-d842). */
+function belongsTo(item: InboxItem, plan: LivePlan): boolean {
+  if (item.plan !== null && item.plan === plan.id) return true
+  return plan.lead_session !== null && item.session === plan.lead_session
+}
+
+/**
+ * A Plan's dot-urgency tier (hs-d842): the most urgent of its open Inbox items (matched by `plan`
+ * or by `session` against its Lead Session), or 4 when it has none.
+ */
+function planTier(plan: LivePlan, items: readonly InboxItem[]): number {
+  let tier = 4
+  for (const item of items) {
+    if (!isOpen(item) || !belongsTo(item, plan)) continue
+    tier = Math.min(tier, urgencyTier(item.urgency))
+  }
+  return tier
 }
 
 /** The Contexts in the rail's order: the live ones first, the archived after, each block sorted by id. */
@@ -320,12 +378,14 @@ function ContextNode({
   context,
   plans,
   sessions,
+  items,
   selectedId,
   onSelectSession,
 }: {
   context: LiveContext
   plans: readonly LivePlan[]
   sessions: readonly LiveSession[]
+  items: readonly InboxItem[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }): React.ReactElement {
@@ -333,7 +393,7 @@ function ContextNode({
   const manager = sessions.find(
     (session) => session.context === context.id && session.role === "manager",
   )
-  const { live, archived } = plansForContext(plans, context.id)
+  const { live, archived } = plansForContext(plans, context.id, items)
   const shown = expanded ? archived : []
   const muted = context.archived
   return (
@@ -381,6 +441,8 @@ export interface AppSidebarProps {
   plans?: readonly LivePlan[]
   /** The Contexts read; the corrected rail lists every Context from it (web/README.md "Context tree rows"). */
   contexts?: readonly LiveContext[]
+  /** The live Inbox items; a Plan row's tier reads the open ones that belong to it (hs-d842). */
+  items?: readonly InboxItem[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }
@@ -390,6 +452,7 @@ export function AppSidebar({
   sessions,
   plans,
   contexts,
+  items,
   selectedId,
   onSelectSession,
   ...props
@@ -428,6 +491,7 @@ export function AppSidebar({
                   context={context}
                   plans={plans ?? []}
                   sessions={sessions}
+                  items={items ?? []}
                   selectedId={selectedId}
                   onSelectSession={onSelectSession}
                 />

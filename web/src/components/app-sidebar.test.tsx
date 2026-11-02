@@ -20,7 +20,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { AppSidebar } from "./app-sidebar";
 import { SidebarProvider } from "./ui/sidebar";
-import type { LiveContext, LivePlan, LiveSession } from "../api/live-server";
+import type { InboxItem, LiveContext, LivePlan, LiveSession } from "../api/live-server";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,6 +32,7 @@ interface TreeProps {
   sessions: readonly TreeSession[];
   plans?: readonly LivePlan[];
   contexts?: readonly LiveContext[];
+  items?: readonly InboxItem[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }
@@ -64,6 +65,8 @@ const PLAN_ALPHA: LivePlan = {
   title: "Alpha plan",
   phase: "dispatch",
   lead_session: LEAD_A,
+  // Alpha is the newer Plan, so the urgency-then-newest order puts it first however the read lists them.
+  created_at: "2026-02-01T00:00:00.000Z",
   archived_at: null,
   counts: { draft: 1, queued: 2, running: 1, merged: 4, failed: 0, cancelled: 0 },
 };
@@ -73,6 +76,7 @@ const PLAN_BETA: LivePlan = {
   title: "Beta plan",
   phase: "plan",
   lead_session: LEAD_B,
+  created_at: "2026-01-01T00:00:00.000Z",
   archived_at: null,
   counts: { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 },
 };
@@ -147,14 +151,16 @@ function renderPlans(
 
 /**
  * Renders the corrected Context tree: the Contexts read (`contexts`) is the row source, the Plans
- * read (`plans`) hangs its rows beneath each Context, and the Sessions read (`sessions`) supplies
- * each row's manager / lead (web/README.md "Context tree rows").
+ * read (`plans`) hangs its rows beneath each Context, the live Inbox items (`items`) give a row
+ * its tier, and the Sessions read (`sessions`) supplies each row's manager / lead
+ * (web/README.md "Context tree rows").
  */
 function renderContexts(
   contexts: readonly LiveContext[],
   plans: readonly LivePlan[] = [],
   sessions: readonly TreeSession[] = [],
   onSelectSession: (id: string) => void = () => {},
+  items: readonly InboxItem[] = [],
 ): void {
   act(() => {
     root.render(
@@ -163,11 +169,47 @@ function renderContexts(
           sessions={sessions}
           plans={plans}
           contexts={contexts}
+          items={items}
           onSelectSession={onSelectSession}
         />
       </SidebarProvider>,
     );
   });
+}
+
+/** One live Inbox item as the read carries it, the rail's tier source; every field left at its default. */
+function inboxItem(overrides: Partial<InboxItem>): InboxItem {
+  return {
+    id: "item-1",
+    kind: "pr-ready",
+    urgency: "blue",
+    label: "Ready",
+    subject: "",
+    context: null,
+    plan: null,
+    job: null,
+    session: null,
+    record: null,
+    event: null,
+    url: null,
+    opened_at: null,
+    closed_at: null,
+    snoozed_until: null,
+    dismissed_at: null,
+    claimed_at: null,
+    age_seconds: 0,
+    ...overrides,
+  };
+}
+
+/** The Plan keys drawn beneath the Contexts, in the DOM's order. */
+function planKeys(): string[] {
+  return [...container.querySelectorAll<HTMLButtonElement>('[data-slot="sidebar-menu-sub"] button')].map(
+    (button) =>
+      [...button.querySelectorAll("span")]
+        .map((span) => span.textContent ?? "")
+        .find((text) => text !== "") ?? "",
+  );
 }
 
 /** Every row: a real <button> carrying its Session's id. */
@@ -384,6 +426,67 @@ test("a Plan row right-aligns its counters", () => {
   // The counters carry the class that pins them to the edge; the key does not.
   expect(counters?.className ?? "").toContain("ml-auto");
   expect(key?.className ?? "").not.toContain("ml-auto");
+});
+
+test("a Context's rows go by urgency, then newest first", () => {
+  // An old Plan with an open red item, a new Plan with none and a middle Plan with none.
+  const oldRed: LivePlan = { ...PLAN_ALPHA, id: "old-red", created_at: "2026-01-01T00:00:00.000Z" };
+  const newNone: LivePlan = { ...PLAN_ALPHA, id: "new-none", created_at: "2026-03-01T00:00:00.000Z" };
+  const middleNone: LivePlan = {
+    ...PLAN_ALPHA,
+    id: "middle-none",
+    created_at: "2026-02-01T00:00:00.000Z",
+  };
+
+  // Listed scrambled: the open red item lifts `old-red` above both, then the rest go newest first.
+  renderContexts(
+    [{ id: CONTEXT, archived: false }],
+    [middleNone, newNone, oldRed],
+    PLAN_SESSIONS,
+    () => {},
+    [inboxItem({ id: "red", urgency: "red", plan: "old-red" })],
+  );
+
+  expect(planKeys()).toEqual(["old-red", "new-none", "middle-none"]);
+});
+
+test("a closed, dismissed or snoozed item does not lift a row", () => {
+  // Each of the three closed states alone, over an otherwise open red item.
+  const states: Array<Partial<InboxItem>> = [
+    { closed_at: "2026-03-02T00:00:00.000Z" },
+    { dismissed_at: "2026-03-02T00:00:00.000Z" },
+    { snoozed_until: "2099-01-01T00:00:00.000Z" },
+  ];
+
+  for (const state of states) {
+    const oldPlan: LivePlan = { ...PLAN_ALPHA, id: "old-plan", created_at: "2026-01-01T00:00:00.000Z" };
+    const newPlan: LivePlan = { ...PLAN_ALPHA, id: "new-plan", created_at: "2026-02-01T00:00:00.000Z" };
+    renderContexts(
+      [{ id: CONTEXT, archived: false }],
+      [oldPlan, newPlan],
+      PLAN_SESSIONS,
+      () => {},
+      [inboxItem({ id: "item", urgency: "red", plan: "old-plan", ...state })],
+    );
+
+    // If the item counted, `old-plan` would be tier 0 and come first; it does not.
+    expect(planKeys()).toEqual(["new-plan", "old-plan"]);
+  }
+});
+
+test("an item matched by the Plan's Lead Session lifts its row", () => {
+  // No `plan` on the item: it belongs to a Plan through its `session` and that Plan's Lead Session.
+  const oldPlan: LivePlan = { ...PLAN_ALPHA, id: "old-plan", lead_session: LEAD_A, created_at: "2026-01-01T00:00:00.000Z" };
+  const newPlan: LivePlan = { ...PLAN_ALPHA, id: "new-plan", lead_session: LEAD_B, created_at: "2026-02-01T00:00:00.000Z" };
+  renderContexts(
+    [{ id: CONTEXT, archived: false }],
+    [oldPlan, newPlan],
+    PLAN_SESSIONS,
+    () => {},
+    [inboxItem({ id: "item", urgency: "yellow", session: LEAD_A })],
+  );
+
+  expect(planKeys()).toEqual(["old-plan", "new-plan"]);
 });
 
 test("a rail given no plans still renders its Session rows", () => {

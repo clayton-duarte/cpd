@@ -50,6 +50,8 @@ export interface LivePlan {
   title: string;
   phase: string;
   lead_session: string | null;
+  /** The Plan's Created, the same `created_at` `plan list` and `plan show` carry (§4.2); absent on a row an older adapter sends (the rail treats it as oldest). */
+  created_at?: string;
   archived_at: string | null;
   counts: LivePlanCounts;
 }
