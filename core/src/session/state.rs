@@ -332,8 +332,9 @@ mod tests {
             .write("fixture", |tx| {
                 tx.execute_batch(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                     INSERT INTO sessions (id, role, context, name, cwd, tier, tmux_pane, state, state_at, created_at)
-                       VALUES ('s1', 'lead', 'ctx', 'One', '/', 'O3', '%5', 'idle', 't', 't');",
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at)
+                       VALUES ('s1', 'lead', 'ctx', 'pay', 'One', '/', 'O3', '%5', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 's1', 't');",
                 )?;
                 Ok(())
             })

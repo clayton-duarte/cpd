@@ -25,8 +25,9 @@ fn world() -> (tempfile::TempDir, CpdHome, SessionId) {
         .write("fixture", |tx| {
             Ok(tx.execute_batch(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                 INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, runner)
-                   VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't', 'durable');",
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't', 'durable');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');",
             )?)
         })
         .unwrap();

@@ -3261,7 +3261,7 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
                   ('lead',   'lead',    'ctx', 'pl', NULL,   'Lead',    '/f/l', NULL,   '/', 'O3', '%2',  'blocked', 'dialog',  't2', 't', NULL),
                   ('fork',   'lead',    'ctx', 'pl', NULL,   'Fork',    NULL,   'lead', '/', 'O3', NULL,  'working', NULL,      't3', 't', NULL),
                   ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'φ: question to the Lead', 't4', 't', NULL),
-                  ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', NULL,   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
+                  ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', 'lead',   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
          COMMIT;",
     )
     .unwrap();
@@ -3395,7 +3395,7 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at, title, titled_at, asleep_at)
            VALUES ('mgr',  'manager', 'ctx', NULL, NULL, 'Manager', '/f/m', NULL, '/', 'O3', '%1', 'idle',    NULL, 't1', 't', NULL, '{sixty}', 'u1', NULL),
                   ('lead', 'lead',    'ctx', 'pl', NULL, 'Lead',    '/f/l', NULL, '/', 'O3', '%2', 'blocked', 'dialog', 't2', 't', NULL, 'Short', 'u2', 'a'),
-                  ('bare', 'lead',    'ctx', 'pl', NULL, 'Bare',    NULL,   NULL, '/', 'O3', NULL, 'stopped', NULL, 't3', 't', 'a', NULL, NULL, NULL);
+                  ('bare', 'lead',    'ctx', 'pl', NULL, 'Bare',    NULL,   'lead', '/', 'O3', NULL, 'stopped', NULL, 't3', 't', 'a', NULL, NULL, NULL);
          COMMIT;"
     ))
     .unwrap();
@@ -4052,9 +4052,9 @@ fn version_9_with_a_grounded_lead(home: &CpdHome) {
         9,
         &format!(
             "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1'), ('two', 'Two', '{T}', 'm1');
-             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
-               VALUES ('l-g', 'lead', 'ctx', NULL, 'grounded', '/r', 'O3', 'idle', '{T}', '2026-01-01T00:00:01.000Z', '%3'),
-                      ('l-a', 'lead', 'ctx', 'aa', 'lead a', '/r', 'O3', 'idle', '{T}', '{T}', NULL);
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane, forked_from)
+               VALUES ('l-g', 'lead', 'ctx', NULL, 'grounded', '/r', 'O3', 'idle', '{T}', '2026-01-01T00:00:01.000Z', '%3', 'l-a'),
+                      ('l-a', 'lead', 'ctx', 'aa', 'lead a', '/r', 'O3', 'idle', '{T}', '{T}', NULL, NULL);
              INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                VALUES ('aa', 'ctx', 'Plan A', 'grounding', 'l-a', '{T}');
              UPDATE contexts SET lead_session = 'l-g', grounded_seq = 2 WHERE id = 'ctx';

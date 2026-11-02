@@ -983,9 +983,11 @@ mod tests {
                      VALUES ('pay', 'w-a1', 'w', 1, 'S2', 'ladder', 'running', 'cpd/pay--w-a1', '/w', '{T}');"
                 ));
             }
+            // A Lead made here is a fork of the Plan's Lead `l-pay`.
+            let fork = if role == "lead" { "'l-pay'" } else { "NULL" };
             self.sql(&format!(
-                "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
-                 VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, 'n', '/', 'O3', 'working', '{T}', '{T}');"
+                "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
+                 VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, 'n', '/', 'O3', 'working', '{T}', '{T}', {fork});"
             ));
         }
 
