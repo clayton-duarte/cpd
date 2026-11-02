@@ -27,17 +27,27 @@ mod tests {
         Tier::parse(s).unwrap()
     }
 
-    fn next(from: &str) -> Option<String> {
-        catalog().next(t(from)).unwrap().map(|t| t.to_string())
+    /// pi levels by effort: off=0 low=1 medium=2 high=3 xhigh=4, a catalog with gaps and models without levels.
+    fn gappy() -> Catalog {
+        Catalog {
+            pi_version: "1.5.0".into(),
+            o: model("opus", &[]),
+            s: model("sonnet", &[0, 1, 3]),
+            h: model("haiku", &[1, 3]),
+            g: model("gemini", &[]),
+        }
     }
 
     #[test]
-    fn syntax() {
-        for good in ["O0", "S3", "H5", "GX"] {
+    fn syntax_takes_a_letter_and_0_to_4_or_x_and_refuses_effort_5() {
+        for good in [
+            "O0", "S3", "H4", "G0", "G2", "G4", "GX", "HX", "SX", "OX", "O4",
+        ] {
             assert_eq!(t(good).to_string(), good);
         }
         for bad in [
-            "", "O", "O6", "o3", "X1", "S33", "S-1", " S3", "S3 ", "minimal", "G0", "gx",
+            "", "O", "G", "O5", "H5", "S5", "G5", "S6", "o3", "X1", "XX", "S33", "S-1", " S3",
+            "S3 ", "minimal", "gx", "GXX", "SXX",
         ] {
             let err = Tier::parse(bad).unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierInvalid, "{bad:?}");
@@ -45,14 +55,78 @@ mod tests {
     }
 
     #[test]
-    fn levels_never_use_minimal() {
-        let levels: Vec<_> = (0..=5)
-            .map(|e| Tier::new(Letter::O, e).unwrap().level())
-            .collect();
-        assert_eq!(levels, ["off", "low", "medium", "high", "xhigh", "max"]);
-        assert_eq!(effort_of_level("minimal"), Some(None));
-        assert_eq!(effort_of_level("xhigh"), Some(Some(4)));
-        assert_eq!(effort_of_level("bogus"), None);
+    fn a_tier_displays_as_written_g2_and_gx() {
+        for written in ["G2", "G0", "GX", "HX", "S4", "OX"] {
+            assert_eq!(t(written).to_string(), written);
+            assert_eq!(
+                t(written).letter().as_char(),
+                written.chars().next().unwrap()
+            );
+        }
+        assert_ne!(t("G0"), t("GX"), "G0 and GX are two Tiers");
+    }
+
+    #[test]
+    fn the_catalog_accepts_x_only_without_levels_and_a_digit_only_when_offered() {
+        let c = gappy();
+        for ok in ["H1", "H3", "S0", "S1", "S3", "OX", "GX"] {
+            assert!(c.is_valid(t(ok)), "{ok}");
+            c.check(t(ok)).unwrap();
+        }
+        for bad in [
+            "HX", "SX", "H0", "H2", "H4", "S2", "S4", "O0", "O3", "G0", "G2",
+        ] {
+            assert!(!c.is_valid(t(bad)), "{bad}");
+            let err = c.check(t(bad)).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::TierInvalid, "{bad}");
+        }
+        // A model that offers 0,2,3,4 (a gap) takes those digits and no X.
+        let mut gap = gappy();
+        gap.o = model("opus", &[0, 2, 3, 4]);
+        for ok in ["O0", "O2", "O3", "O4"] {
+            assert!(gap.is_valid(t(ok)), "{ok}");
+        }
+        for bad in ["O1", "OX"] {
+            assert!(!gap.is_valid(t(bad)), "{bad}");
+        }
+    }
+
+    #[test]
+    fn model_arg_of_an_x_tier_uses_the_off_level() {
+        let c = gappy();
+        assert_eq!(c.model_arg(t("OX")).unwrap(), "p/opus:off");
+        assert_eq!(c.model_arg(t("GX")).unwrap(), "p/gemini:off");
+        assert_eq!(c.model_arg(t("H3")).unwrap(), "p/haiku:high");
+        assert_eq!(c.model_arg(t("S0")).unwrap(), "p/sonnet:off");
+        assert_eq!(
+            c.model_arg(t("HX")).unwrap_err().code(),
+            ErrorCode::TierInvalid
+        );
+    }
+
+    #[test]
+    fn tiers_order_by_the_ladder_g_h_s_o_then_effort_with_x_lowest() {
+        let mut tiers: Vec<Tier> = [
+            "OX", "S3", "G2", "H4", "GX", "O0", "H0", "SX", "G0", "S1", "O4", "HX",
+        ]
+        .map(t)
+        .to_vec();
+        tiers.sort();
+        let sorted: Vec<String> = tiers.iter().map(Tier::to_string).collect();
+        assert_eq!(
+            sorted,
+            [
+                "GX", "G0", "G2", "HX", "H0", "H4", "SX", "S1", "S3", "OX", "O0", "O4"
+            ]
+        );
+        assert!(t("H4") < t("SX"), "a higher letter beats any effort");
+        assert!(t("S4") < t("OX"));
+        assert!(t("GX") < t("G0"), "X is the lowest of its letter");
+        assert!(t("O3") > t("O2"));
+    }
+
+    fn next(from: &str) -> Option<String> {
+        catalog().next(t(from)).unwrap().map(|t| t.to_string())
     }
 
     #[test]
@@ -71,8 +145,8 @@ mod tests {
         let gappy = Catalog {
             pi_version: "1.4.0".into(),
             o: model("opus", &[0, 1, 2, 3, 4, 5]),
-            s: model("sonnet", &[0, 1, 3, 5]),
-            h: model("haiku", &[1, 3, 5]),
+            s: model("sonnet", &[0, 1, 3, 4]),
+            h: model("haiku", &[1, 3, 4]),
             g: model("gemini", &[]),
         };
         let nx = |from: &str| gappy.next(t(from)).unwrap().map(|t| t.to_string());
@@ -99,7 +173,7 @@ mod tests {
         );
         // A catalog-VALID Tier outside the Worker range has no ladder (pro-d82); a Tier the
         // catalog refuses is tier_invalid, as an_invalid_tier_is_refused_not_stepped pins.
-        for name in ["S5", "O3"] {
+        for name in ["S4", "O3"] {
             assert_eq!(nx(name), None, "{name} is not a Worker's Tier: no ladder");
         }
     }
@@ -174,27 +248,6 @@ mod tier_g {
     }
 
     #[test]
-    fn g_has_no_number() {
-        for n in 0..=5 {
-            let name = format!("G{n}");
-            let err = Tier::parse(&name).unwrap_err();
-            assert_eq!(err.code(), ErrorCode::TierInvalid, "{name}");
-            let m = err.message();
-            assert!(m.contains("GX") && m.contains("hs-d562"), "{name}: {m}");
-        }
-        for name in ["gx", "G", "GXX", "OX", "SX", "HX"] {
-            assert_eq!(
-                Tier::parse(name).unwrap_err().code(),
-                ErrorCode::TierInvalid,
-                "{name}"
-            );
-        }
-        for name in ["H5", "S3", "O1"] {
-            assert_eq!(Tier::parse(name).unwrap().to_string(), name);
-        }
-    }
-
-    #[test]
     fn gx_is_never_a_workers_tier() {
         let g = Tier::parse("GX").unwrap();
         assert!(!g.is_worker_allowed());
@@ -239,7 +292,7 @@ mod worker_tiers {
     #[test]
     fn worker_range_allows_h0_to_h3_and_s0_to_s3() {
         for letter in [Letter::O, Letter::S, Letter::H] {
-            for effort in 0..=5 {
+            for effort in 0..=4 {
                 let tier = Tier::new(letter, effort).unwrap();
                 let expected = matches!(
                     tier.to_string().as_str(),
@@ -253,7 +306,7 @@ mod worker_tiers {
 
     #[test]
     fn worker_range_refusal_names_the_range_the_rule_and_pro_d82() {
-        for name in ["H4", "H5", "S4", "S5", "O3"] {
+        for name in ["H4", "S4", "O3"] {
             let err = t(name).check_worker().unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierNotAllowed, "{name}");
             assert_eq!(err.details()["tier"], name);
@@ -280,7 +333,7 @@ mod worker_tiers {
     }
 
     #[test]
-    fn worker_ladder_steps_h0_to_h3_then_s1_s2_s3_and_gives_s4_s5_o3_none() {
+    fn worker_ladder_steps_h0_to_h3_then_s1_s2_s3_and_gives_s4_o3_none() {
         let c = catalog();
         assert_eq!(c.next(t("H0")).unwrap(), Some(t("H1")));
         assert_eq!(c.next(t("H1")).unwrap(), Some(t("H2")));
@@ -288,7 +341,7 @@ mod worker_tiers {
         assert_eq!(c.next(t("H3")).unwrap(), Some(t("S1")));
         assert_eq!(c.next(t("S1")).unwrap(), Some(t("S2")));
         assert_eq!(c.next(t("S2")).unwrap(), Some(t("S3")));
-        for name in ["S4", "S5", "O3"] {
+        for name in ["S4", "O3"] {
             assert_eq!(c.next(t(name)).unwrap(), None, "{name}");
         }
     }

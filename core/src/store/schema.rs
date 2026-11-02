@@ -1089,6 +1089,8 @@ mod tests;
 #[cfg(test)]
 mod tier_catalog_tests;
 #[cfg(test)]
+mod tier_syntax_tests;
+#[cfg(test)]
 mod worker_runner_tests;
 #[cfg(test)]
 mod workflow_rename_tests;

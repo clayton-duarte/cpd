@@ -20,6 +20,9 @@ mod migrate_tests;
 mod runner_tests;
 
 #[cfg(test)]
+mod tier_range_tests;
+
+#[cfg(test)]
 mod tier_tests;
 
 #[cfg(test)]
@@ -46,7 +49,7 @@ pub use file::{
 };
 pub use repo::RepoTests;
 pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
-pub use tier::{Catalog, Letter, Tier, TierModel};
+pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel};
 
 /// `cpd config` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]

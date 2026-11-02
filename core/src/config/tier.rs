@@ -188,6 +188,51 @@ impl Tier {
     }
 }
 
+/// The ladder's order (Tier model v2): letters G < H < S < O, then effort ascending, `X` lowest of its letter.
+impl Ord for Tier {
+    fn cmp(&self, _other: &Tier) -> std::cmp::Ordering {
+        todo!("stub: the implementation fills it in, only the tests call it")
+    }
+}
+
+impl PartialOrd for Tier {
+    fn partial_cmp(&self, other: &Tier) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// An agent role, ascending: auxiliar < worker < lead < manager (Tier model v2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Role {
+    Auxiliar,
+    Worker,
+    Lead,
+    Manager,
+}
+
+/// The role defaults: `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoleTiers {
+    pub auxiliar: Tier,
+    pub worker: Tier,
+    pub lead: Tier,
+    pub manager: Tier,
+}
+
+/// The Tiers a role may have: `floor` to `ceiling`, both valid rungs of the ladder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Range {
+    pub floor: Tier,
+    pub ceiling: Tier,
+}
+
+impl Range {
+    /// Whether `tier` lies on the ladder from `floor` to `ceiling`, both included.
+    pub fn contains(&self, _tier: Tier) -> bool {
+        todo!("stub: the implementation fills it in, only the tests call it")
+    }
+}
+
 impl fmt::Display for Tier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.letter {
@@ -273,6 +318,26 @@ impl Catalog {
             self.model(tier.letter).model,
             tier.level()
         ))
+    }
+
+    /// Every valid rung, ascending (effort-0 rungs included; `X` is the one rung of a model without levels).
+    pub fn ladder(&self) -> Vec<Tier> {
+        todo!("stub: the implementation fills it in, only the tests call it")
+    }
+
+    /// The range of `role` under the role defaults; `None` when no valid rung lies in its span.
+    pub fn range(&self, _role: Role, _defaults: &RoleTiers) -> Option<Range> {
+        todo!("stub: the implementation fills it in, only the tests call it")
+    }
+
+    /// The next valid rung inside `range`; leaving a letter lands on its lowest effort >= 1 (or X); `None` at the ceiling.
+    pub fn next_in(&self, _range: Range, _tier: Tier) -> Option<Tier> {
+        todo!("stub: the implementation fills it in, only the tests call it")
+    }
+
+    /// The lowest valid rung of `range` at or above `tier`.
+    pub fn step_up_in(&self, _range: Range, _tier: Tier) -> Option<Tier> {
+        todo!("stub: the implementation fills it in, only the tests call it")
     }
 
     /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554, hs-d791): within the same
