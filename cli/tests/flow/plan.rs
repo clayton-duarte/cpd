@@ -252,7 +252,7 @@ mod inproc {
 // ---------- plan new ----------
 
 #[test]
-fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
+fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     let fx = Fx::with_ports();
     let repo = inproc::setup(&fx);
     fx.cpd(&[
@@ -265,10 +265,11 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     .ok();
     let brief = fx.env.root().join("brief.md");
     fs::write(&brief, "Retry the failed payouts.\n").unwrap();
-    // Not the repo, not the root: the directory the User runs `plan new` from.
-    let home_dir = fx.env.root().join("home");
-    fs::create_dir_all(&home_dir).unwrap();
-    let cwd = home_dir.canonicalize().unwrap().display().to_string();
+    // Not the repo, not the root, not HOME: the directory the User runs `plan new` from. The Lead starts in HOME.
+    let elsewhere = fx.env.root().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(fx.env.home()).unwrap();
+    let cwd = fx.env.home().canonicalize().unwrap().display().to_string();
 
     let args = [
         "plan",
@@ -283,7 +284,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
         "--brief-file",
         brief.to_str().unwrap(),
     ];
-    let out = fx.cpd_with(&home_dir, &args, &[]).ok();
+    let out = fx.cpd_with(&elsewhere, &args, &[]).ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
@@ -309,7 +310,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
         out["lead"]["window"].as_str().unwrap(),
     );
 
-    // The Lead: stopped, in its parked window, with its pane recorded, in the caller's cwd.
+    // The Lead: stopped, in its parked window, with its pane recorded, in the User's home.
     let lead = fx.cpd(&["session", "show", &session]).ok()["session"].clone();
     assert_eq!(
         (&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]),
@@ -338,7 +339,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
         .into_iter()
         .find(|p| p.id == pane)
         .expect("the Lead's pane");
-    assert_eq!(started.cwd, cwd, "the pane starts in the caller's cwd");
+    assert_eq!(started.cwd, cwd, "the pane starts in the User's home");
 
     // The pane runs `cpd session run <id>` with the Plan's variables (§15.5).
     let pane_vars = state.pane_env(pane);

@@ -1,6 +1,6 @@
 //! `plan new`'s Lead Tier (commands.md §4.1, contract §2.2, §8.2; pro-d139, pro-d140): the default (`lead_tier`, in every
-//! Context), `--tier`, its refusals and its idempotency. On the fake tmux; the Tier catalog is seeded in the
-//! store with a fake pi install, so no real pi, node or tmux runs.
+//! Context, the permanent `codereview` one included), `--tier`, its refusals and its idempotency. On the fake tmux; the Tier
+//! catalog is seeded in the store with a fake pi install, so no real pi, node or tmux runs.
 
 use crate::common;
 
@@ -11,17 +11,16 @@ use serde_json::Value;
 
 const ALLOWED: &str = "O0-O4, S0-S4, H0-H4";
 
-/// The config: `lead_tier = "O2"`, the review Context `review`, and `extra` (top-level keys, before `[inbox]`).
-fn config(fx: &Fx, extra: &str, review_context: &str) {
-    fx.env.write_tmux_config(&format!(
-        "lead_tier = \"O2\"\n{extra}\n[inbox]\nreview_context = \"{review_context}\"\n"
-    ));
+/// The config: `lead_tier = "O2"`, and `extra` (top-level keys).
+fn config(fx: &Fx, extra: &str) {
+    fx.env
+        .write_tmux_config(&format!("lead_tier = \"O2\"\n{extra}\n"));
 }
 
-/// Contexts `ctx` and `review`, a fake pi install with a Tier catalog (O and S efforts 0-4, H 0-3), and the cockpit.
-fn setup(fx: &Fx, extra: &str, review_context: &str) {
+/// Contexts `ctx` and `codereview`, a fake pi install with a Tier catalog (O and S efforts 0-4, H 0-3), and the cockpit.
+fn setup(fx: &Fx, extra: &str) {
     fx.env.write_models();
-    config(fx, extra, review_context);
+    config(fx, extra);
     let scope = fx
         .env
         .root()
@@ -38,14 +37,20 @@ fn setup(fx: &Fx, extra: &str, review_context: &str) {
     ])
     .ok();
     fx.cpd(&[
-        "context", "new", "review", "--title", "Review", "--owner", "acme",
+        "context",
+        "new",
+        "codereview",
+        "--title",
+        "codereview",
+        "--owner",
+        "acme",
     ])
     .ok();
     seed_catalog(fx, "[0,1,2,3,4]", "[0,1,2,3,4]");
     fx.cockpit();
 }
 
-/// The catalog rows: `s` and `o` efforts, H 0-3.
+/// The catalog rows: `s` and `o` efforts, H 0-3, and G (no efforts: a G Tier is never a Lead's).
 fn seed_catalog(fx: &Fx, s: &str, o: &str) {
     let rows: String = [("O", "p/opus", o), ("S", "p/sonnet", s), ("H", "p/haiku", "[0,1,2,3]"), ("G", "p/gemini", "[]")]
         .iter()
@@ -109,23 +114,15 @@ fn not_allowed(run: &common::Run, tier: &str) {
 #[test]
 fn a_plan_defaults_its_lead_to_lead_tier_in_every_context() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     assert_eq!(lead_tier(&fx, "pay", "ctx", None), "O2");
-    assert_eq!(lead_tier(&fx, "rv", "review", None), "O2");
-}
-
-#[test]
-fn with_no_review_context_a_plan_defaults_its_lead_to_lead_tier() {
-    let fx = Fx::with_ports();
-    setup(&fx, "", "");
-    assert_eq!(lead_tier(&fx, "pay", "ctx", None), "O2");
-    assert_eq!(lead_tier(&fx, "rv", "review", None), "O2");
+    assert_eq!(lead_tier(&fx, "rv", "codereview", None), "O2");
 }
 
 /// `--tier S2` wins in `context`: the session row and the `session-registered` Event say S2.
 fn override_wins(context: &str) {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     assert_eq!(lead_tier(&fx, "pl", context, Some("S2")), "S2");
     let registered = fx
         .cpd(&["events", "list", "--kind", "session-registered"])
@@ -141,8 +138,8 @@ fn override_wins(context: &str) {
 }
 
 #[test]
-fn tier_flag_overrides_the_default_in_the_review_context() {
-    override_wins("review");
+fn tier_flag_overrides_the_default_in_the_codereview_context() {
+    override_wins("codereview");
 }
 
 #[test]
@@ -153,7 +150,7 @@ fn tier_flag_overrides_the_default_in_another_context() {
 #[test]
 fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     let before = counts(&fx);
     not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX");
     assert_eq!(counts(&fx), before);
@@ -162,7 +159,7 @@ fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
 #[test]
 fn tier_flag_refuses_effort_5_as_tier_invalid_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     seed_catalog(&fx, "[0,1,2,3,4,5]", "[0,1,2,3,4]");
     let before = counts(&fx);
     // Tier model v2: effort 5 exists for no letter, so it is a syntax error, not a role refusal.
@@ -174,7 +171,7 @@ fn tier_flag_refuses_effort_5_as_tier_invalid_and_writes_nothing() {
 #[test]
 fn tier_flag_refuses_an_effort_pi_does_not_support_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     let before = counts(&fx);
     // H lists efforts 0-3 only.
     let e = common::refused(&plan_new(&fx, "pl", "ctx", Some("H4")), "tier_invalid", 2);
@@ -188,7 +185,7 @@ fn tier_flag_refuses_an_effort_pi_does_not_support_and_writes_nothing() {
 #[test]
 fn a_rerun_with_the_same_tier_is_already() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", Some("S2")).ok()["already"], true);
     assert_eq!((count(&fx, "plans"), count(&fx, "sessions")), (1, 1));
@@ -197,7 +194,7 @@ fn a_rerun_with_the_same_tier_is_already() {
 #[test]
 fn a_rerun_with_another_tier_is_plan_exists() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     common::refused(&plan_new(&fx, "pl", "ctx", Some("S1")), "plan_exists", 3);
     // A first run without `--tier` stored `lead_tier`: the same Tier is `already`, another is `plan_exists`.
@@ -209,7 +206,7 @@ fn a_rerun_with_another_tier_is_plan_exists() {
 #[test]
 fn a_rerun_without_tier_compares_no_tier() {
     let fx = Fx::with_ports();
-    setup(&fx, "", "review");
+    setup(&fx, "");
     let first = plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", None).ok()["already"], true);
     assert_eq!(tier_of(&fx, &lead(&first)), "S2");

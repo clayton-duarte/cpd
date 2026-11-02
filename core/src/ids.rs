@@ -133,6 +133,48 @@ simple_id!(
     |s| matches(s, lower, lower_digit_dash, 1, 39)
 );
 
+/// The three Permanent Contexts (commands.md §3.8): never archived, renamed or deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermanentContext {
+    Cpd,
+    Host,
+    Codereview,
+}
+
+impl PermanentContext {
+    /// Every Permanent Context, in their fixed order.
+    pub const ALL: [PermanentContext; 3] = [
+        PermanentContext::Cpd,
+        PermanentContext::Host,
+        PermanentContext::Codereview,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            PermanentContext::Cpd => "cpd",
+            PermanentContext::Host => "host",
+            PermanentContext::Codereview => "codereview",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            PermanentContext::Cpd => "cpd",
+            PermanentContext::Host => "Host: local maintenance of this machine",
+            PermanentContext::Codereview => "codereview",
+        }
+    }
+}
+
+impl ContextId {
+    /// The Permanent Context this id names, if it is one of the three.
+    pub fn permanent(&self) -> Option<PermanentContext> {
+        PermanentContext::ALL
+            .into_iter()
+            .find(|p| p.id() == self.as_str())
+    }
+}
+
 simple_id!(
     /// Plan id: `^[a-z][a-z0-9-]{1,23}$`.
     PlanId, InvalidPlanId, "Plan id", "^[a-z][a-z0-9-]{1,23}$",
