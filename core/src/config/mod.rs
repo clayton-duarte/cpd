@@ -12,6 +12,7 @@ pub mod preset;
 mod repo;
 mod runner;
 mod tier;
+pub mod tier_write;
 
 #[cfg(test)]
 mod migrate_tests;
@@ -30,6 +31,9 @@ mod preset_tests;
 
 #[cfg(test)]
 mod config_write_tests;
+
+#[cfg(test)]
+mod tier_write_tests;
 
 #[cfg(test)]
 mod explore_tests;
@@ -51,13 +55,47 @@ pub use repo::RepoTests;
 pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
 pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel};
 
-/// `cpd config` takes no arguments.
+/// `cpd config` takes no arguments, or the subcommand `tiers set` (§14.2a).
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: Option<ConfigCommand>,
     /// Internal: apply the config migrations and write `config.toml` only when it changed and
     /// is valid. `cpd install` runs it before replacing the binary (contract §3.7).
     #[arg(long)]
     pub migrate: bool,
+}
+
+/// The subcommands of `cpd config` (§14.2a).
+#[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum ConfigCommand {
+    /// Set the four Tier keys of config.toml (§14.2a)
+    #[command(subcommand)]
+    Tiers(TiersCommand),
+}
+
+/// The subcommands of `cpd config tiers` (§14.2a).
+#[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum TiersCommand {
+    /// Set the four Tier keys of config.toml (§14.2a)
+    Set(SetTiersArgs),
+}
+
+/// `cpd config tiers set` (§14.2a): the four Tiers.
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct SetTiersArgs {
+    /// `context_distill_tier`
+    #[arg(long, value_name = "T")]
+    pub auxiliar: Option<String>,
+    /// `worker_tier`
+    #[arg(long, value_name = "T")]
+    pub worker: Option<String>,
+    /// `lead_tier`
+    #[arg(long, value_name = "T")]
+    pub lead: Option<String>,
+    /// `manager_tier`
+    #[arg(long, value_name = "T")]
+    pub manager: Option<String>,
 }
 
 /// `cpd tiers` selects a policy key like `cpd policy show`; none selects the machine layer.
@@ -65,11 +103,17 @@ pub struct ConfigArgs {
 pub struct TiersArgs {
     #[command(flatten)]
     key: crate::policy::KeyArgs,
+    /// A candidate model `<L>=<ref>` for the letter `L`, for this call only (repeatable)
+    #[arg(long = "model", value_name = "L=ref")]
+    model: Vec<String>,
 }
 
 /// `cpd config` (§14.2): the effective configuration, each leaf with its source.
 pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
+    if let Some(ConfigCommand::Tiers(TiersCommand::Set(_))) = args.command {
+        todo!("stub: `config tiers set` is not implemented yet")
+    }
     if args.migrate {
         return migrate(&home);
     }

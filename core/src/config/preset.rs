@@ -31,6 +31,24 @@ pub enum Command {
     Show(ShowArgs),
     /// Switch the machine to a preset's models (§14.6)
     Apply(ApplyArgs),
+    /// Switch the machine to four model refs given as flags (§14.6a)
+    Set(SetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct SetArgs {
+    /// The model ref of the O letter
+    #[arg(long = "O", value_name = "ref", value_parser = crate::policy::model::model_ref)]
+    o: String,
+    /// The model ref of the S letter
+    #[arg(long = "S", value_name = "ref", value_parser = crate::policy::model::model_ref)]
+    s: String,
+    /// The model ref of the H letter
+    #[arg(long = "H", value_name = "ref", value_parser = crate::policy::model::model_ref)]
+    h: String,
+    /// The model ref of the G letter
+    #[arg(long = "G", value_name = "ref", value_parser = crate::policy::model::model_ref)]
+    g: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -52,6 +70,10 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::List => list(),
         Command::Show(args) => show(args),
         Command::Apply(args) => apply(args),
+        Command::Set(args) => {
+            let _ = (args.o, args.s, args.h, args.g);
+            todo!("stub: `preset set` is not implemented yet")
+        }
     }
 }
 
