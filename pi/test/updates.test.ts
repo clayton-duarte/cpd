@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PendingPrJob, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parsePrOpened, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PendingPrJob, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { CpdError } from "../lib/cpd.ts";
 import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
@@ -388,6 +389,45 @@ test("a Lead gets one cpd-context message with new decisions, board posts and op
   assert.equal(m.details.event, 350);
   assert.deepEqual(f.pi.sent, [], "it only returns the message: no turn");
   assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
+});
+
+const legacyUrl = "https://github.com/o/r/pull/211";
+
+test("parsePrOpened reads the Workflow key of a legacy pr-opened Event from data.pr", () => {
+  assert.deepEqual(parsePrOpened({ events: [{ id: 350, plan: "p1", data: { pr: "api", number: 211, url: legacyUrl } }] }), [{ event: 350, plan: "p1", workflow: "api", number: 211, url: legacyUrl }]);
+});
+
+test("parsePrOpened prefers data.workflow when an Event carries both data.workflow and data.pr", () => {
+  assert.deepEqual(parsePrOpened({ events: [{ id: 350, plan: "p1", data: { workflow: "api", pr: "old", number: 211, url: legacyUrl } }] }), [{ event: 350, plan: "p1", workflow: "api", number: 211, url: legacyUrl }]);
+});
+
+test("parsePrOpened refuses a pr-opened Event with neither data.workflow nor data.pr as bad_output", () => {
+  assert.throws(() => parsePrOpened({ events: [{ id: 350, plan: "p1", data: { number: 211, url: legacyUrl } }] }), (e: any) => e instanceof CpdError && e.code === "bad_output");
+});
+
+test("a Lead cpd-context message lists the pull request of a legacy pr-opened Event that carries data.pr", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("events-list@context-record", eventsList([1, 2, 3, 4]));
+  f.respond("context-show", contextShow([decision(1, "Use one table. The rest is in the record."), record(2, { text: "Just a note." }), decision(3, "Mine.", { by: ID }), decision(4, "Cut the wake.")]));
+  f.respond("events-list@pr-opened", eventsOf("pr-opened", [{ id: 350, plan: "p1", data: { pr: "api", number: 211, url: legacyUrl } }]));
+  f.respond("board-take", take({ id: 1, from_session: null, text: "PR #207 opened" }));
+  const m = await beforeTurn(f);
+  assert.equal(
+    m.content,
+    [
+      "Context ctx: 2 decisions · 1 board post · 1 pull request opened",
+      "- hs-n1: Use one table.",
+      "- hs-n4: Cut the wake.",
+      "",
+      "Board:",
+      "- User (2026-10-21 21:00 +05:30): PR #207 opened",
+      "",
+      "Workflows:",
+      "- Workflow api: pull request opened https://github.com/o/r/pull/211",
+    ].join("\n"),
+  );
 });
 
 test("a Lead gets no message when nothing is new", async (t) => {

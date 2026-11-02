@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { namespacesFor } from "../../durable-host/codemode.ts";
+import { codemodeNamespaces, namespacesFor } from "../../durable-host/codemode.ts";
 import { createReload, type ReloadGuard, type ReloadPort } from "../../durable-host/reload.ts";
 import { createRetier, type RetierPort } from "../../durable-host/retier.ts";
 import { skillsCheck, skillsSection, type SkillsPort } from "../../durable-host/skills.ts";
@@ -188,4 +188,10 @@ test("the code mode extension registers the codemode tool and the mcp server nam
     assert.ok(extension !== undefined, "the host never opened a conversation");
     assert.ok(extension.tools?.some((tool) => tool.name === "codemode"), "the codemode tool is not registered in the host extension");
   });
+});
+
+test("the code mode namespace of a hyphenated server name uses an underscore", async () => {
+  const servers = [{ server: "my-server", tools: ["mcp__my_server__search"] }];
+  assert.deepEqual(codemodeNamespaces(servers), [{ name: "my_server", prefix: "mcp__my_server__" }]);
+  assert.deepEqual(Object.keys(namespacesFor(servers)), ["mcp__my_server__"]);
 });

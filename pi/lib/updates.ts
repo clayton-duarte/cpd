@@ -105,14 +105,21 @@ export function parsePlanEvents(out: Record<string, unknown>): PlanKindEvent[] {
   });
 }
 
-/** Parse `cpd events list --kind pr-opened`: each Event's id, Plan, `data.workflow`, `data.number` and `data.url`. */
+/**
+ * Parse `cpd events list --kind pr-opened`: each Event's id, Plan, `data.workflow`, `data.number` and `data.url`.
+ * The legacy `data.pr` of older Events is read when `data.workflow` is absent (Events are immutable, K1).
+ */
 export function parsePrOpened(out: Record<string, unknown>): PrOpened[] {
   if (!Array.isArray(out.events)) throw bad("events list", "`events` is not a list");
   return out.events.map((e) => {
-    if (!isObject(e) || !Number.isSafeInteger(e.id) || typeof e.plan !== "string" || !isObject(e.data) || typeof e.data.workflow !== "string" || typeof e.data.url !== "string") {
-      throw bad("events list", "a pr-opened Event lacks id, plan, data.workflow or data.url");
+    if (!isObject(e) || !Number.isSafeInteger(e.id) || typeof e.plan !== "string" || !isObject(e.data)) {
+      throw bad("events list", "a pr-opened Event lacks id, plan, data.workflow (or the legacy data.pr) or data.url");
     }
-    return { event: e.id as number, plan: e.plan, workflow: e.data.workflow, number: Number.isSafeInteger(e.data.number) ? (e.data.number as number) : null, url: e.data.url };
+    const workflow = e.data.workflow ?? e.data.pr;
+    if (typeof workflow !== "string" || typeof e.data.url !== "string") {
+      throw bad("events list", "a pr-opened Event lacks id, plan, data.workflow (or the legacy data.pr) or data.url");
+    }
+    return { event: e.id as number, plan: e.plan, workflow, number: Number.isSafeInteger(e.data.number) ? (e.data.number as number) : null, url: e.data.url };
   });
 }
 

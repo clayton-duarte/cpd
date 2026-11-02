@@ -55,15 +55,21 @@ test("reads the workflow kinds", () => {
     assert.equal(parseLine(JSON.stringify({ ...WELL_FORMED, kind, data: { workflow: "w" } })).type, "event", `${kind} parses as an Event, not unknown-kind`);
   }
 
-  // contract §5.2: the `data` key that held the Workflow key is `workflow`, which the adapter reads for `pr-opened`.
+  // contract §5.2: the `data` key is `workflow`; the adapter still reads the legacy `data.pr` of `pr-opened` Events.
   const opened = { ...WELL_FORMED, plan: "p", kind: "pr-opened", data: { workflow: "w", number: 1, url: "u" } };
   const read = parsePrOpened({ events: [opened] });
   assert.equal(read.length, 1, "a pr-opened Event with data.workflow is read");
   assert.equal(read[0]!.event, 7);
   assert.equal(read[0]!.plan, "p");
+  assert.equal(read[0]!.workflow, "w");
   assert.equal(read[0]!.number, 1);
   assert.equal(read[0]!.url, "u");
-  assert.throws(() => parsePrOpened({ events: [{ ...opened, data: { pr: "w", number: 1, url: "u" } }] }), { code: "bad_output" }, "the retired data.pr key is not read");
+  const legacy = parsePrOpened({ events: [{ ...opened, data: { pr: "w", number: 1, url: "u" } }] });
+  assert.equal(legacy.length, 1, "the legacy data.pr key is read");
+  assert.equal(legacy[0]!.workflow, "w", "the legacy data.pr key is read");
+  assert.equal(legacy[0]!.number, 1, "the legacy data.pr key is read");
+  assert.equal(legacy[0]!.url, "u", "the legacy data.pr key is read");
+  assert.throws(() => parsePrOpened({ events: [{ ...opened, data: { number: 1, url: "u" } }] }), { code: "bad_output" }, "an Event with neither data.workflow nor data.pr is refused");
 
   // An unknown kind is still unknown-kind, not invalid (contract §5.2).
   assert.deepEqual(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future" })), { type: "unknown-kind", id: 7 });

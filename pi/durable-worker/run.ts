@@ -8,6 +8,7 @@ import { Reporter, stateArgs, type Wanted } from "../lib/state.ts";
 import { zoneLine } from "../lib/time.ts";
 import { reportPath, storePath, type Config } from "./config.ts";
 import { inputOf, type Input } from "./deliver.ts";
+import { codemodeNamespaces } from "../durable-host/codemode.ts";
 import { cpdExtension } from "./extension.ts";
 import { mcpHandler, type McpPort } from "./mcp.ts";
 import { endReport, type EndReport, type Entry } from "./report.ts";
@@ -21,10 +22,11 @@ export type Deps = {
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
-  open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  open(o: { file: string; cwd: string; model: Model; extension: Extension; codemode: Extension }): Promise<Conversation>;
   follow(hooks: FollowerHooks): { start(): void; stop(): void };
   writeReport(file: string, report: EndReport): Promise<void>;
   onTerminate(handler: () => void): void;
+  codemode(namespaces: readonly { name: string; prefix: string }[]): Extension;
   mcp: McpPort;
   homeDir(): string;
   now(): Date;
@@ -68,7 +70,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
       { cwd: config.cwd, home: deps.homeDir(), cpdHome: config.home, kind: config.jobKind, plan: config.plan },
     );
-    const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension });
+    const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension, codemode: deps.codemode([]) });
     opened = conversation;
     conversation.closed.then(
       (reason) => {
@@ -104,7 +106,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     if (shownState === "stopped") reporter.want({ state: "idle" });
     await submit({ content: `Read ${config.spec} and follow it exactly. Your attempt id is ${config.attempt}.`, requestId: config.attempt, whenBusy: "followUp" });
 
-    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, over: () => over });
+    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, attached: (servers) => conversation.install(deps.codemode(codemodeNamespaces(servers))), over: () => over });
     mcp = handler;
     await handler.replay();
 

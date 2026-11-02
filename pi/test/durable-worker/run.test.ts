@@ -63,6 +63,7 @@ class Store {
   readonly entries: Entry[] = [];
   closeCalls = 0;
   /** As pi-durable's Registry.install: keyed by extension name, an existing name replaced in place. */
+  readonly installs: string[] = [];
   readonly installed = new Map<string, Extension>();
   private closeIt!: (v: unknown) => void;
   readonly closed = new Promise<unknown>((resolve) => {
@@ -86,6 +87,7 @@ class Store {
         return pending.submission;
       },
       install: (extension) => {
+        this.installs.push(extension.name);
         this.installed.set(extension.name, extension);
         notify();
       },
@@ -168,7 +170,8 @@ const MOVES: Record<string, readonly string[]> = {
 };
 const legalMove = (from: string, to: string): boolean => from === to || (MOVES[from]?.includes(to) ?? false);
 
-function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void>; config?: Config; homeDir?: string; mcp?: FakeMcp } = {}) {
+function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: Deps["resolveModel"]; sessionState?: string; entriesError?: Error; writeError?: Error; openGate?: Promise<void>; config?: Config; homeDir?: string; mcp?: FakeMcp; codemodeThrows?: boolean } = {}) {
+  const builds: { namespaces: { name: string; prefix: string }[]; extension: Extension }[] = [];
   const mcp = over.mcp ?? new FakeMcp();
   const order: string[] = [];
   const config = over.config ?? CONFIG;
@@ -251,6 +254,12 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
         },
       };
     },
+    codemode: (namespaces) => {
+      if (over.codemodeThrows && namespaces.length > 0) throw new Error("namespaces rejected");
+      const extension = { name: "codemode", id: builds.length } as unknown as Extension;
+      builds.push({ namespaces: namespaces.map((n) => ({ ...n })), extension });
+      return extension;
+    },
     mcp: { connect: mcp.connect },
     writeReport: async (file, report) => {
       effects.push("writeReport");
@@ -267,6 +276,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
     now: () => NOW,
     log: (line) => {
       logs.push(line);
+      notify();
     },
   };
 
@@ -286,7 +296,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
       return fn();
     });
   const states = () => calls.filter((a) => a[0] === "session" && a[1] === "state").map((a) => a.slice(2).join(" "));
-  return { mcp, order, session, store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
+  return { builds, mcp, order, session, store, calls, opens, reports, logs, effects, follower, terminate, ending, until, states };
 }
 
 /** Waits until the runner is fully up: first message submitted, follower started, terminate handler set. */
@@ -713,7 +723,7 @@ test("a re-attach of a server replaces its tools and closes the old connection",
   assert.equal(r.mcp.conns[1]!.closed, 0);
   deliver(hooks, attached(44, "jira"));
   await installedAfter(r, "mcp-jira", 2);
-  assert.deepEqual([...r.store.installed.keys()].sort(), ["mcp-atlassian", "mcp-jira"]);
+  assert.deepEqual([...r.store.installed.keys()].sort(), ["codemode", "mcp-atlassian", "mcp-jira"]);
   assert.deepEqual(namesOf(r, "mcp-atlassian"), ["mcp__atlassian__other"]);
   assert.equal(r.mcp.conns[0]!.closed, 1);
   assert.equal(await stop(r), 143);
@@ -780,5 +790,66 @@ test("an mcp-attached Event is never submitted as input", { timeout: 10_000 }, a
   deliver(hooks, nudge(43, "Carry on."));
   await r.until("the nudge submitted", () => r.store.submitted.some((i) => i.requestId === "event:43"));
   assert.equal(r.store.submitted.some((i) => i.requestId === "event:42"), false);
+  assert.equal(await stop(r), 143);
+});
+
+const GITHUB = { name: "github", prefix: "mcp__github__" };
+const LINEAR = { name: "linear", prefix: "mcp__linear__" };
+
+test("the durable Worker opens its conversation with the codemode extension built with no namespace", { timeout: 10_000 }, async () => {
+  const r = rig();
+  await up(r);
+  assert.deepEqual(r.builds.map((b) => b.namespaces), [[]]);
+  assert.equal(r.opens[0]!.codemode, r.builds[0]!.extension);
+  assert.equal(await stop(r), 143);
+});
+
+test("an mcp-attached Event reinstalls the codemode extension with the namespace of the attached server", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "github"));
+  await r.until("codemode installed", () => r.store.installs.includes("codemode"));
+  assert.deepEqual(r.store.installs, ["mcp-github", "codemode"]);
+  assert.deepEqual(r.builds.at(-1)!.namespaces, [GITHUB]);
+  assert.equal(r.store.installed.get("codemode"), r.builds.at(-1)!.extension);
+  assert.ok(r.store.installed.has("mcp-github"));
+  assert.equal(await stop(r), 143);
+});
+
+test("a second server adds its namespace and a re-attach keeps one namespace per server", { timeout: 10_000 }, async () => {
+  const r = rig();
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "github"));
+  await r.until("first reinstall", () => r.store.installs.filter((n) => n === "codemode").length >= 1);
+  deliver(hooks, attached(43, "linear"));
+  await r.until("second reinstall", () => r.store.installs.filter((n) => n === "codemode").length >= 2);
+  assert.deepEqual(r.builds.at(-1)!.namespaces, [GITHUB, LINEAR]);
+  deliver(hooks, attached(44, "github"));
+  await r.until("third reinstall", () => r.store.installs.filter((n) => n === "codemode").length >= 3);
+  assert.deepEqual(r.builds.at(-1)!.namespaces, [GITHUB, LINEAR]);
+  assert.equal(await stop(r), 143);
+});
+
+test("a codemode reinstall that throws is one log line and the server stays attached", { timeout: 10_000 }, async () => {
+  const r = rig({ codemodeThrows: true });
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "github"));
+  await r.until("the log line", () => r.logs.some((l) => l.startsWith("codemode namespaces: ")));
+  assert.equal(r.logs.filter((l) => l.startsWith("codemode namespaces: ")).length, 1);
+  assert.ok(r.store.installed.has("mcp-github"));
+  assert.equal(r.mcp.conns[0]!.closed, 0);
+  deliver(hooks, nudge(43, "Carry on."));
+  await r.until("the nudge submitted", () => r.store.submitted.some((i) => i.requestId === "event:43"));
+  assert.equal(await stop(r), 143);
+});
+
+test("a server that fails to connect leaves the codemode extension unchanged", { timeout: 10_000 }, async () => {
+  const r = rig();
+  r.mcp.connectError = new Error("needs sign-in");
+  const hooks = await up(r);
+  deliver(hooks, attached(42, "github"));
+  await r.until("the failure reported", () => r.mcp.reportCalls.length >= 1);
+  assert.equal(r.builds.length, 1);
+  assert.ok(!r.store.installs.includes("codemode"));
   assert.equal(await stop(r), 143);
 });
