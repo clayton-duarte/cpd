@@ -1,0 +1,8 @@
+cpd's writing-for-agents is a copy of the skill of the same name of mattpocock/skills, MIT licensed (see LICENSE beside this file, upstream's text byte for byte).
+
+Upstream:  https://github.com/mattpocock/skills, directory skills/productivity/writing-for-agents
+Base:      commit 4ae2317ddb22b046e26455e4f9c9b3aaaf62212d
+
+What came in: SKILL.md and SKILL-MECHANICS.md, byte for byte. Not copied: agents/openai.yaml (Codex interface metadata, no use in pi).
+
+The changes cpd made on top: none.
