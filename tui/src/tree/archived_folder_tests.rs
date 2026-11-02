@@ -222,9 +222,19 @@ fn archived_contexts_render_in_the_archive_section_and_none_in_the_project_tree(
     assert_eq!(rows(&buf), screen(&gamma(), &group));
     let title = header_row(&group) + 2;
     assert_muted(&buf, title, &[1, 2, 4]);
-    assert_muted(&buf, title + 1, &[1, 2, 4]);
+    // the closing row keeps the fold toggle's own colour: the corner is colour 8, the glyph and the word colour 7
+    assert_muted(&buf, title + 1, &[1]);
+    for x in [2, 4] {
+        assert_eq!(
+            buf[(x, title + 1)].fg,
+            palette::toggle_text().fg.unwrap(),
+            "cell {x} of the closing row ({:?}) is the toggle's colour",
+            buf[(x, title + 1)].symbol()
+        );
+    }
     // the fixture with archived objects in a live Context: no row above the group holds the archived Context, none reads `archive`
     let mut view = View::new(archived(), true);
+    draw(&mut view, W, 40);
     click(&mut view, 5, 39);
     let screen = rows(&draw(&mut view, W, 40));
     let header_at = find(&screen, "Archive");
@@ -307,6 +317,8 @@ fn the_archive_header_is_clickable_and_never_selectable() {
     let mut view = View::new(small(), true);
     let folded = screen(&gamma(), &folded_group());
     let open = screen(&gamma(), &open_group(&zeta_folded()));
+    // a View has hit geometry from its last frame only
+    pane(&mut view);
     // the whole header row is one hit target that toggles it and runs no command
     assert_eq!(click(&mut view, 1, H - 1), Effect::None);
     assert_eq!(rows(&pane(&mut view)), open);

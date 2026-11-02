@@ -218,14 +218,23 @@ fn archive(fx: &Fx, ids: &[&str]) {
 }
 
 /// The view's folds file before it starts: the archived Contexts `ids` have their own closing toggle open (an archived
-/// Context starts folded), the Archive section itself is folded (its default: no `archived` key).
-fn expand(fx: &Fx, ids: &[&str]) {
+/// Context starts folded); the Archive section itself is open when `archive_open` (the file's `"archived":true`), else folded
+/// (its default: no `archived` key).
+fn expand(fx: &Fx, ids: &[&str], archive_open: bool) {
     let dir = fx.env.cpd_home().join("run").join("tui");
     std::fs::create_dir_all(&dir).unwrap();
     let open: Vec<String> = ids.iter().map(|id| format!("[\"{id}\"]")).collect();
+    let archived = if archive_open {
+        ",\"archived\":true"
+    } else {
+        ""
+    };
     std::fs::write(
         dir.join("tree-folds.json"),
-        format!("{{\"collapsed\":[],\"expanded\":[{}]}}", open.join(",")),
+        format!(
+            "{{\"collapsed\":[],\"expanded\":[{}]{archived}}}",
+            open.join(",")
+        ),
     )
     .unwrap();
 }
@@ -708,7 +717,7 @@ fn a_click_on_the_archive_header_opens_and_folds_it_with_the_fold_glyph() {
     let _engine = engine(&fx);
     populate(&fx, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
     archive(&fx, &["zed"]);
-    expand(&fx, &["zed"]);
+    expand(&fx, &["zed"], false);
     let mut tree = Tree::start(&fx, W as u16, 24);
     let standing = fit(&block("cpd", &[]));
     let folded = docked(
@@ -794,7 +803,7 @@ fn the_docked_group_is_capped_at_half_the_pane_and_each_section_scrolls_on_its_o
         ],
     );
     archive(&fx, &["z1", "z2", "z3"]);
-    expand(&fx, &["z1", "z2", "z3"]);
+    expand(&fx, &["z1", "z2", "z3"], true);
     // A pane of 20 rows: B = floor(20 / 2) = 10. Standing: 3 blocks of 4 rows and 2 spacers, n_S = 14; Archive: 3 blocks of
     // 4 rows (title, 2 Plans, `collapse`) and 2 spacers, n_A = 14. The group wants 1 + (3 + 14) + (3 + 14) = 35 > 10, so
     // the fixed rows F = 1 (blank) + 2 (headers) + 4 (reserved rows) = 7 stay and L = 10 - 7 = 3 list rows are shared:
@@ -923,6 +932,7 @@ fn a_click_on_an_archived_contexts_title_in_the_archive_section_unarchives_it_an
         [
             drive::words(&["context", "unarchive", "zed"]),
             drive::words(&["context", "manager", "--context=zed", "--by-user"]),
+            drive::words(&["session", "open", "m-zed"]),
         ]
     );
 }
