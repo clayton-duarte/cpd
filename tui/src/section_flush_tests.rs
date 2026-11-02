@@ -7,7 +7,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::palette;
-use crate::section::{check, flush_title};
+use crate::section::{check, flush_title, flush_title_with};
 
 const CAP_L: &str = "\u{E0B6}";
 const CAP_R: &str = "\u{E0B4}";
@@ -99,5 +99,49 @@ fn a_flush_titles_pills_are_grey_and_its_lines_are_muted() {
             ("─", muted),
             "cell {x}"
         );
+    }
+}
+
+#[test]
+fn a_flush_title_with_a_glyph_is_two_pills_a_fill_and_one_line() {
+    let line = flush_title_with("Standing", Some("\u{F0B26}"), 30);
+    assert_eq!(
+        text(&line),
+        format!(
+            "───{}{}{}─",
+            pill("Standing"),
+            dashes(13),
+            pill("\u{F0B26}")
+        )
+    );
+    let buf = Buffer::empty(Rect::new(0, 0, 30, 1));
+    let mut buf = buf;
+    line.render(Rect::new(0, 0, 30, 1), &mut buf);
+    check::grey_pill(&buf, 3, 0, "Standing");
+    check::grey_pill(&buf, 26, 0, "\u{F0B26}");
+    let muted = palette::muted_text().fg.unwrap();
+    for x in (0..3).chain(13..26).chain(29..30) {
+        assert_eq!(
+            (buf[(x, 0)].symbol(), buf[(x, 0)].fg),
+            ("─", muted),
+            "cell {x}"
+        );
+    }
+}
+
+#[test]
+fn a_narrow_flush_title_with_a_glyph_drops_the_glyph_then_cuts_the_title_then_the_pill() {
+    let g = "\u{F0B26}";
+    let cases = [
+        (18, format!("───{}─{}─", pill("Standing"), pill(g))),
+        (17, format!("───{}{}", pill("Standing"), dashes(4))),
+        (9, format!("───{}─", pill("Sta"))),
+        (6, dashes(6)),
+        (0, String::new()),
+    ];
+    for (width, want) in cases {
+        let line = flush_title_with("Standing", Some(g), width);
+        assert_eq!(text(&line), want, "width {width}");
+        assert_eq!(line.width(), width, "width {width}");
     }
 }

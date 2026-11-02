@@ -901,7 +901,7 @@ pub fn draw(
     let section = if standing.is_empty() {
         0
     } else {
-        let wanted = 2 + if open { standing.len() } else { 0 };
+        let wanted = if open { 4 + standing.len() } else { 2 };
         let fits = usize::from(area.height / 2);
         if fits < 2 { 0 } else { wanted.min(fits) }
     };
@@ -919,11 +919,11 @@ pub fn draw(
     }
     let docked = scroll.docked.get_or_insert_with(Box::default);
     let header = Rect::new(f.area().x, project.bottom() + 1, f.area().width, 1);
-    let glyph = if open { fold::UP } else { fold::DOWN };
+    let glyph = if open { fold::DOWN } else { fold::UP };
     f.render_widget(
-        Paragraph::new(crate::section::flush_title(
-            &format!("{glyph} Standing"),
-            None,
+        Paragraph::new(crate::section::flush_title_with(
+            "Standing",
+            Some(glyph),
             usize::from(header.width),
         )),
         header,
@@ -937,12 +937,8 @@ pub fn draw(
         return;
     }
     let region = Rect::new(area.x, header.bottom(), area.width, section - 2);
-    // rows that do not fit are scrolled between a ▲ and a ▼ row, as the project tree's; rows that fit have no cue rows
-    let list = if standing.len() > usize::from(region.height) {
-        list_area(region)
-    } else {
-        region
-    };
+    // the first and last rows are always the cue rows (blank when nothing is hidden), as the project tree's
+    let list = list_area(region);
     draw_list(
         f, region, list, standing, tree, state, cursor, costs, docked,
     );

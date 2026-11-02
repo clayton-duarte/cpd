@@ -1,6 +1,7 @@
 //! The docked `Standing` section of `cpd tui view tree` (commands.md §13.2, "The Standing section"; pro-d339): the
 //! Permanent Contexts `cpd`, `host` and `codereview` that exist in the store, in that fixed order, under the scrolling project
-//! tree: one blank row, the header, the rows. The view runs in the test process on a `Tree` (`common/tree.rs`) over a prepared
+//! tree: one blank row, the header (the pill `Standing` on the left, the fold glyph as a pill on the right; pro-d347), one
+//! reserved row, the rows, one reserved row. The view runs in the test process on a `Tree` (`common/tree.rs`) over a prepared
 //! store, on a `TestBackend`, with the fake `cpd` and the fake tmux. The panes are 30 columns wide; every test pins whole
 //! screens, built by [`pane`] from the rows the docs give. Between two Context blocks there is one blank spacer row, in
 //! the section as in the project tree (the Lead's answer to `dock-tests-a1-q1`; the docs' worked example omits them).
@@ -18,9 +19,13 @@ const W: usize = 30;
 const DOT: &str = "\u{E3D5}";
 /// The closing row `╰ new` of a Context with no Plan.
 const NEW: &str = "\u{F0B2A}";
-/// The section's glyph open and folded (the `archive` row's: md-arrow_up_drop_circle_outline, ..._down_...).
-const OPEN: &str = "\u{F0B2C}";
-const FOLDED: &str = "\u{F0B26}";
+/// The section's glyph open and folded: the opposite of the `collapse`/`expand` rows' (pro-d347: the section is docked
+/// at the bottom, so it folds down and opens up): md-arrow_down_drop_circle_outline open, ..._up_... folded.
+const OPEN: &str = "\u{F0B26}";
+const FOLDED: &str = "\u{F0B2C}";
+/// A Context's closing rows keep their own rule: `collapse` (expanded) is U+F0B2C, `expand` (folded) is U+F0B26.
+const COLLAPSE: &str = "\u{F0B2C}";
+const EXPAND: &str = "\u{F0B26}";
 const CAP_LEFT: &str = "\u{E0B6}";
 const CAP_RIGHT: &str = "\u{E0B4}";
 
@@ -101,15 +106,26 @@ fn cue(arrow: &str, n: usize) -> String {
     format!("{:>1$}", format!("{arrow} {n} more"), W - 1)
 }
 
-/// The header row: `───`, the pill `<glyph> Standing` with its caps, `─` to the last column.
+/// The header row: `───`, the pill `Standing`, `─`, the pill of the fold glyph (both with their caps) and `─` at the last column.
 fn header(glyph: &str) -> String {
-    let pill = format!("{CAP_LEFT}{glyph} Standing{CAP_RIGHT}");
-    format!("───{pill}{}", "─".repeat(W - 3 - 12))
+    let left = format!("{CAP_LEFT}Standing{CAP_RIGHT}");
+    let right = format!("{CAP_LEFT}{glyph}{CAP_RIGHT}");
+    let fill = W - 3 - "Standing".len() - 2 - 1 - 2 - 1;
+    format!("───{left}{}{right}─", "─".repeat(fill))
+}
+
+/// An open section's rows with its reserved blank row above and below (blank when nothing is hidden).
+fn fit(rows: &[String]) -> Vec<String> {
+    let mut all = vec![String::new()];
+    all.extend(rows.iter().cloned());
+    all.push(String::new());
+    all
 }
 
 /// The screen of an `h`-row pane, as `Tree::screen` reads it (rows without trailing blanks, no empty rows at the end): the
 /// project tree's `above` cue row, its `list` rows, its `below` cue row, then, when `standing` is given, the blank row, the
-/// header (open: with `rows`, folded: with none) and the rows. The tree takes the rows the section leaves.
+/// header and, open, the section's `rows` (its own above cue row, the list, its below cue row: see [`fit`]); folded: none.
+/// The tree takes the rows the section leaves.
 fn pane(
     h: usize,
     above: &str,
@@ -184,7 +200,7 @@ fn the_standing_section_is_docked_at_the_bottom_with_its_pill_and_the_permanent_
     ]);
     assert_eq!(
         tree.screen(),
-        pane(24, "", &block("aa", &[]), "", Some((true, &standing)))
+        pane(24, "", &block("aa", &[]), "", Some((true, &fit(&standing))))
     );
 }
 
@@ -202,7 +218,7 @@ fn only_the_permanent_contexts_that_exist_are_drawn_and_none_draws_no_section() 
             "",
             &block("aa", &[]),
             "",
-            Some((true, &block("host", &[])))
+            Some((true, &fit(&block("host", &[]))))
         ),
         "one Permanent Context: its row under the header"
     );
@@ -242,7 +258,7 @@ fn project_contexts_scroll_above_the_section_and_it_never_moves() {
             ("p4", &[]),
         ],
     );
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     let standing = blocks(&[block("cpd", &[]), block("host", &[])]);
     // the project tree: p4, p3, p2, p1 (11 rows with the spacers); 7 list rows between its two cue rows
     let all = blocks(&[
@@ -253,11 +269,11 @@ fn project_contexts_scroll_above_the_section_and_it_never_moves() {
     ]);
     let shown = |from: usize, above: String, below: String| {
         pane(
-            16,
+            18,
             &above,
             &all[from..from + 7],
             &below,
-            Some((true, &standing)),
+            Some((true, &fit(&standing))),
         )
     };
     assert_eq!(tree.screen(), shown(0, String::new(), cue("▼", 4)));
@@ -266,7 +282,7 @@ fn project_contexts_scroll_above_the_section_and_it_never_moves() {
     wheel(&mut tree, true, 3);
     wheel(&mut tree, true, 3); // clamped at the end
     assert_eq!(tree.screen(), shown(4, cue("▲", 4), String::new()));
-    wheel(&mut tree, true, 14); // over the section, which has nothing to scroll
+    wheel(&mut tree, true, 12); // over the section's rows, which have nothing to scroll
     assert_eq!(
         tree.screen(),
         shown(4, cue("▲", 4), String::new()),
@@ -283,17 +299,17 @@ fn a_click_on_the_header_folds_and_opens_the_section_with_the_fold_glyph() {
     let fx = fx();
     let _engine = engine(&fx);
     populate(&fx, &[("cpd", &[]), ("host", &[]), ("aa", &[])]);
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     let standing = blocks(&[block("cpd", &[]), block("host", &[])]);
-    let open = pane(16, "", &block("aa", &[]), "", Some((true, &standing)));
+    let open = pane(18, "", &block("aa", &[]), "", Some((true, &fit(&standing))));
     assert_eq!(tree.screen(), open);
     tree.click(5, 10); // the header: tree rows 0 to 8, the blank row 9
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((false, &standing))),
+        pane(18, "", &block("aa", &[]), "", Some((false, &[]))),
         "folded: the blank row and the header remain, at the pane's bottom"
     );
-    tree.click(5, 15);
+    tree.click(5, 17);
     assert_eq!(tree.screen(), open, "a second click opens it");
     assert!(
         drive::calls(&fx).is_empty(),
@@ -315,34 +331,34 @@ fn a_permanent_context_expands_to_its_plans_like_any_context() {
         .unwrap(),
         "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'a0';",
     );
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     // expanded by default, as every Context: the live Plans, the archived one, then `collapse`
     let expanded = vec![
         title("cpd"),
         plan("a2", false),
         plan("a1", false),
         plan("a0", false),
-        format!(" ╰{OPEN} collapse"),
+        format!(" ╰{COLLAPSE} collapse"),
     ];
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &expanded)))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
     );
-    tree.click(5, 15); // the closing row `collapse`, in the section, below the header
+    tree.click(5, 16); // the closing row `collapse`, in the section, above its reserved last row
     let folded = vec![
         title("cpd"),
         plan("a2", false),
         plan("a1", false),
-        format!(" ╰{FOLDED} expand"),
+        format!(" ╰{EXPAND} expand"),
     ];
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &folded)))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&folded))))
     );
-    tree.click(5, 15); // `expand`: the section is docked at the bottom, so it is on the last row too
+    tree.click(5, 16); // `expand`: the section grew up, so it is on the same row
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &expanded)))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
     );
 }
 
@@ -361,7 +377,7 @@ fn the_section_is_capped_at_half_the_pane_and_scrolls_on_its_own() {
     );
     let mut tree = Tree::start(&fx, W as u16, 12);
     // 17 rows (three blocks of 5 and two spacers) in the 12-row pane: the section is 6 rows (half), the blank row, the
-    // header and 4 rows: a cue row, 2 list rows, a cue row
+    // header and 4 rows (2 + 4): a cue row, 2 list rows, a cue row
     let all = blocks(&[
         block("cpd", &["c4", "c3", "c2", "c1"]),
         block("host", &["h4", "h3", "h2", "h1"]),
@@ -401,6 +417,39 @@ fn the_section_is_capped_at_half_the_pane_and_scrolls_on_its_own() {
         wheel(&mut tree, false, 10);
     }
     assert_eq!(tree.screen(), first);
+}
+
+#[test]
+fn the_open_section_reserves_a_blank_row_under_the_header_and_above_the_bottom() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(
+        &fx,
+        &[
+            ("cpd", &[]),
+            ("p1", &[]),
+            ("p2", &[]),
+            ("p3", &[]),
+            ("p4", &[]),
+        ],
+    );
+    let tree = Tree::start(&fx, W as u16, 12);
+    // section: blank row, header, reserved row, 2 rows, reserved row = 6 rows, so the project tree has 6 rows: its cue row,
+    // 4 list rows and `▼ 7 more` (11 rows, 4 shown). The last reserved row is blank and dropped by the screen.
+    let expected = [
+        "",
+        " ╭\u{E3D5} p4",
+        " ╰\u{F0B2A} new",
+        "",
+        " ╭\u{E3D5} p3",
+        "                     ▼ 7 more",
+        "",
+        "───\u{E0B6}Standing\u{E0B4}─────────────\u{E0B6}\u{F0B26}\u{E0B4}─",
+        "",
+        " ╭\u{E3D5} cpd",
+        " ╰\u{F0B2A} new",
+    ];
+    assert_eq!(tree.screen(), expected);
 }
 
 #[test]

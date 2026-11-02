@@ -5,6 +5,8 @@
 //!   from the edge.
 //! - [`flush_title`]: the Inbox's, with no padding cell, from column 0 to the last: `───<pill>───…<count>─`.
 //!
+//! - [`flush_title_with`]: the same row with any text as its right pill (the Standing section's fold glyph).
+//!
 //! The title is as the caller gives it, in Title Case, with no padding spaces inside the pill. It is never clickable (the helper
 //! draws a line, it is no hit target). The spacing is the caller's layout, in rows.
 //!
@@ -32,7 +34,7 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
         PLAIN_LEAD,
         palette::muted_text(),
         title,
-        count,
+        count.map(|n| n.to_string()).as_deref(),
         palette::pill_static(),
         width,
     )
@@ -41,6 +43,11 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
 /// The flush title: `───`, the title pill, a `─` fill, the count pill and one `─`, `width` cells, no padding. Cut and dropped as
 /// [`title`]'s are: the count first, then the title's text, then the pill; width 0 is the empty line.
 pub fn flush_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    flush_title_with(title, count.map(|n| n.to_string()).as_deref(), width)
+}
+
+/// [`flush_title`] with any text as the right pill, dropped first when narrow, as the count is.
+pub fn flush_title_with(title: &str, right: Option<&str>, width: usize) -> Line<'static> {
     if width == 0 {
         return Line::default();
     }
@@ -49,7 +56,7 @@ pub fn flush_title(title: &str, count: Option<usize>, width: usize) -> Line<'sta
         0,
         palette::muted_text(),
         title,
-        count,
+        right,
         palette::pill_static(),
         width - 1,
     );
@@ -62,7 +69,7 @@ fn row(
     lead: &str,
     muted: Style,
     title: &str,
-    count: Option<usize>,
+    count: Option<&str>,
     pill_style: Style,
     width: usize,
 ) -> Line<'static> {
@@ -83,7 +90,7 @@ fn row_padded(
     pad: usize,
     muted: Style,
     title: &str,
-    count: Option<usize>,
+    count: Option<&str>,
     pill_style: Style,
     width: usize,
 ) -> Line<'static> {
@@ -98,7 +105,7 @@ fn row_padded(
         left
     };
     let count = count
-        .map(|n| n.to_string())
+        .map(str::to_string)
         .filter(|c| pill && 1 + cells::width(c) + 2 <= left)
         .unwrap_or_default();
     let fill = left
