@@ -23,6 +23,10 @@ An entry is a bold term, a parenthesis with its kind and the Context record that
 The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a Session. Each machine may keep one Manager per Context. Distinct from the Context stage.
 _Avoid_: project, folder; epic (Jira's word for the level, see the table)
 
+**Permanent Context** (entity, pro-d338):
+One of exactly three Contexts that every machine keeps: `cpd`, `host` (local maintenance of the machine) and `codereview` (the review intake of `inbox claim`). Never archived, renamed or deleted (`context_permanent`); its Plans behave as in any Context. The engine ensures all three every tick, and `context manager`, `inbox claim` and the host click ensure them too: a missing row is created and a live Manager is started, while a live Manager is left alone.
+_Avoid_: default Context, system Context
+
 **Context record**:
 One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
@@ -258,7 +262,7 @@ The human who owns the ticket and talks only to the Lead (or the Manager).
 _Avoid_: operator; owner (that is a GitHub login)
 
 **Manager** (role, B3):
-The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It holds the Context's records and Requirements, splits them into Plans, starts each Plan's Lead with a Brief, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User or a Lead talks to it, and reads the Context on demand; it never answers for the User. Its default Tier is `manager_tier`.
+The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It holds the Context's records and Requirements, splits them into Plans, starts each Plan's Lead with a Brief, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User or a Lead talks to it, and reads the Context on demand; it never answers for the User. Its default Tier is `manager_tier`. A Permanent Context (`cpd`, `host`, `codereview`) always has one, ensured by the engine; its `cwd` is the User's home directory.
 _Avoid_: master, supervisor, orchestrator
 
 **Lead** (role):
