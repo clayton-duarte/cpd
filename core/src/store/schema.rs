@@ -1077,6 +1077,8 @@ mod lead_branch_tests;
 #[cfg(test)]
 mod models_notice_tests;
 #[cfg(test)]
+mod permanent_contexts_tests;
+#[cfg(test)]
 mod pr_closed_kind_tests;
 #[cfg(test)]
 mod reaction_refusal_tests;
