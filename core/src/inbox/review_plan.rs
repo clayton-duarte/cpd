@@ -141,8 +141,8 @@ mod tests {
         // the cut lands on a `-`: it is trimmed
         assert_eq!(plan_id("abcdefgh-ijklmnop", 1, 1), "r-abcdefgh-ijklmnop-1");
         assert_eq!(
-            plan_id("abcdefghijklmn-opqrst", 123, 1),
-            "r-abcdefghijklmn-123"
+            plan_id("abcdefghijklmnopq-rstuv", 123, 1),
+            "r-abcdefghijklmnopq-123"
         );
         for attempt in 1..30 {
             assert!(PlanId::parse(&plan_id(long, 12_345, attempt)).is_ok());
