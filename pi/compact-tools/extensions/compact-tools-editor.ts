@@ -80,8 +80,12 @@ type EditorLike = {
 	borderColor: (text: string) => string;
 };
 
+// docs/contract.md section 6.9: a compaction indicator shows the Compacting pill even without working words.
+const effectiveWords = (editor: EditorLike): string | undefined =>
+	(editor.workingStatusIndicator as { kind?: string } | undefined)?.kind === "compaction" ? (state().words ?? "Compacting…") : state().words;
+
 const borderIndex = (editor: EditorLike): number =>
-	state().words !== undefined && editor.workingStatusIndicator !== undefined ? RUNNING : state().focused ? INDEX.blue + 8 : INDEX.brightWhite;
+	effectiveWords(editor) !== undefined && editor.workingStatusIndicator !== undefined ? RUNNING : state().focused ? INDEX.blue + 8 : INDEX.brightWhite;
 
 const loaderFrame = (): string => LOADER_FRAMES[state().frame % LOADER_FRAMES.length]!;
 
@@ -92,6 +96,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	if (width < minWidth(margins)) return original(width);
 	const textWidth = width - SIDE * 2;
 	const { paddingX, borderColor, workingStatusIndicator } = editor;
+	const words = effectiveWords(editor);
 	// Pi's rows are drawn plain at the text width; the box adds the border and the walls.
 	editor.paddingX = 0;
 	editor.borderColor = (text) => text;
@@ -109,7 +114,6 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	const bodyCount = editor.renderedVisibleLineCount;
 	const inner = width - 2 - lead.length * 2;
 	const out: string[] = [];
-	const words = state().words;
 	const hidden = editor.scrollOffset;
 	let top: string | undefined;
 	if (words !== undefined && workingStatusIndicator !== undefined && textWidth >= 1) {

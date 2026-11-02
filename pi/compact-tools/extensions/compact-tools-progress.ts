@@ -87,6 +87,14 @@ export class ProgressController {
 			this.activeTools.clear();
 			this.clearMessage();
 		});
+		// docs/contract.md section 6.9: show the Compacting pill while pi compacts.
+		pi.on("session_before_compact", () => { this.setMessage("Compacting…"); });
+		const afterCompact = () => {
+			if (this.context?.isIdle?.() !== false && this.activeTools.size === 0) this.clearMessage();
+			else this.setMessage([...this.activeTools.values()].at(-1) ?? "Thinking…");
+		};
+		pi.on("session_compact", afterCompact);
+		pi.on("session_compact_failed", afterCompact);
 	}
 
 	bind(ctx: ExtensionContext, resume = false): void {
