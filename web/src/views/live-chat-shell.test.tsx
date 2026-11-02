@@ -87,6 +87,24 @@ test("the Chat's message list carries the 2rem bottom padding, so no text touche
   expect(content?.classList.contains("pb-8")).toBe(true);
 });
 
+test("the transcript is inset 16px on both sides", async () => {
+  const session: TreeSession = { id: "s1", role: "lead", runner: "pi", context: "ctx", name: "Lead one" };
+  const { api, emit } = fakeApi(session);
+
+  await act(async () => {
+    root.render(<LiveChatWithSession api={api} token="t0k" session={session} />);
+    await flush();
+  });
+  await act(async () => {
+    emit(toSnapshotFrame(parsePiSession(messageLine("a1", "assistant", "the newest turn"))));
+    await flush();
+  });
+
+  const content = container.querySelector('[data-slot="message-scroller-content"]');
+  expect(content).not.toBeNull();
+  expect(content?.classList.contains("px-4")).toBe(true);
+});
+
 test("the Chat takes its own column's height, never a viewport of its own", async () => {
   await act(async () => {
     root.render(<LiveChat />);

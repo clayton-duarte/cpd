@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createLiveHandler, type LiveDeps, type LiveHandler, type LivePlan, type LiveSession } from "./live-server";
+import { createLiveHandler, type LiveContext, type LiveDeps, type LiveHandler, type LivePlan, type LiveSession } from "./live-server";
 import type { SnapshotFrame } from "../fold/fold";
 
 const TOKEN = "test-token";
@@ -417,7 +417,9 @@ test("GET /__cpd/plans answers the plans dependency's rows with the token", asyn
   });
   expect(matched).toBe(true);
   expect(res.status()).toBe(200);
-  expect(JSON.parse(res.body())).toEqual({ ok: true, plans: [plan] });
+  const payload = JSON.parse(res.body()) as { ok: boolean; plans: Array<{ id: string }> };
+  expect(payload.ok).toBe(true);
+  expect(payload.plans.map((row) => row.id)).toEqual([plan.id]);
 });
 
 test("GET /__cpd/plans is refused without the token", async () => {
@@ -487,4 +489,79 @@ test("a_durable_sessions_send_prefers_the_injected_durable_transport", async () 
   expect(piRes.res.status()).toBe(200);
   expect(cli).toEqual([[piSession.id, "resume", "the user answered"]]);
   expect(durable).toHaveLength(1);
+});
+
+test("GET /__cpd/plans carries archived Plans with their flag", async () => {
+  // One live Plan and one archived (`archived_at` set): the read answers every Plan of the
+  // Context, and the wire carries the archived flag (web/README.md "Context tree rows").
+  const archived: LivePlan = {
+    ...plan,
+    id: "old-4520",
+    archived_at: "2026-11-02T00:00:00Z",
+  };
+  const handler = createLiveHandler(deps({ plans: async () => [plan, archived] }));
+  const { res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  const payload = JSON.parse(res.body()) as {
+    ok: boolean;
+    plans: Array<{ id: string; archived: boolean }>;
+  };
+  const live = payload.plans.find((row) => row.id === plan.id);
+  const old = payload.plans.find((row) => row.id === archived.id);
+  expect(live).toBeDefined();
+  expect(live?.archived).toBe(false);
+  expect(old).toBeDefined();
+  expect(old?.archived).toBe(true);
+});
+
+// The contexts read (web/README.md "Context tree rows"): a read-only GET /__cpd/contexts on the
+// dev live adapter, the token like its siblings, answering { ok: true, contexts: [...] } from
+// `cpd context list`.
+
+test("GET /__cpd/contexts answers the contexts read with the token", async () => {
+  const contexts: readonly LiveContext[] = [
+    { id: "building-cpd", archived: false },
+    { id: "old-cpd", archived: true },
+  ];
+  const handler = createLiveHandler(deps({ contexts: async () => contexts }));
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  expect(JSON.parse(res.body())).toEqual({ ok: true, contexts });
+
+  // The read is optional: with no contexts dependency the route answers an empty list, so an
+  // API without the read never regresses (web/README.md "The fallback").
+  const bare = createLiveHandler(deps());
+  const empty = await call(bare, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(empty.matched).toBe(true);
+  expect(JSON.parse(empty.res.body())).toEqual({ ok: true, contexts: [] });
+});
+
+test("GET /__cpd/contexts is refused without the token", async () => {
+  const handler = createLiveHandler(deps({ contexts: async () => [] }));
+
+  const missing = await call(handler, { method: "GET", url: "/__cpd/contexts" });
+  expect(missing.matched).toBe(true);
+  expect(missing.res.status()).toBe(401);
+  expect(JSON.parse(missing.res.body())).toEqual({ ok: false, error: "missing or wrong token" });
+
+  // The refusal is the route's own, not a pass-through of an unknown /__cpd/ path: with the
+  // token the same request is a route the handler matches.
+  const wired = await call(handler, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(wired.matched).toBe(true);
 });

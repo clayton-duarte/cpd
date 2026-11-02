@@ -572,17 +572,29 @@ The rail cannot be collapsed: by the User's decision of 2026-11-01 it no longer 
 
 ### Context tree rows
 
-Each rail row renders a **glyph**, then the row's **key**, then — a gap away — its **Job counters** (hs-d838). The glyph is the row's Session state dot — `working`, `waiting`, `blocked` or `idle` — in the same state colours the Inbox rail and the Tree view use. The key is the Context's id on a Context row and the Plan's key on a Plan row.
+Each rail row renders a **glyph**, then the row's **key**, then — a gap away — its **Job counters** (hs-d838). The key is the Context's id on a Context row and the Plan's key on a Plan row.
 
-The counters are the cockpit's four roles in its order: **planned** (draft + queued), **active** (running + merging), **failed**, **merged**. A zero is dropped; a single dot (`·`) separates two drawn roles; and each drawn number takes its status colour — **muted** for planned, the **ramune** primary for active, the **anko** destructive for failed, the **matcha** chart-2 for merged.
+**The rail is the cockpit's tree, not a list of the Plans that happen to be live** (User, 2026-11-02, decision `cockpit behaviour`). It lists **every Context of `cpd context list`**, sorted by id. An **archived Context** comes after the live ones, in its own block, **folded**, its rows **muted**. Under each Context sit **all its Plans, sorted by id** — every **live** Plan always shows, and the **archived** ones are hidden behind the Context row's **fold control**, a button carrying **`aria-expanded`**, **folded by default**, exactly as the cockpit's `expand`/`collapse` row works: the fold shows and hides **only that Context's archived Plans**, never its live ones.
 
-Counters are drawn on **Plan rows only**: a Context row is glyph + key and carries **no numbers**, because the cockpit draws cost on a Context row and cost per Plan is not in cpd's CLI yet (a separate read would be its own Workflow).
+**A Context row is glyph + the Context's id, and carries no numbers.** Clicking it selects that Context's **manager Session**; it is **disabled only when that Context has no manager Session in the Sessions read** (`GET /__cpd/sessions`, above) — never because the Context has no live Plan. A Plan row selects that Plan's **Lead Session**, so clicking still opens the Chat; an **archived** Plan row is drawn **muted** and **still opens its Lead Session** when clicked.
 
-The tree lists every **non-archived** Plan of each Context — never an archived one (hs-d837). It is a Plan tree: a Context row, then one row per Plan beneath it, sorted by Context name and then by Plan key. A Plan row selects that Plan's **Lead Session**, so clicking still opens the Chat.
+**The dots are the palette's meanings**, taken from the pill spec (`pi/lib/pill-spec.json`) and the Dango v3 palette:
 
-**Where the numbers come from.** A read-only `GET /__cpd/plans` route on the dev live adapter, carrying the token like its sibling `/__cpd/` routes, backed by `cpd plan list` — the CLI's own rows: `id` (the key), `context`, `phase`, `lead_session` and the counts. It answers `{"ok":true,"plans":[...]}`, and `{"ok":true,"plans":[]}` when the read is not wired. Its types live in `web/src/api/live-server.ts`, beside `LiveSession`.
+- **Working** and **waiting** are the palette's in-progress cyan **mizu `#67ada7`** — the cockpit draws both in that one colour and tells them apart by glyph, so the web does not invent a second colour.
+- **Blocked** is **anko `#e17f6e`**.
+- **Idle** (and an unknown state) is the plain grey **`#aba3af`**.
+- An **asleep** Session — the read's **`asleep_at`** set, a durable Session put to sleep, never a `state` literal (a sleeping lead's `state` stays `stopped`) — is the dim grey **`#87808c`**, and its **whole row is muted**: both the row's button and every counter span, the `·` separator included, take the dim grey. The row's dim colour carries **Tailwind's important modifier** (`text-[var(--dango-dim)]!`) because the sidebar component's own `text-sidebar-foreground` sits on the same element (`web/src/components/ui/sidebar.tsx`, `sidebar-menu-sub-button`) and Tailwind's emitted order would otherwise let that win — a class string in the DOM is not a rendered colour.
 
-**The fallback.** An API without the plans read — a Chat-only fake — leaves the rail drawing its Session tree exactly as before, so nothing regresses.
+**No Tailwind hue (emerald, violet, red) is used anywhere in the rail.** These four colours are **custom properties of the dark theme in `web/src/index.css`**, named for the palette colour — `mizu`, `anko`, `plain`, `dim` — with their hexes in the Dango table (“The Dango theme”, above); **never a hex inside a component**.
+
+The counters are the cockpit's four roles in their order: **planned** (draft + queued), **active** (running + merging), **failed**, **merged**. A zero is dropped; a single dot (`·`) separates two drawn roles; and each drawn number takes its status colour — **muted** for planned, the **ramune** primary for active, the **anko** destructive for failed, the **matcha** chart-2 for merged. Counters are drawn on **Plan rows only** — a Context row is glyph + id and carries no numbers, because the cockpit draws cost on a Context row and cost per Plan is not in cpd's CLI yet (a separate read would be its own Workflow).
+
+**The reads.** Two read-only routes on the dev live adapter, each carrying the token like its sibling `/__cpd/` routes and each answering an **empty list when the read is not wired**:
+
+- `GET /__cpd/contexts` answers `{"ok":true,"contexts":[{"id":"…","archived":<bool>}]}` — the rows of `cpd context list`; `{"ok":true,"contexts":[]}` when the read is not wired.
+- `GET /__cpd/plans` answers **every Plan of every Context, archived ones included**, as `{"ok":true,"plans":[{"id":"…","context":"…","phase":"…","counts":{…},"leadSession":"…","archived":<bool>}]}` — the rows of `cpd plan list`; `{"ok":true,"plans":[]}` when the read is not wired. Its types live in `web/src/api/live-server.ts`, beside `LiveSession`.
+
+**The fallback.** An API without these reads — a Chat-only fake — leaves the rail drawing its Session tree exactly as before, so nothing regresses.
 
 ### The Inbox rail in the right column
 
@@ -749,6 +761,10 @@ Every token is a Dango v3 value, mapped the way the TUI uses the palette. The ma
 | `--sidebar-accent-foreground` | `#d8d2cc` |
 | `--sidebar-border` | `#5a504a` |
 | `--sidebar-ring` | `#7aa2ce` |
+| `--dango-mizu` | `#67ada7` |
+| `--dango-anko` | `#e17f6e` |
+| `--dango-dim` | `#87808c` |
+| `--dango-plain` | `#aba3af` |
 
 Plus the selection rule, a `.dark ::selection` of **`#5a504a` over `#d8d2cc`**.
 

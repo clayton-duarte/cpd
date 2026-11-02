@@ -455,7 +455,7 @@ export function LiveChat({ api, session }: LiveChatProps): ReactElement {
         ) : (
           <MessageScroller className="min-h-0 flex-1">
             <MessageScrollerViewport ref={viewportRef}>
-              <MessageScrollerContent className="pb-8">
+              <MessageScrollerContent className="px-4 pb-8">
                 {!noMore && (
                   <MessageScrollerItem className="min-w-0" messageId="load-earlier">
                     <Button

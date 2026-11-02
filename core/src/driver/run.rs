@@ -1414,8 +1414,8 @@ impl Driver {
             // A9, explore variant: no worktree and no branch to remove; the explore directory and its artefacts stay.
         } else if linear {
             // A9 (hs-d680): a merged linear Attempt keeps the Lead worktree and the Lead Branch. A failed or
-            // cancelled one resets the Lead Branch to its `base_sha` and discards what the Attempt left, then keeps
-            // the worktree.
+            // cancelled one resets the Lead Branch to its `base_sha` and leaves the tree clean (untracked files removed,
+            // ignored files kept), then keeps the worktree.
             if !merged {
                 match self.linear_base_sha() {
                     Ok(Some(base_sha)) => {
@@ -1557,7 +1557,8 @@ fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
 
 /// A9 for a linear Attempt (hs-d680/hs-d682/hs-d683): its branch is the Workflow's Lead Branch, so a
 /// failed or cancelled Attempt puts the Lead Branch back to the `base_sha` it started from (`git -C <workflow
-/// worktree> reset --hard <base_sha>`), discarding what the Attempt left, and the Lead worktree is kept.
+/// worktree> reset --hard <base_sha>`) and removes the untracked files (`git clean -fd`; ignored files are kept), leaving
+/// the tree clean, and the Lead worktree is kept.
 pub(super) fn reset_linear_lead_branch(
     lead_worktree: &std::path::Path,
     lead_branch: &str,
@@ -1575,8 +1576,10 @@ pub(super) fn reset_linear_lead_branch(
             ));
         }
     }
-    // One call moves the Lead Branch and discards the Attempt's working-tree changes.
+    // The reset moves the Lead Branch and discards tracked changes; the clean removes untracked files and
+    // directories (no `-x`: ignored files stay), so the next Attempt's A2 finds a clean tree.
     git::run::ok(lead_worktree, &["reset", "--hard", base_sha])?;
+    git::run::ok(lead_worktree, &["clean", "-fd"])?;
     Ok(())
 }
 

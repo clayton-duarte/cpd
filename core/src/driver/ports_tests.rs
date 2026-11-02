@@ -959,3 +959,63 @@ fn a_failed_linear_attempt_resets_the_lead_branch() {
         "a failed linear Attempt resets the Lead Branch to its base_sha"
     );
 }
+
+#[test]
+fn a_failed_linear_attempt_removes_the_untracked_files_it_left() {
+    let fakes = Fakes::new();
+    let mut universe = Universe::new(fakes.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
+    let route = Arc::new(GitRoute::new(universe.clone()));
+    let _ = (*fakes.runner).clone().with_git(&route);
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let repo = Repo::init(&universe, &root.join("r"));
+    repo.write("f.txt", "base\n");
+    repo.write(".gitignore", "ignored.log\n");
+    let base = repo.commit("base");
+    let lead = "cpd/pay/api";
+    repo.branch(lead);
+    let worktree = root.join("r.lead");
+    universe
+        .lock()
+        .unwrap()
+        .add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
+    // The failed Attempt left an untracked file, an untracked directory and an ignored file.
+    for (path, text) in [
+        ("new.rs", "n\n"),
+        ("newdir/x.txt", "x\n"),
+        ("ignored.log", "i\n"),
+    ] {
+        let file = worktree.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let ports = Ports {
+        clock: fakes.ports.clock.clone(),
+        runner: fakes.ports.runner.clone(),
+        spawn: fakes.ports.spawn.clone(),
+        ..Ports::real()
+    };
+    let result = Ports::scope(&ports, || {
+        super::run::reset_linear_lead_branch(&worktree, lead, base.as_str())
+    });
+    assert!(result.is_ok(), "the reset failed: {result:?}");
+    assert!(
+        !worktree.join("new.rs").exists(),
+        "the untracked file new.rs is still there"
+    );
+    assert!(
+        !worktree.join("newdir/x.txt").exists(),
+        "the untracked file newdir/x.txt is still there"
+    );
+    assert!(
+        worktree.join("ignored.log").exists(),
+        "the ignored file was removed"
+    );
+    let status = Ports::scope(&ports, || {
+        crate::git::run::ok(&worktree, &["--no-optional-locks", "status", "--porcelain"])
+    });
+    assert_eq!(status.unwrap(), "", "the worktree is not clean");
+}

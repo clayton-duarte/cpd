@@ -22,6 +22,8 @@ export interface LiveSession {
   runner: "pi" | "durable";
   title?: string;
   state?: string;
+  /** The read's `asleep_at`: set means the Session was put to sleep (web/README.md "Context tree rows"), whatever its `state` string says. */
+  asleep_at?: string | null;
   /** The Context the Session belongs to (`cpd session list` row's `context`); the tree groups by it. */
   context?: string;
   /** The Session's display name (`cpd session list` row's `name`); the tree labels rows with it. */
@@ -48,8 +50,19 @@ export interface LivePlan {
   title: string;
   phase: string;
   lead_session: string | null;
+  /** The Plan's Created, the same `created_at` `plan list` and `plan show` carry (§4.2); absent on a row an older adapter sends (the rail treats it as oldest). */
+  created_at?: string;
   archived_at: string | null;
   counts: LivePlanCounts;
+}
+
+/**
+ * One Context the contexts read answers (web/README.md "Context tree rows"): the `cpd context
+ * list` row's id and whether the Context is archived. The rail's Context tree reads them.
+ */
+export interface LiveContext {
+  id: string;
+  archived: boolean;
 }
 
 /** Every external boundary is injected; the handler itself touches nothing real. */
@@ -76,6 +89,8 @@ export interface LiveDeps {
   inbox?(): Promise<readonly InboxItem[]>;
   /** The Plans, from `cpd plan list`; the rail's Plan tree reads them (web/README.md "Where the numbers come from"). Optional so the handler's other routes build without it. */
   plans?(): Promise<readonly LivePlan[]>;
+  /** The Contexts, from `cdp context list`; the rail's Context tree reads them (web/README.md "Context tree rows"). Optional so the handler's other routes build without it. */
+  contexts?(): Promise<readonly LiveContext[]>;
 }
 
 /** Handles one request; resolves true when it matched a /__cpd/ route (the caller stops), false to pass through. */
@@ -326,8 +341,20 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     }
     if (path === "/__cpd/plans" && method === "GET") {
       // The read is optional: an adapter with no plans wiring answers an empty list, so the
+      // rail falls back to its Session tree (web/README.md "The fallback"). Every Plan of every
+      // Context is answered, archived ones included, each row carrying its `archived` flag from
+      // the CLI's `archived_at` (web/README.md "Context tree rows").
+      const plans = (await deps.plans?.()) ?? [];
+      sendJson(res, 200, {
+        ok: true,
+        plans: plans.map((plan) => ({ ...plan, archived: plan.archived_at !== null })),
+      });
+      return true;
+    }
+    if (path === "/__cpd/contexts" && method === "GET") {
+      // The read is optional: an adapter with no contexts wiring answers an empty list, so the
       // rail falls back to its Session tree (web/README.md "The fallback").
-      sendJson(res, 200, { ok: true, plans: (await deps.plans?.()) ?? [] });
+      sendJson(res, 200, { ok: true, contexts: (await deps.contexts?.()) ?? [] });
       return true;
     }
 

@@ -271,6 +271,7 @@ impl GitRoute {
             "commit" => fixture::commit(&mut ctx, rest),
             "switch" | "checkout" => fixture::switch(&mut ctx, sub, rest),
             "reset" => fixture::reset(&mut ctx, rest),
+            "clean" => fixture::clean(&mut ctx, rest),
             "merge" => fixture::merge(&mut ctx, rest),
             "tag" => fixture::tag(&mut ctx, rest),
             "mv" => fixture::mv(&mut ctx, rest),
