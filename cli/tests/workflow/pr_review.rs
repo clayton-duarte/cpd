@@ -503,3 +503,176 @@ fn a_head_answer_without_a_head_sha_is_gh_failed_and_nothing_is_posted() {
         assert!(rows(&fx).is_empty(), "{stdout}");
     }
 }
+
+// --- FR10 (pro-n346, pro-d6): `review submit` finishes the caller's `codereview` Plan, named by `CPD_PLAN`.
+
+const PLAN: &str = "r-pay-812";
+
+/// A Context `codereview` and one `cpd`, a Lead Session each, a Plan `r-pay-812` of `codereview` and `c-pay` of `cpd`,
+/// both in `grounding`.
+fn seed_plans(fx: &Fx) {
+    fx.env.sql(
+        "INSERT OR IGNORE INTO contexts (id, title, created_at, created_on) VALUES ('codereview', 'Code review', 't', 'm');
+         INSERT OR IGNORE INTO contexts (id, title, created_at, created_on) VALUES ('cpd', 'Cpd', 't', 'm');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l1', 'lead', 'codereview', 'r-pay-812', 'L1', '/', 'S3', 'idle', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l2', 'lead', 'cpd', 'c-pay', 'L2', '/', 'S3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('r-pay-812', 'codereview', 'Review', 'grounding', 'l1', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('c-pay', 'cpd', 'Pay', 'grounding', 'l2', 't');",
+    );
+}
+
+/// `submit` with `CPD_PLAN` set to `plan` for the call only (nothing stays set after it).
+fn submit_as(
+    fx: &Fx,
+    plan: Option<&str>,
+    event: &str,
+    file: &str,
+    slack: Option<&str>,
+) -> common::Run {
+    let mut args = vec![
+        "review", "submit", "--pr", REF, "--head", HEAD, "--event", event, "--input", file,
+    ];
+    if let Some(slack) = slack {
+        args.extend(["--slack", slack]);
+    }
+    let vars: Vec<(&str, &str)> = plan.map(|p| ("CPD_PLAN", p)).into_iter().collect();
+    fx.cpd_with(fx.env.root(), &args, &vars)
+}
+
+fn phase(fx: &Fx, id: &str) -> String {
+    fx.env
+        .query(&format!("SELECT phase FROM plans WHERE id = '{id}'"))
+}
+
+fn plan_done_events(fx: &Fx, id: &str) -> Vec<Value> {
+    let text: String = fx.env.query(&format!(
+        "SELECT coalesce(json_group_array(json_object('context', context, 'text', text, 'data', json(data))), '[]')
+           FROM (SELECT * FROM events WHERE kind = 'plan-done' AND plan = '{id}' ORDER BY id)"
+    ));
+    serde_json::from_str(&text).unwrap()
+}
+
+fn any_plan_done(fx: &Fx) -> i64 {
+    fx.env
+        .query("SELECT count(*) FROM events WHERE kind = 'plan-done'")
+}
+
+#[test]
+fn submit_finishes_the_codereview_plan_named_by_cpd_plan() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, Some(SLACK)).ok();
+    assert_eq!(phase(&fx, PLAN), "done");
+    let (locked, done): (String, String) = fx.env.read(|c| {
+        c.query_row(
+            "SELECT locked_at, done_at FROM plans WHERE id = 'r-pay-812'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    });
+    assert!(!locked.is_empty());
+    assert_eq!(locked, done, "locked_at = done_at = the transaction time");
+    assert_eq!(
+        rows(&fx),
+        [json!({"channel": CHANNEL, "ts": TS, "emoji": "github-check-mark", "reacted_at": null})]
+    );
+}
+
+#[test]
+fn submit_finishes_the_plan_without_slack_too() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, None).ok();
+    assert!(rows(&fx).is_empty());
+    assert_eq!(phase(&fx, PLAN), "done");
+}
+
+#[test]
+fn submit_appends_plan_done_with_turn_false_and_no_workflows() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, Some(SLACK)).ok();
+    assert_eq!(
+        plan_done_events(&fx, PLAN),
+        [json!({"context": "codereview",
+                "text": "Plan r-pay-812 is done: review submitted.",
+                "data": {"workflows": [], "turn": false}})]
+    );
+}
+
+#[test]
+fn submit_leaves_a_plan_of_another_context_alone() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    submit_as(&fx, Some("c-pay"), "APPROVE", &file, Some(SLACK)).ok();
+    assert_eq!(phase(&fx, "c-pay"), "grounding");
+    assert_eq!(any_plan_done(&fx), 0);
+    assert_eq!(phase(&fx, PLAN), "grounding");
+    // The same command finishes a Plan of `codereview`: only the Context differs.
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, Some(SLACK)).ok();
+    assert_eq!(phase(&fx, PLAN), "done");
+    assert_eq!(phase(&fx, "c-pay"), "grounding");
+    assert_eq!(any_plan_done(&fx), 1);
+}
+
+#[test]
+fn submit_leaves_a_done_deleted_or_unknown_plan_alone() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    fx.env.sql(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('r-old-1', 'codereview', 'Old', 'done', 'l1', 't', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, deleted_at)
+           VALUES ('r-del-1', 'codereview', 'Deleted', 'grounding', 'l1', 't', 't');",
+    );
+    let before: String = fx.env.query(
+        "SELECT json_group_array(json_array(id, phase, locked_at, done_at, deleted_at)) FROM (SELECT * FROM plans ORDER BY id)",
+    );
+    let file = input(&fx, &review().to_string());
+    for id in ["r-old-1", "r-del-1", "r-none-9"] {
+        submit_as(&fx, Some(id), "APPROVE", &file, None).ok();
+        assert_eq!(any_plan_done(&fx), 0, "{id}");
+    }
+    let after: String = fx.env.query(
+        "SELECT json_group_array(json_array(id, phase, locked_at, done_at, deleted_at)) FROM (SELECT * FROM plans ORDER BY id)",
+    );
+    assert_eq!(after, before);
+    // A live Plan of `codereview` is finished by the same command.
+    submit_as(&fx, Some(PLAN), "APPROVE", &file, None).ok();
+    assert_eq!(phase(&fx, PLAN), "done");
+    assert_eq!(any_plan_done(&fx), 1);
+}
+
+#[test]
+fn submit_without_a_usable_cpd_plan_finishes_no_plan() {
+    let fx = fixture(head(), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    for plan in [None, Some(""), Some("R PAY!"), Some("x")] {
+        submit_as(&fx, plan, "APPROVE", &file, None).ok();
+        assert_eq!(phase(&fx, PLAN), "grounding", "{plan:?}");
+        assert_eq!(any_plan_done(&fx), 0, "{plan:?}");
+    }
+}
+
+#[test]
+fn a_refused_submit_finishes_no_plan() {
+    let fx = fixture(head_at(MOVED), answer());
+    seed_plans(&fx);
+    let file = input(&fx, &review().to_string());
+    refused(
+        &submit_as(&fx, Some(PLAN), "APPROVE", &file, Some(SLACK)),
+        "head_moved",
+        3,
+    );
+    assert_eq!(phase(&fx, PLAN), "grounding");
+    assert_eq!(any_plan_done(&fx), 0);
+}

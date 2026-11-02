@@ -1085,6 +1085,8 @@ mod reaction_refusal_tests;
 #[cfg(test)]
 mod restack_tests;
 #[cfg(test)]
+mod review_plan_done_tests;
+#[cfg(test)]
 mod session_runner_tests;
 #[cfg(test)]
 mod tests;
