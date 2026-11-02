@@ -396,7 +396,6 @@ test("a plan-done without data.turn is a follow-up turn for a Lead", async (t) =
   t.after(() => f.close());
   await started(f, "lead");
   f.emit(event(101, "plan-done", { data: { workflows: [] } }));
-  await waitFor("a delivery", () => f.pi.delivered().length >= 1);
   await f.drain();
   assert.deepEqual(f.pi.delivered().map((s) => [(s.message.details as any).id, s.options]), [[101, { triggerTurn: true, deliverAs: "followUp" }]]);
 });
