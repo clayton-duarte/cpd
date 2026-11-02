@@ -236,11 +236,10 @@ fn changing_the_provider_keeps_a_model_only_when_the_new_provider_offers_it() {
     assert_eq!(value(Letter::O), "(unset)");
     assert_eq!(value(Letter::S), "(unset)");
     assert_eq!(value(Letter::H), "(unset)");
-    assert_eq!(value(Letter::G), "gemini-3.8-flash");
+    assert_eq!(value(Letter::G), "(unset)");
     assert_eq!(row(&m, Row::Provider).value, "github-copilot");
     assert!(row(&m, Row::Model(Letter::O)).invalid);
-    assert!(!row(&m, Row::Model(Letter::G)).invalid);
-    assert!(row(&m, Row::Model(Letter::G)).changed);
+    assert!(row(&m, Row::Model(Letter::G)).invalid);
     assert_eq!(
         m.offered(Row::Model(Letter::S)),
         strings(&[

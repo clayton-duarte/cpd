@@ -281,7 +281,10 @@ impl Commands {
             .collect();
         self.calls.borrow_mut().push(words.clone());
         for (prefix, times, error) in self.fail.borrow_mut().iter_mut() {
-            if *times > 0 && words.iter().zip(prefix.iter()).all(|(w, p)| w == p) {
+            if *times > 0
+                && words.len() >= prefix.len()
+                && words.iter().zip(prefix.iter()).all(|(w, p)| w == p)
+            {
                 *times -= 1;
                 return Err(error.clone());
             }

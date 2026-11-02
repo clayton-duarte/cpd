@@ -127,7 +127,7 @@ mod scroll_width_tests;
 pub mod section;
 #[cfg(test)]
 mod section_width_tests;
-mod settings;
+pub mod settings;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;

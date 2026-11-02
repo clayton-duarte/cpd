@@ -161,6 +161,20 @@ fn tier_model(v: &Value, letter: Letter) -> Result<cpd_core::config::TierModel, 
     })
 }
 
+/// Parses the JSON of `cpd tiers`: the catalog of the four letters.
+pub fn catalog(tiers: &Value) -> Result<Catalog, CpdError> {
+    let tm = tiers
+        .get("tiers")
+        .ok_or_else(|| shape("tiers.tiers is missing"))?;
+    Ok(Catalog {
+        pi_version: text(tiers, "pi_version", "tiers")?.to_owned(),
+        o: tier_model(tm, Letter::O)?,
+        s: tier_model(tm, Letter::S)?,
+        h: tier_model(tm, Letter::H)?,
+        g: tier_model(tm, Letter::G)?,
+    })
+}
+
 impl Reads {
     /// Parses the JSON of `cpd config`, `cpd tiers` and `cpd models show`; a wrong shape is an error.
     pub fn parse(config: &Value, tiers: &Value, models: &Value) -> Result<Reads, CpdError> {
@@ -194,16 +208,7 @@ impl Reads {
                 });
             }
         }
-        let tm = tiers
-            .get("tiers")
-            .ok_or_else(|| shape("tiers.tiers is missing"))?;
-        let catalog = Catalog {
-            pi_version: text(tiers, "pi_version", "tiers")?.to_owned(),
-            o: tier_model(tm, Letter::O)?,
-            s: tier_model(tm, Letter::S)?,
-            h: tier_model(tm, Letter::H)?,
-            g: tier_model(tm, Letter::G)?,
-        };
+        let catalog = catalog(tiers)?;
         let providers = models
             .get("providers")
             .and_then(Value::as_array)
@@ -517,16 +522,10 @@ impl Model {
                 Effect::None
             }
             Row::Provider => {
-                // An id may carry a gateway prefix of the old provider (`vertex/x`): the bare name `x` matches too.
                 let kept = LETTERS.map(|l| {
                     let id = self.id_of(l)?;
-                    let bare = id.rsplit('/').next().unwrap_or(&id);
                     let ids = &self.providers.iter().find(|p| p.provider == entry)?.ids;
-                    let found = ids
-                        .iter()
-                        .find(|i| **i == id)
-                        .or_else(|| ids.iter().find(|i| *i == bare))?;
-                    Some(format!("{entry}/{found}"))
+                    ids.contains(&id).then(|| format!("{entry}/{id}"))
                 });
                 self.models = kept;
                 self.provider = entry;

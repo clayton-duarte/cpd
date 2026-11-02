@@ -1,30 +1,31 @@
 //! The `settings` view (commands.md §13.2), in a tmux popup opened by the StatusBar's settings button
-//! (`cpd tui action settings`). For now a popup with the section title `Agent Tiers`; `q` or Esc closes it.
+//! (`cpd tui action settings`): the Agent Tiers section. It reads and writes only through cpd commands.
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
-#[allow(dead_code)] // stub: only the tests call it until the implementation lands
 mod model;
 #[cfg(test)]
 mod model_tests;
-#[allow(dead_code)] // stub: the implementation fills it in, only the tests call it
 mod view;
 #[cfg(test)]
 mod view_tests;
 
-use super::box_widget::SectionTitle;
-use super::view_ports::{Input, RunFn, Tty};
-use super::{Capture, RunCommand, popup, run_view_on};
+use super::dialog::scroll::Scroll;
+use super::view_ports::{Ctx, Input, RunFn, Tty, run_view_with};
+use super::{Capture, RunCommand, ViewError, popup, run_view_on};
 use cpd_core::error::CpdError;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
+use model::{Effect, Model, Reads, Step};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+use ratatui::layout::Rect;
+use serde_json::Value;
+use std::ffi::OsString;
 use std::io::Write;
 
-/// The section's title.
-const TITLE: &str = "Agent Tiers";
 /// The popup's inner size, columns and rows.
 const WIDTH: u16 = 66;
 const HEIGHT: u16 = 26;
@@ -50,37 +51,213 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     })
 }
 
-/// `cpd tui view settings`: draws the title until `q` or Esc.
-pub(crate) fn run(ports: &Ports, _run_command: RunCommand) -> Result<Output, CpdError> {
+/// `cpd tui view settings`: the dialog, its commands run through `run_command`.
+pub(crate) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdError> {
+    let with_program = |mut argv: Vec<OsString>| {
+        argv.insert(0, OsString::from(PROGRAM));
+        run_command(argv)
+    };
     run_view_on(
         ports,
         "settings",
         Capture::Mouse,
-        || Ok(()),
-        |ctx, ()| {
-            loop {
-                ctx.draw(|f| f.render_widget(SectionTitle::new(TITLE, None), f.area()))?;
-                if let Event::Key(k) = ctx.input.read()?
-                    && k.kind == KeyEventKind::Press
-                    && matches!(k.code, KeyCode::Esc | KeyCode::Char('q'))
-                {
-                    return Ok(());
-                }
-            }
-        },
+        || open(&with_program),
+        |ctx, model| show(ctx, &with_program, model),
     )
 }
 
 /// [`run`] on a terminal, its facts and its input that the caller gives, and the commands it runs through `run_command`
-/// (a test's `TestBackend`, scripted input and a fake [`RunFn`]).
-#[allow(dead_code)] // stub: the implementation fills it in, only the tests call it
+/// (a test's `TestBackend`, scripted input and a fake [`RunFn`]); the commands are the words after `cpd`.
 pub fn run_on<B: Backend, W: Write>(
-    _ports: &Ports,
-    _run_command: RunFn,
-    _tty: &mut dyn Tty,
-    _out: &mut W,
-    _terminal: Terminal<B>,
-    _input: &mut dyn Input,
+    ports: &Ports,
+    run_command: RunFn,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
 ) -> Result<Output, CpdError> {
-    todo!("run_on: the implementation Job")
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "settings",
+        Capture::Mouse,
+        || open(run_command),
+        |ctx, model| show(ctx, run_command, model),
+    )
+}
+
+/// `cpd <words>` through `run_command`: its JSON.
+fn read(run_command: RunFn, words: &[&str]) -> Result<Value, CpdError> {
+    match run_command(words.iter().map(OsString::from).collect())? {
+        Output::Success(fields) => Ok(Value::Object(fields)),
+        Output::Owned => Err(CpdError::new(
+            cpd_core::error::ErrorCode::Internal,
+            format!("cpd {} printed no JSON value.", words.join(" ")),
+        )),
+    }
+}
+
+/// The three reads, before the first draw: a failure is the command's error, with the screen untouched.
+fn open(run_command: RunFn) -> Result<Model, CpdError> {
+    let config = read(run_command, &["config"])?;
+    let tiers = read(run_command, &["tiers"])?;
+    let models = read(run_command, &["models", "show"])?;
+    Ok(Model::new(Reads::parse(&config, &tiers, &models)?))
+}
+
+/// The words of the command a Save step runs.
+fn words(step: &Step) -> Vec<String> {
+    match step {
+        Step::PresetSet(refs) => ["preset", "set"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(
+                ["--O", "--S", "--H", "--G"]
+                    .into_iter()
+                    .zip(refs)
+                    .flat_map(|(flag, r)| [flag.to_owned(), r.clone()]),
+            )
+            .collect(),
+        Step::TiersSet(t) => ["config", "tiers", "set"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(
+                [
+                    ("--auxiliar", t.auxiliar),
+                    ("--worker", t.worker),
+                    ("--lead", t.lead),
+                    ("--manager", t.manager),
+                ]
+                .into_iter()
+                .flat_map(|(flag, tier)| [flag.to_owned(), tier.to_string()]),
+            )
+            .collect(),
+        Step::Retier => ["session", "retier", "--all"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    }
+}
+
+fn run_words(run_command: RunFn, words: &[String]) -> Result<Output, CpdError> {
+    run_command(words.iter().map(OsString::from).collect())
+}
+
+/// The steps of Save, in order: a step that succeeded is the baseline; the first refusal stops and shows. Whether all ran.
+fn save(run_command: RunFn, model: &mut Model) -> bool {
+    for step in model.steps() {
+        match run_words(run_command, &words(&step)) {
+            Ok(_) => model.step_done(&step),
+            Err(e) => {
+                let e = if step == Step::Retier {
+                    CpdError::new(
+                        e.code(),
+                        format!(
+                            "{} The settings are written; the sessions were not re-tiered.",
+                            e.message()
+                        ),
+                    )
+                } else {
+                    e
+                };
+                model.step_failed(&step, &e);
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Runs what `effect` asks; whether the view closes.
+fn apply(run_command: RunFn, model: &mut Model, effect: Effect) -> bool {
+    match effect {
+        Effect::None => false,
+        Effect::Close => true,
+        Effect::Save => save(run_command, model),
+        Effect::Reread(refs) => {
+            let mut argv = vec!["tiers".to_owned()];
+            for (letter, model_ref) in refs {
+                argv.push("--model".to_owned());
+                argv.push(format!("{letter}={model_ref}"));
+            }
+            let read = run_words(run_command, &argv).and_then(|out| match out {
+                Output::Success(f) => model::catalog(&Value::Object(f)),
+                Output::Owned => Err(CpdError::new(
+                    cpd_core::error::ErrorCode::Internal,
+                    "cpd tiers printed no JSON value.",
+                )),
+            });
+            match read {
+                Ok(catalog) => model.reread_done(catalog),
+                Err(e) => model.reread_failed(&e),
+            }
+            false
+        }
+    }
+}
+
+/// What a click does.
+fn click(model: &mut Model, hit: view::Hit) -> Effect {
+    match hit {
+        view::Hit::Value(row) => {
+            if model.rows().iter().any(|r| r.row == row && r.open) {
+                model.key(KeyCode::Esc.into());
+            } else {
+                model.open(row);
+            }
+            Effect::None
+        }
+        view::Hit::Entry(i) => {
+            let open = model.rows().into_iter().find(|r| r.open);
+            let entry = model.list().and_then(|l| l.entries.get(i).cloned());
+            match (open, entry) {
+                (Some(open), Some(entry)) => {
+                    match model.offered(open.row).iter().position(|e| *e == entry) {
+                        Some(at) => model.pick(open.row, at),
+                        None => Effect::None,
+                    }
+                }
+                _ => Effect::None,
+            }
+        }
+        view::Hit::Load => model.load(),
+        view::Hit::Save => model.save(),
+        view::Hit::Cancel => Effect::Close,
+    }
+}
+
+/// Draws and handles input until the view closes: Esc, `q` and Cancel close without writing; Save closes when its steps ran.
+fn show<B: Backend>(
+    ctx: &mut Ctx<B>,
+    run_command: RunFn,
+    mut model: Model,
+) -> Result<(), ViewError> {
+    let mut scroll = Scroll::default();
+    let mut follow = true;
+    let mut area = Rect::ZERO;
+    loop {
+        ctx.draw(|f| {
+            area = f.area();
+            view::draw(f, &model, &mut scroll, follow);
+        })?;
+        follow = false;
+        let effect = match ctx.input.read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press => {
+                follow = true;
+                model.key(k)
+            }
+            Event::Mouse(m) if scroll.mouse(m) => Effect::None,
+            Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                follow = true;
+                view::hit(&model, &scroll, area, m).map_or(Effect::None, |h| click(&mut model, h))
+            }
+            _ => Effect::None,
+        };
+        if apply(run_command, &mut model, effect) {
+            return Ok(());
+        }
+    }
 }
