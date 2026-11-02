@@ -951,7 +951,7 @@ pub fn draw(
         }
     }
     // the group's rows, drawn from its blank row at `y`; whatever does not fit in it is cut at the bottom
-    let bounds = Rect::new(area.x, project.bottom(), area.width, group);
+    let bounds = Rect::new(f.area().x, project.bottom(), f.area().width, group);
     let mut y = project.bottom() + 1;
     let mut previous_open = true;
     for (dock, rows_shown) in docks.into_iter().zip(shown) {
@@ -1315,6 +1315,33 @@ mod tests {
         buf
     }
 
+    /// The whole pane, `height` rows high, row 0 (the ▲ line) and the docked group at the bottom included: the tests of the
+    /// docked sections read it, since the group is not among the first rows.
+    fn render_pane(
+        tree: &Tree,
+        state: &mut TreeState<Id>,
+        width: u16,
+        height: u16,
+        frame: usize,
+    ) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    f.area(),
+                    tree,
+                    state,
+                    false,
+                    frame,
+                    false,
+                    &mut Scroll::default(),
+                )
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
     /// A row of an area `width` wide: `left`, then `right`, which ends at the row's last cell.
     fn row_of(left: &str, right: &str, width: usize) -> String {
         format!("{left:<w$}{right}", w = width - right.chars().count())
@@ -1336,8 +1363,6 @@ mod tests {
     const COLLAPSE: &str = "╰\u{F0B2C} collapse";
     /// The closing row of a LIVE Context with nothing to fold (hs-d688).
     const NEW_PLAN: &str = "╰󰬪 new";
-    /// The tree root's archive row, folded and expanded (hs-d698, hs-d707).
-    const ARCHIVE_UP: &str = "\u{F0B2C} archive";
 
     /// A Plan with an idle Lead named `name` and no forks.
     fn lone(id: &str, name: &str, phase: Phase, counts: [usize; 6]) -> PlanNode {
@@ -1820,23 +1845,35 @@ mod tests {
         state.open(vec![ARCHIVE.to_owned()]);
         unfold(&mut state, &t, "zz");
         for (frame, spinner) in SPINNER.iter().enumerate() {
-            let buf = render_at(&t, &mut state, 24, 12, false, frame);
+            let buf = render_pane(&t, &mut state, 24, 24, frame);
             let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
+            // the live Context `cc` is under the ▲ line; the archived `zz` is in the Archive section, two rows under its header
+            let archive = u16::try_from(
+                lines(&buf)
+                    .iter()
+                    .position(|r| r.contains("Archive"))
+                    .unwrap(),
+            )
+            .unwrap();
             assert_eq!(
-                cell(&buf, 2, 1),
+                cell(&buf, 2, 2),
                 grey,
                 "frame {frame}: an archived Plan row, always the hollow ring {:?}",
                 lines(&buf)
             );
             assert_eq!(
-                cell(&buf, 1, 5),
+                cell(&buf, 1, archive + 2),
                 grey,
                 "frame {frame}: an archived Context row {:?}",
                 lines(&buf)
             );
-            assert_eq!(cell(&buf, 2, 6), grey, "frame {frame}: its Plan row");
             assert_eq!(
-                buf[(1, 0)].symbol(),
+                cell(&buf, 2, archive + 3),
+                grey,
+                "frame {frame}: its Plan row"
+            );
+            assert_eq!(
+                buf[(1, 1)].symbol(),
                 *spinner,
                 "while the live Context row turns"
             );
@@ -2557,10 +2594,12 @@ mod tests {
             ],
             "the archived Plan and fork follow the live rows, no `󰇘`; one closing row per Context (or its last row's `╰─`), one empty row between two Contexts"
         );
-        let all = lines(&buf).join("\n");
+        // the whole pane: the archived Context `zeta` and its closing row are in the Archive section, at the bottom
+        let pane = lines(&render_pane(&t, &mut state, 44, 40, 0));
+        let all = pane.join("\n");
         assert!(!all.contains('\u{F01D8}'), "no `󰇘` row anywhere");
         assert_eq!(
-            lines(&buf).iter().filter(|l| l.starts_with('╰')).count(),
+            pane.iter().filter(|l| l.starts_with('╰')).count(),
             4,
             "one closing row (or last row) per Context, never two: {all}"
         );
@@ -2670,25 +2709,32 @@ mod tests {
             "an archived Context starts folded"
         );
         state.open(vec![ARCHIVE.to_owned()]);
-        let buf = render(&t, &mut state, 44, 22, false);
+        let buf = render_pane(&t, &mut state, 44, 40, 0);
         let rows = lines(&buf);
+        let archive = rows
+            .iter()
+            .position(|r| r.contains("Archive"))
+            .expect("the Archive header");
         assert_eq!(
-            rows[11..17],
-            [
-                format!("╭{STOPPED} gamma"),
-                NEW_PLAN.to_owned(),
-                String::new(),
-                ARCHIVE_UP.to_owned(),
-                format!("╭{STOPPED} zeta"),
-                EXPAND.to_owned()
-            ],
+            rows[12..15],
+            [format!("╭{STOPPED} gamma"), NEW_PLAN.to_owned(), String::new()],
+            "the live Contexts end the project tree, with no archive row under them: {rows:#?}"
+        );
+        assert!(
+            rows[..archive].iter().all(|r| !r.contains("zeta")),
+            "{rows:#?}"
+        );
+        assert_eq!(
+            rows[archive + 2..archive + 4],
+            [format!("╭{STOPPED} zeta"), EXPAND.to_owned()],
             "{rows:#?}"
         );
         unfold(&mut state, &t, "zeta");
-        let buf = render(&t, &mut state, 44, 24, false);
+        let buf = render_pane(&t, &mut state, 44, 40, 0);
         let rows = lines(&buf);
+        let zeta = rows.iter().position(|r| r.contains("zeta")).unwrap();
         assert_eq!(
-            rows[15..19],
+            rows[zeta..zeta + 4],
             [
                 format!("╭{STOPPED} zeta"),
                 row_of(&format!("├─{STOPPED} zp"), "2", 44),
@@ -2697,7 +2743,8 @@ mod tests {
             ],
             "{rows:#?}"
         );
-        for y in 15..19 {
+        for y in zeta..zeta + 4 {
+            let y = u16::try_from(y).unwrap();
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     // the closing row's arrow and word are the fold toggle's colour 7; everything else is muted
@@ -2713,8 +2760,10 @@ mod tests {
             }
         }
         assert!(click_toggle(&mut state, &t, &toggle_of(&["zeta"])));
+        let rows = lines(&render_pane(&t, &mut state, 44, 40, 0));
+        let zeta = rows.iter().position(|r| r.contains("zeta")).unwrap();
         assert_eq!(
-            lines(&render(&t, &mut state, 44, 24, false))[15..17],
+            rows[zeta..zeta + 2],
             [format!("╭{STOPPED} zeta"), EXPAND.to_owned()]
         );
     }
