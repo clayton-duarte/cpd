@@ -17,26 +17,26 @@ CREATE TABLE sessions_new (
   file        TEXT,
   forked_from TEXT REFERENCES sessions(id),
   cwd         TEXT NOT NULL,
-  tier        TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
+  tier        TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),
   tmux_pane   TEXT CHECK (tmux_pane IS NULL OR tmux_pane GLOB '%[0-9]*'),
   state       TEXT NOT NULL CHECK (state IN ('working', 'waiting', 'blocked', 'idle', 'stopped')),
   state_label TEXT,
   state_at    TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   archived_at TEXT,
-  title       TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 200),  -- named migration session-titles, check widened by session-title-length (hs-d543)
-  titled_at   TEXT,                                                           -- named migration session-titles
-  asleep_at   TEXT,                                                           -- named migration session-asleep
-  by_user     INTEGER NOT NULL DEFAULT 0 CHECK (by_user IN (0, 1)),          -- additive migration session-by-user (hs-d542); 0 = today's behaviour (first message at registration), 1 = by-user Session (first message with User's first prompt)
-  switch_failed TEXT CHECK (switch_failed IS NULL OR json_valid(switch_failed)),  -- additive migration switch-failed (Plan retier-truth, pro-d86); NULL = no failed model switch, see commands.md §10.2
-  working_pr  TEXT,  -- migration 20261102T2100-session-working-pr (breaking; pro-d219, pro-d259): the key of the Lead's current Workflow, null otherwise; the invariant and the triggers below are §3.6 "The Lead's Workflow"
-  runner      TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable')),  -- additive migration session-runner (§4.5): set when the Session is created, never changed; a durable Lead or Manager has no pane (§3.6)
+  title       TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 200),
+  titled_at   TEXT,
+  asleep_at   TEXT,
+  by_user     INTEGER NOT NULL DEFAULT 0 CHECK (by_user IN (0, 1)),
+  switch_failed TEXT CHECK (switch_failed IS NULL OR json_valid(switch_failed)),
+  working_pr  TEXT,
+  runner      TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable')),
   FOREIGN KEY (plan, attempt) REFERENCES attempts(plan, id) DEFERRABLE INITIALLY DEFERRED,
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
   CHECK (role <> 'manager' OR plan IS NULL),
-  CHECK (state NOT IN ('waiting', 'blocked') OR state_label IS NOT NULL),   -- migration waiting-state (hs-d303): `waiting` has a label as `blocked` has
-  CHECK (state_label IS NULL OR state IN ('waiting', 'blocked') OR (state = 'stopped' AND state_label = 'host crash loop'))   -- migration session-crash-loop (P1.10, hs-d785): a crash-looped durable Session is `stopped` with the label `host crash loop`
+  CHECK (state NOT IN ('waiting', 'blocked') OR state_label IS NOT NULL),
+  CHECK (state_label IS NULL OR state IN ('waiting', 'blocked') OR (state = 'stopped' AND state_label = 'host crash loop'))
 ) STRICT;
 INSERT INTO sessions_new (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at, title, titled_at, asleep_at, by_user, switch_failed, working_pr, runner)
   SELECT id, role, context, plan, attempt, name, file, forked_from, cwd, CASE WHEN substr(tier, 2, 1) = '5' THEN substr(tier, 1, 1) || '4' ELSE tier END, tmux_pane, state, state_label, state_at, created_at, archived_at, title, titled_at, asleep_at, by_user, switch_failed, working_pr, runner
@@ -68,13 +68,13 @@ CREATE TABLE attempts_new (
   id               TEXT NOT NULL,
   job              TEXT NOT NULL,
   number           INTEGER NOT NULL CHECK (number >= 1),
-  tier             TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
+  tier             TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X')),
   origin           TEXT NOT NULL CHECK (origin IN ('ladder', 'retry')),
   status           TEXT NOT NULL CHECK (status IN ('starting', 'running', 'merging', 'ended')),
   outcome          TEXT CHECK (outcome IN ('merged', 'failed', 'cancelled')),
   cause            TEXT CHECK (cause IN ('merged', 'cancel_requested', 'setup_failed', 'timed_out',
                                          'crashed', 'no_submit', 'merge_conflict',
-                                         'aborted',  -- hs-a8, the User, 2026-10-31: attempt abort's cause (migration attempt-aborted)
+                                         'aborted',
                                          'cas_lost', 'dirty_target', 'tampered',
                                          'gate_failed', 'gate_error', 'provider_error')),
   branch           TEXT NOT NULL CHECK (branch = 'cpd/' || plan || '--' || id
@@ -91,16 +91,16 @@ CREATE TABLE attempts_new (
   check_tail       TEXT,
   merged_sha       TEXT,
   nudged           INTEGER NOT NULL DEFAULT 0 CHECK (nudged IN (0, 1)),
-  stop_request     TEXT CHECK (stop_request IN ('timed_out', 'cancelled', 'aborted')),  -- hs-a8: 'aborted' set by attempt abort (§6.5 of commands.md) when its merge step is running (migration attempt-aborted)
+  stop_request     TEXT CHECK (stop_request IN ('timed_out', 'cancelled', 'aborted')),
   metrics          TEXT CHECK (metrics IS NULL OR json_valid(metrics)),
   started_at       TEXT NOT NULL,
   ended_at         TEXT,
-  runner           TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable')),  -- migration `worker-runner` (pro-d165, §4.5; an ADD COLUMN, so after `ended_at`): the Worker runner, `worker_runner` of §8.2 read when the Attempt was created; existing rows read `pi`
-  worker_pid       INTEGER,  -- migration `worker-runner` (§4.5): the pid of a `durable` Worker's process, null for `pi` and before the start (§3.4)
-  gate_hook        TEXT CHECK (gate_hook IN ('pre-commit', 'pre-merge')),  -- migration `gate-facts` (pro-d267, §4.5; an ADD COLUMN): the hook of the failed Gate, §2.2
-  gate_command     TEXT,  -- migration `gate-facts`: the rendered `sh -c` text of the first command that exited non-zero, §2.2
-  gate_exit        INTEGER,  -- migration `gate-facts`: that command's exit code, §2.2
-  actual_files     TEXT CHECK (actual_files IS NULL OR (json_valid(actual_files) AND json_type(actual_files) = 'array')),  -- migration `actual-files` (pro-d304, §4.5; an ADD COLUMN): the paths `attempt submit` recorded, a JSON array; null means not captured, §2.2
+  runner           TEXT NOT NULL DEFAULT 'pi' CHECK (runner IN ('pi', 'durable')),
+  worker_pid       INTEGER,
+  gate_hook        TEXT CHECK (gate_hook IN ('pre-commit', 'pre-merge')),
+  gate_command     TEXT,
+  gate_exit        INTEGER,
+  actual_files     TEXT CHECK (actual_files IS NULL OR (json_valid(actual_files) AND json_type(actual_files) = 'array')),
   PRIMARY KEY (plan, id),
   UNIQUE (plan, job, number),
   FOREIGN KEY (plan, job) REFERENCES jobs(plan, key),
@@ -132,11 +132,11 @@ BEGIN SELECT RAISE(ABORT, 'illegal_transition'); END;
 CREATE TABLE jobs_new (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
   plan                TEXT NOT NULL REFERENCES plans(id),
-  workflow            TEXT,                   -- R34: the Job's Workflow (A7); NULL exactly for an explore Job (CHECK below)
-  review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),  -- inert since pro-d163: nothing reads or writes it (B2, migration 4)
+  workflow            TEXT,
+  review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),
   key                 TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 32),
   title               TEXT NOT NULL CHECK (length(title) >= 1),
-  tier                TEXT CHECK (tier IS NULL OR (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X'))),  -- null only while draft (migration 0014); the Tier syntax of §9, rebuilt by `tier-syntax-g-x` (§4.5)
+  tier                TEXT CHECK (tier IS NULL OR (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(tier, 2, 1) BETWEEN '0' AND '4' OR substr(tier, 2, 1) = 'X'))),
   goal                TEXT CHECK (goal IS NULL OR length(goal) >= 1),
   context             TEXT,
   touches             TEXT CHECK (touches IS NULL OR (json_valid(touches) AND json_type(touches) = 'array' AND json_array_length(touches) >= 1)),
@@ -146,32 +146,32 @@ CREATE TABLE jobs_new (
   appended            INTEGER NOT NULL CHECK (appended IN (0, 1)),
   fingerprint         TEXT CHECK (fingerprint IS NULL OR length(fingerprint) = 64),
   created_txn         INTEGER NOT NULL REFERENCES txns(id),
-  retry_tier          TEXT CHECK (retry_tier IS NULL OR (length(retry_tier) = 2 AND substr(retry_tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(retry_tier, 2, 1) BETWEEN '0' AND '4' OR substr(retry_tier, 2, 1) = 'X'))),  -- migration 20261103T0700-tier-rows-v2 (breaking; pro-d204, pro-n347; §4.5): the Tier syntax of §9, effort 5 rewritten to 4 in the copy
+  retry_tier          TEXT CHECK (retry_tier IS NULL OR (length(retry_tier) = 2 AND substr(retry_tier, 1, 1) IN ('O', 'S', 'H', 'G') AND (substr(retry_tier, 2, 1) BETWEEN '0' AND '4' OR substr(retry_tier, 2, 1) = 'X'))),
   cancel_reason       TEXT,
   cancel_requested_at TEXT,
   failed_cause        TEXT,
   merged_sha          TEXT,
   created_at          TEXT NOT NULL,
-  urgent              INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0, 1)),  -- the urgent flag (§2.2); not in jobs_locked, not in a fingerprint; added by the migration 20261019T0451-job-urgent (an ADD COLUMN, so last among the columns)
-  kind                TEXT NOT NULL DEFAULT 'work' CHECK (kind IN ('work', 'docs', 'test', 'impl', 'verify', 'open', 'update', 'scout', 'research')),  -- the Job's kind (§2.2 "Job kinds"); named migration `job-kinds` (hs-d341), an ADD COLUMN, so after `urgent`, rebuilt by `job-verify-kind` (§4.5); a Locked field, guarded by jobs_locked, in no fingerprint
-  tests               TEXT CHECK (tests IS NULL OR (json_valid(tests) AND json_type(tests) = 'array' AND json_array_length(tests) >= 1)),            -- a `test` Job's named tests (Spec); guarded by jobs_locked, in no fingerprint
-  test_files          TEXT CHECK (test_files IS NULL OR (json_valid(test_files) AND json_type(test_files) = 'array' AND json_array_length(test_files) >= 1)),  -- the files that hold them (Spec); the guard of §7.5
-  test_approved       TEXT CHECK (test_approved IS NULL OR (json_valid(test_approved) AND json_type(test_approved) = 'array')),                      -- an `impl` Job's approved red-test paths; NOT Locked: `job approve-tests` changes it after the lock
-  resources           TEXT CHECK (resources IS NULL OR (json_valid(resources) AND json_type(resources) = 'array' AND json_array_length(resources) >= 1)),  -- the exclusive resources the Job takes (Spec, optional; §2.2); guarded by jobs_locked, in no fingerprint; added by the migration job-resources
-  skipped_n           INTEGER CHECK (skipped_n IS NULL OR skipped_n >= 1),  -- E3's skip order (§3.7): set the first time E3 skips a Ready Job for want of a pool, cleared when it starts; NOT Locked (E3 writes it after the lock); added by the migration job-tenancy
-  summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),  -- an explore Job's bounded summary (§2.2 "Explore Jobs"); NOT NULL exactly when an explore Job is merged; added by the migration explore-kinds
-  touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),  -- the paths the Lead approved a Job to change beyond its Spec `touches` (§2.2, §7.5); NOT Locked, in no fingerprint; added by the migration job-touches-approved
+  urgent              INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0, 1)),
+  kind                TEXT NOT NULL DEFAULT 'work' CHECK (kind IN ('work', 'docs', 'test', 'impl', 'verify', 'open', 'update', 'scout', 'research')),
+  tests               TEXT CHECK (tests IS NULL OR (json_valid(tests) AND json_type(tests) = 'array' AND json_array_length(tests) >= 1)),
+  test_files          TEXT CHECK (test_files IS NULL OR (json_valid(test_files) AND json_type(test_files) = 'array' AND json_array_length(test_files) >= 1)),
+  test_approved       TEXT CHECK (test_approved IS NULL OR (json_valid(test_approved) AND json_type(test_approved) = 'array')),
+  resources           TEXT CHECK (resources IS NULL OR (json_valid(resources) AND json_type(resources) = 'array' AND json_array_length(resources) >= 1)),
+  skipped_n           INTEGER CHECK (skipped_n IS NULL OR skipped_n >= 1),
+  summary             TEXT CHECK (summary IS NULL OR length(summary) >= 1),
+  touches_approved    TEXT CHECK (touches_approved IS NULL OR (json_valid(touches_approved) AND json_type(touches_approved) = 'array')),
   UNIQUE (plan, key),
   FOREIGN KEY (plan, workflow) REFERENCES "workflows"(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
   CHECK (status IN ('draft', 'cancelled') OR fingerprint IS NOT NULL),
-  CHECK (status IN ('draft', 'cancelled') OR (tier IS NOT NULL AND goal IS NOT NULL AND context IS NOT NULL AND touches IS NOT NULL AND acceptance IS NOT NULL AND out_of_scope IS NOT NULL)),  -- stubs only as drafts, or cancelled as such (hs-d241)
-  CHECK ((goal IS NULL) = (context IS NULL) AND (goal IS NULL) = (touches IS NULL) AND (goal IS NULL) = (acceptance IS NULL) AND (goal IS NULL) = (out_of_scope IS NULL)),  -- the Spec is all or nothing
+  CHECK (status IN ('draft', 'cancelled') OR (tier IS NOT NULL AND goal IS NOT NULL AND context IS NOT NULL AND touches IS NOT NULL AND acceptance IS NOT NULL AND out_of_scope IS NOT NULL)),
+  CHECK ((goal IS NULL) = (context IS NULL) AND (goal IS NULL) = (touches IS NULL) AND (goal IS NULL) = (acceptance IS NULL) AND (goal IS NULL) = (out_of_scope IS NULL)),
   CHECK ((status = 'merged') = (merged_sha IS NOT NULL)),
   CHECK ((status = 'failed') = (failed_cause IS NOT NULL)),
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
   CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL),
-  CHECK ((workflow IS NULL) = (kind IN ('scout', 'research'))),  -- an explore Job belongs to the Plan, not to a Workflow (migration explore-kinds)
+  CHECK ((workflow IS NULL) = (kind IN ('scout', 'research'))),
   CHECK ((kind IN ('scout', 'research') AND status = 'merged') = (summary IS NOT NULL))
 ) STRICT;
 INSERT INTO jobs_new (seq, plan, workflow, review, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent, kind, tests, test_files, test_approved, resources, skipped_n, summary, touches_approved)
@@ -218,3 +218,4 @@ WHEN OLD.status <> 'draft'
           AND NEW.title IS OLD.title AND NEW.tier IS OLD.tier AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key
           AND NEW.workflow IS OLD.workflow AND NEW.review IS OLD.review AND NEW.kind IS OLD.kind)
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
+
