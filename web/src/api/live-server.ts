@@ -62,8 +62,14 @@ export interface LiveDeps {
   tail(id: string): Promise<string>;
   /** The durable Session's host-socket read; absent, or `undefined` for a Session with no live host, means `tail(id)` is used. */
   host?: DurableHostRead;
-  /** One send: `cpd session send <id> <text> --unblocks <reason>`. The only mutation there is. */
+  /** One send: `cpd session send <id> <text> --unblocks <reason>`. The mutation for a pi Session (and the fallback). */
   send(id: string, text: string, unblocks: string): Promise<void>;
+  /**
+   * The durable Session send (the host socket's `submit`, web/README.md "Send"). Optional: when it
+   * is absent a durable Session keeps `send` (the CLI). The composition, not the handler, decides
+   * which transport exists; the handler only picks by the Session's runner.
+   */
+  durableSend?(id: string, text: string, unblocks: string): Promise<void>;
   /** A pi Session's file mtime in ms, undefined when absent: the frames stream's change signal. */
   stat(id: string): Promise<number | undefined>;
   /** The open Inbox items, from `cpd inbox list`; the rail renders them unchanged (web/README.md "The live Inbox in the right rail"). Optional so the handler's other routes build without it. */
@@ -102,7 +108,7 @@ const TEXT_MAX = 20_000;
 const UNBLOCKS_MAX = 200;
 
 /** The newest turns within `SNAPSHOT_TAIL` and `SNAPSHOT_BUDGET_BYTES`; never nothing. */
-function snapshotTail(messages: readonly TranscriptMessage[]): readonly TranscriptMessage[] {
+export function snapshotTail(messages: readonly TranscriptMessage[]): readonly TranscriptMessage[] {
   const tail: TranscriptMessage[] = [];
   let bytes = 0;
   for (let at = messages.length - 1; at >= 0 && tail.length < SNAPSHOT_TAIL; at -= 1) {
@@ -193,7 +199,12 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     });
   };
 
-  const handleSend = async (req: IncomingMessage, res: ServerResponse, id: string): Promise<void> => {
+  const handleSend = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    id: string,
+    session: LiveSession | undefined,
+  ): Promise<void> => {
     let body: unknown;
     try {
       body = JSON.parse(await readBody(req));
@@ -213,7 +224,11 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
       sendJson(res, 400, { ok: false, error: "invalid body" });
       return;
     }
-    await deps.send(id, text, unblocks);
+    if (session?.runner === "durable" && deps.durableSend !== undefined) {
+      await deps.durableSend(id, text, unblocks);
+    } else {
+      await deps.send(id, text, unblocks);
+    }
     sendJson(res, 200, { ok: true });
   };
 
@@ -325,7 +340,8 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
         return true;
       }
       if (action === "send" && method === "POST") {
-        await handleSend(req, res, id);
+        const session = (await deps.list()).find((candidate) => candidate.id === id);
+        await handleSend(req, res, id, session);
         return true;
       }
       if (action === "frames" && method === "GET") {
