@@ -51,6 +51,102 @@ There is no approvals UI here: no tree, inbox or plan wiring, no `ui_response` a
 
 The frames stream's epoch is `"live"` and its `seq` counts the snapshots sent on one connection from 1.
 
+### The WebSocket stream (dev mode only)
+
+The frames route above stays exactly as it is — the SSE route is **not** replaced (no decision
+replaces it; this Plan's audit, `docs/research/web-socket-audit.md`, leaves the SSE fate an open
+question, and the dev layer keeps both). Alongside it, a second live surface carries the same
+frames over a **WebSocket**, for both runners, per that audit (which is research, not contract:
+nothing of the bridge is implemented yet — this subsection is the pin the test and implementation
+Jobs build against).
+
+**The route.** The browser opens a WebSocket to `GET /__cpd/sessions/<id>/ws?token=<token>`. A
+browser cannot set a header on a WebSocket handshake, so the token travels in the query — the
+same way the SSE route's `EventSource` already carries it (`web/src/api/live.ts` `subscribe()`).
+The route mounts only with `CPD_WEB_LIVE=1`, under the same token rule as every `/__cpd/` route —
+and the token is checked **before the upgrade**: a missing or wrong token refuses the upgrade
+with an HTTP 401, and the socket never opens.
+
+**The framing.** Server→client only: one JSON `SnapshotFrame` **text message per snapshot** — the
+SAME payload the SSE route sends (`web/src/api/live-server.ts`'s `toSnapshotFrame` /
+`snapshotTail`): the current snapshot at once on open, then a re-sent snapshot on each change,
+the newest turns only, within `SNAPSHOT_TAIL` (40 turns) and `SNAPSHOT_BUDGET_BYTES`
+(1 000 000). Client→server carries no required message — the browser sends nothing to stay
+subscribed. Frame sizes are bounded and measured (`docs/research/web-socket-audit.md` §1 and §3,
+citing `docs/research/web-socket-audit-measurements.md`): the host socket's own `LIMITS` cap a
+line at `clientLine` 1 048 576 B (an over-limit client line is answered `frame_too_large` and
+dropped), with a `slowClient` send buffer of 8 388 608 B; the bridge's browser-facing side
+inherits that cap for any client→server message it accepts, and bounds every server→client frame
+with the same snapshot budget. The measured frames fit with room: 122 901 / 185 649 / 187 642 B
+for the three long Sessions — at most 0.19 of `clientLine`, under the 1 MB budget — and the
+durable host's first `snapshot` is 338 B. On the browser side, the audit's measured drop
+thresholds are `EventSource`-specific (a 4, 8 and 20 MB single `data:` event never fired
+`onmessage` in Chrome; 1 and 2 MB did — recorded in `web/src/api/live-server.ts`); no browser
+WebSocket message cap was measured (audit, "Not measured": a browser is needed), and none is
+load-bearing here — the snapshot bounds keep every frame at or under 1 MB either way.
+
+**Both runners.** The bridge reads both runner kinds and sends the same frames either way:
+
+- A **durable** Session is read over its host socket through `web/src/api/host.ts` — one connect
+  + `hello` + `attach` per attach, the allowlisted frames out, reconnected per the 100 ms → 1 s
+  cap over a 30 s deadline rule. This is the audit's minimal host-socket fix (its Verdict 2): the
+  dev adapter today wires no `host` read (`web/vite.config.ts` `realDeps()` — verified absent),
+  so the durable frames route falls to `cpd session tail`, which follows a live host forever and
+  never resolves (measured: 20 s, 0 bytes, exit 124 — audit measurements §2e). The bridge relies
+  on the host's push instead: the host sends nothing while idle and pushes on change (audit
+  §2b), at the measured handshake cost of connect + `hello` → `welcome` median 0.50 ms and
+  `attach` → first `snapshot` median 0.14 ms (audit §1).
+- A **pi** Session is read from its session file and watched with `fs.watch` instead of the 1 s
+  mtime poll — the de-poll the audit's Verdict points at ("the poll is the dev cost; the push is
+  the bridge shape"), whose cost the audit measured: a changed tick on the largest Session
+  (29.6 MB) re-reads and re-parses for 209.1 ms per change (audit §2d), while an idle Session
+  costs one sub-millisecond `fs.stat` per second (audit §5). The audit itself judges the 1 s
+  poll "fine for a dev window" — the `fs.watch` watch is a liveness improvement, not a necessity;
+  the file read and parse (`parsePiSession`) are unchanged.
+- A runner with **no reachable live source** falls back exactly as the SSE route does:
+  `cpd session tail` for a durable Session (the `LiveDeps.tail` fallback). The §2e hang is the
+  live-host case, which the socket read now covers; with no host answering, `tail` returns and
+  the fallback behaves as the SSE route's does.
+
+**The client.** `web/src/api/live.ts`'s `subscribe()` opens a `WebSocket` to the route above
+instead of an `EventSource`; its signature `(id, onFrame) => close`, the `SnapshotFrame` payload
+and the fold (`web/src/fold/fold.ts` rule 3: a snapshot replaces the whole view) are **unchanged**.
+Reconnect re-attaches, and the socket's actual resume semantics are **attach fresh**: the first
+message on every (re)connect is the current full snapshot, so a client holding an `epoch`/`seq`
+cursor carries nothing across connections — the frame's `epoch` (`"live"`) and `seq`
+(per-connection, from 1) are the fold's bookkeeping, as on the SSE route. The audit's epoch/seq
+cursor resume is the durable host protocol's ring mechanism (`pi/durable-host/ring.ts`, audit
+§1), a host-socket-layer affordance the bridge may use on its own attachment; the browser surface
+carries no cursor, and the fold needs nothing older than the newest snapshot.
+
+**The module boundary.** A new `web/src/api/ws-bridge.ts` holds the bridge, dependency-injected
+so it is testable with no server and no real socket: the session lookup (`LiveDeps.list`), the
+durable attach (the `host.ts` client), the pi file watch, the snapshot build (`snapshotTail`)
+and the send transport, each an injected boundary. `web/vite.config.ts` mounts it on the Vite
+dev server's `httpServer` `upgrade` event when `CPD_WEB_LIVE=1` — the same opt-in gate as the
+existing middleware; without the flag, nothing changes.
+
+**Send.** For a **pi** Session the send path is unchanged: `cpd session send <id> <text>
+--unblocks <reason>` with the fixed one-line reason, as today. For a **durable** Session the
+bridge sends over the host socket: `submit` — the audit clears it (its Verdict 4: one frame at
+the socket's measured cost, against the CLI spawn's measured median 13.57–16.27 ms per call,
+audit measurements §4; and `when_busy` gives the real follow-up/steer/reject choice instead of
+a fixed string). `submit` carries no unblocks reason, so the fixed-reason rule is a CLI-send
+rule; the browser `LiveApi.send(id, text)` contract is unchanged either way. Which `when_busy`
+mode the bridge sends is the implementation Job's to pin.
+
+**What does not change.** The SSE route, every row of the `/__cpd/` table and the
+`live-server.ts` description are unchanged; so are the fold, the mock, the typed `CpdApi` and
+`docs/research/web-client-api.md`.
+
+**The open questions, and the dev-layer choice.** The audit leaves two questions open, and this
+Plan decides neither against it: the SSE route's fate (it stays), and one-socket-per-client
+versus a shared fan-out (the audit measured one attached client at a time; multi-client fan-out
+is under its "Not measured"). The dev-layer choice made here: the **SSE route stays**, and the
+browser holds **one WebSocket per Session** — each `subscribe()` opens one. How the bridge
+attaches behind it (one host socket per browser client, or one shared attachment fanning out)
+is the implementation Job's, bounded by the audit's fan-out gap.
+
 ### The TypeScript contract
 
 These interfaces are the pin the test and implementation Jobs build against. Nothing here may drift without amending this document.
