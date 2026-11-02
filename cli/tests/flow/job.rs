@@ -3360,7 +3360,7 @@ fn the_worker_range_follows_worker_tier_and_lead_tier_in_config() {
         );
     }
     for tier in ["H3", "H4", "S0", "S1"] {
-        job_add(&fx, "pl", &format!("a-{tier}"), tier, &[]).ok();
+        job_add(&fx, "pl", &format!("a-{}", tier.to_lowercase()), tier, &[]).ok();
     }
     // worker_tier = S0, lead_tier = S4: S0..S3, so every H is below the floor.
     ranged_with(&fx.env, "S0", "S4");

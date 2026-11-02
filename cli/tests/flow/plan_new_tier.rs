@@ -241,7 +241,7 @@ fn plan_new_tier_flag_is_checked_against_the_lead_range() {
     common::refused(&plan_new(&fx, "pl", "ctx", Some("O1")), "tier_invalid", 2);
     assert_eq!(counts(&fx), before);
     // The ends and the middle of the range are taken.
-    for (id, tier) in [("a", "S4"), ("b", "O0"), ("c", "O2")] {
+    for (id, tier) in [("pa", "S4"), ("pb", "O0"), ("pc", "O2")] {
         assert_eq!(lead_tier(&fx, id, "ctx", Some(tier)), tier);
     }
     // A second config moves the floor.
@@ -249,5 +249,5 @@ fn plan_new_tier_flag_is_checked_against_the_lead_range() {
     for tier in ["S1", "H3"] {
         not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S2", "O2");
     }
-    assert_eq!(lead_tier(&fx, "d", "ctx", Some("S3")), "S3");
+    assert_eq!(lead_tier(&fx, "pd", "ctx", Some("S3")), "S3");
 }
