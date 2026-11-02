@@ -15,7 +15,7 @@
 import * as React from "react"
 import { GalleryVerticalEnd } from "lucide-react"
 
-import type { LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
+import type { LiveContext, LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
 import {
   Sidebar,
   SidebarContent,
@@ -285,6 +285,8 @@ export interface AppSidebarProps {
   sessions: readonly LiveSession[]
   /** The Plans read; when absent, or empty, the rail draws its Session tree as before, and when present it draws the Plan tree (web/README.md "Context tree rows"). */
   plans?: readonly LivePlan[]
+  /** The Contexts read; the corrected rail lists every Context from it (web/README.md "Context tree rows"). */
+  contexts?: readonly LiveContext[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }
@@ -293,6 +295,7 @@ export interface AppSidebarProps {
 export function AppSidebar({
   sessions,
   plans,
+  contexts: _contexts,
   selectedId,
   onSelectSession,
   ...props
