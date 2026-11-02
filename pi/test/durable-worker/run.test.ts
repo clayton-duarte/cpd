@@ -276,6 +276,7 @@ function rig(over: { store?: Store; sessionShowError?: CpdError; resolveModel?: 
     now: () => NOW,
     log: (line) => {
       logs.push(line);
+      notify();
     },
   };
 
@@ -722,7 +723,7 @@ test("a re-attach of a server replaces its tools and closes the old connection",
   assert.equal(r.mcp.conns[1]!.closed, 0);
   deliver(hooks, attached(44, "jira"));
   await installedAfter(r, "mcp-jira", 2);
-  assert.deepEqual([...r.store.installed.keys()].sort(), ["mcp-atlassian", "mcp-jira"]);
+  assert.deepEqual([...r.store.installed.keys()].sort(), ["codemode", "mcp-atlassian", "mcp-jira"]);
   assert.deepEqual(namesOf(r, "mcp-atlassian"), ["mcp__atlassian__other"]);
   assert.equal(r.mcp.conns[0]!.closed, 1);
   assert.equal(await stop(r), 143);
