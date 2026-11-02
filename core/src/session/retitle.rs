@@ -266,7 +266,7 @@ fn run_pi(env: &mut Env, row: &Row, text: &str, limit: usize) -> Result<Title, C
     let id = &row.id;
     let models = row::models_of(env, row)?;
     let catalog = load_catalog(&env.config, &models)?;
-    let model = catalog.model_arg(Tier::new(Letter::G, 0).expect("GX"))?;
+    let model = catalog.model_arg(Tier::x(Letter::G))?;
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
     let environ: Vec<String> = std::env::vars_os()
