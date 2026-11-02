@@ -127,6 +127,7 @@ kinds! {
     PlanDeleted = "plan-deleted",
     ContextDeleted = "context-deleted",
     RecordsRetired = "records-retired",
+    // Retired (pro-d327): `cpd context docs` is gone; past Events keep the kind, nothing writes it.
     DocsDecided = "docs-decided",
     ContextCurated = "context-curated",
     ContextRenamed = "context-renamed",

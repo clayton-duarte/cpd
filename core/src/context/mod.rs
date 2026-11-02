@@ -91,15 +91,12 @@ pub enum Command {
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
     Delete(DeleteArgs),
-    /// List the pending retirements and documentation candidates (§3.15)
+    /// List the pending retirements (§3.15)
     #[command(hide = true)]
     Curation(curation::CurationArgs),
     /// Decide the pending retirements (§3.16)
     #[command(hide = true)]
     Retire(curation::RetireArgs),
-    /// Decide the pending documentation candidates (§3.17)
-    #[command(hide = true)]
-    Docs(curation::DocsArgs),
 }
 
 /// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -325,7 +322,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),
         Command::Retire(args) => curation::retire(args),
-        Command::Docs(args) => curation::docs(args),
     }
 }
 

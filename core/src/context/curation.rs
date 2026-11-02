@@ -1,5 +1,5 @@
 //! Record curation (hs-d549, hs-d551): the curations and retirement proposals the distiller writes, and the User's
-//! decisions on them (contract §4.6 "Retirement"; commands.md §3.15 to §3.17).
+//! decisions on them (contract §4.6 "Retirement"; commands.md §3.15 and §3.16).
 
 use clap::Args;
 
@@ -190,18 +190,6 @@ pub struct RetireArgs {
     reject: Vec<RecordId>,
 }
 
-#[derive(Args, Debug)]
-pub struct DocsArgs {
-    #[command(flatten)]
-    select: Select,
-    /// The pending doc candidates to send to the Manager
-    #[arg(long, value_name = "id,...", value_delimiter = ',')]
-    send: Vec<RecordId>,
-    /// The pending doc candidates to dismiss
-    #[arg(long, value_name = "id,...", value_delimiter = ',')]
-    dismiss: Vec<RecordId>,
-}
-
 /// Only the User decides (hs-d551): no Session and no Attempt runs these commands.
 fn user_only(command: &str) -> Result<(), CpdError> {
     for var in ["CPD_SESSION", "CPD_ATTEMPT"] {
@@ -292,7 +280,7 @@ pub(super) fn curation(args: CurationArgs) -> Result<Output, CpdError> {
         .with("limit", 0));
     }
     let limit = args.limit.map_or(-1, i64::from);
-    let (retire, docs, retire_total, docs_total) = store.read(|conn| {
+    let (retire, retire_total) = store.read(|conn| {
         ContextRow::require(conn, &context)?;
         let mut stmt = conn.prepare(
             "SELECT r.record, c.kind, c.text, coalesce(k.short, ''), r.reason, r.target
@@ -307,37 +295,15 @@ pub(super) fn curation(args: CurationArgs) -> Result<Output, CpdError> {
                           "short": r.get::<_, String>(3)?, "reason": r.get::<_, String>(4)?, "target": r.get::<_, String>(5)?}))
             })?
             .collect::<rusqlite::Result<Vec<Value>>>()?;
-        let mut stmt = conn.prepare(
-            "SELECT k.record, c.kind, c.text, k.short, coalesce(k.doc_paths, '[]')
-               FROM record_curations k JOIN context_records c ON c.context = k.context AND c.id = k.record
-              WHERE k.context = ?1 AND k.doc_candidate = 'pending' ORDER BY k.curated_at, c.seq LIMIT ?2",
-        )?;
-        let docs = stmt
-            .query_map(rusqlite::params![context.as_str(), limit], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let docs = docs
-            .into_iter()
-            .map(|(record, kind, text, short, paths)| {
-                let paths: Value = serde_json::from_str(&paths)
-                    .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("The doc paths of {record} are not JSON: {e}.")))?;
-                Ok(json!({"record": record, "kind": kind, "text": text, "short": short, "paths": paths}))
-            })
-            .collect::<Result<Vec<Value>, CpdError>>()?;
         let total = |sql: &str| conn.query_row(sql, [context.as_str()], |r| r.get::<_, i64>(0));
         let retire_total = total(
             "SELECT count(*) FROM record_retirements r JOIN context_records c ON c.context = r.context AND c.id = r.record
               WHERE r.context = ?1 AND r.status = 'pending'",
         )?;
-        let docs_total = total(
-            "SELECT count(*) FROM record_curations k JOIN context_records c ON c.context = k.context AND c.id = k.record
-              WHERE k.context = ?1 AND k.doc_candidate = 'pending'",
-        )?;
-        Ok((retire, docs, retire_total, docs_total))
+        Ok((retire, retire_total))
     })?;
     Ok(Output::success(
-        json!({"context": context, "retire": retire, "docs": docs, "retire_total": retire_total, "docs_total": docs_total}),
+        json!({"context": context, "retire": retire, "retire_total": retire_total}),
     ))
 }
 
@@ -370,88 +336,4 @@ pub(super) fn retire(args: RetireArgs) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"context": context, "approved": approve, "rejected": reject}),
     ))
-}
-
-/// The board's limit of a post's characters (`board post`, commands.md §10a.1).
-const POST_MAX_CHARS: usize = 2000;
-
-/// The one board post that sends `sent` (id, short form, paths) to the Manager: a record whose line does not fit
-/// goes by id alone, and the text is cut at the limit, so that it is always written.
-fn docs_post(context: &ContextId, sent: &[(String, String, Vec<String>)]) -> String {
-    let mut text = format!(
-        "Documentation candidates of Context {context}, sent by the User: plan a docs Workflow that documents these records.\n"
-    );
-    let mut room = POST_MAX_CHARS.saturating_sub(text.chars().count());
-    for (id, short, paths) in sent {
-        let full = format!("- {id}: {short} ({})\n", paths.join(", "));
-        let line = if full.chars().count() <= room {
-            full
-        } else {
-            format!("- {id}\n")
-        };
-        room = room.saturating_sub(line.chars().count());
-        text.push_str(&line);
-    }
-    text.chars().take(POST_MAX_CHARS).collect()
-}
-
-/// `context docs` (§3.17).
-pub(super) fn docs(args: DocsArgs) -> Result<Output, CpdError> {
-    user_only("context docs")?;
-    let (send, dismiss) = decided(
-        "context docs",
-        ("--send", &args.send),
-        ("--dismiss", &args.dismiss),
-    )?;
-    let Env { mut store, .. } = Env::open()?;
-    let context = args.select.resolve(&mut store)?;
-    let manager = store.write("context docs", |tx| {
-        ContextRow::require(tx, &context)?;
-        all_pending(tx, &context, "record_curations", "doc_candidate", &send.iter().chain(&dismiss).collect::<Vec<_>>())?;
-        let manager: Option<String> = tx
-            .query_row(
-                "SELECT id FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL ORDER BY created_at, id LIMIT 1",
-                [context.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if manager.is_none() && !send.is_empty() {
-            return Err(CpdError::new(ErrorCode::ManagerMissing, format!("Context {context} has no live Manager to send the candidates to."))
-                .with("context", context.as_str()));
-        }
-        let at = clock::now();
-        let mut sent = Vec::new();
-        for (status, ids) in [("sent", &send), ("dismissed", &dismiss)] {
-            for id in ids {
-                if status == "sent" {
-                    let (short, paths): (String, String) = tx.query_row(
-                        "SELECT short, coalesce(doc_paths, '[]') FROM record_curations WHERE context = ?1 AND record = ?2",
-                        [context.as_str(), id.as_str()],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )?;
-                    let paths: Vec<String> = serde_json::from_str(&paths)
-                        .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("The doc paths of {id} are not a JSON list: {e}.")))?;
-                    sent.push((id.clone(), short, paths));
-                }
-                tx.execute(
-                    "UPDATE record_curations SET doc_candidate = ?3 WHERE context = ?1 AND record = ?2",
-                    rusqlite::params![context.as_str(), id, status],
-                )?;
-            }
-        }
-        if let Some(manager) = manager.as_ref().filter(|_| !send.is_empty()) {
-            tx.execute(
-                "INSERT INTO board_posts (at, context, from_session, to_session, text) VALUES (?1, ?2, NULL, ?3, ?4)",
-                rusqlite::params![at, context.as_str(), manager, docs_post(&context, &sent)],
-            )?;
-        }
-        let text = format!("Doc candidates of {context} decided: {} sent, {} dismissed.", send.len(), dismiss.len());
-        append(tx, NewEvent::docs_decided(text, context.as_str(), &send, &dismiss).context(context.clone()))?;
-        Ok(manager.filter(|_| !send.is_empty()))
-    })?;
-    let mut out = json!({"context": context, "sent": send, "dismissed": dismiss});
-    if let Some(manager) = manager {
-        out["manager"] = json!(manager);
-    }
-    Ok(Output::success(out))
 }

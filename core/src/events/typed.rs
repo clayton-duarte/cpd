@@ -688,19 +688,6 @@ impl NewEvent {
         )
     }
 
-    pub fn docs_decided(
-        text: impl Into<String>,
-        context: &str,
-        sent: impl Serialize,
-        dismissed: impl Serialize,
-    ) -> NewEvent {
-        make(
-            Kind::DocsDecided,
-            text,
-            json!({"context": context, "sent": sent, "dismissed": dismissed}),
-        )
-    }
-
     pub fn context_curated(
         text: impl Into<String>,
         context: &str,
@@ -993,7 +980,6 @@ mod tests {
             Kind::RecordsRetired => {
                 vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())]
             }
-            Kind::DocsDecided => vec![NewEvent::docs_decided(T, s, [s], Vec::<String>::new())],
             Kind::ContextCurated => vec![
                 NewEvent::context_curated(T, s, 0, 0, 0, 0),
                 NewEvent::context_curated(T, s, 1, 1, 0, 0),
@@ -1017,7 +1003,7 @@ mod tests {
             Kind::WatchStopped => vec![NewEvent::watch_stopped(T, 1)],
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
             // retired (hs-d738): past Events hold these kinds, nothing writes them, so no constructor (see `RETIRED`)
-            Kind::ReviewOpened | Kind::ReviewClosed => vec![],
+            Kind::ReviewOpened | Kind::ReviewClosed | Kind::DocsDecided => vec![],
             Kind::IncidentStarted => vec![
                 NewEvent::incident_started(T, s, s, s, [s], None),
                 NewEvent::incident_started(T, s, s, s, [s], Some(s)),
@@ -1031,7 +1017,8 @@ mod tests {
     }
 
     /// The retired kinds (contract §5.2): valid in `event_kinds`, written by nothing, so they have no constructor.
-    const RETIRED: [Kind; 2] = [Kind::ReviewOpened, Kind::ReviewClosed];
+    /// `DocsDecided` is retired too (pro-d327): `cpd context docs` is gone.
+    const RETIRED: [Kind; 3] = [Kind::ReviewOpened, Kind::ReviewClosed, Kind::DocsDecided];
 
     /// `kind.rs`'s table is the oracle: every constructor of a kind carries the kind's required
     /// `data` fields and no field the kind does not list.
