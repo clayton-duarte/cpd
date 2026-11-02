@@ -765,8 +765,8 @@ fn a_folded_standing_leaves_one_blank_row_above_the_archive_header() {
     populate(&fx, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
     archive(&fx, &["zed"]);
     let mut tree = Tree::start(&fx, W as u16, 24);
-    // the group: blank row, Standing's header (rows 17), 4 rows of its own, Archive's header; Standing's header is row 18
-    tree.click(5, 18);
+    // the group: blank row, Standing's header (row 17), 4 rows of its own, Archive's header, a blank row; Standing's header is row 17
+    tree.click(5, 17);
     // the rows at the bottom: blank row, Standing header (U+F0B2C), one blank row, Archive header, then the pane's last row blank
     let folded = group(Some((false, &[])), Some((false, &[])));
     assert_eq!(
