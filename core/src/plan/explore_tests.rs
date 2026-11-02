@@ -4,7 +4,7 @@
 //!
 //! The commands read the process environment (`CPD_HOME`): a test takes `LOCK`, points it at a temp home and `Drop` puts it back.
 //! No test lets `plan lock` or `plan cancel` reach git, tmux or the engine: the lock is driven to an error that comes before
-//! git (no draft Job; not approved; a PR with no draft Job), and the cancel is the Jobs step (`cancel_jobs`) alone.
+//! git (no draft Job; not approved; a Workflow with no draft Job), and the cancel is the Jobs step (`cancel_jobs`) alone.
 
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -15,7 +15,7 @@ use super::cancel::cancel_jobs;
 use super::fingerprint::plan_fingerprint;
 use super::review::latest_approved_for;
 use super::{LockArgs, ReviewArgs, ShowArgs};
-use crate::args::{PlanArg, PrTitle};
+use crate::args::{PlanArg, WorkflowTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -55,8 +55,8 @@ fn plan_arg() -> PlanArg {
     }
 }
 
-/// Plan `pay` in `phase` with PR `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the PR `web`.
-fn fixture(phase: &str, extra_pr: bool) -> Fixture {
+/// Plan `pay` in `phase` with Workflow `api` (`waiting`, or `dispatch` after the lock) and the Lead; `extra_pr` adds the Workflow `web`.
+fn fixture(phase: &str, extra_workflow: bool) -> Fixture {
     let lock = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
@@ -87,14 +87,14 @@ fn fixture(phase: &str, extra_pr: bool) -> Fixture {
            VALUES ('pay', 'ctx', 'P', '{phase}', 'l-pay', '{T}', {locked},
                    '{{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{{\"api\":[\"works\"]}},\"goal\":\"g\",\"out_of_scope\":[],\"risks\":[]}}');"
     );
-    for pr in if extra_pr {
+    for workflow in if extra_workflow {
         vec!["api", "web"]
     } else {
         vec!["api"]
     } {
         sql.push_str(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{pr}', '/r', 'main', '{status}', 'cpd/pay/{pr}', {worktree}, 1, '{T}', {started});"
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{workflow}', '/r', 'main', '{status}', 'cpd/pay/{workflow}', {worktree}, 1, '{T}', {started});"
         ));
     }
     let mut f = Fixture {
@@ -118,19 +118,19 @@ impl Fixture {
             .unwrap();
     }
 
-    /// A complete draft `work` Job of PR `api`.
+    /// A complete draft `work` Job of Workflow `api`.
     fn draft(&mut self, key: &str) {
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, created_txn, created_at)
                VALUES ('pay', 'api', '{key}', 'Draft {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'work', 'draft', 0, cpd_txn(), '{T}');"
         ));
     }
 
-    /// An explore Job as `job add` makes it: no PR, `queued`, a fingerprint, the derived touches.
+    /// An explore Job as `job add` makes it: no Workflow, `queued`, a fingerprint, the derived touches.
     fn explore(&mut self, key: &str, kind: &str, status: &str) {
         let tier = if kind == "scout" { "H2" } else { "S2" };
         self.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
                VALUES ('pay', NULL, '{key}', 'Explore {key}', '{tier}', 'g', 'c', '[\"run/pay/explore/{key}.md\"]', '[\"b\"]', '[]', '{kind}', 'queued', 1, '{}', cpd_txn(), '{T}');",
             "e".repeat(64)
         ));
@@ -201,7 +201,7 @@ fn lock() -> Result<Output, CpdError> {
 fn review() -> Result<Output, CpdError> {
     super::review::review(ReviewArgs {
         plan: plan_arg(),
-        title: "Pay".parse::<PrTitle>().unwrap(),
+        title: "Pay".parse::<WorkflowTitle>().unwrap(),
     })
 }
 
@@ -291,7 +291,7 @@ fn plan_review_counts_no_explore_job() {
 
 #[test]
 fn adding_an_explore_job_keeps_an_approved_review_approved() {
-    // The PR `web` has no draft Job, so a lock that passes the approval check ends in `pr_empty`, before git.
+    // The Workflow `web` has no draft Job, so a lock that passes the approval check ends in `pr_empty`, before git.
     let mut f = fixture("plan", true);
     f.draft("d1");
     f.approve_current();
@@ -312,14 +312,14 @@ fn adding_an_explore_job_keeps_an_approved_review_approved() {
     );
     let e = refused(lock());
     assert_ne!(e.code(), ErrorCode::PlanNotApproved, "{e}");
-    assert_eq!(e.code(), ErrorCode::PrEmpty, "{e}");
+    assert_eq!(e.code(), ErrorCode::WorkflowEmpty, "{e}");
 }
 
 #[test]
 fn plan_show_lists_explore_jobs_with_a_null_pr() {
     let mut f = fixture("dispatch", true);
     f.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, kind, status, appended, fingerprint, created_txn, created_at)
            VALUES ('pay', 'api', 'w1', 'Work', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'work', 'queued', 0, '{}', cpd_txn(), '{T}');",
         "f".repeat(64)
     ));
@@ -338,8 +338,8 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
     }
     let work = jobs.iter().find(|j| j["key"] == "w1").unwrap();
     assert_eq!(work["pr"], "api");
-    for pr in out["prs"].as_array().unwrap() {
-        let listed: Vec<&str> = pr["jobs"]
+    for workflow in out["workflows"].as_array().unwrap() {
+        let listed: Vec<&str> = workflow["jobs"]
             .as_array()
             .unwrap()
             .iter()
@@ -347,7 +347,7 @@ fn plan_show_lists_explore_jobs_with_a_null_pr() {
             .collect();
         assert!(
             !listed.contains(&"s1") && !listed.contains(&"r1"),
-            "no PR row mentions an explore Job: {pr}"
+            "no Workflow row mentions an explore Job: {workflow}"
         );
     }
     assert_eq!(out["counts"]["queued"], 3);

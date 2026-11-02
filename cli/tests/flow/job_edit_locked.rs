@@ -47,7 +47,7 @@ fn a_queued_job_with_no_attempt_takes_a_new_spec_and_its_fingerprint_follows() {
     assert_eq!(job_row(&fx.env, "pl", "a", "title"), "Title of a");
     assert_eq!(job_row(&fx.env, "pl", "a", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "a", "kind"), "work");
-    assert_eq!(job_row(&fx.env, "pl", "a", "pr"), "repo");
+    assert_eq!(job_row(&fx.env, "pl", "a", "workflow"), "repo");
     assert_eq!(job_row(&fx.env, "pl", "a", "status"), "queued");
     assert_eq!(
         fx.env
@@ -119,7 +119,7 @@ fn only_the_spec_of_a_queued_job_can_be_edited() {
     for flag in [
         &["--title", "Else"][..],
         &["--tier", "S3"],
-        &["--pr", "repo"],
+        &["--workflow", "repo"],
         &["--kind", "docs"],
         &["--needs", "a"],
         &["--no-needs"],
@@ -178,7 +178,7 @@ fn an_open_or_update_job_is_never_edited() {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
                VALUES ('pl', 'repo', 'open-x', 'Open it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'open', '{fp}', cpd_txn(), 't'),
                       ('pl', 'repo', 'update-x', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{fp}', cpd_txn(), 't');",
             fp = "f".repeat(64)

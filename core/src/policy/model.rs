@@ -11,7 +11,7 @@ use super::domain::{HasText, Set};
 use super::load::policy_invalid;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::{OwnerLogin, PlanId, PrKey};
+use crate::ids::{OwnerLogin, PlanId, WorkflowKey};
 
 /// The four resolved model refs of a policy: the `model` domain's value.
 ///
@@ -36,7 +36,7 @@ impl Models {
     }
 }
 
-/// The models of the Job `job` of `plan`: its PR's repo key (contract §8.3 "Models" (5)). A Worker Attempt, a Job's
+/// The models of the Job `job` of `plan`: its Workflow's repo key (contract §8.3 "Models" (5)). A Worker Attempt, a Job's
 /// Tier check, the ladder and the `open` and `update` Jobs read them here. A key that does not resolve is its error.
 pub fn models_of_job(
     conn: &rusqlite::Connection,
@@ -46,12 +46,12 @@ pub fn models_of_job(
 ) -> Result<Models, CpdError> {
     let held: Option<Option<String>> = conn
         .query_row(
-            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+            "SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2",
             [plan.as_str(), job],
             |r| r.get(0),
         )
         .optional()?;
-    // An explore Job has no PR: its models are the Plan's Lead's, from the Context's owner.
+    // An explore Job has no Workflow: its models are the Plan's Lead's, from the Context's owner.
     if let Some(None) = held {
         let context: String = conn.query_row(
             "SELECT context FROM plans WHERE id = ?1",
@@ -88,14 +88,16 @@ pub fn models_of_attempt(
     models_of_job(conn, home, plan, &job)
 }
 
-/// The models of the PR `key' of `plan`: [`models_of_job`] for a PR.
-pub fn models_of_pr(
+/// The models of the Workflow `key' of `plan`: [`models_of_job`] for a Workflow.
+pub fn models_of_workflow(
     conn: &rusqlite::Connection,
     home: &CpdHome,
     plan: &PlanId,
-    key: &PrKey,
+    key: &WorkflowKey,
 ) -> Result<Models, CpdError> {
-    Ok(Models::of(&crate::pr::policy_of_pr(conn, home, plan, key)?))
+    Ok(Models::of(&crate::pr::policy_of_workflow(
+        conn, home, plan, key,
+    )?))
 }
 
 /// The models of Context `context`: its owner's key, or, for a Context with no owner, the machine layer over the

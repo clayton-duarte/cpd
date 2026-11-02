@@ -7,18 +7,25 @@ use serde_json::{Value, json};
 use super::jobs::{Job, JobSpec};
 use super::lint::{Finding, Input, Rule, Severity, first_error, run};
 use super::outline::Outline;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::row::Phase;
 use crate::error::ErrorCode;
 use crate::ids::PlanId;
 
 const MESSAGE_TAIL: &str = "A hint, not a conflict prediction: on the ledger of 2026-10-30, 5 of 209 such pairs (2.4%) hit a merge conflict.";
 
-fn job(key: &str, pr: &str, kind: &str, status: &str, touches: &[&str], needs: &[&str]) -> Job {
+fn job(
+    key: &str,
+    workflow: &str,
+    kind: &str,
+    status: &str,
+    touches: &[&str],
+    needs: &[&str],
+) -> Job {
     Job {
         seq: 1,
         key: key.into(),
-        pr: Some(pr.into()),
+        workflow: Some(workflow.into()),
         title: format!("Title {key}"),
         tier: Some("S2".into()),
         spec: Some(JobSpec {
@@ -49,7 +56,7 @@ fn job(key: &str, pr: &str, kind: &str, status: &str, touches: &[&str], needs: &
     }
 }
 
-/// A draft `work` Job of PR `web`.
+/// A draft `work` Job of Workflow `web`.
 fn draft(key: &str, touches: &[&str], needs: &[&str]) -> Job {
     job(key, "web", "work", "draft", touches, needs)
 }
@@ -61,12 +68,12 @@ fn stub(key: &str) -> Job {
     j
 }
 
-fn pr(key: &str) -> PrRow {
-    PrRow::fixture(key, "/repo", "main", &[], "waiting")
+fn workflow(key: &str) -> WorkflowRow {
+    WorkflowRow::fixture(key, "/repo", "main", &[], "waiting")
 }
 
-fn tdd(key: &str) -> PrRow {
-    let mut p = pr(key);
+fn tdd(key: &str) -> WorkflowRow {
+    let mut p = workflow(key);
     p.shape = "tdd".into();
     p
 }
@@ -86,16 +93,21 @@ fn outline(prs: &[&str]) -> Outline {
     }
 }
 
-fn lint_with(phase: Phase, prs: &[PrRow], jobs: &[Job], outline: Option<&Outline>) -> Vec<Finding> {
+fn lint_with(
+    phase: Phase,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+    outline: Option<&Outline>,
+) -> Vec<Finding> {
     let plan = PlanId::parse("pl").unwrap();
-    run(&Input::new(&plan, phase, prs, jobs, outline))
+    run(&Input::new(&plan, phase, workflows, jobs, outline))
 }
 
-/// Findings of the Plan with an outline for `web` and PR `web`, in phase `dispatch` (no pr_empty).
+/// Findings of the Plan with an outline for `web` and Workflow `web`, in phase `dispatch` (no workflow_empty).
 fn lint(jobs: &[Job]) -> Vec<Finding> {
     lint_with(
         Phase::Dispatch,
-        &[pr("web")],
+        &[workflow("web")],
         jobs,
         Some(&outline(&["web"])),
     )
@@ -215,7 +227,7 @@ fn parallel_write_overlap_needs_a_draft_under_review() {
 }
 
 #[test]
-fn jobs_of_different_prs_are_not_compared() {
+fn jobs_of_different_workflows_are_not_compared() {
     let same = [draft("a", &["x.rs"], &[]), draft("b", &["x.rs"], &[])];
     assert_fires(&same);
     let other = [
@@ -224,14 +236,14 @@ fn jobs_of_different_prs_are_not_compared() {
     ];
     let findings = lint_with(
         Phase::Dispatch,
-        &[pr("web"), pr("api")],
+        &[workflow("web"), workflow("api")],
         &other,
         Some(&outline(&["web", "api"])),
     );
     assert!(overlaps(&findings).is_empty());
     let findings = lint_with(
         Phase::Dispatch,
-        &[pr("web"), pr("api")],
+        &[workflow("web"), workflow("api")],
         &same,
         Some(&outline(&["web", "api"])),
     );
@@ -354,7 +366,7 @@ fn first_error_is_the_refusal_of_the_first_error_finding() {
 
 #[test]
 fn a_waiting_stub_is_not_exempt_the_review_refuses_a_stub_whether_it_waits_or_not() {
-    // The PR `web` waits (status `waiting`, phase Dispatch): its stub is a finding all the same.
+    // The Workflow `web` waits (status `waiting`, phase Dispatch): its stub is a finding all the same.
     let prs = [tdd("web")];
     let jobs = [job("t", "web", "test", "draft", &[], &[]), stub("s")];
     let findings = lint_with(Phase::Dispatch, &prs, &jobs, Some(&outline(&["web"])));
@@ -385,27 +397,27 @@ fn first_error_ignores_warnings() {
 
 #[test]
 fn pr_empty_fires_only_in_phase_plan() {
-    let prs = [pr("web"), pr("api")];
+    let prs = [workflow("web"), workflow("api")];
     let jobs = [draft("a", &[], &[])];
     let o = outline(&["web"]);
     let in_plan = lint_with(Phase::Plan, &prs, &jobs, Some(&o));
-    let hits = of(&in_plan, Rule::PrEmpty);
+    let hits = of(&in_plan, Rule::WorkflowEmpty);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].details["prs"], json!(["api"]));
+    assert_eq!(hits[0].details["workflows"], json!(["api"]));
     let later = lint_with(Phase::Dispatch, &prs, &jobs, Some(&o));
-    assert!(of(&later, Rule::PrEmpty).is_empty());
+    assert!(of(&later, Rule::WorkflowEmpty).is_empty());
 }
 
 #[test]
 fn pr_empty_with_no_live_pr_names_pr_add() {
     let findings = lint_with(Phase::Plan, &[], &[], Some(&outline(&[])));
-    let hits = of(&findings, Rule::PrEmpty);
+    let hits = of(&findings, Rule::WorkflowEmpty);
     assert_eq!(hits.len(), 1);
     assert!(
         hits[0].details["next"]
             .as_str()
             .unwrap()
-            .starts_with("cpd pr add")
+            .starts_with("cpd workflow add")
     );
 }
 
@@ -434,13 +446,18 @@ fn dependency_cycle_finding_lists_the_cycle() {
 #[test]
 fn outline_findings_follow_the_outline() {
     let jobs = [draft("a", &[], &[])];
-    let missing = lint_with(Phase::Dispatch, &[pr("web")], &jobs, None);
+    let missing = lint_with(Phase::Dispatch, &[workflow("web")], &jobs, None);
     assert_eq!(of(&missing, Rule::OutlineMissing).len(), 1);
     assert!(of(&missing, Rule::OutlineIncomplete).is_empty());
-    let incomplete = lint_with(Phase::Dispatch, &[pr("web")], &jobs, Some(&outline(&[])));
+    let incomplete = lint_with(
+        Phase::Dispatch,
+        &[workflow("web")],
+        &jobs,
+        Some(&outline(&[])),
+    );
     let hits = of(&incomplete, Rule::OutlineIncomplete);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].details["prs"], json!(["web"]));
+    assert_eq!(hits[0].details["workflows"], json!(["web"]));
     assert!(of(&incomplete, Rule::OutlineMissing).is_empty());
     assert!(of(&lint(&jobs), Rule::OutlineIncomplete).is_empty());
 }

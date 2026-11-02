@@ -42,7 +42,7 @@ impl Phase {
 }
 
 /// One Plan, parsed at the boundary: the `plans` row alone, so a Plan with no
-/// PR (just created) is found too.
+/// Workflow (just created) is found too.
 #[derive(Clone, Debug)]
 pub struct PlanRow {
     pub id: PlanId,
@@ -176,7 +176,7 @@ mod tests {
     use crate::store::Store;
 
     /// commands-G3: the one Plan row is the Plan as `plan show` prints it
-    /// (§2.2 Plan except `prs`), with or without a PR.
+    /// (§2.2 Plan except `prs`), with or without a Workflow.
     #[test]
     fn the_plan_row_is_the_plans_row_alone() {
         let dir = tempfile::tempdir().unwrap();

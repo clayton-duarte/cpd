@@ -1340,7 +1340,7 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
            ('ground-c', 'lead', 'ctx', NULL, 'C', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead-a', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'repo', '/', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
          INSERT INTO events (txn, at, kind, context, plan, session, text, data) VALUES
            (cpd_txn(), 't', 'session-moved', 'ctx', 'pay', 'lead-a', 'x', '{\"place\": \"chat\"}'),

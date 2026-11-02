@@ -104,17 +104,17 @@ pub fn watch(home: &CpdHome, store: Option<&mut Store>) -> Check {
         Err(e) => return Check::from_error(name, Severity::Warn, &e),
     };
     if plans == 0 {
-        return Check::pass(name, Severity::Warn).message("No Plan is in dispatch or pr.");
+        return Check::pass(name, Severity::Warn).message("No Plan is in dispatch or deploy.");
     }
     match engine_runs(&home.watch_lock()) {
         Ok(true) => Check::pass(name, Severity::Warn).found(format!(
-            "{plans} Plan(s) in dispatch or pr; the engine runs"
+            "{plans} Plan(s) in dispatch or deploy; the engine runs"
         )),
         Ok(false) => Check::fail(
             name,
             Severity::Warn,
             format!(
-                "{plans} Plan(s) are in dispatch or pr and no engine runs: start it with `cpd watch --ensure`."
+                "{plans} Plan(s) are in dispatch or deploy and no engine runs: start it with `cpd watch --ensure`."
             ),
         ),
         Err(message) => Check::fail(name, Severity::Warn, message),

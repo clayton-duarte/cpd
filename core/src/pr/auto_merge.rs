@@ -1,4 +1,4 @@
-//! Auto-merge of a posted PR (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
+//! Auto-merge of a posted Workflow (commands.md §9.8b; pro-d115, pro-d117): the one read query and the GraphQL mutation
 //! `enablePullRequestAutoMerge` with the first method the repo allows, never `gh pr merge`. `pr post` reads once before
 //! its send and runs [`after_read`]; the engine's E18 runs [`attempt`] (read, then [`after_read`]).
 
@@ -23,11 +23,11 @@ pub enum Outcome {
     Failed(CpdError),
 }
 
-/// Whether PR `pr` of `plan` is stacked: its stored `base` is the `lead_branch` of any `prs` row (any Plan, any status).
-pub fn stacked(conn: &Connection, plan: &str, pr: &str) -> Result<bool, CpdError> {
+/// Whether Workflow `pr` of `plan` is stacked: its stored `base` is the `lead_branch` of any `prs` row (any Plan, any status).
+pub fn stacked(conn: &Connection, plan: &str, workflow: &str) -> Result<bool, CpdError> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM prs b WHERE b.lead_branch = (SELECT base FROM prs WHERE plan = ?1 AND key = ?2))",
-        [plan, pr],
+        "SELECT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = (SELECT base FROM workflows WHERE plan = ?1 AND key = ?2))",
+        [plan, workflow],
         |r| r.get(0),
     )?)
 }
@@ -64,10 +64,12 @@ mod tests {
 
     fn conn(rows: &[(&str, &str, &str)]) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE prs (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)")
-            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflows (plan TEXT, key TEXT, base TEXT, lead_branch TEXT)",
+        )
+        .unwrap();
         for (plan, key, base) in rows {
-            conn.execute("INSERT INTO prs (plan, key, base, lead_branch) VALUES (?1, ?2, ?3, 'cpd/' || ?1 || '/' || ?2)", [plan, key, base]).unwrap();
+            conn.execute("INSERT INTO workflows (plan, key, base, lead_branch) VALUES (?1, ?2, ?3, 'cpd/' || ?1 || '/' || ?2)", [plan, key, base]).unwrap();
         }
         conn
     }

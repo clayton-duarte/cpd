@@ -5,7 +5,7 @@ import { CpdError, isObject } from "./cpd.ts";
 export const REMINDER_TYPE = "cpd-reminder";
 
 export const REMINDER_TEXT =
-  'cpd reminder: your last message spoke of further work but named no registered Job or PR. Register it now (cpd job add <k> --draft --title "…", or cpd pr add …) and name its key.';
+  'cpd reminder: your last message spoke of further work but named no registered Job or Workflow. Register it now (cpd job add <k> --draft --title "…", or cpd workflow add …) and name its key.';
 
 /** The fixed phrase list of §15.8, matched case-insensitively as substrings. Extending it is a change to that section. */
 export const PHRASES: readonly string[] = [
@@ -13,6 +13,7 @@ export const PHRASES: readonly string[] = [
   "next step",
   "next steps",
   "next pr",
+  "next workflow",
   "follow-up",
   "follow up",
   "followup",
@@ -43,10 +44,10 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Whether `text` contains `key` as a whole word, case-sensitive (a key's own `-` and `_` are word characters). */
 export const namesKey = (text: string, key: string): boolean => new RegExp(`(?<![\\w-])${escape(key)}(?![\\w-])`).test(text);
 
-/** Every Job key and PR key `cpd plan show` lists, whatever their status. A shape that is not the documented one is an error: the check then adds nothing. */
+/** Every Job key and Workflow key `cpd plan show` lists, whatever their status. A shape that is not the documented one is an error: the check then adds nothing. */
 export function planKeys(show: Record<string, unknown>): string[] {
   const keys: string[] = [];
-  for (const field of ["jobs", "prs"]) {
+  for (const field of ["jobs", "workflows"]) {
     const list = show[field];
     if (!Array.isArray(list)) throw new CpdError("bad_output", `cpd plan show: \`${field}\` is not a list`);
     for (const item of list) {
@@ -57,7 +58,7 @@ export function planKeys(show: Record<string, unknown>): string[] {
   return keys;
 }
 
-/** The reminder is due: the text talks of future work and names none of the Plan's Job or PR keys. */
+/** The reminder is due: the text talks of future work and names none of the Plan's Job or Workflow keys. */
 export const needsReminder = (text: string, keys: Iterable<string>): boolean => {
   if (!talksOfFutureWork(text)) return false;
   for (const k of keys) if (k !== "" && namesKey(text, k)) return false;

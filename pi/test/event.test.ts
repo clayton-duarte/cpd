@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
 import { KINDS, parseLine } from "../lib/event.ts";
+import { parsePrOpened } from "../lib/updates.ts";
 
 /** The kinds of contract.md §5.2's table: the backticked names of the first column of its rows. */
 function contractKinds(): string[] {
@@ -44,6 +45,28 @@ const WELL_FORMED = { id: 7, at: "t", kind: "job-merged", context: null, plan: n
 test("parseLine: a well-formed Event of an unknown kind is unknown-kind, not invalid", () => {
   assert.deepEqual(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future" })), { type: "unknown-kind", id: 7 });
   assert.equal(parseLine(JSON.stringify(WELL_FORMED)).type, "event");
+});
+
+test("reads the workflow kinds", () => {
+  // contract §5.2 "Renamed kinds": the six kinds that name the Workflow.
+  const workflowKinds = ["workflow-added", "workflow-edited", "workflow-described", "workflow-cancelled", "workflow-started", "workflow-base-changed"];
+  for (const kind of workflowKinds) {
+    assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is a known kind`);
+    assert.equal(parseLine(JSON.stringify({ ...WELL_FORMED, kind, data: { workflow: "w" } })).type, "event", `${kind} parses as an Event, not unknown-kind`);
+  }
+
+  // contract §5.2: the `data` key that held the Workflow key is `workflow`, which the adapter reads for `pr-opened`.
+  const opened = { ...WELL_FORMED, plan: "p", kind: "pr-opened", data: { workflow: "w", number: 1, url: "u" } };
+  const read = parsePrOpened({ events: [opened] });
+  assert.equal(read.length, 1, "a pr-opened Event with data.workflow is read");
+  assert.equal(read[0]!.event, 7);
+  assert.equal(read[0]!.plan, "p");
+  assert.equal(read[0]!.number, 1);
+  assert.equal(read[0]!.url, "u");
+  assert.throws(() => parsePrOpened({ events: [{ ...opened, data: { pr: "w", number: 1, url: "u" } }] }), { code: "bad_output" }, "the retired data.pr key is not read");
+
+  // An unknown kind is still unknown-kind, not invalid (contract §5.2).
+  assert.deepEqual(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future" })), { type: "unknown-kind", id: 7 });
 });
 
 test("parseLine: a malformed line is invalid even with an unknown kind", () => {

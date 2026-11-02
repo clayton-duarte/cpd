@@ -136,8 +136,15 @@ fn context(id: &str) -> String {
     )
 }
 
-/// `pr`: the Plan has a PR (the schema ties phases `deploy` and `done` to one).
-fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: bool) -> String {
+/// `pr`: the Plan has a Workflow (the schema ties phases `deploy` and `done` to one).
+fn plan_row(
+    id: &str,
+    context: &str,
+    phase: &str,
+    lead: &str,
+    created: &str,
+    workflow: bool,
+) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late {
@@ -150,7 +157,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     } else {
         "NULL"
     };
-    let (row, number, url, opened, pull_request) = if pr {
+    let (row, number, url, opened, pull_request) = if workflow {
         let state = if phase == "done" { "merged" } else { "open" };
         let merged = if phase == "done" {
             "'2026-01-09T00:00:00.000Z'"
@@ -160,7 +167,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
         (
             format!(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                 VALUES ('acme/{id}', 7, 'https://github.com/acme/{id}/pull/7', 'PR of {id}', 0, '{state}', 'none', 'none',
+                 VALUES ('acme/{id}', 7, 'https://github.com/acme/{id}/pull/7', 'Workflow of {id}', 0, '{state}', 'none', 'none',
                          '2026-01-05T00:00:00.000Z', {merged}, '2026-01-06T00:00:00.000Z');"
             ),
             "7",
@@ -187,7 +194,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
          {row}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened},
                  {pull_request}, cpd_txn(), '{created}', {locked}, {done});"
@@ -283,7 +290,7 @@ fn job_row(plan: &str, key: &str, status: &str) -> String {
         "NULL"
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), NULL, NULL, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
@@ -398,7 +405,7 @@ pub(super) fn populate(env: &mut Env) {
         "beta",
         "rel",
         "blocked",
-        Some("cpd: PR feedback"),
+        Some("cpd: Workflow feedback"),
         "2026-01-02T00:00:02.000Z",
     );
     s += &session_row(
@@ -684,7 +691,7 @@ fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot()
 
 /// A live Context with no Plan or fork row ends with the clickable ` ╰\u{F0B2A} new` (hs-d688): the corner and the glyph
 /// muted (colour 8), the word `new` in the clickable colour 15. An ARCHIVED empty Context keeps the plain muted
-/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order PR may have moved `gamma`.
+/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order Workflow may have moved `gamma`.
 #[test]
 fn an_empty_live_context_draws_the_clickable_new_row() {
     let mut env = Env::new();

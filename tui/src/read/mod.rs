@@ -3,9 +3,9 @@
 //!
 //! - [`tree()`]: the tree view, Contexts → Plans → Lead Sessions (`context list`, `session list`), and the
 //!   Inbox's visible items, from which every dot of the tree comes (`inbox list`);
-//! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's PRs with their Jobs, Attempts and
+//! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's Workflows with their Jobs, Attempts and
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
-//!   review and first PR (`plan show`);
+//!   review and first Workflow (`plan show`);
 //! - [`pulse()`] and [`manager_slot()`]: the Pulse view, one Context's Plans with their 5-minute activity;
 //! - [`widgets()`]: slots, the engine, the Plans, open Escalations and the latest Events
 //!   (`plan list`); the views read only what they draw: [`inbox_at()`] (the right column) and [`slots()`] (the StatusBar);
@@ -69,8 +69,9 @@ mod working_pr_dot_tests;
 pub use age::age_text;
 pub use dot::{Dot, OrderKey, Work};
 pub use flow::{
-    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus,
-    Pull, Review, UpdateState, WorkerRef, chat_slot, flow, plan_boxes, plan_boxes_at,
+    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, Pull, Review,
+    UpdateState, WorkerRef, WorkflowNode, WorkflowStatus, chat_slot, flow, plan_boxes,
+    plan_boxes_at,
 };
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
@@ -87,6 +88,6 @@ pub use tree::{
     tree_at,
 };
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets,
-    open_pulls, slots, widgets,
+    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, ReviewDecision, Slots, Widgets,
+    WorkflowRow, open_pulls, slots, widgets,
 };

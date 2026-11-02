@@ -301,7 +301,7 @@ fn a_build_that_adds_a_migration_origin_main_lacks_is_refused_before_building() 
     );
     assert!(
         run.stderr.contains(&format!(
-            "apply it to {}/cpd.db before the PR merges",
+            "apply it to {}/cpd.db before the Workflow merges",
             rig.cpd_home().display()
         )),
         "{}",
@@ -309,7 +309,7 @@ fn a_build_that_adds_a_migration_origin_main_lacks_is_refused_before_building() 
     );
     assert!(
         run.stderr.contains(
-            "Merge main into this branch, or wait until the PR merges, then install again."
+            "Merge main into this branch, or wait until the Workflow merges, then install again."
         ),
         "{}",
         run.stderr

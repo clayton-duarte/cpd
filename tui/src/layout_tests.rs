@@ -24,7 +24,7 @@ pub(crate) enum Kind {
     Full,
     /// A left rail with a closing row, a blank row above and one below inside the rect.
     Rail,
-    /// Rounded walls all round, the title is text (a PR's `api · repo 󱦰 main · dispatch`), not a pill: (8) does not apply.
+    /// Rounded walls all round, the title is text (a Workflow's `api · repo 󱦰 main · dispatch`), not a pill: (8) does not apply.
     FullText,
     /// A section title (`SectionTitle`): its rect is the three rows; the rows above and below the title row are blank and the
     /// title row starts one column in (the margin) with `──`, then the pill's left cap when a pill fits.
@@ -43,9 +43,9 @@ pub(crate) enum Scroll {
 /// The fixture the Plan pane's sample draws, at a scroll offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlanCase {
-    /// One PR with no Jobs.
+    /// One Workflow with no Jobs.
     Empty(Scroll),
-    /// Three Jobs in two PRs: a PR box next to another.
+    /// Three Jobs in two Workflows: a Workflow box next to another.
     Three(Scroll),
 }
 

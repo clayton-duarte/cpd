@@ -81,15 +81,13 @@ fn pr(
     };
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     fx.env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, name, title)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, name, title)
          VALUES ('{plan}', '{key}', '{repo}', '{base}', '{status}', 'cpd/{plan}/{key}', {worktree}, cpd_txn(), 't', {started}, {}, {});",
         q(name),
         q(title)
     ));
     for need in needs {
-        fx.env.sql(&format!(
-            "INSERT INTO pr_needs (plan, pr, needs) VALUES ('{plan}', '{key}', '{need}');"
-        ));
+        fx.env.sql(&format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('{plan}', '{key}', '{need}');"));
     }
 }
 
@@ -121,7 +119,7 @@ fn job(
         format!("'{FP}'")
     };
     fx.env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
          VALUES ('{plan}', '{pr}', '{key}', 'Title {key}', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't');"
     ));
     for need in needs {
@@ -670,13 +668,13 @@ fn a_review_with_a_pr_that_has_a_draft_and_no_done_when_is_refused_and_writes_no
         "outline_incomplete",
         3,
     );
-    assert_eq!(error["details"]["prs"], json!(["ui"]));
+    assert_eq!(error["details"]["workflows"], json!(["ui"]));
     assert_eq!(state(&fx), before);
 
     // Every PR with a draft covered: the review goes through. `idle` is ended first: a live PR with no draft Job
     // is refused `pr_empty` (after the outline check above), and an ended PR needs no entry either.
     fx.env
-        .sql("UPDATE prs SET status = 'cancelled' WHERE plan = 'mine' AND key = 'idle';");
+        .sql("UPDATE workflows SET status = 'cancelled' WHERE plan = 'mine' AND key = 'idle';");
     outline(
         &fx,
         &json!({"goal": "G", "done_when": {"api": ["Done"], "ui": ["Done too"]}}),
@@ -859,7 +857,7 @@ Plan mine: Title of mine · review r1
 
 Goal: Show the review in chat
 
-## PRs
+## Workflows
 - ui (ui, base cpd/mine/api): Build the UI
   Done when: The summary is written
   Done when: The dialog opens
@@ -886,7 +884,7 @@ Lint: none
 
 Decided: t-d1, t-d2
 
-Later: PR api
+Later: Workflow api
 
 ## Risks
 R1 The dialog API differs between modes
@@ -977,7 +975,7 @@ Plan mine · phase plan
 
 Goal: —
 
-## PRs
+## Workflows
 - api (api-name, base main): API work
 
 ## Jobs (1 under review, 0 locked)
@@ -992,7 +990,7 @@ Overlaps: none
 
 Lint: none
 
-Later: later-one, PR next
+Later: later-one, Workflow next
 
 Full plan ({})
 ",

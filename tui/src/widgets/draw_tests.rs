@@ -46,7 +46,12 @@ fn context(id: &str) -> String {
 
 /// A Plan; `pr` is `(number, polled)`, where `polled` is the pull request row's `(title, review decision, checks)`: what `pr open`
 /// writes (the Plan's title, no review, no checks) until the first poll changes it.
-fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, &str))>) -> String {
+fn plan_row(
+    id: &str,
+    phase: &str,
+    created: &str,
+    workflow: Option<(i64, (&str, &str, &str))>,
+) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late {
@@ -65,7 +70,7 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
         "deploy" => "open",
         _ => "merged",
     };
-    let (row, number, url, opened, pull_request) = match pr {
+    let (row, number, url, opened, pull_request) = match workflow {
         Some((n, (title, decision, checks))) => {
             let (state, merged) = if status == "merged" {
                 ("merged", "'2026-01-09T00:00:00.000Z'")
@@ -96,7 +101,7 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', 'l-{id}', '{created}', {locked}, {done});
          {row}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {pull_request},
                  cpd_txn(), '{created}', {locked}, {done});"
@@ -131,13 +136,13 @@ type PlanFixture = (
 );
 
 /// One Context and these Plans, each named by its Lead Session (the label), oldest first:
-/// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
-/// - `rel` ("cpd visual lead"): PR 7, open, failing checks, changes requested; the Lead parked;
-/// - `fresh` ("fresh lead"): PR 11, as `pr open` wrote its row (no review, no checks); the Lead parked;
-/// - `ship` ("v1"): in dispatch, no PR; the Lead in the chat slot;
-/// - `sketch` ("sketch lead"): no PR; the Lead has no pane (`none`);
-/// - `away` ("away lead"): PR 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
-/// - `never` ("never lead"): no PR; the Lead was never moved.
+/// - `old` ("cpd-ui"): done, its merged Workflow 3, every check passed, no review; the Lead in the chat slot;
+/// - `rel` ("cpd visual lead"): Workflow 7, open, failing checks, changes requested; the Lead parked;
+/// - `fresh` ("fresh lead"): Workflow 11, as `pr open` wrote its row (no review, no checks); the Lead parked;
+/// - `ship` ("v1"): in dispatch, no Workflow; the Lead in the chat slot;
+/// - `sketch` ("sketch lead"): no Workflow; the Lead has no pane (`none`);
+/// - `away` ("away lead"): Workflow 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
+/// - `never` ("never lead"): no Workflow; the Lead was never moved.
 fn populate(store: &mut Store) {
     let mut s = context("alpha");
     let plans: [PlanFixture; 7] = [
@@ -205,9 +210,9 @@ fn populate(store: &mut Store) {
             None,
         ),
     ];
-    for (n, (id, name, phase, pr, created, place)) in plans.into_iter().enumerate() {
+    for (n, (id, name, phase, workflow, created, place)) in plans.into_iter().enumerate() {
         s += &lead_row(id, name);
-        s += &plan_row(id, phase, created, pr);
+        s += &plan_row(id, phase, created, workflow);
         if let Some(place) = place {
             s += &moved(&format!("2026-01-03T00:00:0{n}.000Z"), id, place);
         }
@@ -309,7 +314,7 @@ fn the_column_shows_the_machine_and_the_inbox_under_it_and_nothing_else() {
     assert_eq!(got[..4], expected, "\n{}", got.join("\n"));
     assert!(
         !got.iter()
-            .any(|r| r.contains("PRs") || r.contains("acme/repo#")),
+            .any(|r| r.contains("Workflows") || r.contains("acme/repo#")),
         "\n{}",
         got.join("\n")
     );
@@ -323,7 +328,7 @@ fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
         "v1",
         "sketch lead",
         "never lead",
-        "no PR",
+        "no Workflow",
         "cpd-ui",
         "cpd visual lead",
         "fresh lead",

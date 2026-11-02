@@ -1,5 +1,5 @@
 //! The `tier_catalog` cache is keyed by the content of `<agentDir>/models.json` too (commands.md §14.3, contract §4.4 and §9;
-//! pro-d26, Plan bifrost, PR catfp): `models_sha` is the lowercase hex SHA-256 of the file's bytes, `""` when it does not
+//! pro-d26, Plan bifrost, Workflow catfp): `models_sha` is the lowercase hex SHA-256 of the file's bytes, `""` when it does not
 //! exist. Through [`load_from`] on a scripted `node` (no real pi, no node): the table is append-only, so a changed file adds rows.
 
 use std::fs;

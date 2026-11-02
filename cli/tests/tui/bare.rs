@@ -491,9 +491,9 @@ fn fixture(env: &common::TestEnv, attempt: Option<&str>) -> Option<Flock<fs::Fil
                 exec(
                     tx,
                     &format!(
-                        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                            VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, '{at}');
-                         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                            status, appended, fingerprint, created_txn, created_at)
                            VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, '{at}');
                          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid, submitted_sha, submitted_at)

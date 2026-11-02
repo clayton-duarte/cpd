@@ -1,5 +1,5 @@
 //! The table `pull_requests` (contract §2.2 Pull request, §4.4; D5): what the
-//! PR poller last read of one of the User's pull requests. This module is the
+//! pull request poller last read of one of the User's pull requests. This module is the
 //! only writer of the table. A row is written only when a value changes; the
 //! rows append no Event of their own: `attention` says which transitions the
 //! owning Plan's Lead is told of (D7).
@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::comments::{Item, Read};
 use super::gh::{Listed, Membership, PolledPr};
 use crate::error::CpdError;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::policy::Checks;
 use crate::store::WriteTxn;
 
@@ -217,11 +217,13 @@ pub(super) fn find(
         .optional()?)
 }
 
-/// Every row a PR in status `open` points to, with that PR's Plan and key, in Plan and key order.
-pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRequest)>, CpdError> {
+/// Every row a Workflow in status `open` points to, with that Workflow's Plan and key, in Plan and key order.
+pub(super) fn owned_open(
+    conn: &Connection,
+) -> Result<Vec<(PlanId, WorkflowKey, PullRequest)>, CpdError> {
     let columns: Vec<String> = COLUMNS.split(", ").map(|c| format!("pr.{c}")).collect();
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.plan, r.key, {} FROM prs r JOIN pull_requests pr ON pr.id = r.pull_request
+        "SELECT r.plan, r.key, {} FROM workflows r JOIN pull_requests pr ON pr.id = r.pull_request
           WHERE r.status = 'open' ORDER BY r.plan, r.key",
         columns.join(", ")
     ))?;
@@ -255,11 +257,12 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(plan, key, pull)| {
-            let bad =
-                |what: &str, value: &str| CpdError::bad_row(format!("a PR has {what} {value:?}"));
+            let bad = |what: &str, value: &str| {
+                CpdError::bad_row(format!("a pull request has {what} {value:?}"))
+            };
             Ok((
                 PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?,
-                PrKey::parse(&key).map_err(|_| bad("PR key", &key))?,
+                WorkflowKey::parse(&key).map_err(|_| bad("Workflow key", &key))?,
                 pull,
             ))
         })
@@ -413,14 +416,14 @@ pub(super) enum Reason {
     Approved,
 }
 
-/// What `attention` needs of the post (pro-d64): the owner's `pr.post.enabled` and whether the PR has a `pr_posts` row.
+/// What `attention` needs of the post (pro-d64): the owner's `pr.post.enabled` and whether the Workflow has a `pr_posts` row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PostFacts {
     pub enabled: bool,
     pub posted: bool,
 }
 
-/// What `attention` needs of the checks: whether the PR carries one of the owner's `pr.excused_labels` (pro-d216).
+/// What `attention` needs of the checks: whether the Workflow carries one of the owner's `pr.excused_labels` (pro-d216).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Excused(pub bool);
 
@@ -442,7 +445,7 @@ impl Reason {
 /// became `failed`, the review became `changes_requested` (each from anything
 /// else), the state became `closed` from `open`, or the feedback has `new` open items (`comments::new_items`). `before` none is a row first
 /// seen: it counts as no checks, no review and `open`. A conflict is no reason any more (hs-d340): it queues an `update` Job
-/// (`poll::update_for_conflict`). Checks are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
+/// (`poll::update_for_conflict`). Checks are a reason only when the Workflow's `pr.feedback.checks` is `any` (§8.3, hs-d292).
 pub(super) fn attention(
     before: Option<&PullRequest>,
     after: &PullRequest,
@@ -475,7 +478,7 @@ pub(super) fn attention(
     }
     // The post's reasons (pro-d64): only for the User's own pull requests of an owner that enabled posting.
     if post.enabled && after.authored {
-        // Ready to post (pro-d225): a transition, told once when the PR turns ready; `before` none was not ready.
+        // Ready to post (pro-d225): a transition, told once when the Workflow turns ready; `before` none was not ready.
         let was_ready = before.is_some_and(|b| super::postable::unready(b).is_empty());
         if !post.posted && !was_ready && super::postable::unready(after).is_empty() {
             reasons.push(Reason::ReadyToPost);
@@ -772,7 +775,7 @@ mod tests {
         assert_eq!(
             post_reasons(None, &closed, ON),
             [Reason::Closed],
-            "a closed PR is not ready"
+            "a closed Workflow is not ready"
         );
     }
 
@@ -802,7 +805,7 @@ mod tests {
         assert_eq!(
             post_reasons(None, &closed, POSTED),
             [Reason::Closed],
-            "closed PR"
+            "closed Workflow"
         );
     }
 

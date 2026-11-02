@@ -62,7 +62,7 @@ pub(super) fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
     };
     fx.env.sql(
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+            "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
              VALUES ('{plan}', '{key}', '{repo}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {pull}, cpd_txn(), 't', {started}, {merged});"
         ),
@@ -73,7 +73,7 @@ pub(super) fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
 pub(super) fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
     fx.env.sql(
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('{plan}', '{pr}', '{key}', 'Title {key}', 'S2', 'Goal.', 'Context.', '{touches}',
                      '[\"cargo test\"]', '[]', '{status}', 0,
@@ -106,7 +106,7 @@ const NONE: &str = "No other active Plan touches these files.";
 
 /// The table of `## Overlaps` up to its rows: one row per this Job, other Plan and other PR.
 const HEADER: &str =
-    "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
+    "| Job | Other Plan | Workflow | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
 
 #[test]
 fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
@@ -127,9 +127,9 @@ fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
     assert!(!text.contains(NONE), "{text}");
     // After the PRs table, before the PR sections.
     let (prs, overlaps, section) = (
-        text.find("## PRs").unwrap(),
+        text.find("## Workflows").unwrap(),
         text.find("## Overlaps").unwrap(),
-        text.find("## PR api").unwrap(),
+        text.find("## Workflow api").unwrap(),
     );
     assert!(prs < overlaps && overlaps < section, "{text}");
 }

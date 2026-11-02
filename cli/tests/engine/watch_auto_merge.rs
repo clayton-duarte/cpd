@@ -130,11 +130,7 @@ impl Probe {
     /// The `(auto_merge, auto_merge_at)` of PR `pr`'s post.
     fn row(&self, pr: &str) -> (String, Option<String>) {
         self.store()
-            .query_row(
-                "SELECT auto_merge, auto_merge_at FROM pr_posts WHERE plan = 'pay' AND pr = ?1",
-                [pr],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT auto_merge, auto_merge_at FROM pr_posts WHERE plan = 'pay' AND workflow = ?1", [pr], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
     }
 
@@ -309,9 +305,9 @@ impl Merge {
         };
         self.fx.env.sql(&format!(
             "{pull_request}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
                VALUES ('pay', '{key}', '/nowhere', '{base}', '{status}', 'cpd/pay/{key}', {worktree}, {n}, {u}, {opened}, {pull}, cpd_txn(), 't', {started}, {merged_at});
-             INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, auto_merge, auto_merge_at)
+             INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, auto_merge, auto_merge_at)
                VALUES ('pay', '{key}', 'C0POLICY1', '1793040{number:03}.000001', 'https://acme.slack.com/archives/C0POLICY1/p{number}', 't', '{auto_merge}', {at});"
         ));
     }
@@ -386,7 +382,7 @@ fn waits_while_the_base_is_another_prs_lead_branch_then_enables_after_the_unstac
         if !unstacked {
             if nap >= 5 * NAPS_PER_TICK {
                 *record.lock().unwrap() = Some((p.calls(), p.state("top")));
-                p.write("UPDATE prs SET base = 'main' WHERE plan = 'pay' AND key = 'top';");
+                p.write("UPDATE workflows SET base = 'main' WHERE plan = 'pay' AND key = 'top';");
                 unstacked = true;
             }
             return false;

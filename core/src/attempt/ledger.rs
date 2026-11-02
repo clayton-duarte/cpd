@@ -1,5 +1,5 @@
 //! What the driver and the merge read from and write to the Ledger (contract
-//! §3.2, §3.4, §5.2): the Attempt, with its Job's PR and its Plan, and the
+//! §3.2, §3.4, §5.2): the Attempt, with its Job's Workflow and its Plan, and the
 //! transactions that end it. The driver ends an Attempt before it is
 //! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
@@ -16,18 +16,18 @@ use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
 
-/// An Attempt with what the driver and the merge need of its Job, PR and Plan.
+/// An Attempt with what the driver and the merge need of its Job, Workflow and Plan.
 #[derive(Clone, Debug)]
 pub struct Attempt {
     pub plan: PlanId,
     pub context: ContextId,
-    /// The repo of the Job's PR: the realpath of its main worktree.
+    /// The repo of the Job's Workflow: the realpath of its main worktree.
     pub repo: PathBuf,
-    /// The Lead Branch of the Job's PR (R34 A5).
+    /// The Lead Branch of the Job's Workflow (R34 A5).
     pub lead_branch: String,
-    /// The branch every push and `gh pr list --head` of the PR names: the pull request's head of an adopted PR, else the Lead Branch.
+    /// The branch every push and `gh pr list --head` of the Workflow names: the pull request's head of an adopted Workflow, else the Lead Branch.
     pub remote_branch: String,
-    /// Whether the PR is an adopted pull request (`prs.head_ref` is set) that has not opened: only its `open` and `update` Jobs publish.
+    /// Whether the Workflow is an adopted pull request (`prs.head_ref` is set) that has not opened: only its `open` and `update` Jobs publish.
     pub adopted: bool,
     pub lead_worktree: PathBuf,
     pub id: AttemptId,
@@ -44,14 +44,14 @@ pub struct Attempt {
     pub submitted_sha: Option<String>,
     /// The Job's kind (§2.2 "Job kinds"): `open` and `update` Jobs are merged without a rebase and with a push (§7.4).
     pub kind: String,
-    /// The Job's PR (R34 A7).
-    pub pr: Option<String>,
+    /// The Job's Workflow (R34 A7).
+    pub workflow: Option<String>,
 }
 
 impl Attempt {
-    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
-    pub fn pr_str(&self) -> &str {
-        self.pr.as_deref().unwrap_or_default()
+    /// The key of the Job's Workflow; empty for a Job with none (an explore Job), which no Workflow key equals.
+    pub fn workflow_str(&self) -> &str {
+        self.workflow.as_deref().unwrap_or_default()
     }
 }
 
@@ -72,13 +72,13 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         )
         .optional()?;
     let context = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
-    // The repo and Lead worktree are those of the Job's PR (R34 A7).
+    // The repo and Lead worktree are those of the Job's Workflow (R34 A7).
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.pr, r.head_ref, r.status
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.workflow, r.head_ref, r.status
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-               LEFT JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+               LEFT JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow
               WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
@@ -114,28 +114,28 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         (repo, lead_worktree, lead_branch),
         submitted_sha,
-        (kind, pr, head_ref, pr_status),
+        (kind, workflow, head_ref, workflow_status),
     ) = row;
-    // An explore Attempt has no PR: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
-    let (repo, lead_worktree, lead_branch) = match (pr.is_some(), repo, lead_worktree, lead_branch)
-    {
-        (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => {
-            (repo, lead_worktree, lead_branch)
-        }
-        (true, ..) => {
-            return Err(corrupt(format!(
-                "Plan {plan} has an Attempt but no Lead worktree"
-            )));
-        }
-        (false, ..) => (String::new(), worktree.clone(), String::new()),
-    };
+    // An explore Attempt has no Workflow: its repo and Lead Branch are none (empty), its Lead worktree is its own directory.
+    let (repo, lead_worktree, lead_branch) =
+        match (workflow.is_some(), repo, lead_worktree, lead_branch) {
+            (true, Some(repo), Some(lead_worktree), Some(lead_branch)) => {
+                (repo, lead_worktree, lead_branch)
+            }
+            (true, ..) => {
+                return Err(corrupt(format!(
+                    "Plan {plan} has an Attempt but no Lead worktree"
+                )));
+            }
+            (false, ..) => (String::new(), worktree.clone(), String::new()),
+        };
     Ok(Attempt {
         plan: plan.clone(),
         context: ContextId::parse(&context)
             .map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
         remote_branch: head_ref.clone().unwrap_or_else(|| lead_branch.clone()),
-        adopted: head_ref.is_some() && pr_status.as_deref() != Some("open"),
+        adopted: head_ref.is_some() && workflow_status.as_deref() != Some("open"),
         lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
         id: id.clone(),
@@ -151,7 +151,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         stop_request,
         submitted_sha,
         kind,
-        pr,
+        workflow,
     })
 }
 
@@ -560,26 +560,26 @@ pub fn end_opened(
             }
             if let Some(pull) = pull {
                 text.push_str(&format!(
-                    " Pull request #{} of PR {} is open: {}.",
+                    " Pull request #{} of Workflow {} is open: {}.",
                     pull.number,
-                    attempt.pr_str(),
+                    attempt.workflow_str(),
                     pull.url
                 ));
             }
             text.push_str(&format!(" Next: {show}"));
             if attempt.kind == "work" {
                 let open: i64 = tx.query_row(
-                    "SELECT coalesce((SELECT json_array_length(r.feedback) FROM prs p JOIN pull_requests r ON r.id = p.pull_request
+                    "SELECT coalesce((SELECT json_array_length(r.feedback) FROM workflows p JOIN pull_requests r ON r.id = p.pull_request
                                        WHERE p.plan = ?1 AND p.key = ?2 AND p.status = 'open'), 0)",
-                    params![plan, attempt.pr_str()],
+                    params![plan, attempt.workflow_str()],
                     |r| r.get(0),
                 )?;
                 if open > 0 {
-                    let key = attempt.pr_str();
-                    text.push_str(&format!(" PR {key} still has {open} open review comments: cpd pr view --pr {key}, then cpd pr reply."));
+                    let key = attempt.workflow_str();
+                    text.push_str(&format!(" Workflow {key} still has {open} open review comments: cpd pr view --workflow {key}, then cpd pr reply."));
                 }
             }
-            let pull = pull.map(|p| (attempt.pr_str(), p.number, p.url));
+            let pull = pull.map(|p| (attempt.workflow_str(), p.number, p.url));
             (
                 "merged",
                 None,
@@ -698,7 +698,7 @@ pub fn end_opened(
             .job(attempt.job.clone())
             .attempt(attempt.id.clone()),
     )?;
-    // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its PR that it fixes.
+    // pro-d89: a merge that is not an `open` or `update` Job's own requeues the failed `open`/`update` Jobs of its Workflow that it fixes.
     if matches!(end, End::Merged { .. }) && attempt.kind != "open" && attempt.kind != "update" {
         crate::job::fix_retry::retry_after_fix(tx, &attempt.plan, &attempt.job)?;
     }

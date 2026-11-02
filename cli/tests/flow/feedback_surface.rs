@@ -36,7 +36,7 @@ fn plan_show_gives_each_pr_its_open_feedback_count() {
 
     let show = fx.show();
 
-    let prs = show["prs"].as_array().unwrap();
+    let prs = show["workflows"].as_array().unwrap();
     let open = prs.iter().find(|p| p["key"] == "one").unwrap();
     assert_eq!(open["feedback_open"], json!(3), "{open}");
 }
@@ -49,7 +49,7 @@ fn plan_show_gives_null_for_a_pr_whose_feedback_was_never_read() {
 
     let show = fx.show();
 
-    for pr in show["prs"].as_array().unwrap() {
+    for pr in show["workflows"].as_array().unwrap() {
         let object = pr.as_object().unwrap();
         assert!(object.contains_key("feedback_open"), "{pr}");
         assert_eq!(object["feedback_open"], Value::Null, "{pr}");
@@ -72,7 +72,7 @@ fn merged_fix_text(live: &Live) -> String {
             "S2",
             "--spec",
             spec.to_str().unwrap(),
-            "--pr",
+            "--workflow",
             "repo",
             "--plan",
             "pay",
@@ -102,7 +102,7 @@ fn the_job_merged_text_of_a_work_job_names_the_open_review_comments_left() {
 
     assert!(
         text.ends_with(
-            "PR repo still has 2 open review comments: cpd pr view --pr repo, then cpd pr reply."
+            "Workflow repo still has 2 open review comments: cpd pr view --workflow repo, then cpd pr reply."
         ),
         "{text:?}"
     );

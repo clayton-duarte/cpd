@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::archive;
 use super::testkit::Fx;
 
-/// Plan `pay` with Lead `lead1`, PR `repo`, Jobs `done` (Attempt `done-a1`, `ended`, Worker `w-done`) and `live` (Attempt
+/// Plan `pay` with Lead `lead1`, Workflow `repo`, Jobs `done` (Attempt `done-a1`, `ended`, Worker `w-done`) and `live` (Attempt
 /// `live-a1`, `running`, Worker `w-live`, its driver lock held); both Workers `stopped`.
 fn fx() -> (Fx, Flock<File>) {
     let mut fx = Fx::with_plan("");

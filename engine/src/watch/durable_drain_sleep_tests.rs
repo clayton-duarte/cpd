@@ -53,7 +53,7 @@ fn tmux_restart_drain_still_waits_for_a_working_pi_lead() {
     assert_eq!(restart::busy(&mut fx.engine.store).unwrap().len(), 1);
 }
 
-/// Plan `pay` is done and finished long ago, with no PR; Lead `lead1` is idle with the stored `runner`. The tmux is the
+/// Plan `pay` is done and finished long ago, with no Workflow; Lead `lead1` is idle with the stored `runner`. The tmux is the
 /// in-process fake with a server; the returned runner records what E13 sent.
 fn sleep_fx(runner: &str) -> (Fx, FakeRunner) {
     let mut fx = Fx::new("");

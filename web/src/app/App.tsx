@@ -9,10 +9,12 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from "reac
 import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
-import type { LiveSession } from "../api/live-server";
+import type { LiveSession, LivePlan, LiveContext } from "../api/live-server";
+import type { InboxItem } from "../api/readmodel";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
 import { AppSidebar } from "../components/app-sidebar";
+import { InboxRail } from "../components/inbox-rail";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -24,7 +26,10 @@ import { SidebarProvider } from "../components/ui/sidebar";
 import { LiveChat } from "../views/live-chat";
 
 /** The Context column's default width (web/README.md "Sizing"); the handle restores it. */
-const CONTEXT_DEFAULT = "20rem";
+const CONTEXT_DEFAULT_WIDTH = "20rem";
+
+/** The Inbox column's default width; double-clicking its handle restores it (web/README.md "The column"). */
+const INBOX_DEFAULT_WIDTH = "25rem";
 
 /** The app root's props; the live adapter drives the Chat column. */
 export interface AppProps {
@@ -99,78 +104,139 @@ export function ApprovalDialog({
  */
 function ContextColumn({
   sessions,
+  plans,
+  contexts,
+  items,
   selectedId,
   onSelectSession,
 }: {
   sessions: readonly LiveSession[];
+  plans?: readonly LivePlan[];
+  contexts?: readonly LiveContext[];
+  items: readonly InboxItem[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }): ReactElement {
   return (
     <div className="h-full overflow-hidden [transform:translateZ(0)]">
-      <SidebarProvider style={{ "--sidebar-width": "100%" } as CSSProperties}>
-        <AppSidebar sessions={sessions} selectedId={selectedId} onSelectSession={onSelectSession} />
+      <SidebarProvider
+        className="h-full min-h-0"
+        style={{ "--sidebar-width": "100%" } as CSSProperties}
+      >
+        <AppSidebar
+          sessions={sessions}
+          plans={plans}
+          contexts={contexts}
+          items={items}
+          selectedId={selectedId}
+          onSelectSession={onSelectSession}
+        />
       </SidebarProvider>
-    </div>
-  );
-}
-
-/** The Inbox (right) column: a placeholder; the real Inbox belongs to the ui-parity Plan. */
-function InboxColumn(): ReactElement {
-  return (
-    <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-      The Inbox lands here.
     </div>
   );
 }
 
 /**
  * Renders the resizable three-column shell (web/README.md "The resizable three-column shell"):
- * Context | Chat | Inbox, with a handle between each. The Context column defaults to 20rem; the
- * three panels' default sizes over-constrain the group, so the mount effect re-applies 20rem
- * through the panel ref to land it exactly, and the Context handle's double-click restores it.
+ * Context | Chat | Inbox, with a handle between each. The Context column defaults to 20rem and
+ * the Inbox column to 25rem; the three panels' default sizes over-constrain the group, so the
+ * mount effect re-applies the two rem defaults through the panel refs to land each exactly, and
+ * each handle's double-click restores its column's default.
  */
 export function App({ token, live }: AppProps): ReactElement {
   const contextPanel = usePanelRef();
+  const inboxPanel = usePanelRef();
   const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
+  const [plans, setPlans] = useState<readonly LivePlan[] | undefined>(undefined);
+  const [contexts, setContexts] = useState<readonly LiveContext[] | undefined>(undefined);
+  const [inbox, setInbox] = useState<readonly InboxItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
 
-  // Fetch the lead/manager Sessions once; the cancelled flag keeps the resolution from setting
-  // state after unmount (web/README.md "The Context tree").
+  // Fetch the lead/manager Sessions, the live Inbox and the Plans once; the cancelled flag keeps
+  // a resolution from setting state after unmount (web/README.md "The Context tree", "The live
+  // Inbox in the right rail"). Every read stays empty when it fails, and a Plans read the API does
+  // not offer leaves `plans` undefined, so the rail keeps its Session tree ("The fallback").
   useEffect(() => {
     if (live === undefined) return;
     let cancelled = false;
-    void live.sessions().then((list) => {
-      if (cancelled) return;
-      setSessions(list);
-    });
+    void live.sessions().then(
+      (list) => {
+        if (!cancelled) setSessions(list);
+      },
+      () => {},
+    );
+    const inboxRead = live.inbox?.();
+    if (inboxRead !== undefined) {
+      void inboxRead.then(
+        (items) => {
+          if (!cancelled) setInbox(items);
+        },
+        () => {},
+      );
+    }
+    const plansRead = live.plans?.();
+    if (plansRead !== undefined) {
+      void plansRead.then(
+        (list) => {
+          if (!cancelled) setPlans(list);
+        },
+        () => {},
+      );
+    }
+    const contextsRead = live.contexts?.();
+    if (contextsRead !== undefined) {
+      void contextsRead.then(
+        (list) => {
+          if (!cancelled) setContexts(list);
+        },
+        () => {},
+      );
+    }
     return () => {
       cancelled = true;
     };
   }, [live]);
 
   useEffect(() => {
-    contextPanel.current?.resize(CONTEXT_DEFAULT);
-  }, [contextPanel]);
+    contextPanel.current?.resize(CONTEXT_DEFAULT_WIDTH);
+    inboxPanel.current?.resize(INBOX_DEFAULT_WIDTH);
+  }, [contextPanel, inboxPanel]);
 
   // Nothing is selected on first render; the rail's `onSelectSession` fills it.
   const selected = sessions.find((session) => session.id === selectedId);
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-svh">
-      <ResizablePanel defaultSize={CONTEXT_DEFAULT} panelRef={contextPanel}>
-        <ContextColumn sessions={sessions} selectedId={selectedId} onSelectSession={setSelectedId} />
+      <ResizablePanel defaultSize={CONTEXT_DEFAULT_WIDTH} panelRef={contextPanel}>
+        <ContextColumn
+          sessions={sessions}
+          plans={plans}
+          contexts={contexts}
+          items={inbox}
+          selectedId={selectedId}
+          onSelectSession={setSelectedId}
+        />
       </ResizablePanel>
       <ResizableHandle
         disableDoubleClick
-        onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT)}
+        onDoubleClick={() => contextPanel.current?.resize(CONTEXT_DEFAULT_WIDTH)}
       />
       <ResizablePanel defaultSize="60%">
         <LiveChat api={live} token={token} session={selected} />
       </ResizablePanel>
-      <ResizableHandle disableDoubleClick />
-      <ResizablePanel defaultSize="20%">
-        <InboxColumn />
+      <ResizableHandle
+        disableDoubleClick
+        onDoubleClick={() => inboxPanel.current?.resize(INBOX_DEFAULT_WIDTH)}
+      />
+      <ResizablePanel defaultSize={INBOX_DEFAULT_WIDTH} minSize="16rem" maxSize="50%" panelRef={inboxPanel}>
+        <div className="h-full overflow-hidden [transform:translateZ(0)]">
+          <SidebarProvider
+            className="h-full min-h-0"
+            style={{ "--sidebar-width": "100%" } as CSSProperties}
+          >
+            <InboxRail items={inbox} sessions={sessions} />
+          </SidebarProvider>
+        </div>
       </ResizablePanel>
     </ResizablePanelGroup>
   );

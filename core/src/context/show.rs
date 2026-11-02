@@ -150,16 +150,17 @@ fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<
     })))
 }
 
-/// The repos of the PRs that are not `cancelled` of each `plan` record's Plan
-/// (commands.md §3.3), by record id: each repo once, in PR key order, from
+/// The repos of the Workflows that are not `cancelled` of each `plan` record's Plan
+/// (commands.md §3.3), by record id: each repo once, in Workflow key order, from
 /// this machine's database. A Plan of another machine has none.
 pub(crate) fn plan_repos(
     conn: &rusqlite::Connection,
     machine: &crate::ids::MachineName,
     records: &[render::Indexed],
 ) -> Result<render::Repos, CpdError> {
-    let mut stmt = conn
-        .prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
+    let mut stmt = conn.prepare(
+        "SELECT repo FROM workflows WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key",
+    )?;
     let mut out = render::Repos::new();
     for (_, record) in records {
         let Some(plan) = record.plan().filter(|_| record.kind() == RecordKind::Plan) else {

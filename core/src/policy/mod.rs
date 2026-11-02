@@ -24,9 +24,9 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Generated,
-    Jira, JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources,
-    Text, audience,
+    Checks, Declared, Deploys, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Jira,
+    JiraSet, Policy, Post, PostSet, Pr, ResourceScope, Resources, Scope, Source, Sources, Text,
+    Workflow, audience,
 };
 /// The `policy` commands (commands.md §22).
 #[derive(clap::Subcommand, Debug)]
@@ -189,18 +189,18 @@ pub fn owner_unset(context: &ContextId) -> CpdError {
         .with("context", context.as_str())
 }
 
-/// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have PR rows.
-pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> CpdError {
+/// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have Workflow rows.
+pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, workflows: &[String]) -> CpdError {
     CpdError::new(
         ErrorCode::OwnerInUse,
         format!(
-            "The Context {context} has the owner {owner} and its Plans have PR rows ({}): the owner of a Context cannot change once a PR row exists.",
-            prs.join(", ")
+            "The Context {context} has the owner {owner} and its Plans have Workflow rows ({}): the owner of a Context cannot change once a Workflow row exists.",
+            workflows.join(", ")
         ),
     )
     .with("context", context.as_str())
     .with("owner", owner.as_str())
-    .with("prs", prs)
+    .with("workflows", workflows)
 }
 
 #[cfg(test)]
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn default_sets_every_domain_with_gate_none_and_any() {
         let d = default_policy();
-        assert_eq!((d.gate.merge, d.gate.pr), (Gate::None, Gate::None));
+        assert_eq!((d.gate.merge, d.gate.workflow), (Gate::None, Gate::None));
         assert_eq!(d.pr.feedback.checks, Checks::Any);
         for domain in Domain::ALL {
             assert_eq!(d.text(*domain), "");
@@ -319,7 +319,7 @@ mod tests {
         );
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
         let r = resolve(&home, &repo_key("acme", "other")).unwrap();
-        assert_eq!(r.policy.gate.pr, Gate::Local);
+        assert_eq!(r.policy.gate.workflow, Gate::Local);
         assert!(matches!(
             r.sources.get(Domain::Gates).source,
             Source::Owner(_)
@@ -389,7 +389,7 @@ mod tests {
         write(
             &home,
             "acme/owner.toml",
-            "[pr]\nfeedback.checks = \"none\"\njira_required = true\nhuman_gated_contexts = []\nexcused_labels = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\nestimate_fields = []\n",
+            "[pr]\nfeedback.checks = \"none\"\nhuman_gated_contexts = []\nexcused_labels = []\nrequired_checks = []\ntext = \"owner pr\"\n[pr.post]\nenabled = true\nchannel = \"\"\ntemplate = \"{{ url }}\"\nmerged_reaction = \"\"\n[pr.jira]\nin_progress = \"\"\nin_review = \"\"\ndone = \"\"\nestimate_fields = []\n",
         );
         write(&home, "acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
@@ -409,7 +409,6 @@ mod tests {
                 "pr.post.channel",
                 "pr.post.template",
                 "pr.post.merged_reaction",
-                "pr.jira_required",
                 "pr.human_gated_contexts",
                 "pr.excused_labels",
                 "pr.required_checks",
@@ -432,7 +431,7 @@ mod tests {
         write(&home, "acme/owner.toml", "[pr]\ngate = \"local\"\n");
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(
-            (r.policy.gate.merge, r.policy.gate.pr),
+            (r.policy.gate.merge, r.policy.gate.workflow),
             (Gate::Local, Gate::Local)
         );
         assert_eq!(r.warnings.len(), 1);
@@ -440,7 +439,7 @@ mod tests {
         write(&home, "acme/owner.toml", "[pr]\ngate = \"ci\"\n");
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(
-            (r.policy.gate.merge, r.policy.gate.pr),
+            (r.policy.gate.merge, r.policy.gate.workflow),
             (Gate::None, Gate::None)
         );
         // An explicit `[gate]` table wins over the alias.
@@ -451,7 +450,7 @@ mod tests {
         );
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(
-            (r.policy.gate.merge, r.policy.gate.pr),
+            (r.policy.gate.merge, r.policy.gate.workflow),
             (Gate::None, Gate::Local)
         );
     }
@@ -592,13 +591,13 @@ mod tests {
             assert_eq!(r.sources.get(*d).source, Source::DefaultNoOwnerFile);
         }
         assert_eq!(
-            r.sources.get(Domain::Pr).to_string(),
+            r.sources.get(Domain::Workflow).to_string(),
             "default (no owner file)"
         );
         // With an owner file it resolves as `resolve` does.
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
         let r = resolve_unowned_row(&home, &repo_key("acme", "cpd")).unwrap();
-        assert_eq!(r.policy.gate.pr, Gate::Local);
+        assert_eq!(r.policy.gate.workflow, Gate::Local);
         assert_eq!(r.policy.code.text, "ignored");
     }
 
@@ -684,7 +683,7 @@ mod tests {
 
         let e = owner_in_use(&ctx, &acme, &["p/a".to_string()]);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerInUse, 3));
-        assert_eq!(e.details()["prs"], serde_json::json!(["p/a"]));
+        assert_eq!(e.details()["workflows"], serde_json::json!(["p/a"]));
         assert_eq!(e.details()["context"], "ctx");
         assert_eq!(e.details()["owner"], "acme");
     }

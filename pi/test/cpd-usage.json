@@ -553,7 +553,7 @@
       "--help": false,
       "--plan": true,
       "--reason": true,
-      "--until-pr": true
+      "--until-workflow": true
     },
     "positionals": {
       "max": 0,
@@ -599,11 +599,11 @@
       "--kind": true,
       "--needs": true,
       "--plan": true,
-      "--pr": true,
       "--spec": true,
       "--tier": true,
       "--title": true,
-      "--urgent": false
+      "--urgent": false,
+      "--workflow": true
     },
     "positionals": {
       "max": 1,
@@ -689,10 +689,10 @@
       "--needs": true,
       "--no-needs": false,
       "--plan": true,
-      "--pr": true,
       "--spec": true,
       "--tier": true,
-      "--title": true
+      "--title": true,
+      "--workflow": true
     },
     "positionals": {
       "max": 1,
@@ -983,81 +983,12 @@
       "--help": false,
       "--owner": true,
       "--plan": true,
-      "--pr": true,
-      "--repo": true
+      "--repo": true,
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
       "min": 0
-    },
-    "required": []
-  },
-  "pr add": {
-    "flags": {
-      "--adopt": true,
-      "--base": true,
-      "--confirm-author": true,
-      "--help": false,
-      "--jira": true,
-      "--jobs": true,
-      "--needs": true,
-      "--no-needs": false,
-      "--plan": true,
-      "--repo": true,
-      "--shape": true,
-      "--title": true
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
-    },
-    "required": [
-      "--repo",
-      "--title"
-    ]
-  },
-  "pr cancel": {
-    "flags": {
-      "--help": false,
-      "--plan": true,
-      "--superseded-by": true
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
-    },
-    "required": []
-  },
-  "pr describe": {
-    "flags": {
-      "--file": true,
-      "--help": false,
-      "--plan": true,
-      "--pr": true
-    },
-    "positionals": {
-      "max": 0,
-      "min": 0
-    },
-    "required": [
-      "--file",
-      "--pr"
-    ]
-  },
-  "pr edit": {
-    "flags": {
-      "--base": true,
-      "--help": false,
-      "--jira": true,
-      "--needs": true,
-      "--no-needs": false,
-      "--plan": true,
-      "--repo": true,
-      "--title": true
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
     },
     "required": []
   },
@@ -1075,7 +1006,7 @@
     "flags": {
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1098,7 +1029,7 @@
     "flags": {
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1110,7 +1041,7 @@
     "flags": {
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1124,7 +1055,7 @@
       "--continue": false,
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1138,8 +1069,8 @@
       "--body-file": true,
       "--help": false,
       "--plan": true,
-      "--pr": true,
-      "--to": true
+      "--to": true,
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1153,7 +1084,7 @@
     "flags": {
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1161,22 +1092,11 @@
     },
     "required": []
   },
-  "pr start": {
-    "flags": {
-      "--help": false,
-      "--plan": true
-    },
-    "positionals": {
-      "max": 1,
-      "min": 1
-    },
-    "required": []
-  },
   "pr view": {
     "flags": {
       "--help": false,
       "--plan": true,
-      "--pr": true
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1643,8 +1563,8 @@
       "--help": false,
       "--owner": true,
       "--plan": true,
-      "--pr": true,
-      "--repo": true
+      "--repo": true,
+      "--workflow": true
     },
     "positionals": {
       "max": 0,
@@ -1869,6 +1789,84 @@
     "positionals": {
       "max": 0,
       "min": 0
+    },
+    "required": []
+  },
+  "workflow add": {
+    "flags": {
+      "--adopt": true,
+      "--base": true,
+      "--confirm-author": true,
+      "--help": false,
+      "--jira": true,
+      "--jobs": true,
+      "--needs": true,
+      "--no-needs": false,
+      "--plan": true,
+      "--repo": true,
+      "--shape": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--repo",
+      "--title"
+    ]
+  },
+  "workflow cancel": {
+    "flags": {
+      "--help": false,
+      "--plan": true,
+      "--superseded-by": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "workflow describe": {
+    "flags": {
+      "--file": true,
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": [
+      "--file"
+    ]
+  },
+  "workflow edit": {
+    "flags": {
+      "--base": true,
+      "--help": false,
+      "--jira": true,
+      "--needs": true,
+      "--no-needs": false,
+      "--plan": true,
+      "--repo": true,
+      "--title": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
+    },
+    "required": []
+  },
+  "workflow start": {
+    "flags": {
+      "--help": false,
+      "--plan": true
+    },
+    "positionals": {
+      "max": 1,
+      "min": 1
     },
     "required": []
   }

@@ -1,5 +1,5 @@
 //! E19, the Jira transition queue (Plan jira-sync; pro-d126, pro-d128; contract §3.7 E19; commands.md §21.11, §21.12): the helper
-//! `pi/lib/jira-transition.ts` moves the ticket of the OLDEST PENDING `jira_transitions` row whose PR has a ticket and is not
+//! `pi/lib/jira-transition.ts` moves the ticket of the OLDEST PENDING `jira_transitions` row whose Workflow has a ticket and is not
 //! cancelled, detached on its own thread, one run at a time, 120 s deadline, as E17 does. The ticket, the target and the three
 //! status names are read when the row runs. A target whose name is empty settles the row `skipped` without a call. An `ok`
 //! answer settles it (`moved`, `unchanged`); a `jira_refused` answer parks it with one `error` Event, and each tick a parked row
@@ -19,7 +19,7 @@ use super::engine::{Engine, incident_holds};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::deadline::Failed;
-use cpd_core::ids::{PlanId, PrKey};
+use cpd_core::ids::{PlanId, WorkflowKey};
 use cpd_core::jira::{Done, Names, Request};
 use cpd_core::policy::Policy;
 use cpd_core::ports::Ports;
@@ -64,20 +64,20 @@ fn about(plan: &str) -> About {
     About::Plan(PlanId::parse(plan).expect("a stored Plan id"))
 }
 
-/// The policy of the PR of `plan`/`pr`, resolved now.
-fn policy_of(engine: &mut Engine, plan: &str, pr: &str) -> Result<Policy, CpdError> {
+/// The policy of the Workflow of `plan`/`pr`, resolved now.
+fn policy_of(engine: &mut Engine, plan: &str, workflow: &str) -> Result<Policy, CpdError> {
     let home = engine.home.clone();
     let plan = PlanId::parse(plan)?;
-    let key = PrKey::parse(pr)?;
+    let key = WorkflowKey::parse(workflow)?;
     engine
         .store
-        .read(|conn| cpd_core::pr::policy_of_pr(conn, &home, &plan, &key))
+        .read(|conn| cpd_core::pr::policy_of_workflow(conn, &home, &plan, &key))
 }
 
 fn move_about(due: &Due) -> About {
     About::Move(
         PlanId::parse(&due.plan).expect("a stored Plan id"),
-        PrKey::parse(&due.pr).expect("a stored PR key"),
+        WorkflowKey::parse(&due.workflow).expect("a stored Workflow key"),
         due.target,
     )
 }
@@ -93,7 +93,7 @@ fn fail_row(engine: &mut Engine, due: &Due, status: &str, failure: Failure) {
         _ => serde_json::Map::new(),
     };
     details.insert("plan".into(), json!(due.plan));
-    details.insert("pr".into(), json!(due.pr));
+    details.insert("pr".into(), json!(due.workflow));
     details.insert("ticket".into(), json!(due.ticket));
     details.insert("target".into(), json!(due.target.as_str()));
     details.insert("status".into(), json!(status));
@@ -141,7 +141,7 @@ pub(super) fn run(engine: &mut Engine) {
                 return;
             }
         };
-        let policy = match policy_of(engine, &due.plan, &due.pr) {
+        let policy = match policy_of(engine, &due.plan, &due.workflow) {
             Ok(policy) => policy,
             Err(e) => {
                 engine.jira.failed_at.insert(due.id, now);
@@ -211,7 +211,7 @@ fn collect(engine: &mut Engine) {
                         outcome.as_str(),
                         due.ticket,
                         due.target.as_str(),
-                        due.pr,
+                        due.workflow,
                         status
                     ));
                     engine.clear(Step::E19, &About::Machine);
@@ -243,7 +243,7 @@ fn collect(engine: &mut Engine) {
                         "E19: parked {} {} on {} of {}: {reason}",
                         due.ticket,
                         due.target.as_str(),
-                        due.pr,
+                        due.workflow,
                         due.plan
                     ));
                     engine.clear(Step::E19, &About::Machine);
@@ -273,7 +273,7 @@ fn reopen_parked(engine: &mut Engine) {
     };
     for row in parked {
         let due = row.due;
-        match policy_of(engine, &due.plan, &due.pr) {
+        match policy_of(engine, &due.plan, &due.workflow) {
             Err(e) => engine.fail(Step::E19, about(&due.plan), Failure::from(&e)),
             Ok(policy) => {
                 engine.clear(Step::E19, &about(&due.plan));
@@ -287,7 +287,7 @@ fn reopen_parked(engine: &mut Engine) {
                             "E19: reopened {} {} on {} of {}",
                             due.ticket,
                             due.target.as_str(),
-                            due.pr,
+                            due.workflow,
                             due.plan
                         )),
                         Err(e) => engine.fail(Step::E19, about(&due.plan), Failure::from(&e)),

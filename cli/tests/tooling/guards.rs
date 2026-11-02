@@ -405,13 +405,13 @@ fn the_real_process_scan_fails_a_new_real_git_site_and_passes_the_exact_debt() {
         "the exact debt passes"
     );
     let adopt = [file(
-        "cli/tests/pr/pr_adopt_life.rs",
+        "cli/tests/workflow/workflow_adopt_life.rs",
         "    fx.git(&[\"a\"]);\n    self.git_repo(&[\"b\"]);\n",
     )];
-    assert!(REAL_GIT_SELF_FILES.contains(&"cli/tests/pr/pr_adopt_life.rs"));
+    assert!(REAL_GIT_SELF_FILES.contains(&"cli/tests/workflow/workflow_adopt_life.rs"));
     assert_eq!(
         real_process_mismatches(&adopt, ALLOW, &[]),
-        ["cli/tests/pr/pr_adopt_life.rs: git 2 sites (allowed 0)"],
+        ["cli/tests/workflow/workflow_adopt_life.rs: git 2 sites (allowed 0)"],
         "in a listed file `fx.git(` and `self.git_repo(` are real"
     );
 }

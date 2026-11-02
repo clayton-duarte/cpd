@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 22;
+pub const PROTOCOL: u32 = 20;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -103,12 +103,12 @@ kinds! {
     AttemptEnded = "attempt-ended",
     AllMerged = "all-merged",
     PrFeedback = "pr-feedback",
-    PrAdded = "pr-added",
-    PrEdited = "pr-edited",
-    PrDescribed = "pr-described",
-    PrCancelled = "pr-cancelled",
-    PrStarted = "pr-started",
-    PrBaseChanged = "pr-base-changed",
+    WorkflowAdded = "workflow-added",
+    WorkflowEdited = "workflow-edited",
+    WorkflowDescribed = "workflow-described",
+    WorkflowCancelled = "workflow-cancelled",
+    WorkflowStarted = "workflow-started",
+    WorkflowBaseChanged = "workflow-base-changed",
     PrOpened = "pr-opened",
     PrMerged = "pr-merged",
     Escalation = "escalation",
@@ -168,18 +168,18 @@ impl Kind {
                 &["title", "jira", "lead_session", "forked_from", "cwd"],
                 &[],
             ),
-            PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
+            PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "workflows"]),
             PlanReview => spec(
                 [Y, Y, N, N, N],
                 &["review", "fingerprint", "status"],
                 &["feedback", "jobs"],
             ),
             PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
-            PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
+            PlanDone => spec([Y, Y, N, N, N], &["workflows"], &[]),
             JobAdded => spec(
                 [Y, Y, Y, N, N],
                 &[
-                    "pr", "kind", "status", "appended", "tier", "needs", "urgent",
+                    "workflow", "kind", "status", "appended", "tier", "needs", "urgent",
                 ],
                 &["by", "reason"],
             ),
@@ -190,7 +190,7 @@ impl Kind {
                 &[
                     "turn",
                     "cancel_too_late",
-                    "pr",
+                    "workflow",
                     "number",
                     "url",
                     "summary",
@@ -232,11 +232,11 @@ impl Kind {
                 ],
                 &[],
             ),
-            AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
+            AllMerged => spec([Y, Y, N, N, N], &["workflow", "merged", "cancelled"], &[]),
             PrFeedback => spec(
                 [Y, Y, N, N, N],
                 &[
-                    "pr",
+                    "workflow",
                     "number",
                     "url",
                     "state",
@@ -249,18 +249,18 @@ impl Kind {
                 ],
                 &[],
             ),
-            PrAdded => spec(
+            WorkflowAdded => spec(
                 [Y, Y, N, N, N],
-                &["pr", "repo", "base", "needs", "appended"],
+                &["workflow", "repo", "base", "needs", "appended"],
                 &["title", "head_ref", "author"],
             ),
-            PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
-            PrDescribed => spec([Y, Y, N, N, N], &["pr"], &[]),
-            PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
-            PrStarted => spec(
+            WorkflowEdited => spec([Y, Y, N, N, N], &["workflow", "fields"], &[]),
+            WorkflowDescribed => spec([Y, Y, N, N, N], &["workflow"], &[]),
+            WorkflowCancelled => spec([Y, Y, N, N, N], &["workflow"], &["superseded_by"]),
+            WorkflowStarted => spec(
                 [Y, Y, N, N, N],
                 &[
-                    "pr",
+                    "workflow",
                     "repo",
                     "base",
                     "lead_branch",
@@ -272,13 +272,24 @@ impl Kind {
                 ],
                 &[],
             ),
-            PrBaseChanged => spec(
+            WorkflowBaseChanged => spec(
                 [Y, Y, N, N, N],
-                &["pr", "from", "to", "from_pr", "to_pr", "by"],
+                &[
+                    "workflow",
+                    "from",
+                    "to",
+                    "from_workflow",
+                    "to_workflow",
+                    "by",
+                ],
                 &["number", "url"],
             ),
-            PrOpened => spec([Y, Y, N, N, N], &["pr", "number", "url"], &[]),
-            PrMerged => spec([Y, Y, N, N, N], &["pr", "number", "url", "merged_at"], &[]),
+            PrOpened => spec([Y, Y, N, N, N], &["workflow", "number", "url"], &[]),
+            PrMerged => spec(
+                [Y, Y, N, N, N],
+                &["workflow", "number", "url", "merged_at"],
+                &[],
+            ),
             Escalation => spec([Y, Y, Y, Y, N], &["escalation", "question"], &[]),
             EscalationAnswered => spec([Y, Y, Y, Y, N], &["escalation"], &[]),
             EscalationExpired => spec([Y, Y, Y, Y, N], &["escalation", "reason"], &[]),
@@ -337,9 +348,9 @@ impl Kind {
             IncidentStarted => spec(
                 [N, N, N, N, N],
                 &["by", "reason", "started_at", "plans"],
-                &["until_pr"],
+                &["until_workflow"],
             ),
-            IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_pr"]),
+            IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_workflow"]),
             IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
             Error => spec(
                 [M, M, M, M, M],
@@ -387,14 +398,13 @@ mod tests {
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
     /// The protocol history: 8 (`session-retiered`), 10 (`plan-outlined`), 12 (`session-resumed`), 13 (`session report`),
-    /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`pr-described`),
-    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level `jobs`,
-    /// commands.md §3.12, Plan explore-view), 20 (`attempt-ended` and `job-blocked`, hs-d798), 21 (`attempt-aborted`,
-    /// hs-a8) and 22 (`job-addendum`, pro-d294).
-    // The 18 in the name is the Job's fixed test name, not the protocol number.
+    /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`workflow-described`),
+    /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
+    /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
+    /// `workflow-*` and the object data key is `workflow`).
     #[test]
-    fn the_protocol_is_18_with_the_job_addendum_kind() {
-        assert_eq!(PROTOCOL, 22);
+    fn the_protocol_is_20_with_the_workflow_wire() {
+        assert_eq!(PROTOCOL, 20);
     }
 
     #[test]

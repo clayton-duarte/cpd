@@ -1,5 +1,5 @@
 //! The plan view of a Plan whose Attempt is an explore Job (Decision pro-d237, Plan `explore-roles`): an explore Job
-//! (kind `scout` or `research`) has `jobs.pr` NULL; the Workflow cost must not read it, and every cockpit read takes it.
+//! (kind `scout` or `research`) has `jobs.workflow` NULL; the Workflow cost must not read it, and every cockpit read takes it.
 //! Fixed `now`: no wall clock, no sleep, no git, no tmux.
 
 use cpd_core::error::CpdError;
@@ -18,10 +18,10 @@ fn pay() -> PlanId {
     PlanId::parse("pay").unwrap()
 }
 
-/// An explore Job `key` (kind `scout`, no PR) of Job status `status`, with no Attempt.
+/// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'scout');"
@@ -52,7 +52,7 @@ fn explore(key: &str, metrics: Option<&str>) -> String {
     explore_job(key, "running") + &explore_attempt(key, metrics)
 }
 
-/// The Job `work` of PR `api` with one Attempt of cost 0.25.
+/// The Job `work` of Workflow `api` with one Attempt of cost 0.25.
 fn work() -> String {
     job("api", "work", "work", "running")
         + "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, metrics)
@@ -60,7 +60,7 @@ fn work() -> String {
                    '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z', '{\"cost_usd\":0.25}');"
 }
 
-/// Plan `pay` with PR `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
+/// Plan `pay` with Workflow `api` (one work Job, cost 0.25) and scout Job `look` (cost 0.40).
 fn mixed() -> (tempfile::TempDir, Store) {
     let (dir, mut store) = store_with(&["api"]);
     run(
@@ -76,8 +76,8 @@ fn plan_boxes_reads_a_plan_with_an_explore_attempt() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].key.as_str(), "api");
+    assert_eq!(boxes.workflows.len(), 1);
+    assert_eq!(boxes.workflows[0].key.as_str(), "api");
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn plan_boxes_reads_a_plan_with_only_explore_attempts() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert!(boxes.prs.is_empty());
+    assert!(boxes.workflows.is_empty());
     assert!(
         boxes.jobs.iter().any(|j| j.key.as_str() == "look"),
         "the explore Job is a JobNode of the Plan"
@@ -100,8 +100,8 @@ fn an_explore_attempts_cost_is_in_no_workflow() {
     let result = read::plan_boxes_at(&mut store, &pay(), NOW_MS);
     assert!(result.is_ok(), "plan_boxes_at failed: {result:?}");
     let boxes = result.unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    near(boxes.prs[0].cost_usd, 0.25);
+    assert_eq!(boxes.workflows.len(), 1);
+    near(boxes.workflows[0].cost_usd, 0.25);
 }
 
 #[test]
@@ -156,9 +156,9 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
             .iter()
             .find(|j| j.key.as_str() == "look")
             .unwrap()
-            .pr
+            .workflow
             .is_none(),
-        "the explore Job has no PR"
+        "the explore Job has no Workflow"
     );
 }
 
@@ -166,7 +166,7 @@ fn an_explore_job_is_a_node_beside_the_pr_job_in_the_flow() {
 fn an_explore_attempts_time_is_in_no_workflows_active_time() {
     let (_dir, mut store) = store_with(&["api"]);
     let explore_run = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
          VALUES ('pay', NULL, 'look', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'scout');
@@ -183,8 +183,8 @@ fn an_explore_attempts_time_is_in_no_workflows_active_time() {
             + &explore_run),
     );
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    assert_eq!(boxes.prs.len(), 1);
-    assert_eq!(boxes.prs[0].elapsed_seconds, Some(60));
+    assert_eq!(boxes.workflows.len(), 1);
+    assert_eq!(boxes.workflows[0].elapsed_seconds, Some(60));
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn a_queued_explore_job_with_no_attempt_is_a_node_beside_the_pr_job() {
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     let keys: Vec<&str> = boxes.jobs.iter().map(|j| j.key.as_str()).collect();
     assert!(keys.contains(&"work") && keys.contains(&"look"), "{keys:?}");
-    near(boxes.prs[0].cost_usd, 0.25);
+    near(boxes.workflows[0].cost_usd, 0.25);
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn a_queued_explore_job_with_an_ended_attempt_is_read_by_every_cockpit_read() {
     );
     assert_every_cockpit_read_is_ok(&mut store);
     let boxes = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    near(boxes.prs[0].cost_usd, 0.25);
+    near(boxes.workflows[0].cost_usd, 0.25);
     let tree = read::tree_at(&mut store, Some(NOW)).unwrap();
     let plan = tree
         .contexts

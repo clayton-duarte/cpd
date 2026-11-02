@@ -70,7 +70,7 @@ pub(super) fn guard_tests(
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
-        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a PR with no behaviour is made with --shape docs or --shape config.",
+        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a Workflow with no behaviour is made with --shape docs or --shape config.",
     )
     .with("job", job)
 }
@@ -130,7 +130,7 @@ pub(super) fn check(
         return Err(CpdError::new(
             ErrorCode::TestJobRequired,
             format!(
-                "The impl Job {} needs no test Job of its PR, so it names no test to run.",
+                "The impl Job {} needs no test Job of its Workflow, so it names no test to run.",
                 job.key
             ),
         )

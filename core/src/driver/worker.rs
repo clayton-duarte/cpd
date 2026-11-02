@@ -191,7 +191,7 @@ pub fn render_spec(
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
     let addenda = addenda(conn, target)?;
-    // An explore Job has no PR, no quick check and no protected path of a policy: its Worker works in no repository.
+    // An explore Job has no Workflow, no quick check and no protected path of a policy: its Worker works in no repository.
     let explore = crate::plan::jobs::is_explore(&job.kind);
     let (quick_check, protected, generated) = if explore {
         (Vec::new(), Vec::new(), Vec::new())
@@ -207,15 +207,15 @@ pub fn render_spec(
     let approved_touches = crate::job::guard::approved_touches(job);
     let artefact = super::explore::artefact_in(&target.worktree, &job.key);
     let job_spec = if matches!(job.kind.as_str(), "open" | "update") {
-        let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
-        let pr = prs
+        let workflows = crate::plan::fingerprint::load_workflows(conn, &target.plan)?;
+        let workflow = workflows
             .iter()
-            .find(|p| p.key.as_str() == job.pr_str())
+            .find(|p| p.key.as_str() == job.workflow_str())
             .ok_or_else(|| {
                 CpdError::bad_row(format!(
-                    "Job {} has no PR row {} in Plan {}",
+                    "Job {} has no Workflow row {} in Plan {}",
                     job.key,
-                    job.pr_str(),
+                    job.workflow_str(),
                     target.plan
                 ))
             })?;
@@ -224,7 +224,7 @@ pub fn render_spec(
         let cause = (job.kind == "update")
             .then(|| crate::job::open::cause_of(conn, &target.plan, &job.key))
             .transpose()?;
-        crate::job::open::fixed_spec(pr, job.kind == "update", cause)
+        crate::job::open::fixed_spec(workflow, job.kind == "update", cause)
     } else {
         job.require_spec()?.clone()
     };

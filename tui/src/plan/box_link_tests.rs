@@ -1,4 +1,4 @@
-//! The Plan view's PR box titles are the `Link` widget (pro-d60): `#<number> <state>` underlined, then the cue, ordinary
+//! The Plan view's Workflow box titles are the `Link` widget (pro-d60): `#<number> <state>` underlined, then the cue, ordinary
 //! cells and no OSC 8; a plain left click on any of it opens the pull request and does nothing else.
 
 use std::sync::Arc;
@@ -27,10 +27,10 @@ fn pull(number: i64) -> Pull {
     }
 }
 
-fn pr_with(key: &str, pull: Option<Pull>) -> read::PrNode {
-    read::PrNode {
+fn workflow_with(key: &str, pull: Option<Pull>) -> read::WorkflowNode {
+    read::WorkflowNode {
         pull,
-        ..sample_pr(key)
+        ..sample_workflow(key)
     }
 }
 
@@ -91,7 +91,7 @@ fn opened(runner: &FakeRunner) -> Vec<String> {
 }
 
 fn one_box(number: i64, working: bool) -> Centre {
-    let mut api = pr_with("api", Some(pull(number)));
+    let mut api = workflow_with("api", Some(pull(number)));
     api.lead_dot = working.then(|| crate::read::Dot::working(false, None));
     sample_centre(vec![api], Vec::new())
 }
@@ -159,7 +159,7 @@ fn a_left_click_on_a_pr_box_titles_text_or_cue_opens_its_pull_request_url() {
 #[test]
 fn a_click_on_the_title_does_nothing_else_than_open_the_page() {
     let centre = sample_centre(
-        vec![pr_with("api", Some(pull(12)))],
+        vec![workflow_with("api", Some(pull(12)))],
         vec![sample_job("api", "a")],
     );
     let mut ui = Ui::default();
@@ -207,9 +207,9 @@ fn the_lead_working_dot_stays_between_the_state_and_the_cue_inside_the_link() {
 
 #[test]
 fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_pointer() {
-    let mut web = pr_with("web", Some(pull(2)));
-    web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
-    let centre = sample_centre(vec![pr_with("api", Some(pull(1))), web], Vec::new());
+    let mut web = workflow_with("web", Some(pull(2)));
+    web.needs = vec![cpd_core::ids::WorkflowKey::parse("api").unwrap()];
+    let centre = sample_centre(vec![workflow_with("api", Some(pull(1))), web], Vec::new());
     let mut ui = Ui::default();
     let first = draw(&mut ui, &centre, 8);
     let (ax, ay) = title_x(&first, 1).expect("api's title");
@@ -242,9 +242,9 @@ fn after_the_chart_scrolled_a_click_opens_the_url_of_the_title_now_under_the_poi
 
 #[test]
 fn a_pr_box_with_no_pull_request_has_no_link() {
-    let mut web = pr_with("web", Some(pull(2)));
-    web.needs = vec![cpd_core::ids::PrKey::parse("api").unwrap()];
-    let centre = sample_centre(vec![pr_with("api", None), web], Vec::new());
+    let mut web = workflow_with("web", Some(pull(2)));
+    web.needs = vec![cpd_core::ids::WorkflowKey::parse("api").unwrap()];
+    let centre = sample_centre(vec![workflow_with("api", None), web], Vec::new());
     let mut ui = Ui::default();
     let buf = draw(&mut ui, &centre, 20);
     let (ports, runner) = ports_with(Reply::ok(""));

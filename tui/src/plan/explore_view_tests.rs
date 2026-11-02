@@ -1,5 +1,5 @@
-//! The Plan view's chart draws one Plan-level ` explore Jobs ` box above the PR boxes for a Plan that has an explore Job
-//! (Plan `explore-view`, D1-A): the same pills as a PR box, no footer and no need-line to a PR. The cost/active-time rule
+//! The Plan view's chart draws one Plan-level ` explore Jobs ` box above the Workflow boxes for a Plan that has an explore Job
+//! (Plan `explore-view`, D1-A): the same pills as a Workflow box, no footer and no need-line to a Workflow. The cost/active-time rule
 //! is unchanged (pro-d237). Fixed `now_ms` and frame: no wall clock, no sleep, no git, no tmux.
 
 use cpd_core::error::CpdError;
@@ -34,19 +34,19 @@ fn run(store: &mut Store, sql: &str) {
         .unwrap();
 }
 
-/// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with PR `api` (`/repo`, base `main`).
+/// A store of Context `ctx`, Lead `lead1` and Plan `pay` (phase `dispatch`) with Workflow `api` (`/repo`, base `main`).
 fn db() -> (tempfile::TempDir, Store) {
-    let (dir, mut store) = db_without_pr();
+    let (dir, mut store) = db_without_workflow();
     run(
         &mut store,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
            VALUES ('pay', 'api', '/repo', 'main', 'dispatch', 'cpd/pay/api', '/wt/api', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');",
     );
     (dir, store)
 }
 
-/// [`db`] without the PR: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
-fn db_without_pr() -> (tempfile::TempDir, Store) {
+/// [`db`] without the Workflow: an explore-only Plan's store (Context `ctx`, Lead `lead1`, Plan `pay`, phase `dispatch`).
+fn db_without_workflow() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
@@ -62,17 +62,17 @@ fn db_without_pr() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// A PR Job `key` of PR `pr`, queued or running, Tier S3.
-fn pr_job(pr: &str, key: &str, status: &str) -> String {
+/// A Workflow Job `key` of Workflow `pr`, queued or running, Tier S3.
+fn workflow_job(workflow: &str, key: &str, status: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind)
-         VALUES ('pay', '{pr}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
+         VALUES ('pay', '{workflow}', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', 'work');"
     )
 }
 
-/// An explore Job `key` (kind `scout`, no PR) of Job status `status`, Tier S1, with no Attempt.
+/// An explore Job `key` (kind `scout`, no Workflow) of Job status `status`, Tier S1, with no Attempt.
 fn explore_job(key: &str, status: &str) -> String {
     explore_job_of("scout", key, status)
 }
@@ -96,7 +96,7 @@ fn explore_job_of(kind: &str, key: &str, status: &str) -> String {
         ("NULL", "NULL")
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at, kind, failed_cause, cancel_reason, cancel_requested_at, merged_sha, summary)
          VALUES ('pay', NULL, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z', '{kind}', {failed_cause}, {cancel_reason}, {cancel_at}, {merged_sha}, {summary});"
@@ -116,13 +116,13 @@ fn explore_running(key: &str) -> String {
 /// The chart of Plan `pay` as the Plan view draws it, at spinner `frame`.
 fn chart(store: &mut Store, frame: usize) -> super::flow::Chart {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
-    boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).chart
+    boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame).chart
 }
 
 /// A [`Centre`] as the Plan view holds it, its read straight from `store` at spinner `frame`.
 fn centre(store: &mut Store, frame: usize) -> Centre {
     let plan = read::plan_boxes_at(store, &pay(), NOW_MS).unwrap();
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame);
+    let boxes = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, frame);
     let slot = read::ChatSlot {
         session: SessionId::parse("lead1").unwrap(),
         name: "lead1".into(),
@@ -161,7 +161,7 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let (_dir, mut store) = db();
     run(
         &mut store,
-        &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+        &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")),
     );
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
@@ -173,10 +173,10 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     let api = lines
         .iter()
         .position(|l| l.contains(" api · "))
-        .expect("the api PR box");
+        .expect("the api Workflow box");
     assert!(
         explore < api,
-        "the explore box is above the PR box: {lines:?}"
+        "the explore box is above the Workflow box: {lines:?}"
     );
     assert!(
         lines[explore + 1].contains("look"),
@@ -185,14 +185,14 @@ fn the_chart_draws_an_explore_jobs_box_above_the_pr_boxes() {
     );
     assert!(
         lines[api + 1].contains("api-1"),
-        "the api pill stays inside its PR box: {:?}",
+        "the api pill stays inside its Workflow box: {:?}",
         lines[api + 1]
     );
 }
 
 #[test]
 fn an_explore_only_plans_chart_is_the_explore_box_alone() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &explore_job("look", "queued"));
     let chart = chart(&mut store, 0);
     let lines = rows(&chart.buf);
@@ -212,7 +212,7 @@ fn an_explore_only_plans_chart_is_the_explore_box_alone() {
     );
     assert!(
         !lines.iter().any(|l| l.contains("no Jobs")),
-        "no PR box and no `no Jobs` box: {lines:?}"
+        "no Workflow box and no `no Jobs` box: {lines:?}"
     );
 }
 
@@ -232,8 +232,8 @@ fn a_running_explore_job_spins_and_a_failed_one_turns() {
     let plan = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
     let mut needs = plan.needs_user.clone();
     needs.worked_on = vec![JobKey::parse("look").unwrap()];
-    let working = boxes::layout(&plan.prs, &plan.jobs, &needs, 0).chart;
-    let turning = boxes::layout(&plan.prs, &plan.jobs, &needs, 1).chart;
+    let working = boxes::layout(&plan.workflows, &plan.jobs, &needs, 0).chart;
+    let turning = boxes::layout(&plan.workflows, &plan.jobs, &needs, 1).chart;
     let (icon0, style0) = pill(&working, "look");
     let (icon1, _) = pill(&turning, "look");
     let red = palette::job_pill(JobStatus::Failed, false, true);
@@ -255,7 +255,7 @@ fn exact_rendered_rows_for_one_pr_box_and_one_explore_box() {
     let (_dir, mut store) = db();
     run(
         &mut store,
-        &(pr_job("api", "api-1", "queued") + &explore_job("look", "queued")),
+        &(workflow_job("api", "api-1", "queued") + &explore_job("look", "queued")),
     );
     let chart = chart(&mut store, 0);
     let got = rows(&chart.buf).join("\n");
@@ -291,7 +291,7 @@ fn the_explore_box_title_counts_the_jobs_per_kind() {
     let (_dir, mut store) = db();
     run(
         &mut store,
-        &(pr_job("api", "api-1", "queued")
+        &(workflow_job("api", "api-1", "queued")
             + &explore_job_of("scout", "look", "queued")
             + &explore_job_of("scout", "peek", "queued")
             + &explore_job_of("research", "dig", "queued")),
@@ -315,7 +315,7 @@ fn the_explore_box_title_counts_the_jobs_per_kind() {
 
 #[test]
 fn an_explore_only_plans_box_title_has_the_counts() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(
         &mut store,
         &(explore_job_of("scout", "look", "merged") + &explore_job_of("research", "dig", "failed")),
@@ -330,7 +330,7 @@ fn an_explore_only_plans_box_title_has_the_counts() {
 
 #[test]
 fn the_explore_box_title_counts_every_explore_job_whatever_its_status() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     let sql: String = ["queued", "running", "merged", "failed", "cancelled"]
         .iter()
         .map(|st| explore_job_of("scout", &format!("scout-{st}"), st))
@@ -353,10 +353,10 @@ fn the_explore_box_title_counts_every_explore_job_whatever_its_status() {
 
 #[test]
 fn the_explore_box_title_is_text_only_in_the_title_style() {
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &explore_job_of("scout", "look", "queued"));
     let plan = read::plan_boxes_at(&mut store, &pay(), NOW_MS).unwrap();
-    let drawn = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0);
+    let drawn = boxes::layout(&plan.workflows, &plan.jobs, &plan.needs_user, 0);
     assert_eq!(drawn.links, Links::default(), "the counts are no link");
 
     let title = " explore Jobs · 1 scout ";
@@ -443,7 +443,7 @@ fn every_job() -> String {
                 };
                 assert!(key.len() <= 32, "key {key}");
                 sql += &format!(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                    "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                        fingerprint, created_txn, created_at, kind, failed_cause, cancel_reason, cancel_requested_at,
                                        merged_sha, summary, tests, test_files)
                      VALUES ('pay', {pr_sql}, '{key}', 'Job', 'S1', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
@@ -464,17 +464,17 @@ const EVERY_PR: &str = "
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z'),
              ('acme/repo', 2, 'https://github.com/acme/repo/pull/2', 'T', 0, 'open', 'none', 'passed', 'clean', 1, 'main', 'main',
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
       VALUES ('pay', 'p-dispatch', '/repo', 'main', 'dispatch', 'cpd/pay/p-dispatch', '/wt/d', cpd_txn(), '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
       VALUES ('pay', 'p-waiting', '/repo', 'main', 'waiting', 'cpd/pay/p-waiting', cpd_txn(), '2026-01-01T00:00:00.000Z'),
              ('pay', 'p-cancelled', '/repo', 'main', 'cancelled', 'cpd/pay/p-cancelled', cpd_txn(), '2026-01-01T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                      created_txn, created_at, started_at, merged_at)
       VALUES ('pay', 'p-merged', '/repo', 'main', 'merged', 'cpd/pay/p-merged', '/wt/m', 1, 'https://github.com/acme/repo/pull/1',
               '2026-01-02T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), '2026-01-01T00:00:00.000Z',
               '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-    INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+    INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                      created_txn, created_at, started_at)
       VALUES ('pay', 'p-open', '/repo', 'main', 'open', 'cpd/pay/p-open', '/wt/o', 2, 'https://github.com/acme/repo/pull/2',
               '2026-01-02T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 2), cpd_txn(), '2026-01-01T00:00:00.000Z',
@@ -510,13 +510,13 @@ fn assert_draws_every_job(store: &mut Store) {
 #[test]
 fn the_plan_view_draws_every_job_of_the_plan() {
     // a Plan of PRs of every status with a Job of every kind and status, and the explore Jobs of the Plan
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, EVERY_PR);
     run(&mut store, &every_job());
     assert_draws_every_job(&mut store);
 
     // a Plan of no PR and the explore Jobs only
-    let (_dir, mut store) = db_without_pr();
+    let (_dir, mut store) = db_without_workflow();
     run(&mut store, &every_job_explore_only());
     assert_draws_every_job(&mut store);
 }

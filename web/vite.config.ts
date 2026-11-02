@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type PluginOption } from "vite";
-import { createLiveHandler, type LiveDeps, type LiveSession } from "./src/api/live-server.ts";
+import { createLiveHandler, type LiveDeps, type LiveContext, type LiveSession, type InboxItem, type LivePlan } from "./src/api/live-server.ts";
 
 // The web client dev/build config (docs/research/web-client-api.md §6, A2): React + the
 // Tailwind v4 plugin, and the dev server on port 5173 against the typed mock. With
@@ -35,9 +35,41 @@ interface SessionRow {
   runner?: unknown;
   name?: unknown;
   state?: unknown;
+  asleep_at?: unknown;
   title?: unknown;
   context?: unknown;
   file?: unknown;
+}
+
+/** One `plan list` row (only the fields realDeps reads). */
+interface PlanListRow {
+  id?: unknown;
+  context?: unknown;
+  title?: unknown;
+  phase?: unknown;
+  lead_session?: unknown;
+  archived_at?: unknown;
+  counts?: unknown;
+}
+
+/** One `context list` row (only the fields realDeps reads). */
+interface ContextListRow {
+  id?: unknown;
+  archived_at?: unknown;
+}
+
+/** The six Job counts `cpd plan list` prints, coerced to numbers with a missing one at zero. */
+function planCounts(value: unknown): LivePlan["counts"] {
+  const counts = (value ?? {}) as Record<string, unknown>;
+  const at = (key: string): number => (typeof counts[key] === "number" ? (counts[key] as number) : 0);
+  return {
+    draft: at("draft"),
+    queued: at("queued"),
+    running: at("running"),
+    merged: at("merged"),
+    failed: at("failed"),
+    cancelled: at("cancelled"),
+  };
 }
 
 /** Builds the real `LiveDeps`: it runs the cpd CLI and reads the pi session file it names. */
@@ -62,6 +94,9 @@ function realDeps(): LiveDeps {
       const title = typeof row.title === "string" ? row.title : row.name;
       if (typeof title === "string") session.title = title;
       if (typeof row.state === "string") session.state = row.state;
+      if (row.asleep_at === null || typeof row.asleep_at === "string") {
+        session.asleep_at = row.asleep_at;
+      }
       if (typeof row.context === "string") session.context = row.context;
       if (typeof row.name === "string") session.name = row.name;
       sessions.push(session);
@@ -106,6 +141,44 @@ function realDeps(): LiveDeps {
       } catch {
         return undefined;
       }
+    },
+    async inbox() {
+      const parsed = JSON.parse(await runCpd(["inbox", "list"])) as { items?: readonly InboxItem[] };
+      return parsed.items ?? [];
+    },
+    async plans() {
+      // The CLI's own rows, archived ones kept: the rail lists every Plan of a Context and hides
+      // the archived behind the fold (web/README.md "Context tree rows"). Each row carries its
+      // `archived_at`; the route derives the wire's `archived` flag from it.
+      const parsed = JSON.parse(await runCpd(["plan", "list"])) as { plans?: readonly PlanListRow[] };
+      const plans: LivePlan[] = [];
+      for (const row of parsed.plans ?? []) {
+        plans.push({
+          id: String(row.id),
+          context: String(row.context ?? ""),
+          title: String(row.title ?? ""),
+          phase: String(row.phase ?? ""),
+          lead_session: typeof row.lead_session === "string" ? row.lead_session : null,
+          archived_at: typeof row.archived_at === "string" ? row.archived_at : null,
+          counts: planCounts(row.counts),
+        });
+      }
+      return plans;
+    },
+    async contexts() {
+      // The Contexts read (web/README.md "Context tree rows"): the rows of `cpd context list`,
+      // each reduced to its id and whether it is archived.
+      const parsed = JSON.parse(await runCpd(["context", "list"])) as {
+        contexts?: readonly ContextListRow[];
+      };
+      const contexts: LiveContext[] = [];
+      for (const row of parsed.contexts ?? []) {
+        contexts.push({
+          id: String(row.id),
+          archived: typeof row.archived_at === "string",
+        });
+      }
+      return contexts;
     },
   };
 }

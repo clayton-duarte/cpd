@@ -59,7 +59,10 @@ pub enum Command {
     /// The message board (commands.md §10a)
     #[command(subcommand)]
     Board(board::Command),
-    /// Pull requests (commands.md §9)
+    /// The Plan's Workflows: add, edit, describe, cancel, start (commands.md §9)
+    #[command(subcommand)]
+    Workflow(pr::WorkflowCommand),
+    /// Pull requests, through gh (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
     /// The GitHub review (commands.md §31.1)
@@ -120,7 +123,7 @@ pub enum Command {
     Resource(resource::Command),
     /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
     Prune(prune::Args),
-    /// Remove the worktrees and branches of merged and cancelled PRs (commands.md §29)
+    /// Remove the worktrees and branches of merged and cancelled Workflows (commands.md §29)
     Janitor,
     /// Tag the commit that set the workspace version (commands.md §26.1)
     Tag,
@@ -205,6 +208,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
+        Command::Workflow(c) => pr::run_workflow(c),
         Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => pr::review::run(ports, c),
         Command::Policy(c) => policy::run(c),

@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createLiveHandler, type LiveDeps, type LiveHandler, type LiveSession } from "./live-server";
+import { createLiveHandler, type LiveContext, type LiveDeps, type LiveHandler, type LivePlan, type LiveSession } from "./live-server";
 import type { SnapshotFrame } from "../fold/fold";
 
 const TOKEN = "test-token";
@@ -30,6 +30,17 @@ const durableSession: LiveSession = {
   role: "manager",
   runner: "durable",
   title: "durable manager",
+};
+
+// One `cpd plan list` row: the plans read passes it through unchanged.
+const plan: LivePlan = {
+  id: "pay-4521",
+  context: "building-cpd",
+  title: "Retry failed payments",
+  phase: "dispatch",
+  lead_session: "596d007f-0000-0000-0000-000000000000",
+  archived_at: null,
+  counts: { draft: 1, queued: 2, running: 1, merged: 4, failed: 0, cancelled: 0 },
 };
 
 /** Reads the committed pi fixture beside this test. */
@@ -171,6 +182,41 @@ function snapshotText(frame: SnapshotFrame): string {
   return snapshot.messages?.[0]?.text ?? "";
 }
 
+/** The messages of a snapshot frame. */
+function frameMessages(frame: SnapshotFrame): Array<{ id: string; text: string }> {
+  const snapshot = frame.snapshot as { messages?: Array<{ id: string; text: string }> };
+  return snapshot.messages ?? [];
+}
+
+/** A pi JSONL of `count` assistant turns, each a text of `size` characters, ids m1…mN. */
+function piTurns(count: number, size: number): string {
+  const lines: string[] = [];
+  for (let i = 1; i <= count; i += 1) {
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: `m${i}`,
+        message: { role: "assistant", content: [{ type: "text", text: "x".repeat(size) }] },
+      }),
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Reads the first snapshot a frames request sends for `jsonl`, then closes the stream. */
+async function firstSnapshot(handler: LiveHandler, id: string): Promise<SnapshotFrame> {
+  const capture = makeRes();
+  const done = handler(
+    makeReq({ method: "GET", url: `/__cpd/sessions/${id}/frames`, headers: { "x-cpd-token": TOKEN } }),
+    capture.res,
+  );
+  await flush();
+  const frame = frames(capture.body())[0]!;
+  capture.close();
+  await done;
+  return frame;
+}
+
 test("the handler refuses a request without the token", async () => {
   const handler = createLiveHandler(deps());
   const missing = await call(handler, { method: "GET", url: "/__cpd/sessions" });
@@ -276,6 +322,66 @@ test("the SSE route streams a snapshot frame and again when the transcript chang
   }
 });
 
+test("the frames snapshot carries only the newest turns, within the byte budget", async () => {
+  // Fifty short turns: the tail bound keeps the newest 40, dropping m1…m10.
+  const tailHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(50, 1), stat: async () => 1 }),
+  );
+  const tail = frameMessages(await firstSnapshot(tailHandler, piSession.id));
+  expect(tail).toHaveLength(40);
+  expect(tail[0]!.id).toBe("m11");
+  expect(tail[tail.length - 1]!.id).toBe("m50");
+
+  // Ten ~400 KB turns: the byte budget drops old turns until the frame fits, newest kept.
+  const budgetHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(10, 400_000), stat: async () => 1 }),
+  );
+  const budgetFrame = await firstSnapshot(budgetHandler, piSession.id);
+  const budgetMessages = frameMessages(budgetFrame);
+  expect(budgetMessages.length).toBeLessThan(10);
+  expect(budgetMessages[budgetMessages.length - 1]!.id).toBe("m10");
+  expect(JSON.stringify(budgetFrame).length).toBeLessThanOrEqual(1_000_000);
+
+  // One turn larger than the budget still ships: an empty snapshot would blank the Chat.
+  const giantHandler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(1, 2_000_000), stat: async () => 1 }),
+  );
+  const giantFrame = await firstSnapshot(giantHandler, piSession.id);
+  const giant = frameMessages(giantFrame);
+  expect(giant).toHaveLength(1);
+  expect(giant[0]!.id).toBe("m1");
+  expect(JSON.stringify(giantFrame).length).toBeGreaterThan(1_000_000);
+});
+
+test("the transcript route pages with limit and before and reports whether more precedes the page", async () => {
+  const handler = createLiveHandler(
+    deps({ list: async () => [piSession], readPi: async () => piTurns(10, 3) }),
+  );
+  const readPage = async (url: string): Promise<{ ids: string[]; more: boolean }> => {
+    const { res } = await call(handler, { method: "GET", url, headers: { "x-cpd-token": TOKEN } });
+    const payload = JSON.parse(res.body()) as {
+      messages: Array<{ id: string }>;
+      more: boolean;
+    };
+    return { ids: payload.messages.map((message) => message.id), more: payload.more };
+  };
+  const transcript = `/__cpd/sessions/${piSession.id}/transcript`;
+
+  // With no limit the whole transcript is answered, as before.
+  const whole = await readPage(transcript);
+  expect(whole.ids).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"]);
+
+  // The three turns just above m8, with older turns still preceding them.
+  const page = await readPage(`${transcript}?limit=3&before=m8`);
+  expect(page.ids).toEqual(["m5", "m6", "m7"]);
+  expect(page.more).toBe(true);
+
+  // The page that reaches the oldest turn says nothing precedes it.
+  const first = await readPage(`${transcript}?limit=3&before=m2`);
+  expect(first.ids).toEqual(["m1"]);
+  expect(first.more).toBe(false);
+});
+
 test("the send route runs cpd session send with the unblocks reason", async () => {
   const sent: Array<[string, string, string]> = [];
   const handler = createLiveHandler(
@@ -297,4 +403,126 @@ test("the send route runs cpd session send with the unblocks reason", async () =
   expect(res.status()).toBe(200);
   expect(JSON.parse(res.body())).toEqual({ ok: true });
   expect(sent).toEqual([[piSession.id, "please resume", "the user answered"]]);
+});
+
+// The plans read (web/README.md "Where the numbers come from"): a read-only GET /__cpd/plans on
+// the dev live adapter, the token like its siblings, answering { ok: true, plans: [...] }.
+
+test("GET /__cpd/plans answers the plans dependency's rows with the token", async () => {
+  const handler = createLiveHandler(deps({ plans: async () => [plan] }));
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  const payload = JSON.parse(res.body()) as { ok: boolean; plans: Array<{ id: string }> };
+  expect(payload.ok).toBe(true);
+  expect(payload.plans.map((row) => row.id)).toEqual([plan.id]);
+});
+
+test("GET /__cpd/plans is refused without the token", async () => {
+  const handler = createLiveHandler(deps({ plans: async () => [plan] }));
+
+  const missing = await call(handler, { method: "GET", url: "/__cpd/plans" });
+  expect(missing.matched).toBe(true);
+  expect(missing.res.status()).toBe(401);
+  expect(JSON.parse(missing.res.body())).toEqual({ ok: false, error: "missing or wrong token" });
+
+  // The refusal is the route's own, not a pass-through of an unknown /__cpd/ path: with the
+  // token the same request is a route the handler matches.
+  const wired = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(wired.matched).toBe(true);
+});
+
+test("GET /__cpd/plans answers an empty list without the plans dependency", async () => {
+  const handler = createLiveHandler(deps());
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  expect(JSON.parse(res.body())).toEqual({ ok: true, plans: [] });
+});
+
+test("GET /__cpd/plans carries archived Plans with their flag", async () => {
+  // One live Plan and one archived (`archived_at` set): the read answers every Plan of the
+  // Context, and the wire carries the archived flag (web/README.md "Context tree rows").
+  const archived: LivePlan = {
+    ...plan,
+    id: "old-4520",
+    archived_at: "2026-11-02T00:00:00Z",
+  };
+  const handler = createLiveHandler(deps({ plans: async () => [plan, archived] }));
+  const { res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/plans",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  const payload = JSON.parse(res.body()) as {
+    ok: boolean;
+    plans: Array<{ id: string; archived: boolean }>;
+  };
+  const live = payload.plans.find((row) => row.id === plan.id);
+  const old = payload.plans.find((row) => row.id === archived.id);
+  expect(live).toBeDefined();
+  expect(live?.archived).toBe(false);
+  expect(old).toBeDefined();
+  expect(old?.archived).toBe(true);
+});
+
+// The contexts read (web/README.md "Context tree rows"): a read-only GET /__cpd/contexts on the
+// dev live adapter, the token like its siblings, answering { ok: true, contexts: [...] } from
+// `cpd context list`.
+
+test("GET /__cpd/contexts answers the contexts read with the token", async () => {
+  const contexts: readonly LiveContext[] = [
+    { id: "building-cpd", archived: false },
+    { id: "old-cpd", archived: true },
+  ];
+  const handler = createLiveHandler(deps({ contexts: async () => contexts }));
+  const { matched, res } = await call(handler, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(matched).toBe(true);
+  expect(res.status()).toBe(200);
+  expect(JSON.parse(res.body())).toEqual({ ok: true, contexts });
+
+  // The read is optional: with no contexts dependency the route answers an empty list, so an
+  // API without the read never regresses (web/README.md "The fallback").
+  const bare = createLiveHandler(deps());
+  const empty = await call(bare, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(empty.matched).toBe(true);
+  expect(JSON.parse(empty.res.body())).toEqual({ ok: true, contexts: [] });
+});
+
+test("GET /__cpd/contexts is refused without the token", async () => {
+  const handler = createLiveHandler(deps({ contexts: async () => [] }));
+
+  const missing = await call(handler, { method: "GET", url: "/__cpd/contexts" });
+  expect(missing.matched).toBe(true);
+  expect(missing.res.status()).toBe(401);
+  expect(JSON.parse(missing.res.body())).toEqual({ ok: false, error: "missing or wrong token" });
+
+  // The refusal is the route's own, not a pass-through of an unknown /__cpd/ path: with the
+  // token the same request is a route the handler matches.
+  const wired = await call(handler, {
+    method: "GET",
+    url: "/__cpd/contexts",
+    headers: { "x-cpd-token": TOKEN },
+  });
+  expect(wired.matched).toBe(true);
 });

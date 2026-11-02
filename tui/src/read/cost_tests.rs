@@ -327,12 +327,12 @@ pub(super) fn session(
     )
 }
 
-/// A Plan `id` in `context` with its one PR and its Lead Session `l-<id>` (file `file`).
+/// A Plan `id` in `context` with its one Workflow and its Lead Session `l-<id>` (file `file`).
 fn plan(id: &str, context: &str, file: Option<&str>) -> String {
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'dispatch', 'l-{id}', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          {}",
         session(&format!("l-{id}"), "lead", context, Some(id), None, file, "")
@@ -366,7 +366,7 @@ fn manager(id: &str, context: &str, file: Option<&str>, archived: bool) -> Strin
 
 fn job(plan: &str, key: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'queued', 0, '{FP}', cpd_txn(),
                  '2026-01-02T00:00:00.000Z');"

@@ -49,9 +49,9 @@ fn fresh(phase: &str) -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-fn pr(plan: &str, key: &str, lead_branch: &str) -> String {
+fn workflow(plan: &str, key: &str, lead_branch: &str) -> String {
     format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan}', '{key}', '/r', 'main', 'waiting', '{lead_branch}', cpd_txn(), 't');"
     )
 }
@@ -59,14 +59,14 @@ fn pr(plan: &str, key: &str, lead_branch: &str) -> String {
 #[test]
 fn prs_accepts_a_plan_slash_key_lead_branch() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("`<plan>/<key>` is a Lead Branch");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("`<plan>/<key>` is a Lead Branch");
 }
 
 #[test]
 fn prs_still_accepts_the_two_legacy_lead_branch_forms() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "cpd/pay/api")).expect("`cpd/<plan>/<key>`");
-    write(&mut store, &pr("pay", "old", "cpd/pay")).expect("`cpd/<plan>`");
+    write(&mut store, &workflow("pay", "api", "cpd/pay/api")).expect("`cpd/<plan>/<key>`");
+    write(&mut store, &workflow("pay", "old", "cpd/pay")).expect("`cpd/<plan>`");
 }
 
 #[test]
@@ -77,17 +77,17 @@ fn prs_refuses_a_lead_branch_that_is_not_derived_from_plan_and_key() {
         ("api", "pay/other"),
         ("api", "cpd/other/api"),
     ] {
-        let failed = message(write(&mut store, &pr("pay", key, branch)), branch);
+        let failed = message(write(&mut store, &workflow("pay", key, branch)), branch);
         assert!(failed.contains("CHECK"), "{branch}: {failed}");
     }
-    // Refused for the CHECK, so the same PR with its own name goes in.
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the derived name");
+    // Refused for the CHECK, so the same Workflow with its own name goes in.
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the derived name");
 }
 
-/// PR `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
+/// Workflow `api` with a queued Job `j` and, over it, one running Attempt on `branch`.
 fn attempt_on(branch: &str) -> String {
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
          VALUES ('pay', 'api', 'j', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, 'work', NULL, cpd_txn(), 't');
          UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'j';
          UPDATE jobs SET status = 'running' WHERE key = 'j';
@@ -99,17 +99,17 @@ fn attempt_on(branch: &str) -> String {
 #[test]
 fn attempts_accepts_a_linear_attempt_on_a_plan_slash_key_branch() {
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
     write(&mut store, &attempt_on("pay/api"))
-        .expect("a linear Attempt's branch is its PR's Lead Branch");
+        .expect("a linear Attempt's branch is its Workflow's Lead Branch");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
     write(&mut store, &attempt_on("cpd/pay--j-a1"))
         .expect("a parallel Attempt branch keeps its name");
 
     let (_dir, mut store) = fresh("plan");
-    write(&mut store, &pr("pay", "api", "pay/api")).expect("the PR");
+    write(&mut store, &workflow("pay", "api", "pay/api")).expect("the Workflow");
     let failed = message(
         write(&mut store, &attempt_on("paid/api")),
         "another plan's branch",
@@ -125,7 +125,7 @@ fn prs_locked_refuses_moving_a_legacy_lead_branch() {
             &mut store,
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', 1, 'u', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                VALUES ('pay', 'api', '/r', 'main', 'merged', 'cpd/pay', '/w', cpd_txn(), 't', 't', 1, 'u', 't',
                        (SELECT id FROM pull_requests WHERE number = 1), 't');",
@@ -133,8 +133,8 @@ fn prs_locked_refuses_moving_a_legacy_lead_branch() {
         .unwrap();
         let moved = write(
             &mut store,
-            "UPDATE prs SET lead_branch = 'cpd/pay/api' WHERE key = 'api'",
+            "UPDATE workflows SET lead_branch = 'cpd/pay/api' WHERE key = 'api'",
         );
-        assert!(message(moved, phase).contains("pr_locked"), "{phase}");
+        assert!(message(moved, phase).contains("workflow_locked"), "{phase}");
     }
 }

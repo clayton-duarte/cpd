@@ -36,9 +36,9 @@ pub struct StartArgs {
     /// The explanation of the incident (1 or more characters; required only on a fresh start)
     #[arg(long, value_name = "text")]
     pub reason: Option<Text>,
-    /// The `<plan>/<key>` PR that ends the incident when it merges
+    /// The `<plan>/<key>` Workflow that ends the incident when it merges
     #[arg(long, value_name = "<plan>/<key>")]
-    pub until_pr: Option<String>,
+    pub until_workflow: Option<String>,
 }
 
 /// Runs one `incident` command. The caller's Session is `$CPD_SESSION` (commands.md §25).
@@ -54,7 +54,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             caller.as_ref(),
             &args.plan,
             args.reason.as_ref().map_or("", |t| t.as_str()),
-            args.until_pr.as_deref(),
+            args.until_workflow.as_deref(),
         ),
         Command::End => end(&mut store, caller.as_ref()),
         Command::Status => status(&mut store),
@@ -93,7 +93,7 @@ fn require_manager<'a>(
 pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
     let stored = conn
         .query_row(
-            "SELECT started_at, started_by, reason, until_pr FROM incident WHERE id = 1",
+            "SELECT started_at, started_by, reason, until_workflow FROM incident WHERE id = 1",
             [],
             |r| {
                 Ok((
@@ -105,7 +105,7 @@ pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
             },
         )
         .optional()?;
-    let Some((started_at, by, reason, until_pr)) = stored else {
+    let Some((started_at, by, reason, until_workflow)) = stored else {
         return Ok(None);
     };
     let plans: Vec<String> = plans(conn)?
@@ -113,7 +113,7 @@ pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
         .map(|p| p.as_str().to_owned())
         .collect();
     Ok(Some(
-        json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_pr": until_pr}),
+        json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_workflow": until_workflow}),
     ))
 }
 
@@ -178,13 +178,13 @@ pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
 }
 
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
-fn parse_until_pr(value: &str) -> Result<(PlanId, String), CpdError> {
+fn parse_until_workflow(value: &str) -> Result<(PlanId, String), CpdError> {
     let usage = || {
         CpdError::new(
             ErrorCode::Usage,
-            "An --until-pr is `<plan>/<key>` with a non-empty Plan and key.",
+            "An --until-workflow is `<plan>/<key>` with a non-empty Plan and key.",
         )
-        .with("until_pr", value)
+        .with("until_workflow", value)
     };
     let (plan, key) = value.split_once('/').ok_or_else(usage)?;
     if plan.is_empty() || key.is_empty() || key.contains('/') {
@@ -199,15 +199,15 @@ fn parse_until_pr(value: &str) -> Result<(PlanId, String), CpdError> {
 /// `starting` or `running` Attempt with no `stop_request`, and appends one `incident-started` Event;
 /// `reason` must be non-empty. A start while `incident` is live replaces `incident_plans` with
 /// exactly the named Plans, keeps `started_at`, `started_by` and `reason`, runs no stop-request
-/// sweep, and appends one `incident-plans` Event only when the set or `until_pr` changed. `until_pr`
-/// is the optional `<plan>/<key>` auto-end PR; when it is absent the stored `until_plan`/`until_pr`
+/// sweep, and appends one `incident-plans` Event only when the set or `until_workflow` changed. `until_workflow`
+/// is the optional `<plan>/<key>` auto-end Workflow; when it is absent the stored `until_plan`/`until_workflow`
 /// are cleared.
 pub fn start(
     store: &mut Store,
     caller: Option<&SessionId>,
     plans: &[PlanId],
     reason: &str,
-    until_pr: Option<&str>,
+    until_workflow: Option<&str>,
 ) -> Result<Output, CpdError> {
     if plans.is_empty() {
         return Err(CpdError::new(
@@ -215,7 +215,7 @@ pub fn start(
             "Incident mode needs at least one --plan.",
         ));
     }
-    let until = until_pr.map(parse_until_pr).transpose()?;
+    let until = until_workflow.map(parse_until_workflow).transpose()?;
     store.write("incident start", |tx| {
         let caller = require_manager(tx, caller)?;
         for plan in plans {
@@ -228,21 +228,21 @@ pub fn start(
         if let Some((until_plan, key)) = &until {
             if !plans.contains(until_plan) {
                 return Err(CpdError::new(
-                    ErrorCode::UntilPrNotIncident,
-                    format!("The --until-pr Plan {until_plan} is not one of the incident's Plans."),
+                    ErrorCode::UntilWorkflowNotIncident,
+                    format!("The --until-workflow Plan {until_plan} is not one of the incident's Plans."),
                 )
                 .with("plan", until_plan.as_str())
-                .with("until_pr", until_pr.unwrap_or_default()));
+                .with("until_workflow", until_workflow.unwrap_or_default()));
             }
             let known: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2)",
+                "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2)",
                 params![until_plan.as_str(), key],
                 |r| r.get(0),
             )?;
             if !known {
                 return Err(CpdError::new(
-                    ErrorCode::PrNotFound,
-                    format!("No PR {until_plan}/{key}."),
+                    ErrorCode::WorkflowNotFound,
+                    format!("No Workflow {until_plan}/{key}."),
                 )
                 .with("plan", until_plan.as_str())
                 .with("pr", key.as_str()));
@@ -250,15 +250,15 @@ pub fn start(
         }
 
         let live: Option<Option<String>> = tx
-            .query_row("SELECT until_pr FROM incident WHERE id = 1", [], |r| r.get(0))
+            .query_row("SELECT until_workflow FROM incident WHERE id = 1", [], |r| r.get(0))
             .optional()?;
-        if let Some(stored_until_pr) = live {
-            let new_until_pr = until.as_ref().map(|(plan, key)| format!("{plan}/{key}"));
+        if let Some(stored_until_workflow) = live {
+            let new_until_workflow = until.as_ref().map(|(plan, key)| format!("{plan}/{key}"));
             let stored: Vec<PlanId> = self::plans(tx)?;
             let stored_set: BTreeSet<&str> = stored.iter().map(PlanId::as_str).collect();
             let new_set: BTreeSet<&str> = plans.iter().map(PlanId::as_str).collect();
             let set_changed = stored_set != new_set;
-            let until_changed = new_until_pr.as_deref() != stored_until_pr.as_deref();
+            let until_changed = new_until_workflow.as_deref() != stored_until_workflow.as_deref();
             if !set_changed && !until_changed {
                 let incident = row(tx)?.expect("the row just read");
                 return Ok(Output::success(json!({"changed": false, "incident": incident})));
@@ -272,12 +272,12 @@ pub fn start(
             }
             if until_changed {
                 tx.execute(
-                    "UPDATE incident SET until_plan = ?1, until_pr = ?2 WHERE id = 1",
-                    params![until.as_ref().map(|(plan, _)| plan.as_str()), new_until_pr.as_deref()],
+                    "UPDATE incident SET until_plan = ?1, until_workflow = ?2 WHERE id = 1",
+                    params![until.as_ref().map(|(plan, _)| plan.as_str()), new_until_workflow.as_deref()],
                 )?;
             }
             let named: Vec<&str> = plans.iter().map(PlanId::as_str).collect();
-            append(tx, NewEvent::incident_plans("Incident mode Plans updated.", caller.as_str(), &named, new_until_pr.as_deref()))?;
+            append(tx, NewEvent::incident_plans("Incident mode Plans updated.", caller.as_str(), &named, new_until_workflow.as_deref()))?;
             let incident = row(tx)?.expect("the row just updated");
             return Ok(Output::success(json!({"changed": true, "incident": incident})));
         }
@@ -287,7 +287,7 @@ pub fn start(
         }
         let started_at = clock::now();
         tx.execute(
-            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr, lead)
+            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_workflow, lead)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 started_at,
@@ -295,7 +295,7 @@ pub fn start(
                 reason,
                 tx.id(),
                 until.as_ref().map(|(plan, _)| plan.as_str()),
-                until_pr,
+                until_workflow,
                 lead,
             ],
         )?;
@@ -308,7 +308,7 @@ pub fn start(
             [],
         )?;
         let named: Vec<&str> = plans.iter().map(PlanId::as_str).collect();
-        append(tx, NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at, &named, until_pr))?;
+        append(tx, NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at, &named, until_workflow))?;
         let incident = row(tx)?.expect("the row just inserted");
         Ok(Output::success(json!({"changed": true, "incident": incident})))
     })
@@ -342,14 +342,14 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
 }
 
 /// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
-/// recorded. When the stored `until_pr` PR is merged, deletes the `incident` row and every
-/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-pr"`, `by`
-/// `"engine"`), returning true; false when incident mode is off, no `until_pr` is stored, or the
-/// PR is not merged.
-pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
+/// recorded. When the stored `until_workflow` Workflow is merged, deletes the `incident` row and every
+/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-workflow"`, `by`
+/// `"engine"`), returning true; false when incident mode is off, no `until_workflow` is stored, or the
+/// Workflow is not merged.
+pub fn end_if_until_workflow_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let stored = tx
         .query_row(
-            "SELECT until_plan, until_pr FROM incident WHERE id = 1",
+            "SELECT until_plan, until_workflow FROM incident WHERE id = 1",
             [],
             |r| {
                 Ok((
@@ -359,14 +359,14 @@ pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
             },
         )
         .optional()?;
-    let Some((Some(until_plan), Some(until_pr))) = stored else {
+    let Some((Some(until_plan), Some(until_workflow))) = stored else {
         return Ok(false);
     };
-    let key = until_pr
+    let key = until_workflow
         .split_once('/')
-        .map_or(until_pr.as_str(), |(_, key)| key);
+        .map_or(until_workflow.as_str(), |(_, key)| key);
     let merged: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
+        "SELECT EXISTS(SELECT 1 FROM workflows WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
         params![until_plan, key],
         |r| r.get(0),
     )?;
@@ -378,7 +378,7 @@ pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
     let ended_at = clock::now();
     append(
         tx,
-        NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-pr"),
+        NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-workflow"),
     )?;
     Ok(true)
 }

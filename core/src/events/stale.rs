@@ -1,5 +1,5 @@
 //! Stale Events (contract §5.4): which Events `events follow --session` skips because a later Event, or the
-//! PR's row, proves the condition they report is over. A missing object or field fails open (not stale).
+//! Workflow's row, proves the condition they report is over. A missing object or field fails open (not stale).
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -8,7 +8,7 @@ use super::kind::Kind;
 use super::select::Event;
 use crate::error::CpdError;
 
-/// Whether `event` is stale: a later Event (an id above its own, anywhere in the store) or the PR's row proves it.
+/// Whether `event` is stale: a later Event (an id above its own, anywhere in the store) or the Workflow's row proves it.
 pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
     let Some(kind) = Kind::ALL.iter().copied().find(|k| k.as_str() == event.kind) else {
         return Ok(false);
@@ -73,14 +73,14 @@ pub fn is_stale(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
                     &["attempt-started", "job-merged", "job-cancelled"],
                 );
             }
-            let pr = event.data.pointer("/details/pr").and_then(Value::as_str);
-            match (plan, pr) {
-                (Some(plan), Some(pr)) => exists(
+            let workflow = event.data.pointer("/details/pr").and_then(Value::as_str);
+            match (plan, workflow) {
+                (Some(plan), Some(workflow)) => exists(
                     conn,
                     "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2
-                     AND kind IN ('pr-started', 'pr-merged', 'pr-cancelled')
-                     AND json_extract(data, '$.pr') = ?3 LIMIT 1",
-                    params![plan, id, pr],
+                     AND kind IN ('workflow-started', 'pr-merged', 'workflow-cancelled')
+                     AND json_extract(data, '$.workflow') = ?3 LIMIT 1",
+                    params![plan, id, workflow],
                 ),
                 _ => Ok(false),
             }
@@ -106,17 +106,17 @@ fn later_of_job(conn: &Connection, event: &Event, kinds: &[&str]) -> Result<bool
 }
 
 fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
-    let (Some(plan), Some(pr)) = (
+    let (Some(plan), Some(workflow)) = (
         event.plan.as_deref(),
-        event.data.get("pr").and_then(Value::as_str),
+        event.data.get("workflow").and_then(Value::as_str),
     ) else {
         return Ok(false);
     };
     if exists(
         conn,
-        "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2 AND kind IN ('pr-merged', 'pr-cancelled')
-         AND json_extract(data, '$.pr') = ?3 LIMIT 1",
-        params![plan, event.id, pr],
+        "SELECT 1 FROM events WHERE plan = ?1 AND id > ?2 AND kind IN ('pr-merged', 'workflow-cancelled')
+         AND json_extract(data, '$.workflow') = ?3 LIMIT 1",
+        params![plan, event.id, workflow],
     )? {
         return Ok(true);
     }
@@ -137,9 +137,9 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
     };
     let row: Option<(String, Option<String>, String, Option<String>)> = conn
         .query_row(
-            "SELECT p.checks, p.review_decision, p.state, p.feedback FROM prs
-             JOIN pull_requests p ON p.id = prs.pull_request WHERE prs.plan = ?1 AND prs.key = ?2",
-            params![plan, pr],
+            "SELECT p.checks, p.review_decision, p.state, p.feedback FROM workflows
+             JOIN pull_requests p ON p.id = workflows.pull_request WHERE workflows.plan = ?1 AND workflows.key = ?2",
+            params![plan, workflow],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
@@ -162,12 +162,12 @@ fn pr_feedback(conn: &Connection, event: &Event) -> Result<bool, CpdError> {
             "ready_to_post" => {
                 let posted = exists(
                     conn,
-                    "SELECT 1 FROM pr_posts WHERE plan = ?1 AND pr = ?2 LIMIT 1",
-                    params![plan, pr],
+                    "SELECT 1 FROM pr_posts WHERE plan = ?1 AND workflow = ?2 LIMIT 1",
+                    params![plan, workflow],
                 )?;
                 let id: i64 = conn.query_row(
-                    "SELECT pull_request FROM prs WHERE plan = ?1 AND key = ?2",
-                    params![plan, pr],
+                    "SELECT pull_request FROM workflows WHERE plan = ?1 AND key = ?2",
+                    params![plan, workflow],
                     |r| r.get(0),
                 )?;
                 let row = crate::pr::pulls::load(conn, id)?;

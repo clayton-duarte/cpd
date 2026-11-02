@@ -83,7 +83,7 @@ fn world(fx: &Fx) -> (String, String) {
     for key in ["api", "web", "ui"] {
         let repo = fx.keyed_repo(key);
         fx.cpd(&[
-            "pr",
+            "workflow",
             "add",
             key,
             "--repo",
@@ -133,7 +133,7 @@ fn world(fx: &Fx) -> (String, String) {
     };
     let start_pr = |key: &str| {
         format!(
-            "UPDATE prs SET status = 'dispatch', lead_worktree = '/wt/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';"
+            "UPDATE workflows SET status = 'dispatch', lead_worktree = '/wt/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';"
         )
     };
     let open_pr = |key: &str, number: i64, status: &str| {
@@ -143,15 +143,15 @@ fn world(fx: &Fx) -> (String, String) {
             ""
         };
         format!(
-            "UPDATE prs SET status = 'open', pr_number = {number}, pr_url = 'https://github.com/acme/{key}/pull/{number}', pr_opened_at = 't',
+            "UPDATE workflows SET status = 'open', pr_number = {number}, pr_url = 'https://github.com/acme/{key}/pull/{number}', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{key}' AND number = {number})
               WHERE plan = 'pay' AND key = '{key}';
-             UPDATE prs SET status = '{status}'{merged} WHERE plan = 'pay' AND key = '{key}' AND status <> '{status}';"
+             UPDATE workflows SET status = '{status}'{merged} WHERE plan = 'pay' AND key = '{key}' AND status <> '{status}';"
         )
     };
     let draft = |key: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', 'api', '{key}', 'Job {key}', 'S2', 'Goal.', 'Context.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         )
     };
@@ -231,7 +231,7 @@ fn job_status(fx: &Fx, key: &str) -> String {
 
 fn pr_status(fx: &Fx, key: &str) -> String {
     fx.env
-        .query(&format!("SELECT status FROM prs WHERE key = '{key}'"))
+        .query(&format!("SELECT status FROM workflows WHERE key = '{key}'"))
 }
 
 fn gh_closes(fx: &Fx) -> Vec<Vec<String>> {
@@ -418,7 +418,7 @@ fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
     // Job `x` is running with no Attempt: a bad row, on which `job cancel` fails after the Jobs before it.
     fx.env.sql(
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', 'api', 'x', 'Job x', 'S2', 'Goal.', 'Context.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE key = 'x';
              UPDATE jobs SET status = 'running' WHERE key = 'x';",
@@ -494,7 +494,7 @@ fn add_tdd_pr(fx: &Fx, impl_status: &str) {
     let fingerprint = "f".repeat(64);
     let job = |key: &str, kind: &str, tests: &str| {
         format!(
-            "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, tests, test_files, status, appended, fingerprint, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, tests, test_files, status, appended, fingerprint, created_txn, created_at)
              VALUES ('pay', 'tdd', '{key}', '{kind}', 'Job {key}', 'S2', 'Goal.', 'Context.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]', {tests}, {tests},
                      'queued', 0, '{fingerprint}', cpd_txn(), 't');"
         )
@@ -508,7 +508,7 @@ fn add_tdd_pr(fx: &Fx, impl_status: &str) {
     };
     fx.env.sql(
         &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
+            "INSERT INTO workflows (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
                VALUES ('pay', 'tdd', '{repo}', 'main', 'dispatch', 'tdd', 'cpd/pay/tdd', '/wt/tdd', 't', cpd_txn(), 't');
              {tests}{imp}{open}{running}",
             repo = repo.display(),

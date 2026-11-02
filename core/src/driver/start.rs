@@ -62,30 +62,30 @@ pub struct Started {
     pub pid: u32,
 }
 
-/// Whether the PR has a live (not `ended`) linear Attempt other than `except` (pro-d52): its branch is the PR's Lead
+/// Whether the Workflow has a live (not `ended`) linear Attempt other than `except` (pro-d52): its branch is the Workflow's Lead
 /// Branch. The one place that derives it, for the starter and E3.
-pub fn pr_has_live_linear(
+pub fn workflow_has_live_linear(
     conn: &Connection,
     plan: &PlanId,
-    pr: &str,
+    workflow: &str,
     except: &str,
 ) -> Result<bool, CpdError> {
     let n: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-           JOIN prs ON prs.plan = j.plan AND prs.key = j.pr
-          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3 AND a.branch = prs.lead_branch",
-        params![plan.as_str(), pr, except],
+           JOIN workflows ON workflows.plan = j.plan AND workflows.key = j.workflow
+          WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended' AND a.id <> ?3 AND a.branch = workflows.lead_branch",
+        params![plan.as_str(), workflow, except],
         |r| r.get(0),
     )?;
     Ok(n > 0)
 }
 
-/// How an Attempt of a PR is allocated (hs-d680/hs-d682/hs-d683): a **linear** Attempt reuses the PR's workflow worktree on
+/// How an Attempt of a Workflow is allocated (hs-d680/hs-d682/hs-d683): a **linear** Attempt reuses the Workflow's Lead worktree on
 /// its Lead Branch; a **parallel** one gets its own worktree and branch. E3 derives it and passes it to the starter, which
-/// enforces it atomically, refusing any start next to a live linear Attempt of the PR. `None` means the caller passed no allocation: the starter derives it from the PR's live Attempts.
+/// enforces it atomically, refusing any start next to a live linear Attempt of the Workflow. `None` means the caller passed no allocation: the starter derives it from the Workflow's live Attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Allocation {
-    /// The workflow worktree on the PR's Lead Branch.
+    /// The Lead worktree on the Workflow's Lead Branch.
     Linear,
     /// Its own `cpd/<plan>--<attempt>` worktree and branch.
     Parallel,
@@ -127,7 +127,7 @@ pub fn start_with(
     start_with_allocation(ports, store, ctx, plan, key, None)
 }
 
-/// [`start_with`] with the linear vs parallel allocation E3 derived (`None`: derive it here from the PR's live Attempts),
+/// [`start_with`] with the linear vs parallel allocation E3 derived (`None`: derive it here from the Workflow's live Attempts),
 /// which the starter enforces atomically in its write transaction.
 pub fn start_with_allocation(
     ports: &Ports,
@@ -147,12 +147,16 @@ pub fn start_with_allocation(
                 conn,
                 ctx.home,
                 plan,
-                &w.pr,
+                &w.workflow,
                 key.as_str(),
                 Some(&w.names),
             )?;
-            let policy =
-                crate::pr::policy_of_pr(conn, ctx.home, plan, &crate::ids::PrKey::parse(&w.pr)?)?;
+            let policy = crate::pr::policy_of_workflow(
+                conn,
+                ctx.home,
+                plan,
+                &crate::ids::WorkflowKey::parse(&w.workflow)?,
+            )?;
             pools = resource::pools_of(&policy.resources, &w.owner, &w.repo)
                 .into_iter()
                 .filter(|p| w.names.iter().any(|n| n == p.name()))
@@ -295,7 +299,7 @@ pub fn start_with_allocation(
 
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
 /// does not match its fingerprint. `allocation` is E3's derived linear vs parallel choice (`None`: derive it from the
-/// PR's live Attempts).
+/// Workflow's live Attempts).
 fn decide(
     conn: &Connection,
     home: &CpdHome,
@@ -321,27 +325,30 @@ fn decide(
         .with("plan", plan.as_str())
         .with("job", key.as_str())
     })?;
-    // The repo and status of the Job's PR (R34 A7).
-    // An explore Job has no PR: it is Ready by its own rule (`require_ready_explore`).
+    // The repo and status of the Job's Workflow (R34 A7).
+    // An explore Job has no Workflow: it is Ready by its own rule (`require_ready_explore`).
     let explore = jobs::is_explore(&job.kind);
-    let (repo, _pr_status): (String, String) = if explore {
+    let (repo, _workflow_status): (String, String) = if explore {
         require_ready_explore(conn, &all, job, plan, &phase)?;
         (String::new(), String::new())
     } else {
-        let pr: (String, String) = conn.query_row(
-            "SELECT r.repo, r.status FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        let workflow: (String, String) = conn.query_row(
+            "SELECT r.repo, r.status FROM jobs j JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE j.plan = ?1 AND j.key = ?2",
             [plan.as_str(), key.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        require_ready(&all, job, plan, &phase, &pr.1)?;
-        pr
+        require_ready(&all, job, plan, &phase, &workflow.1)?;
+        workflow
     };
     if job.kind == "open" {
-        let pr = crate::ids::PrKey::parse(job.pr_str()).map_err(|e| {
-            CpdError::bad_row(format!("Job {key} has the PR key {:?}: {e}", job.pr_str()))
+        let workflow = crate::ids::WorkflowKey::parse(job.workflow_str()).map_err(|e| {
+            CpdError::bad_row(format!(
+                "Job {key} has the Workflow key {:?}: {e}",
+                job.workflow_str()
+            ))
         })?;
-        crate::pr::stored_description_of(conn, plan, &pr)?;
-        crate::pr::jira_required_of(conn, home, plan, &pr)?;
+        crate::pr::stored_description_of(conn, plan, &workflow)?;
+        crate::pr::jira_required_of(conn, home, plan, &workflow)?;
     }
     let found = locked_fingerprint(job);
     if job.fingerprint.as_deref() != Some(found.as_str()) {
@@ -415,9 +422,9 @@ fn decide(
         key.clone(),
         NonZeroU32::new(number).expect("numbers start at 1"),
     );
-    // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
-    // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
-    // the same transaction that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    // A linear Attempt (hs-d680, pro-d52) is the Workflow's only live Attempt for its whole life: it runs in the Workflow's one
+    // Lead worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
+    // the same transaction that inserts the Attempt, so two concurrent starts cannot both take the Lead worktree.
     if explore {
         // No worktree, no branch of git: the Attempt row holds a branch name no git branch has and the explore directory (R7).
         let worktree = explore_dir(home, plan);
@@ -429,30 +436,30 @@ fn decide(
             worktree,
         });
     }
-    if pr_has_live_linear(conn, plan, job.pr_str(), &attempt.to_string())? {
+    if workflow_has_live_linear(conn, plan, job.workflow_str(), &attempt.to_string())? {
         return Err(CpdError::new(
             ErrorCode::CasLost,
-            format!("Attempt {attempt} of Job {key} cannot start: the workflow worktree of PR {} is held by a live linear Attempt.", job.pr_str()),
+            format!("Attempt {attempt} of Job {key} cannot start: the Lead worktree of Workflow {} is held by a live linear Attempt.", job.workflow_str()),
         )
         .with("plan", plan.as_str())
         .with("job", key.as_str())
-        .with("pr", job.pr_str()));
+        .with("pr", job.workflow_str()));
     }
     let live: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",
-        params![plan.as_str(), job.pr_str(), attempt.to_string()],
+          WHERE a.plan = ?1 AND j.workflow = ?2 AND a.status <> 'ended' AND a.id <> ?3",
+        params![plan.as_str(), job.workflow_str(), attempt.to_string()],
         |r| r.get(0),
     )?;
     // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
-    // A requested Linear while another Attempt of the PR is live cannot take the PR's one workflow worktree: CasLost,
+    // A requested Linear while another Attempt of the Workflow is live cannot take the Workflow's one Lead worktree: CasLost,
     // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
     let linear = match allocation {
         Some(Allocation::Linear) if live > 0 => {
-            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of PR {} is live.", job.pr_str()))
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of Workflow {} is live.", job.workflow_str()))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str())
-                .with("pr", job.pr_str()));
+                .with("pr", job.workflow_str()));
         }
         Some(Allocation::Linear) => true,
         Some(Allocation::Parallel) => false,
@@ -460,19 +467,19 @@ fn decide(
     };
     let (branch, worktree) = if linear {
         let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
-            "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
-            params![plan.as_str(), job.pr_str()],
+            "SELECT lead_branch, lead_worktree FROM workflows WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), job.workflow_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let lead_worktree = lead_worktree.ok_or_else(|| {
             CpdError::new(
                 ErrorCode::StoreFailed,
                 format!(
-                    "PR {} of Plan {plan} has no workflow worktree.",
-                    job.pr_str()
+                    "Workflow {} of Plan {plan} has no Lead worktree.",
+                    job.workflow_str()
                 ),
             )
-            .with("pr", job.pr_str())
+            .with("pr", job.workflow_str())
         })?;
         (lead_branch, PathBuf::from(lead_worktree))
     } else {
@@ -538,17 +545,17 @@ fn require_ready_explore(
     .with("waiting_for", waiting))
 }
 
-/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is
-/// `dispatch` or `open` (a `waiting` PR has no Lead worktree yet), with every
+/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose Workflow is
+/// `dispatch` or `open` (a `waiting` Workflow has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
 fn require_ready(
     all: &[Job],
     job: &Job,
     plan: &PlanId,
     phase: &str,
-    pr_status: &str,
+    workflow_status: &str,
 ) -> Result<(), CpdError> {
-    // An `open` or `update` Job has no Dependency rows: it waits for the PR's other Jobs (§3.2, derived).
+    // An `open` or `update` Job has no Dependency rows: it waits for the Workflow's other Jobs (§3.2, derived).
     let derived = crate::job::open::unfinished(all, job);
     let waiting: Vec<&str> = match &derived {
         Some(keys) => keys.iter().map(String::as_str).collect(),
@@ -563,12 +570,12 @@ fn require_ready(
         format!("it is {}, not queued", job.status)
     } else if !matches!(phase, "dispatch" | "deploy") {
         format!("Plan {plan} is in phase {phase}")
-    } else if !matches!(pr_status, "dispatch" | "open") {
-        format!("its PR {} is {pr_status}", job.pr_str())
-    } else if job.kind == "open" && pr_status != "dispatch" {
+    } else if !matches!(workflow_status, "dispatch" | "open") {
+        format!("its Workflow {} is {workflow_status}", job.workflow_str())
+    } else if job.kind == "open" && workflow_status != "dispatch" {
         format!(
-            "its PR {} is {pr_status}, and an open Job runs only while its PR is dispatch",
-            job.pr_str()
+            "its Workflow {} is {workflow_status}, and an open Job runs only while its Workflow is dispatch",
+            job.workflow_str()
         )
     } else if !waiting.is_empty() && derived.is_some() {
         format!("it waits for {}, not finished yet", waiting.join(", "))
@@ -576,8 +583,8 @@ fn require_ready(
         format!("it needs {}, not merged yet", waiting.join(", "))
     } else if job.kind == "open" && crate::job::open::nothing_merged(all, job) {
         format!(
-            "no other Job of its PR {} is merged: there is nothing to open",
-            job.pr_str()
+            "no other Job of its Workflow {} is merged: there is nothing to open",
+            job.workflow_str()
         )
     } else {
         return Ok(());
@@ -590,8 +597,8 @@ fn require_ready(
     .with("job", job.key.as_str())
     .with("status", job.status.as_str())
     .with("phase", phase)
-    .with("pr", job.pr_str())
-    .with("pr_status", pr_status)
+    .with("pr", job.workflow_str())
+    .with("pr_status", workflow_status)
     .with("waiting_for", waiting))
 }
 
@@ -645,17 +652,17 @@ fn insert(
             format!("Job {key} changed while its Attempt was being started: try again."),
         ));
     }
-    // An explore Job has no PR, so no Jira transition.
-    let pr: Option<String> = tx.query_row(
-        "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+    // An explore Job has no Workflow, so no Jira transition.
+    let workflow: Option<String> = tx.query_row(
+        "SELECT workflow FROM jobs WHERE plan = ?1 AND key = ?2",
         params![plan.as_str(), key.as_str()],
         |r| r.get(0),
     )?;
-    if let Some(pr) = pr {
+    if let Some(workflow) = workflow {
         crate::pr::jira_sync::queue(
             tx,
             plan.as_str(),
-            &pr,
+            &workflow,
             crate::pr::jira_sync::Target::InProgress,
         )?;
     }

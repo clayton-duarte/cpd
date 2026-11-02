@@ -1,5 +1,5 @@
 //! `plan lock` (commands.md §4.8, contract §3.1, §7.2): `plan → dispatch`.
-//! Starts the PRs that need no other PR (all or nothing, `pr::start`), queues
+//! Starts the Workflows that need no other Workflow (all or nothing, `pr::start`), queues
 //! every draft Job with its Locked-Job fingerprint, and starts the engine with
 //! `cpd watch --ensure`.
 
@@ -9,10 +9,10 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
 
-use super::fingerprint::{load_prs, plan_fingerprint};
+use super::fingerprint::{load_workflows, plan_fingerprint};
 use super::jobs::{self, Job};
 use super::lint;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
 use super::{Env, LockArgs};
@@ -32,20 +32,28 @@ const COMMAND: &str = "plan lock";
 pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, prs, held) = env.store.read(|conn| {
-        let prs = load_prs(conn, &id)?;
+    let (plan, jobs, workflows, held) = env.store.read(|conn| {
+        let workflows = load_workflows(conn, &id)?;
         let mut held = HashMap::new();
-        for pr in prs.iter().filter(|p| p.status != "cancelled") {
-            held.insert(pr.key.to_string(), start::not_ready(conn, &id, &pr.key)?);
+        for workflow in workflows.iter().filter(|p| p.status != "cancelled") {
+            held.insert(
+                workflow.key.to_string(),
+                start::not_ready(conn, &id, &workflow.key)?,
+            );
         }
-        Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, prs, held))
+        Ok((
+            row::load(conn, &id)?,
+            jobs::load(conn, &id)?,
+            workflows,
+            held,
+        ))
     })?;
     match plan.phase {
         Phase::Plan => {}
         Phase::Dispatch => {
             let watch = ensure_watch(&env, &id)?;
             return Ok(Output::success(json!({
-                "plan": id, "phase": "dispatch", "prs": listed(&prs, &[], &held), "watch": watch, "already": true,
+                "plan": id, "phase": "dispatch", "workflows": listed(&workflows, &[], &held), "watch": watch, "already": true,
             })));
         }
         other => {
@@ -67,7 +75,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     }
     env.store
         .read(|conn| check_drafts_complete(conn, &id, &jobs))?;
-    super::shape::check(&id, &prs, &jobs)?;
+    super::shape::check(&id, &workflows, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| {
         Ok((
@@ -85,20 +93,20 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
-    if let Some(e) = lint::pr_empty(&id, &prs, &jobs) {
+    if let Some(e) = lint::workflow_empty(&id, &workflows, &jobs) {
         return Err(e);
     }
     if let Some(e) = lint::dependency_cycle(&id, &jobs) {
         return Err(e);
     }
 
-    // git, outside any transaction (§7.2): every PR with no needs is prepared first,
+    // git, outside any transaction (§7.2): every Workflow with no needs is prepared first,
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
-    for pr in prs.iter().filter(|p| {
+    for workflow in workflows.iter().filter(|p| {
         p.status == "waiting" && held.get(p.key.as_str()).is_some_and(NotReady::is_empty)
     }) {
-        match start::prepare(&env.home, &env.config, &mut env.store, &id, pr) {
+        match start::prepare(&env.home, &env.config, &mut env.store, &id, workflow) {
             Ok(p) => prepared.push(p),
             Err(failed) => {
                 prepared.iter().for_each(start::Prepared::discard);
@@ -136,8 +144,8 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             tx,
             NewEvent::plan_phase_locked(text, &keys, started_keys).plan(id.clone()),
         )?;
-        for pr in &started {
-            start::record(tx, &id, pr, By::Lock)?;
+        for workflow in &started {
+            start::record(tx, &id, workflow, By::Lock)?;
         }
         Ok(())
     });
@@ -148,29 +156,33 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
 
     let watch = ensure_watch(&env, &id)?;
     Ok(Output::success(
-        json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&prs, &started, &held), "watch": watch}),
+        json!({"plan": id, "phase": "dispatch", "jobs": keys, "workflows": listed(&workflows, &started, &held), "watch": watch}),
     ))
 }
 
-/// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
-/// key order. A PR started by this lock has its worktree and R35's outcome;
+/// `workflows` of the result (commands.md §4.8): every Workflow that is not `cancelled`, in
+/// key order. A Workflow started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
-fn listed(prs: &[PrRow], started: &[Pushed], held: &HashMap<String, NotReady>) -> Vec<Value> {
-    prs.iter()
+fn listed(
+    workflows: &[WorkflowRow],
+    started: &[Pushed],
+    held: &HashMap<String, NotReady>,
+) -> Vec<Value> {
+    workflows.iter()
         .filter(|p| p.status != "cancelled")
-        .map(|pr| {
-            let mut one = match started.iter().find(|s| s.key() == pr.key.as_str()) {
+        .map(|workflow| {
+            let mut one = match started.iter().find(|s| s.key() == workflow.key.as_str()) {
                 Some(s) => {
                     let mut one = s.to_json();
-                    one["needs"] = json!(pr.needs);
+                    one["needs"] = json!(workflow.needs);
                     one
                 }
                 None => json!({
-                    "key": pr.key, "status": pr.status, "needs": pr.needs, "lead_branch": pr.lead_branch,
-                    "lead_worktree": pr.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
+                    "key": workflow.key, "status": workflow.status, "needs": workflow.needs, "lead_branch": workflow.lead_branch,
+                    "lead_worktree": workflow.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
                 }),
             };
-            one["base_pr"] = json!(held.get(pr.key.as_str()).and_then(|h| h.base_pr.clone()));
+            one["base_workflow"] = json!(held.get(workflow.key.as_str()).and_then(|h| h.base_workflow.clone()));
             one
         })
         .collect()

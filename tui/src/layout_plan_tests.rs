@@ -1,4 +1,4 @@
-//! The layout rows of the Plan view's PR boxes: an empty PR, and a PR box next to another, at the canvas's corner and
+//! The layout rows of the Plan view's Workflow boxes: an empty Workflow, and a Workflow box next to another, at the canvas's corner and
 //! scrolled to its middle. A box the pane clips is checked for nothing outside the container only.
 
 use crate::layout_tests::{PlanCase, Scroll, check_at};

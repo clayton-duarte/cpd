@@ -963,14 +963,14 @@ fn offsets_unchanged_write_nothing_whatever_the_time() {
     assert!(!home.home.run_dir().join("tui/plan-scroll.json").exists());
 }
 
-/// Plan `p1` of one PR `api`, its Lead `lead` in the chat slot.
+/// Plan `p1` of one Workflow `api`, its Lead `lead` in the chat slot.
 const PLAN_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('lead', 'lead', 'ctx', NULL, NULL, 'n', '/s/lead.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                  '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('p1', 'api', '/api-repo', 'main', 'dispatch', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
          UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
@@ -1007,7 +1007,7 @@ fn the_plan_views_snapshot_reads_the_elapsed_time_at_its_ports_clock() {
     sql(
         &mut store,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, created_at)
              VALUES ('p1', 'api', 'a', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0,
                      '0000000000000000000000000000000000000000000000000000000000000000', cpd_txn(), '2026-01-02T00:00:00.000Z');
@@ -1019,7 +1019,7 @@ fn the_plan_views_snapshot_reads_the_elapsed_time_at_its_ports_clock() {
         let centre = crate::plan::snapshot_with(&fakes.ports, store, 40)
             .unwrap()
             .expect("the Lead is in the slot");
-        centre.plan.prs[0].elapsed_seconds
+        centre.plan.workflows[0].elapsed_seconds
     };
     assert_eq!(elapsed(&fakes, &mut store), Some(100)); // the fake clock is 100 s after the start
     fakes.clock.advance(Duration::from_secs(90));

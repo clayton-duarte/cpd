@@ -8,13 +8,13 @@ use rusqlite::OptionalExtension;
 use crate::config::Tier;
 use crate::home::CpdHome;
 use crate::ids::PlanId;
-use crate::plan::PrRow;
+use crate::plan::WorkflowRow;
 use crate::store::Store;
 
 use super::open::{Cause, queue_update};
 
 /// A store with a live incident over the Plan `pay` (the incident Plan) and the Plan `ops`
-/// outside it (held); each has one PR (`api`, `web`) in `waiting`.
+/// outside it (held); each has one Workflow (`api`, `web`) in `waiting`.
 struct Fixture {
     _dir: tempfile::TempDir,
     store: Store,
@@ -34,9 +34,9 @@ fn fixture() -> Fixture {
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('ops', 'ctx', 'Ops', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('ops', 'web', '/r', 'main', 'waiting', 'cpd/ops', cpd_txn(), 't');
                  INSERT INTO incident (id, started_at, started_by, reason, started_txn)
                    VALUES (1, 't', 'mgr', 'why', cpd_txn());
@@ -80,8 +80,8 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     let mut f = fixture();
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
-    let pay_pr = PrRow::fixture("api", "/r", "main", &[], "open");
-    let ops_pr = PrRow::fixture("web", "/r", "main", &[], "open");
+    let pay_workflow = WorkflowRow::fixture("api", "/r", "main", &[], "open");
+    let ops_workflow = WorkflowRow::fixture("web", "/r", "main", &[], "open");
 
     // `ops` is held: the poll's conflict cause queues nothing.
     let queued = f
@@ -90,7 +90,7 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
             queue_update(
                 tx,
                 &ops,
-                &ops_pr,
+                &ops_workflow,
                 Tier::parse("S2").unwrap(),
                 "poll",
                 Cause::Conflict,
@@ -110,7 +110,7 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
             queue_update(
                 tx,
                 &pay,
-                &pay_pr,
+                &pay_workflow,
                 Tier::parse("S2").unwrap(),
                 "poll",
                 Cause::Conflict,

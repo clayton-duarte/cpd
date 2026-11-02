@@ -2,7 +2,7 @@
 //! `checking`; checking and merging Attempts are landing, drawn yellow, and the legend calls the state "landing".
 
 use cpd_core::config::Tier;
-use cpd_core::ids::{AttemptId, JobKey, PrKey};
+use cpd_core::ids::{AttemptId, JobKey, WorkflowKey};
 
 use crate::palette::{self, Meaning};
 use crate::plan::flow::Live;
@@ -57,7 +57,7 @@ fn job(status: AttemptStatus) -> JobNode {
     JobNode {
         kind: "work".into(),
         key: JobKey::parse("a").unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Running,

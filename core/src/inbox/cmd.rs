@@ -436,7 +436,7 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 }
 
 /// `inbox claim` (§21.7): the preconditions in order, all before any write; then `claimed_at`, the Event `inbox-claimed` and
-/// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the PR's Slack post (the cache's
+/// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the Workflow's Slack post (the cache's
 /// channel and the post's `ts_raw`) in one transaction, and a stopped Manager started after it. An already claimed item and a
 /// refusal queue nothing.
 fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {

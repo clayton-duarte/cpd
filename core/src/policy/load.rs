@@ -76,7 +76,7 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
         let gate = alias.gate();
         scope.gate = Some(GatesSet {
             merge: Some(gate),
-            pr: Some(gate),
+            workflow: Some(gate),
             text: None,
         });
     }

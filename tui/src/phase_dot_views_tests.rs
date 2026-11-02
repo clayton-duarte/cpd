@@ -1,5 +1,5 @@
-//! Red tests: the phase colour of a working Lead's dot in the plan view's PR box title and in the Dispatch column's
-//! open-PR rows, from docs/commands.md §13.2 ("PR boxes", the open-PR rows of the `PRs` section) and §17 ("The Lead
+//! Red tests: the phase colour of a working Lead's dot in the plan view's Workflow box title and in the Dispatch column's
+//! open-Workflow rows, from docs/commands.md §13.2 ("Workflow boxes", the open-Workflow rows of the `Workflows` section) and §17 ("The Lead
 //! dot rule"), and docs/contract.md §6.1.1, amended by dot-docs: a working Lead's spinner is the bright pair of its
 //! Plan's phase colour (grounding grey 15, plan magenta 13, dispatch cyan 14, deploy yellow 11, done green 10), a
 //! working Session that leads no Plan is cyan 14, and a Plan with a failed Job shows the red loader whatever its
@@ -8,7 +8,7 @@
 use cpd_core::config::Tier;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{JobKey, PlanId, PrKey};
+use cpd_core::ids::{JobKey, PlanId, WorkflowKey};
 use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 use ratatui::style::Color;
@@ -16,7 +16,7 @@ use ratatui::style::Color;
 use crate::palette;
 use crate::plan::boxes;
 use crate::read::{
-    self, Dot, JobNode, JobStatus, NeedsUser, PrNode, PrState, PrStatus, Pull, Work,
+    self, Dot, JobNode, JobStatus, NeedsUser, PrState, Pull, Work, WorkflowNode, WorkflowStatus,
 };
 
 /// Each Plan of the fixture: its phase, its id and its Lead Session.
@@ -45,7 +45,7 @@ fn the_plan_view_reads_its_leads_plan_phase() {
     }
 }
 
-/// pro-d200: the PR box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
+/// pro-d200: the Workflow box title's Lead dot follows what the Lead works on, and is red for a failed Job or an open Escalation.
 #[test]
 fn dots_plan_box_title_dot_follows_work() {
     let needs = |work: Option<Work>| NeedsUser {
@@ -53,8 +53,10 @@ fn dots_plan_box_title_dot_follows_work() {
         lead_work: work,
         ..NeedsUser::default()
     };
-    // the read model hands the box its dot: `PrNode::lead_dot`, red when a Job of the box failed or an Escalation is open
-    let pr = |failed_here: bool, work: Option<Work>| pr_node(Some(Dot::working(failed_here, work)));
+    // the read model hands the box its dot: `WorkflowNode::lead_dot`, red when a Job of the box failed or an Escalation is open
+    let workflow = |failed_here: bool, work: Option<Work>| {
+        workflow_node(Some(Dot::working(failed_here, work)))
+    };
     for (work, colour) in [
         (Some(Work::Planning), palette::numbered::C13),
         (Some(Work::Dispatch), palette::numbered::C14),
@@ -63,7 +65,7 @@ fn dots_plan_box_title_dot_follows_work() {
     ] {
         for frame in [0, 5, 27] {
             assert_eq!(
-                title_dot(&pr(false, work), &[], &needs(work), frame),
+                title_dot(&workflow(false, work), &[], &needs(work), frame),
                 Some(colour),
                 "{work:?} frame {frame}"
             );
@@ -71,12 +73,12 @@ fn dots_plan_box_title_dot_follows_work() {
     }
     for work in [Some(Work::Planning), Some(Work::Review), None] {
         assert_eq!(
-            title_dot(&pr(true, work), &[failed_job()], &needs(work), 3),
+            title_dot(&workflow(true, work), &[failed_job()], &needs(work), 3),
             Some(palette::numbered::C9),
             "a failed Job beats {work:?}"
         );
         assert_eq!(
-            title_dot(&pr(true, work), &[], &needs(work), 3),
+            title_dot(&workflow(true, work), &[], &needs(work), 3),
             Some(palette::numbered::C9),
             "an Escalation beats {work:?}"
         );
@@ -87,19 +89,19 @@ fn dots_plan_box_title_dot_follows_work() {
         ..NeedsUser::default()
     };
     assert_eq!(
-        title_dot(&pr_node(None), &[], &idle, 0),
+        title_dot(&workflow_node(None), &[], &idle, 0),
         None,
         "a Lead not working: no spinner"
     );
 }
 
-/// A PR of a Plan whose Lead works (or not), with one pull request.
-fn pr_node(lead_dot: Option<Dot>) -> PrNode {
-    PrNode {
-        key: PrKey::parse("api").unwrap(),
+/// A Workflow of a Plan whose Lead works (or not), with one pull request.
+fn workflow_node(lead_dot: Option<Dot>) -> WorkflowNode {
+    WorkflowNode {
+        key: WorkflowKey::parse("api").unwrap(),
         repo_name: "api-repo".into(),
         base: "main".into(),
-        status: PrStatus::Dispatch,
+        status: WorkflowStatus::Dispatch,
         needs: Vec::new(),
         pull: Some(Pull {
             number: 12,
@@ -123,7 +125,7 @@ fn failed_job() -> JobNode {
     JobNode {
         kind: "work".into(),
         key: JobKey::parse("j1").unwrap(),
-        pr: Some(PrKey::parse("api").unwrap()),
+        workflow: Some(WorkflowKey::parse("api").unwrap()),
         seq: 0,
         title: String::new(),
         status: JobStatus::Failed,
@@ -142,8 +144,13 @@ fn failed_job() -> JobNode {
 
 /// The foreground of the Lead's dot in the box title row, found by its spinner glyph: the whole title is a link, so
 /// the glyph rides in a cell's OSC 8 symbol while the cell keeps the dot's style.
-fn title_dot(pr: &PrNode, jobs: &[JobNode], needs: &NeedsUser, frame: usize) -> Option<Color> {
-    let chart = boxes::layout(std::slice::from_ref(pr), jobs, needs, frame).chart;
+fn title_dot(
+    workflow: &WorkflowNode,
+    jobs: &[JobNode],
+    needs: &NeedsUser,
+    frame: usize,
+) -> Option<Color> {
+    let chart = boxes::layout(std::slice::from_ref(workflow), jobs, needs, frame).chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| {
@@ -185,7 +192,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
              UPDATE sessions SET plan = '{plan}' WHERE id = '{lead}';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, authored, created_at, changed_at)
                VALUES ('acme/repo', {number}, 'https://github.com/acme/repo/pull/{number}', 'T', 0, 'open', 'none', 'passed', 1, {at}, {at});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                               pull_request, created_txn, created_at, started_at)
                VALUES ('{plan}', 'api', '/repo', 'main', 'open', 'cpd/{plan}/api', '/wt', {number},
                        'https://github.com/acme/repo/pull/{number}', {at},

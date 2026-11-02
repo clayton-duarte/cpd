@@ -16,7 +16,7 @@ fn plan() -> PlanId {
     PlanId::parse("pl").unwrap()
 }
 
-/// A store with Plan `pl` in `phase` and its PR `r` (`dispatch`), then `extra` SQL.
+/// A store with Plan `pl` in `phase` and its Workflow `r` (`dispatch`), then `extra` SQL.
 fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -29,7 +29,7 @@ fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pl', 'ctx', 'P', '{phase}', 'lead', 't', {locked});
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                    VALUES ('pl', 'r', '/r', 'main', 'dispatch', 'cpd/pl', '/w', cpd_txn(), 't', 't');
                  {extra}"
             ))?;
@@ -39,8 +39,8 @@ fn store(phase: &str, extra: &str) -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-/// SQL for the Job `key` of PR `pr`: a stub draft, a full draft (`full`) or any other status, with its needs.
-fn job(key: &str, pr: &str, kind: &str, status: &str, full: bool, needs: &[&str]) -> String {
+/// SQL for the Job `key` of Workflow `pr`: a stub draft, a full draft (`full`) or any other status, with its needs.
+fn job(key: &str, workflow: &str, kind: &str, status: &str, full: bool, needs: &[&str]) -> String {
     let (tier, spec) = if full || status != "draft" {
         ("'S2'", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]'")
     } else {
@@ -64,8 +64,8 @@ fn job(key: &str, pr: &str, kind: &str, status: &str, full: bool, needs: &[&str]
         column("cancelled", "'x'"),
     );
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
-         VALUES ('pl', '{pr}', '{key}', 'T', '{kind}', {tier}, {spec}, '{status}', 1, {fingerprint}, {failed}, {merged}, {cancelled}, {cancelled}, cpd_txn(), 't');"
+        "INSERT INTO jobs (plan, workflow, key, title, kind, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, failed_cause, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
+         VALUES ('pl', '{workflow}', '{key}', 'T', '{kind}', {tier}, {spec}, '{status}', 1, {fingerprint}, {failed}, {merged}, {cancelled}, {cancelled}, cpd_txn(), 't');"
     );
     for need in needs {
         sql.push_str(&format!(
@@ -165,13 +165,13 @@ fn a_complete_draft_waiting_through_a_draft_on_a_work_job_is_parked() {
 }
 
 const WEB_NEEDS_R: &str =
-    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+    "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
      VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
-     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'web', 'r');";
+     INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'web', 'r');";
 
 #[test]
-fn a_complete_draft_of_a_pr_that_waits_for_another_pr_is_parked() {
-    // hs-d731's PR-waits clause is gone: a PR that waits for another PR no longer keeps a complete draft legal.
+fn a_complete_draft_of_a_workflow_that_waits_for_another_workflow_is_parked() {
+    // hs-d731's Workflow-waits clause is gone: a Workflow that waits for another Workflow no longer keeps a complete draft legal.
     let extra = format!(
         "{WEB_NEEDS_R}{}",
         job("k", "web", "work", "draft", true, &[])
@@ -180,7 +180,7 @@ fn a_complete_draft_of_a_pr_that_waits_for_another_pr_is_parked() {
     assert_eq!(
         parked(&mut s),
         ["k"],
-        "dispatch: the waiting PR no longer exempts"
+        "dispatch: the waiting Workflow no longer exempts"
     );
     let (_d, mut s) = store("plan", &extra);
     assert_eq!(parked(&mut s), ["k"]);

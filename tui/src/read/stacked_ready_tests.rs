@@ -1,5 +1,5 @@
-//! 'Ready to merge' in the cockpit's read model (pro-d118; commands.md §13.2): the Plan view's PR box has `Pull.clean` (its
-//! yellow `open`) only for a PR whose base is the repo's default branch; a NULL base or default branch is not ready. Rows are
+//! 'Ready to merge' in the cockpit's read model (pro-d118; commands.md §13.2): the Plan view's Workflow box has `Pull.clean` (its
+//! yellow `open`) only for a Workflow whose base is the repo's default branch; a NULL base or default branch is not ready. Rows are
 //! inserted with the `base_ref` and `default_branch` columns of the `pr-base` migration. [`store_with`] is shared with
 //! `widgets::stacked_ready_tests`.
 
@@ -10,7 +10,7 @@ use cpd_core::store::Store;
 
 use crate::read;
 
-/// A store of Context `ctx` and Plan `pay` whose one PR owns the open, authored, non-draft pull request `acme/repo#7`, with
+/// A store of Context `ctx` and Plan `pay` whose one Workflow owns the open, authored, non-draft pull request `acme/repo#7`, with
 /// `merge_state = 'clean'` and the given `base_ref` and `default_branch` (SQL literals, e.g. `'main'` or `NULL`).
 pub(crate) fn store_with(base_ref: &str, default_branch: &str) -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -28,7 +28,7 @@ pub(crate) fn store_with(base_ref: &str, default_branch: &str) -> (tempfile::Tem
                                     base_ref, default_branch, created_at, changed_at)
            VALUES ('acme/repo', 7, 'https://github.com/acme/repo/pull/7', 'T', 0, 'open', 'none', 'passed', 'clean', 1,
                    {base_ref}, {default_branch}, {at}, {at});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at)
            VALUES ('pay', 'api', '/repo', 'main', 'open', 'cpd/pay/api', '/wt', 7, 'https://github.com/acme/repo/pull/7', {at},
                    (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(), '2026-01-01T00:00:00.000Z', {at});"
@@ -42,17 +42,17 @@ pub(crate) fn store_with(base_ref: &str, default_branch: &str) -> (tempfile::Tem
     (dir, store)
 }
 
-/// `Pull.clean` of the Plan view's one PR box.
+/// `Pull.clean` of the Plan view's one Workflow box.
 fn box_clean(store: &mut Store) -> bool {
     let boxes = read::plan_boxes(store, &PlanId::parse("pay").unwrap()).unwrap();
-    boxes.prs[0]
+    boxes.workflows[0]
         .pull
         .as_ref()
-        .expect("the PR has a pull request")
+        .expect("the Workflow has a pull request")
         .clean
 }
 
-/// A stacked PR (clean against its base, which is not the default branch): its `open` is not yellow.
+/// A stacked Workflow (clean against its base, which is not the default branch): its `open` is not yellow.
 #[test]
 fn stacked_ready_plan_view_open_is_not_yellow_for_a_stacked_pr() {
     let (_dir, mut store) = store_with("'cpd/other'", "'main'");

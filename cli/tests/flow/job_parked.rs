@@ -34,7 +34,7 @@ fn incomplete_draft(fx: &Fx, key: &str, kind: &str) {
     fixture(
         &fx.env,
         &format!(
-            "INSERT INTO jobs (plan, pr, key, title, kind, status, appended, created_txn, created_at)
+            "INSERT INTO jobs (plan, workflow, key, title, kind, status, appended, created_txn, created_at)
              VALUES ('pl', 'repo', '{key}', 'Title of {key}', '{kind}', 'draft', 1, cpd_txn(), 't');"
         ),
     );
@@ -44,7 +44,7 @@ fn incomplete_draft(fx: &Fx, key: &str, kind: &str) {
 /// review covers it), never a state the door would write after the lock while it waits.
 fn complete_draft(fx: &Fx, key: &str, needs: &[&str]) {
     let mut sql = format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pl', 'repo', '{key}', 'Title of {key}', 'S2', 'Do it.', 'Because.', '[\"src/a.rs\"]', '[\"cargo test\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     );
     for need in needs {
@@ -59,9 +59,9 @@ fn complete_draft(fx: &Fx, key: &str, needs: &[&str]) {
 fn web_waits_for_repo(fx: &Fx) {
     fixture(
         &fx.env,
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pl', 'web', '/web', 'main', 'waiting', 'cpd/pl/web', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'web', 'repo');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pl', 'web', 'repo');",
     );
 }
 
@@ -224,18 +224,18 @@ fn stub_that_needs_a_waiting_stub_is_accepted() {
 fn stub_in_a_pr_that_waits_for_another_pr_is_accepted() {
     let fx = locked();
     web_waits_for_repo(&fx);
-    let out = stub(&fx, "k", &["--pr", "web"]).ok();
+    let out = stub(&fx, "k", &["--workflow", "web"]).ok();
     assert_eq!(
         (&out["job"]["pr"], &out["job"]["status"]),
         (&json!("web"), &json!("draft"))
     );
-    // A complete draft in the same waiting PR is refused: the PR's wait is a wait.
+    // A complete draft in the same waiting Workflow is refused: the Workflow's wait is a wait.
     let spec = spec_file(&fx.env);
     refused(
         &stub(
             &fx,
             "full",
-            &["--tier", "S2", "--spec", &spec, "--pr", "web"],
+            &["--tier", "S2", "--spec", &spec, "--workflow", "web"],
         ),
         "draft_parked",
         3,

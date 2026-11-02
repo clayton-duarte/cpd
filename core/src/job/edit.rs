@@ -1,5 +1,5 @@
 //! `job edit` (commands.md §5.2): the Locked fields and Dependencies of a
-//! `draft` Job, and its PR; a Locked Job is refused with `job_locked` (§3.2).
+//! `draft` Job, and its Workflow; a Locked Job is refused with `job_locked` (§3.2).
 //! It is how a stub draft gets its Tier and Spec (R1).
 
 use std::path::PathBuf;
@@ -10,14 +10,15 @@ use serde_json::json;
 use super::spec::{self, Spec};
 use super::{
     EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known,
-    check_needs_same_pr, check_pr_live, check_shape_allows, find, plan_phase, sorted_needs,
+    check_needs_same_workflow, check_shape_allows, check_workflow_live, find, plan_phase,
+    sorted_needs,
 };
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
-use crate::plan::fingerprint::load_prs;
+use crate::plan::fingerprint::load_workflows;
 use crate::plan::jobs::{self, Job};
 
 const COMMAND: &str = "job edit";
@@ -27,7 +28,7 @@ struct Edits {
     title: Option<String>,
     tier: Option<String>,
     spec: Option<Spec>,
-    pr: Option<String>,
+    workflow: Option<String>,
     needs: Option<Vec<String>>,
     kind: Option<String>,
     /// `CPD_ATTEMPT` is set: a Worker's pane, not the Lead's.
@@ -56,14 +57,14 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
     if args.title.is_none()
         && args.tier.is_none()
         && args.spec.is_none()
-        && args.pr.is_none()
+        && args.workflow.is_none()
         && args.kind.is_none()
         && args.needs.is_none()
         && !args.no_needs
     {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
-            "Nothing to edit: pass --title, --tier, --spec, --pr, --kind, --needs or --no-needs.",
+            "Nothing to edit: pass --title, --tier, --spec, --workflow, --kind, --needs or --no-needs.",
         ));
     }
     let needs = match (&args.needs, args.no_needs) {
@@ -98,14 +99,14 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         .map(|path: &PathBuf| spec::read_for(path, &spec_kind))
         .transpose()?;
     if let Some(tier) = args.tier {
-        let pr = args.pr.clone();
-        env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
+        let workflow = args.workflow.clone();
+        env.check_tier(&plan, &args.key, workflow.as_ref(), tier)?;
     }
     let edits = Edits {
         title: args.title.map(|t| t.as_str().to_owned()),
         tier: args.tier.map(|t| t.to_string()),
         spec,
-        pr: args.pr.map(|p| p.as_str().to_owned()),
+        workflow: args.workflow.map(|p| p.as_str().to_owned()),
         needs,
         kind: args.kind,
         worker: std::env::var("CPD_ATTEMPT").is_ok_and(|v| !v.is_empty()),
@@ -125,8 +126,8 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
                 let state = if before.is_draft() { "" } else { " (queued, Locked)" };
                 let text = format!("Job {key} of Plan {plan}{state} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
-                if let Some(pr) = &after.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &after.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok((after, fields, false))
             }
@@ -180,12 +181,12 @@ fn decide(
             && attempts == 0;
         let spec_only = edits.title.is_none()
             && edits.tier.is_none()
-            && edits.pr.is_none()
+            && edits.workflow.is_none()
             && edits.kind.is_none()
             && edits.needs.is_none();
         if !editable || !spec_only {
             let why = if editable {
-                "only its Spec (--spec) can change; title, Tier, PR, kind and Dependencies are Locked".to_owned()
+                "only its Spec (--spec) can change; title, Tier, Workflow, kind and Dependencies are Locked".to_owned()
             } else if matches!(before.kind.as_str(), "open" | "update") {
                 format!(
                     "it is an {} Job: its Spec is cpd's, and cannot be edited",
@@ -224,11 +225,11 @@ fn decide(
         if explore {
             spec.touches = vec![spec::explore_artefact(plan.as_str(), key.as_str())];
         } else {
-            // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+            // The Spec names no primary checkout of a Workflow of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
             let user_home = std::env::home_dir().unwrap_or_default();
             spec.without_artefacts(home.root(), plan.as_str(), &user_home)
                 .check_primary_roots(
-                    &super::add::primary_roots(&load_prs(conn, plan)?),
+                    &super::add::primary_roots(&load_workflows(conn, plan)?),
                     &user_home,
                 )?;
             spec.check_files_relative()?;
@@ -260,39 +261,45 @@ fn decide(
             after.test_files = None;
         }
     }
-    if let Some(pr) = &edits.pr {
-        let prs = load_prs(conn, plan)?;
-        if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
+    if let Some(workflow) = &edits.workflow {
+        let workflows = load_workflows(conn, plan)?;
+        if !workflows
+            .iter()
+            .any(|p| p.key.as_str() == workflow.as_str())
+        {
             return Err(CpdError::new(
-                ErrorCode::PrNotFound,
-                format!("No PR {pr} in Plan {plan}."),
+                ErrorCode::WorkflowNotFound,
+                format!("No Workflow {workflow} in Plan {plan}."),
             )
             .with("plan", plan.as_str())
-            .with("pr", pr.as_str()));
+            .with("pr", workflow.as_str()));
         }
-        check_pr_live(&prs, plan, pr)?;
-        after.pr = Some(pr.clone());
+        check_workflow_live(&workflows, plan, workflow)?;
+        after.workflow = Some(workflow.clone());
     }
-    let moved = after.pr != before.pr;
+    let moved = after.workflow != before.workflow;
     if let (false, Some(spec)) = (explore, &edits.spec) {
-        let prs = load_prs(conn, plan)?;
-        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr_str()) {
-            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the PR's base.
-            let mut pr = pr.clone();
+        let workflows = load_workflows(conn, plan)?;
+        if let Some(workflow) = workflows
+            .iter()
+            .find(|p| p.key.as_str() == after.workflow_str())
+        {
+            // A Lead Branch that is not in the repo (yet) is no tree to read: the Job starts from the Workflow's base.
+            let mut workflow = workflow.clone();
             let lead_exists = crate::git::run::run(
-                std::path::Path::new(&pr.repo),
+                std::path::Path::new(&workflow.repo),
                 &[
                     "rev-parse",
                     "--verify",
                     "--quiet",
-                    &format!("{}^{{commit}}", pr.lead_branch),
+                    &format!("{}^{{commit}}", workflow.lead_branch),
                 ],
             )
             .is_ok_and(|o| o.code == 0);
             if locked && !lead_exists {
-                pr.lead_worktree = None;
+                workflow.lead_worktree = None;
             }
-            super::add::check_touches(&pr, &prs, &spec.touches)?;
+            super::add::check_touches(&workflow, &workflows, &spec.touches)?;
         }
     }
     if edits.spec.is_some() || moved {
@@ -304,22 +311,27 @@ fn decide(
             conn,
             home,
             plan,
-            after.pr_str(),
+            after.workflow_str(),
             key.as_str(),
             names.as_deref(),
         )?;
     }
     if !explore && (moved || after.kind != before.kind) {
-        check_shape_allows(&load_prs(conn, plan)?, plan, after.pr_str(), &after.kind)?;
+        check_shape_allows(
+            &load_workflows(conn, plan)?,
+            plan,
+            after.workflow_str(),
+            &after.kind,
+        )?;
     }
-    // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
+    // A Job that changes Workflow keeps none of its old needs: they are checked against the new Workflow.
     if let Some(needs) = &edits.needs {
         check_needs_known(&all, plan, needs)?;
         check_needs_available(&all, plan, needs)?;
     }
     let needs = edits.needs.clone().unwrap_or_else(|| before.needs.clone());
     if edits.needs.is_some() || moved {
-        check_needs_same_pr(&all, plan, after.pr_str(), &needs)?;
+        check_needs_same_workflow(&all, plan, after.workflow_str(), &needs)?;
     }
     after.needs = needs;
     if moved {
@@ -330,15 +342,15 @@ fn decide(
             .collect();
         if !needing.is_empty() {
             return Err(CpdError::new(
-                ErrorCode::NeedsOtherPr,
+                ErrorCode::NeedsOtherWorkflow,
                 format!(
-                    "Job {key} cannot change PR: {} need{} it.",
+                    "Job {key} cannot change Workflow: {} need{} it.",
                     needing.join(", "),
                     if needing.len() == 1 { "s" } else { "" }
                 ),
             )
             .with("plan", plan.as_str())
-            .with("pr", after.pr_str())
+            .with("pr", after.workflow_str())
             .with("jobs", needing));
         }
     }
@@ -382,8 +394,8 @@ fn decide(
             _ => {}
         }
     }
-    if before.pr != after.pr {
-        fields.push("pr");
+    if before.workflow != after.workflow {
+        fields.push("workflow");
     }
     if before.needs != after.needs {
         fields.push("needs");
@@ -419,7 +431,7 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 9] {
 
 /// Writes the changed `jobs` columns, and deletes and inserts `dependencies`
 /// rows to match (§4.4 allows deletion only for `draft`): the old
-/// Dependencies first, then the columns (`pr` among them), then the new ones.
+/// Dependencies first, then the columns (`workflow` among them), then the new ones.
 fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(), CpdError> {
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute(
@@ -441,7 +453,11 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
             .zip(columns(after))
             .map(|(b, a)| (a.0, b.1 != a.1, a.1)),
     );
-    written.push(("pr", before.pr != after.pr, after.pr.clone()));
+    written.push((
+        "workflow",
+        before.workflow != after.workflow,
+        after.workflow.clone(),
+    ));
     let changed: Vec<&(&str, bool, Option<String>)> =
         written.iter().filter(|(_, changed, _)| *changed).collect();
     let fingerprint = (!after.is_draft()).then(|| jobs::locked_fingerprint(after));

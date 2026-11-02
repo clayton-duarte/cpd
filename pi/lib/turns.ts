@@ -17,7 +17,7 @@ async function readRecords(host: Host, r: Run, cursor: number) {
 }
 
 /**
- * `before_agent_start` of a Lead or a Manager: one `cpd-context` message added to the run, never a turn. A Lead's is short (new decisions, the board posts, its Plan's opened PRs); a Manager's
+ * `before_agent_start` of a Lead or a Manager: one `cpd-context` message added to the run, never a turn. A Lead's is short (new decisions, the board posts, its Plan's Workflows whose pull request opened); a Manager's
  * is the turn-start update (records, board posts, `Plans:`, `Pending work:`, `Errors:`). The board posts are taken last, so a failed read loses none. A failed read is reported once (no turn) and leaves the cursor.
  */
 async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
@@ -29,7 +29,7 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
     let message: Message | undefined;
     if (r.info.role === "lead") {
       const plan = r.info.plan;
-      const prs = plan === null ? [] : parsePrOpened(await call(["events", "list", "--context", context, "--kind", "pr-opened", "--since", String(cursor)])).filter((p) => p.plan === plan);
+      const workflows = plan === null ? [] : parsePrOpened(await call(["events", "list", "--context", context, "--kind", "pr-opened", "--since", String(cursor)])).filter((p) => p.plan === plan);
       let standing: string[] = [];
       if (plan !== null) {
         try {
@@ -37,11 +37,11 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
         } catch (e) {
           // A `usage` refusal is the adapter's own bug: reported, not rendered. A condition (a missing Plan, a busy store) is the Lead's to see.
           const err = toCpdError(e);
-          if (err.code === "usage") host.deliver("closed-unmerged PR line", err);
-          else standing = [`could not read the Plan's PRs: ${err.message.split("\n")[0]}`];
+          if (err.code === "usage") host.deliver("closed-unmerged Workflow line", err);
+          else standing = [`could not read the Plan's Workflows: ${err.message.split("\n")[0]}`];
         }
       }
-      message = leadUpdate(context, r.id, events, records, prs, parseTaken(await call(["board", "take", "--session", r.id])), standing);
+      message = leadUpdate(context, r.id, events, records, workflows, parseTaken(await call(["board", "take", "--session", r.id])), standing);
     } else {
       const plans = parsePlanEvents(await call(["events", "list", "--context", context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)]));
       const pending = parsePending(await call(["context", "pending", "--context", context]));

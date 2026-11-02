@@ -1,5 +1,5 @@
 //! `pr view` (commands.md §9.8, contract §7.6): the checks, reviews and comments
-//! of one PR's pull request, which the poller does not store. Read-only: no
+//! of one Workflow's pull request, which the poller does not store. Read-only: no
 //! write transaction, no Event.
 
 use rusqlite::OptionalExtension;
@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::gh;
 use super::status::{Approval, ChecksSummary, PrState, ReviewDecision};
-use super::{Args, Env, pr_policy};
+use super::{Args, Env, workflow_policy};
 use crate::error::CpdError;
 use crate::output::Output;
 use crate::ports::Ports;
@@ -22,18 +22,18 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?;
-    if !matches!(pr.status.as_str(), "open" | "merged") {
-        return Err(pr.refuse(&id, COMMAND, "open or merged"));
+    let workflow = plan.select(&args.workflow)?;
+    if !matches!(workflow.status.as_str(), "open" | "merged") {
+        return Err(workflow.refuse(&id, COMMAND, "open or merged"));
     }
-    let number = pr
+    let number = workflow
         .pull
         .as_ref()
-        .expect("an open or merged PR has its pull request (prs CHECK)")
+        .expect("an open or merged Workflow has its pull request (workflows CHECK)")
         .number;
-    let lead = pr.lead(&id)?;
+    let lead = workflow.lead(&id)?;
 
-    let policy = pr_policy(&mut env, &id, &pr.key)?;
+    let policy = workflow_policy(&mut env, &id, &workflow.key)?;
     let view = gh::view(&*env.ports.runner, lead, number)?;
     let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
 
@@ -89,18 +89,18 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         .map(|c| json!({"id": c.id.0, "author": login(&c.user), "path": c.path, "body": c.body}))
         .collect();
 
-    let row = pr
+    let row = workflow
         .pull_request
-        .expect("an open or merged PR has its pull_request row (prs CHECK)");
+        .expect("an open or merged Workflow has its pull_request row (workflows CHECK)");
     let feedback = env
         .store
         .read(|conn| crate::pr::pulls::load(conn, row))?
         .feedback;
     let post = env.store.read(|conn| {
-        let Some(p) = super::posts::find(conn, id.as_str(), pr.key.as_str())? else { return Ok(None) };
-        // The queue row of the PR's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
+        let Some(p) = super::posts::find(conn, id.as_str(), workflow.key.as_str())? else { return Ok(None) };
+        // The queue row of the Workflow's merge reaction (at most one): its emoji is the last attempted, `reacted_at` and `refusal` are its.
         let row: Option<(String, Option<String>, Option<String>)> = conn
-            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND pr = ?2", [id.as_str(), pr.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT emoji, reacted_at, refusal FROM slack_reactions WHERE plan = ?1 AND workflow = ?2", [id.as_str(), workflow.key.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
         let (reaction, reacted_at, refusal) = match row {
             Some((emoji, reacted_at, refusal)) => (Some(emoji), reacted_at, refusal),
@@ -111,7 +111,7 @@ pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "plan": id,
         "pr": {
-            "key": pr.key, "number": number, "url": view.url, "title": view.title, "jira": pr.jira, "state": state.as_str(),
+            "key": workflow.key, "number": number, "url": view.url, "title": view.title, "jira": workflow.jira, "state": state.as_str(),
             "review_decision": ReviewDecision::of_reviews(view.review_decision.as_deref(), &approvals, &env.config.inbox.bot_reviewers).as_str(), "checks": summary.as_str(),
         },
         "checks": checks,

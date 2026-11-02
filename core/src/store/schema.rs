@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::context::legacy;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::PrKey;
+use crate::ids::WorkflowKey;
 
 /// A legacy migration: applied once, in order, inside the migrating transaction.
 pub(super) type Migration = fn(&Connection) -> Result<()>;
@@ -186,7 +186,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "04b060187360fc728c868740d91b43bda73c6ac4f776990ce2efe1306f3f56cd";
+pub const SCHEMA_HASH: &str = "6ed86ce9b6fc0de3f4e49aa19ef5aca9135346b4cf5989ac943b165c47fbc5ab";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -252,14 +252,14 @@ fn migration_3(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The line of `0004.sql` that splits it into the part before the PRs are
+/// The line of `0004.sql` that splits it into the part before the Workflows are
 /// filled and the part after.
 const FILL_PRS: &str = "\n-- @fill-prs\n";
 
 /// Plans across repos (§4.5, R34 A6, B2), steps 2 to 4; step 1 (foreign keys
 /// off, `legacy_alter_table` on) and step 5 (`foreign_key_check`) are the
 /// caller's, around the migrating transaction. Needs the migration's `txns`
-/// row: each migrated PR's `created_txn` and history row name it.
+/// row: each migrated Workflow's `created_txn` and history row name it.
 fn migration_4(conn: &Connection) -> Result<()> {
     let (tables, rebuild) = LEGACY[3]
         .sql
@@ -277,7 +277,7 @@ fn migration_4(conn: &Connection) -> Result<()> {
 }
 
 /// Reopening a Plan (§4.5, hs-d118): `plans_phase` allows `pr>dispatch` and
-/// `done>dispatch`, `prs_locked` allows the legacy Lead Branch of a merged PR to
+/// `done>dispatch`, `prs_locked` allows the legacy Lead Branch of a merged Workflow to
 /// move to `cpd/<plan>/<key>`. No table changes.
 fn migration_5(conn: &Connection) -> Result<()> {
     conn.execute_batch(LEGACY[4].sql)
@@ -287,7 +287,7 @@ fn migration_5(conn: &Connection) -> Result<()> {
 /// `pull_requests` and the part that fills it and rebuilds `prs`.
 const HISTORY: &str = "\n-- @history\n";
 
-/// The PR poller (§4.5 migration 6, D5, D6), steps 2 to 5; step 1 and step 6
+/// The pull request poller (§4.5 migration 6, D5, D6), steps 2 to 5; step 1 and step 6
 /// are the caller's, as for migration 4. `pull_requests` gets its history
 /// triggers before the back-fill, so each back-filled row has an `insert`
 /// history row in the migration's `txns` row; the rebuild of `prs` writes
@@ -419,7 +419,7 @@ pub(super) fn import_old_stores(conn: &Connection, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The PR poll's mergeable state (§4.5 migration 0011, hs-d188): two columns of
+/// The pull request poll's mergeable state (§4.5 migration 0011, hs-d188): two columns of
 /// `pull_requests`, whose history triggers are dropped and written again to
 /// list every column (`0011.sql` drops them and writes `_hist_del`; the other
 /// two are generated).
@@ -435,7 +435,7 @@ fn migration_12(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "inbox_items", true)
 }
 
-/// The PR poll's Inbox kinds (§4.5 legacy migration 0013, hs-d165): `authored` and
+/// The pull request poll's Inbox kinds (§4.5 legacy migration 0013, hs-d165): `authored` and
 /// `review_requested` on `pull_requests`, whose history triggers are written again
 /// to list every column, and `inbox_items` rebuilt with the four pull request kinds
 /// (`0013-pr-inbox.sql` drops and writes `pull_requests_hist_del`; the other history
@@ -455,8 +455,8 @@ fn migration_14(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "jobs", true)
 }
 
-/// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
-/// status from the Plan's phase. No `pr_needs`: one PR has no needs.
+/// §4.5 step 2: one Workflow per Plan, its per-repo columns kept as stored, its
+/// status from the Plan's phase. No `pr_needs`: one Workflow has no needs.
 fn fill_prs(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT id, repo FROM plans ORDER BY id")?;
     let plans: Vec<(String, String)> = stmt
@@ -475,16 +475,16 @@ fn fill_prs(conn: &Connection) -> Result<()> {
          FROM plans WHERE id = ?1",
     )?;
     for (plan, repo) in plans {
-        insert.execute((&plan, migrated_pr_key(&repo).as_str()))?;
+        insert.execute((&plan, migrated_workflow_key(&repo).as_str()))?;
     }
     Ok(())
 }
 
-/// The key of the PR migration 4 makes from a Plan (§4.5): the base name of
+/// The key of the Workflow migration 4 makes from a Plan (§4.5): the base name of
 /// its repo, lower-cased, each character outside `[a-z0-9-]` replaced by `-`,
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
-fn migrated_pr_key(repo: &str) -> PrKey {
+fn migrated_workflow_key(repo: &str) -> WorkflowKey {
     let name = Path::new(repo)
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
@@ -503,7 +503,7 @@ fn migrated_pr_key(repo: &str) -> PrKey {
         key.insert_str(0, "pr-");
     }
     key.truncate(24);
-    PrKey::parse(&key).expect("the rule above always makes a valid PR key")
+    WorkflowKey::parse(&key).expect("the rule above always makes a valid Workflow key")
 }
 
 /// What a generated `_hist_upd` trigger writes in `before` and `after`.
@@ -565,8 +565,8 @@ fn delete_owner(table: &str) -> Option<String> {
         )
     };
     Some(match table {
-        "prs" | "pr_posts" | "job_addenda" | "job_pools" | "pr_needs" | "plan_reviews" | "jobs"
-        | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        "workflows" | "pr_posts" | "job_pools" | "workflow_needs" | "plan_reviews" | "jobs"
+        | "dependencies" | "attempts" | "escalations" | "job_addenda" => plan_deleted("OLD.plan"),
         "context_records" | "record_retirements" | "record_curations" => {
             context_deleted("OLD.context")
         }
@@ -1090,5 +1090,7 @@ mod tests;
 mod tier_catalog_tests;
 #[cfg(test)]
 mod worker_runner_tests;
+#[cfg(test)]
+mod workflow_rename_tests;
 #[cfg(test)]
 mod working_pr_tests;

@@ -1,6 +1,6 @@
 //! Red tests for a linear Attempt's merge (contract §7.4, hs-d680/hs-d682/hs-d683): its branch is the
-//! PR's Lead Branch, so the merge diffs `base_sha...submitted_sha` for the tamper check, skips the rebase
-//! and the fast-forward, keeps rule P's push and runs the Gate in the workflow worktree, and records
+//! Workflow's Lead Branch, so the merge diffs `base_sha...submitted_sha` for the tamper check, skips the rebase
+//! and the fast-forward, keeps rule P's push and runs the Gate in the Lead worktree, and records
 //! `merged_sha = submitted_sha`. R recovers a linear Attempt in `merging` whose `submitted_sha` is an
 //! ancestor of the Lead Branch tip with `merged_sha = submitted_sha`. Red until `wlinear-impl` teaches the
 //! merge and R the linear case.
@@ -66,7 +66,7 @@ fn commit(
     u.commit(repo, &tree, parents, message)
 }
 
-/// A temp `$CPD_HOME` whose PR `pay/api` is `open` on its Lead Branch `cpd/pay/api`, with one `merging`
+/// A temp `$CPD_HOME` whose Workflow `pay/api` is `open` on its Lead Branch `cpd/pay/api`, with one `merging`
 /// linear Attempt `a-a1` whose `submitted_sha` is `submitted` and whose `base_sha` is `base`.
 struct Rig {
     _tmp: TempDir,
@@ -77,7 +77,7 @@ struct Rig {
     id: AttemptId,
 }
 
-/// The store and the workflow worktree of a linear Attempt whose commit `attempt_tree` is `submitted`,
+/// The store and the Lead worktree of a linear Attempt whose commit `attempt_tree` is `submitted`,
 /// optionally followed by a sibling's commit `sibling_tree` on top (the Lead Branch tip is past `submitted`).
 fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
@@ -142,10 +142,10 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '{}', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '{}', 'main', 'dispatch', '{lead}', '{}', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"**\"]', '[\"b\"]', '[]', 'running', 0, '{placeholder}', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"f.txt\"]', '[\"b\"]', '[]', 'running', 0, '{placeholder}', cpd_txn(), 't');
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, submitted_sha, submitted_at, driver_pid, started_at)
                    VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'merging', '{lead}', '{}', '{}', '{}', 't', 4242, 't');",
                 worktree.display(),

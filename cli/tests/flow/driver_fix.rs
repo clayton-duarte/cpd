@@ -26,7 +26,7 @@ fn add_fix(live: &Live, key: &str) {
             "S2",
             "--spec",
             spec.to_str().unwrap(),
-            "--pr",
+            "--workflow",
             "repo",
             "--plan",
             PLAN,
@@ -62,9 +62,9 @@ fn adopt(live: &Live) {
         &["push", "-q", "origin", "main:refs/heads/feat/x"],
     );
     live.fixture(
-        "CREATE TEMP TABLE adopted AS SELECT * FROM prs WHERE key = 'repo';
+        "CREATE TEMP TABLE adopted AS SELECT * FROM workflows WHERE key = 'repo';
          UPDATE adopted SET head_ref = 'feat/x';
-         INSERT OR REPLACE INTO prs SELECT * FROM adopted;
+         INSERT OR REPLACE INTO workflows SELECT * FROM adopted;
          DROP TABLE adopted;",
     );
 }
@@ -126,7 +126,7 @@ fn a_work_job_of_an_adopted_pr_that_has_not_opened_is_not_pushed() {
     let live = open_live();
     adopt(&live);
     assert_eq!(
-        live.value::<String>("SELECT status FROM prs WHERE key = 'repo'"),
+        live.value::<String>("SELECT status FROM workflows WHERE key = 'repo'"),
         "dispatch"
     );
     add_fix(&live, "fix");

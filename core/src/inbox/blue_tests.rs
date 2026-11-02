@@ -153,7 +153,7 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     let cache = json!({"version": 1, "polled_at": "2026-01-01T00:00:00.000Z", "channel": "C02JU6C2Z1D", "read": 10, "posts": [post]});
     std::fs::write(path, cache.to_string()).unwrap();
 
-    let pr = GhPr {
+    let workflow = GhPr {
         title: "Add retries".to_owned(),
         draft: false,
         state: GhState::Open,
@@ -163,7 +163,7 @@ fn a_post_that_needs_review_opens_a_blue_item_with_the_same_subject_label_and_ur
     };
     let lookup = Lookup {
         me: "clayton-duarte".to_owned(),
-        prs: [(("acme/pay".to_owned(), 812), Some(pr))]
+        workflows: [(("acme/pay".to_owned(), 812), Some(workflow))]
             .into_iter()
             .collect(),
     };

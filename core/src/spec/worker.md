@@ -20,10 +20,10 @@ This is a **test Job**: you write red tests for the tests named under "Tests" be
 This is an **implementation Job**: it builds on the red tests that the test Job(s) {{ test_jobs }} wrote, and you make them pass. They are named under "Tests" below.
 {% elif kind == "open" %}
 
-This is the **open Job** of a PR: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason). cpd, not you, then runs the Gate, pushes the Lead Branch and opens the pull request.
+This is the **open Job** of a Workflow: you bring the Workflow's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason). cpd, not you, then runs the Gate, pushes the Lead Branch and opens the pull request.
 {% elif kind == "update" %}
 
-This is an **update Job** of a PR whose pull request is open: you bring the PR's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason unless its Context says the base PR merged and the default branch holds commits you lack). cpd, not you, then runs the Gate and pushes the Lead Branch to the pull request.
+This is an **update Job** of a Workflow whose pull request is open: you bring the Workflow's Lead Branch up to date with its base, merging the base as its Context says (on a conflict always; a base that merely moved ahead is no reason unless its Context says the base Workflow's pull request merged and the default branch holds commits you lack). cpd, not you, then runs the Gate and pushes the Lead Branch to the pull request.
 {% endif %}
 
 ## Rules
@@ -34,7 +34,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 - Work only in this worktree, and touch the files listed under "Files you may touch". A diff outside those files is refused `touches_violation`; the repo's generated paths (listed in the Spec) are exempt; a path the Lead approved with `job approve-touches` is exempt; otherwise ask the Lead (`cpd ask`) or revert the file. Never a guarded or protected path.
 {% endif %}
 {% if kind == "open" or kind == "update" %}
-- Fetch the base (`git fetch origin <base>`, the base is named under "Context") and merge it as the Context says: a conflict always (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1); with no conflict, merge it **only if the Lead Branch conflicts with it** or the Context tells you the base PR merged and the default branch holds commits the Lead Branch lacks. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict and no such cause there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
+- Fetch the base (`git fetch origin <base>`, the base is named under "Context") and merge it as the Context says: a conflict always (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1); with no conflict, merge it **only if the Lead Branch conflicts with it** or the Context tells you the base Workflow's pull request merged and the default branch holds commits the Lead Branch lacks. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict and no such cause there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
 - Do not push, do not run `gh`, do not run the Gate and do not touch the pull request: cpd does them after your submit passes.
 {% elif not explore %}
 - Commit your work. Uncommitted changes are refused at submit.
@@ -75,7 +75,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 - Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
 {% endif %}
 - Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
-- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the PR's open Job, and the adapter refuses it in a Worker session.
+- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the Workflow's open Job, and the adapter refuses it in a Worker session.
 - Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
@@ -277,7 +277,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `tests_failed`: a named test fails (the tail is in `details`): fix the implementation, commit, then submit again.
 - `tests_error`: the test commands could not run. Ask the Lead.
 {% elif kind == "open" or kind == "update" %}
-- `owner_unset`, `owner_unconfirmed`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
+- `owner_unset`, `owner_unconfirmed`, `policy_invalid`: the Workflow's policy does not resolve. Ask the Lead.
 {% endif %}
 {% endif %}
 - `attempt_not_running`: the Attempt was stopped. Stop.

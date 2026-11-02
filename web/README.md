@@ -45,8 +45,8 @@ There is no approvals UI here: no tree, inbox or plan wiring, no `ui_response` a
 |---|---|---|---|
 | `/__cpd/health` | GET | token | 200 `{"ok":true}` |
 | `/__cpd/sessions` | GET | token | 200 `{"ok":true,"sessions":[<LiveSession>...]}` — lead and manager Sessions |
-| `/__cpd/sessions/<id>/transcript` | GET | token | 200 `{"ok":true,"session":"<id>","messages":[<TranscriptMessage>...]}`; an unknown id is 404 `{"ok":false,"error":"session not found"}` |
-| `/__cpd/sessions/<id>/frames` | GET (SSE) | token | `text/event-stream`; one `data: <SnapshotFrame JSON>\\n\\n` event per snapshot — the current snapshot at once, then a re-sent snapshot (seq + 1) whenever the transcript changes; the client closing ends the stream |
+| `/__cpd/sessions/<id>/transcript` | GET | token; query `limit`, `before` | 200 `{"ok":true,"session":"<id>","messages":[<TranscriptMessage>...],"more":<bool>}`; an unknown id is 404 `{"ok":false,"error":"session not found"}` (“The live frame is the newest turns; history is paged”, below) |
+| `/__cpd/sessions/<id>/frames` | GET (SSE) | token | `text/event-stream`; one `data: <SnapshotFrame JSON>\\n\\n` event per snapshot — the current snapshot at once, then a re-sent snapshot (seq + 1) whenever the transcript changes; the snapshot carries the newest turns only, within `SNAPSHOT_TAIL` and `SNAPSHOT_BUDGET_BYTES` (“The live frame is the newest turns; history is paged”, below); the client closing ends the stream |
 | `/__cpd/sessions/<id>/send` | POST | token; JSON body `{"text":string,"unblocks":string}` | 200 `{"ok":true}`; the body's limits are 10.13's (text 1–20 000 characters, unblocks 1–200, else 400) |
 
 The frames stream's epoch is `"live"` and its `seq` counts the snapshots sent on one connection from 1.
@@ -64,10 +64,20 @@ export interface TranscriptMessage {
   role: "user" | "assistant" | "system" | "tool";
   /** The tool name of a `tool` message (the tail grammar's `<toolName>`). */
   name?: string;
+  /** The turn's parts, in source order — every block the parse kept (pi parse rules 3–4, below). */
+  parts: readonly TranscriptPart[];
+  /** The join of the `text` parts' text — what the plain-text paths carry. */
   text: string;
   /** A failed tool result — the tail grammar's ` (error)` suffix. */
   error?: true;
 }
+
+/** One part of a turn, in source order — the kinds the Chat renders (“The Chat column renders a whole turn”). */
+export type TranscriptPart =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool"; name: string; title: string; arguments: Record<string, unknown>; result: string; durationMs?: number; error?: true }
+  | { type: "image"; dataUrl: string };
 
 /** Parses a pi session file's JSONL text into messages (rules below). */
 export function parsePiSession(jsonl: string): TranscriptMessage[];
@@ -81,10 +91,11 @@ export function toSnapshotFrame(messages: readonly TranscriptMessage[], epoch?: 
 
 The pi JSONL parse rules — the real field names of a pi session file (verified against a real file under `~/.pi/agent/sessions`):
 
-1. Parse every line as JSON. A line whose `type` is not `"message"` is skipped (`session`, `session_info`, `model_change`, `thinking_level_change`, `custom`, …).
-2. Of a `message` line, keep only `message.role` `"user"` or `"assistant"`; `"system"` is skipped.
-3. `message.content` is either a plain string — the text as is — or an array of blocks: join every block with `type === "text"` by its `text` field (an empty join when there is none). `"thinking"` and `"toolCall"` blocks are skipped.
-4. The message's `id` is the line's `id` field; one message per line, in file order. The transcript is completed history: never pending.
+1. Parse every line as JSON. A line whose `type` is not `"message"` is skipped (`session`, `session_info`, `model_change`, `thinking_level_change`, `custom`, …) — except a `custom_message` line, the cpd record that “A message delivered into a Session is the person's turn” (below) rules.
+2. Of a `message` line, keep `message.role` `"user"`, `"assistant"` and `"system"` — a `"system"` line is a notice, and the Chat renders it as a `Marker` (“The Chat column renders a whole turn”, below).
+3. `message.content` is either a plain string — one `text` part — or an array of blocks, kept in order as the turn's `parts`: a `text` block is a `text` part (`text` stays the join of the `text` parts, an empty join when there is none), a `thinking` block is a `thinking` part (its text under `thinking`), a `toolCall` block is a `tool` part (`id`, `name`, `arguments`), and an `image` block (`data`, `mimeType`) is an `image` part. No block is skipped.
+4. A following line with `message.role` `"toolResult"` is no turn of its own: paired by `toolCallId` with the `toolCall` block it answers, its `text` blocks become the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and its `durationMs` and `isError` land on the part (`error: true`).
+5. The message's `id` is the line's `id` field; in file order. The transcript is completed history: never pending.
 
 The tail parse rules — the plain-line grammar of `docs/contract.md` §6.20, what `cpd session tail <id>` prints:
 
@@ -92,6 +103,8 @@ The tail parse rules — the plain-line grammar of `docs/contract.md` §6.20, wh
 2. A following line with no prefix is a source newline of the same message's text — the grammar prints one line per source line with the prefix on the first line only — so continuation lines join with `\n`.
 3. A `tool` line ending ` (error)` is a failed tool result: `error: true`, and the marker is consumed — the text is what precedes it.
 4. Lines before the first prefixed line are ignored, so a fixture may carry a header label. The grammar carries no ids: messages take the synthetic ids `tail-1`, `tail-2`, … in output order.
+
+A tail message's `parts` are one `text` part — the plain grammar has nothing else; the full part kinds come from the pi parse (above) and the socket read (below).
 
 `toSnapshotFrame` produces `{ type: "snapshot", epoch, seq, snapshot: { messages } }` — the frame the existing fold's rule 3 reads (`web/src/fold/fold.ts`), so the live transcript enters the Chat through the same rendering engine, unchanged. The snapshot's `messages` are `TranscriptMessage[]`: the fold passes a snapshot's messages through as they are, and the view renders the role badge from them (`system` and `tool` included).
 
@@ -138,6 +151,8 @@ export interface LiveApi {
   sessions(): Promise<readonly LiveSession[]>;
   /** Subscribes to one Session's snapshot frames; the returned closure closes the stream. */
   subscribe(id: string, onFrame: (frame: SnapshotFrame) => void): () => void;
+  /** One page of the transcript: the whole one with no `page`, else the page above `page.before` ({ messages, more }). */
+  transcript(id: string, page?: { limit?: number; before?: string }): Promise<{ messages: readonly TranscriptMessage[]; more: boolean }>;
   /** Sends one message; always posts the fixed one-line reason below. */
   send(id: string, text: string): Promise<void>;
 }
@@ -154,6 +169,7 @@ export function createLiveApi(deps: {
 
 - Every request carries the token as `x-cpd-token`.
 - `sessions()` GETs `/__cpd/sessions` and resolves the `sessions` array.
+- `transcript(id, page?)` GETs `/__cpd/sessions/<id>/transcript` — `page`'s `limit` and `before` as the query — and resolves `{ messages, more }` (“The live frame is the newest turns; history is paged”, below).
 - `subscribe()` opens `new EventSource(<baseUrl>/__cpd/sessions/<id>/frames?token=<token>)` — an `EventSource` cannot set headers, so the query carries the token — parses each `data:` event's JSON as a `SnapshotFrame`, and calls `onFrame` with it; the returned closure closes the `EventSource`.
 - `send()` POSTs `/__cpd/sessions/<id>/send` with `{"text":<text>,"unblocks":"sent from the cpd web chat"}` — the **fixed one-line reason** every browser send carries, within 10.13's limits; a non-ok response rejects.
 
@@ -190,17 +206,19 @@ entry declares.
 
 Reasoning, Tool, Chain of Thought, Sources and Suggestion
 (`/docs/ai-elements/base/reasoning`, `/tool`, `/chain-of-thought`, `/sources`, `/suggestion`)
-are **not used**, and `Trace` (`/docs/components/base/trace`) is not vendored: the adapter
-hands whole text messages only (fold rule 3). `parsePiSession` drops the `thinking` and
-`toolCall` blocks, a durable `toolResult` arrives as a plain `tool` message with a name and
-text and no structured input, and nothing carries citations or suggestions — so there is no
-step to put in a Trace, and Code Block is reached only from fenced code in Markdown (below).
+are **not used**. `Trace` (`/docs/components/base/trace`), `Marker` (`/docs/components/base/marker`)
+and the `item` and `collapsible` primitives **are** vendored: the turn now renders every part,
+not only its text (“The Chat column renders a whole turn”, below), and an `ask_user_question`
+call renders the registry's Confirmation shape (“An ask renders as a question card”, below).
+A durable Session read over the socket pairs its `toolResult`s the same way (“The Chat column
+renders a whole turn”, below); the `cpd session tail` fallback keeps its plain `tool` message
+with a name and text and no structured input, and nothing carries citations or suggestions.
 
 #### The stock components, their doc pages and their extra deps
 
 | Component | Doc URL | The exports this chat uses | Declares |
 |---|---|---|---|
-| `message-scroller` | https://ui.shadcn.com/docs/components/base/message-scroller | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem`, `MessageScrollerButton` | `@shadcn/react` |
+| `message-scroller` | https://ui.shadcn.com/docs/components/base/message-scroller | `MessageScrollerProvider`, `MessageScroller`, `MessageScrollerViewport`, `MessageScrollerContent`, `MessageScrollerItem` | `@shadcn/react` |
 | `message` | https://ui.shadcn.com/docs/components/base/message | `Message`, `MessageContent` | — |
 | `bubble` | https://ui.shadcn.com/docs/components/base/bubble | `Bubble`, `BubbleContent` | `radix-ui` (already present) |
 | `input-group` | https://ui.shadcn.com/docs/components/base/input-group | `InputGroup`, `InputGroupTextarea`, `InputGroupButton` | — |
@@ -260,30 +278,41 @@ new entries imported, `tsc --noEmit` (`pnpm run typecheck`) and `vite build`
    rewrites the shared primitives `ui/{button,input,textarea,input-group}.tsx` to the same
    `radix-rhea` preset, so the whole `ui/` directory is one style.
 
+   The Chat column's turn rendering (“The Chat column renders a whole turn”, below) adds four
+   entries under the same rule — `trace`, `marker`, `item` and `collapsible` (the Confirmation
+   shape's `button` and the badges' `badge` are already vendored):
+
+   ```
+   npx shadcn@latest add trace marker item collapsible -o -y
+   ```
+
+   It creates `web/src/components/ui/{trace,marker,item,collapsible}.tsx`.
+
 4. **The extra deps.** The add writes `@shadcn/react`, `cn` and `shiki` into
    `web/package.json`; `radix-ui` is already there. The Markdown wrapper adds `remark-gfm`
-   (`react-markdown` is already a dep). Nothing here needs `@base-ui/react`: the `base-rhea`
-   twins of `bubble`, `tooltip` and `collapsible` would, and none of those is vendored (no
-   message actions, no Trace).
+   (`react-markdown` is already a dep). Nothing here needs `@base-ui/react`: the vendored
+   entries are the `radix-rhea` twins, which run on the repo's existing `radix-ui` — including
+   the `collapsible` and `trace` entries the Chat column's turn rendering adds (above).
 
 #### The full-screen composition
 
-One root fills the viewport; the message list is the only scrolling region and the prompt is a
+One root fills its column (“The shell never scrolls the document”, in “The resizable
+three-column shell”, below); the message list is the only scrolling region and the prompt is a
 sibling below it, outside that region, so it never scrolls away:
 
 ```tsx
-<MessageScrollerProvider autoScroll>
-  <div className="flex h-dvh flex-col">
+<MessageScrollerProvider>
+  <div className="flex h-full min-h-0 flex-col">
     {/* the session picker (below) */}
     <div className="flex items-center gap-2 border-b p-2 text-sm">…</div>
 
     <MessageScroller className="min-h-0 flex-1">
       <MessageScrollerViewport>
-        <MessageScrollerContent>
+        <MessageScrollerContent className="pb-8">
           {messages.map((message) => …)}
         </MessageScrollerContent>
       </MessageScrollerViewport>
-      <MessageScrollerButton />
+      {/* the authored jump-to-latest control, rendered only while following is released */}
     </MessageScroller>
 
     {/* the prompt input: a sibling of the scroller, pinned below the viewport */}
@@ -297,43 +326,25 @@ sibling below it, outside that region, so it never scrolls away:
 </MessageScrollerProvider>
 ```
 
-**Scroll behaviour.** `MessageScrollerProvider autoScroll` follows the reply while the person
-stays at the live edge; the person's turn is the `scrollAnchor`, so a new question settles near
-the top and the reply streams in under it; `MessageScrollerButton` jumps back to the live edge.
+**Scroll behaviour.** The vendored `MessageScroller` is the layout shell with its own
+`autoScroll` off; where the viewport sits in the thread is the authored rule of “The thread
+follows its live edge”, below (`web/src/hooks/use-thread-scroll.ts`). No turn carries
+`scrollAnchor`.
 Enter sends, Shift+Enter adds a line.
 
 #### How one message renders
 
-Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The role
-picks the branch; the text is **never** dumped as a bare `{message.text}`:
-
-```tsx
-message.role === "user" ? (
-  <MessageScrollerItem messageId={message.id} scrollAnchor>
-    <Message align="end">
-      <MessageContent>
-        <Bubble align="end" variant="muted">
-          <BubbleContent>{message.text}</BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
-  </MessageScrollerItem>
-) : (
-  <MessageScrollerItem messageId={message.id}>
-    <Message align="start">
-      <MessageContent>
-        <Markdown>{message.text}</Markdown>
-      </MessageContent>
-    </Message>
-  </MessageScrollerItem>
-)
-```
+Every message is a `MessageScrollerItem` keyed by `message.id`, carrying `messageId`. The turn
+renders **part by part** — the full contract is “The Chat column renders a whole turn”, below —
+and the text is **never** dumped as a bare `{message.text}` (a `system` notice renders as the
+collapsed `Notice` row of “A cpd notice collapses to its summary line”, below):
 
 - The **person** is `Message align="end"` with `Bubble align="end" variant="muted"` and the
-text inside `BubbleContent`.
-- The **agent** (and every non-`user` role) is `Message align="start"` and the text goes
-through `Markdown`; a fenced block becomes a `CodeBlock` with its language title and copy
-button.
+markdown through `BubbleContent`.
+- The **agent** (and every non-`user` role) is `Message align="start"` and its parts render in
+order: text through `Markdown` (a fenced block becomes a `CodeBlock` with its language title
+and copy button), `thinking` and `tool` as `Trace` rows, an `image` inline, and a `system`
+notice as the collapsed `Notice` row of “A cpd notice collapses to its summary line”, below.
 
 #### Sessions, the live wiring and the no-adapter state
 
@@ -371,7 +382,7 @@ the shadcn **`resizable`** wrapper (`PanelGroup`, `Panel`, `PanelResizeHandle`).
 |---|---|
 | Context (left) | the shadcn **`sidebar-03`** block (“a sidebar with submenus”), copied verbatim |
 | Chat (centre) | the existing `web/src/views/live-chat.tsx` — no longer unchanged: it has lost its Session picker (the rail selects, next section) and takes the selected `session` from `App` |
-| Inbox (right) | a **placeholder** (“The Inbox lands here.”) — the real Inbox and the Tree/Plan panes belong to the ui-parity Plan |
+| Inbox (right) | the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, vendored 1:1 (“The Inbox rail in the right column”, below) — the rail renders the live Inbox (“The live Inbox in the right rail”, below); the Tree/Plan panes stay out of scope (the ui-parity Plan) |
 
 **Sizing.** The Context column **defaults to `20rem`**; dragging its handle resizes it;
 **double-clicking its handle restores `20rem`** (checked in a real browser: initial 320 px,
@@ -383,6 +394,21 @@ the group, so the library scales them down on first layout (~311 px at 1400 px w
 its panel box: the Context panel gets a `transform` wrapper (establishing a containing block)
 with `overflow-hidden`, and `SidebarProvider` gets `--sidebar-width: 100%` so the rail and its
 gap spacer match the panel without its content adding a panel scrollbar.
+
+**The shell never scrolls the document** (hs-d834). The Chat column’s root takes its own
+column’s height — `flex h-full min-h-0 flex-col` in `web/src/views/live-chat.tsx`, never a
+viewport unit (`h-dvh`) — so the Chat can never be taller than its panel. **Both** rails’
+`SidebarProvider` carry `h-full min-h-0` (`web/src/app/App.tsx`): the Inbox’s already did, the
+Context column’s now does too. And `web/src/index.css` clamps the document — `html, body,
+#root { height: 100% }` and `overflow: hidden` on `body` — so the page itself never scrolls and
+every scrollable thing is a column’s own list: the rails’ `SidebarContent` and the Chat’s thread
+viewport, each with the themed scrollbar (“Themed scrollbars”, below). The reason, plainly: a
+viewport-unit height inside a panel, or an unbounded rail, pushes the document taller than the
+shell and scrolls the whole page.
+
+Within that column, the Chat thread’s content box reserves **2rem** below its newest line —
+`pb-8` on the `MessageScrollerContent` in `web/src/views/live-chat.tsx` (hs-d835) — so rendered
+text never touches the prompt input.
 
 **Dark is the default.** The `<html>` element carries `class="dark"` in `web/index.html`.
 
@@ -433,6 +459,8 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 - A root row's label is the manager's `name`, falling back to the context; a nested row's label is the lead's `name`, falling back to its id.
 - The rail's header carries `cpd` with the Context count beneath it (`1 context`, `4 contexts`, `No contexts` at zero) — never the `sidebar-03` block's `Documentation` / `v1.0.0`.
 
+The rail cannot be collapsed: by the User's decision of 2026-11-01 it no longer renders `sidebar-03`'s `SidebarRail` — the 4px strip at the rail's edge, which an accidental click collapsed the whole rail through — so it has no collapse affordance at all.
+
 **The ids.** Every row is a real `<button>` — not a link — carrying `data-session-id` (the full uuid) and `title` (the same uuid), and showing the id's first 8 characters muted beside the label.
 
 **The selection.** The rail is the Chat's only navigation:
@@ -446,9 +474,251 @@ The left rail stops being the `sidebar-03` block's sample menu and becomes the *
 
 **The adapter carries the tree's fields.** `web/src/api/live-server.ts`'s `LiveSession` gains `context` and `name`, which the dev adapter's `realDeps().list()` in `web/vite.config.ts` fills from each `cpd session list` row's `context` and `name`.
 
+### Context tree rows
+
+Each rail row renders a **glyph**, then the row's **key**, then — a gap away — its **Job counters** (hs-d838). The key is the Context's id on a Context row and the Plan's key on a Plan row.
+
+**The rail is the cockpit's tree, not a list of the Plans that happen to be live** (User, 2026-11-02, decision `cockpit behaviour`). It lists **every Context of `cpd context list`**, sorted by id. An **archived Context** comes after the live ones, in its own block, **folded**, its rows **muted**. Under each Context sit **all its Plans, sorted by id** — every **live** Plan always shows, and the **archived** ones are hidden behind the Context row's **fold control**, a button carrying **`aria-expanded`**, **folded by default**, exactly as the cockpit's `expand`/`collapse` row works: the fold shows and hides **only that Context's archived Plans**, never its live ones.
+
+**A Context row is glyph + the Context's id, and carries no numbers.** Clicking it selects that Context's **manager Session**; it is **disabled only when that Context has no manager Session in the Sessions read** (`GET /__cpd/sessions`, above) — never because the Context has no live Plan. A Plan row selects that Plan's **Lead Session**, so clicking still opens the Chat; an **archived** Plan row is drawn **muted** and **still opens its Lead Session** when clicked.
+
+**The dots are the palette's meanings**, taken from the pill spec (`pi/lib/pill-spec.json`) and the Dango v3 palette:
+
+- **Working** and **waiting** are the palette's in-progress cyan **mizu `#67ada7`** — the cockpit draws both in that one colour and tells them apart by glyph, so the web does not invent a second colour.
+- **Blocked** is **anko `#e17f6e`**.
+- **Idle** (and an unknown state) is the plain grey **`#aba3af`**.
+- An **asleep** Session — the read's **`asleep_at`** set, a durable Session put to sleep, never a `state` literal (a sleeping lead's `state` stays `stopped`) — is the dim grey **`#87808c`**, and its **whole row is muted**: both the row's button and every counter span, the `·` separator included, take the dim grey. The row's dim colour carries **Tailwind's important modifier** (`text-[var(--dango-dim)]!`) because the sidebar component's own `text-sidebar-foreground` sits on the same element (`web/src/components/ui/sidebar.tsx`, `sidebar-menu-sub-button`) and Tailwind's emitted order would otherwise let that win — a class string in the DOM is not a rendered colour.
+
+**No Tailwind hue (emerald, violet, red) is used anywhere in the rail.** These four colours are **custom properties of the dark theme in `web/src/index.css`**, named for the palette colour — `mizu`, `anko`, `plain`, `dim` — with their hexes in the Dango table (“The Dango theme”, above); **never a hex inside a component**.
+
+The counters are the cockpit's four roles in their order: **planned** (draft + queued), **active** (running + merging), **failed**, **merged**. A zero is dropped; a single dot (`·`) separates two drawn roles; and each drawn number takes its status colour — **muted** for planned, the **ramune** primary for active, the **anko** destructive for failed, the **matcha** chart-2 for merged. Counters are drawn on **Plan rows only** — a Context row is glyph + id and carries no numbers, because the cockpit draws cost on a Context row and cost per Plan is not in cpd's CLI yet (a separate read would be its own Workflow).
+
+**The reads.** Two read-only routes on the dev live adapter, each carrying the token like its sibling `/__cpd/` routes and each answering an **empty list when the read is not wired**:
+
+- `GET /__cpd/contexts` answers `{"ok":true,"contexts":[{"id":"…","archived":<bool>}]}` — the rows of `cpd context list`; `{"ok":true,"contexts":[]}` when the read is not wired.
+- `GET /__cpd/plans` answers **every Plan of every Context, archived ones included**, as `{"ok":true,"plans":[{"id":"…","context":"…","phase":"…","counts":{…},"leadSession":"…","archived":<bool>}]}` — the rows of `cpd plan list`; `{"ok":true,"plans":[]}` when the read is not wired. Its types live in `web/src/api/live-server.ts`, beside `LiveSession`.
+
+**The fallback.** An API without these reads — a Chat-only fake — leaves the rail drawing its Session tree exactly as before, so nothing regresses.
+
+### The Inbox rail in the right column
+
+The right column stops being a placeholder and becomes the **Inbox rail** — the mail list of the shadcn **`sidebar-09`** block, decided by the User on 2026-11-01 from the working dev preview (`preview/chat-shell`, `1624176c7`). It is vendored 1:1 into `web/src/components/inbox-rail.tsx` under the same registry rule as the Context rail (**`new-york-v4` only**, above): `cn` imported relatively from `web/src/lib/utils.ts`, no `@` alias.
+
+**What the block is.** `sidebar-09` ("Collapsible nested sidebars", https://ui.shadcn.com/r/styles/new-york-v4/sidebar-09.json) is two sidebars side by side: an icon column — Inbox, Drafts, Sent, Junk, Trash under an Acme Inc header and the sample user — and, beside it, the mail list.
+
+**What is vendored.** Only the block's second sidebar — its header (the title alone) and its mail list. Each row is an anchor and renders the name with its date pushed right (`ml-auto text-xs`), the subject in `font-medium`, then the teaser in `line-clamp-2 w-[260px] text-xs whitespace-break-spaces`, under the block's row classes `flex flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground` — rows and classes verbatim.
+
+**What is deliberately not vendored** — the User's decision: the block's first sidebar (the icon column), the `Unreads` switch in the second sidebar's header, and the `Type to search...` input the block puts under the title — so the header carries the title `Inbox` alone and the rail has no input at all.
+
+**The data.** The rail renders the **live Inbox** — the block's ten sample mails (`data.mails`) and the `Mail` interface they need are gone with this PR. The items and the row mapping are the next section's contract (“The live Inbox in the right rail”, below).
+
+**The column.** The Inbox column defaults to `25rem` and is sized and resized like the Context column (above), double-clicking its handle restoring `25rem`. The panel wraps the rail in its own `SidebarProvider` whose `--sidebar-width` is `100%`, so the block's `Sidebar` fills the panel instead of the sidebar's `16rem` default.
+
+**Why 25rem.** The teaser is a fixed `w-[260px]` and the block's own `page.tsx` sets `--sidebar-width: 350px`; at a narrower column the teaser's last characters are clipped mid-word (measured 2026-11-01: 257px of inner width against the 260px teaser). `25rem` gives the row room.
+
+### The live Inbox in the right rail
+
+The rail's data is the **real Inbox**: the open items `cpd inbox list` prints, one row per item, read-only. An item's fields come from that command's JSON row — its `kind`, `label`, `session`, `url` and `age_seconds` are what the row renders.
+
+**Where the items come from.** `web/src/api/live-server.ts` gains a `/__cpd/inbox` route on the dev adapter, guarded by the same token check as every other `/__cpd/` route, returning `{ ok: true, items: [...] }`. Its `inbox()` dependency runs `cpd inbox list` and passes the items through unchanged. `web/src/api/live.ts` gains `inbox()` on `LiveApi`: a plain `GET /__cpd/inbox` with the token header, exactly as `sessions()` reads `/__cpd/sessions`.
+
+**The row's parts, one by one.** The name is the **actor**: for the kind `review-requested` it is `peer review`; otherwise, when the item names a Session, it is that Session's `name` (falling back to the first 8 characters of its id); otherwise it is `cpd engine`. The date is the item's `age_seconds` rendered relative: `just now` under a minute; `1 minute ago`, `N minutes ago` under an hour; `1 hour ago`, `N hours ago`; `Yesterday` from 24 to 48 hours; `N days ago` under a week (the day form is plural only: `Yesterday` holds the 24 to 48 hour range, so a day is never one); `1 week ago`, `N weeks ago` under 30 days; `1 month ago`, `N months ago` after that — the plural of each unit only for N ≥ 2. The subject line is the item's `label`'s first line. The teaser is the label's second line when it has one (the pull request's title, for a `pr-ready`), and the row has no teaser line when it does not.
+
+**What the row links to.** The row is an anchor: its `href` is the item's `url` when the item has one, and `#` when it does not (a `curate-docs` item has none).
+
+**An empty Inbox.** No items renders an empty list under the header — no placeholder copy is invented.
+
+**What does not change.** The rows keep the block's classes, the header keeps its title, the column keeps its `25rem` default, and the rail is read-only: nothing in it snoozes, dismisses, claims or answers an item.
+
+### The Chat column renders a whole turn
+
+The Chat column renders **every part of a turn** — decided by the User on 2026-11-01. Text alone left real Sessions with empty turns: `parsePiSession` kept only text, so thinking, tool calls, their results and images were dropped. One `TranscriptMessage` carries the turn's ordered `parts` (`TranscriptPart`, “The TypeScript contract”, above), and `web/src/views/live-chat.tsx` renders each in order, one `MessageScrollerItem` per turn keyed by its id:
+
+| Part | Renders as | Held by |
+|---|---|---|
+| `text` (the person's turn) | a `Bubble` with its markdown through `BubbleContent` | `web/src/components/ui/bubble.tsx` |
+| `text` (the agent's) | markdown through `react-markdown`; a fenced block through the `Code Block` | `web/src/components/markdown.tsx`, `web/src/components/ui/code-block.tsx` |
+| `thinking` | a `Trace` row: closed, its title carries the part's word count; opened, the collapsible carries the thinking's text | `web/src/components/ui/trace.tsx` |
+| `tool` | a `Trace` row (below) | `web/src/components/ui/trace.tsx` |
+| `image` | inline, an `<img>` from its base64 data URL (`data:<mimeType>;base64,<data>`) | `web/src/views/live-chat.tsx` |
+| `system` (the whole message) | a collapsed `Notice` row, not a Bubble and not a markdown turn (“A cpd notice collapses to its summary line”, below) | `web/src/views/live-chat.tsx` |
+
+The `tool` row's title is the command or path the call names — the `arguments`' `command` of a `bash` call, its `path` of a `read`, `edit` or `write` call, else the tool's `name` — with the call's `durationMs` beside the title and the row in its error state when the result failed (`error`). Opened, the row shows the call's `arguments` and its `result` as `Code Block`s. A large result is never truncated: the Code Block carries it whole; only the live frame is bounded (next section).
+
+The pairing behind a `tool` part is measured against a real pi session file under `~/.pi/agent/sessions`: an assistant message's content blocks are `thinking` (its text under `thinking`), `text` and `toolCall` (`id`, `name`, `arguments`), and the tool's result is the **following** line's `message.role` `"toolResult"` (`toolCallId`, `toolName`, `content` of `text` and `image` blocks, `isError`, `durationMs`). `parsePiSession` pairs a `toolCall` with its `toolResult` by `toolCallId`: the part carries the call's `arguments`, and the result's text, `durationMs`, `isError` and `image` blocks land on the same turn — the `toolResult` line yields no turn of its own.
+
+### The thread follows its live edge
+
+Where the viewport sits in the thread is an **authored rule, not the primitive's** (hs-d832). The
+rule lives in **`web/src/hooks/use-thread-scroll.ts`**; the vendored `MessageScroller` stays as the
+layout shell with its own `autoScroll` **turned off**:
+
+- The thread **opens at its newest turn**.
+- While the reader is **following**, every new frame keeps the view at the newest content.
+- Following is **released** only when the reader scrolls more than **40% of the viewport height**
+  above that newest content — and a released view **never moves on a frame**. No arrival drags it.
+- Scrolling back **inside that margin re-engages following automatically**.
+- A **jump-to-latest control**, shown only while following is released, re-engages it too.
+
+While following, the viewport carries **`data-autoscrolling`** — the attribute the themed
+scrollbar's rule reads to hide the thumb (“Themed scrollbars”, below).
+
+History, kept because both earlier rules were measured and rejected: the registry recipe's anchor
+(`scrollAnchor={message.role === "user"}`) settled the person's turn at the top of the viewport and
+the primitive's state machine never left `anchored-to-message` for `following-bottom`, so new
+output never arrived in view (dropped by the prototype commit `8597fd602` on `preview/chat-shell`).
+The primitive's own follow rule was then measured and killed too:
+`$CPD_HOME/run/web-chat-bugs/explore/scout-scroll.md` found an **8 px** end-edge released for good
+by **one upward scroll** — any wheel tick releases it at all — while the newest agent turn measured
+**~950 px against a 767 px viewport**: a reader reading the newest turn is never inside the 8 px
+edge, so every later frame was ignored. That is why the rule is authored code, not the primitive's
+`autoScroll`.
+
+**The DOM contract the tests pin** (`web/src/views/live-chat.test.tsx` and
+`web/src/components/inbox-rail.test.tsx`, a new file): the Chat's scrolling viewport is the
+vendored **`[data-slot="message-scroller-viewport"]`** element; the jump-to-latest control is a
+button carrying **`data-slot="thread-jump"`**, rendered only while following is released.
+
+### A cpd notice collapses to its summary line
+
+A `system` message — a cpd notice: a Context dump, an engine Event, an Escalation — renders
+**collapsed by default** as **one summary line** (hs-d831): the notice's **first non-empty line,
+truncated**, a **muted line count** beside it (`24 lines`) and an **expand control**. Expanded,
+the whole text renders `whitespace-pre-wrap` inside a box capped at **24rem** (Tailwind
+`max-h-96`) that **scrolls with the themed scrollbar** (“Themed scrollbars”, below), and it
+collapses again. A notice of **one line** renders as one plain line: **no line count and no expand
+control**. Everything else in a turn is unchanged: the person's turns and the agent's answer and
+markdown, the Reasoning and Tool rows (already collapsed, closed by default) and the ask card.
+
+The triage that decided it: `$CPD_HOME/run/web-chat-bugs/explore/scout-blocks.md` measured the
+worst offender — one `cpd-context` dump rendered whole as a `Marker` reached **299 lines and
+51,485 characters** (Session `62b1c19b`, JSONL line 3557) — about six viewport heights for one
+transcript row — while the terminal cockpit caps the same content at **12 lines** with no
+expansion (`tui/src/history/render.rs:48-50`). The whole-`Marker` rendering of a `system` message
+is superseded by this rule.
+
+The DOM contract the tests pin (`web/src/views/live-chat.test.tsx`): the notice's row carries
+**`data-slot="notice"`**, its line count **`data-slot="notice-count"`** (text `N lines`, absent
+for a one-line notice), its expand control is a button with **`aria-expanded`** (absent for a
+one-line notice), and its body is **not in the DOM while collapsed**.
+
+### Themed scrollbars
+
+Every scrolling surface of the shell uses one authored Tailwind v4 utility, **`scrollbar-themed`**
+(hs-d830), declared in `web/src/index.css` as:
+
+```css
+scrollbar-width: thin;
+scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+```
+
+plus **`color-scheme: dark` on `.dark`** in `@layer base`, so the scrollbar corner and the native
+controls follow the theme. It is applied to the three surfaces that scroll:
+
+- the Chat's scrolling viewport — the vendored `[data-slot="message-scroller-viewport"]`
+  (`web/src/components/ui/message-scroller.tsx`);
+- `SidebarContent` (`web/src/components/ui/sidebar.tsx`) — both rails scroll there;
+- the Code Block's scrolling content (`web/src/components/ui/code-block.tsx`).
+
+The Chat viewport keeps the **`data-autoscrolling` thumb-transparent override**: the thumb hides
+while the thread follows its live edge (“The thread follows its live edge”, above). The **Tree and
+Plan panes are not in this contract** — the shell does not mount them. Pinned by
+`web/src/views/live-chat.test.tsx` (the Chat viewport) and `web/src/components/inbox-rail.test.tsx`
+(the rail).
+
+### The Dango theme
+
+The shell's dark theme is the **Dango v3 palette** (hs-d836, approved by the User on the dev preview, 2026-11-02). The shell **ships DARK only**: the palette is written in the **`.dark` block of `web/src/index.css`**, and only `.dark` carries Dango — the light theme (`:root`) is unchanged and is **not** Dango. The shell's `@theme inline` block maps the CSS custom properties to Tailwind's `--color-*` slots; it carries no colours of its own.
+
+Every token is a Dango v3 value, mapped the way the TUI uses the palette. The mapping, one row per CSS custom property:
+
+| CSS custom property | Hex |
+|---|---|
+| `--background` | `#1c1a20` |
+| `--foreground` | `#d8d2cc` |
+| `--card` | `#24222a` |
+| `--card-foreground` | `#d8d2cc` |
+| `--popover` | `#24222a` |
+| `--popover-foreground` | `#d8d2cc` |
+| `--primary` | `#7aa2ce` |
+| `--primary-foreground` | `#1c1a20` |
+| `--secondary` | `#2a2730` |
+| `--secondary-foreground` | `#d8d2cc` |
+| `--muted` | `#2a2730` |
+| `--muted-foreground` | `#aba3af` |
+| `--accent` | `#2a2730` |
+| `--accent-foreground` | `#d8d2cc` |
+| `--destructive` | `#e17f6e` |
+| `--border` | `#5a504a` |
+| `--input` | `#5a504a` |
+| `--ring` | `#7aa2ce` |
+| `--chart-1` | `#7aa2ce` |
+| `--chart-2` | `#8da96e` |
+| `--chart-3` | `#c29653` |
+| `--chart-4` | `#ca88a3` |
+| `--chart-5` | `#67ada7` |
+| `--sidebar` | `#1c1a20` |
+| `--sidebar-foreground` | `#d8d2cc` |
+| `--sidebar-primary` | `#7aa2ce` |
+| `--sidebar-primary-foreground` | `#1c1a20` |
+| `--sidebar-accent` | `#2a2730` |
+| `--sidebar-accent-foreground` | `#d8d2cc` |
+| `--sidebar-border` | `#5a504a` |
+| `--sidebar-ring` | `#7aa2ce` |
+| `--dango-mizu` | `#67ada7` |
+| `--dango-anko` | `#e17f6e` |
+| `--dango-dim` | `#87808c` |
+| `--dango-plain` | `#aba3af` |
+
+Plus the selection rule, a `.dark ::selection` of **`#5a504a` over `#d8d2cc`**.
+
+**The palette's own rules**, quoted from its source: colour indices **0–8 are read-only and 9–15 clickable**; **0 (bamboo `#5a504a`) draws lines and sticks**; **7 (`#aba3af`) is secondary text**; **8 (`#87808c`) is dim text**; and **15 (shiro `#f3ead9`) is the brightest**. The accent the cockpit's own theme calls `accent` is **index 4, ramune** — `#7aa2ce`, what the table writes to `--primary`, `--ring` and `--sidebar-primary`.
+
+**Source of truth**: the Ghostty theme `~/.config/ghostty/themes/Dango` (v3) and the pi theme `dango.json` (`~/.local/share/cpd/pi/themes/dango.json`). The web theme **MUST agree with the table above**, so the test that pins it can fail when either drifts: the palette is pinned in `web/src/index.css`'s `.dark` block, and the test that pins it is the Dango assertions of `web/src/views/live-chat-shell.test.tsx` alongside the `index.css` clamp test there.
+
+### The markdown a turn renders
+
+A turn's text is markdown, and the Chat parses it as **CommonMark plus GFM**. `react-markdown` alone parses CommonMark only, so a markdown table — which a Lead's status message is largely made of — rendered as a paragraph of pipe characters, and a task list, a strikethrough and a bare URL were lost. The prose parser therefore runs through **`remark-gfm`, pinned `4.0.1` and declared in `web/package.json`**; the mapping lives in `web/src/components/markdown.tsx` (the same file that maps a fenced block onto the Code Block). What a turn's text may contain, measured on the preview branch, 2026-11-01:
+
+- A **table** renders as a real `<table>` with its header row and its cells — a table of 3 rows and 7 cells rendered whole. Tailwind's preflight strips a table's borders and cell padding, so the mapping styles them: the table sits in its own `overflow-x-auto` wrapper, so a wide table scrolls instead of widening the turn; each row carries a rule; each cell gets padding; and a header cell does not wrap.
+- A **task list** renders its checkboxes (`type="checkbox"` inputs — 2 measured).
+- A **strikethrough** renders as `<del>`.
+- A **bare URL** becomes a link (an anchor around it).
+- **Inline code** stays inline.
+- A **fenced block** renders through the Code Block, with its language as the title and a copy action (`web/src/components/ui/code-block.tsx`).
+
+### A message delivered into a Session is the person's turn
+
+A cpd record arrives in a pi session file as a `custom_message` line, and the parser (`parsePiSession`, `web/src/transcript.ts`) filed every one of them as an engine notice — measured against 1 500+ records across 13 real Sessions of Context building-cpd, the Chat showed the person's own words back as a cpd notice. The rule, measured: the record whose `customType` is `"cpd"` and whose `details.kind` is `"session-message"` (595 of those records) is a message **delivered into the Session** — the person's own turn. Every other record is an engine notice: the `customType`s `cpd-context`, `cpd-plan-summary`, `cpd-plan-decision` and `cpd-skills`, and the `"cpd"` kinds `escalation`, `error`, `pr-feedback`, `job-merged`, `job-failed` and `plan-done`. A record with `display: false` is skipped, whichever kind it carries.
+
+The delivered turn's text is `details.data.text` — the person's words, unwrapped — not cpd's wrapper: the record's `content` is cpd's wrapper `Message from <sender> (<time>): <body>`, and only its `<body>` is the fallback when `details.data.text` is absent. The wrapper's sender may itself carry parentheses (`Message from web-chat-live (14bd6551-…) (13:02 EST): …`), so the `<time>` is the last parenthesised group before the colon.
+
+The delivered turn renders as a `Bubble` aligned to the end (`web/src/views/live-chat.tsx`), with a muted line above it carrying the time cpd stamped and the recorded reason (`details.data.unblocks`, e.g. `sent from the cpd web chat`); the full `Message from <sender> (<time>)` header is the line's `title`.
+
+### The live frame is the newest turns; history is paged
+
+The `frames` route sent the whole transcript as one SSE event — 20 450 029 bytes for a real Session (`97de2471…`) — and Chrome's `EventSource` never fired `onmessage` for an event that large, so the Chat rendered nothing at all. It sends the newest turns only, bounded by two constants in `web/src/api/live-server.ts`:
+
+- `SNAPSHOT_TAIL` — **40** turns.
+- `SNAPSHOT_BUDGET_BYTES` — **1 000 000** bytes of serialized frame.
+
+Turns drop oldest first until both bounds hold, and the frame is never nothing: the newest turn always ships, even when it alone exceeds a bound. The budget is the measurement, not a guess — on Chrome, 2026-11-01: an SSE event of 1 MB and one of 2 MB were delivered; events of 4 MB, 8 MB and 20 MB never fired `onmessage`.
+
+History is paged through the transcript route. `GET /__cpd/sessions/<id>/transcript` takes `limit` (capped at **500**) and `before` (the oldest turn id the reader already holds) and answers `{"messages":[<TranscriptMessage>...],"more":<bool>}` — `more` says whether an older page exists; with no `limit` it still answers the whole transcript. The client side is a `transcript(id, page?)` method on `LiveApi` (`web/src/api/live.ts`), a plain GET with the token, exactly like `sessions()`.
+
+The Chat shows a **Load earlier messages** control at the top of the thread (`web/src/views/live-chat.tsx`): it asks for the page above the oldest turn it holds (`before` = that turn's id) and prepends the answer, and it disappears when `more` is false. A frame's turns and the loaded pages are deduplicated by turn id — a turn is held once, whichever path delivered it.
+
+### An ask renders as a question card
+
+An `ask_user_question` call does not render as a JSON blob: it renders as the registry's **Confirmation** shape — the AI Elements pattern of `docs/ai-elements/base/confirmation`, built on the `item` (`web/src/components/ui/item.tsx`) and `button` primitives — in the `tool` part's place, in `web/src/views/live-chat.tsx`. The card is read-only, like the whole adapter: it shows what was asked and what was answered, it asks nothing.
+
+The call's `arguments` hold `questions`: each question's `header`, `question`, `options` of `label`/`description`, and `multiSelect` when several options may be picked. The result's `details.answers` hold, per question: `questionIndex`, `question`, `kind` (`option`, `custom` or `multi`), `answer` — the picked label, the person's typed words, or null — and, for `multi`, `selected` (the picked labels).
+
+The card shows one `Item` per question: the question's `header` as a `Badge`, the `question` text, every option with its `label` and `description`, the taken one's label marked, and a typed answer quoted as the person wrote it. A `Badge` names the outcome: the picked label for an `option` answer, **`N of M picked`** for a `multi` one, **`Typed answer`** for a `custom` one, **`No answer`** when `answer` is null. When the result records a refusal (`cancelled: true` with no answers — measured: the result carries the text “User declined to answer questions”), the card shows **`Refused`** and the refusal text in the destructive colour. A question matches its answer by `questionIndex` — never by the question's text, which pi may restate (the answer's own `question` is pi's restatement and is not used for matching).
+
 ### The durable host-socket read (`chat-host`)
 
-A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` is untouched. The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
+A durable Session's transcript is read from its **host socket** — the real frames of `docs/contract.md` §6.14 — not only by shelling the CLI. The preference rule, pinned: for a durable Session the dev server **connects to the host socket when a live host answers** (a socket file that accepts and completes the handshake) and **falls back to `cpd session tail` otherwise** — no socket file, a refused connect, a refused handshake. A pi Session keeps its session-file read; the browser API is unchanged either way: the SSE `/frames` stream still emits the same `SnapshotFrame`s of `toSnapshotFrame`, and `LiveApi` keeps its shape (the `transcript()` page method of the Chat column's contract, above, is the one method added since). The send path stays `cpd session send`: the socket is **read-only** here, the client sends `hello` and `attach` and nothing else. The activation flag, the token and the security boundary above are unchanged — the host-socket read runs in the same dev server, behind the same token check.
 
 #### The socket
 
@@ -512,7 +782,7 @@ export function applyHostFrame(state: HostState, frame: HostFrame): HostState;
 
 The rules are `docs/contract.md` §6.20's fold, in TS, over the wire's unchanged pi-durable shapes:
 
-1. A `snapshot` frame **replaces the whole state**, never merges — the base snapshot, a rebase, and a new epoch's snapshot are the same operation. Its `SnapshotEvent` entries render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message` (the role from the message type, the text from its text blocks joined; thinking blocks skipped); an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message gives role `"tool"` with `name` = `toolName` and `error: true` when `isError`.
+1. A `snapshot` frame **replaces the whole state**, never merges — the base snapshot, a rebase, and a new epoch's snapshot are the same operation. Its `SnapshotEvent` entries render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message` — the role from the message type, the blocks becoming the message's ordered `parts` exactly as the pi parse rules 3–4 (above) — and an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message pairs with the `toolCall` it answers, by `toolCallId`: its text becomes the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and it carries `name` = `toolName`, `durationMs` and `error: true` when `isError`. (The `cpd session tail` fallback keeps its plain grammar: a `tool` message with a name, text and no structured input.)
 2. An `events` frame applies its `AgentEvent`s in order: a completed message (`message_end`, or a `run_end` ending an in-flight message) appends its `TranscriptMessage`s; every other event updates nothing the transcript shows. The short-answer rule holds: a message arrives whole, the fold never waits for deltas.
 3. The cursor advances only with stream frames: a `snapshot` sets it to `(epoch, seq)`, an `events` frame likewise once its events are applied. `attached` fixes the mode and touches nothing else.
 4. `host_state`, `notice`, `status`, `ui_request`, `ui_resolved` and `error` leave the state unchanged.

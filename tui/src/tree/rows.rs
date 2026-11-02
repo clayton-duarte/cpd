@@ -246,7 +246,7 @@ impl<'a> Row<'a> {
 
     /// The row is of a Plan or a Context that `plan delete` or `context delete` may delete: archived, or asleep (a Plan whose
     /// Lead is asleep; a Context whose every Plan is asleep or archived), contract §2.2 "Deleted". The command says whether
-    /// the rest holds (nothing running, no open PR); the menu offers Delete on this much.
+    /// the rest holds (nothing running, no open Workflow); the menu offers Delete on this much.
     pub fn deletable(&self) -> bool {
         let quiet =
             |p: &PlanNode| p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
@@ -714,7 +714,7 @@ pub fn items_with_costs(
 
 /// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
 /// only. The rows scroll in their area with a dim, right-aligned `▲ <n> more` / `▼ <n> more` cue row (`dialog::scroll::cue`, hs-d348) where some are hidden (the Deploy
-/// column's PR list and the Inbox section scroll with the same code, one row a row).
+/// column's Workflow list and the Inbox section scroll with the same code, one row a row).
 #[derive(Debug, Default)]
 pub struct Scroll {
     offset: usize,

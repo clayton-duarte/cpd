@@ -14,7 +14,7 @@ use crate::store::Store;
 
 use super::ledger::{self, End, Ladder, Stage};
 
-/// A temporary store with a Plan `pay`, its PR `api` and the Job `a`, whose Attempts the tests add.
+/// A temporary store with a Plan `pay`, its Workflow `api` and the Job `a`, whose Attempts the tests add.
 pub(super) struct Fixture {
     _dir: tempfile::TempDir,
     pub(super) store: Store,
@@ -33,9 +33,9 @@ pub(super) fn fixture() -> Fixture {
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
                    VALUES ('pay', 'api', '/r', 'main', 'dispatch', 'cpd/pay', '/lead', 't', cpd_txn(), 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                 INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't');"
             ))?;
             Ok(())

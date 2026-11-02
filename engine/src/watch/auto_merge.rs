@@ -1,4 +1,4 @@
-//! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117): a posted PR whose request is `pending`
+//! E18, the pending auto-merge requests (commands.md §9.8b; pro-d115, pro-d117): a posted Workflow whose request is `pending`
 //! (deferred because it was stacked, or its `gh` call failed) is retried through the core function `pr post` runs, detached
 //! on its own thread, its answer collected at a later tick. `enabled` sets the row `enabled`; `not_allowed` (the repo lacks
 //! auto-merge) sets it `none` with no Event; `refused` (GitHub's refusal, or no merge method) sets it `refused` with one
@@ -113,7 +113,7 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
         posts::set_auto_merge(
             tx,
             &post.plan,
-            &post.pr,
+            &post.workflow,
             match (&refused, &not_allowed) {
                 (Some(_), _) => "refused",
                 (None, true) => "none",
@@ -124,8 +124,8 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::AutoMergeRefused,
                 format!(
-                    "Auto-merge for PR {}/{} (#{} of {}) was refused: {why}.",
-                    post.plan, post.pr, post.number, post.repo
+                    "Auto-merge for Workflow {}/{} (#{} of {}) was refused: {why}.",
+                    post.plan, post.workflow, post.number, post.repo
                 ),
             ));
             let text = format!(
@@ -153,13 +153,13 @@ fn settle(engine: &mut Engine, post: &Pending, outcome: Outcome) {
             engine.clear(Step::E18, &about);
             if not_allowed {
                 engine.log.line(&format!(
-                    "E18: the repo of PR {}/{} does not allow auto-merge: row set to none",
-                    post.plan, post.pr
+                    "E18: the repo of Workflow {}/{} does not allow auto-merge: row set to none",
+                    post.plan, post.workflow
                 ));
             } else if refused.is_none() {
                 engine.log.line(&format!(
-                    "E18: enabled auto-merge for PR {}/{}",
-                    post.plan, post.pr
+                    "E18: enabled auto-merge for Workflow {}/{}",
+                    post.plan, post.workflow
                 ));
             }
         }

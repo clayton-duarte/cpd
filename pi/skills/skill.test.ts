@@ -107,7 +107,9 @@ for (const { skill } of skills) test(`${skill}: nothing of cpd 1, of the removed
   for (const { name, text } of skillFiles(skill)) {
     assert.doesNotMatch(text, /\bgrounded\b|forked_from/i, `${name}: the grounded Lead is retired (hs-d129); a Lead starts fresh`);
     assert.doesNotMatch(text, /--wf\b|\bCPD_WF\b/, `${name}: --wf is cpd 1`);
-    assert.doesNotMatch(text, /\bworkflows?\b/i, `${name}: the term Workflow is retired`);
+    // The object is a Workflow (pro-d136): the skill text may say `workflow`, but the cpd-1 forms the word replaced
+    // (its command group, its flag and the phrases the glossary retires) stay forbidden.
+    assert.doesNotMatch(text, /cpd workflow (init|show|phase)\b|workflow_required|workflow worktree|sync Job|dispatch or pr|phase pr\b|pr\.gate/, `${name}: a retired form of the object is left`);
     assert.doesNotMatch(text, /herdr|\bbd\b|queue message|reviewMode|review-tier|review-needed|review decide|outOfScope/i, `${name}: cpd 1 or removed Reviewer text`);
   }
 });
@@ -249,7 +251,7 @@ test("cpd-lead: no local review before the PR opens, and the overlaps are settle
 
 test("the skill adds a scoped waiting Job queued with --needs and approves undecided batches with cpd_plan_review in any phase", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /--pr <key> --needs <k1,k2>\n/, "a scoped Job that waits is added queued with its needs link");
+  assert.match(text, /--workflow <key> --needs <k1,k2>\n/, "a scoped Job that waits is added queued with its needs link");
   assert.doesNotMatch(text, /--needs <k1,k2> --draft/, "a waiting Job is never held as a draft (hs-d822)");
   assert.doesNotMatch(text, /--draft[^\n`]*--needs|--needs[^\n`]*--draft/, "no command holds a draft with a needs link");
   assert.doesNotMatch(text, /waits on an explore Job|whose `--needs` name an explore Job/, "the explore-waiting form is not a legal draft form (hs-n677)");
@@ -284,14 +286,14 @@ test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is t
 test("cpd-lead: a PR is docs, red tests by another Worker, implementation; bug fixes reproduce first", () => {
   const [skillMd, ...refs] = skillFiles("cpd-lead");
   const text = skillMd!.text;
-  const line = text.split("\n").find((l) => l.startsWith("- **PR shape:**"))!;
-  assert.ok(line, "Splitting states the PR shape");
+  const line = text.split("\n").find((l) => l.startsWith("- **Workflow shape:**"))!;
+  assert.ok(line, "Splitting states the Workflow shape");
   const at = (re: RegExp) => { const m = re.exec(line); assert.ok(m, `PR shape must state: ${re}`); return m.index; };
   assert.ok(at(/docs Job/) < at(/red tests/) && at(/red tests/) < at(/implementation Job/) && at(/implementation Job/) < at(/open Job cpd adds/), "order: docs, red tests, implementation, open Job");
   assert.match(line, /different Worker from the implementer, from the docs alone/);
   assert.match(line, /A bug or flake fix starts with a test that reproduces it/);
   assert.match(line, /exact rows/);
-  assert.match(line, /docs-only or config-only PR skips the test Job/);
+  assert.match(line, /docs-only or config-only Workflow skips the test Job/);
   assert.match(text, /cpd job add <tests> .*--needs <docs>\n/);
   assert.match(text, /cpd job add <impl> .*--needs <tests>\n/);
   assert.ok(refs.length > 0);
@@ -437,12 +439,12 @@ function factProblems(files: { name: string; text: string }[]): string[] {
     // Ids: record ids are <machine>-<letter><n>; the skill's patterns are the contract's.
     for (const m of text.matchAll(/\bhs-([a-z])(\d+)\b/g)) if (!recordLetters.includes(m[1]!) || Number(m[2]) < 1) bad(`${m[0]} is not a Context record id (contract.md §2.1)`);
     for (const m of text.matchAll(/`(\^[^`]+\$)`/g)) {
-      const formats = ["Context id", "Plan id", "PR key \\(R34\\)", "Job key"].map(idFormat);
+      const formats = ["Context id", "Plan id", "Workflow key \\(R34\\)", "Job key"].map(idFormat);
       if (!formats.includes(m[1]!)) bad(`id pattern \`${m[1]}\` is none of contract.md §2.1`);
     }
     for (const [re, format, thing] of [
       [/\b[Ii]d `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
-      [/PR has a key \(`(\^[^`]+\$)`/, idFormat("PR key \\(R34\\)"), "PR key"],
+      [/\b(?:PR|Workflow) has a key \(`(\^[^`]+\$)`/, idFormat("Workflow key \\(R34\\)"), "Workflow key"],
       [/id matches `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
       [/Job key matches `(\^[^`]+\$)`/, idFormat("Job key"), "Job key"],
     ] as const) {
@@ -492,7 +494,7 @@ test("the fact check fails on a code, a kind, a flag, an exit number, a number, 
     ["Escalations expire after `ask_minutes`, default 15 min.", /ask_minutes = 60/], // a wrong default
     ["See hs-x9.", /hs-x9/], // a record id with an unknown letter
     ["A Plan has an id `^[a-z]+$`.", /\^\[a-z\]\+\$/], // an id pattern of no kind
-    ["The key is `^[a-z][a-z0-9-]{1,23}$`; each PR has a key (`^[a-z][a-z0-9-]{1,23}$`, for example `web`).", /PR key pattern/], // the Plan pattern for a PR key
+    ["The key is `^[a-z][a-z0-9-]{1,23}$`; each Workflow has a key (`^[a-z][a-z0-9-]{1,23}$`, for example `web`).", /Workflow key pattern/], // the Plan pattern for a Workflow key
     ["Phases: grounding → plan → dispatch → pr → done.", /grounding → plan → dispatch → pr → done/], // a renamed phase
     ["Read `error.details.nothing`.", /error\.details\.nothing/], // a detail no refusal carries
   ] as const) assert.match(problems(line), culprit, line);
@@ -539,18 +541,18 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   assert.match(lead, /--needs <k1,k2>`, no `--draft`/, "a scoped Job that waits is queued with its needs link (hs-d822)");
   assert.match(lead, /never as a waiting draft/);
   assert.match(lead, /A draft is legal only while it is a stub or under review/, "the two legal draft forms are stated (hs-n677)");
-  assert.match(lead, /cpd pr add <key> --repo <path> --title "<title>" --needs/);
-  assert.match(lead, /pr_title_required/);
-  assert.match(lead, /cpd pr edit <key> --title/);
-  for (const l of lead.split("\n")) if (/cpd pr add <key>/.test(l)) assert.match(l, /--title/, `pr add without --title: ${l}`);
+  assert.match(lead, /cpd workflow add <key> --repo <path> --title "<title>" --needs/);
+  assert.match(lead, /workflow_title_required/);
+  assert.match(lead, /cpd workflow edit <key> --title/);
+  for (const l of lead.split("\n")) if (/cpd workflow add <key>/.test(l)) assert.match(l, /--title/, `workflow add without --title: ${l}`);
   assert.doesNotMatch(lead, /cpd_plan_review` \(no parameters\)/);
-  // PR needs are stated at pr add with --needs <pr-key> or --no-needs, refused needs_required in dispatch
-  assert.match(lead, /--needs <pr-key>/);
+  // Workflow needs are stated at workflow add with --needs <workflow-key> or --no-needs, refused needs_required in dispatch
+  assert.match(lead, /--needs <workflow-key>/);
   assert.match(lead, /--no-needs/);
   assert.match(lead, /needs_required/);
   const [skillMd, ...refs] = skillFiles("cpd-lead");
   const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
-  assert.match(spec, /--needs <research-pr>/);
+  assert.match(spec, /--needs <research-workflow>/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
@@ -568,14 +570,14 @@ test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", (
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
     assert.match(text, /gh pr edit <n> --base/, `${skill}: gh pr edit --base`);
-    assert.match(text, /cpd pr add <key> --repo <path> --base/, `${skill}: pr add --base`);
-    assert.match(text, /cpd pr push --pr <key>/, `${skill}: cpd pr push`);
+    assert.match(text, /cpd workflow add <key> --repo <path> --base/, `${skill}: workflow add --base`);
+    assert.match(text, /cpd pr push --workflow <key>/, `${skill}: cpd pr push`);
   }
 });
 
 test("cpd-lead: a stacked PR waits for its base PR to open, --base needs neither --needs nor --no-needs, and a draft is no parking place", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /waiting.*base PR is open/, "cpd-lead: stacked PR waits for base PR to open");
+  assert.match(text, /waiting.*base Workflow is open/, "cpd-lead: stacked Workflow waits for base Workflow to open");
   assert.match(text, /needs neither flag/, "cpd-lead: --base needs neither flag");
   assert.match(text, /draft.*never.*parking place/, "cpd-lead: draft is no parking place");
 });
@@ -585,39 +587,39 @@ test("cpd-lead: a same-repo PR on an earlier PR of the Plan is stacked with --ba
   const bullet = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
   // 1. Rules: Register planned work at once
   const register = bullet("- **Register planned work at once.**");
-  assert.match(register, /same-repo follow-up is stacked \(`--base <pr-key>`, the default\)/);
-  assert.match(register, /`--needs <pr-key>` \(the cross-repo or fresh-main exception: `cpd pr add <key> --repo <path> --title "<title>" --needs <pr-key>`\)/);
-  // 2. 2. Plan, Scoping: the settling of repos and PRs
-  assert.match(section(text, "### Scoping"), /stacked on it with `--base <pr-key>`, the default; `--needs <pr-key>` only for another repo or a PR that must start from fresh `main`/);
-  // 3. 2. Plan, Scoping: the stacked example, the order between PRs, the base PR added before
+  assert.match(register, /same-repo follow-up is stacked \(`--base <workflow-key>`, the default\)/);
+  assert.match(register, /`--needs <workflow-key>` \(the cross-repo or fresh-main exception: `cpd workflow add <key> --repo <path> --title "<title>" --needs <workflow-key>`\)/);
+  // 2. 2. Plan, Scoping: the settling of repos and Workflows
+  assert.match(section(text, "### Scoping"), /stacked on it with `--base <workflow-key>`, the default; `--needs <workflow-key>` only for another repo or a Workflow that must start from fresh `main`/);
+  // 3. 2. Plan, Scoping: the stacked example, the order between Workflows, the base Workflow added before
   const scoping = section(text, "### Scoping");
-  assert.match(scoping, /cpd pr add <key> --repo <path> --title "<title>" --base <pr-key>\n/);
-  assert.match(scoping, /\*\*The order between PRs\.\*\* A same-repo PR that depends on an earlier PR of the Plan is stacked on it: `--base <pr-key>`, never `--needs`/);
-  assert.match(scoping, /starts as soon as its base PR is `open`[^\n]*without waiting for the base PR's review or merge/);
-  assert.match(scoping, /a PR may need, or stack on, only PRs added before it/);
-  // 4. Splitting (the old Sequencing): the Dependencies bullet and the PR needs bullet (which names the post-lock restack)
-  assert.match(bullet("- A Job's Dependencies are Jobs of its own PR"), /stacking, `--base <pr-key>`, the default for a same-repo PR/);
-  const needs = bullet("- **PR needs before the lock:**");
-  assert.match(needs, /`cpd pr edit <key> --base <pr-key> --no-needs`/, "the post-lock restack edit is named");
-  assert.match(needs, /`pr_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock/);
-  // 5. 3. Dispatch, Deploying, Stacked PRs
+  assert.match(scoping, /cpd workflow add <key> --repo <path> --title "<title>" --base <workflow-key>\n/);
+  assert.match(scoping, /\*\*The order between Workflows\.\*\* A same-repo Workflow that depends on an earlier Workflow of the Plan is stacked on it: `--base <workflow-key>`, never `--needs`/);
+  assert.match(scoping, /starts as soon as its base Workflow is `open`[^\n]*without waiting for the base Workflow's review or merge/);
+  assert.match(scoping, /a Workflow may need, or stack on, only Workflows added before it/);
+  // 4. Splitting (the old Sequencing): the Dependencies bullet and the Workflow needs bullet (which names the post-lock restack)
+  assert.match(bullet("- A Job's Dependencies are Jobs of its own Workflow"), /stacking, `--base <workflow-key>`, the default for a same-repo Workflow/);
+  const needs = bullet("- **Workflow needs before the lock:**");
+  assert.match(needs, /`cpd workflow edit <key> --base <workflow-key> --no-needs`/, "the post-lock restack edit is named");
+  assert.match(needs, /`workflow_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock/);
+  // 5. 3. Dispatch, Deploying, Stacked Workflows
   const registerLayer = bullet("- Register a later layer at once");
-  assert.match(registerLayer, /`--base <pr-key>`[^\n]*the default/);
-  assert.match(registerLayer, /`--needs <pr-key>` is the exception, for another repo or a PR that must start from fresh `main`/);
-  assert.doesNotMatch(registerLayer, /Use `--needs <pr-key>` instead/, "--needs is no longer the way to wait for a same-repo base PR");
-  assert.match(bullet("- While the previous PR is open"), /after the lock, `cpd pr edit` changes a waiting PR's base only in the restack of \[Splitting\]\(#splitting\)/);
+  assert.match(registerLayer, /`--base <workflow-key>`[^\n]*the default/);
+  assert.match(registerLayer, /`--needs <workflow-key>` is the exception, for another repo or a Workflow that must start from fresh `main`/);
+  assert.doesNotMatch(registerLayer, /Use `--needs <workflow-key>` instead/, "--needs is no longer the way to wait for a same-repo base Workflow");
+  assert.match(bullet("- While the previous Workflow is open"), /after the lock, `cpd workflow edit` changes a waiting Workflow's base only in the restack of \[Splitting\]\(#splitting\)/);
 });
 
 test("cpd-lead references: the research follow-up keeps --needs <research-pr> as the fresh-main exception to stacking", () => {
   const spec = skillFiles("cpd-lead").find((f) => f.name.endsWith("spec-files.md"))!.text;
-  const line = spec.split("\n").find((l) => l.includes("--needs <research-pr>")) ?? assert.fail("no research follow-up sentence");
+  const line = spec.split("\n").find((l) => l.includes("--needs <research-workflow>")) ?? assert.fail("no research follow-up sentence");
   assert.match(line, /the exception to stacking \(\[Scoping\]\(\.\.\/SKILL\.md#scoping\)\)/);
 });
 
-test("cpd-manager: the landing-order line stacks a same-repo PR and keeps --needs for other repos, not for the PRs of a Plan", () => {
+test("cpd-manager: the landing-order line stacks a same-repo Workflow and keeps --needs for other repos, not for the Workflows of a Plan", () => {
   const line = skillFiles("cpd-manager")[0]!.text.split("\n").find((l) => l.startsWith("- **Set the landing order.**")) ?? assert.fail("no landing-order line");
-  assert.match(line, /the Lead stacks a same-repo PR on the one it depends on \(`cpd pr add <key> --repo <path> --base <pr-key>`\), `--needs` across repos/);
-  assert.doesNotMatch(line, /needs order|order its own PRs|each starts when the other merges/, "needs no longer orders the PRs of a Plan");
+  assert.match(line, /the Lead stacks a same-repo Workflow on the one it depends on \(`cpd workflow add <key> --repo <path> --base <workflow-key>`\), `--needs` across repos/);
+  assert.doesNotMatch(line, /needs order|order its own Workflows|each starts when the other merges/, "needs no longer orders the Workflows of a Plan");
 });
 
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
@@ -694,7 +696,7 @@ test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is on
   const addressing = section(text, "#### Addressing");
   const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
   assert.match(row, /A conflict with the base is no reason and sends you nothing/);
-  assert.match(row, /Append one Job per actionable item to the PR named in `data\.pr` with `cpd job add/);
+  assert.match(row, /Append one Job per actionable item to the Workflow named in `data\.workflow` with `cpd job add/);
   assert.match(row, /The fix Job's own merge pushes it to the pull request: nothing else is queued/);
   assert.match(row, /cpd queues an update Job for it/);
   assert.doesNotMatch(row, /cpd queue the PR's update Job/);
@@ -707,11 +709,11 @@ test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is on
   assert.match(addressing, /never a plain `git push`/);
   assert.match(addressing, /never by adding an update Job yourself/);
   assert.match(addressing, /No `--kind`, no test, impl or docs Job, no `--draft`, no review: the Job is queued at once/);
-  assert.match(addressing, /`cpd pr rebase --pr <key>`/);
-  assert.match(addressing, /`cpd pr push --pr <key>`/);
+  assert.match(addressing, /`cpd pr rebase --workflow <key>`/);
+  assert.match(addressing, /`cpd pr push --workflow <key>`/);
   assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
   assert.match(rule, /never with `git push`/);
-  assert.match(rule, /the PR's open and update Jobs push it/);
+  assert.match(rule, /the Workflow's open and update Jobs push it/);
 });
 
 test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
@@ -728,34 +730,34 @@ test("cpd-lead never blocks and says the adapter refuses waits over 30 seconds",
 
 test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees the PRs whose Jobs are all merged (hs-d340)", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /\*\*cpd opens the PRs, you do not\.\*\*/);
-  assert.match(lead, /never wait for anything to open a PR/);
+  assert.match(lead, /\*\*cpd opens the pull requests, you do not\.\*\*/);
+  assert.match(lead, /never wait for anything to open a pull request/);
   assert.match(lead, /`cpd pr open` is the repair/);
   assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 E4)");
   assert.doesNotMatch(lead, /Open a PR as soon as its last Job merges/);
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Oversee all-merged PRs/);
+  assert.match(manager, /Oversee all-merged Workflows/);
   assert.match(manager, /stack those that would conflict/);
-  assert.match(manager, /cpd opens a PR as soon as its last Job merges/);
+  assert.match(manager, /cpd opens the pull request as soon as a Workflow's last Job merges/);
 });
 
 test("the Job kinds: the template and its shape, [tests], the kind of each Job and the red-test guard (hs-d341, hs-d497)", () => {
   const [skillMd, ...refs] = skillFiles("cpd-lead");
   const lead = skillMd!.text;
   const dividing = section(lead, "### Scoping");
-  assert.match(dividing, /cpd pr add <key> --repo <path> --title "<title>" --shape docs/);
-  assert.match(dividing, /cpd pr add <key> --repo <path> --title "<title>" --shape config/);
+  assert.match(dividing, /cpd workflow add <key> --repo <path> --title "<title>" --shape docs/);
+  assert.match(dividing, /cpd workflow add <key> --repo <path> --title "<title>" --shape config/);
   assert.match(dividing, /`<key>-docs` \(kind docs\), `<key>-tests` \(kind test, needs the docs Job\) and `<key>-impl` \(kind impl, needs the test Job\)/);
   assert.match(dividing, /stored and enforced/);
   assert.match(dividing, /`shape_violation`/);
   assert.match(dividing, /`shape_incomplete`/);
   assert.match(dividing, /`tests_unconfigured`/);
-  assert.match(dividing, /you add it yourself, as a commit in the Lead worktree of a PR of that repo/);
+  assert.match(dividing, /you add it yourself, as a commit in the Lead worktree of a Workflow of that repo/);
   const splitting = section(lead, "### Splitting");
   assert.match(splitting, /`--kind docs\|test\|impl`/);
   assert.match(splitting, /a test Job's also has `tests` and `test_files`/);
   const approving = section(lead, "### Orchestrating");
-  assert.match(approving, /the kind of each Job and, for each PR that has not started, the placeholder row of its open Job/);
+  assert.match(approving, /the kind of each Job and, for each Workflow that has not started, the placeholder row of its open Job/);
   const escalations = section(lead, "#### Escalations");
   assert.match(escalations, /`cpd job approve-tests <job> --path <p> --reason "<why>"`/);
   assert.match(escalations, /only an implementation Job/);
@@ -769,7 +771,7 @@ test("the Job kinds: the template and its shape, [tests], the kind of each Job a
 test("the open Job and the update Job: cpd adds them, the Lead decides only when one fails (hs-d340, hs-d490, hs-d497)", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   const checks = section(lead, "#### Mechanical checks");
-  assert.match(checks, /The checks are part of the PR's open Job \(key `open-<pr>`/);
+  assert.match(checks, /The checks are part of the Workflow's open Job \(key `open-<workflow>`/);
   assert.match(checks, /You run none of them/);
   assert.match(checks, /only when the Lead Branch conflicts with it/);
   assert.match(checks, /a base that merely moved ahead is no reason/);
@@ -780,17 +782,17 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
   const rows = section(lead, DISPATCH_STEPS);
   const merged = rows.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
   assert.match(merged, /`data\.number` and `data\.url`/);
-  assert.match(merged, /Do not open a PR yourself/);
-  assert.match(merged, /A fix Job of an open PR is done when its `job-merged` arrives: its merge pushed the Lead Branch to the pull request/);
+  assert.match(merged, /Do not open a pull request yourself/);
+  assert.match(merged, /A fix Job of an open Workflow is done when its `job-merged` arrives: its merge pushed the Lead Branch to the pull request/);
   assert.doesNotMatch(merged, /cpd queues an update Job that pushes them/);
   const failed = section(lead, "#### Failed Jobs");
-  assert.match(failed, /A PR's open or update Job/);
+  assert.match(failed, /A Workflow's open or update Job/);
   const pr = section(lead, "#### PR");
   assert.match(pr, /the Job's `job-merged` Event carries the URL \(`data\.url`\)/);
-  assert.match(pr, /if the PR then conflicts with it, cpd queues an update Job; you do nothing/);
+  assert.match(pr, /if the pull request then conflicts with it, cpd queues an update Job; you do nothing/);
   const fixes = section(lead, "#### Appending fixes");
-  assert.match(fixes, /A Gate failure of a PR's open or update Job is not one/);
-  assert.match(fixes, /On a PR that is already open, a fix Job is a `work` Job and its own merge carries it to the pull request/);
+  assert.match(fixes, /A Gate failure of a Workflow's open or update Job is not one/);
+  assert.match(fixes, /On a Workflow that is already open, a fix Job is a `work` Job and its own merge carries it to the pull request/);
   assert.doesNotMatch(fixes, /makes cpd queue the PR's update Job/);
 });
 
@@ -801,11 +803,12 @@ test("cpd-manager: job approve-tests joins the commands that belong to a Lead an
   assert.doesNotMatch(rule, /`cpd pr open`/);
 });
 
-test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the PR's open Job (hs-d340)", () => {
+test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the Workflow's open Job (hs-d340)", () => {
   const worker = readFileSync(new URL("../../core/src/spec/worker.md", here), "utf8");
-  assert.match(worker, /the Gate runs it, in the PR's open Job/);
+  // The object is a Workflow (pro-d136, pro-d138): the Spec and the adapter's code both speak the new word; the rename is a cutover, no transitional period.
+  assert.match(worker, /the Gate runs it, in the Workflow's open Job/);
   const guard = readFileSync(new URL("../lib/testguard.ts", here), "utf8");
-  assert.match(guard, /the full suite is the Gate's, run by the PR's open Job/);
+  assert.match(guard, /the full suite is the Gate's, run by the Workflow's open Job/);
   for (const text of [worker, guard]) assert.doesNotMatch(text, /at pr open/);
   const deliveries = readFileSync(new URL("../lib/delivery.ts", here), "utf8");
   assert.doesNotMatch(deliveries, /"all-merged":/, "commands.md §15.3: all-merged is ignored");
@@ -813,13 +816,13 @@ test("the Worker Spec's text and the adapter's refusal say the full suite is the
 
 test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and folds small PRs; cpd-manager splits by deliverable and area", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /A PR is a substantial deliverable\./);
-  assert.match(lead, /parallelism from Jobs inside a PR, not from more PRs/);
-  assert.match(lead, /one small Job joins the PR of its area/);
-  assert.match(lead, /combine finished PRs into one before they open/);
+  assert.match(lead, /A Workflow is a substantial deliverable\./);
+  assert.match(lead, /parallelism from Jobs inside a Workflow, not from more Workflows/);
+  assert.match(lead, /one small Job joins the Workflow of its area/);
+  assert.match(lead, /combine finished Workflows into one before they open/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Split by deliverable and area/);
-  assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
+  assert.match(manager, /small follow-up goes into its area's existing Workflow, not a new one/);
 });
 
 test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, larger content goes to a file", () => {
@@ -884,8 +887,8 @@ test("cpd-manager pins the exact CLI of context decide, plan new, session send a
 
 test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four-step bug report protocol", () => {
   const cases = [
-    { skill: "cpd-manager", scope: "Plan / PR / Job" },
-    { skill: "cpd-lead", scope: "PR / Job" },
+    { skill: "cpd-manager", scope: "Plan / Workflow / Job" },
+    { skill: "cpd-lead", scope: "Workflow / Job" },
   ];
   for (const c of cases) {
     const lines = section(skillFiles(c.skill)[0]!.text, "## Rules").split("\n");

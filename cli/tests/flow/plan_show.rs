@@ -64,15 +64,10 @@ impl Pay for Fx {
         } else {
             ""
         };
-        let needs: String = needs
-            .iter()
-            .map(|n| {
-                format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', '{key}', '{n}');")
-            })
-            .collect();
+        let needs: String = needs.iter().map(|n| format!("INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
         self.env.sql(&format!(
             "{row}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at)
              VALUES ('pay-1', '{key}', '/r/{key}', 'main', '{status}', 'cpd/pay-1/{key}', {worktree}, {pull}, cpd_txn(), 't', {started});
              {needs}"
@@ -90,7 +85,7 @@ impl Pay for Fx {
             })
             .collect();
         self.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('pay-1', '{pr}', '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]',
                      '{status}', 0, iif('{status}' = 'cancelled', 'x', NULL), iif('{status}' = 'cancelled', 't', NULL), cpd_txn(), 't');
@@ -143,15 +138,18 @@ fn a_plan_without_a_pr_shows_lists_and_renders() {
     let fx = fx("grounding");
     let show = fx.show();
     assert_eq!(
-        (&show["plan"]["id"], &show["prs"], &show["jobs"]),
+        (&show["plan"]["id"], &show["workflows"], &show["jobs"]),
         (&json!("pay-1"), &json!([]), &json!([]))
     );
-    assert_eq!(fx.list()["plans"][0]["prs"], json!([]));
+    assert_eq!(fx.list()["plans"][0]["workflows"], json!([]));
     let (out, text) = fx.render();
-    assert_eq!((&out["prs"], &out["draft_jobs"]), (&json!(0), &json!(0)));
+    assert_eq!(
+        (&out["workflows"], &out["draft_jobs"]),
+        (&json!(0), &json!(0))
+    );
     assert_eq!(
         text,
-        "# Plan: Pay the bills\n\nContext: `ctx` · Phase: `grounding`\n\nNo PRs yet.\n"
+        "# Plan: Pay the bills\n\nContext: `ctx` · Phase: `grounding`\n\nNo Workflows yet.\n"
     );
 }
 
@@ -192,11 +190,11 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
         (&json!("dispatch"), &json!("lead1"), &Value::Null)
     );
 
-    let prs = show["prs"].as_array().unwrap();
+    let prs = show["workflows"].as_array().unwrap();
     assert_eq!(prs.len(), 1);
     assert_eq!(
         prs[0],
-        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "closed_unmerged": false,
+        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_workflow": null, "needs": [], "status": "dispatch", "closed_unmerged": false,
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null, "shape": "free",
@@ -247,7 +245,7 @@ fn list_with_one_pr_has_the_dispatch_columns() {
         json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1})
     );
     assert_eq!(
-        plan["prs"],
+        plan["workflows"],
         json!([{"key": "pay", "repo": "/r/pay", "status": "dispatch", "pr": null, "pull_request": null}])
     );
 }
@@ -256,7 +254,10 @@ fn list_with_one_pr_has_the_dispatch_columns() {
 fn render_with_one_pr_keeps_the_jobs_table_and_graph() {
     let fx = one_pr();
     let (out, text) = fx.render();
-    assert_eq!((&out["draft_jobs"], &out["prs"]), (&json!(2), &json!(1)));
+    assert_eq!(
+        (&out["draft_jobs"], &out["workflows"]),
+        (&json!(2), &json!(1))
+    );
     assert!(
         text.starts_with("# Plan: Pay the bills\n\nContext: `ctx` · Phase: `dispatch`\n"),
         "{text}"
@@ -270,7 +271,7 @@ fn render_with_one_pr_keeps_the_jobs_table_and_graph() {
         "one PR has no graph of PRs: {text}"
     );
     assert!(
-        text.contains("\n## PR pay\n\nRepo: `/r/pay` · Base: `main` · Needs: none\n"),
+        text.contains("\n## Workflow pay\n\nRepo: `/r/pay` · Base: `main` · Needs: none\n"),
         "{text}"
     );
     assert!(
@@ -311,7 +312,7 @@ fn two_prs() -> Fx {
 fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
     let fx = two_prs();
     let show = fx.show();
-    let prs = &show["prs"];
+    let prs = &show["workflows"];
     assert_eq!(
         keys(prs),
         ["a-web", "old", "z-api"],
@@ -385,7 +386,7 @@ fn list_with_two_prs_has_each_prs_columns_in_key_order() {
     let fx = two_prs();
     let plan = fx.list()["plans"][0].clone();
     assert_eq!(
-        plan["prs"],
+        plan["workflows"],
         json!([
             {"key": "a-web", "repo": "/r/a-web", "status": "waiting", "pr": null, "pull_request": null},
             {"key": "old", "repo": "/r/old", "status": "cancelled", "pr": null, "pull_request": null},
@@ -405,7 +406,7 @@ fn render_with_two_prs_has_a_section_per_pr_in_needs_order() {
     let fx = two_prs();
     let (out, text) = fx.render();
     assert_eq!(
-        (&out["draft_jobs"], &out["prs"]),
+        (&out["draft_jobs"], &out["workflows"]),
         (&json!(3), &json!(2)),
         "the cancelled PR is not counted"
     );
@@ -433,10 +434,13 @@ fn render_with_two_prs_has_a_section_per_pr_in_needs_order() {
         "{text}"
     );
 
-    let (api, web) = (at(&text, "\n## PR z-api\n"), at(&text, "\n## PR a-web\n"));
+    let (api, web) = (
+        at(&text, "\n## Workflow z-api\n"),
+        at(&text, "\n## Workflow a-web\n"),
+    );
     assert!(api < web, "the needed PR comes first: {text}");
     assert!(
-        text.contains("\n## PR a-web\n\nRepo: `/r/a-web` · Base: `main` · Needs: `z-api`\n"),
+        text.contains("\n## Workflow a-web\n\nRepo: `/r/a-web` · Base: `main` · Needs: `z-api`\n"),
         "{text}"
     );
     // Each Job is under its PR only, with that PR's graph.
@@ -467,7 +471,7 @@ fn render_ties_prs_by_key() {
     let (_, text) = fx.render();
     let order: Vec<usize> = ["api", "db", "web"]
         .iter()
-        .map(|k| at(&text, &format!("\n## PR {k}\n")))
+        .map(|k| at(&text, &format!("\n## Workflow {k}\n")))
         .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{text}");
 }
@@ -481,13 +485,13 @@ fn a_pr_without_jobs_says_so_and_the_fingerprint_covers_the_prs() {
     let (out, text) = fx.render();
     assert!(
         text.contains(
-            "\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"
+            "\n## Workflow web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"
         ),
         "{text}"
     );
     let before = out["fingerprint"].clone();
     fx.env
-        .sql("UPDATE prs SET base = 'develop' WHERE key = 'web'");
+        .sql("UPDATE workflows SET base = 'develop' WHERE key = 'web'");
     assert_ne!(fx.render().0["fingerprint"], before);
 }
 
@@ -498,8 +502,8 @@ fn a_waiting_pr_with_no_jobs_shows_the_open_job_placeholder_in_no_fingerprint() 
     fx.pr("web", "waiting", &[]);
     let (out, text) = fx.render();
     assert!(!text.contains("No Jobs yet."), "{text}");
-    assert!(text.contains("\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: none\n\n### Jobs\n\n| Key | Title | Kind | Tier | Status | Needs | Touches |\n"), "{text}");
-    assert!(text.contains("| `open-web` | Open the pull request: web | open | H3 | — | every other Job of the PR | — |"), "{text}");
+    assert!(text.contains("\n## Workflow web\n\nRepo: `/r/web` · Base: `main` · Needs: none\n\n### Jobs\n\n| Key | Title | Kind | Tier | Status | Needs | Touches |\n"), "{text}");
+    assert!(text.contains("| `open-web` | Open the pull request: web | open | H3 | — | every other Job of the Workflow | — |"), "{text}");
     assert!(
         text.contains("\n### `open-web`: Open the pull request: web\n"),
         "{text}"
@@ -522,7 +526,7 @@ fn a_closed_unmerged_pr_is_flagged_in_plan_show() {
     fx.env
         .sql("UPDATE pull_requests SET state = 'closed' WHERE number = 7");
     let show = fx.show();
-    let flags: Vec<(&str, &Value)> = show["prs"]
+    let flags: Vec<(&str, &Value)> = show["workflows"]
         .as_array()
         .unwrap()
         .iter()
@@ -536,6 +540,6 @@ fn a_pr_with_an_open_pull_request_is_not_flagged_in_plan_show() {
     let fx = fx("dispatch");
     fx.pr("api", "open", &[]);
     let show = fx.show();
-    assert_eq!(show["prs"][0]["closed_unmerged"], json!(false));
-    assert_eq!(show["prs"][0]["pull_request"]["state"], json!("open"));
+    assert_eq!(show["workflows"][0]["closed_unmerged"], json!(false));
+    assert_eq!(show["workflows"][0]["pull_request"]["state"], json!("open"));
 }

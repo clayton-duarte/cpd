@@ -1,6 +1,6 @@
-//! E3 and the description of a PR (contract §3.7 E3, §5.2 `error`; Plan desc-gate): an `open` Job whose PR has no stored
+//! E3 and the description of a Workflow (contract §3.7 E3, §5.2 `error`; Plan desc-gate): an `open` Job whose Workflow has no stored
 //! description and no `head_ref` is never started; E3 raises one `description_required` error Event for it, once, and starts it at the
-//! first tick after the PR is described. An adopted PR (`head_ref` set) and an `update` Job need no description.
+//! first tick after the Workflow is described. An adopted Workflow (`head_ref` set) and an `update` Job need no description.
 
 use cpd_core::ports::Fakes;
 use serde_json::json;
@@ -38,21 +38,23 @@ fn texts(fx: &mut Fx, kind: &str) -> Vec<String> {
         .unwrap()
 }
 
-/// PR `repo` with Job `api` merged and the PR's Job `key` of `kind` queued: Ready. The PR's description and head_ref are NULL.
+/// Workflow `repo` with Job `api` merged and the Workflow's Job `key` of `kind` queued: Ready. The Workflow's description and head_ref are NULL.
 fn with_open_job(key: &str, kind: &str) -> Fx {
     let mut fx = Fx::with_plan("");
-    // The open Job's start resolves the PR's policy (the ticket rule): the Context's owner has an empty one.
+    // The open Job's start resolves the Workflow's policy (the ticket rule): the Context's owner has an empty one.
     let dir = fx.engine.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("owner.toml"), "").unwrap();
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
          VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, "");
     assert_eq!(
-        fx.query::<i64>("SELECT count(*) FROM prs WHERE description IS NULL AND head_ref IS NULL"),
+        fx.query::<i64>(
+            "SELECT count(*) FROM workflows WHERE description IS NULL AND head_ref IS NULL"
+        ),
         1
     );
     fx
@@ -65,7 +67,11 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
 
     ticks(&mut fx, 3);
 
-    assert_eq!(attempts(&mut fx), 0, "no Attempt for an undescribed PR");
+    assert_eq!(
+        attempts(&mut fx),
+        0,
+        "no Attempt for an undescribed Workflow"
+    );
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     let (plan, job, attempt, data) = &errors[0];
@@ -79,13 +85,13 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
         "{data}"
     );
     assert!(
-        texts(&mut fx, "error")[0].contains("cpd pr describe --pr repo"),
+        texts(&mut fx, "error")[0].contains("cpd workflow describe --workflow repo"),
         "{:?}",
         texts(&mut fx, "error")
     );
     assert_eq!(fx.job_status("open-repo"), "queued");
 
-    fx.fixture("UPDATE prs SET description = 'A description';");
+    fx.fixture("UPDATE workflows SET description = 'A description';");
     tick(&mut fx);
 
     assert_eq!(attempts(&mut fx), 1, "described: started");
@@ -97,27 +103,27 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
     );
 }
 
-/// Guard: an adopted PR keeps its own pull request body; its open Job starts.
+/// Guard: an adopted Workflow keeps its own pull request body; its open Job starts.
 #[test]
 fn e3_starts_the_open_job_of_an_adopted_pr_without_a_stored_description() {
     let mut fx = with_open_job("open-repo", "open");
-    fx.fixture("DROP TRIGGER prs_head_ref_fixed; UPDATE prs SET head_ref = 'feature';");
+    fx.fixture("DROP TRIGGER workflows_head_ref_fixed; UPDATE workflows SET head_ref = 'feature';");
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 }
 
-/// Guard: a described PR starts its open Job.
+/// Guard: a described Workflow starts its open Job.
 #[test]
 fn e3_starts_the_open_job_of_a_described_pr() {
     let mut fx = with_open_job("open-repo", "open");
-    fx.fixture("UPDATE prs SET description = 'A description';");
+    fx.fixture("UPDATE workflows SET description = 'A description';");
     ticks(&mut fx, 2);
     assert_eq!(attempts(&mut fx), 1);
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 }
 
-/// Pin (Plan bifrost, PR haiku55): the refused open Job stays queued, so E4 adds no second open Job.
+/// Pin (Plan bifrost, Workflow haiku55): the refused open Job stays queued, so E4 adds no second open Job.
 #[test]
 fn an_undescribed_pr_keeps_one_open_job_and_no_attempt_over_eleven_e3_and_e4_ticks() {
     let mut fx = with_open_job("open-repo", "open");

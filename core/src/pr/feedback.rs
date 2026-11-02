@@ -37,7 +37,7 @@ pub(super) fn text(
         String::new()
     };
     format!(
-        "PR {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --pr {key}.",
+        "Workflow {key} (#{number}) of Plan {plan} needs attention: {}.{counts} Read the details with cpd pr view --plan {plan} --workflow {key}.",
         why.join(", ")
     )
 }
@@ -131,8 +131,8 @@ mod tests {
         ];
         assert_eq!(
             text("pay", "api", 7, &all, (0, 0)),
-            "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
-             Read the details with cpd pr view --plan pay --pr api."
+            "Workflow api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
+             Read the details with cpd pr view --plan pay --workflow api."
         );
         assert!(
             text("pay", "api", 7, &all[..1], (0, 0))
@@ -183,7 +183,7 @@ mod tests {
                 &pull("conflicting", "dirty"),
                 &[Reason::ChecksFailed]
             ),
-            json!({"pr": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
+            json!({"workflow": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
                    "mergeable": "conflicting", "merge_state": "dirty", "conflict": false, "reasons": ["checks_failed"]})
         );
         assert_eq!(

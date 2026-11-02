@@ -7,23 +7,23 @@ use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use super::fingerprint::{load_prs, plan_fingerprint};
+use super::fingerprint::{load_workflows, plan_fingerprint};
 use super::jobs::{self, Job};
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::pr::start::not_ready;
 
-/// What decides whether a draft waits: the Plan's Jobs and the PRs that wait for another PR (only after the lock).
+/// What decides whether a draft waits: the Plan's Jobs and the Workflows that wait for another Workflow (only after the lock).
 struct Waits<'a> {
     all: &'a [Job],
-    pr_waits: BTreeSet<String>,
+    workflow_waits: BTreeSet<String>,
 }
 
 impl Waits<'_> {
     /// `job` needs, directly or through drafts that wait themselves, a Job that is `queued`, `running` or `failed`;
-    /// or its PR waits for another PR.
+    /// or its Workflow waits for another Workflow.
     fn waiting(&self, job: &Job, seen: &mut BTreeSet<String>) -> bool {
-        if self.pr_waits.contains(job.pr_str()) {
+        if self.workflow_waits.contains(job.workflow_str()) {
             return true;
         }
         job.needs.iter().any(|need| {
@@ -43,7 +43,7 @@ fn locked(phase: &str) -> bool {
     matches!(phase, "dispatch" | "deploy" | "done")
 }
 
-/// The PRs of `plan` that wait for another PR, when the Plan is locked: the condition engine E7 starts a PR by.
+/// The Workflows of `plan` that wait for another Workflow, when the Plan is locked: the condition engine E7 starts a Workflow by.
 fn waiting_prs(
     conn: &Connection,
     plan: &PlanId,
@@ -51,10 +51,10 @@ fn waiting_prs(
 ) -> Result<BTreeSet<String>, CpdError> {
     let mut waits = BTreeSet::new();
     if locked(phase) {
-        for pr in load_prs(conn, plan)? {
-            let key = PrKey::parse(pr.key.as_str())?;
+        for workflow in load_workflows(conn, plan)? {
+            let key = WorkflowKey::parse(workflow.key.as_str())?;
             if !not_ready(conn, plan, &key)?.is_empty() {
-                waits.insert(pr.key.to_string());
+                waits.insert(workflow.key.to_string());
             }
         }
     }
@@ -104,7 +104,7 @@ pub fn parked_drafts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, Cp
 
 /// The door of `job add --draft` and `job edit` for ONE draft row, before it is written: after the lock, a complete draft
 /// (both Tier and Spec) that waits is refused `draft_parked`: it waits on a queued, running or failed Job (directly or
-/// through other drafts) or on its PR waiting for another PR. `others` are the Plan's Jobs as stored, `job` the row as it
+/// through other drafts) or on its Workflow waiting for another Workflow. `others` are the Plan's Jobs as stored, `job` the row as it
 /// would be (never in `others`). Never refused: a stub, the `open` Job's draft, a complete draft that does not wait, any
 /// draft in phase `plan`.
 pub fn door(
@@ -124,7 +124,7 @@ pub fn door(
         .collect();
     let waits = Waits {
         all: &all,
-        pr_waits: waiting_prs(conn, plan, phase)?,
+        workflow_waits: waiting_prs(conn, plan, phase)?,
     };
     if !waits.waiting(job, &mut BTreeSet::from([job.key.clone()])) {
         return Ok(());
@@ -133,7 +133,7 @@ pub fn door(
         ErrorCode::DraftParked,
         format!(
             "Job {} would be a parked draft: a complete draft that waits for a queued, running or failed Job (directly or \
-             through other drafts) or for another PR, and no current review covers it. The legal forms: add the Job it waits \
+             through other drafts) or for another Workflow, and no current review covers it. The legal forms: add the Job it waits \
              for queued with --needs and no --draft; or put this complete draft under a Plan review (cpd_plan_review) in the \
              same turn.",
             job.key
@@ -141,6 +141,6 @@ pub fn door(
     )
     .with("plan", plan.as_str())
     .with("job", job.key.as_str())
-    .with("pr", job.pr_str())
+    .with("pr", job.workflow_str())
     .with("needs", job.needs.clone()))
 }

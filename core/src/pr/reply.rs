@@ -1,4 +1,4 @@
-//! `pr reply` (Plan fb-path): answers an item of the PR's stored feedback list with a reply ending in the
+//! `pr reply` (Plan fb-path): answers an item of the Workflow's stored feedback list with a reply ending in the
 //! marker, as the User. It never resolves a thread, writes nothing in the store and appends no Event.
 
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::comments::{Kind, MARKER};
 use super::{Env, gh};
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, WorkflowArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::ports::Ports;
@@ -15,7 +15,7 @@ use crate::ports::Ports;
 #[derive(clap::Args, Debug)]
 pub struct ReplyArgs {
     #[command(flatten)]
-    pr: PrArg,
+    workflow: WorkflowArg,
     #[command(flatten)]
     plan: PlanArg,
     /// The id of the open item to answer (`cpd pr view`, `feedback`)
@@ -49,36 +49,39 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
     let id = args.plan.require()?.clone();
     let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
-    let pr = plan.select(&args.pr)?;
-    if pr.status != "open" {
+    let workflow = plan.select(&args.workflow)?;
+    if workflow.status != "open" {
         return Err(CpdError::new(
-            ErrorCode::PrNotOpen,
+            ErrorCode::WorkflowNotOpen,
             format!(
-                "PR {} of Plan {id} is {}: pr reply needs an open PR.",
-                pr.key, pr.status
+                "Workflow {} of Plan {id} is {}: pr reply needs an open Workflow.",
+                workflow.key, workflow.status
             ),
         )
         .with("plan", id.as_str())
-        .with("pr", pr.key.as_str())
-        .with("status", pr.status.as_str()));
+        .with("pr", workflow.key.as_str())
+        .with("status", workflow.status.as_str()));
     }
-    let row = pr
+    let row = workflow
         .pull_request
-        .expect("an open PR has its pull_request row (prs CHECK)");
+        .expect("an open Workflow has its pull_request row (prs CHECK)");
     let pull = env.store.read(|conn| super::pulls::load(conn, row))?;
     let list = pull.feedback.unwrap_or_default();
     let Some(item) = list.iter().find(|i| i.id == args.to) else {
         let open: Vec<&str> = list.iter().map(|i| i.id.as_str()).collect();
         return Err(CpdError::new(
             ErrorCode::FeedbackNotFound,
-            format!("PR {} has no open feedback item {:?}.", pr.key, args.to),
+            format!(
+                "Workflow {} has no open feedback item {:?}.",
+                workflow.key, args.to
+            ),
         )
-        .with("pr", pr.key.as_str())
+        .with("pr", workflow.key.as_str())
         .with("to", args.to.as_str())
         .with("open", json!(open)));
     };
 
-    let lead = pr.lead(&id)?;
+    let lead = workflow.lead(&id)?;
     let runner = &*env.ports.runner;
     let url = match item.kind {
         Kind::Thread => {
@@ -95,6 +98,6 @@ pub(super) fn reply(ports: &Ports, args: ReplyArgs) -> Result<Output, CpdError> 
         }
     };
     Ok(Output::success(
-        json!({"replied": {"pr": pr.key, "to": args.to, "url": url}}),
+        json!({"replied": {"pr": workflow.key, "to": args.to, "url": url}}),
     ))
 }

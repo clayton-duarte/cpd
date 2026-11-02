@@ -163,7 +163,7 @@ fn fx_on(w: &World, config_extra: &str) -> Fx {
     fx
 }
 
-/// `fx_on` with Plan `pay` (PR `repo`, its Lead `lead1`) in the store.
+/// `fx_on` with Plan `pay` (Workflow `repo`, its Lead `lead1`) in the store.
 fn plan_on(w: &World, config_extra: &str) -> Fx {
     let mut fx = Fx::with_plan(config_extra);
     w.attach(&mut fx);
@@ -194,7 +194,7 @@ fn lock_mark(home: &CpdHome) -> String {
 
 // ---- run_with: the loop on virtual time ---------------------------------------------------------------------------
 
-/// One tick a second, no PR poll in the way, a store that is not waited for in real time.
+/// One tick a second, no pull request poll in the way, a store that is not waited for in real time.
 const LOOP: &str =
     "[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[timeouts]\nstore_busy_ms = 1\n";
 

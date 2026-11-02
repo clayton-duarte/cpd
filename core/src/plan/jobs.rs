@@ -25,7 +25,7 @@ pub const KINDS: [&str; 9] = [
     "work", "docs", "test", "impl", "verify", "open", "update", "scout", "research",
 ];
 
-/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a PR.
+/// The explore kinds (`scout`, `research`): Jobs of the Plan, not of a Workflow.
 pub fn is_explore(kind: &str) -> bool {
     matches!(kind, "scout" | "research")
 }
@@ -48,8 +48,8 @@ pub struct JobSpec {
 pub struct Job {
     pub seq: i64,
     pub key: String,
-    /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
-    pub pr: Option<String>,
+    /// The key of the Workflow the Job belongs to (`jobs.pr`, §2.2).
+    pub workflow: Option<String>,
     pub title: String,
     pub tier: Option<String>,
     pub spec: Option<JobSpec>,
@@ -84,9 +84,9 @@ pub struct Job {
 }
 
 impl Job {
-    /// The key of the Job's PR; empty for a Job with none (an explore Job), which no PR key equals.
-    pub fn pr_str(&self) -> &str {
-        self.pr.as_deref().unwrap_or_default()
+    /// The key of the Job's Workflow; empty for a Job with none (an explore Job), which no Workflow key equals.
+    pub fn workflow_str(&self) -> &str {
+        self.workflow.as_deref().unwrap_or_default()
     }
 
     pub fn is_draft(&self) -> bool {
@@ -156,7 +156,7 @@ impl Job {
     pub fn to_json(&self) -> Value {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         let mut value = json!({
-            "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
+            "key": self.key, "seq": self.seq, "pr": self.workflow, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
             "appended": self.appended, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
@@ -189,7 +189,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
         needs.entry(job).or_default().push(need);
     }
     let mut stmt = conn.prepare(
-        "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "SELECT seq, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, urgent,
                 kind, tests, test_files, test_approved, resources, summary, touches_approved
            FROM jobs WHERE plan = ?1 ORDER BY seq",
@@ -244,7 +244,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     rows.into_iter()
         .map(
             |(
-                (seq, key, pr, title, tier),
+                (seq, key, workflow, title, tier),
                 (goal, context),
                 (touches, acceptance, out_of_scope),
                 (status, appended, fingerprint, retry_tier),
@@ -288,14 +288,14 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                     tests: optional("tests", tests)?,
                     test_files: optional("test_files", test_files)?,
                     test_approved: optional("test_approved", test_approved)?,
-                    touches_approved: optional("touches_approved", touches_approved)?,
                     resources: optional("resources", resources)?,
+                    touches_approved: optional("touches_approved", touches_approved)?,
                     kind,
                     spec,
                     needs: needs.remove(&key).unwrap_or_default(),
                     seq,
                     key,
-                    pr,
+                    workflow,
                     title,
                     tier,
                     status,
@@ -307,8 +307,8 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                     cancel_requested_at,
                     failed_cause,
                     merged_sha,
-                    summary,
                     created_at,
+                    summary,
                 })
             },
         )
@@ -409,7 +409,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
-            pr: Some("web".into()),
+            workflow: Some("web".into()),
             title: format!("Title {key}"),
             tier: Some("S2".into()),
             spec: Some(JobSpec {

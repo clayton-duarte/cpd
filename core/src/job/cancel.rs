@@ -30,7 +30,7 @@ enum Decision {
     Request(Job, AttemptId),
 }
 
-/// Whether the cancel keeps the shape of a `tdd` PR (`shape_incomplete`). Only `plan cancel` skips it, by calling
+/// Whether the cancel keeps the shape of a `tdd` Workflow (`shape_incomplete`). Only `plan cancel` skips it, by calling
 /// [`cancel_without_shape`]: it is a parameter of the function, never a flag or an option of the command.
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
@@ -83,8 +83,8 @@ pub(super) fn cancel_in(
                 append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
                 // The dependents fail or are cancelled in the same transaction (contract §3.2 "Cancel", hs-d647).
                 let failed = fail_dependents(tx, &plan, &key, &reason)?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &job.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok(("cancelled".to_owned(), false, false, failed))
             }
@@ -104,8 +104,8 @@ pub(super) fn cancel_in(
                         .job(key.clone())
                         .attempt(attempt),
                 )?;
-                if let Some(pr) = &job.pr {
-                    crate::session::working_pr::name(tx, &plan, &crate::ids::PrKey::parse(pr)?)?;
+                if let Some(workflow) = &job.workflow {
+                    crate::session::working_pr::name(tx, &plan, &crate::ids::WorkflowKey::parse(workflow)?)?;
                 }
                 Ok(("running".to_owned(), true, false, Failed::default()))
             }
@@ -257,7 +257,7 @@ fn decide(
     }
 }
 
-/// The last `test` or the last `impl` Job of a `tdd` PR that has not opened is not cancelled: add the replacement first
+/// The last `test` or the last `impl` Job of a `tdd` Workflow that has not opened is not cancelled: add the replacement first
 /// (`shape_incomplete`, §5.3, hs-d497).
 fn keeps_the_shape(
     conn: &Connection,
@@ -265,20 +265,23 @@ fn keeps_the_shape(
     all: &[Job],
     job: &Job,
 ) -> Result<(), CpdError> {
-    let prs = crate::plan::fingerprint::load_prs(conn, plan)?;
-    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr_str()) else {
+    let workflows = crate::plan::fingerprint::load_workflows(conn, plan)?;
+    let Some(workflow) = workflows
+        .iter()
+        .find(|p| p.key.as_str() == job.workflow_str())
+    else {
         return Ok(());
     };
-    let lacks = crate::plan::shape::missing(pr, all, Some(job.key.as_str()));
-    // Only what this cancel would take away: a PR that already lacked a kind is not this Job's doing.
-    let kept = crate::plan::shape::missing(pr, all, None);
+    let lacks = crate::plan::shape::missing(workflow, all, Some(job.key.as_str()));
+    // Only what this cancel would take away: a Workflow that already lacked a kind is not this Job's doing.
+    let kept = crate::plan::shape::missing(workflow, all, None);
     let taken: Vec<&str> = lacks.into_iter().filter(|k| !kept.contains(k)).collect();
     if taken.is_empty() {
         return Ok(());
     }
     Err(crate::plan::shape::incomplete(
         plan,
-        pr,
+        workflow,
         &taken,
         &format!("cancelling {} would leave it with none", job.key),
     ))

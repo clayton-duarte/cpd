@@ -32,7 +32,7 @@ pub enum Meaning {
     InProgress,
     /// A landing Job (checking or merging); an open PR; phase `deploy`.
     Review,
-    /// A merged Job; a merged PR; phase `done`; checks passed.
+    /// A merged Job; a merged Workflow; phase `done`; checks passed.
     Done,
     /// What needs the User: a stuck Job (`job-stuck`), a closed PR its Lead asked about, a conflict or failed checks on a PR
     /// no Plan owns. A failure an agent handles is [`Meaning::Waiting`] instead (hs-d303).
@@ -352,7 +352,7 @@ pub const DRAFT: &str = "\u{F059}";
 /// A cancelled Job: `nf-md-close_circle` (U+F0159).
 pub const CANCELLED: &str = "\u{F0159}";
 
-// PR check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
+// Workflow check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
 /// Checks passed: `nf-md-check_circle` (U+F05E0).
 pub const CHECKS_PASSED: &str = MERGED;
 /// Checks failed: `nf-md-close_circle` (U+F0159).
@@ -559,7 +559,7 @@ pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
     }
 }
 
-/// Meaning of a PR's state.
+/// Meaning of a Workflow's state.
 pub fn pr_state(state: PrState) -> Meaning {
     match state {
         // an open pull request is colourless (grey) until it is ready to merge: `pr_open`
@@ -583,7 +583,7 @@ pub fn pr_open(clean: bool) -> Meaning {
 /// owns: red (audit Q4), where [`pr_state`] gives `closed` the waiting colour.
 pub const PR_CLOSED_ASKED: (&str, Meaning) = ("closed", Meaning::Failed);
 
-/// The PR states the legend lists, with the name shown.
+/// The Workflow states the legend lists, with the name shown.
 pub const PR_LEGEND: [(&str, PrState); 3] = [
     ("open", PrState::Open),
     ("merged", PrState::Merged),
@@ -591,14 +591,14 @@ pub const PR_LEGEND: [(&str, PrState); 3] = [
 ];
 
 /// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
-/// meaning: the plan view's PR box title and the legend's PR states.
+/// meaning: the plan view's Workflow box title and the legend's Workflow states.
 pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 
 /// What a conflicting open pull request that a cpd Plan owns reads: its Lead fixes it (hs-d302), so it is `Waiting`, not
 /// red. [`PR_CONFLICT`] is the one no Plan owns, the User's to fix.
 pub const PR_CONFLICT_OWNED: (&str, Meaning) = ("conflict", Meaning::Waiting);
 
-/// What a conflicting pull request reads while its PR has an update Job that is not ended (hs-d532): the running colour
+/// What a conflicting pull request reads while its Workflow has an update Job that is not ended (hs-d532): the running colour
 /// while the Job runs, the waiting colour while it is queued.
 pub const PR_UPDATING_RUNNING: (&str, Meaning) = ("updating", Meaning::InProgress);
 pub const PR_UPDATING_QUEUED: (&str, Meaning) = ("updating", Meaning::Waiting);
@@ -612,7 +612,7 @@ pub fn checks_of(c: Checks, owned: bool) -> (&'static str, Meaning) {
     }
 }
 
-/// Icon and meaning of a PR's checks.
+/// Icon and meaning of a Workflow's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
     match c {
         Checks::Passed => (CHECKS_PASSED, Meaning::Done),

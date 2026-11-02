@@ -387,7 +387,7 @@ impl Jira {
         let jira = ticket.map_or("NULL".to_owned(), |t| format!("'{t}'"));
         let sql = if status == "cancelled" {
             format!(
-                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at, name, jira)
+                "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at, name, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', 'cancelled', 'cpd/pay/{key}', cpd_txn(), 't', 'pay', {jira});"
             )
         } else {
@@ -395,7 +395,7 @@ impl Jira {
             format!(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored)
                    VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, 'open', 'none', 'none', 't', NULL, 't', 0);
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, name, jira)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, name, jira)
                    VALUES ('pay', '{key}', '/nowhere', 'main', 'open', 'cpd/pay/{key}', '/nowhere/lead', {number}, '{url}', 't',
                            (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number}), cpd_txn(), 't', 't', 'pay', {jira});"
             )
@@ -575,7 +575,7 @@ fn a_target_with_no_status_name_settles_skipped_without_calling_the_helper() {
 fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     let t = jira(LONG, true);
     t.fx.env
-        .sql("UPDATE prs SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
+        .sql("UPDATE workflows SET jira = NULL WHERE plan = 'pay' AND key = 'web';");
     t.queue("web", "in_progress");
     t.queue("api", "in_progress");
     t.run(then_ticks(5, |p| p.settled("api", "in_progress")));
@@ -592,7 +592,7 @@ fn a_row_of_a_pr_with_no_ticket_waits_and_runs_once_the_ticket_is_set() {
     );
     assert_eq!(p.error_events(), vec![]);
 
-    p.write("UPDATE prs SET jira = 'ABC-9' WHERE plan = 'pay' AND key = 'web';");
+    p.write("UPDATE workflows SET jira = 'ABC-9' WHERE plan = 'pay' AND key = 'web';");
     t.run(then_ticks(3, |p| p.settled("web", "in_progress")));
     assert_eq!(
         p.tickets(),
@@ -751,12 +751,13 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
     // Each case parks `api`'s `in_review` row, changes something, and runs the engine until the control row behind it is
     // settled too. (change, does it reopen the row, the ticket and the name of the second run)
     type Change = Box<dyn Fn(&Probe)>;
-    type SecondRun<'a> = Option<(&'a str, &'a str)>;
-    let cases: Vec<(&str, Change, SecondRun)> = vec![
+    // (what changes, the change, the ticket and name of the second run)
+    type Case = (&'static str, Change, Option<(&'static str, &'static str)>);
+    let cases: Vec<Case> = vec![
         (
             "another ticket",
             Box::new(|p| {
-                p.write("UPDATE prs SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")
+                p.write("UPDATE workflows SET jira = 'ABC-124' WHERE plan = 'pay' AND key = 'api';")
             }),
             Some(("ABC-124", "In Review")),
         ),
@@ -768,9 +769,7 @@ fn a_parked_row_is_reopened_and_run_when_the_ticket_or_the_status_name_changes()
         (
             "another title",
             Box::new(|p| {
-                p.write(
-                    "UPDATE prs SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';",
-                )
+                p.write("UPDATE workflows SET title = 'Another title' WHERE plan = 'pay' AND key = 'api';")
             }),
             None,
         ),
@@ -1130,7 +1129,7 @@ fn a_failed_run_is_one_error_event_scoped_to_the_plan_naming_the_ticket_the_stat
         json!({"tool": "transitionJiraIssue", "status_code": 400, "plan": "pay", "pr": "api", "ticket": API, "target": "done", "status": "Done"})
     );
     assert!(
-        text.starts_with(r#"The engine failed at E19 (Jira transitions) for the done move of PR api of Plan pay: ABC-123 could not be moved to "Done""#),
+        text.starts_with(r#"The engine failed at E19 (Jira transitions) for the done move of Workflow api of Plan pay: ABC-123 could not be moved to "Done""#),
         "{text}"
     );
     assert!(text.ends_with("See: cpd plan show --plan pay"), "{text}");

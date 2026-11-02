@@ -1,5 +1,5 @@
-//! `pr poll` cleans nothing (commands.md §9.2 "After a PR is merged or cancelled", contract §7.2): the clean-up
-//! of merged and cancelled PRs is `cpd janitor`'s (`janitor_tests.rs`). In process on the janitor's `Rig`: the git is
+//! `pr poll` cleans nothing (commands.md §9.2 "After a Workflow is merged or cancelled", contract §7.2): the clean-up
+//! of merged and cancelled Workflows is `cpd janitor`'s (`janitor_tests.rs`). In process on the janitor's `Rig`: the git is
 //! the in-process `Universe`, `gh` and tmux are scripted on the runner. No test starts a process or sleeps.
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use super::poll::{Trigger, poll, queue_update_for};
 use crate::args::PlanArg;
 use crate::config::Tier;
 use crate::host::runner::{Call, Handler, Reply};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, WorkflowKey};
 use crate::janitor_tests::Rig;
 use crate::ports::Ports;
 use crate::store::Store;
@@ -23,7 +23,7 @@ struct Gh {
 
 fn node(number: i64) -> String {
     format!(
-        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"Workflow {number}",
         "isDraft":false,"state":"MERGED","createdAt":"opened","updatedAt":"U1","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
@@ -56,8 +56,8 @@ impl Handler for Gh {
 fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     let mut rig = Rig::new();
     // `api` is open and GitHub says it merged; `web` is cancelled already.
-    rig.pr("api", "open");
-    rig.pr("web", "cancelled");
+    rig.workflow("api", "open");
+    rig.workflow("web", "cancelled");
     let _ = (*rig.fakes.runner)
         .clone()
         .route("gh", Arc::new(Gh { merged: vec![801] }));
@@ -77,19 +77,23 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     let status: String = {
         let mut store = crate::store::Store::open(&rig.home, 5000).unwrap();
         store
-            .read(
-                |c| Ok(c.query_row("SELECT status FROM prs WHERE key = 'api'", [], |r| r.get(0))?),
-            )
+            .read(|c| {
+                Ok(
+                    c.query_row("SELECT status FROM workflows WHERE key = 'api'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
             .unwrap()
     };
     assert_eq!(status, "merged", "the poll saw the merge: {out:?}");
-    for pr in &rig.prs {
+    for workflow in &rig.workflows {
         assert_eq!(
-            rig.left(pr),
+            rig.left(workflow),
             [true; 6],
-            "{} PR {}: the poll leaves every worktree, registration and branch",
-            pr.status,
-            pr.key
+            "{} Workflow {}: the poll leaves every worktree, registration and branch",
+            workflow.status,
+            workflow.key
         );
     }
     let kills: Vec<Call> = rig
@@ -112,7 +116,7 @@ fn pr_poll_removes_and_reports_nothing_of_a_merged_or_cancelled_pr() {
     );
 }
 
-/// The in-process `gh` of the required-checks tests: the search lists the one open PR `acme/pay#801` with the bulk rollup
+/// The in-process `gh` of the required-checks tests: the search lists the one open Workflow `acme/pay#801` with the bulk rollup
 /// `rollup` (None is a null rollup), the per-check read lists `nodes`, the comments read is empty; any other call exits 9.
 struct OpenGh {
     rollup: Option<&'static str>,
@@ -128,7 +132,7 @@ impl Handler for OpenGh {
                     .rollup
                     .map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
                 let node = format!(
-                    r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"PR 801",
+                    r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"Workflow 801",
                     "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
                     "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
                 );
@@ -158,14 +162,14 @@ fn guardian() -> serde_json::Value {
     serde_json::json!({"__typename": "StatusContext", "context": "GitGuardian Security Checks", "state": "SUCCESS"})
 }
 
-/// Polls the open PR `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
+/// Polls the open Workflow `acme/pay#801` under the repo policy file `policy` and returns the `checks` its row stores.
 fn stored_checks(
     rollup: Option<&'static str>,
     nodes: Vec<serde_json::Value>,
     policy: &str,
 ) -> String {
     let mut rig = Rig::new();
-    rig.pr("api", "open");
+    rig.workflow("api", "open");
     let dir = rig.home.root().join("policy/acme");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("pay.toml"), policy).unwrap();
@@ -236,16 +240,16 @@ fn poll_stores_passed_when_the_required_check_passed() {
 
 // --- the widened update-Job trigger (contract §3.7 E5, §3.8; commands.md §9.2; hs-d794, hs-n617) ---
 //
-// The poll queues a PR's `update` Job for two causes: the conflict (unchanged, `update_for_conflict`)
-// and a base PR's merge that repoints the pull request to the default branch with the default branch
+// The poll queues a Workflow's `update` Job for two causes: the conflict (unchanged, `update_for_conflict`)
+// and a base Workflow's merge that repoints the pull request to the default branch with the default branch
 // ahead of the Lead Branch without a conflict, `reason` `base-merged`. The ahead decision is computed
 // from git in the poll's read phase; these tests pass it as the boolean directly.
 
-/// A Plan `pay` in `deploy` with the PRs `keys` `open` (the janitor `Rig`).
+/// A Plan `pay` in `deploy` with the Workflows `keys` `open` (the janitor `Rig`).
 fn open_rig(keys: &[&'static str]) -> Rig {
     let mut rig = Rig::new();
     for key in keys {
-        rig.pr(key, "open");
+        rig.workflow(key, "open");
     }
     rig
 }
@@ -286,9 +290,12 @@ fn last_reason(store: &mut Store) -> Option<String> {
 fn a_base_merge_with_main_ahead_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
-    // The repoint happened (GitHub moved the PR to the default branch) and main is ahead without a conflict.
+    // The repoint happened (GitHub moved the Workflow to the default branch) and main is ahead without a conflict.
     let queued = store
         .write("pr poll", |tx| {
             queue_update_for(tx, &pay, &api, Trigger::BaseMerged, true, tier())
@@ -314,8 +321,8 @@ fn a_base_merge_with_main_contained_queues_nothing() {
     let mut store = Store::open(&rig.home, 5000).unwrap();
     let (pay, api, web) = (
         PlanId::parse("pay").unwrap(),
-        PrKey::parse("api").unwrap(),
-        PrKey::parse("web").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+        WorkflowKey::parse("web").unwrap(),
     );
 
     let (ahead, contained) = store
@@ -336,7 +343,7 @@ fn a_base_merge_with_main_contained_queues_nothing() {
     assert_eq!(
         update_jobs(&mut store),
         vec![ahead.as_str().to_owned()],
-        "only the ahead PR's update Job exists"
+        "only the ahead Workflow's update Job exists"
     );
 }
 
@@ -344,7 +351,10 @@ fn a_base_merge_with_main_contained_queues_nothing() {
 fn a_conflict_still_queues_an_update_job() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
     let queued = store
         .write("pr poll", |tx| {
@@ -369,7 +379,10 @@ fn a_conflict_still_queues_an_update_job() {
 fn an_update_job_already_live_is_not_duplicated() {
     let rig = open_rig(&["api"]);
     let mut store = Store::open(&rig.home, 5000).unwrap();
-    let (pay, api) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+    let (pay, api) = (
+        PlanId::parse("pay").unwrap(),
+        WorkflowKey::parse("api").unwrap(),
+    );
 
     let first = store
         .write("pr poll", |tx| {

@@ -29,13 +29,13 @@ fn a_verify_job_runs_and_merges_like_a_docs_job() {
     let merged = live.commit(&live.lead, "build.txt", "build\n", "build");
     let fp = "0".repeat(64);
     live.fixture(&format!(
-        "DROP TRIGGER prs_shape_fixed;
-         UPDATE prs SET shape = 'tdd' WHERE key = 'repo';
+        "DROP TRIGGER workflows_shape_fixed;
+         UPDATE workflows SET shape = 'tdd' WHERE key = 'repo';
          UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api';
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, merged_sha, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, merged_sha, created_txn, created_at)
          VALUES ('pay', 'repo', 'build', 'Build', 'S2', 'Build.', 'Because.', '[\"build.txt\"]', '[\"it works\"]', '[]', 'merged', 0, 'impl', '{fp}', '{merged}', cpd_txn(), 't');
-         CREATE TRIGGER prs_shape_fixed BEFORE UPDATE OF shape ON prs
-BEGIN SELECT RAISE(ABORT, 'pr_locked'); END;"
+         CREATE TRIGGER workflows_shape_fixed BEFORE UPDATE OF shape ON workflows
+BEGIN SELECT RAISE(ABORT, 'workflow_locked'); END;"
     ));
     let spec = live.fx.env.root().join("verify-spec.json");
     fs::write(&spec, r#"{"goal": "Check it end to end.", "context": "The PR is built.", "touches": ["e2e.txt"], "acceptance": ["e2e passes"], "out_of_scope": []}"#).unwrap();
@@ -55,7 +55,7 @@ BEGIN SELECT RAISE(ABORT, 'pr_locked'); END;"
             "verify",
             "--needs",
             "build",
-            "--pr",
+            "--workflow",
             "repo",
             "--plan",
             PLAN,

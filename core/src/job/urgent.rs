@@ -47,11 +47,11 @@ pub(super) fn urgent(args: UrgentArgs) -> Result<Output, CpdError> {
                             .plan(plan.clone())
                             .job(key.clone()),
                     )?;
-                    if let Some(pr) = &job.pr {
+                    if let Some(workflow) = &job.workflow {
                         crate::session::working_pr::name(
                             tx,
                             &plan,
-                            &crate::ids::PrKey::parse(pr)?,
+                            &crate::ids::WorkflowKey::parse(workflow)?,
                         )?;
                     }
                     Ok((job, false))

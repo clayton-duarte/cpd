@@ -43,11 +43,11 @@ fn context(id: &str) -> String {
 
 /// A Plan `id` in `context`, phase dispatch, with Lead Session `l-<id>` in `state` (`blocked` takes a label).
 fn plan(id: &str, context: &str, created: &str, state: &str) -> String {
-    let label = (state == "blocked").then_some("cpd: PR feedback");
+    let label = (state == "blocked").then_some("cpd: Workflow feedback");
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'dispatch', 'l-{id}', '{created}', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '{created}', '{created}');
          {}",
         session(&format!("l-{id}"), "lead", context, Some(id), None, state, label)
@@ -59,7 +59,7 @@ fn plan_done(id: &str, context: &str, created: &str, done_at: &str) -> String {
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', 'done', 'l-{id}', '{created}', '2026-01-02T00:00:00.000Z', '{done_at}');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', 'dispatch', 'cpd/{id}', '/wt', cpd_txn(), '{created}', '{created}');
          {}",
         session(&format!("l-{id}"), "lead", context, Some(id), None, "stopped", None)
@@ -98,7 +98,7 @@ fn job(plan: &str, key: &str, status: &str) -> String {
         "NULL"
     };
     format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, merged_sha, created_at)
          VALUES ('{plan}', 'repo', '{key}', 'Job', 'S3', 'G.', 'W.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fp}, cpd_txn(),
                  {sha}, '2026-01-02T00:00:00.000Z');"
@@ -303,10 +303,10 @@ fn every_activity_kind_counts_and_the_others_do_not() {
         "attempt-nudge",
         "all-merged",
         "pr-feedback",
-        "pr-added",
-        "pr-edited",
-        "pr-cancelled",
-        "pr-started",
+        "workflow-added",
+        "workflow-edited",
+        "workflow-cancelled",
+        "workflow-started",
         "pr-opened",
         "pr-merged",
         "escalation",
@@ -544,7 +544,7 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
     // the Inbox, commands.md §17).
     sql(
         &mut store,
-        "UPDATE sessions SET state = 'blocked', state_label = 'cpd: PR feedback' WHERE id = 'l-p2';
+        "UPDATE sessions SET state = 'blocked', state_label = 'cpd: Workflow feedback' WHERE id = 'l-p2';
          INSERT INTO inbox_items (kind, urgency, subject, label, context, plan, session, opened_at)
            VALUES ('dialog', 'red', 'session:l-p2', 'p2 asks you', 'ctx', 'p2', 'l-p2', '2026-10-18T15:00:00.000Z');",
     );

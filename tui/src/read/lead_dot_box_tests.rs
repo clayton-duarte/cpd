@@ -1,6 +1,6 @@
-//! Red tests: a merged or cancelled PR's box title draws no Lead dot and no red loader (docs/commands.md §13.2 "PR boxes",
+//! Red tests: a merged or cancelled Workflow's box title draws no Lead dot and no red loader (docs/commands.md §13.2 "Workflow boxes",
 //! §17 "The Lead dot rule"; decisions pro-d217, pro-d219). The open box of the same Plan still draws its dot. Which open
-//! box shows the dot, and its colour, is the next PR's and is not asserted here.
+//! box shows the dot, and its colour, is the next Workflow's and is not asserted here.
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -9,12 +9,12 @@ use cpd_core::store::Store;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, PlanBoxes, PrNode};
+use crate::read::{self, Dot, PlanBoxes, WorkflowNode};
 
 const AT: &str = "'2026-01-02T00:00:00.000Z'";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-/// One Plan `pay` with a working Lead and PRs `old` (merged), `new` (open) and `gone` (cancelled); a failed Job in `new`
+/// One Plan `pay` with a working Lead and Workflows `old` (merged), `new` (open) and `gone` (cancelled); a failed Job in `new`
 /// when `failed`. In-process store; no tmux, git or gh.
 fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
     let dir = tempfile::tempdir().unwrap();
@@ -33,20 +33,20 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
                    'main', 'main', {AT}, {AT}, {AT}),
                   ('acme/repo', 2, 'https://github.com/acme/repo/pull/2', 'T', 0, 'open', 'none', 'passed', 'clean', 1,
                    'main', 'main', {AT}, {AT}, NULL);
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', 'old', '/repo', 'main', 'merged', 'pay/old', '/wt-old', 1, 'https://github.com/acme/repo/pull/1', {AT},
                    (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT}, {AT});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at)
            VALUES ('pay', 'new', '/repo', 'main', 'open', 'pay/new', '/wt-new', 2, 'https://github.com/acme/repo/pull/2', {AT},
                    (SELECT id FROM pull_requests WHERE number = 2), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'gone', '/repo', 'main', 'cancelled', 'pay/gone', cpd_txn(), '2026-01-01T00:00:00.000Z');"
     );
     if failed {
         sql.push_str(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, failed_cause, merged_sha)
                VALUES ('pay', 'new', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', cpd_txn(), {AT}, 'crashed', NULL);"
         ));
@@ -62,13 +62,23 @@ fn plan_boxes(failed: bool) -> (tempfile::TempDir, PlanBoxes) {
     (dir, boxes)
 }
 
-fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a PrNode {
-    b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
+fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
+    b.workflows.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 
 /// The foreground of the spinner cell in row 0 of the box of `pr` drawn alone among all the Plan's Jobs.
-fn title_dot(b: &PlanBoxes, pr: &PrNode, frame: usize) -> Option<ratatui::style::Color> {
-    let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
+fn title_dot(
+    b: &PlanBoxes,
+    workflow: &WorkflowNode,
+    frame: usize,
+) -> Option<ratatui::style::Color> {
+    let chart = boxes::layout(
+        std::slice::from_ref(workflow),
+        &b.jobs,
+        &b.needs_user,
+        frame,
+    )
+    .chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| {

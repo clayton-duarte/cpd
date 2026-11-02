@@ -1,5 +1,5 @@
 //! `sessions.working_pr` and its three triggers (contract §3.6 `The Lead's Workflow`, §4.4; decisions pro-d217,
-//! pro-d219, pro-d259): non-null only for a `working` Lead whose Plan has a PR with that key; leaving `working`
+//! pro-d219, pro-d259): non-null only for a `working` Lead whose Plan has a Workflow with that key; leaving `working`
 //! clears it; a new Session names nothing.
 
 use crate::error::{CpdError, ErrorCode};
@@ -53,16 +53,16 @@ fn fixture() -> (tempfile::TempDir, Store) {
                                     base_ref, default_branch, created_at, changed_at, merged_at)
            VALUES ('acme/repo', 1, 'https://github.com/acme/repo/pull/1', 'T', 0, 'merged', 'none', 'passed', 'clean', 1,
                    'main', 'main', 't', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
            VALUES ('pay', 'a', '/r', 'main', 'dispatch', 'pay/a', '/wt-a', 't', cpd_txn(), 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                           pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', 'm', '/r', 'main', 'merged', 'pay/m', '/wt-m', 1, 'https://github.com/acme/repo/pull/1', 't',
                    (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), 't', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'c', '/r', 'main', 'cancelled', 'pay/c', cpd_txn(), 't'),
                   ('other', 'x', '/r', 'main', 'waiting', 'other/x', cpd_txn(), 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
            VALUES ('pay', 'a', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{FP}', cpd_txn(), 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'w', 't');"
@@ -71,8 +71,8 @@ fn fixture() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-fn name(pr: &str) -> String {
-    format!("UPDATE sessions SET working_pr = '{pr}' WHERE id = 'lead-pay'")
+fn name(workflow: &str) -> String {
+    format!("UPDATE sessions SET working_pr = '{workflow}' WHERE id = 'lead-pay'")
 }
 
 #[test]

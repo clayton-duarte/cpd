@@ -278,7 +278,7 @@ fn pr_sql(fx: &Fx, key: &str, number: u32, merged_ago: Option<i64>) -> String {
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', {number}, '{url}', 'PR {key}', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at, merged_at)
            VALUES ('pay', '{key}', '/nowhere', 'main', '{state}', 'cpd/pay/{key}', '/nowhere/lead', {number}, '{url}', 't',
                    (SELECT id FROM pull_requests WHERE repo = 'acme/pay' AND number = {number}), cpd_txn(), 't', 't', {merged_at});"
     )
@@ -293,7 +293,7 @@ fn queue_sql(ts: &str, emoji: &str) -> String {
 fn post_sql(key: &str, ts: &str, reaction: Option<&str>) -> String {
     let reaction = reaction.map_or("NULL".to_owned(), |r| format!("'{r}'"));
     format!(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at)
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at)
            VALUES ('pay', '{key}', '{CHANNEL}', '{ts}', 'https://acme.slack.com/archives/{CHANNEL}/p{}', 't', {reaction}, NULL);",
         ts.replace('.', "")
     )
@@ -736,8 +736,8 @@ impl React {
         self.post("api", TS, Some(EMOJI));
         self.fx.env.sql(&format!(
             "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
-             UPDATE prs SET name = 'pay' WHERE plan = 'pay' AND key = 'api';
-             INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, pr) VALUES ('{CHANNEL}', '{TS}', '{EMOJI}', 't', 'pay', 'api');"
+             UPDATE workflows SET name = 'pay' WHERE plan = 'pay' AND key = 'api';
+             INSERT INTO slack_reactions (channel, ts, emoji, queued_at, plan, workflow) VALUES ('{CHANNEL}', '{TS}', '{EMOJI}', 't', 'pay', 'api');"
         ));
     }
 }

@@ -42,10 +42,10 @@ fn reviews(
     now: OffsetDateTime,
     numbers: &[u64],
 ) -> Vec<Condition> {
-    let prs = numbers
+    let workflows = numbers
         .iter()
         .map(|n| {
-            let pr = GhPr {
+            let workflow = GhPr {
                 title: "Add retries".to_owned(),
                 draft: false,
                 state: GhState::Open,
@@ -53,12 +53,12 @@ fn reviews(
                 decision: None,
                 reviews: Vec::new(),
             };
-            (("acme/pay".to_owned(), *n), Some(pr))
+            (("acme/pay".to_owned(), *n), Some(workflow))
         })
         .collect();
     let lookup = Lookup {
         me: "clayton-duarte".to_owned(),
-        prs,
+        workflows,
     };
     let bots = ["github-actions".to_owned()];
     let mut github = |_: &[(String, u64)]| -> Result<Lookup, CpdError> { Ok(lookup.clone()) };

@@ -362,7 +362,7 @@ fn tiers_world() -> Models {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'P', 'grounding', 'lead1', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pl', 'L', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
            VALUES ('pl', 'p1', '/r', 'main', 'waiting', 'cpd/pl/p1', 'r1', cpd_txn(), 't'),
                   ('pl', 'p2', '/r', 'main', 'waiting', 'cpd/pl/p2', 'r2', cpd_txn(), 't');",
     );
@@ -419,13 +419,13 @@ fn m7_owner_and_repo_select_the_repos_models() {
 fn m7_pr_selects_its_repo() {
     let fx = tiers_world();
     assert_tiers(
-        &tiers(&fx, &["--pr", "p1", "--plan", "pl"]).ok(),
+        &tiers(&fx, &["--workflow", "p1", "--plan", "pl"]).ok(),
         "one",
         Some("acme"),
         Some("r1"),
     );
     assert_tiers(
-        &tiers(&fx, &["--pr", "p2", "--plan", "pl"]).ok(),
+        &tiers(&fx, &["--workflow", "p2", "--plan", "pl"]).ok(),
         "two",
         Some("acme"),
         Some("r2"),

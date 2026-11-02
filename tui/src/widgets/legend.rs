@@ -307,8 +307,8 @@ pub(crate) fn sections() -> Vec<Section> {
         sample(palette::PR_UPDATING_QUEUED),
         plain("its update Job is queued"),
     ]);
-    let prs = Section {
-        title: "PRs (Dispatch)",
+    let workflows = Section {
+        title: "Workflows (Dispatch)",
         header: None,
         rows: pr_rows,
     };
@@ -397,7 +397,7 @@ pub(crate) fn sections() -> Vec<Section> {
             })
             .collect(),
     };
-    vec![meanings, jobs, dots, prs, inbox, pulse, checks]
+    vec![meanings, jobs, dots, workflows, inbox, pulse, checks]
 }
 
 /// The vertical constraints of the body: each section after a gap.
@@ -586,11 +586,11 @@ mod tests {
                 "▄",
                 "a Plan or ask Event",
                 "▄",
-                "a PR opened",
+                "a pull request opened",
                 "▄",
                 "an escalation",
                 "▄",
-                "a Job or a PR merged",
+                "a Job or a Workflow merged",
                 "▄",
                 "any other activity",
                 "▁",
@@ -800,8 +800,8 @@ mod tests {
 
     #[test]
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
-        let prs = &sections()[3];
-        let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
+        let workflows = &sections()[3];
+        let names: Vec<String> = workflows.rows.iter().map(|r| text(&r[0])).collect();
         assert_eq!(
             names,
             [
@@ -814,7 +814,7 @@ mod tests {
                 "#2 updating"
             ]
         );
-        let conflict = &prs.rows[4][0].spans[0];
+        let conflict = &workflows.rows[4][0].spans[0];
         assert_eq!(
             conflict.style,
             palette::fg_clickable(palette::Meaning::Failed)
@@ -823,8 +823,8 @@ mod tests {
 
     #[test]
     fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
-        let prs = &sections()[3];
-        let (handled, asked) = (&prs.rows[2], &prs.rows[3]);
+        let workflows = &sections()[3];
+        let (handled, asked) = (&workflows.rows[2], &workflows.rows[3]);
         assert_eq!(
             handled[0].spans[0].style,
             palette::fg_clickable(Meaning::Waiting)

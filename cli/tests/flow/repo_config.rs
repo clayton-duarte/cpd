@@ -83,7 +83,7 @@ fn pr_add_of_a_repo_without_a_file_succeeds() {
     let repo = fx.keyed_repo("shop");
     let out = fx
         .cpd(&[
-            "pr",
+            "workflow",
             "add",
             "pay",
             "--repo",
@@ -96,7 +96,7 @@ fn pr_add_of_a_repo_without_a_file_succeeds() {
             "pl",
         ])
         .ok();
-    assert_eq!(out["pr"]["name"], "shop", "{out}");
+    assert_eq!(out["workflow"]["name"], "shop", "{out}");
 }
 
 #[test]

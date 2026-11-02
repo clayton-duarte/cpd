@@ -9,7 +9,7 @@ use ratatui::style::Color;
 
 use crate::palette;
 use crate::plan::boxes;
-use crate::read::{self, Dot, PlanBoxes, PrNode};
+use crate::read::{self, Dot, PlanBoxes, WorkflowNode};
 
 const AT: &str = "'2026-01-02T00:00:00.000Z'";
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -46,30 +46,30 @@ impl Fixture {
                VALUES ('acme/repo', 1, 'https://github.com/acme/repo/pull/1', 'T', 0, 'merged', 'none', 'passed', 'clean', 1, 'main', 'main', {AT}, {AT}, {AT}),
                       ('acme/repo', 2, 'https://github.com/acme/repo/pull/2', 'T', 0, 'open', 'none', 'passed', 'clean', 1, 'main', 'main', {AT}, {AT}, NULL),
                       ('acme/repo', 3, 'https://github.com/acme/repo/pull/3', 'T', 0, 'open', 'none', 'passed', 'clean', 1, 'main', 'main', {AT}, {AT}, NULL);
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                               pull_request, created_txn, created_at, started_at, merged_at)
                VALUES ('pay', 'old', '/repo', 'main', 'merged', 'pay/old', '/wt-old', 1, 'https://github.com/acme/repo/pull/1', {AT},
                        (SELECT id FROM pull_requests WHERE number = 1), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT}, {AT});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                               pull_request, created_txn, created_at, started_at)
                VALUES ('pay', 'api', '/repo', 'main', 'open', 'pay/api', '/wt-api', 2, 'https://github.com/acme/repo/pull/2', {AT},
                        (SELECT id FROM pull_requests WHERE number = 2), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT}),
                       ('pay', 'dev', '/repo', 'main', 'open', 'pay/dev', '/wt-dev', 3, 'https://github.com/acme/repo/pull/3', {AT},
                        (SELECT id FROM pull_requests WHERE number = 3), cpd_txn(), '2026-01-01T00:00:00.000Z', {AT});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', 'web', '/repo', 'main', 'dispatch', 'pay/web', '/wt-web', cpd_txn(), '2026-01-01T00:00:00.000Z', {AT});
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('pay', 'gone', '/repo', 'main', 'cancelled', 'pay/gone', cpd_txn(), '2026-01-01T00:00:00.000Z');"
         ));
         match extra {
             Extra::None => {}
             Extra::FailedJobInApi => f.sql(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                    fingerprint, created_txn, created_at, failed_cause, merged_sha)
                    VALUES ('pay', 'api', 'j1', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', cpd_txn(), {AT}, 'crashed', NULL);"
             )),
             Extra::OpenEscalationInApi => f.sql(&format!(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                    fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'j1', 'J', 'S1', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}', cpd_txn(), {AT});
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
@@ -101,14 +101,20 @@ impl Fixture {
     }
 }
 
-fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a PrNode {
-    b.prs.iter().find(|p| p.key.as_str() == key).unwrap()
+fn node<'a>(b: &'a PlanBoxes, key: &str) -> &'a WorkflowNode {
+    b.workflows.iter().find(|p| p.key.as_str() == key).unwrap()
 }
 
 /// The foreground of the spinner cell in row 0 of the box of `key` drawn alone.
 fn title_dot(b: &PlanBoxes, key: &str, frame: usize) -> Option<Color> {
-    let pr = node(b, key);
-    let chart = boxes::layout(std::slice::from_ref(pr), &b.jobs, &b.needs_user, frame).chart;
+    let workflow = node(b, key);
+    let chart = boxes::layout(
+        std::slice::from_ref(workflow),
+        &b.jobs,
+        &b.needs_user,
+        frame,
+    )
+    .chart;
     (0..chart.buf.area.width)
         .map(|x| &chart.buf[(x, 0)])
         .find(|cell| {

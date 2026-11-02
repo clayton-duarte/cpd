@@ -27,47 +27,47 @@ fn ticks(fx: &mut Fx, n: usize) {
     }
 }
 
-/// Job `api` merged: the PR's open Job can be Ready once nothing else of the PR is left.
+/// Job `api` merged: the Workflow's open Job can be Ready once nothing else of the Workflow is left.
 fn add_merged_api(fx: &mut Fx) {
     fx.add_job("api", &[], &merged("api"));
 }
 
-/// Job `key` of PR `repo`, a draft: the PR's open Job waits for it, and E3 never starts it.
+/// Job `key` of Workflow `repo`, a draft: the Workflow's open Job waits for it, and E3 never starts it.
 fn add_draft(fx: &mut Fx, key: &str) {
     add_draft_in(fx, "repo", key);
 }
 
-/// `add_draft` in PR `pr`.
-fn add_draft_in(fx: &mut Fx, pr: &str, key: &str) {
+/// `add_draft` in Workflow `pr`.
+fn add_draft_in(fx: &mut Fx, workflow: &str, key: &str) {
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+         VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
     ));
 }
 
-/// Job `key` of PR `repo` as cpd adds an `open` or `update` Job (`kind`): `appended`, no Dependencies, `queued` with its
+/// Job `key` of Workflow `repo` as cpd adds an `open` or `update` Job (`kind`): `appended`, no Dependencies, `queued` with its
 /// fingerprint, then moved by `then` (SQL).
 fn add_cpd_job(fx: &mut Fx, key: &str, kind: &str, then: &str) {
     add_cpd_job_in(fx, "repo", key, kind, then);
 }
 
-/// `add_cpd_job` in PR `pr`.
-fn add_cpd_job_in(fx: &mut Fx, pr: &str, key: &str, kind: &str, then: &str) {
+/// `add_cpd_job` in Workflow `pr`.
+fn add_cpd_job_in(fx: &mut Fx, workflow: &str, key: &str, kind: &str, then: &str) {
     fx.fixture(&format!(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+         VALUES ('pay', '{workflow}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
     ));
     fx.lock_job(key, then);
 }
 
-/// PR `web` of Plan `pay`, `dispatch`, beside PR `repo`.
-fn add_web_pr(fx: &mut Fx) {
+/// Workflow `web` of Plan `pay`, `dispatch`, beside Workflow `repo`.
+fn add_web_workflow(fx: &mut Fx) {
     let (repo, lead) = (
         fx.engine.home.root().join("repo"),
         fx.engine.home.root().join("lead"),
     );
     fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
         repo.display(),
         lead.display()
@@ -111,9 +111,9 @@ fn tick_e3_e4(fx: &mut Fx) {
     tick(fx);
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (H3),
+/// E4 adds the Workflow's `open` Job once the Workflow is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (H3),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
-/// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
+/// that follow add nothing. (A draft of the Workflow keeps it from being Ready, so E3 starts nothing here.)
 #[test]
 fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_adds_no_second() {
     let mut fx = Fx::with_plan("");
@@ -128,7 +128,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
         .store
         .read(|conn| {
             Ok(conn.query_row(
-                "SELECT title, tier, pr, appended, urgent, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'",
+                "SELECT title, tier, workflow, appended, urgent, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )?)
@@ -163,7 +163,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
         (
             &data["kind"],
             &data["by"],
-            &data["pr"],
+            &data["workflow"],
             &data["status"],
             &data["tier"]
         ),
@@ -178,12 +178,12 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(
-        fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"),
+        fx.query::<Option<String>>("SELECT all_merged_at FROM workflows WHERE plan = 'pay'"),
         None
     );
 }
 
-/// B1 (hs-d573): the open Job is a draft while a draft of its PR remains, and queued (with its fingerprint) once none does.
+/// B1 (hs-d573): the open Job is a draft while a draft of its Workflow remains, and queued (with its fingerprint) once none does.
 #[test]
 fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it_when_none_does() {
     let mut fx = Fx::with_plan("");
@@ -237,14 +237,14 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
     assert_eq!(fx.count("job-added"), 1);
 }
 
-/// B1: one PR with a draft gets a draft open Job, one without gets a queued one; later ticks change nothing.
+/// B1: one Workflow with a draft gets a draft open Job, one without gets a queued one; later ticks change nothing.
 #[test]
 fn e4_queues_the_open_job_at_once_when_its_pr_has_no_draft_and_adds_no_second_to_a_draft_one() {
     let mut fx = Fx::with_plan("");
     add_merged_api(&mut fx);
     add_draft(&mut fx, "later");
-    add_web_pr(&mut fx);
-    // A running Job keeps E3 from starting the open Job of PR web, and is no draft.
+    add_web_workflow(&mut fx);
+    // A running Job keeps E3 from starting the open Job of Workflow web, and is no draft.
     fx.add_job_in(
         "web",
         "ui",
@@ -261,7 +261,7 @@ fn e4_queues_the_open_job_at_once_when_its_pr_has_no_draft_and_adds_no_second_to
     assert_eq!(fx.count("job-added"), 2);
 }
 
-/// A6 (hs-d573): nothing moves a queued open Job back to draft when a draft is added to its PR later.
+/// A6 (hs-d573): nothing moves a queued open Job back to draft when a draft is added to its Workflow later.
 #[test]
 fn e4_leaves_a_queued_open_job_queued_when_a_draft_is_added_to_its_pr_later() {
     let mut fx = Fx::with_plan("");
@@ -290,27 +290,27 @@ fn e4_gives_the_open_job_the_tier_open_tier_names() {
     );
 }
 
-/// Only a PR that is `dispatch`, of a Plan that is not archived, gets one.
+/// Only a Workflow that is `dispatch`, of a Plan that is not archived, gets one.
 #[test]
 fn e4_adds_no_open_job_to_a_waiting_pr_or_to_a_pr_of_an_archived_plan() {
-    // A PR that is still `waiting`, beside the PR that is `dispatch`.
+    // A Workflow that is still `waiting`, beside the Workflow that is `dispatch`.
     let mut waiting = Fx::with_plan("");
     add_draft(&mut waiting, "later");
     let repo = waiting.engine.home.root().join("repo");
     waiting.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
            VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', 'Show the receipt', 'config', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
+         INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', 'web', 'repo');",
         repo.display()
     ));
     ticks(&mut waiting, 4);
     assert_eq!(jobs_of_kind(&mut waiting, "open").len(), 1);
     assert_eq!(
-        waiting.query::<String>("SELECT pr FROM jobs WHERE kind = 'open'"),
+        waiting.query::<String>("SELECT workflow FROM jobs WHERE kind = 'open'"),
         "repo"
     );
 
-    // The Plan is archived: its dispatch PR gets none.
+    // The Plan is archived: its dispatch Workflow gets none.
     let mut archived = Fx::with_plan("");
     add_merged_api(&mut archived);
     archived.fixture("UPDATE plans SET archived_at = 't' WHERE id = 'pay';");
@@ -321,8 +321,8 @@ fn e4_adds_no_open_job_to_a_waiting_pr_or_to_a_pr_of_an_archived_plan() {
     );
 }
 
-/// A PR that has an open Job `queued` or `failed` gets no second one (a `failed` one waits for the Lead: `job retry`, or `job cancel`).
-/// PR `web`, which has none, gets its own in the same ticks: the engine has looked at both.
+/// A Workflow that has an open Job `queued` or `failed` gets no second one (a `failed` one waits for the Lead: `job retry`, or `job cancel`).
+/// Workflow `web`, which has none, gets its own in the same ticks: the engine has looked at both.
 #[test]
 fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
     for then in [
@@ -333,7 +333,7 @@ fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
         add_merged_api(&mut fx);
         add_draft(&mut fx, "later");
         add_cpd_job(&mut fx, "open-repo", "open", then);
-        add_web_pr(&mut fx);
+        add_web_workflow(&mut fx);
         fx.add_job_in("web", "ui", &[], &merged("ui"));
         add_draft_in(&mut fx, "web", "later-web");
 
@@ -347,12 +347,12 @@ fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
         assert_eq!(
             fx.count("job-added"),
             1,
-            "{then:?}: only PR web's was added"
+            "{then:?}: only Workflow web's was added"
         );
     }
 }
 
-/// A `merged` open Job on a PR that is still `dispatch` (its merge died before it opened the pull request, §7.4 R) counts for nothing:
+/// A `merged` open Job on a Workflow that is still `dispatch` (its merge died before it opened the pull request, §7.4 R) counts for nothing:
 /// the next tick adds a fresh one, `open-repo-2`. Only a `merged` one: a `cancelled` one is the Lead's and stands (next test).
 #[test]
 fn e4_adds_a_fresh_open_job_after_a_merged_one_on_a_pr_still_dispatch() {
@@ -370,9 +370,9 @@ fn e4_adds_a_fresh_open_job_after_a_merged_one_on_a_pr_still_dispatch() {
     assert_eq!(fx.count("job-added"), 1);
 }
 
-/// The Lead's cancel of a PR's `open` Job stands (§3.7 E4, hs-d301): the PR stays `dispatch` and no `open-repo-2` follows, over several
+/// The Lead's cancel of a Workflow's `open` Job stands (§3.7 E4, hs-d301): the Workflow stays `dispatch` and no `open-repo-2` follows, over several
 /// ticks and across an engine restart. Seen: Plan ui-design's `open-proto` was cancelled and `open-proto-2` came four seconds later.
-/// PR `web`, which has none, gets `open-web`: the engine has looked at both.
+/// Workflow `web`, which has none, gets `open-web`: the engine has looked at both.
 #[test]
 fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
     let mut fx = Fx::with_plan("");
@@ -383,7 +383,7 @@ fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
         "open",
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'never to be opened', cancel_requested_at = 't' WHERE key = 'open-repo';",
     );
-    add_web_pr(&mut fx);
+    add_web_workflow(&mut fx);
     add_draft_in(&mut fx, "web", "later-web");
 
     for _ in 0..2 {
@@ -397,15 +397,15 @@ fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
         jobs_of_kind(&mut fx, "open"),
         [pair("open-repo", "cancelled"), pair("open-web", "draft")]
     );
-    assert_eq!(fx.count("job-added"), 1, "only PR web's was added");
+    assert_eq!(fx.count("job-added"), 1, "only Workflow web's was added");
     assert_eq!(
-        fx.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"),
+        fx.query::<String>("SELECT status FROM workflows WHERE plan = 'pay' AND key = 'repo'"),
         "dispatch"
     );
 }
 
-/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never starts it, and the PR's open Job waits while one remains (§3.2
-/// Ready: the PR waits for the batch). Cancelling it frees the open Job: `the_open_job_is_ready_only_when_...` below.
+/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never starts it, and the Workflow's open Job waits while one remains (§3.2
+/// Ready: the Workflow waits for the batch). Cancelling it frees the open Job: `the_open_job_is_ready_only_when_...` below.
 #[test]
 fn e3_never_starts_a_draft_and_the_open_job_waits_while_one_remains() {
     let mut fx = Fx::with_plan("");
@@ -432,7 +432,7 @@ fn e3_never_starts_a_draft_and_the_open_job_waits_while_one_remains() {
     );
 }
 
-/// An open Job is Ready only when every other Job of its PR is `merged` or `cancelled` and one is `merged` (§3.2): a `draft`, a
+/// An open Job is Ready only when every other Job of its Workflow is `merged` or `cancelled` and one is `merged` (§3.2): a `draft`, a
 /// `queued`, a `running` or a `failed` Job keeps it back, and so do Jobs that are all `cancelled`.
 #[test]
 fn the_open_job_is_ready_only_when_every_other_job_is_merged_or_cancelled_and_one_is_merged() {
@@ -479,7 +479,7 @@ fn the_open_job_is_ready_only_when_every_other_job_is_merged_or_cancelled_and_on
     );
     assert_eq!(ready(&mut failed), []);
 
-    // No Job merged: a PR whose Jobs are all cancelled has nothing to open.
+    // No Job merged: a Workflow whose Jobs are all cancelled has nothing to open.
     let mut cancelled = Fx::with_plan("");
     cancelled.add_job("api", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'api';");
     for _ in 0..4 {

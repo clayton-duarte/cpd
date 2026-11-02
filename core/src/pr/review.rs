@@ -1,5 +1,5 @@
 //! `review submit` (commands.md §31.1; pro-d107, pro-d108, pro-d110): posts a GitHub review through `gh`, then, with
-//! `--slack`, queues the verdict's reaction (§21.9). It needs no Plan, Context or PR key and checks nothing of the
+//! `--slack`, queues the verdict's reaction (§21.9). It needs no Plan, Context or Workflow key and checks nothing of the
 //! review, and of the pull request only its head (`--head`, pro-d169): GitHub's own refusal is relayed.
 
 use std::path::PathBuf;
@@ -25,8 +25,8 @@ pub enum Command {
 #[derive(clap::Args, Debug)]
 pub struct SubmitArgs {
     /// The pull request: its URL, or owner/repo#n
-    #[arg(long, value_name = "url | owner/repo#n")]
-    pr: String,
+    #[arg(long = "pr", value_name = "url | owner/repo#n")]
+    workflow: String,
     /// The review's verdict: APPROVE or REQUEST_CHANGES
     #[arg(long, value_name = "APPROVE|REQUEST_CHANGES")]
     event: String,
@@ -104,7 +104,7 @@ fn parse_head(text: &str) -> Result<String, CpdError> {
 }
 
 fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
-    let pull = parse_pull(&args.pr)?;
+    let pull = parse_pull(&args.workflow)?;
     let emoji = match args.event.as_str() {
         "APPROVE" => "github-check-mark",
         "REQUEST_CHANGES" => "github-changes-requested",

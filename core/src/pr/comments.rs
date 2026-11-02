@@ -51,9 +51,9 @@ const COMMENT: &str = "id author { __typename login } body url createdAt";
 
 /// The GraphQL text reading `prs` (`owner/name`, number pairs): alias `p<i>` for the i-th. The caller has checked
 /// that each repo is `owner/name`.
-pub fn query(prs: &[(&str, i64)]) -> String {
+pub fn query(workflows: &[(&str, i64)]) -> String {
     let mut text = String::from("query { viewer { login } rateLimit { cost remaining resetAt }");
-    for (i, (repo, number)) in prs.iter().enumerate() {
+    for (i, (repo, number)) in workflows.iter().enumerate() {
         let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
         text.push_str(&format!(
             " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ id updatedAt \
@@ -206,7 +206,11 @@ fn failed(repo: &str, number: i64, why: &str) -> CpdError {
 
 /// The reads in `answer`, alias `p<i>` for the i-th pair of `prs`. An `errors` array, a missing alias, field or pull
 /// request, and more than 100 threads, comments or reviews (or comments of a thread) are `gh_failed`.
-pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<Read>, CpdError> {
+pub fn parse(
+    workflows: &[(&str, i64)],
+    answer: &str,
+    bots: &[String],
+) -> Result<Vec<Read>, CpdError> {
     let gh = |message: String| CpdError::new(ErrorCode::GhFailed, message);
     let answer: Answer = serde_json::from_str(answer)
         .map_err(|e| gh(format!("The comments read printed unexpected JSON: {e}.")))?;
@@ -220,8 +224,8 @@ pub fn parse(prs: &[(&str, i64)], answer: &str, bots: &[String]) -> Result<Vec<R
         .data
         .ok_or_else(|| gh("The comments read answered without data.".to_owned()))?;
     let me = data.viewer.login.clone();
-    let mut reads = Vec::with_capacity(prs.len());
-    for (i, (repo, number)) in prs.iter().enumerate() {
+    let mut reads = Vec::with_capacity(workflows.len());
+    for (i, (repo, number)) in workflows.iter().enumerate() {
         let (repo, number) = (*repo, *number);
         let pull = data
             .pulls

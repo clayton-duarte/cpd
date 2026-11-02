@@ -26,7 +26,7 @@ fn world(fx: &Fx) {
     .ok();
     let repo = fx.keyed_repo("api");
     fx.cpd(&[
-        "pr",
+        "workflow",
         "add",
         "api",
         "--repo",
@@ -52,7 +52,7 @@ fn world(fx: &Fx) {
         .ok();
     }
     fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');",
     );
 }

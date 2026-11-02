@@ -65,7 +65,7 @@ pub struct Merge {
 /// Driver step A8 (§7.4) for Attempt `attempt` of `plan`, which must be
 /// `merging`: steps 1–10, ending the Attempt in one transaction (§3.4). It
 /// takes no lock and runs no R first (hs-d243): the compare-and-swap of step
-/// 8, rule P and rule S keep concurrent merges of one PR apart.
+/// 8, rule P and rule S keep concurrent merges of one Workflow apart.
 ///
 /// An `Err` is an unexpected failure (git, the store) and leaves the Attempt
 /// `merging`; the driver then ends it as commands.md §6.4 says. After an
@@ -107,14 +107,14 @@ pub fn merge(
         catalog: ctx.catalog,
         retry_cap: ctx.config.retry_cap,
     };
-    let pr = crate::ids::PrKey::parse(target.pr_str()).map_err(|_| {
+    let workflow = crate::ids::WorkflowKey::parse(target.workflow_str()).map_err(|_| {
         CpdError::bad_row(format!(
-            "Job {} has the PR key {:?}",
+            "Job {} has the Workflow key {:?}",
             target.job,
-            target.pr_str()
+            target.workflow_str()
         ))
     })?;
-    // Step 10, and every other end. An `open` Job's merge writes the PR's rows in the same transaction (§7.7).
+    // Step 10, and every other end. An `open` Job's merge writes the Workflow's rows in the same transaction (§7.7).
     store.write(ctx.source, |tx| {
         let pull = pulled.as_ref().map(|p| ledger::Pull {
             number: p.number(),
@@ -130,7 +130,7 @@ pub fn merge(
             pull,
         )?;
         if let Some(pulled) = &pulled {
-            crate::pr::record_pull(tx, plan, &pr, pulled)?;
+            crate::pr::record_pull(tx, plan, &workflow, pulled)?;
         }
         if let Some(e) = &stale {
             ledger::append_error(
@@ -194,7 +194,7 @@ fn steps(
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
     let cpd_kind = is_cpd_kind(target);
-    // A linear Attempt's branch is the PR's Lead Branch (hs-d680, A5): its merge skips the rebase and fast-forward.
+    // A linear Attempt's branch is the Workflow's Lead Branch (hs-d680, A5): its merge skips the rebase and fast-forward.
     let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
     // 0. Branch check (engine-W1): the Attempt branch is still what `attempt submit` checked. A linear Attempt's
     // branch is the Lead Branch; only a rewrite that drops the submitted commit is tampering.
@@ -271,15 +271,15 @@ fn steps(
         // 3. Removed by hs-d243: the merge never works in the Lead worktree, and rule S
         // (step 9) neither overwrites local changes nor fails the Job for them.
         // 4. Tamper check of old...<attempt branch>.
-        // A stacked PR's base is its base PR's Lead Branch, and its check reads the root base too (§7.5).
+        // A stacked Workflow's base is its base Workflow's Lead Branch, and its check reads the root base too (§7.5).
         let base_refs: Vec<String> = store.read(|conn| {
-            let (pr_repo, pr_base): (String, String) = conn.query_row(
+            let (workflow_repo, workflow_base): (String, String) = conn.query_row(
                 "SELECT r.repo, r.base FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-                   JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
+                   JOIN workflows r ON r.plan = j.plan AND r.key = j.workflow WHERE a.plan = ?1 AND a.id = ?2",
                 [target.plan.as_str(), target.id.to_string().as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
-            crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
+            crate::pr::start::tamper_bases(conn, repo, &workflow_repo, &workflow_base)
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
         let policy = store
@@ -410,11 +410,12 @@ fn steps(
         // runs first, so nothing is pushed or opened when it refuses.
         if cpd_kind {
             if target.kind == "open" {
-                let (pr, ..) = pr_of_job(store, target)?;
-                store
-                    .read(|conn| crate::pr::jira_required_of(conn, home, &target.plan, &pr.key))?;
+                let (workflow, ..) = workflow_of_job(store, target)?;
+                store.read(|conn| {
+                    crate::pr::jira_required_of(conn, home, &target.plan, &workflow.key)
+                })?;
             }
-            let pr = pr_row(store, target)?;
+            let workflow = workflow_row(store, target)?;
             let again = format!("cpd attempt submit {}", target.id);
             match store.read(|conn| {
                 crate::pr::base_check(
@@ -422,7 +423,7 @@ fn steps(
                     &target.plan,
                     repo,
                     &target.worktree,
-                    &pr,
+                    &workflow,
                     submitted,
                     &again,
                 )
@@ -449,7 +450,7 @@ fn steps(
             return Ok(Stepped::ends(end));
         }
         if cpd_kind
-            && policy.gate.pr == Gate::Local
+            && policy.gate.workflow == Gate::Local
             && let Some(end) = run_gate(
                 home,
                 config,
@@ -768,56 +769,57 @@ fn run_gate(
     }
 }
 
-/// The PR row of the Attempt's Job: all the base check and the merged-on-GitHub check need.
-fn pr_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::PrRow, CpdError> {
+/// The Workflow row of the Attempt's Job: all the base check and the merged-on-GitHub check need.
+fn workflow_row(store: &mut Store, target: &Attempt) -> Result<crate::plan::WorkflowRow, CpdError> {
     store.read(|conn| {
-        let prs = crate::plan::fingerprint::load_prs(conn, &target.plan)?;
-        prs.into_iter()
-            .find(|p| p.key.as_str() == target.pr_str())
+        let workflows = crate::plan::fingerprint::load_workflows(conn, &target.plan)?;
+        workflows
+            .into_iter()
+            .find(|p| p.key.as_str() == target.workflow_str())
             .ok_or_else(|| {
                 CpdError::bad_row(format!(
-                    "Plan {} has no PR {}",
+                    "Plan {} has no Workflow {}",
                     target.plan,
-                    target.pr_str()
+                    target.workflow_str()
                 ))
             })
     })
 }
 
-/// The PR of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
-fn pr_of_job(
+/// The Workflow of the Attempt's Job with its stored title and description, the pull request's body (§7.6 `pr open` step 3).
+fn workflow_of_job(
     store: &mut Store,
     target: &Attempt,
-) -> Result<(crate::plan::PrRow, String, Option<String>), CpdError> {
-    let pr = pr_row(store, target)?;
-    let title = pr.title.clone().ok_or_else(|| {
+) -> Result<(crate::plan::WorkflowRow, String, Option<String>), CpdError> {
+    let workflow = workflow_row(store, target)?;
+    let title = workflow.title.clone().ok_or_else(|| {
         CpdError::new(
-            ErrorCode::PrTitleRequired,
-            format!("PR {} of Plan {} has no title: run cpd pr edit {} --title \"<text>\" (1-72 characters).", pr.key, target.plan, pr.key),
+            ErrorCode::WorkflowTitleRequired,
+            format!("Workflow {} of Plan {} has no title: run cpd workflow edit {} --title \"<text>\" (1-72 characters).", workflow.key, target.plan, workflow.key),
         )
         .with("plan", target.plan.as_str())
-        .with("pr", pr.key.as_str())
+        .with("pr", workflow.key.as_str())
     })?;
     let description =
-        store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &pr.key))?;
-    Ok((pr, title, description))
+        store.read(|conn| crate::pr::stored_description_of(conn, &target.plan, &workflow.key))?;
+    Ok((workflow, title, description))
 }
 
 /// The refusals of an `open` or `update` Job's merge that end the Attempt `gate_error` instead of leaving it `merging`.
 fn is_refusal(code: ErrorCode) -> bool {
     matches!(
         code,
-        ErrorCode::PrTitleRequired
+        ErrorCode::WorkflowTitleRequired
             | ErrorCode::DescriptionRequired
             | ErrorCode::JiraRequired
             | ErrorCode::BaseNotFound
     )
 }
 
-/// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
+/// Whether the newest pull request of the Workflow's Lead Branch is already merged on GitHub: the `open` Job adopts it at the merge (§7.4 step 8b; §7.7).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
-    let pr = pr_row(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, &pr)
+    let workflow = workflow_row(store, target)?;
+    crate::pr::is_merged_on_github(&target.lead_worktree, &workflow)
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
@@ -826,17 +828,17 @@ fn open_pull_request(
     config: &Config,
     target: &Attempt,
 ) -> Result<crate::pr::Pulled, CpdError> {
-    let (pr, title, description) = pr_of_job(store, target)?;
+    let (workflow, title, description) = workflow_of_job(store, target)?;
     crate::pr::pull_request(
         &target.lead_worktree,
-        &pr,
+        &workflow,
         &title,
         description.as_deref(),
         &config.inbox.bot_reviewers,
     )
 }
 
-/// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR that has not opened unless the Job is an `open` or
+/// Step 8's and R2's push of `sha`: to the Workflow's remote branch, and skipped for an adopted Workflow that has not opened unless the Job is an `open` or
 /// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
 pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
     if target.adopted && !is_cpd_kind(target) {

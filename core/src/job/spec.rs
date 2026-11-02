@@ -60,11 +60,11 @@ impl Spec {
         Ok(())
     }
 
-    /// The Spec names no primary checkout of any PR of its Plan (commands.md §5.1 "A Spec names no primary
-    /// checkout", §5.2): every string is searched for each `roots` entry's root (a PR key and its repo path),
+    /// The Spec names no primary checkout of any Workflow of its Plan (commands.md §5.1 "A Spec names no primary
+    /// checkout", §5.2): every string is searched for each `roots` entry's root (a Workflow key and its repo path),
     /// or, when that root is inside `home`, its `~`, `$HOME` and `${HOME}` forms. A form matches where it ends
     /// at the end of the string or before a character outside `[A-Za-z0-9._-]`; the first match in field order
-    /// (goal, context, touches, acceptance, out_of_scope, tests, test_files) then PR order is `spec_invalid`
+    /// (goal, context, touches, acceptance, out_of_scope, tests, test_files) then Workflow order is `spec_invalid`
     /// with `details {path, primary, pr}`. Pure: no I/O, so unit tests reach it.
     pub fn check_primary_roots(
         &self,
@@ -96,7 +96,7 @@ impl Spec {
                     return Err(invalid(
                         path,
                         format!(
-                            "the Spec names {primary}, the primary checkout of the repo of PR {key}; a Worker works in its own worktree; write paths relative to the repo, and to read the latest main say `git fetch origin` then `git show origin/main:<path>`"
+                            "the Spec names {primary}, the primary checkout of the repo of Workflow {key}; a Worker works in its own worktree; write paths relative to the repo, and to read the latest main say `git fetch origin` then `git show origin/main:<path>`"
                         ),
                     )
                     .with("primary", primary)

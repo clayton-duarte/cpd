@@ -124,7 +124,7 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
                    VALUES ('lead-{plan}', 'lead', '{context}', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                    VALUES ('{plan}', '{context}', 'The {plan} plan', 'grounding', 'lead-{plan}', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('{plan}', 'r', '/r', 'main', 'waiting', 'cpd/{plan}', cpd_txn(), 't');"
             ))?;
             Ok(())
@@ -1142,8 +1142,8 @@ fn show_lists_the_repos_of_each_plans_prs_from_the_database() {
     store
         .write("fixture", |tx| {
             tx.execute_batch(
-                "UPDATE prs SET repo = '/r/b', key = 'b' WHERE plan = 'two';
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                "UPDATE workflows SET repo = '/r/b', key = 'b' WHERE plan = 'two';
+                 INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                    VALUES ('two', 'a', '/r/a', 'main', 'waiting', 'cpd/two/a', cpd_txn(), 't'),
                           ('two', 'c', '/r/b', 'main', 'waiting', 'cpd/two/c', cpd_txn(), 't'),
                           ('two', 'd', '/r/dropped', 'main', 'cancelled', 'cpd/two/d', cpd_txn(), 't');",
@@ -1587,7 +1587,7 @@ fn archivable(fx: &Fx) {
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
-         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, cancel_reason, cancel_requested_at, appended, created_txn, created_at)
+         INSERT INTO jobs (plan, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, cancel_reason, cancel_requested_at, appended, created_txn, created_at)
            VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 'a fixture', 't', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
@@ -1701,7 +1701,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     let fingerprint = "a".repeat(64);
     let blockers = [
         ("job", format!(
-                "INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, fingerprint, appended, created_txn, created_at)
+                "INSERT INTO jobs (plan, key, workflow, title, tier, goal, context, touches, acceptance, out_of_scope, status, fingerprint, appended, created_txn, created_at)
                  VALUES ('pay', 'blk', 'r', 'Blk', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', '{fingerprint}', 0, 1, 't')"
             )),
         (

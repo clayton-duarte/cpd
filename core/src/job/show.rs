@@ -75,8 +75,8 @@ pub(crate) fn show_in(env: &mut Env, args: ShowArgs) -> Result<Output, CpdError>
                 held.push(json!({"resource": crate::resource::WORKERS, "scope": "host", "slots": workers.slots, "holders": workers.holders}));
             }
             if let Some(wanted) = &wanted {
-                let key = crate::ids::PrKey::parse(&wanted.pr)?;
-                let policy = crate::pr::policy_of_pr(conn, &home, &plan, &key)?;
+                let key = crate::ids::WorkflowKey::parse(&wanted.workflow)?;
+                let policy = crate::pr::policy_of_workflow(conn, &home, &plan, &key)?;
                 for pool in crate::resource::pools_of(&policy.resources, &wanted.owner, &wanted.repo) {
                     if !wanted.names.iter().any(|n| n == pool.name()) {
                         continue;

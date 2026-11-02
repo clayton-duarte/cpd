@@ -61,21 +61,21 @@ export type PlanEvent = { event: number; at: string; plan: string; text: string;
 export type PlanKindEvent = PlanEvent & { kind: string; data: Record<string, unknown> };
 /** An unread board post, as `cpd board take` prints it: `from` is the sending Session, null for the User. */
 export type BoardPost = { at: string; from: string | null; text: string };
-/** A `pr-opened` Event of a Plan. */
-export type PrOpened = { event: number; plan: string; pr: string; number: number | null; url: string };
+/** A `pr-opened` Event of a Plan: its Workflow key, its pull request number and URL. */
+export type PrOpened = { event: number; plan: string; workflow: string; number: number | null; url: string };
 /** An `error` Event: its Event id and `data.code`. */
 export type ErrorEvent = { event: number; code: string };
 
 /** A plan-level explore Job of `context pending`, reduced to what the digest needs. */
 export type PendingJob = { key: string; kind: string; status: string; tier: string | null; title: string };
-/** A Job of a PR of `context pending`. */
+/** A Job of a Workflow of `context pending`. */
 export type PendingPrJob = { key: string; status: string; title: string };
-/** A PR of `context pending` that is not merged or cancelled. */
+/** A Workflow of `context pending` that is not merged or cancelled. */
 export type PendingPr = { key: string; status: string; number: number | null; jobs: PendingPrJob[] };
 /** An active Plan of `context pending`. */
-export type PendingPlan = { id: string; phase: string; prs: PendingPr[]; jobs: PendingJob[] };
+export type PendingPlan = { id: string; phase: string; workflows: PendingPr[]; jobs: PendingJob[] };
 
-/** At most this many Jobs are listed under one PR of `Pending work:`; the rest are named by a count. */
+/** At most this many Jobs are listed under one Workflow of `Pending work:`; the rest are named by a count. */
 export const MAX_PENDING_JOBS = 10;
 
 /** A Context record as `context show` prints it, reduced to what the update needs. */
@@ -105,14 +105,14 @@ export function parsePlanEvents(out: Record<string, unknown>): PlanKindEvent[] {
   });
 }
 
-/** Parse `cpd events list --kind pr-opened`: each Event's id, Plan, `data.pr`, `data.number` and `data.url`. */
+/** Parse `cpd events list --kind pr-opened`: each Event's id, Plan, `data.workflow`, `data.number` and `data.url`. */
 export function parsePrOpened(out: Record<string, unknown>): PrOpened[] {
   if (!Array.isArray(out.events)) throw bad("events list", "`events` is not a list");
   return out.events.map((e) => {
-    if (!isObject(e) || !Number.isSafeInteger(e.id) || typeof e.plan !== "string" || !isObject(e.data) || typeof e.data.pr !== "string" || typeof e.data.url !== "string") {
-      throw bad("events list", "a pr-opened Event lacks id, plan, data.pr or data.url");
+    if (!isObject(e) || !Number.isSafeInteger(e.id) || typeof e.plan !== "string" || !isObject(e.data) || typeof e.data.workflow !== "string" || typeof e.data.url !== "string") {
+      throw bad("events list", "a pr-opened Event lacks id, plan, data.workflow or data.url");
     }
-    return { event: e.id as number, plan: e.plan, pr: e.data.pr, number: Number.isSafeInteger(e.data.number) ? (e.data.number as number) : null, url: e.data.url };
+    return { event: e.id as number, plan: e.plan, workflow: e.data.workflow, number: Number.isSafeInteger(e.data.number) ? (e.data.number as number) : null, url: e.data.url };
   });
 }
 
@@ -134,12 +134,12 @@ export function parseTaken(out: Record<string, unknown>): BoardPost[] {
   });
 }
 
-/** Parse `cpd context pending`: each active Plan's id and phase, its plan-level explore Jobs and its PRs with their Jobs' key, status and title. */
+/** Parse `cpd context pending`: each active Plan's id and phase, its plan-level explore Jobs and its Workflows with their Jobs' key, status and title. */
 export function parsePending(out: Record<string, unknown>): PendingPlan[] {
   const what = "context pending";
   if (!Array.isArray(out.plans)) throw bad(what, "`plans` is not a list");
   return out.plans.map((p) => {
-    if (!isObject(p) || typeof p.id !== "string" || typeof p.phase !== "string" || !Array.isArray(p.prs) || !Array.isArray(p.jobs)) throw bad(what, "a Plan lacks id, phase, prs or jobs");
+    if (!isObject(p) || typeof p.id !== "string" || typeof p.phase !== "string" || !Array.isArray(p.workflows) || !Array.isArray(p.jobs)) throw bad(what, "a Plan lacks id, phase, workflows or jobs");
     const plan = p.id;
     return {
       id: plan,
@@ -148,15 +148,15 @@ export function parsePending(out: Record<string, unknown>): PendingPlan[] {
         if (!isObject(j) || typeof j.key !== "string" || typeof j.kind !== "string" || typeof j.status !== "string" || typeof j.title !== "string") throw bad(what, `Plan ${plan}: a Job lacks key, kind, status or title`);
         return { key: j.key, kind: j.kind, status: j.status, tier: typeof j.tier === "string" ? j.tier : null, title: j.title };
       }),
-      prs: p.prs.map((r) => {
-        if (!isObject(r) || typeof r.key !== "string" || typeof r.status !== "string" || !Array.isArray(r.jobs)) throw bad(what, `Plan ${plan}: a PR lacks key, status or jobs`);
-        if (r.pull_request !== null && !(isObject(r.pull_request) && Number.isSafeInteger(r.pull_request.number))) throw bad(what, `Plan ${plan}, PR ${r.key}: pull_request is neither null nor an object with a number`);
+      workflows: p.workflows.map((r) => {
+        if (!isObject(r) || typeof r.key !== "string" || typeof r.status !== "string" || !Array.isArray(r.jobs)) throw bad(what, `Plan ${plan}: a Workflow lacks key, status or jobs`);
+        if (r.pull_request !== null && !(isObject(r.pull_request) && Number.isSafeInteger(r.pull_request.number))) throw bad(what, `Plan ${plan}, Workflow ${r.key}: pull_request is neither null nor an object with a number`);
         return {
           key: r.key,
           status: r.status,
           number: isObject(r.pull_request) ? (r.pull_request.number as number) : null,
           jobs: r.jobs.map((j) => {
-            if (!isObject(j) || typeof j.key !== "string" || typeof j.status !== "string" || typeof j.title !== "string") throw bad(what, `Plan ${plan}, PR ${r.key}: a Job lacks key, status or title`);
+            if (!isObject(j) || typeof j.key !== "string" || typeof j.status !== "string" || typeof j.title !== "string") throw bad(what, `Plan ${plan}, Workflow ${r.key}: a Job lacks key, status or title`);
             return { key: j.key, status: j.status, title: j.title };
           }),
         };
@@ -209,10 +209,10 @@ const PLAN_COUNTS: readonly { kind: string; say: (events: PlanKindEvent[]) => st
     kind: "pr-opened",
     say: (e) => {
       const numbers = e.flatMap((x) => (Number.isSafeInteger(x.data.number) ? [`#${x.data.number}`] : []));
-      return `${plural(e.length, "PR", "PRs")} opened${numbers.length > 0 ? ` (${numbers.join(", ")})` : ""}`;
+      return `${plural(e.length, "pull request", "pull requests")} opened${numbers.length > 0 ? ` (${numbers.join(", ")})` : ""}`;
     },
   },
-  { kind: "pr-merged", say: (e) => `${plural(e.length, "PR", "PRs")} merged` },
+  { kind: "pr-merged", say: (e) => `${plural(e.length, "pull request", "pull requests")} merged` },
   { kind: "job-failed", say: (e) => `${plural(e.length, "Job", "Jobs")} failed` },
   { kind: "plan-done", say: () => "done" },
 ];
@@ -229,7 +229,7 @@ function plansSection(plans: readonly PlanEvent[]): string[] {
   ];
 }
 
-/** The `Pending work:` section: one line per active Plan with plan-level Jobs or a PR, the `jobs <counts>` segment first, then one per PR. Empty when no Plan has work. */
+/** The `Pending work:` section: one line per active Plan with plan-level Jobs or a Workflow, the `jobs <counts>` segment first, then one per Workflow. Empty when no Plan has work. */
 export function pendingSection(plans: readonly PendingPlan[]): string[] {
   const statuses = ["running", "queued", "failed", "draft", "merged"];
   const counts = (jobs: readonly { status: string }[]) => statuses.flatMap((status) => {
@@ -239,9 +239,9 @@ export function pendingSection(plans: readonly PendingPlan[]): string[] {
   const lines: string[] = [];
   for (const p of plans) {
     const segments = p.jobs.length === 0 ? [] : [`jobs ${counts(p.jobs).join(", ")}`];
-    for (const pr of p.prs) {
-      const parts = counts(pr.jobs);
-      segments.push(`PR ${pr.key} ${parts.length > 0 ? parts.join(", ") : `${pr.status}${pr.number !== null ? ` #${pr.number}` : ""}`}`);
+    for (const w of p.workflows) {
+      const parts = counts(w.jobs);
+      segments.push(`Workflow ${w.key}${parts.length > 0 ? ` ${parts.join(", ")}` : `: pull request ${w.status}${w.number !== null ? ` #${w.number}` : ""}`}`);
     }
     if (segments.length === 0) continue;
     lines.push(`- ${p.id} (${p.phase}): ${segments.join("; ")}`);
@@ -269,27 +269,27 @@ const header = (context: string, parts: readonly (readonly [number, string, stri
   `Context ${context}: ${parts.filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(" · ")}`;
 
 /**
- * §15.7, Leads: the short message. New decision records by other Sessions (id and first sentence), the board posts taken in full, the Plan's opened PRs.
- * Undefined when none. `details.event` is the highest Event id read (records and PRs, own and non-decision included; 0 when none).
+ * §15.7, Leads: the short message. New decision records by other Sessions (id and first sentence), the board posts taken in full, the Plan's Workflows whose pull request opened.
+ * Undefined when none. `details.event` is the highest Event id read (records and Workflows, own and non-decision included; 0 when none).
  */
-export function leadUpdate(context: string, sessionId: string, events: readonly RecordEvent[], records: readonly ContextRecord[], prs: readonly PrOpened[], posts: readonly BoardPost[], standing: readonly string[] = []): Message | undefined {
+export function leadUpdate(context: string, sessionId: string, events: readonly RecordEvent[], records: readonly ContextRecord[], workflows: readonly PrOpened[], posts: readonly BoardPost[], standing: readonly string[] = []): Message | undefined {
   const wanted = new Set(events.map((e) => e.record));
   const decisions = records.filter((r) => wanted.has(r.id) && r.by !== sessionId && r.kind === "decision").sort((a, b) => a.seq - b.seq);
-  if (decisions.length === 0 && prs.length === 0 && posts.length === 0 && standing.length === 0) return undefined;
+  if (decisions.length === 0 && workflows.length === 0 && posts.length === 0 && standing.length === 0) return undefined;
   const sections: string[][] = [
     decisions.map((r) => `- ${r.id}: ${firstSentence(r.text)}`),
     boardSection(posts),
-    prs.length === 0 ? [] : ["PRs:", ...prs.map((p) => `- PR ${p.pr} opened: ${p.url}`)],
+    workflows.length === 0 ? [] : ["Workflows:", ...workflows.map((p) => `- Workflow ${p.workflow}: pull request opened ${p.url}`)],
     [...standing],
   ].filter((s) => s.length > 0);
-  const counts = [[decisions.length, "decision", "decisions"], [posts.length, "board post", "board posts"], [prs.length, "PR opened", "PRs opened"]] as const;
+  const counts = [[decisions.length, "decision", "decisions"], [posts.length, "board post", "board posts"], [workflows.length, "pull request opened", "pull requests opened"]] as const;
   const summary = counts.every(([n]) => n === 0) ? CONTEXT_TYPE : `${CONTEXT_TYPE}: ${counts.filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(" · ")}`;
   const onlyStanding = counts.every(([n]) => n === 0);
   return {
     customType: CONTEXT_TYPE,
     content: [...(onlyStanding ? [] : [header(context, counts)]), ...sections.flatMap((s, i) => (i === 0 && (decisions.length > 0 || onlyStanding) ? s : ["", ...s]))].join("\n"),
     display: true,
-    details: { event: Math.max(0, ...events.map((e) => e.event), ...prs.map((p) => p.event)), delivered_to: sessionId, records: decisions.map((r) => r.id), summary },
+    details: { event: Math.max(0, ...events.map((e) => e.event), ...workflows.map((p) => p.event)), delivered_to: sessionId, records: decisions.map((r) => r.id), summary },
   };
 }
 
@@ -326,19 +326,19 @@ export function contextUpdate(context: string, sessionId: string, events: readon
       delivered_to: sessionId,
       records: fresh.map((r) => r.id),
       plan_events: plans.length,
-      plans_pending: pending.filter((p) => p.prs.length > 0 || p.jobs.length > 0).length,
+      plans_pending: pending.filter((p) => p.workflows.length > 0 || p.jobs.length > 0).length,
       ...optional("posts", posts.length),
       ...optional("errors", errors.length),
     },
   };
 }
 
-/** The Lead's standing lines for the PRs of `cpd plan show` whose pull request closed without a merge (`closed_unmerged`): one per PR, derived each turn, never consumed. */
+/** The Lead's standing lines for the Workflows of `cpd plan show` whose pull request closed without a merge (`closed_unmerged`): one per Workflow, derived each turn, never consumed. */
 export function closedPrLines(planShow: unknown): string[] {
-  const prs = isObject(planShow) && Array.isArray(planShow.prs) ? planShow.prs : [];
-  return prs.flatMap((p) => {
+  const workflows = isObject(planShow) && Array.isArray(planShow.workflows) ? planShow.workflows : [];
+  return workflows.flatMap((p) => {
     if (!isObject(p) || p.closed_unmerged !== true || !isObject(p.pull_request)) return [];
     const { number, url } = p.pull_request;
-    return [`PR ${p.key}: its pull request #${number} (${url}) is closed without a merge and cpd still lists the PR as open. Ask the User, or cpd pr cancel --pr ${p.key}.`];
+    return [`Workflow ${p.key}: its pull request #${number} (${url}) is closed without a merge and cpd still lists the Workflow as open. Ask the User, or cpd workflow cancel --workflow ${p.key}.`];
   });
 }

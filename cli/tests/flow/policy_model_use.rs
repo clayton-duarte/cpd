@@ -134,7 +134,7 @@ fn two_repos() -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'plan', 'lead-pl', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/', 'O3', 'stopped', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
+         INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
            VALUES ('pl', 'r1', '/r1', 'r1', 'main', 'waiting', 'cpd/pl/r1', cpd_txn(), 't'),
                   ('pl', 'r2', '/r2', 'r2', 'main', 'waiting', 'cpd/pl/r2', cpd_txn(), 't');",
     );
@@ -155,7 +155,7 @@ fn add(fx: &Fx, pr: &str, tier: &str) -> common::Run {
         tier,
         "--spec",
         spec.to_str().unwrap(),
-        "--pr",
+        "--workflow",
         pr,
         "--plan",
         "pl",
@@ -470,7 +470,7 @@ fn c5_the_distiller_of_a_context_with_no_owner_runs_on_the_machine_layers_g_ref(
 fn h3_job(live: &Live) {
     fixture(
         &live.fx.env,
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'repo', 'hi', 'Title of hi', 'H3', 'Do hi.', 'Because.', '[\"hi.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');",
     );
     let plan = PlanId::parse(PLAN).unwrap();

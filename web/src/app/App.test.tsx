@@ -15,8 +15,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { App } from "./App";
+import { relativeAge } from "../components/inbox-rail";
 import type { LiveApi } from "../api/live";
 import type { LiveSession } from "../api/live-server";
+import type { InboxItem } from "../api/readmodel";
 import type { SnapshotFrame } from "../fold/fold";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -106,6 +108,14 @@ async function renderShell(): Promise<void> {
   });
 }
 
+/** Renders the shell with an injected live adapter: no network, no EventSource, no socket. */
+async function renderLive(api: LiveApi): Promise<void> {
+  await act(async () => {
+    root.render(<App token="t0k" live={api} />);
+    await flush();
+  });
+}
+
 /** The three panels in document order: Context, Chat, Inbox. */
 function columns(): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>("[data-panel]")];
@@ -156,12 +166,56 @@ test("the Context column renders the sidebar-03 block", async () => {
   expect(columns_[0]!.querySelector('[data-slot="sidebar"]')).not.toBeNull();
 });
 
-test("the Inbox column renders its placeholder", async () => {
-  await renderShell();
-
+/** The Inbox rail: the shell's right column. */
+function inboxRail(): HTMLElement {
   const columns_ = columns();
   expect(columns_).toHaveLength(3);
-  expect(columns_[2]!.textContent).toContain("The Inbox lands here.");
+  return columns_[2]!;
+}
+
+test("the Inbox rail's header carries the title and no search input, and no Unreads switch", async () => {
+  await renderShell();
+
+  const rail = inboxRail();
+  // The header is the title alone: the `Inbox` element, not the placeholder's sentence.
+  const title = [...rail.querySelectorAll<HTMLElement>("*")].find(
+    (el) => el.textContent?.trim() === "Inbox",
+  );
+  expect(title).toBeDefined();
+
+  // The block's `SidebarInput` (`Type to search...`) is deliberately not vendored: no input at all.
+  expect(rail.querySelectorAll("input")).toHaveLength(0);
+  expect(rail.querySelector('[data-slot="sidebar-input"]')).toBeNull();
+
+  // The block's `Unreads` switch is deliberately not vendored.
+  expect(rail.textContent).not.toContain("Unreads");
+});
+
+test("the Inbox rail has no icon column", async () => {
+  const { api } = fakeLive([], [inboxItem({ label: "Curate the docs", age_seconds: 5 })]);
+  await renderLive(api);
+
+  const rail = inboxRail();
+  // The rail is the block's second sidebar (its mail list), not the placeholder.
+  expect(rail.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  expect(rail.textContent).toContain("Curate the docs");
+  // The block's first sidebar — its icon column (Drafts, Sent, Junk, Trash) — is not vendored.
+  for (const label of ["Drafts", "Sent", "Junk", "Trash"]) {
+    expect(rail.textContent).not.toContain(label);
+  }
+});
+
+test("the Context rail cannot be collapsed: it renders no rail toggle", async () => {
+  await renderShell();
+
+  // The Context column and its rail are still there...
+  const columns_ = columns();
+  expect(columns_).toHaveLength(3);
+  expect(columns_[0]!.querySelector('[data-slot="sidebar"]')).not.toBeNull();
+  // ...but sidebar-03's `SidebarRail` — the 4px strip that collapsed the rail on a stray click —
+  // is not, in either rail.
+  expect(container.querySelector('[data-slot="sidebar-rail"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Toggle Sidebar"]')).toBeNull();
 });
 
 test("the Context column defaults to 20rem and a double-click restores it", async () => {
@@ -192,17 +246,25 @@ test("the Context column defaults to 20rem and a double-click restores it", asyn
 /** A Session as the tree and Chat now see it: `LiveSession` plus `context` and `name`. */
 type TreeSession = LiveSession & { context: string; name?: string };
 
-/** A fake LiveApi: the sessions it lists, the ids App subscribed to, and the frame emitter. */
-function fakeLive(sessions: readonly TreeSession[]): {
+/**
+ * A fake LiveApi: the sessions and live Inbox items it returns, the ids App subscribed to, and
+ * the frame emitter. `inbox()` is the Inbox rail's read (web/README.md "The live Inbox in the
+ * right rail"); the tests feed items through it and never run `cpd inbox list`.
+ */
+function fakeLive(
+  sessions: readonly TreeSession[],
+  inbox: readonly InboxItem[] = [],
+): {
   api: LiveApi;
   subscribed: string[];
   emit: (frame: SnapshotFrame) => void;
 } {
   const subscribed: string[] = [];
   let onFrame: ((frame: SnapshotFrame) => void) | undefined;
-  const api: LiveApi = {
+  const api = {
     sessions: async () => sessions,
-    subscribe: (id, callback) => {
+    inbox: async () => inbox,
+    subscribe: (id: string, callback: (frame: SnapshotFrame) => void) => {
       subscribed.push(id);
       onFrame = callback;
       return () => {
@@ -210,8 +272,36 @@ function fakeLive(sessions: readonly TreeSession[]): {
       };
     },
     send: async () => {},
-  };
+  } as unknown as LiveApi;
   return { api, subscribed, emit: (frame) => onFrame?.(frame) };
+}
+
+/**
+ * One live Inbox item as `cpd inbox list` prints it (web/README.md "The live Inbox in the right
+ * rail"): the CLI row's fields, with the ones the rail does not render left at their default.
+ */
+function inboxItem(overrides: Partial<InboxItem>): InboxItem {
+  return {
+    id: "item-1",
+    kind: "pr-ready",
+    urgency: "blue",
+    label: "Ready",
+    subject: "",
+    context: null,
+    plan: null,
+    job: null,
+    session: null,
+    record: null,
+    event: null,
+    url: null,
+    opened_at: null,
+    closed_at: null,
+    snoozed_until: null,
+    dismissed_at: null,
+    claimed_at: null,
+    age_seconds: 0,
+    ...overrides,
+  };
 }
 
 test("picking a lead in the rail shows that lead's transcript and leaves no picker", async () => {
@@ -270,4 +360,159 @@ test("the document defaults to the dark theme", () => {
   const html = readFileSync(`${import.meta.dirname}/../../index.html`, "utf8");
   const rootTag = /<html[^>]*>/i.exec(html)?.[0] ?? "";
   expect(rootTag).toMatch(/\bclass="[^"]*\bdark\b[^"]*"/);
+});
+
+/** The Inbox rail's rows, one anchor per live item (web/README.md "The live Inbox"). */
+function inboxRows(): HTMLElement[] {
+  return [...inboxRail().querySelectorAll<HTMLElement>("a")];
+}
+
+/** The name of a row: the first span of the row's top line, before the pushed-right date. */
+function rowName(row: Element): string | null {
+  return row.querySelector("div > span")?.textContent ?? null;
+}
+
+/** The date of a row: the span pushed right by the block's `ml-auto`. */
+function rowDate(row: Element): string | null {
+  return row.querySelector(".ml-auto")?.textContent ?? null;
+}
+
+test("the right rail renders the live Inbox items, not the sample mails", async () => {
+  const item = inboxItem({
+    kind: "review-requested",
+    label: "Review requested\nacme/api#812",
+    url: "https://example.test/acme/api/pull/812",
+    age_seconds: 30,
+  });
+  const { api } = fakeLive([], [item]);
+
+  await renderLive(api);
+
+  // The real item's label leads the rail...
+  const rail = inboxRail();
+  expect(rail.textContent).toContain("Review requested");
+  expect(rail.textContent).toContain("acme/api#812");
+  // ...and the block's ten registry sample mails are gone with this PR.
+  expect(rail.textContent).not.toContain("William Smith");
+  expect(rail.textContent).not.toContain("Sophia White");
+});
+
+test("an Inbox row's name is its actor: peer review, the Session's name, or cpd engine", async () => {
+  const session: TreeSession = {
+    id: "sess-abcdef123456",
+    role: "lead",
+    runner: "durable",
+    context: "ctx",
+    name: "Tree Lead",
+  };
+  const items = [
+    inboxItem({ id: "peer-1", kind: "review-requested", label: "Review requested", session: session.id }),
+    inboxItem({ id: "session-1", kind: "pr-ready", label: "Ready", session: session.id }),
+    inboxItem({ id: "engine-1", kind: "pr-ready", label: "Ready", session: null }),
+  ];
+  const { api } = fakeLive([session], items);
+
+  await renderLive(api);
+
+  expect(inboxRows().map((row) => rowName(row))).toEqual(["peer review", "Tree Lead", "cpd engine"]);
+});
+
+test("an Inbox row's date is its age rendered relative", async () => {
+  const ages: readonly (readonly [number, string])[] = [
+    [30, "just now"],
+    [300, "5 minutes ago"],
+    [10_800, "3 hours ago"],
+    [108_000, "Yesterday"],
+    [259_200, "3 days ago"],
+    [1_209_600, "2 weeks ago"],
+    [6_480_000, "2 months ago"],
+  ];
+  const items = ages.map(([age_seconds], index) =>
+    inboxItem({ id: `item-${index}`, label: `Item ${index}`, age_seconds }),
+  );
+  const { api } = fakeLive([], items);
+
+  await renderLive(api);
+
+  expect(inboxRows().map((row) => rowDate(row))).toEqual(ages.map(([, rendered]) => rendered));
+});
+
+// The two tests below pin web/README.md's relative-age rule for the units that can be one, as the
+// table above pins the plural forms: the singular is only for N = 1, and the day unit has none
+// because `Yesterday` owns 24 to 48 hours, so the day branch first renders `2 days ago`.
+test("relativeAge renders one minute and one hour in the singular, and just now under a minute", () => {
+  const ages: readonly (readonly [number, string])[] = [
+    [59, "just now"],
+    [60, "1 minute ago"],
+    [90, "1 minute ago"],
+    [3599, "59 minutes ago"],
+    [3_600, "1 hour ago"],
+    [7_199, "1 hour ago"],
+  ];
+
+  expect(ages.map(([age_seconds]) => relativeAge(age_seconds))).toEqual(
+    ages.map(([, rendered]) => rendered),
+  );
+});
+
+test("relativeAge renders one week and one month in the singular, and never one day because Yesterday owns 24 to 48 hours", () => {
+  const ages: readonly (readonly [number, string])[] = [
+    [604_800, "1 week ago"],
+    [1_209_600, "2 weeks ago"],
+    [2_592_000, "1 month ago"],
+    [86_400, "Yesterday"],
+    [86_401, "Yesterday"],
+    [172_799, "Yesterday"],
+    [172_800, "2 days ago"],
+  ];
+
+  expect(ages.map(([age_seconds]) => relativeAge(age_seconds))).toEqual(
+    ages.map(([, rendered]) => rendered),
+  );
+});
+
+test("an Inbox row shows the label's first line as its subject and its second line as its teaser only when there is one", async () => {
+  const twoLine = inboxItem({
+    id: "two-line",
+    kind: "pr-ready",
+    label: "Ready to merge\nacme/api#7",
+  });
+  const oneLine = inboxItem({ id: "one-line", kind: "curate-docs", label: "Curate the docs" });
+  const { api } = fakeLive([], [twoLine, oneLine]);
+
+  await renderLive(api);
+
+  const [twoLineRow, oneLineRow] = inboxRows();
+  expect(twoLineRow!.querySelector(".font-medium")?.textContent).toBe("Ready to merge");
+  expect(twoLineRow!.querySelector(".line-clamp-2")?.textContent).toBe("acme/api#7");
+  expect(oneLineRow!.querySelector(".font-medium")?.textContent).toBe("Curate the docs");
+  expect(oneLineRow!.querySelector(".line-clamp-2")).toBeNull();
+});
+
+test("an Inbox row links to its item's url, and to # when it has none", async () => {
+  const linked = inboxItem({
+    id: "linked",
+    kind: "pr-ready",
+    label: "Ready",
+    url: "https://example.test/acme/api/pull/7",
+  });
+  const unlinked = inboxItem({ id: "unlinked", kind: "curate-docs", label: "Curate the docs", url: null });
+  const { api } = fakeLive([], [linked, unlinked]);
+
+  await renderLive(api);
+
+  const [linkedRow, unlinkedRow] = inboxRows();
+  expect(linkedRow!.getAttribute("href")).toBe("https://example.test/acme/api/pull/7");
+  expect(unlinkedRow!.getAttribute("href")).toBe("#");
+});
+
+test("an empty Inbox renders an empty list, with no invented copy", async () => {
+  const { api } = fakeLive([], []);
+
+  await renderLive(api);
+
+  const rail = inboxRail();
+  expect(rail.querySelectorAll("a")).toHaveLength(0);
+  // Only the header's title; the body adds no placeholder sentence.
+  expect(rail.textContent?.trim()).toBe("Inbox");
 });

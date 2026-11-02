@@ -46,7 +46,7 @@ pub fn wilson_lower(passed: u32, n: u32) -> f64 {
 }
 
 /// Ladder order: letter H before S (then O, G), then the effort.
-fn rank(tier: Tier) -> (u8, u8) {
+pub(crate) fn rank(tier: Tier) -> (u8, u8) {
     let letter = match tier.letter() {
         Letter::H => 0,
         Letter::S => 1,

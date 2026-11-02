@@ -1,31 +1,31 @@
 //! What the views show of work that is cancelled or cannot start (hs-d518, hs-d521, hs-d523): one derivation for the
 //! Plan view, the plan render and `context pending`, so the three never disagree with each other or with scheduling.
 //!
-//! - **Waiting**: a `queued` Job, or a PR that has not started, that is not Ready (contract §3.2) is *shown* as
+//! - **Waiting**: a `queued` Job, or a Workflow that has not started, that is not Ready (contract §3.2) is *shown* as
 //!   `waiting`, with its blockers. A display only: the stored status never changes. The Job rule is E3's
 //!   (`engine/src/watch/schedule.rs` `READY`): the Dependencies not `merged`, an `open` or `update` Job's other Jobs
-//!   ([`crate::job::open::unfinished`]), a Job of a PR that has not started shows nothing more; a PR's needs not `merged` and its base PR not started (§3.8).
+//!   ([`crate::job::open::unfinished`]), a Job of a Workflow that has not started shows nothing more; a Workflow's needs not `merged` and its base Workflow not started (§3.8).
 //!   A `cancelled` need counts for nothing: it blocks nothing.
-//! - **Superseded**: a `cancelled` PR names the PR that carried its work, from its `pr-cancelled` Event.
+//! - **Superseded**: a `cancelled` Workflow names the Workflow that carried its work, from its `workflow-cancelled` Event.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
 
 use super::jobs::Job;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 use crate::job::open::unfinished;
 
-/// The PR statuses and bases the blockers read, and the PRs that superseded cancelled ones.
+/// The Workflow statuses and bases the blockers read, and the Workflows that superseded cancelled ones.
 #[derive(Clone, Debug, Default)]
 pub struct Display {
-    /// Every PR's status by PR reference: the bare key of a PR of the Plan, `<plan>/<key>` of another's.
+    /// Every Workflow's status by Workflow reference: the bare key of a Workflow of the Plan, `<plan>/<key>` of another's.
     statuses: BTreeMap<String, String>,
-    /// The base PR (a reference) of each stacked PR of the Plan, by PR key.
+    /// The base Workflow (a reference) of each stacked Workflow of the Plan, by Workflow key.
     bases: BTreeMap<String, String>,
-    /// The PR (a reference) that superseded each cancelled PR of the Plan, by PR key.
+    /// The Workflow (a reference) that superseded each cancelled Workflow of the Plan, by Workflow key.
     superseded: BTreeMap<String, String>,
     /// Each Job's Attempts of the Plan as (number, tier, status), by Job key, in number order.
     attempts: BTreeMap<String, Vec<(u32, String, String)>>,
@@ -33,7 +33,7 @@ pub struct Display {
     retrying: BTreeSet<String>,
 }
 
-/// A PR of the Plan as the reference its own Plan uses, or `<plan>/<key>`.
+/// A Workflow of the Plan as the reference its own Plan uses, or `<plan>/<key>`.
 fn reference(own: &str, plan: &str, key: &str) -> String {
     if own == plan {
         key.to_owned()
@@ -47,7 +47,7 @@ impl Display {
     pub fn load(conn: &Connection, plan: &PlanId) -> Result<Display, CpdError> {
         let own = plan.as_str();
         let mut display = Display::default();
-        let mut stmt = conn.prepare("SELECT plan, key, status FROM prs")?;
+        let mut stmt = conn.prepare("SELECT plan, key, status FROM workflows")?;
         for row in stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -58,8 +58,8 @@ impl Display {
             let (p, key, status) = row?;
             display.statuses.insert(reference(own, &p, &key), status);
         }
-        // a stacked PR's base is the PR whose Lead Branch is its `base` (contract §2.2 "The base PR")
-        let mut stmt = conn.prepare("SELECT p.key, q.plan, q.key FROM prs p JOIN prs q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
+        // a stacked Workflow's base is the Workflow whose Lead Branch is its `base` (contract §2.2 "The base Workflow")
+        let mut stmt = conn.prepare("SELECT p.key, q.plan, q.key FROM workflows p JOIN workflows q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
         for row in stmt.query_map([own], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -71,8 +71,8 @@ impl Display {
             display.bases.insert(key, reference(own, &base_plan, &base));
         }
         let mut stmt = conn.prepare(
-            "SELECT json_extract(data, '$.pr'), json_extract(data, '$.superseded_by') FROM events
-              WHERE kind = 'pr-cancelled' AND plan = ?1 AND json_extract(data, '$.superseded_by') IS NOT NULL ORDER BY id",
+            "SELECT json_extract(data, '$.workflow'), json_extract(data, '$.superseded_by') FROM events
+              WHERE kind = 'workflow-cancelled' AND plan = ?1 AND json_extract(data, '$.superseded_by') IS NOT NULL ORDER BY id",
         )?;
         for row in stmt.query_map([own], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -102,13 +102,13 @@ impl Display {
         Ok(display)
     }
 
-    /// Without a store: the PRs of the Plan alone (every need is of the Plan), their bases found by Lead Branch.
+    /// Without a store: the Workflows of the Plan alone (every need is of the Plan), their bases found by Lead Branch.
     #[cfg(test)]
-    pub fn of(prs: &[PrRow]) -> Display {
+    pub fn of(workflows: &[WorkflowRow]) -> Display {
         let mut display = Display::default();
-        for p in prs {
+        for p in workflows {
             display.statuses.insert(p.key.to_string(), p.status.clone());
-            if let Some(base) = prs.iter().find(|q| q.lead_branch == p.base) {
+            if let Some(base) = workflows.iter().find(|q| q.lead_branch == p.base) {
                 display
                     .bases
                     .insert(p.key.to_string(), base.key.to_string());
@@ -141,12 +141,12 @@ impl Display {
             .or_else(|| job.tier.clone())
     }
 
-    /// The PR that superseded the cancelled PR `key`, as a reference.
+    /// The Workflow that superseded the cancelled Workflow `key`, as a reference.
     pub fn superseded_by(&self, key: &str) -> Option<&str> {
         self.superseded.get(key).map(String::as_str)
     }
 
-    /// What the `queued` Job `job` cannot start until, sorted (references of PRs and keys of Jobs): empty when it is Ready,
+    /// What the `queued` Job `job` cannot start until, sorted (references of Workflows and keys of Jobs): empty when it is Ready,
     /// and for a Job that is not `queued`. `jobs` are every Job of the Plan.
     pub fn job_blockers(&self, jobs: &[Job], job: &Job) -> Vec<String> {
         if job.status != "queued" {
@@ -171,10 +171,10 @@ impl Display {
         blockers
     }
 
-    /// The PRs `pr` needs as the views show them: its stored needs, then its base PR (the implied need, derived, never stored).
-    pub fn pr_needs(&self, pr: &PrRow) -> Vec<String> {
-        let mut needs = pr.needs.clone();
-        if let Some(base) = self.bases.get(pr.key.as_str())
+    /// The Workflows `pr` needs as the views show them: its stored needs, then its base Workflow (the implied need, derived, never stored).
+    pub fn workflow_needs(&self, workflow: &WorkflowRow) -> Vec<String> {
+        let mut needs = workflow.needs.clone();
+        if let Some(base) = self.bases.get(workflow.key.as_str())
             && !needs.contains(base)
         {
             needs.push(base.clone());
@@ -182,13 +182,13 @@ impl Display {
         needs
     }
 
-    /// What the PR that has not started cannot start until, sorted (PR references): the PRs it needs that are not `merged`, and
-    /// its base PR when that has not started. Empty when it can start, and for a PR that has started.
-    pub fn pr_blockers(&self, pr: &PrRow) -> Vec<String> {
-        if pr.status != "waiting" {
+    /// What the Workflow that has not started cannot start until, sorted (Workflow references): the Workflows it needs that are not `merged`, and
+    /// its base Workflow when that has not started. Empty when it can start, and for a Workflow that has started.
+    pub fn workflow_blockers(&self, workflow: &WorkflowRow) -> Vec<String> {
+        if workflow.status != "waiting" {
             return Vec::new();
         }
-        let mut blockers: Vec<String> = pr
+        let mut blockers: Vec<String> = workflow
             .needs
             .iter()
             .filter(|n| {
@@ -198,8 +198,8 @@ impl Display {
             })
             .cloned()
             .collect();
-        // the implied need (contract §2.2): met when the base PR is `open` or `merged`
-        if let Some(base) = self.bases.get(pr.key.as_str()).filter(|b| {
+        // the implied need (contract §2.2): met when the base Workflow is `open` or `merged`
+        if let Some(base) = self.bases.get(workflow.key.as_str()).filter(|b| {
             self.statuses
                 .get(*b)
                 .is_some_and(|s| matches!(s.as_str(), "waiting" | "dispatch"))

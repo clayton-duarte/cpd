@@ -1,4 +1,4 @@
-//! The table `pr_posts` (contract §4.4; PR post, pro-d64, pro-d65): the one post of a PR for review in Slack.
+//! The table `pr_posts` (contract §4.4; Workflow post, pro-d64, pro-d65): the one post of a Workflow for review in Slack.
 //! Written once by `pr post`; no later write (the reaction is queued in `slack_reactions`).
 //! `reaction` only records that a reaction was wanted at post time (NULL = none); it is never the emoji used. A data row: it appends no Event.
 
@@ -15,7 +15,7 @@ pub struct PostRecord {
     pub link: String,
     pub posted_at: String,
     /// Whether a reaction was wanted at post time (`None` = none): the emoji name the policy had then, never the emoji that will be
-    /// used (the engine resolves that from the PR's policy when it places the reaction).
+    /// used (the engine resolves that from the Workflow's policy when it places the reaction).
     pub reaction: Option<String>,
     /// When the reaction was added; `None` until then.
     pub reacted_at: Option<String>,
@@ -25,12 +25,12 @@ pub struct PostRecord {
     pub auto_merge_at: Option<String>,
 }
 
-/// The post of PR `pr` of `plan`, if it has one.
-pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord>, CpdError> {
+/// The post of Workflow `pr` of `plan`, if it has one.
+pub fn find(conn: &Connection, plan: &str, workflow: &str) -> Result<Option<PostRecord>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND pr = ?2",
-            [plan, pr],
+            "SELECT channel, ts, link, posted_at, reaction, reacted_at, auto_merge, auto_merge_at FROM pr_posts WHERE plan = ?1 AND workflow = ?2",
+            [plan, workflow],
             |r| {
                 Ok(PostRecord { channel: r.get(0)?, ts: r.get(1)?, link: r.get(2)?, posted_at: r.get(3)?, reaction: r.get(4)?, reacted_at: r.get(5)?, auto_merge: r.get(6)?, auto_merge_at: r.get(7)? })
             },
@@ -38,17 +38,17 @@ pub fn find(conn: &Connection, plan: &str, pr: &str) -> Result<Option<PostRecord
         .optional()?)
 }
 
-/// Writes the post of PR `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the PR already has one (nothing is written).
+/// Writes the post of Workflow `pr` of `plan`, its auto-merge request stored as `pending`; `false` when the Workflow already has one (nothing is written).
 pub fn insert(
     tx: &WriteTxn<'_>,
     plan: &str,
-    pr: &str,
+    workflow: &str,
     post: &PostRecord,
 ) -> Result<bool, CpdError> {
     let rows = tx.execute(
-        "INSERT INTO pr_posts (plan, pr, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
-         ON CONFLICT (plan, pr) DO NOTHING",
-        rusqlite::params![plan, pr, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
+        "INSERT INTO pr_posts (plan, workflow, channel, ts, link, posted_at, reaction, reacted_at, auto_merge) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
+         ON CONFLICT (plan, workflow) DO NOTHING",
+        rusqlite::params![plan, workflow, post.channel, post.ts, post.link, post.posted_at, post.reaction, post.reacted_at],
     )?;
     Ok(rows == 1)
 }
@@ -58,42 +58,42 @@ pub fn insert(
 pub fn set_auto_merge(
     tx: &WriteTxn<'_>,
     plan: &str,
-    pr: &str,
+    workflow: &str,
     state: &str,
 ) -> Result<bool, CpdError> {
     let rows = tx.execute(
         "UPDATE pr_posts SET auto_merge = ?3,
            auto_merge_at = IIF(?3 IN ('enabled', 'refused'), (SELECT at FROM txns WHERE id = cpd_txn()), NULL)
-         WHERE plan = ?1 AND pr = ?2 AND auto_merge = 'pending'",
-        [plan, pr, state],
+         WHERE plan = ?1 AND workflow = ?2 AND auto_merge = 'pending'",
+        [plan, workflow, state],
     )?;
     Ok(rows == 1)
 }
 
-/// A post whose auto-merge request waits (`pending`) for a PR that can take it now.
+/// A post whose auto-merge request waits (`pending`) for a Workflow that can take it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
     pub plan: String,
-    pub pr: String,
+    pub workflow: String,
     /// The GitHub repo, `owner/name`.
     pub repo: String,
     pub number: i64,
 }
 
-/// The oldest-posted `pending` request whose PR is `open`, whose Plan is not archived and not held by incident mode, and
+/// The oldest-posted `pending` request whose Workflow is `open`, whose Plan is not archived and not held by incident mode, and
 /// which is not stacked (its `base` is no `prs.lead_branch`; the rule of `auto_merge::stacked`), if any.
 pub fn next_pending(conn: &Connection) -> Result<Option<Pending>, CpdError> {
     Ok(conn
         .query_row(
-            "SELECT p.plan, p.pr, q.repo, q.number
-             FROM pr_posts p JOIN prs r ON r.plan = p.plan AND r.key = p.pr
+            "SELECT p.plan, p.workflow, q.repo, q.number
+             FROM pr_posts p JOIN workflows r ON r.plan = p.plan AND r.key = p.workflow
                JOIN plans l ON l.id = p.plan JOIN pull_requests q ON q.id = r.pull_request
              WHERE p.auto_merge = 'pending' AND r.status = 'open' AND l.archived_at IS NULL
                AND (NOT EXISTS (SELECT 1 FROM incident) OR EXISTS (SELECT 1 FROM incident_plans i WHERE i.plan = p.plan))
-               AND NOT EXISTS (SELECT 1 FROM prs b WHERE b.lead_branch = r.base)
-             ORDER BY p.posted_at, p.plan, p.pr LIMIT 1",
+               AND NOT EXISTS (SELECT 1 FROM workflows b WHERE b.lead_branch = r.base)
+             ORDER BY p.posted_at, p.plan, p.workflow LIMIT 1",
             [],
-            |r| Ok(Pending { plan: r.get(0)?, pr: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
+            |r| Ok(Pending { plan: r.get(0)?, workflow: r.get(1)?, repo: r.get(2)?, number: r.get(3)? }),
         )
         .optional()?)
 }
@@ -123,7 +123,7 @@ mod tests {
         (dir, store)
     }
 
-    /// A PR `key` with `status`, merged at `merged_at`, and a post with `reaction`.
+    /// A Workflow `key` with `status`, merged at `merged_at`, and a post with `reaction`.
     fn add(store: &mut Store, key: &str, status: &str, merged_at: &str, reaction: Option<&str>) {
         store
             .write("fixture", |tx| {
@@ -133,7 +133,7 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
+                    "INSERT INTO workflows (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request, merged_at)
                      VALUES ('pay', ?1, '/r', 'main', ?2, 'cpd/pay/' || ?1, IIF(?2 IN ('waiting', 'cancelled'), NULL, '/r/lead'), cpd_txn(), 't', IIF(?2 IN ('waiting', 'cancelled'), NULL, 't'), 7, 'u', 't', IIF(?2 IN ('open', 'merged'), (SELECT max(id) FROM pull_requests), NULL), NULLIF(?3, ''))",
                     rusqlite::params![key, status, merged_at],
                 )?;

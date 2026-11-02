@@ -9,11 +9,11 @@ use std::path::Path;
 use super::jobs::Job;
 use super::lint::Finding;
 use super::overlap::Overlap;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::render::{cell, inline};
 use super::row::PlanRow;
 
-/// What stands for a missing goal, PR title or need.
+/// What stands for a missing goal, Workflow title or need.
 const NONE: &str = "—";
 /// The overlap rows shown before the rest are counted.
 const OVERLAPS_SHOWN: usize = 5;
@@ -36,13 +36,13 @@ pub enum Kind<'a> {
 /// What the summary reads besides the Plan row.
 pub struct Input<'a> {
     pub plan: &'a PlanRow,
-    pub prs: &'a [PrRow],
+    pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub overlaps: &'a [Overlap],
     /// The lint warnings to show.
     pub lint: &'a [Finding],
-    /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
-    pub base_prs: &'a BTreeMap<String, String>,
+    /// The base Workflow (`<plan>/<key>`) of each stacked Workflow, by Workflow key (contract §2.2 "The base Workflow").
+    pub base_workflows: &'a BTreeMap<String, String>,
 }
 
 /// A Job under review: a `draft` with its Tier and its Spec.
@@ -55,19 +55,20 @@ fn locked(job: &Job) -> bool {
     !job.is_draft() && job.status != "cancelled"
 }
 
-fn repo_name(pr: &PrRow) -> String {
-    pr.name
+fn repo_name(workflow: &WorkflowRow) -> String {
+    workflow
+        .name
         .clone()
         .or_else(|| {
-            Path::new(&pr.repo)
+            Path::new(&workflow.repo)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
         })
-        .unwrap_or_else(|| pr.repo.clone())
+        .unwrap_or_else(|| workflow.repo.clone())
 }
 
-/// `Order:` and `Stacked on:` (block 7): empty when no PR counts.
-fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
+/// `Order:` and `Stacked on:` (block 7): empty when no Workflow counts.
+fn order(i: &Input, counting: &[&WorkflowRow]) -> Vec<String> {
     if counting.is_empty() {
         return Vec::new();
     }
@@ -75,10 +76,10 @@ fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
     let counts = |need: &str| keys.contains(need);
     let mut items: Vec<String> = Vec::new();
     let mut tied: BTreeSet<&str> = keys.clone();
-    for pr in counting {
-        for need in pr.needs.iter().filter(|n| counts(n)) {
-            items.push(format!("{need} → {}", pr.key));
-            tied.remove(pr.key.as_str());
+    for workflow in counting {
+        for need in workflow.needs.iter().filter(|n| counts(n)) {
+            items.push(format!("{need} → {}", workflow.key));
+            tied.remove(workflow.key.as_str());
             tied.remove(need.as_str());
         }
     }
@@ -88,7 +89,7 @@ fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
     let stacked: Vec<String> = counting
         .iter()
         .filter_map(|p| {
-            i.base_prs
+            i.base_workflows
                 .get(p.key.as_str())
                 .map(|base| format!("{} on {base}", p.key))
         })
@@ -121,7 +122,7 @@ fn overlaps_block(overlaps: &[Overlap]) -> Vec<String> {
         };
         out.push(format!(
             "- {path}: {}/{}/{} ({}){more}",
-            o.plan, o.pr, other.key, other.status
+            o.plan, o.workflow, other.key, other.status
         ));
     }
     if overlaps.len() > OVERLAPS_SHOWN {
@@ -161,11 +162,19 @@ fn list(head: &str, rows: Vec<String>) -> Vec<String> {
 pub fn markdown(kind: &Kind, i: &Input) -> String {
     let plan = i.plan;
     let outline = plan.outline.as_ref();
-    let mut counting: Vec<&PrRow> = i.prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut counting: Vec<&WorkflowRow> = i
+        .workflows
+        .iter()
+        .filter(|p| p.status != "cancelled")
+        .collect();
     counting.sort_by(|a, b| a.key.cmp(&b.key));
     let mut reviewed: Vec<&Job> = i.jobs.iter().filter(|j| under_review(j)).collect();
-    reviewed.sort_by(|a, b| (&a.pr, &a.key).cmp(&(&b.pr, &b.key)));
-    let has_review = |pr: &PrRow| reviewed.iter().any(|j| j.pr_str() == pr.key.as_str());
+    reviewed.sort_by(|a, b| (&a.workflow, &a.key).cmp(&(&b.workflow, &b.key)));
+    let has_review = |workflow: &WorkflowRow| {
+        reviewed
+            .iter()
+            .any(|j| j.workflow_str() == workflow.key.as_str())
+    };
 
     let mut blocks: Vec<Vec<String>> = Vec::new();
     blocks.push(match kind {
@@ -189,24 +198,28 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
         outline.map_or(NONE.to_owned(), |o| inline(&o.goal))
     )]);
 
-    let mut prs = vec!["## PRs".to_owned()];
-    for pr in counting.iter().filter(|p| has_review(p)) {
-        let title = pr.title.as_deref().map_or(NONE.to_owned(), inline);
-        prs.push(format!(
+    let mut workflows = vec!["## Workflows".to_owned()];
+    for workflow in counting.iter().filter(|p| has_review(p)) {
+        let title = workflow.title.as_deref().map_or(NONE.to_owned(), inline);
+        workflows.push(format!(
             "- {} ({}, base {}): {title}",
-            pr.key,
-            inline(&repo_name(pr)),
-            inline(&pr.base)
+            workflow.key,
+            inline(&repo_name(workflow)),
+            inline(&workflow.base)
         ));
         for done in outline
-            .and_then(|o| o.done_when.get(pr.key.as_str()))
+            .and_then(|o| o.done_when.get(workflow.key.as_str()))
             .into_iter()
             .flatten()
         {
-            prs.push(format!("  Done when: {}", inline(done)));
+            workflows.push(format!("  Done when: {}", inline(done)));
         }
     }
-    blocks.push(if prs.len() > 1 { prs } else { Vec::new() });
+    blocks.push(if workflows.len() > 1 {
+        workflows
+    } else {
+        Vec::new()
+    });
 
     let decisions = outline.iter().flat_map(|o| &o.decisions).enumerate();
     blocks.push(list(
@@ -268,7 +281,7 @@ pub fn markdown(kind: &Kind, i: &Input) -> String {
             counting
                 .iter()
                 .filter(|p| !has_review(p))
-                .map(|p| format!("PR {}", p.key)),
+                .map(|p| format!("Workflow {}", p.key)),
         )
         .collect();
     if !later.is_empty() {

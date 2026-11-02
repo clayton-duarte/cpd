@@ -1,4 +1,4 @@
-//! The non-blocking PR poll (E5): one thread runs the poll; the tick never waits for it.
+//! The non-blocking pull request poll (E5): one thread runs the poll; the tick never waits for it.
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -51,7 +51,7 @@ impl PollRun {
                         Err(Failure::from(&CpdError::new(
                             ErrorCode::SpawnFailed,
                             format!(
-                                "The PR poll panicked: {}.",
+                                "The pull request poll panicked: {}.",
                                 text.unwrap_or_else(|| "no message".to_owned())
                             ),
                         )))
@@ -66,7 +66,7 @@ impl PollRun {
             let (tx, rx) = channel();
             let failure = Failure::from(&CpdError::new(
                 ErrorCode::SpawnFailed,
-                format!("Cannot start the PR poll thread: {e}."),
+                format!("Cannot start the pull request poll thread: {e}."),
             ));
             let _ = tx.send(Finished {
                 result: Err(failure),

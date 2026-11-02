@@ -4,11 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::jobs::{self, Job};
 use super::outline::Outline;
-use super::prs::PrRow;
+use super::prs::WorkflowRow;
 use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
 use super::row::Phase;
 use super::shape;
 use super::shared::is_shared;
+use super::tier_advice::{self, Advice};
+use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
 
@@ -36,22 +38,24 @@ pub enum Rule {
     TestJobRequired,
     ImplJobRequired,
     ShapeIncomplete,
-    PrEmpty,
+    WorkflowEmpty,
     DependencyCycle,
     ParallelWriteOverlap,
+    TierAdvice,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 9] = [
+    pub const ALL: [Rule; 10] = [
         Rule::DraftIncomplete,
         Rule::OutlineMissing,
         Rule::OutlineIncomplete,
         Rule::TestJobRequired,
         Rule::ImplJobRequired,
         Rule::ShapeIncomplete,
-        Rule::PrEmpty,
+        Rule::WorkflowEmpty,
         Rule::DependencyCycle,
         Rule::ParallelWriteOverlap,
+        Rule::TierAdvice,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -62,15 +66,16 @@ impl Rule {
             Rule::TestJobRequired => "test_job_required",
             Rule::ImplJobRequired => "impl_job_required",
             Rule::ShapeIncomplete => "shape_incomplete",
-            Rule::PrEmpty => "pr_empty",
+            Rule::WorkflowEmpty => "workflow_empty",
             Rule::DependencyCycle => "dependency_cycle",
             Rule::ParallelWriteOverlap => "parallel_write_overlap",
+            Rule::TierAdvice => "tier_advice",
         }
     }
 
     pub fn severity(self) -> Severity {
         match self {
-            Rule::ParallelWriteOverlap => Severity::Warn,
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => Severity::Warn,
             _ => Severity::Error,
         }
     }
@@ -112,6 +117,11 @@ impl Finding {
                     self.other.as_deref().unwrap_or("")
                 )
             }
+            Rule::TierAdvice => {
+                // The message is `<job> is <T> but history favours <A> for <kind> Jobs: ...`; the row is its head.
+                let head = self.message.split(" Jobs: ").next().unwrap_or("");
+                head.replacen(" but history", ", history", 1)
+            }
             _ => self.message.clone(),
         }
     }
@@ -133,42 +143,49 @@ impl Finding {
 pub struct Input<'a> {
     pub plan: &'a PlanId,
     pub phase: Phase,
-    pub prs: &'a [PrRow],
+    pub workflows: &'a [WorkflowRow],
     pub jobs: &'a [Job],
     pub outline: Option<&'a Outline>,
+    pub advice: &'a [crate::plan::tier_advice::Advice],
 }
 
 impl<'a> Input<'a> {
     pub fn new(
         plan: &'a PlanId,
         phase: Phase,
-        prs: &'a [PrRow],
+        workflows: &'a [WorkflowRow],
         jobs: &'a [Job],
         outline: Option<&'a Outline>,
     ) -> Self {
         Input {
             plan,
             phase,
-            prs,
+            workflows,
             jobs,
             outline,
+            advice: &[],
         }
+    }
+
+    pub fn with_advice(self, advice: &'a [crate::plan::tier_advice::Advice]) -> Self {
+        Input { advice, ..self }
     }
 }
 
 type RuleFn = fn(&Input) -> Vec<Finding>;
 
 /// The rules, in catalogue order: another rule is one variant, one function and one line here.
-const RULES: [RuleFn; 9] = [
+const RULES: [RuleFn; 10] = [
     draft_incomplete_rule,
     outline_missing_rule,
     outline_incomplete_rule,
     test_job_required_rule,
     impl_job_required_rule,
     shape_incomplete_rule,
-    pr_empty_rule,
+    workflow_empty_rule,
     dependency_cycle_rule,
     parallel_write_overlap_rule,
+    tier_advice_rule,
 ];
 
 impl Rule {
@@ -181,9 +198,11 @@ impl Rule {
             Rule::TestJobRequired => ErrorCode::TestJobRequired,
             Rule::ImplJobRequired => ErrorCode::ImplJobRequired,
             Rule::ShapeIncomplete => ErrorCode::ShapeIncomplete,
-            Rule::PrEmpty => ErrorCode::PrEmpty,
+            Rule::WorkflowEmpty => ErrorCode::WorkflowEmpty,
             Rule::DependencyCycle => ErrorCode::DependencyCycle,
-            Rule::ParallelWriteOverlap => unreachable!("a warning carries no refusal"),
+            Rule::ParallelWriteOverlap | Rule::TierAdvice => {
+                unreachable!("a warning carries no refusal")
+            }
         }
     }
 }
@@ -221,7 +240,7 @@ fn outline_missing_rule(i: &Input) -> Vec<Finding> {
 fn outline_incomplete_rule(i: &Input) -> Vec<Finding> {
     let e = i
         .outline
-        .and_then(|o| outline_incomplete(i.plan, o, i.prs, i.jobs));
+        .and_then(|o| outline_incomplete(i.plan, o, i.workflows, i.jobs));
     one(Rule::OutlineIncomplete, e)
 }
 
@@ -240,7 +259,7 @@ fn impl_job_required_rule(i: &Input) -> Vec<Finding> {
 }
 
 fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
-    shape::shape_incomplete(i.plan, i.prs, i.jobs)
+    shape::shape_incomplete(i.plan, i.workflows, i.jobs)
         .into_iter()
         .map(|e| {
             let pr = e
@@ -253,26 +272,36 @@ fn shape_incomplete_rule(i: &Input) -> Vec<Finding> {
         .collect()
 }
 
-fn pr_empty_rule(i: &Input) -> Vec<Finding> {
+fn workflow_empty_rule(i: &Input) -> Vec<Finding> {
     if i.phase != Phase::Plan {
         return Vec::new();
     }
-    one(Rule::PrEmpty, pr_empty(i.plan, i.prs, i.jobs))
+    one(
+        Rule::WorkflowEmpty,
+        workflow_empty(i.plan, i.workflows, i.jobs),
+    )
 }
 
 fn dependency_cycle_rule(i: &Input) -> Vec<Finding> {
     one(Rule::DependencyCycle, dependency_cycle(i.plan, i.jobs))
 }
 
-/// `pr_empty` (lock's check): a live PR has no draft Job (a draft `open` Job counts), or the Plan has no live PR.
-pub(super) fn pr_empty(id: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Option<CpdError> {
-    let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
+/// `workflow_empty` (lock's check): a live Workflow has no draft Job (a draft `open` Job counts), or the Plan has no live Workflow.
+pub(super) fn workflow_empty(
+    id: &PlanId,
+    workflows: &[WorkflowRow],
+    jobs: &[Job],
+) -> Option<CpdError> {
+    let live: Vec<&WorkflowRow> = workflows
+        .iter()
+        .filter(|p| p.status != "cancelled")
+        .collect();
     let empty: Vec<&str> = live
         .iter()
         .filter(|p| {
             !jobs
                 .iter()
-                .any(|j| j.is_draft() && j.pr_str() == p.key.as_str())
+                .any(|j| j.is_draft() && j.workflow_str() == p.key.as_str())
         })
         .map(|p| p.key.as_str())
         .collect();
@@ -280,20 +309,20 @@ pub(super) fn pr_empty(id: &PlanId, prs: &[PrRow], jobs: &[Job]) -> Option<CpdEr
         return None;
     }
     let message = if live.is_empty() {
-        format!("Plan {id} has no PR: add one with cpd pr add.")
+        format!("Plan {id} has no Workflow: add one with cpd workflow add.")
     } else {
         format!(
-            "Plan {id} has PRs without a draft Job: {}.",
+            "Plan {id} has Workflows without a draft Job: {}.",
             empty.join(", ")
         )
     };
-    let mut error = CpdError::new(ErrorCode::PrEmpty, message)
+    let mut error = CpdError::new(ErrorCode::WorkflowEmpty, message)
         .with("plan", id.as_str())
-        .with("prs", empty);
+        .with("workflows", empty);
     if live.is_empty() {
         error = error.with(
             "next",
-            format!("cpd pr add <key> --repo <path> --plan {id}"),
+            format!("cpd workflow add <key> --repo <path> --plan {id}"),
         );
     }
     Some(error)
@@ -344,9 +373,9 @@ fn reach<'a>(start: &'a Job, by_key: &BTreeMap<&'a str, &'a Job>) -> BTreeSet<&'
 
 fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
     let mut out = Vec::new();
-    let prs: BTreeSet<&str> = i.jobs.iter().map(Job::pr_str).collect();
-    for pr in prs {
-        let jobs: Vec<&Job> = i.jobs.iter().filter(|j| j.pr_str() == pr).collect();
+    let workflow_keys: BTreeSet<&str> = i.jobs.iter().map(Job::workflow_str).collect();
+    for pr in workflow_keys {
+        let jobs: Vec<&Job> = i.jobs.iter().filter(|j| j.workflow_str() == pr).collect();
         let by_key: BTreeMap<&str, &Job> = jobs.iter().map(|j| (j.key.as_str(), *j)).collect();
         let closure: BTreeMap<&str, BTreeSet<&str>> = jobs
             .iter()
@@ -395,6 +424,65 @@ fn parallel_write_overlap_rule(i: &Input) -> Vec<Finding> {
                 });
             }
         }
+    }
+    out
+}
+
+fn message(job: &str, advice: &Advice, tier: Tier, draft: bool) -> String {
+    let a = advice.tier;
+    let mut m = format!(
+        "{job} is {tier} but history favours {a} for {} Jobs: of {} first Attempts at {a}, {} merged ({:.1}%, lower bound {:.1}%), at an expected cost of ${:.2}. That is what happened to Jobs that ran at {a}, not what the Tier causes: the Lead picks harder Jobs for higher Tiers.",
+        advice.kind,
+        advice.n,
+        advice.passed,
+        advice.rate * 100.0,
+        advice.lower * 100.0,
+        advice.expected_cost
+    );
+    if draft {
+        m.push_str(&format!(
+            " Keep {tier} if this Job is harder than the usual one, or change it with cpd job edit {job} --tier {a}."
+        ));
+    }
+    m
+}
+
+/// `tier_advice`: a draft or queued Job of a Worker kind runs a Tier dearer than the history favours (downward only).
+fn tier_advice_rule(i: &Input) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for j in i.jobs {
+        if !matches!(
+            j.kind.as_str(),
+            "work" | "docs" | "test" | "impl" | "verify"
+        ) || !matches!(j.status.as_str(), "draft" | "queued")
+        {
+            continue;
+        }
+        let Some(raw) = j.tier.as_deref() else {
+            continue;
+        };
+        let Some(advice) = i.advice.iter().find(|a| a.kind == j.kind) else {
+            continue;
+        };
+        // A stored Plan's Jobs always have a valid Tier (§4.4 CHECK): a bad one is a bad row, loud.
+        let tier = Tier::parse(raw).unwrap_or_else(|_| {
+            panic!(
+                "{}",
+                CpdError::bad_row(format!("Job {} has tier {raw:?}", j.key))
+            )
+        });
+        if tier_advice::rank(advice.tier) >= tier_advice::rank(tier) {
+            continue;
+        }
+        out.push(Finding {
+            rule: Rule::TierAdvice,
+            message: message(&j.key, advice, tier, j.status == "draft"),
+            details: serde_json::Map::new(),
+            pr: Some(j.workflow_str().to_owned()),
+            job: Some(j.key.clone()),
+            other: None,
+            paths: Vec::new(),
+        });
     }
     out
 }

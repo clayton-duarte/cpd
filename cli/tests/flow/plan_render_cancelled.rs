@@ -51,10 +51,14 @@ pub(crate) fn pr(env: &TestEnv, key: &str, status: &str, base: &str, needs: &[&s
     // the needs are written in the transaction that creates the PR: after it they are Locked
     let needs: String = needs
         .iter()
-        .map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', '{key}', '{n}');"))
+        .map(|n| {
+            format!(
+                "INSERT INTO workflow_needs (plan, workflow, needs) VALUES ('pay', '{key}', '{n}');"
+            )
+        })
         .collect();
     env.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
          VALUES ('pay', '{key}', '/r/{key}', '{key}', '{base}', '{status}', 'cpd/pay/{key}', {started}, cpd_txn(), 't');{needs}"
     ));
 }
@@ -70,7 +74,7 @@ pub(crate) fn job_of_kind(
     needs: &[&str],
 ) {
     env.sql(&format!(
-        "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+        "INSERT INTO jobs (plan, workflow, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', '{pr}', '{key}', '{kind}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]',
                  'draft', 0, cpd_txn(), 't');"
     ));
@@ -171,7 +175,7 @@ fn with_cancelled_pr(superseded_by: Option<&str>) -> Fx {
         "pay",
     ])
     .ok();
-    let mut args = vec!["pr", "cancel", "old", "--plan", "pay"];
+    let mut args = vec!["workflow", "cancel", "old", "--plan", "pay"];
     if let Some(by) = superseded_by {
         args.extend(["--superseded-by", by]);
     }
@@ -228,7 +232,7 @@ fn summary_counts_leave_cancelled_out() {
     let before = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
     let (out, _text) = render(&fx);
     // the PRs counted are those that are not cancelled; the fingerprint is the one of the Plan as before
-    assert_eq!(out["prs"], 1, "{out}");
+    assert_eq!(out["workflows"], 1, "{out}");
     assert_eq!(out["draft_jobs"], 0, "{out}");
     assert_eq!(before["counts"]["cancelled"], 2, "{before}");
     assert_eq!(before["counts"]["queued"], 1, "{before}");
