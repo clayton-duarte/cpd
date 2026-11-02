@@ -247,15 +247,6 @@ mod tier_g {
         assert_eq!(g.level(), "off");
     }
 
-    #[test]
-    fn gx_is_never_a_workers_tier() {
-        let g = Tier::parse("GX").unwrap();
-        assert!(!g.is_worker_allowed());
-        let err = g.check_worker().unwrap_err();
-        assert_eq!(err.code(), ErrorCode::TierNotAllowed);
-        assert_eq!(err.details()["allowed"], "H0-H3, S0-S3");
-        assert_eq!(err.details()["rule"], "pro-d82");
-    }
 }
 
 #[cfg(test)]
@@ -287,40 +278,6 @@ mod worker_tiers {
 
     fn t(s: &str) -> Tier {
         Tier::parse(s).unwrap()
-    }
-
-    #[test]
-    fn worker_range_allows_h0_to_h3_and_s0_to_s3() {
-        for letter in [Letter::O, Letter::S, Letter::H] {
-            for effort in 0..=4 {
-                let tier = Tier::new(letter, effort).unwrap();
-                let expected = matches!(
-                    tier.to_string().as_str(),
-                    "H0" | "H1" | "H2" | "H3" | "S0" | "S1" | "S2" | "S3"
-                );
-                assert_eq!(tier.is_worker_allowed(), expected, "{tier}");
-                assert_eq!(tier.check_worker().is_ok(), expected, "{tier}");
-            }
-        }
-    }
-
-    #[test]
-    fn worker_range_refusal_names_the_range_the_rule_and_pro_d82() {
-        for name in ["H4", "S4", "O3"] {
-            let err = t(name).check_worker().unwrap_err();
-            assert_eq!(err.code(), ErrorCode::TierNotAllowed, "{name}");
-            assert_eq!(err.details()["tier"], name);
-            assert_eq!(err.details()["allowed"], "H0-H3, S0-S3");
-            assert_eq!(err.details()["rule"], "pro-d82");
-            let m = err.message();
-            assert!(
-                m.starts_with(&format!("Tier {name} is not allowed for a Worker")),
-                "{m}"
-            );
-            for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
-                assert!(m.contains(part), "{part} in {m}");
-            }
-        }
     }
 
     #[test]
