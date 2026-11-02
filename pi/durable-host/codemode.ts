@@ -1,4 +1,4 @@
-// Contract §6.18 "Code mode": the namespaces of the attached MCP servers, `mcp__<server>__`. The host
+// Contract §6.18 "Code mode": the namespaces of the attached MCP servers, `mcp__<server>__`, the server with `-` as `_` as pi's `mcpNamespace` does. The host
 // builds the code mode extension from these; no client imports @earendil-works/pi-codemode in a test.
 
 export type CodemodeServer = { server: string; tools: readonly string[] };
@@ -6,7 +6,7 @@ export type CodemodeServer = { server: string; tools: readonly string[] };
 /** One namespace prefix per server, each to the tool names under it. Pure: it reads no registry, no config. */
 export function namespacesFor(servers: readonly CodemodeServer[]): Record<string, readonly string[]> {
   const out: Record<string, readonly string[]> = {};
-  for (const { server, tools } of servers) out[`mcp__${server}__`] = tools;
+  for (const { server, tools } of servers) out[`mcp__${server.replaceAll("-", "_")}__`] = tools;
   return out;
 }
 

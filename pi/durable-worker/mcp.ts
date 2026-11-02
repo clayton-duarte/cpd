@@ -79,6 +79,11 @@ export function mcpHandler(host: McpHost) {
     host.install(extensionOf(name, connection));
     open.set(name, connection);
     await previous?.close().catch((e) => host.log(`mcp close: ${messageOf(e)}`));
+    try {
+      host.attached([...open].map(([server, c]) => ({ server, tools: c.tools.map((t) => t.name) })));
+    } catch (e) {
+      host.log(`codemode namespaces: ${messageOf(e)}`);
+    }
   };
 
   const enqueue = (event: EventOf<"mcp-attached">): void => {
