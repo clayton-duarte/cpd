@@ -314,7 +314,12 @@ impl Config {
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let worker_tier = tier_key(&mut r, "worker_tier", "H3")?;
         for (below_key, below, key, above) in [
-            ("context_distill_tier", context_distill_tier, "worker_tier", worker_tier),
+            (
+                "context_distill_tier",
+                context_distill_tier,
+                "worker_tier",
+                worker_tier,
+            ),
             ("worker_tier", worker_tier, "lead_tier", lead_tier),
             ("lead_tier", lead_tier, "manager_tier", manager_tier),
         ] {

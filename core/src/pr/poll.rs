@@ -286,7 +286,14 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
             apply(
-                tx, &seen, &reads, &owned, &checks, &follows, &ahead, worker_tier,
+                tx,
+                &seen,
+                &reads,
+                &owned,
+                &checks,
+                &follows,
+                &ahead,
+                worker_tier,
             )
         })?
     } else {
