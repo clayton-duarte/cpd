@@ -538,15 +538,35 @@ test("an asleep lead's row is dim, keyed on asleep_at", () => {
     ],
   );
 
-  // Only the rows whose lead carries `asleep_at` take the dim row class, whatever the state says.
+  // The winning class carries Tailwind's important modifier, so it beats the sidebar component's
+  // own `text-sidebar-foreground` on the same element (web/README.md "Context tree rows").
+  const DIM = "text-[var(--dango-dim)]!";
+  /** The row's counter spans: the numbers and their `·` separators, the container's children. */
+  const counterSpans = (key: string): HTMLElement[] => [
+    ...(rowContaining(key)?.querySelectorAll<HTMLElement>('[class*="tabular-nums"] > span') ?? []),
+  ];
+
+  // Only the rows whose lead carries `asleep_at` take the dim row class, whatever the state says,
+  // and every one of their counter spans does too — the `·` separator included.
   for (const key of ["sleep-stopped", "sleep-idle"]) {
-    expect(rowContaining(key)?.className).toContain("text-[var(--dango-dim)]");
+    expect(rowContaining(key)?.className).toContain(DIM);
+    const spans = counterSpans(key);
+    expect(spans.length).toBeGreaterThan(0);
+    for (const span of spans) {
+      expect(span.className).toContain(DIM);
+    }
   }
+  // An `asleep_at`-less idle Session carries none of it: neither its button nor its counters.
   for (const key of ["awake-idle", "awake-stopped", "awake-working"]) {
-    expect(rowContaining(key)?.className ?? "").not.toContain("text-[var(--dango-dim)]");
+    expect(rowContaining(key)?.className ?? "").not.toContain(DIM);
+    for (const span of counterSpans(key)) {
+      expect(span.className).not.toContain(DIM);
+    }
   }
-  // An asleep row does not take the working row's class, and its dot is the palette's plain grey.
+  // An asleep row does not take the working row's class; its dot is the palette's dim grey and an
+  // idle Session's dot is the plain grey (web/README.md "Context tree rows").
   expect(rowContaining("sleep-stopped")?.className).not.toBe(rowContaining("awake-working")?.className);
-  expect(dotColour(dotFor("sleep-stopped"))).toMatch(/dango-plain/);
+  expect(dotColour(dotFor("sleep-stopped"))).toMatch(/dango-dim/);
+  expect(dotColour(dotFor("awake-idle"))).toMatch(/dango-plain/);
   expect(dotColour(dotFor("awake-working"))).toMatch(/dango-mizu/);
 });
