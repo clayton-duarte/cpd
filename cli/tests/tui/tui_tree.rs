@@ -476,7 +476,7 @@ fn a_missing_folds_file_is_every_context_open() {
     let mut tree = Tree::start(&fx, 46, 26);
     let screen = ready(&tree);
     assert!(alpha_is_expanded(&screen), "{screen:?}");
-    // the archived Context beta is under the archive row: the row starts folded and beta is not drawn
+    // the archived Context beta is in the Archive section: the section starts folded and beta is not drawn
     assert!(
         !screen.iter().any(|r| r.contains(" beta")),
         "the folder starts folded: {screen:?}"
@@ -488,10 +488,10 @@ fn a_missing_folds_file_is_every_context_open() {
     assert!(!folds_file(&fx.env).exists(), "nothing is written");
     let archive = screen
         .iter()
-        .position(|r| r.trim() == format!("{DOWN} archive"))
-        .expect("the archive row");
+        .position(|r| r.contains("Archive"))
+        .expect("the Archive header");
     tree.click(5, archive as u16);
-    let screen = tree.until("the archive row expanded", |s| {
+    let screen = tree.until("the Archive section open", |s| {
         s.iter().any(|r| r.contains(" beta"))
     });
     let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
@@ -1227,13 +1227,13 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
             && !screen.iter().any(|r| r.contains("ship·f-bl")),
         "{screen:#?}"
     );
-    // the archived Context beta is under the archive row: open the row, then beta is folded right under it
+    // the archived Context beta is in the Archive section: open it (a click on its header), then beta is folded in it
     let archive = screen
         .iter()
-        .position(|r| r.trim() == format!("{DOWN} archive"))
-        .expect("the archive row");
+        .position(|r| r.contains("Archive"))
+        .expect("the Archive header");
     tree.click(5, archive as u16);
-    let screen = tree.until("the archive row expanded", |s| {
+    let screen = tree.until("the Archive section open", |s| {
         s.iter().any(|r| r.contains(" beta"))
     });
     let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
