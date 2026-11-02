@@ -3641,33 +3641,33 @@ The Context block's rows (title, `├─` rows, closing row) end at column `W - 
 **Rows without a cost.** Fork, Manager, Worker and toggle rows draw no cost, though each Session node carries its own cost (`SessionNode.cost_usd`, the read model's data, not a row element). A tree whose every cost is `None` draws what it drew before, except that its rows now end at column `W - 2` (pro-d186).
 - **The Standing section** (User, 2026-11-02 EST, pro-d339; the Permanent Contexts of pro-d338 and pro-d340). Below the project tree the pane holds a docked section `Standing` with the Permanent Contexts that exist in the store, `cpd`, `host` and `codereview` (`ContextId::permanent()`, `PermanentContext::ALL`), in that fixed order, never sorted by tier or age. A Permanent Context that does not exist yet is not drawn; with none, there is no section. *Assumption (I infer it; the User did not state it):* a Permanent Context is drawn in Standing only, never in the project tree or in the `archive` row, so each row has one place. **Layout**, top to bottom: the project tree (its rows as above, its own `▲ n more` / `▼ n more` cue rows and its own wheel), then ONE blank row, then the **header** row, then the Standing rows. Two consecutive Standing Context blocks are separated by ONE blank spacer row, as two live Context blocks of the project tree are, and none follows the last. The section (blank row, header and rows, its spacer rows included) is at most half the pane's height, rounded down; its spacer rows count in that height, and when its rows do not fit they scroll inside the section, spacer rows with them, with their own cue rows (`dialog::scroll::cue`) and their own wheel. The project tree never shares that scroll, and the section never moves while the project tree scrolls. **Rows**: each Standing Context is drawn as any Context row, with the same text, its Plans under it, the same expansion of its archived rows, the same closing row and the same dots. **Header**: `section::flush_title` (`tui/src/section.rs`) at the pane's width, from column 0 to the last column, with the pill text `<glyph> Standing`: the glyph U+F0B2C (`󰬬`) when the section is open and U+F0B26 (`󰬦`) when it is folded; no count. **The section is open by default.** A left click on the header row folds it (then only the blank row and the header remain; the rows are hidden) and a second click opens it. The folded state lives in the view's memory only. **Keys**: the cursor (`j`/`k`, Down, Up, Enter, `x`, `n`) crosses from the last project row into the first Standing row and back, and each region keeps the cursor row in view; a folded section has no rows for the cursor. **Click**: a left click on a Standing Context row runs `context manager --context=<id> --by-user`, as any live Context row. **Menu**: a right click on a Standing Context row opens `New Plan…` and `Copy id` only (no `Rename…`, no `Archive`); every other Context row keeps its menu; the header row has no menu. Standing Contexts are never in the `archive` row.
 
-**Worked example**: a pane 30 columns wide and 24 rows high (columns and rows counted from 0; colours are not shown). The project tree has 18 rows and 13 of them are shown: row 0 is its `▲` line (blank: nothing is hidden above), rows 1 to 13 its rows, row 14 its `▼ 5 more` line. Row 15 is the blank row and row 16 the header. Rows 17 to 23 are the Standing rows: `cpd` (its Plan `perm-managers` and an archived Plan behind the `expand` toggle), `host` (no Plan yet, so its row is the clickable ` ╰󰬪 new`) and `codereview` (one live Plan, so its last row is `╰─`). The section is 9 rows, under the 12 that half of 24 allows, so nothing scrolls.
+**Worked example**: a pane 30 columns wide and 24 rows high (columns and rows counted from 0; colours are not shown). A dot is drawn as §17 draws it:  where the Context or Plan needs the User,  where nothing does. The project tree has 22 rows, its 18 Context and Plan rows and the 4 blank spacer rows between its 5 Context blocks, and 11 of them are shown: row 0 is its `▲` line (blank: nothing is hidden above), rows 1 to 11 its rows, up to `receipts`, and row 12 its `▼ 11 more` line. The 11 hidden rows are `export-csv`, a blank row, `garden` with its two Plans, a blank row and a fifth Context of five rows (its title and four Plans). Row 13 is the blank row and row 14 the header. Rows 15 to 23 are the Standing rows: `cpd` (its Plan `perm-managers` and an archived Plan behind the `expand` toggle), a blank row, `host` (no Plan yet, so its row is the clickable ` ╰󰬪 new`), a blank row and `codereview` (one live Plan, so its last row is `╰─`). The section is 11 rows (the blank row, the header and 9 rows: 7 Context and Plan rows and 2 spacer rows), under the 12 that half of 24 allows, so nothing scrolls.
 
 ```
 
- ╭󰽢 building-cpd
- ├─󰽢 cross-repo       2⋅1⋅1⋅4
- ├─󰽤 billing-migrate
- ╰─󰽧 spike-tui
- ╭󰽤 homeserver
- ├─󰽤 b2-budget …
- ╰─󰽧 speedtest …
- ╭󰽤 tax-2026
- ├─󰽤 receipts         1⋅1⋅1⋅1
- ╰─󰽧 export-csv
- ╭󰽤 garden
- ├─󰽤 beds-plan
- ╰─󰽧 water-timer
-                     ▼ 5 more
+ ╭ building-cpd
+ ├─ cross-repo       2⋅1⋅1⋅4
+ ├─ billing-migrate
+ ╰─ spike-tui
+
+ ╭ homeserver
+ ├─ b2-budget
+ ╰─ speedtest
+
+ ╭ tax-2026
+ ├─ receipts         1⋅1⋅1⋅1
+                    ▼ 11 more
 
 ───󰬬 Standing───────────────
- ╭󰽢 cpd
- ├─󰽧 perm-managers    2⋅1⋅1⋅4
+ ╭ cpd
+ ├─ perm-managers    2⋅1⋅1⋅4
  ╰󰬦 expand
+
  ╭ host
  ╰󰬪 new
- ╭󰽤 codereview
- ╰─󰽧 review-queue
+
+ ╭ codereview
+ ╰─ review-queue
 ```
 
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable) and, after the last Session row, on into the Inbox section's item rows (below; the header, the cue lines, the up-to-date row and the blank rows are skipped by the cursor and the cursor goes back up from the first item row to the last Session; there is no toggle row, pro-d147), is drawn as the blue block (colour 4 inverted: text in the terminal's background colour, contract §6.1.1) across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
