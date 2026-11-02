@@ -654,8 +654,6 @@ fn a_click_on_a_curate_retire_item_opens_its_checklist_and_approve_runs_the_reti
                 {"record": "r-2", "text": "Other note", "reason": "stale", "target": "r-9"},
             ],
             "retire_total": 2,
-            "docs": [],
-            "docs_total": 0,
         })),
     );
     let screen = first_rows(&fx);
@@ -697,7 +695,7 @@ fn a_click_on_a_curate_retire_item_opens_its_checklist_and_approve_runs_the_reti
 }
 
 #[test]
-fn a_click_on_a_curate_docs_item_and_later_runs_nothing() {
+fn a_click_on_a_curate_docs_history_item_runs_nothing() {
     let fx = rig(vec![curation(
         Kind::CurateDocs,
         "alpha: documentation candidates",
@@ -705,41 +703,11 @@ fn a_click_on_a_curate_docs_item_and_later_runs_nothing() {
     )]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    // the first checklist is answered [Later] (closed unapproved), the second with Esc (a cancelled dialog writes the same
-    // not-approved outcome; Lead answer deploy-act-impl-a1-q3)
-    let later = Some(r#"{"approved":false,"ticked":[],"unticked":["r-3"]}"#);
-    let asked = checklists(&fx, &[later, later]);
-    says(
-        &fx,
-        &["context", "curation"],
-        Says::Ok(
-            json!({"retire": [], "retire_total": 0, "docs": [{"record": "r-3", "text": "Use sqlite", "paths": ["a.md", "b.md"]}], "docs_total": 1}),
-        ),
-    );
     let screen = first_rows(&fx);
     let click = || click_on(&screen, "alpha: documentation candidates");
     run(&fx, vec![click(), click()]);
-    let curation = words(&["context", "curation", "--context=alpha", "--limit=10"]);
-    assert_eq!(
-        cpd_calls(&fx),
-        [curation.clone(), curation],
-        "each click asks for the curation, and Later and Esc run no `context docs`"
-    );
-    let commands = commands(&fx);
-    assert_eq!(commands.len(), 2, "one checklist per click: {commands:?}");
-    assert!(
-        commands.iter().all(|c| c.starts_with(
-            "cpd tui view dialog checklist --title='Documentation candidates of alpha' --out="
-        )),
-        "{commands:?}"
-    );
-    let seen = asked
-        .seen
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    let rows = json!([{"id": "r-3", "text": "Use sqlite", "detail": "a.md, b.md"}]);
-    assert_eq!(seen, [rows.clone(), rows]);
+    assert!(cpd_calls(&fx).is_empty(), "{:?}", cpd_calls(&fx));
+    assert!(commands(&fx).is_empty(), "{:?}", commands(&fx));
 }
 
 // ---------- the right-click menu ----------
