@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use crate::config::{Catalog, TierModel};
+use crate::config::{Catalog, Tier, TierModel};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
@@ -104,6 +104,12 @@ fn a_cancelled_attempt_fails_the_dependents() {
     let ladder = Ladder {
         catalog: &catalog,
         retry_cap: 3,
+        roles: crate::config::RoleTiers {
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
     };
     store
         .write("test", |tx| {

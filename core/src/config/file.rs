@@ -14,7 +14,7 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use super::runner::WorkerRunner;
-use super::tier::{RoleTiers, Tier};
+use super::tier::{Catalog, Range, Role, RoleTiers, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{ContextId, MachineName};
@@ -246,6 +246,11 @@ impl Config {
             lead: self.lead_tier,
             manager: self.manager_tier,
         }
+    }
+
+    /// [`RoleTiers::range`] of the role defaults.
+    pub fn range(&self, catalog: &Catalog, role: Role) -> Result<Range, CpdError> {
+        self.role_tiers().range(catalog, role)
     }
 
     /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,

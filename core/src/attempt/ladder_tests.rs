@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::config::{Catalog, TierModel};
+use crate::config::{Catalog, Tier, TierModel};
 use crate::ids::{AttemptId, PlanId};
 
 use super::incident_tests::{Fixture, catalog, fixture};
@@ -62,6 +62,12 @@ fn end_on(
     let ladder = Ladder {
         catalog: cat,
         retry_cap,
+        roles: crate::config::RoleTiers {
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
     };
     f.store
         .write("test", |tx| {

@@ -161,7 +161,6 @@ fn read_jobs(
             ));
         };
         let tier = Tier::parse(&tier)?;
-        tier.check_worker()?;
         let spec = entry.remove("spec").ok_or_else(|| {
             invalid(
                 &format!("{at}.spec"),
@@ -623,6 +622,21 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
+    if let Some(jobs) = &jobs {
+        // The template's Jobs are worker Jobs: each Tier is valid in the catalog and in the worker range.
+        let catalog = match &env.catalog {
+            Some(fixed) => fixed.clone(),
+            None => crate::config::catalog::load_with(
+                &crate::policy::model::Models::of(&policy),
+                &mut env.store,
+            )?,
+        };
+        let roles = env.config.role_tiers();
+        for (tier, _) in jobs.values() {
+            catalog.check(*tier)?;
+            roles.check_job(&catalog, "work", *tier)?;
+        }
+    }
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
         .then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
     let adopt = args

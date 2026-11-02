@@ -92,7 +92,7 @@ pub struct AddArgs {
     /// The title
     #[arg(long, value_name = "text")]
     title: Text,
-    /// The Tier: <O|S|H><0-5> (required, except with --draft)
+    /// The Tier: <G|H|S|O><0-4|X> (required, except with --draft)
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
     /// The Spec file (JSON) (required, except with --draft)
@@ -127,7 +127,7 @@ pub struct EditArgs {
     /// The new title
     #[arg(long, value_name = "text")]
     title: Option<Text>,
-    /// The new Tier: <O|S|H><0-5>
+    /// The new Tier: <G|H|S|O><0-4|X>
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
     /// The new Spec file (JSON): it replaces the whole Spec; a queued Job with no Attempt takes only this flag
@@ -171,7 +171,7 @@ pub struct RetryArgs {
     /// The Job key
     #[arg(value_name = "key")]
     key: JobKey,
-    /// The Tier of the next Attempt: <O|S|H><0-5>
+    /// The Tier of the next Attempt: <G|H|S|O><0-4|X>
     #[arg(long, value_name = "T")]
     tier: Tier,
     #[command(flatten)]
@@ -270,7 +270,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
-    /// unless a Worker may have it: H0-H3 or S0-S3 (pro-d82, hs-d554).
+    /// unless it is in the worker range (floor `worker_tier` up to just below `lead_tier`); an explore Job keeps
+    /// its letter (H for a scout, S for research), effort >= 1 or X, up to the worker ceiling (pro-d328 to pro-d332).
     ///
     /// The models are those of the Job's Workflow repo key (contract §8.3 "Models" (5)): `pr` is the Workflow the Job is
     /// (or is about to be) on, `None` for the Workflow the existing Job `job` is on.
@@ -279,6 +280,7 @@ impl Env {
         plan: &PlanId,
         job: &JobKey,
         workflow: Option<&WorkflowKey>,
+        kind: &str,
         tier: Tier,
     ) -> Result<(), CpdError> {
         let home = self.home.clone();
@@ -303,22 +305,23 @@ impl Env {
                 }
             }
         })?;
-        self.check_tier_models(&models, tier)
+        self.check_tier_models(&models, kind, tier)
     }
 
     /// [`Env::check_tier`] for an explore Job, which has no Workflow: the models are the Context owner's.
-    fn check_explore_tier(&mut self, plan: &PlanId, tier: Tier) -> Result<(), CpdError> {
+    fn check_explore_tier(&mut self, plan: &PlanId, kind: &str, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
             plan_phase(conn, plan)?;
             explore_models(conn, &home, plan)
         })?;
-        self.check_tier_models(&models, tier)
+        self.check_tier_models(&models, kind, tier)
     }
 
     fn check_tier_models(
         &mut self,
         models: &crate::policy::model::Models,
+        kind: &str,
         tier: Tier,
     ) -> Result<(), CpdError> {
         let catalog = match &self.catalog {
@@ -326,7 +329,7 @@ impl Env {
             None => config::catalog::load_with(models, &mut self.store)?,
         };
         catalog.check(tier)?;
-        tier.check_worker()
+        self.config.role_tiers().check_job(&catalog, kind, tier)
     }
 }
 
@@ -342,26 +345,6 @@ fn explore_models(
         |r| r.get(0),
     )?;
     crate::policy::model::models_of_context(conn, home, &context)
-}
-
-/// `tier_not_allowed` (exit 2, `details` name the kind and its range) unless `tier` is in the range of `kind`:
-/// H1-H3 for `scout`, S1-S3 for `research`; every other kind has no range of its own.
-pub(crate) fn check_kind_tier(kind: &str, tier: Tier) -> Result<(), CpdError> {
-    let (letter, range) = match kind {
-        "scout" => (config::Letter::H, "H1-H3"),
-        "research" => (config::Letter::S, "S1-S3"),
-        _ => return Ok(()),
-    };
-    if tier.letter() == letter && (1..=3).contains(&tier.effort()) {
-        return Ok(());
-    }
-    Err(CpdError::new(
-        ErrorCode::TierNotAllowed,
-        format!("Tier {tier} is not allowed for a {kind} Job: its Tiers are {range}."),
-    )
-    .with("tier", tier.to_string())
-    .with("kind", kind)
-    .with("allowed", range))
 }
 
 /// The Plan's phase, else `plan_not_found`.

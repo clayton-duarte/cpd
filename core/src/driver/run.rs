@@ -1337,6 +1337,7 @@ impl Driver {
         let ladder = Ladder {
             catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
             retry_cap: self.config.retry_cap,
+            roles: self.config.role_tiers(),
         };
         let (plan, id) = (&self.plan, &self.id);
         let submitted = self.store.write(SOURCE, |tx| {
@@ -1490,6 +1491,7 @@ impl Driver {
         let ladder = Ladder {
             catalog: self.catalog.as_ref().expect("A1 loads the catalog"),
             retry_cap: self.config.retry_cap,
+            roles: self.config.role_tiers(),
         };
         let ended = self.store.write(SOURCE, |tx| {
             ledger::end(

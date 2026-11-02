@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use cpd_core::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use cpd_core::clock::{Clock, timestamp};
-use cpd_core::config::{Catalog, TierModel};
+use cpd_core::config::{Catalog, Tier, TierModel};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::ports::Fakes;
 
@@ -302,6 +302,12 @@ fn fail_attempt(
     let ladder = Ladder {
         catalog: &catalog,
         retry_cap,
+        roles: cpd_core::config::RoleTiers {
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
     };
     let end = End::Failed {
         cause,

@@ -194,6 +194,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     let ladder = Ladder {
         catalog: &catalog,
         retry_cap: engine.config.retry_cap,
+        roles: engine.config.role_tiers(),
     };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| {
