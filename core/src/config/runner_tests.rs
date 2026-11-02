@@ -39,7 +39,7 @@ fn levels() -> String {
         "O": ["off", "low", "medium", "high"],
         "S": ["minimal", "off", "low"],
         "H": ["off", "low", "medium"],
-        "G": ["off", "low"],
+        "G": ["off"],
     })
     .to_string()
 }
@@ -96,7 +96,7 @@ fn read_with_builds_the_catalog_from_a_scripted_success() {
     assert_eq!(catalog.o.efforts, vec![0, 1, 2, 3]);
     assert_eq!(catalog.s.efforts, vec![0, 1], "minimal has no digit");
     assert_eq!(catalog.h.efforts, vec![0, 1, 2]);
-    assert!(catalog.g.efforts.is_empty(), "G has no effort levels");
+    assert!(catalog.g.efforts.is_empty(), "G offers only off: no efforts");
 }
 
 #[test]
@@ -183,18 +183,13 @@ fn read_with_maps_an_unknown_thinking_level_to_catalog_failed() {
 }
 
 #[test]
-fn read_with_maps_a_model_with_no_usable_level_to_catalog_failed() {
+fn read_with_gives_a_model_with_no_usable_level_no_efforts() {
     let (_, result) = read(Reply::ok(
         &json!({"O": ["minimal"], "S": ["low"], "H": ["low"], "G": []}).to_string(),
     ));
-    let err = result.unwrap_err();
-    assert_eq!(err.code(), ErrorCode::CatalogFailed);
-    assert!(
-        err.message()
-            .starts_with("pi reports no usable thinking level for "),
-        "{}",
-        err.message()
-    );
+    let catalog = result.unwrap();
+    assert!(catalog.o.efforts.is_empty(), "only `OX` is valid for it");
+    assert_eq!(catalog.s.efforts, vec![1]);
 }
 
 #[test]
