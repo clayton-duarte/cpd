@@ -277,8 +277,8 @@ _Avoid_: engine, backend
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager or the User asks of one Plan's Lead. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt
 
-**Tier** (other, pro-d146):
-A two-character code naming the model and effort an agent runs at, e.g. `O3` for a Lead or `S1` for a coding Worker; the model table is the policy's `[model]` domain. It means this only: the Inbox colours are called urgency.
+**Tier** (other, pro-d146; Tier model v2, pro-d328 to pro-d332):
+A code naming the model and effort an agent runs at: a letter (`G`, `H`, `S` or `O`, ranked G < H < S < O), then an effort digit `0`–`4` that the model offers, or `X` for a model with no effort levels; e.g. `O3` for a Lead, `S1` for a coding Worker, `GX` for a model with none. Effort 5 is never valid. Each role (auxiliar, worker, lead, manager) has a default Tier and a range of Tiers (contract §9). The model table is the policy's `[model]` domain. It means this only: the Inbox colours are called urgency.
 _Avoid_: level, profile; tier (for a colour)
 
 **Context update** (mechanism):
