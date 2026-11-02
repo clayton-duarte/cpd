@@ -106,11 +106,12 @@ fn cue(arrow: &str, n: usize) -> String {
     format!("{:>1$}", format!("{arrow} {n} more"), W - 1)
 }
 
-/// The header row: `───`, the pill `Standing`, `─`, the pill of the fold glyph (both with their caps) and `─` at the last column.
-fn header(glyph: &str) -> String {
-    let left = format!("{CAP_LEFT}Standing{CAP_RIGHT}");
+/// The header row of a section: `───`, the pill of `title` (`Standing` or `Archive`), `─`s, the pill of the fold glyph (both
+/// with their caps) and `─` at the last column.
+fn header(title: &str, glyph: &str) -> String {
+    let left = format!("{CAP_LEFT}{title}{CAP_RIGHT}");
     let right = format!("{CAP_LEFT}{glyph}{CAP_RIGHT}");
-    let fill = W - 3 - "Standing".len() - 2 - 1 - 2 - 1;
+    let fill = W - 3 - title.len() - 2 - 1 - 2 - 1;
     format!("───{left}{}{right}─", "─".repeat(fill))
 }
 
@@ -122,10 +123,49 @@ fn fit(rows: &[String]) -> Vec<String> {
     all
 }
 
+/// The rows of the docked group (R2 of the docs), from its blank row to its last row, built from the sections given as
+/// `(open, rows)`: `rows` of an open section are its own `▲` cue row, its list and its `▼` cue row (see [`fit`]); a folded
+/// section is its header only. Between Standing and Archive there is exactly ONE row: Standing's reserved end row when
+/// Standing is open, one blank row when it is folded. No section, no group: no rows at all.
+fn group(standing: Option<(bool, &[String])>, archive: Option<(bool, &[String])>) -> Vec<String> {
+    if standing.is_none() && archive.is_none() {
+        return Vec::new();
+    }
+    let mut rows = vec![String::new()];
+    for (title, section) in [("Standing", standing), ("Archive", archive)] {
+        let Some((open, list)) = section else {
+            continue;
+        };
+        if title == "Archive" && matches!(standing, Some((false, _))) {
+            rows.push(String::new());
+        }
+        rows.push(header(title, if open { OPEN } else { FOLDED }));
+        if open {
+            rows.extend(list.iter().cloned());
+        }
+    }
+    rows
+}
+
 /// The screen of an `h`-row pane, as `Tree::screen` reads it (rows without trailing blanks, no empty rows at the end): the
-/// project tree's `above` cue row, its `list` rows, its `below` cue row, then, when `standing` is given, the blank row, the
-/// header and, open, the section's `rows` (its own above cue row, the list, its below cue row: see [`fit`]); folded: none.
-/// The tree takes the rows the section leaves.
+/// project tree's `above` cue row, its `list` rows, its `below` cue row, then the docked `group` at the bottom of the pane.
+/// The project tree takes the rows the group leaves.
+fn docked(h: usize, above: &str, list: &[String], below: &str, group: &[String]) -> Vec<String> {
+    let region = h - group.len();
+    let mut screen = vec![above.to_owned()];
+    screen.extend(list.iter().cloned());
+    screen.resize(region - 1, String::new());
+    screen.push(below.to_owned());
+    screen.extend(group.iter().cloned());
+    assert_eq!(screen.len(), h, "the expected pane has {h} rows");
+    while screen.last().is_some_and(String::is_empty) {
+        screen.pop();
+    }
+    screen
+}
+
+/// [`docked`] with the Standing section alone, as the first tests of this file pin it: with `standing` given, the blank
+/// row, the header and, open, the section's `rows`.
 fn pane(
     h: usize,
     above: &str,
@@ -133,26 +173,7 @@ fn pane(
     below: &str,
     standing: Option<(bool, &[String])>,
 ) -> Vec<String> {
-    let rows: &[String] = match standing {
-        Some((true, rows)) => rows,
-        _ => &[],
-    };
-    let section = standing.map_or(0, |_| 2 + rows.len());
-    let region = h - section;
-    let mut screen = vec![above.to_owned()];
-    screen.extend(list.iter().cloned());
-    screen.resize(region - 1, String::new());
-    screen.push(below.to_owned());
-    if let Some((open, _)) = standing {
-        screen.push(String::new());
-        screen.push(header(if open { OPEN } else { FOLDED }));
-        screen.extend(rows.iter().cloned());
-    }
-    assert_eq!(screen.len(), h, "the expected pane has {h} rows");
-    while screen.last().is_some_and(String::is_empty) {
-        screen.pop();
-    }
-    screen
+    docked(h, above, list, below, &group(standing, None))
 }
 
 fn wheel(tree: &mut Tree, down: bool, row: u16) {
@@ -173,6 +194,71 @@ fn row_of(screen: &[String], text: &str) -> u16 {
         .iter()
         .position(|r| r.contains(text))
         .unwrap_or_else(|| panic!("no row with {text}: {screen:?}")) as u16
+}
+
+// ---------- the Archive section ----------
+
+/// Archives the Contexts `ids` as `context archive` leaves them: the Context and its Plans carry `archived_at`.
+fn archive(fx: &Fx, ids: &[&str]) {
+    let mut s = String::new();
+    for id in ids {
+        s += &format!(
+            "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = '{id}';
+             UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE context = '{id}';"
+        );
+    }
+    sql(
+        &mut Store::open(
+            &CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
+            5000,
+        )
+        .unwrap(),
+        &s,
+    );
+}
+
+/// The view's folds file before it starts: the archived Contexts `ids` have their own closing toggle open (an archived
+/// Context starts folded), the Archive section itself is folded (its default: no `archived` key).
+fn expand(fx: &Fx, ids: &[&str]) {
+    let dir = fx.env.cpd_home().join("run").join("tui");
+    std::fs::create_dir_all(&dir).unwrap();
+    let open: Vec<String> = ids.iter().map(|id| format!("[\"{id}\"]")).collect();
+    std::fs::write(
+        dir.join("tree-folds.json"),
+        format!("{{\"collapsed\":[],\"expanded\":[{}]}}", open.join(",")),
+    )
+    .unwrap();
+}
+
+/// An archived Context's block as the section draws it (the project tree's own rows, muted): its title, then, with its
+/// own closing toggle open, its archived Plans (newest first) and `collapse`; folded, `expand` alone.
+fn archived_block(id: &str, plans: &[&str], open: bool) -> Vec<String> {
+    let mut rows = vec![title(id)];
+    if open {
+        rows.extend(plans.iter().map(|p| plan(p, false)));
+        rows.push(format!(" ╰{COLLAPSE} collapse"));
+    } else {
+        rows.push(format!(" ╰{EXPAND} expand"));
+    }
+    rows
+}
+
+/// `▲ n more` above a scrolled list, or the blank reserved row when nothing is hidden above.
+fn above_cue(offset: usize) -> String {
+    if offset > 0 {
+        cue("▲", offset)
+    } else {
+        String::new()
+    }
+}
+
+/// `▼ n more` under a list showing `n` of `total` rows from `offset`, or the blank reserved row when nothing is hidden.
+fn below_cue(total: usize, offset: usize, n: usize) -> String {
+    if total > offset + n {
+        cue("▼", total - offset - n)
+    } else {
+        String::new()
+    }
 }
 
 // ---------- the tests ----------
@@ -556,5 +642,287 @@ fn a_click_on_a_permanent_context_runs_context_manager_by_user() {
     assert_eq!(
         drive::calls(&fx)[0],
         drive::words(&["context", "manager", "--context=codereview", "--by-user"])
+    );
+}
+
+// ---------- the docked Archive section (pro-d348, pro-d349) ----------
+
+#[test]
+fn the_archive_section_is_docked_below_standing_folded_by_default_with_one_shared_blank_row() {
+    let with = fx();
+    let _engine = engine(&with);
+    populate(&with, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
+    archive(&with, &["zed"]);
+    let tree = Tree::start(&with, W as u16, 24);
+    let standing = fit(&block("cpd", &[]));
+    // Standing open (its reserved end row is the one row shared with Archive), Archive folded: its header is the last row.
+    // The project tree holds `aa` at the top: no `archive` row, no `zed`.
+    assert_eq!(
+        tree.screen(),
+        docked(
+            24,
+            "",
+            &block("aa", &[]),
+            "",
+            &group(Some((true, &standing)), Some((false, &[])))
+        )
+    );
+    assert_eq!(
+        tree.screen()[23],
+        header("Archive", FOLDED),
+        "the Archive header is the pane's last row, its glyph U+F0B2C"
+    );
+    assert_eq!(
+        tree.screen()[22],
+        "",
+        "Standing's reserved end row: the one blank row above Archive's header"
+    );
+    drop(tree);
+    drop(_engine);
+    drop(with);
+    // with no archived Context: the Standing-only layout, no Archive header
+    let without = fx();
+    let _engine = engine(&without);
+    populate(&without, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
+    let tree = Tree::start(&without, W as u16, 24);
+    assert_eq!(
+        tree.screen(),
+        pane(
+            24,
+            "",
+            &blocks(&[block("zed", &["zp"]), block("aa", &[])]),
+            "",
+            Some((true, &standing))
+        )
+    );
+    assert!(
+        !tree.screen().iter().any(|r| r.contains("Archive")),
+        "no archived Context, no Archive section: {:?}",
+        tree.screen()
+    );
+}
+
+#[test]
+fn a_click_on_the_archive_header_opens_and_folds_it_with_the_fold_glyph() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
+    archive(&fx, &["zed"]);
+    expand(&fx, &["zed"]);
+    let mut tree = Tree::start(&fx, W as u16, 24);
+    let standing = fit(&block("cpd", &[]));
+    let folded = docked(
+        24,
+        "",
+        &block("aa", &[]),
+        "",
+        &group(Some((true, &standing)), Some((false, &[]))),
+    );
+    assert_eq!(tree.screen(), folded, "folded by default");
+    tree.click(5, 23); // the Archive header, the pane's last row
+    // open (glyph U+F0B26): a reserved blank row under the header, zed's block (title, its archived Plan, its closing row),
+    // the reserved last row at the bottom (dropped by the screen). Group: 12 rows, the half of the pane, so nothing scrolls.
+    let archived = fit(&archived_block("zed", &["zp"], true));
+    let open = docked(
+        24,
+        "",
+        &block("aa", &[]),
+        "",
+        &group(Some((true, &standing)), Some((true, &archived))),
+    );
+    assert_eq!(tree.screen(), open);
+    assert_eq!(
+        tree.screen()[18],
+        header("Archive", OPEN),
+        "the header moved up with the section: group rows 12 to 23, the header at 18"
+    );
+    tree.click(5, 18);
+    assert_eq!(tree.screen(), folded, "a second click folds it back");
+    assert!(
+        drive::calls(&fx).is_empty(),
+        "folding runs no command: {:?}",
+        drive::calls(&fx)
+    );
+}
+
+#[test]
+fn a_folded_standing_leaves_one_blank_row_above_the_archive_header() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
+    archive(&fx, &["zed"]);
+    let mut tree = Tree::start(&fx, W as u16, 24);
+    // the group: blank row, Standing's header (rows 17), 4 rows of its own, Archive's header; Standing's header is row 18
+    tree.click(5, 18);
+    // the rows at the bottom: blank row, Standing header (U+F0B2C), one blank row, Archive header at the pane's last row
+    let folded = group(Some((false, &[])), Some((false, &[])));
+    assert_eq!(
+        folded,
+        [
+            String::new(),
+            header("Standing", FOLDED),
+            String::new(),
+            header("Archive", FOLDED)
+        ]
+    );
+    assert_eq!(
+        tree.screen(),
+        docked(24, "", &block("aa", &[]), "", &folded)
+    );
+    assert_eq!(tree.screen()[23], header("Archive", FOLDED));
+    assert_eq!(tree.screen()[22], "");
+    assert_eq!(tree.screen()[21], header("Standing", FOLDED));
+    assert_eq!(tree.screen()[20], "");
+}
+
+#[test]
+fn the_docked_group_is_capped_at_half_the_pane_and_each_section_scrolls_on_its_own() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    // Standing: the three Permanent Contexts (the only ones), 3 Plans each; Archive: z1, z2, z3, 2 Plans each, their own
+    // toggle open; the project tree: `aa`. (Archived Contexts are listed by id.)
+    populate(
+        &fx,
+        &[
+            ("cpd", &["c1", "c2", "c3"]),
+            ("host", &["h1", "h2", "h3"]),
+            ("codereview", &["r1", "r2", "r3"]),
+            ("aa", &[]),
+            ("z1", &["a1", "a2"]),
+            ("z2", &["b1", "b2"]),
+            ("z3", &["d1", "d2"]),
+        ],
+    );
+    archive(&fx, &["z1", "z2", "z3"]);
+    expand(&fx, &["z1", "z2", "z3"]);
+    // A pane of 20 rows: B = floor(20 / 2) = 10. Standing: 3 blocks of 4 rows and 2 spacers, n_S = 14; Archive: 3 blocks of
+    // 4 rows (title, 2 Plans, `collapse`) and 2 spacers, n_A = 14. The group wants 1 + (3 + 14) + (3 + 14) = 35 > 10, so
+    // the fixed rows F = 1 (blank) + 2 (headers) + 4 (reserved rows) = 7 stay and L = 10 - 7 = 3 list rows are shared:
+    // Archive is open with rows, so a = 1, n_S' = min(14, 3 - 1) = 2 and n_A' = min(14, 3 - 2) = 1. The group is 10 rows,
+    // the project region 10 rows: screen rows 0 to 9 (the project tree), 10 the blank row, 11 Standing's header, 12 its
+    // `▲` row, 13 and 14 its list, 15 its `▼` row (shared with Archive), 16 Archive's header, 17 its `▲` row, 18 its
+    // list row, 19 its `▼` row. A wheel notch scrolls 3 rows (view::WHEEL_ROWS, the tree's notch; guess: the sections
+    // keep it) and the offsets clamp at 14 - 2 = 12 and 14 - 1 = 13.
+    let all_s = blocks(&[
+        block("cpd", &["c3", "c2", "c1"]),
+        block("host", &["h3", "h2", "h1"]),
+        block("codereview", &["r3", "r2", "r1"]),
+    ]);
+    let all_a = blocks(&[
+        archived_block("z1", &["a2", "a1"], true),
+        archived_block("z2", &["b2", "b1"], true),
+        archived_block("z3", &["d2", "d1"], true),
+    ]);
+    assert_eq!((all_s.len(), all_a.len()), (14, 14));
+    let shown = |s: usize, a: usize| {
+        let mut standing = vec![above_cue(s)];
+        standing.extend(all_s[s..s + 2].iter().cloned());
+        standing.push(below_cue(14, s, 2));
+        let mut archived = vec![above_cue(a)];
+        archived.extend(all_a[a..a + 1].iter().cloned());
+        archived.push(below_cue(14, a, 1));
+        docked(
+            20,
+            "",
+            &block("aa", &[]),
+            "",
+            &group(Some((true, &standing)), Some((true, &archived))),
+        )
+    };
+    let mut tree = Tree::start(&fx, W as u16, 20);
+    assert_eq!(tree.screen(), shown(0, 0), "the start");
+    assert_eq!(tree.screen()[15], cue("▼", 12));
+    assert_eq!(tree.screen()[19], cue("▼", 13));
+    wheel(&mut tree, true, 3); // over the project region: neither section moves
+    assert_eq!(
+        tree.screen(),
+        shown(0, 0),
+        "the project region's wheel is its own"
+    );
+    wheel(&mut tree, true, 13); // over Standing's list rows: only Standing's rows move
+    assert_eq!(tree.screen(), shown(3, 0), "only Standing scrolled");
+    wheel(&mut tree, true, 18); // over Archive's list row: only Archive's rows move
+    assert_eq!(tree.screen(), shown(3, 3), "only Archive scrolled");
+    for _ in 0..6 {
+        wheel(&mut tree, true, 14);
+    }
+    assert_eq!(
+        tree.screen(),
+        shown(12, 3),
+        "Standing at its end: its last two rows, no `▼`"
+    );
+    for _ in 0..6 {
+        wheel(&mut tree, true, 18);
+    }
+    assert_eq!(
+        tree.screen(),
+        shown(12, 13),
+        "Archive at its end: its last row, no `▼`"
+    );
+    wheel(&mut tree, true, 3);
+    assert_eq!(
+        tree.screen(),
+        shown(12, 13),
+        "the project region's wheel moves neither"
+    );
+    for _ in 0..6 {
+        wheel(&mut tree, false, 14);
+    }
+    assert_eq!(
+        tree.screen(),
+        shown(0, 13),
+        "Standing back at its start, Archive stays"
+    );
+    for _ in 0..6 {
+        wheel(&mut tree, false, 18);
+    }
+    assert_eq!(tree.screen(), shown(0, 0));
+}
+
+/// REGRESSION (a click on an archived Context's title keeps its command; it fails today because the row is not drawn there
+/// yet): with Archive open, the click runs `context unarchive <id>`, then `context manager --context=<id> --by-user`.
+#[test]
+fn a_click_on_an_archived_contexts_title_in_the_archive_section_unarchives_it_and_opens_its_manager()
+ {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx, &[("aa", &[]), ("zed", &["zp"])]);
+    archive(&fx, &["zed"]);
+    drive::fake_cpd(
+        &fx,
+        r#"{"ok":true,"manager":{"session":"m-zed","name":"zed-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-zed","displaced":null}"#,
+    );
+    let mut tree = Tree::start(&fx, W as u16, 24);
+    // no Standing: the group is the blank row and Archive's header, the pane's last row
+    assert_eq!(
+        tree.screen(),
+        docked(
+            24,
+            "",
+            &block("aa", &[]),
+            "",
+            &group(None, Some((false, &[])))
+        )
+    );
+    tree.click(5, 23);
+    // open, zed folded: the group is 1 + 3 + 2 = 6 rows; header 19, `▲` row 20, title 21, `expand` 22, `▼` row 23
+    let archived = fit(&archived_block("zed", &["zp"], false));
+    assert_eq!(
+        tree.screen(),
+        docked(
+            24,
+            "",
+            &block("aa", &[]),
+            "",
+            &group(None, Some((true, &archived)))
+        )
+    );
+    tree.click(8, 21);
+    assert_eq!(
+        drive::calls(&fx),
+        [
+            drive::words(&["context", "unarchive", "zed"]),
+            drive::words(&["context", "manager", "--context=zed", "--by-user"]),
+        ]
     );
 }
