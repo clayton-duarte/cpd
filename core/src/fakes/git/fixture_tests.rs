@@ -1319,6 +1319,58 @@ fn reset_hard_on_a_detached_head_moves_only_head() {
     );
 }
 
+#[test]
+fn clean_fd_removes_untracked_files_and_directories_and_keeps_ignored_and_tracked_files() {
+    let mut w = fx();
+    let dir = made(&mut w, &[("f.txt", "f\n"), (".gitignore", "ignored.log\n")]);
+    w.write(&dir, "new.rs", "n\n");
+    w.write(&dir, "newdir/x.txt", "x\n");
+    w.write(&dir, "ignored.log", "i\n");
+    for flags in [&["-fd"][..], &["-df"], &["-f", "-d"]] {
+        w.write(&dir, "new.rs", "n\n");
+        w.write(&dir, "newdir/x.txt", "x\n");
+        let mut args = vec!["clean"];
+        args.extend_from_slice(flags);
+        assert_eq!(w.ok(&dir, &args), "Removing new.rs\nRemoving newdir/\n");
+        assert_eq!(
+            (
+                w.read(&dir, "new.rs"),
+                w.read(&dir, "newdir/x.txt"),
+                w.read(&dir, "ignored.log").as_deref(),
+                w.read(&dir, "f.txt").as_deref()
+            ),
+            (None, None, Some("i\n"), Some("f\n"))
+        );
+        assert_eq!(status(&w, &dir), "");
+    }
+}
+
+#[test]
+fn clean_f_without_d_keeps_an_untracked_directory() {
+    let mut w = fx();
+    let dir = one(&mut w);
+    w.write(&dir, "new.rs", "n\n");
+    w.write(&dir, "newdir/x.txt", "x\n");
+    assert_eq!(w.ok(&dir, &["clean", "-f"]), "Removing new.rs\n");
+    assert_eq!(w.read(&dir, "newdir/x.txt").as_deref(), Some("x\n"));
+}
+
+#[test]
+fn clean_without_f_is_refused() {
+    let mut w = fx();
+    let dir = one(&mut w);
+    w.write(&dir, "new.rs", "n\n");
+    let out = w.git(&dir, &["clean", "-d"]);
+    assert_eq!(
+        (out.code, out.stderr.as_str()),
+        (
+            128,
+            "fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; refusing to clean\n"
+        )
+    );
+    assert_eq!(w.read(&dir, "new.rs").as_deref(), Some("n\n"));
+}
+
 // ---- merge --------------------------------------------------------------------------------------------
 
 #[test]
