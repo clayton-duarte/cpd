@@ -17,7 +17,7 @@ const LEAD2: &str = "lead2";
 const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
-/// `session.rs`'s fixture (Leads `lead1` on `pay`, `lead2`, Manager `manager1` on `O5`, Worker `worker1`), the config
+/// `session.rs`'s fixture (Leads `lead1` on `pay`, `lead2`, Manager `manager1` on `O2`, Worker `worker1`), the config
 /// `lead_tier = "O2"`, `review_lead_tier = "S3"`, `manager_tier = "O4"` (plus `extra` tables), a fake pi install, and
 /// a catalog where O and S list efforts 0-`s_max` ... and H lists `h_efforts`.
 fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
@@ -128,7 +128,7 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
     assert_eq!(sent[0]["data"], json!({"from": "O3", "to": "S2"}));
 
     assert_eq!(tier(&fx, LEAD2), "O3");
-    assert_eq!(tier(&fx, MANAGER), "O5");
+    assert_eq!(tier(&fx, MANAGER), "O2");
     assert_eq!(tier(&fx, WORKER), "S2");
 }
 
@@ -154,7 +154,7 @@ fn retier_tier_moves_the_manager_too() {
     assert_eq!(sent.len(), 1);
     assert_eq!(
         (sent[0]["session"].as_str(), sent[0]["data"].clone()),
-        (Some(MANAGER), json!({"from": "O5", "to": "O3"}))
+        (Some(MANAGER), json!({"from": "O2", "to": "O3"}))
     );
 }
 

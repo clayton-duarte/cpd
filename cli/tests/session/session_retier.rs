@@ -26,7 +26,7 @@ const ARCHIVED_LEAD: &str = "lead5";
 const ARCHIVED_MANAGER: &str = "manager0";
 
 /// `session.rs`'s fixture (Leads `lead1` on `pay` and `lead2` on `other`, Manager `manager1`, Worker `worker1`, every
-/// Lead on `O3`, the Manager on `O5`), with the config the User set on 2026-10-20 (`lead_tier = "O2"`, `manager_tier =
+/// Lead on `O3`, the Manager on `O2`), with the config the User set on 2026-10-20 (`lead_tier = "O2"`, `manager_tier =
 /// "O4"`, hs-d506) and more Sessions: a side fork `fork1` (a Lead on `O3`), a Lead already on its target `lead4`
 /// (`O2`), and an archived Lead `lead5` and an archived Manager `manager0`, both stale.
 fn fixture(env: &TestEnv) {
@@ -41,7 +41,7 @@ fn fixture(env: &TestEnv) {
            ('fork1', 'lead', 'ctx', 'pay', NULL, 'Side', 'lead1', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5', NULL),
            ('lead4', 'lead', 'ctx', 'pay', NULL, 'On target', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't6', NULL),
            ('lead5', 'lead', 'ctx', 'pay', NULL, 'Archived lead', NULL, '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7', 't9'),
-           ('manager0', 'manager', 'ctx', NULL, NULL, 'Old manager', NULL, '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't8', 't9');"
+           ('manager0', 'manager', 'ctx', NULL, NULL, 'Old manager', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't8', 't9');"
     ));
 }
 
@@ -109,7 +109,7 @@ fn retier_one_moves_a_lead_to_lead_tier_with_one_event() {
 
     // Only that Session.
     assert_eq!(tier(&fx, LEAD2), "O3");
-    assert_eq!(tier(&fx, MANAGER), "O5");
+    assert_eq!(tier(&fx, MANAGER), "O2");
 }
 
 /// A Manager goes to `manager_tier` (`O4` = `xhigh`), a Context's Event with no Plan.
@@ -126,7 +126,7 @@ fn retier_one_moves_a_manager_to_manager_tier() {
             out["retiered"][0]["from"].as_str(),
             out["retiered"][0]["to"].as_str()
         ),
-        (Some("manager"), Some("O5"), Some("O4"))
+        (Some("manager"), Some("O2"), Some("O4"))
     );
     assert_eq!(tier(&fx, MANAGER), "O4");
     let shown = show(&fx, MANAGER);
@@ -145,7 +145,7 @@ fn retier_one_moves_a_manager_to_manager_tier() {
         (
             Some(MANAGER),
             Value::Null,
-            json!({"from": "O5", "to": "O4"})
+            json!({"from": "O2", "to": "O4"})
         )
     );
 }
@@ -181,7 +181,7 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
             want(FORK, "O3", "O2"),
             want(LEAD1, "O3", "O2"),
             want(LEAD2, "O3", "O2"),
-            want(MANAGER, "O5", "O4")
+            want(MANAGER, "O2", "O4")
         ]
     );
     assert_eq!(
@@ -201,7 +201,7 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
     }
     assert_eq!(tier(&fx, WORKER), "S2");
     assert_eq!(tier(&fx, ARCHIVED_LEAD), "O3");
-    assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O5");
+    assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O2");
 
     // One Event per changed Session, none for the others.
     let mut sessions: Vec<String> = events(&fx, "session-retiered")
@@ -453,7 +453,7 @@ fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
         })
         .collect();
     assert!(moved.contains(&(LEAD1, "S2", "S3")), "{out}");
-    assert!(moved.contains(&(MANAGER, "O5", "O4")), "{out}");
+    assert!(moved.contains(&(MANAGER, "O2", "O4")), "{out}");
     assert_eq!(tier(&fx, LEAD1), "S3");
     assert_eq!(tier(&fx, MANAGER), "O4");
 }

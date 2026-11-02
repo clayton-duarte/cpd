@@ -3067,11 +3067,11 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
         count(&fx.env, "events"),
         count(&fx.env, "jobs"),
     );
-    for tier in ["H4", "O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4"] {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    for tier in ["H4", "O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4"] {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!(
@@ -3185,7 +3185,7 @@ fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
         "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
     ); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["H4", "O1", "O3", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4"] {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
         not_allowed(
             &job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"),
@@ -3276,7 +3276,7 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
         "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
     ); // H4 reaches the Worker range check
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["H4", "O1", "O3", "O5", "S4", "S5"] {
+    for tier in ["H4", "O1", "O3", "S4"] {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
@@ -3374,6 +3374,10 @@ fn a_job_tier_g0_parses_and_is_tier_not_allowed_while_g5_is_tier_invalid() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
+    fixture(
+        &fx.env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2]' WHERE letter = 'G';",
+    ); // G0 reaches the Worker range check
     let e = refused(&job_add(&fx, "pl", "k", "G0", &[]), "tier_not_allowed", 2);
     assert_eq!(e["details"]["tier"], "G0", "{e}");
     refused(&job_add(&fx, "pl", "k", "G5", &[]), "tier_invalid", 2);

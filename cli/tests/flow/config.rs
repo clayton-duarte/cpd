@@ -1019,10 +1019,10 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
             "ok": true,
             "pi_version": "9.9.9",
             "tiers": {
-                "O": {"model": "p/m-opus", "efforts": [0, 1, 2, 3, 4, 5]},
-                "S": {"model": "p/m-sonnet", "efforts": [0, 1, 2, 3, 4, 5]},
+                "O": {"model": "p/m-opus", "efforts": [0, 1, 2, 3, 4]},
+                "S": {"model": "p/m-sonnet", "efforts": [0, 1, 2, 3, 4]},
                 "H": {"model": "p/m-low", "efforts": [0, 1, 2]},
-                "G": {"model": "p/m-g", "efforts": []}
+                "G": {"model": "p/m-g", "efforts": [0, 1, 2, 3, 4]}
             }
         })
     );
@@ -1036,11 +1036,14 @@ fn tiers_runs_the_catalog_module_from_argv() {
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.2.0");
-    // `minimal` is dropped; the levels map to efforts by position.
-    assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
+    // `minimal` and `max` are dropped; the levels map to efforts by position.
+    assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4]));
     assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0, 1, 2, 3]));
-    assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
+    assert_eq!(
+        out["tiers"]["G"],
+        json!({"model": "p/m-g", "efforts": [0, 1, 2, 3]})
+    );
 
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let calls = fx.calls("node");
@@ -1075,13 +1078,13 @@ fn tiers_runs_the_catalog_module_from_argv() {
 const TIERS_MODELS_DEFAULT_G: &str = "O = \"github-copilot/m-opus\"\nS = \"github-copilot/m-sonnet\"\nH = \"github-copilot/m-low\"\n";
 
 #[test]
-fn tiers_prints_g_without_an_effort() {
+fn tiers_reads_the_efforts_of_g_like_the_other_letters() {
     let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(
         out["tiers"]["G"],
-        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []})
+        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": [0, 1, 2, 3]})
     );
     assert_eq!(
         fx.calls("node")[0].args.last().unwrap(),
@@ -1096,7 +1099,7 @@ fn tiers_prints_g_without_an_effort() {
     fx.fake_node(levels(ALL_LEVELS_JSON));
     assert_eq!(
         fx.cpd(&["tiers"]).ok()["tiers"]["G"],
-        json!({"model": "github-copilot/gemini", "efforts": []})
+        json!({"model": "github-copilot/gemini", "efforts": [0, 1, 2, 3]})
     );
 }
 
@@ -1114,28 +1117,28 @@ fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
     );
 }
 
+/// Tier model v2: the cache holds four rows per version, G included. A cache of only O, S and H rows is a miss: `cpd tiers`
+/// asks pi again and writes the four rows.
 #[test]
-fn a_cache_written_before_g_still_serves_the_catalog() {
+fn a_cache_without_a_g_row_is_a_miss_and_is_written_again_with_four_rows() {
     let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
-    // Only the cold call has a reply: a second call of node would be unscripted and fail the test.
-    fx.fake_once("node", levels(ALL_LEVELS_JSON));
-    fx.cpd(&["tiers"]).ok();
-    assert_eq!(
-        cached_rows(&fx.env),
-        [
-            row("1.2.0", "H", "github-copilot/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "github-copilot/m-opus", "[0,1,2,3,4,5]"),
-            row("1.2.0", "S", "github-copilot/m-sonnet", "[0,1]"),
-        ],
-        "G is never cached"
+    fx.env.sql(
+        "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
+           ('1.2.0', 'O', 'github-copilot/m-opus', '[0,1,2,3,4]', 't'),
+           ('1.2.0', 'S', 'github-copilot/m-sonnet', '[0,1]', 't'),
+           ('1.2.0', 'H', 'github-copilot/m-low', '[0,1,2,3]', 't');",
     );
+    // Only one reply: a second call of node would be unscripted and fail the test.
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
+    assert_eq!(fx.calls("node").len(), 1, "the three-row cache was a miss");
     assert_eq!(
         out["tiers"]["G"],
-        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []})
+        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": [0, 1, 2, 3]})
     );
-    assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
-    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
+    assert_eq!(cached_rows(&fx.env).len(), 4);
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"]["efforts"], json!([0, 1, 2, 3]));
+    assert_eq!(fx.calls("node").len(), 1, "now the four rows serve it");
 }
 
 /// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
@@ -1320,10 +1323,6 @@ fn tiers_catalog_failures_are_catalog_failed() {
             levels(r#"{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}"#),
         ),
         (
-            "a model with no usable level",
-            levels(r#"{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}"#),
-        ),
-        (
             "levels that are not text",
             levels(r#"{"O":[1],"S":["off"],"H":["off"],"G":["off"]}"#),
         ),
@@ -1457,8 +1456,9 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     assert_eq!(
         cached_rows(&fx.env),
         [
+            row("1.2.0", "G", "p/m-g", "[0,1,2,3]"),
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4]"),
             row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
         ]
     );
@@ -1497,15 +1497,17 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
-    assert_eq!(out["tiers"]["H"]["efforts"], json!([0]));
+    assert_eq!(out["tiers"]["H"]["efforts"], json!([]), "only off: no efforts");
     // The table is append-only (§4.4): the new version's rows join the old ones.
     assert_eq!(
         cached_rows(&fx.env),
         [
+            row("1.2.0", "G", "p/m-g", "[0,1,2,3]"),
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4]"),
             row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
-            row("1.3.0", "H", "p/m-low", "[0]"),
+            row("1.3.0", "G", "p/m-g", "[]"),
+            row("1.3.0", "H", "p/m-low", "[]"),
             row("1.3.0", "O", "p/m-opus", "[0,1]"),
             row("1.3.0", "S", "p/m-sonnet", "[0,1]"),
         ]
@@ -1542,13 +1544,13 @@ fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
     assert_eq!(second["pi_version"], "1.2.0");
     assert_eq!(
         second["tiers"]["S"]["efforts"],
-        json!([0, 1, 2, 3, 4, 5]),
+        json!([0, 1, 2, 3, 4]),
         "the changed models.json is seen"
     );
     assert_eq!(fx.calls("node").len(), 2);
     // Append-only: the first bytes' rows stay beside the second's.
     let rows = cached_rows(&fx.env);
-    assert_eq!(rows.len(), 6, "{rows:?}");
+    assert_eq!(rows.len(), 8, "{rows:?}");
     assert!(
         rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3]")),
         "{rows:?}"
@@ -1599,7 +1601,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     assert_eq!(fx.calls("node").len(), 2);
     assert!(cached_rows(&fx.env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
     // The unchanged models' rows are kept, not duplicated or rewritten.
-    assert_eq!(cached_rows(&fx.env).len(), 4);
+    assert_eq!(cached_rows(&fx.env).len(), 5);
 }
 
 #[test]
@@ -1832,7 +1834,7 @@ fn config_refuses_an_effort_5_review_lead_tier() {
         assert_eq!(err["details"]["key"], "review_lead_tier", "{tier}: {err}");
         let message = err["message"].as_str().unwrap();
         assert!(
-            message.contains("effort 0-4") && message.contains("hs-d506"),
+            message.contains("<G|H|S|O><0-4|X>"),
             "{tier}: {message}"
         );
     }
