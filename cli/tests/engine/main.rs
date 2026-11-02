@@ -17,6 +17,7 @@ mod watch_jira;
 mod watch_models;
 mod watch_parked;
 mod watch_parked_inbox;
+mod watch_permanent;
 mod watch_react;
 mod watch_resources;
 mod watch_sleep;
