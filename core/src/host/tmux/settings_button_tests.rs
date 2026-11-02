@@ -62,10 +62,10 @@ fn the_settings_click_range_owns_columns_21_to_25() {
     let at = format.find(pill).unwrap();
     assert_eq!(display_width(&format[..at]), 21, "it starts at column 21");
     assert_eq!(display_width(pill), 4, "it covers columns 21-24");
-    // tmux's range also owns the cell after the pill, the join (column 25): the left group ends there
+    // the left group is 25 cells and ends with the pill; tmux's range also owns the join after it, column 25
     assert_eq!(
-        display_width(&format[..at + pill.len()]) + 1,
+        display_width(&format[..at + pill.len()]),
         25,
-        "the range owns up to column 25"
+        "the left group is 25 cells and ends with the settings pill; the range also owns the join after it, column 25"
     );
 }
