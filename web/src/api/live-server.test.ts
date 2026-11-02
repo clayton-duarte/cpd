@@ -449,3 +449,42 @@ test("GET /__cpd/plans answers an empty list without the plans dependency", asyn
   expect(res.status()).toBe(200);
   expect(JSON.parse(res.body())).toEqual({ ok: true, plans: [] });
 });
+
+// The durable send transport (web/README.md "Send"): the send route prefers the injected
+// durable transport for a durable Session, while a pi Session keeps the CLI `send`. The
+// composition, not the handler, decides which transport exists; the handler only picks by runner.
+
+test("a_durable_sessions_send_prefers_the_injected_durable_transport", async () => {
+  const cli: Array<[string, string, string]> = [];
+  const durable: Array<[string, string, string]> = [];
+  const handler = createLiveHandler(
+    deps({
+      list: async () => [piSession, durableSession],
+      send: async (id: string, text: string, unblocks: string) => {
+        cli.push([id, text, unblocks]);
+      },
+      durableSend: async (id: string, text: string, unblocks: string) => {
+        durable.push([id, text, unblocks]);
+      },
+    } as unknown as Partial<LiveDeps>),
+  );
+  const post = (id: string) =>
+    call(handler, {
+      method: "POST",
+      url: `/__cpd/sessions/${id}/send`,
+      headers: { "x-cpd-token": TOKEN, "content-type": "application/json" },
+      body: JSON.stringify({ text: "resume", unblocks: "the user answered" }),
+    });
+
+  // A durable Session takes the injected durable transport, not the CLI.
+  const durableRes = await post(durableSession.id);
+  expect(durableRes.res.status()).toBe(200);
+  expect(durable).toEqual([[durableSession.id, "resume", "the user answered"]]);
+  expect(cli).toEqual([]);
+
+  // A pi Session keeps the CLI send, even with the durable transport present.
+  const piRes = await post(piSession.id);
+  expect(piRes.res.status()).toBe(200);
+  expect(cli).toEqual([[piSession.id, "resume", "the user answered"]]);
+  expect(durable).toHaveLength(1);
+});
