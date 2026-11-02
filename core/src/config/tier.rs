@@ -82,7 +82,7 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
 }
 
 /// The highest effort digit; effort 5 is valid for no letter.
-const MAX_EFFORT: u8 = 4;
+const TOP_EFFORT: u8 = 4;
 
 /// A Tier: a model letter and an effort 0-4 or `X`, `^[GHSO]([0-4]|X)$`, e.g. `S3`, `GX`.
 /// `X` (no effort) is distinct from effort 0; it is the one Tier of a model with no effort levels.
@@ -96,7 +96,7 @@ pub struct Tier {
 impl Tier {
     /// `None` when `effort` is above 4.
     pub fn new(letter: Letter, effort: u8) -> Option<Tier> {
-        (effort <= MAX_EFFORT).then_some(Tier {
+        (effort <= TOP_EFFORT).then_some(Tier {
             letter,
             effort: Some(effort),
         })

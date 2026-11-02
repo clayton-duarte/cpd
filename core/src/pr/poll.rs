@@ -304,16 +304,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     // A poll that finds nothing new opens no write transaction (D5).
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
-            apply(
-                tx,
-                &seen,
-                &reads,
-                &owned,
-                &checks,
-                &follows,
-                &ahead,
-                &tiers,
-            )
+            apply(tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers)
         })?
     } else {
         Outcome::default()
@@ -452,7 +443,9 @@ fn apply(
                 if tell(tx, plan, key, resolved, &change)? {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
-                if let Some(job) = update_for_conflict(tx, plan, key, &change, || tier_of(plan, key))? {
+                if let Some(job) =
+                    update_for_conflict(tx, plan, key, &change, || tier_of(plan, key))?
+                {
                     out.update_jobs
                         .push((plan.clone(), key.clone(), job, Cause::Conflict));
                 }
@@ -463,7 +456,12 @@ fn apply(
         let is_ahead = ahead
             .iter()
             .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
-        let (base_changed, job) = follow_base(tx, follow, is_ahead, tier_of(&follow.plan, &follow.workflow)?)?;
+        let (base_changed, job) = follow_base(
+            tx,
+            follow,
+            is_ahead,
+            tier_of(&follow.plan, &follow.workflow)?,
+        )?;
         out.base_changed.push(base_changed);
         if let Some(job) = job {
             out.update_jobs.push((

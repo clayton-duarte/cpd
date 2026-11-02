@@ -86,10 +86,14 @@ fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
     .unwrap();
 }
 
+/// Role defaults that are rungs of the healthy catalog (G `p/m-aux` 0-4, H `p/m-low` 0-2, S and O 0-4), ascending: the
+/// built-in GX and H3 are no rungs of it.
+const ROLES: &str = "context_distill_tier = \"G0\"\nworker_tier = \"H2\"\nlead_tier = \"S4\"";
+
 /// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
 fn healthy() -> Fx {
     let fx = Fx::with_ports();
-    write_config(&fx, "");
+    write_config(&fx, ROLES);
     fx.healthy_tools();
     fx
 }
@@ -521,7 +525,9 @@ fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
     let fx = healthy();
     write_config(
         &fx,
-        "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]",
+        &format!(
+            "{ROLES}\nlead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]"
+        ),
     );
     let run = doctor(&fx);
     run.ok();
@@ -974,7 +980,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
     // No runner file, and a Node too old for the runner: `pi` does not care.
     for extra in ["", "worker_runner = \"pi\""] {
         let fx = healthy();
-        write_config(&fx, extra);
+        write_config(&fx, &format!("{ROLES}\n{extra}"));
         script(
             &fx,
             "node",
@@ -998,7 +1004,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
 #[test]
 fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
     let fx = healthy();
-    write_config(&fx, "worker_runner = \"durable\"");
+    write_config(&fx, &format!("{ROLES}\nworker_runner = \"durable\""));
     add_runner_file(&fx);
     script(
         &fx,

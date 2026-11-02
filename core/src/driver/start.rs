@@ -137,7 +137,17 @@ pub fn start_with_allocation(
     key: &JobKey,
     allocation: Option<Allocation>,
 ) -> Result<Started, CpdError> {
-    let next = store.read(|conn| decide(conn, ctx.home, ctx.catalog, &ctx.config.role_tiers(), plan, key, allocation))?;
+    let next = store.read(|conn| {
+        decide(
+            conn,
+            ctx.home,
+            ctx.catalog,
+            &ctx.config.role_tiers(),
+            plan,
+            key,
+            allocation,
+        )
+    })?;
     // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
     let (wanted, pools) = store.read(|conn| {
         let wanted = resource::wanted(conn, plan, key.as_str())?;

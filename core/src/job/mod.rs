@@ -309,7 +309,12 @@ impl Env {
     }
 
     /// [`Env::check_tier`] for an explore Job, which has no Workflow: the models are the Context owner's.
-    fn check_explore_tier(&mut self, plan: &PlanId, kind: &str, tier: Tier) -> Result<(), CpdError> {
+    fn check_explore_tier(
+        &mut self,
+        plan: &PlanId,
+        kind: &str,
+        tier: Tier,
+    ) -> Result<(), CpdError> {
         let home = self.home.clone();
         let models = self.store.read(|conn| {
             plan_phase(conn, plan)?;

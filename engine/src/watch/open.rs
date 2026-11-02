@@ -157,7 +157,11 @@ fn add_all(
             .iter()
             .find(|(p, k, _)| p == plan && k == key)
             .map(|(_, _, tier)| *tier)
-            .ok_or_else(|| CpdError::bad_row(format!("no open Tier was read for Workflow {key} of Plan {plan}")))?;
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "no open Tier was read for Workflow {key} of Plan {plan}"
+                ))
+            })?;
         let job = open::add(tx, plan, workflow, tier, draft, open::BY_ENGINE)?;
         added.push((plan.clone(), key.clone(), job));
     }

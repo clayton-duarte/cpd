@@ -231,7 +231,9 @@ impl Engine {
     ) -> Result<Catalog, CpdError> {
         let home = self.home.clone();
         self.catalog_of(|store| {
-            store.read(|conn| cpd_core::policy::model::models_of_workflow(conn, &home, plan, workflow))
+            store.read(|conn| {
+                cpd_core::policy::model::models_of_workflow(conn, &home, plan, workflow)
+            })
         })
     }
 
