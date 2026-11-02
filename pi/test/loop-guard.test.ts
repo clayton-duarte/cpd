@@ -475,24 +475,26 @@ test("loop guard intra-turn: a refusal after the trip appends no second entry", 
   assert.equal(stateCalls(f).filter((s) => s === LABEL).length, 1);
 });
 
-for (const [title, fireReset] of [
-  ["before_agent_start resets the counters", (f: Fixture) => f.pi.fire("before_agent_start", { messageType: "user", prompt: "go" })],
-  ["agent_end resets the counters", (f: Fixture) => f.pi.fire("agent_end", { messages: [] })],
-] as const) {
-  test(`loop guard intra-turn: ${title}`, async (t) => {
-    const f = await freshStart(t);
-    await refuse(f, 2);
-    await fireReset(f);
-    await twelveThenRefused(f, "second turn");
-    await fireReset(f);
-    // two refusals, a reset, two more refusals: no trip
-    await refuse(f, 2);
-    await fireReset(f);
-    await refuse(f, 2);
-    assert.ok(!(await settled(f)).includes(LABEL), "no trip");
-    assert.deepEqual(guardEntries(f), []);
-  });
+async function resetCounters(f: Fixture, fireReset: (f: Fixture) => Promise<unknown>) {
+  await refuse(f, 2);
+  await fireReset(f);
+  await twelveThenRefused(f, "second turn");
+  await fireReset(f);
+  // two refusals, a reset, two more refusals: no trip
+  await refuse(f, 2);
+  await fireReset(f);
+  await refuse(f, 2);
+  assert.ok(!(await settled(f)).includes(LABEL), "no trip");
+  assert.deepEqual(guardEntries(f), []);
 }
+
+test("loop guard intra-turn: before_agent_start resets the counters", async (t) => {
+  await resetCounters(await freshStart(t), (f) => f.pi.fire("before_agent_start", { messageType: "user", prompt: "go" }));
+});
+
+test("loop guard intra-turn: agent_end resets the counters", async (t) => {
+  await resetCounters(await freshStart(t), (f) => f.pi.fire("agent_end", { messages: [] }));
+});
 
 test("loop guard intra-turn: a Manager is guarded", async (t) => {
   const f = await freshStart(t, { role: "manager", plan_lead: false, plan: null });
