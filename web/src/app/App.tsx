@@ -106,12 +106,14 @@ function ContextColumn({
   sessions,
   plans,
   contexts,
+  items,
   selectedId,
   onSelectSession,
 }: {
   sessions: readonly LiveSession[];
   plans?: readonly LivePlan[];
   contexts?: readonly LiveContext[];
+  items: readonly InboxItem[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }): ReactElement {
@@ -125,6 +127,7 @@ function ContextColumn({
           sessions={sessions}
           plans={plans}
           contexts={contexts}
+          items={items}
           selectedId={selectedId}
           onSelectSession={onSelectSession}
         />
@@ -209,6 +212,7 @@ export function App({ token, live }: AppProps): ReactElement {
           sessions={sessions}
           plans={plans}
           contexts={contexts}
+          items={inbox}
           selectedId={selectedId}
           onSelectSession={setSelectedId}
         />
