@@ -94,9 +94,9 @@ fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_err
     let mut fx = Fx::with_plan("");
     for (key, tier) in [
         ("api", "O3"),
-        ("web", "S5"),
+        ("web", "O4"),
         ("app", "S4"),
-        ("ui", "H5"),
+        ("ui", "O2"),
         ("cli", "H4"),
     ] {
         fx.add_job_on(tier, "repo", key, &[], "");
@@ -152,7 +152,7 @@ fn an_engine_error_sends_no_message_to_a_manager() {
     let mut fx = Fx::with_plan("");
     fx.fixture(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'idle', 't', 't');",
+           VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O4', 'idle', 't', 't');",
     );
     fx.add_job_on("O3", "repo", "api", &[], "");
 

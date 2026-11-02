@@ -340,7 +340,7 @@ fn cache(fx: &Fx, prefixes: &[&str]) {
     }
     let rows: String = prefixes
         .iter()
-        .flat_map(|p| [("O", "[0,1,2,3,4,5]"), ("S", "[0,1]"), ("H", "[0,1,2]")].map(|(l, e)| (p, l, e)))
+        .flat_map(|p| [("O", "[0,1,2,3,4,5]"), ("S", "[0,1]"), ("H", "[0,1,2]"), ("G", "[]")].map(|(l, e)| (p, l, e)))
         .map(|(p, letter, efforts)| {
             let model = format!("github-copilot/{p}-{}", letter.to_lowercase());
             format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('{VERSION}', '{letter}', '{model}', '{efforts}', 't');")

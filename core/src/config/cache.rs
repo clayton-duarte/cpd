@@ -12,8 +12,8 @@ use crate::store::{Store, WriteTxn};
 const COMMAND: &str = "tiers";
 
 /// The cached Catalog for `pi_version`, when it holds a row for each of the
-/// three configured models (`models` in `O, S, H` order). `None` is a cache miss.
-/// `g` is the configured G model: G is never cached (hs-d562), a catalog is built with it.
+/// four configured models (`models` in `O, S, H` order, then `g`). `None` is a cache miss.
+/// `g` is the configured G model.
 pub(super) fn read(
     store: &mut Store,
     pi_version: &str,
@@ -22,8 +22,12 @@ pub(super) fn read(
     g: &str,
 ) -> Result<Option<Catalog>, CpdError> {
     store.read(|conn| {
-        let mut found = Vec::with_capacity(3);
-        for (letter, model) in [Letter::O, Letter::S, Letter::H].into_iter().zip(models) {
+        let mut found = Vec::with_capacity(4);
+        let all = [models[0], models[1], models[2], g];
+        for (letter, model) in [Letter::O, Letter::S, Letter::H, Letter::G]
+            .into_iter()
+            .zip(all)
+        {
             match row(conn, pi_version, models_sha, letter, model)? {
                 Some(efforts) => found.push(TierModel {
                     model: model.to_owned(),
@@ -32,11 +36,7 @@ pub(super) fn read(
                 None => return Ok(None),
             }
         }
-        let [o, s, h]: [TierModel; 3] = found.try_into().expect("one model per letter");
-        let g = TierModel {
-            model: g.to_owned(),
-            efforts: vec![],
-        };
+        let [o, s, h, g]: [TierModel; 4] = found.try_into().expect("one model per letter");
         Ok(Some(Catalog {
             pi_version: pi_version.to_owned(),
             o,
@@ -83,7 +83,7 @@ pub(super) fn write(
     catalog: &Catalog,
 ) -> Result<(), CpdError> {
     store.write(COMMAND, |tx: &WriteTxn<'_>| {
-        for letter in [Letter::O, Letter::S, Letter::H] {
+        for letter in [Letter::O, Letter::S, Letter::H, Letter::G] {
             let TierModel { model, efforts } = catalog.model(letter);
             tx.execute(
                 "INSERT OR IGNORE INTO tier_catalog (pi_version, models_sha, letter, model, efforts, read_at) \

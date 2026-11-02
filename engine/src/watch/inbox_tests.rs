@@ -630,7 +630,7 @@ fn a_stuck_job_wakes_its_context_manager() {
     let mut fx = Fx::with_plan("[inbox]\nstuck_job_minutes = 1\n");
     fx.fixture(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'idle', 't', 't');",
+           VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O4', 'idle', 't', 't');",
     );
     fx.add_job(
         "api",

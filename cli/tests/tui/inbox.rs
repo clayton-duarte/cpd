@@ -229,7 +229,7 @@ fn manager(fx: &mut Fixture, id: &str, archived: bool) {
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
-                 VALUES ('{id}', 'manager', 'ctx1', NULL, NULL, 'ctx1-manager-{id}', '/sessions/{id}.jsonl', '/repo', 'O5', NULL, 'idle', NULL,
+                 VALUES ('{id}', 'manager', 'ctx1', NULL, NULL, 'ctx1-manager-{id}', '/sessions/{id}.jsonl', '/repo', 'O4', NULL, 'idle', NULL,
                          '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', {archived});"
             ))?;
             Ok(())

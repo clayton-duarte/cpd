@@ -606,10 +606,10 @@ fn add_lays_out_the_opener_stub_in_every_shape() {
 }
 
 #[test]
-fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
+fn the_opener_stub_carries_the_fixed_spec_and_worker_tier() {
     let fx = crud("plan");
     fx.add_shape("api", None).ok();
-    let open_tier = fx.cpd(&["config"]).ok()["config"]["open_tier"]
+    let worker_tier = fx.cpd(&["config"]).ok()["config"]["worker_tier"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -624,7 +624,7 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
             )?)
         })
         .unwrap();
-    // A draft with no fingerprint; the fixed Spec is stored, the Tier is the config's `open_tier`.
+    // A draft with no fingerprint; the fixed Spec is stored, the Tier is the config's `worker_tier`.
     assert_eq!(
         (row.0.as_str(), row.1.as_str(), row.2.is_some(), row.3),
         ("draft", "open", false, 0)
@@ -639,7 +639,10 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
             )?)
         })
         .unwrap();
-    assert_eq!(tier, open_tier, "the opener is at the config's open_tier");
+    assert_eq!(
+        tier, worker_tier,
+        "the opener is at the config's worker_tier"
+    );
     for (name, value) in [
         ("goal", &row.4),
         ("context", &row.5),

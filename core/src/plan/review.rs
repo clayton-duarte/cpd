@@ -112,8 +112,8 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
-    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a Workflow that has not started will get.
-    open_tier: String,
+    /// `worker_tier` (§8.2): the Tier the render shows for the `open` Job a Workflow that has not started will get.
+    worker_tier: String,
     plan: PlanRow,
     workflows: Vec<WorkflowRow>,
     jobs: Vec<Job>,
@@ -129,7 +129,7 @@ struct Snapshot {
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
-    let open_tier = env.config.open_tier.to_string();
+    let worker_tier = env.config.worker_tier.to_string();
     let (workflows, jobs, overlaps, plan_row) = env.store.read(|conn| {
         let (workflows, jobs) = (load_workflows(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&workflows, &jobs, &overlap::load_others(conn, id)?);
@@ -139,7 +139,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     let findings = super::lint_cmd::find(env, &plan_row, &workflows, &jobs)?;
     env.store.read(|conn| {
         Ok(Snapshot {
-            open_tier,
+            worker_tier,
             base_workflows: base_workflows(conn, id)?,
             display: Display::load(conn, id)?,
             plan: plan_row,
@@ -186,7 +186,7 @@ fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
         &s.workflows,
         &s.jobs,
         &s.overlaps,
-        &s.open_tier,
+        &s.worker_tier,
         &s.display,
         &warnings_of(s),
     )
