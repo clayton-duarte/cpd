@@ -38,10 +38,11 @@ type EventRow = (Option<String>, Option<String>, Option<String>, Value);
 const PLAN: &str = "pay";
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [
+const EFFORTS: [(&str, &str, &str); 4] = [
     ("O", "p/opus", "[0,1,2,3,4,5]"),
     ("S", "p/sonnet", "[1,2,3,4,5]"),
     ("H", "p/haiku", "[0,1,2,3]"),
+    ("G", "p/gemini", "[]"),
 ];
 
 /// A time `minutes` ago, as cpd writes times (contract §1.3).

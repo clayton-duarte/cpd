@@ -47,7 +47,7 @@ fn setup(fx: &Fx, extra: &str, review_context: &str) {
 
 /// The catalog rows: `s` and `o` efforts, H 0-3.
 fn seed_catalog(fx: &Fx, s: &str, o: &str) {
-    let rows: String = [("O", "p/opus", o), ("S", "p/sonnet", s), ("H", "p/haiku", "[0,1,2,3]")]
+    let rows: String = [("O", "p/opus", o), ("S", "p/sonnet", s), ("H", "p/haiku", "[0,1,2,3]"), ("G", "p/gemini", "[]")]
         .iter()
         .map(|(letter, model, efforts)| {
             format!("INSERT OR REPLACE INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")

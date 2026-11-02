@@ -36,7 +36,7 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
-    let rows: String = [("O", "p/opus", efforts[0]), ("S", "p/sonnet", efforts[1]), ("H", "p/haiku", efforts[2])]
+    let rows: String = [("O", "p/opus", efforts[0]), ("S", "p/sonnet", efforts[1]), ("H", "p/haiku", efforts[2]), ("G", "p/gemini", "[]")]
         .iter()
         .map(|(letter, model, efforts)| {
             format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")

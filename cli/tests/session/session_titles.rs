@@ -89,7 +89,7 @@ fn setup(fx: &Fx) -> Arc<FakePi> {
         &format!(
             "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
                ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
-               ('1.0.0', 'H', 'p/haiku', '[1,2,3]', 't');
+               ('1.0.0', 'H', 'p/haiku', '[1,2,3]', 't'), ('1.0.0', 'G', 'p/gemini', '[]', 't');
              INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
              INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at, archived_at) VALUES
                ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{lead}', '/', 'O3', 'idle', 't', 't1', NULL),

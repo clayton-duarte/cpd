@@ -49,10 +49,11 @@ pub(super) fn fixture(env: &TestEnv, sql: &str) {
 }
 
 /// O supports efforts 0–5, S 0–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [
+const EFFORTS: [(&str, &str, &str); 4] = [
     ("O", "p/opus", "[0,1,2,3,4,5]"),
     ("S", "p/sonnet", "[0,1,2,3,4,5]"),
     ("H", "p/haiku", "[0,1,2,3]"),
+    ("G", "p/gemini", "[]"),
 ];
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.

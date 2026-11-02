@@ -111,10 +111,11 @@ fn catalog() -> Catalog {
 }
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [
+const EFFORTS: [(&str, &str, &str); 4] = [
     ("O", "p/opus", "[0,1,2,3,4,5]"),
     ("S", "p/sonnet", "[1,2,3,4,5]"),
     ("H", "p/haiku", "[0,1,2,3]"),
+    ("G", "p/gemini", "[]"),
 ];
 
 /// The repo `pay` with a bare `origin` holding `main`, a config, the Tier catalog and Context `ctx`. No Plan yet.
