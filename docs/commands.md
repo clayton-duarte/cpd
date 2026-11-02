@@ -5015,7 +5015,7 @@ pi's compaction default `compaction.reserveTokens: 16384` makes a model without 
 
 The setting is read from pi's settings.json (global and trusted-project, merged by pi's SettingsManager). cpd adds no file and no key of its own.
 
-The module is `pi/lib/compaction-ratio.ts`, loaded by the adapter (`extension.ts`, section 15.1). `pi/compact-tools` is NOT involved. The module hooks `SettingsManager.prototype.getCompactionReserveTokens`.
+The module is `pi/lib/compaction-ratio.ts`, loaded by the adapter (`extension.ts`, section 15.1). `pi/compact-tools` is NOT involved. The module hooks `SettingsManager.prototype.getCompactionReserveTokens` and `AgentSession.prototype` (the idle-only rule below).
 
 For a model with a positive contextWindow: `reserveTokens = Math.round(contextWindow * reserveTokensRatio)`, so compaction triggers at `used > contextWindow - reserveTokens = contextWindow * (1 - reserveTokensRatio)` (pi's `shouldCompact`). The value is derived on every call from the model in hand; it is never written to the session file or to the settings.
 
@@ -5026,6 +5026,18 @@ A model whose contextWindow is absent or not a positive number keeps pi's own va
 A ratio outside (0, 1), or one that is not a finite number, is refused: `getCompactionReserveTokens` throws an Error whose message names the exact key (`compaction.reserveTokensRatio`, or `compaction.modelOverrides["<key>"].reserveTokensRatio`). There is no silent fallback.
 
 The ratio applies in every cpd pi session; a plain pi that does not load the adapter is not covered.
+
+**Idle-only threshold compaction** (User, 2026-11-02, Context decision pro-d353). pi 1.3.0 runs threshold auto-compaction in the middle of a turn: between tool calls, before each LLM request, before a turn starts, and after `agent.prompt` resolves while queued messages still wait. The User wants compaction to wait until the agent is idle. `registerCompactionRatio` therefore also wraps three methods of `AgentSession.prototype`, through the repo's `hookMethod`, once per process: a second call and a reload replace nothing and stack nothing.
+
+- `_compactBeforeNextAssistantResponse` only refreshes the messages from `sessionManager.buildSessionProjection()`; it never compacts.
+- `_exceedsCompactionThreshold` answers false while `agent.state.isStreaming` is true, and pi's own answer otherwise.
+- `_checkCompaction` answers false, compacting nothing, before a turn starts (`skipAbortedCheck === false`, the pre-run call of `_prepareRun`), and, for a non-error assistant message, while queued steering or follow-up messages wait (`agent.hasQueuedMessages() === true`).
+
+Crossing the threshold during a turn therefore queues the compaction until the turn ends and no message is queued. **Post-run threshold fallback:** in `_handlePostAgentRun`, `_checkCompaction` runs pi's own check right before the session settles to idle. When that check declined, the message's `stopReason` is neither `error` nor `aborted`, and the session projection exceeds the threshold, it runs `_runAutoCompaction("threshold", false)` itself. The fallback never fires for an `error` or `aborted` assistant message. pi settles after `_handlePostAgentRun`, so the cpd Session turns idle only after that compaction ended.
+
+**Unchanged: context-overflow recovery.** An `error` assistant message is always passed to pi's own `_checkCompaction`, also while messages are queued (`reason === "overflow"`, `willRetry === true`).
+
+As for the ratio, a plain pi that does not load the adapter is not covered by the idle-only rule.
 
 ### 15.20 A Lead runs a command the User explicitly asks for (pro-d56)
 
