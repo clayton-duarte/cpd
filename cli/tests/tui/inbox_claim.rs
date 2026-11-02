@@ -15,7 +15,9 @@ const MANAGER: &str = "mgr-rc";
 const T5: &str = "2026-01-01T05:00:00.000Z";
 
 fn config(socket: &str) -> String {
-    format!("version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n")
+    format!(
+        "version = 1\nmachine = \"m1\"\nlead_tier = \"S4\"\nlead_runner = \"pi\"\n[tmux]\nsocket = \"{socket}\"\n"
+    )
 }
 
 /// The five open items `Fixture::new` leaves, as conditions: a reconcile that omits one closes it.
@@ -130,6 +132,11 @@ fn assert_nothing_written(fx: &Fixture) {
         fx.store_count("SELECT count(*) FROM inbox_items WHERE claimed_at IS NOT NULL"),
         0
     );
+    assert_eq!(fx.store_count("SELECT count(*) FROM plans"), 0);
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM sessions WHERE role = 'lead'"),
+        0
+    );
 }
 
 fn refusal(fx: &Fixture, id: &str) -> (i32, String) {
@@ -175,26 +182,6 @@ fn claim_marks_the_item_claimed_hides_it_and_writes_inbox_claimed() {
 }
 
 #[test]
-fn claim_tells_the_codereview_manager_with_the_pull_request_url_and_the_slack_post() {
-    let (fx, id) = claimable();
-    fx.ok(&["claim", &id.to_string()]);
-    let messages = fx.events("session-message");
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    let message = &messages[0];
-    assert_eq!(message["session"], MANAGER);
-    assert_eq!(message["context"], "codereview");
-    assert_eq!(
-        message["data"]["from"],
-        Value::Null,
-        "sent with no sender Session"
-    );
-    let text = message["data"]["text"].as_str().unwrap();
-    for part in [URL, CHANNEL, TS_RAW] {
-        assert!(text.contains(part), "{part} in {text}");
-    }
-}
-
-#[test]
 fn claim_is_idempotent_and_the_second_claim_writes_and_sends_nothing() {
     let (fx, id) = claimable();
     let id = id.to_string();
@@ -207,7 +194,7 @@ fn claim_is_idempotent_and_the_second_claim_writes_and_sends_nothing() {
     assert_eq!(again["already"], true);
     assert_eq!(again["item"]["claimed_at"], first["item"]["claimed_at"]);
     assert_eq!(fx.events("inbox-claimed").len(), 1);
-    assert_eq!(fx.events("session-message").len(), 1);
+    assert!(fx.events("session-message").is_empty());
     assert_eq!(fx.ok(&["list"])["events_cursor"], cursor);
     assert_eq!(fx.store_count("SELECT count(*) FROM txns"), count);
 }
@@ -251,42 +238,6 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
         "no cache"
     );
     assert_nothing_written(&fx);
-}
-
-#[test]
-fn claim_wakes_a_stopped_manager_as_session_send_does() {
-    let mut fx = Fixture::new();
-    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
-    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
-    codereview_context(&mut fx, "stopped");
-    write_cache(&fx, 812);
-    let mut all = base();
-    all.push(review_request());
-    reconcile(&mut fx.store, &all, T5).unwrap();
-    let id = fx.store_count(&format!(
-        "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
-    ));
-    fx.fx.cockpit();
-
-    let out = fx.ok(&["claim", &id.to_string()]);
-    assert_eq!(out["manager"], MANAGER);
-    let started: Vec<Vec<String>> = fx
-        .fx
-        .calls("tmux")
-        .into_iter()
-        .map(|c| c.args)
-        .filter(|a| a.iter().any(|x| x == "new-window"))
-        .collect();
-    assert_eq!(started.len(), 1, "one new-window: {started:?}");
-    assert_eq!(
-        started[0][started[0].len() - 3..],
-        ["session", "run", MANAGER],
-        "{:?}",
-        started[0]
-    );
-    let shown = fx.cpd(&["session", "show", MANAGER]).ok();
-    assert!(shown["session"]["tmux_pane"].is_string(), "{shown}");
-    assert_eq!(fx.events("session-message").len(), 1);
 }
 
 #[test]
@@ -353,9 +304,6 @@ fn claim_queues_eyes_on_the_post_with_the_caches_channel_and_ts_raw() {
         None,
         "reacted_at is null until the helper succeeds"
     );
-    let messages = fx.events("session-message");
-    let text = messages[0]["data"]["text"].as_str().unwrap();
-    assert!(text.contains(CHANNEL) && text.contains(TS_RAW), "{text}");
 }
 
 #[test]
@@ -435,13 +383,10 @@ fn claim_creates_the_codereview_context_and_manager_when_none_exists() {
         1
     );
     let manager = out["manager"].as_str().unwrap();
-    let messages = fx.events("session-message");
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    assert_eq!(messages[0]["session"], manager);
-    assert_eq!(messages[0]["context"], "codereview");
-    assert_eq!(new_windows(&fx), 1, "the stopped Manager is started");
+    assert!(fx.events("session-message").is_empty());
+    assert_eq!(new_windows(&fx), 1, "only the Lead's window is started");
     let shown = fx.cpd(&["session", "show", manager]).ok();
-    assert!(shown["session"]["tmux_pane"].is_string(), "{shown}");
+    assert_eq!(shown["session"]["tmux_pane"], Value::Null, "{shown}");
 }
 
 #[test]
@@ -465,9 +410,7 @@ fn claim_gives_an_archived_codereview_manager_a_new_one() {
         ),
         1
     );
-    let messages = fx.events("session-message");
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    assert_eq!(messages[0]["session"], manager);
+    assert!(fx.events("session-message").is_empty());
     assert_eq!(
         fx.store_count(&format!(
             "SELECT count(*) FROM sessions WHERE id = '{MANAGER}' AND archived_at = '2026-01-03T00:00:00.000Z' AND state = 'stopped'"
@@ -632,4 +575,332 @@ fn claim_with_a_failing_gh_is_gh_failed_and_writes_nothing() {
         fx.store_count("SELECT count(*) FROM contexts WHERE id = 'codereview'"),
         0
     );
+}
+
+// ---- the review Plan and its Lead (commands.md §21.7, FR10) ----
+
+const PLAN: &str = "r-pay-812";
+const TITLE: &str = "Review pay#812 Pay the bills";
+const POINTER: &str = "Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>";
+
+/// [`claimable`] for the pull request `<repo>#<number>` (owner `missionlane` or `acme`), the fake cockpit up.
+fn claimable_pr(owner: &str, repo: &str, number: u64) -> (Fixture, i64) {
+    let subject = format!("pr:{owner}/{repo}#{number}");
+    let mut fx = Fixture::new();
+    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
+    codereview_context(&mut fx, "idle");
+    let path = fx.fx.env.cpd_home().join("run/team-review.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let post = json!({"repo": format!("{owner}/{repo}"), "number": number, "ts": 1_700_000_000.0, "ts_raw": TS_RAW, "author": "Ryan Case", "primary": true,
+                      "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false});
+    let cache =
+        json!({"version": 1, "polled_at": T0, "channel": CHANNEL, "read": 10, "posts": [post]});
+    fs::write(path, cache.to_string()).unwrap();
+    let mut all = base();
+    let mut item = review_request();
+    item.subject = subject.clone();
+    item.label = format!("{owner}/{repo}#{number} review requested");
+    item.url = Some(format!("https://github.com/{owner}/{repo}/pull/{number}"));
+    all.push(item);
+    reconcile(&mut fx.store, &all, T5).unwrap();
+    let id = fx.store_count(&format!(
+        "SELECT id FROM inbox_items WHERE subject = '{subject}'"
+    ));
+    fx.fx.cockpit();
+    (fx, id)
+}
+
+fn text(fx: &Fixture, query: &str) -> String {
+    fx.fx.env.query::<String>(query)
+}
+
+/// The ids of every Plan, sorted.
+fn plan_ids(fx: &Fixture) -> Vec<String> {
+    fx.fx.env.read(|c| {
+        let mut s = c.prepare("SELECT id FROM plans ORDER BY id")?;
+        s.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()
+    })
+}
+
+/// A Plan row `id` with its Lead Session, as other fixtures insert them; `extra` is the Plan's `, archived_at`/`, deleted_at` value list.
+fn old_plan(fx: &mut Fixture, id: &str, column: &str, value: &str) {
+    let (cols, vals) = if column.is_empty() {
+        (String::new(), String::new())
+    } else {
+        (format!(", {column}"), format!(", '{value}'"))
+    };
+    sql(
+        fx,
+        &format!(
+            "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead-{id}', 'lead', 'codereview', '{id}', NULL, '{id}', '/repo', 'O2', 'stopped', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at{cols})
+               VALUES ('{id}', 'codereview', 'Old', 'grounding', 'lead-{id}', 't'{vals});"
+        ),
+    );
+}
+
+fn new_window_names(fx: &Fixture) -> Vec<String> {
+    fx.fx
+        .calls("tmux")
+        .into_iter()
+        .map(|c| c.args)
+        .filter(|a| a.iter().any(|x| x == "new-window" || x == "new-session"))
+        .flatten()
+        .filter(|a| a.starts_with("park-"))
+        .collect()
+}
+
+#[test]
+fn claim_creates_the_review_plan_and_lead_and_wakes_nobody() {
+    let (fx, id) = claimable();
+    fx.fx.cockpit();
+    let manager_before = text(
+        &fx,
+        &format!(
+            "SELECT json_object('s', state, 'p', tmux_pane, 'a', archived_at) FROM sessions WHERE id = '{MANAGER}'"
+        ),
+    );
+    let rows_before = fx.store_count("SELECT count(*) FROM sessions WHERE role = 'manager'");
+    fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(plan_ids(&fx), vec![PLAN.to_owned()]);
+    assert_eq!(
+        fx.store_count(&format!(
+            "SELECT count(*) FROM plans p JOIN sessions s ON s.id = p.lead_session AND s.plan = p.id
+             WHERE p.id = '{PLAN}' AND p.context = 'codereview' AND p.phase = 'grounding'
+               AND s.role = 'lead' AND s.context = 'codereview' AND s.by_user = 0 AND s.tier = 'S4' AND s.runner = 'pi'"
+        )),
+        1
+    );
+    for kind in ["inbox-claimed", "plan-created", "session-registered"] {
+        assert!(!fx.events(kind).is_empty(), "{kind}");
+    }
+    assert!(fx.events("session-message").is_empty());
+    assert_eq!(
+        text(
+            &fx,
+            &format!(
+                "SELECT json_object('s', state, 'p', tmux_pane, 'a', archived_at) FROM sessions WHERE id = '{MANAGER}'"
+            ),
+        ),
+        manager_before,
+        "a live idle Manager stays idle"
+    );
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM sessions WHERE role = 'manager'"),
+        rows_before
+    );
+}
+
+#[test]
+fn claim_review_plan_id_and_title_come_from_the_repo_the_number_and_the_pr_title() {
+    let (fx, id) = claimable();
+    fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(plan_ids(&fx), vec![PLAN.to_owned()]);
+    assert_eq!(
+        text(&fx, &format!("SELECT title FROM plans WHERE id = '{PLAN}'")),
+        TITLE
+    );
+}
+
+#[test]
+fn claim_review_plan_id_uses_the_known_short_slugs() {
+    for (repo, slug) in [
+        ("account-management-mobile-app", "mobile"),
+        ("cc-api-orc-apollo", "orc"),
+        ("card-dashboard", "cd"),
+        ("snowflake-analytics", "sfa"),
+        ("compass-ui", "cui"),
+    ] {
+        let (fx, id) = claimable_pr("missionlane", repo, 77);
+        fx.ok(&["claim", &id.to_string()]);
+        assert_eq!(plan_ids(&fx), vec![format!("r-{slug}-77")], "{repo}");
+    }
+}
+
+#[test]
+fn claim_review_plan_id_takes_the_next_free_suffix() {
+    {
+        let (mut fx, id) = claimable();
+        old_plan(&mut fx, PLAN, "", "");
+        fx.ok(&["claim", &id.to_string()]);
+        assert_eq!(
+            plan_ids(&fx),
+            vec![PLAN.to_owned(), "r-pay-812-2".to_owned()]
+        );
+    }
+
+    let (mut fx, id) = claimable();
+    old_plan(&mut fx, PLAN, "", "");
+    old_plan(
+        &mut fx,
+        "r-pay-812-2",
+        "archived_at",
+        "2026-01-02T00:00:00.000Z",
+    );
+    old_plan(
+        &mut fx,
+        "r-pay-812-3",
+        "deleted_at",
+        "2026-01-02T00:00:00.000Z",
+    );
+    fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(
+        text(
+            &fx,
+            "SELECT max(id) FROM plans WHERE id LIKE 'r-pay-812-%' AND id NOT IN ('r-pay-812-2', 'r-pay-812-3')"
+        ),
+        "r-pay-812-4"
+    );
+}
+
+#[test]
+fn claim_review_plan_id_fits_24_characters() {
+    let grammar = |id: &str| {
+        id.len() <= 24
+            && id.starts_with(|c: char| c.is_ascii_lowercase())
+            && id.len() >= 2
+            && id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    {
+        let (fx, id) = claimable_pr("acme", "a-very-long-repository-name-indeed", 123_456);
+        fx.ok(&["claim", &id.to_string()]);
+        assert_eq!(plan_ids(&fx), vec!["r-a-very-long-rep-123456".to_owned()]);
+        assert!(grammar(&plan_ids(&fx)[0]));
+    }
+
+    let (mut fx, id) = claimable_pr("acme", "a-very-long-repository-name-indeed", 123_456);
+    old_plan(&mut fx, "r-a-very-long-rep-123456", "", "");
+    fx.ok(&["claim", &id.to_string()]);
+    let ids = plan_ids(&fx);
+    assert!(
+        ids.contains(&"r-a-very-long-r-123456-2".to_owned()),
+        "{ids:?}"
+    );
+    assert!(ids.iter().all(|i| grammar(i)), "{ids:?}");
+}
+
+fn brief(home: &str) -> String {
+    format!(
+        "Review PR {URL} (`acme/pay#812`).
+Slack post: `{CHANNEL}/{TS_RAW}` (`--slack {CHANNEL}/{TS_RAW}`).
+
+Read `{home}/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and follow it strictly:
+1. Turn 1: run `~/cpd-codereview/cpd-code-review/prefetch.sh \"{URL}\" \"/tmp/$CPD_PLAN\"`.
+2. Never run `cpd context show --context codereview`; never message any Manager or Lead (`cpd session send` / `cpd board post`).
+3. Use `{home}/projects/pay` (`git show`/`git grep`) and `H2` `scout` Jobs (`cpd job add --kind scout --tier H2`) if wide/cross-repo/multi-branch exploration is needed.
+4. After the User answers the `Verdict` `ask_user_question`, run 1 bash call (`cpd review submit ... --slack {CHANNEL}/{TS_RAW} && cpd context note ...`) and stop."
+    )
+}
+
+#[test]
+fn claim_writes_the_review_brief_record_and_the_lead_first_message() {
+    let (fx, id) = claimable();
+    fx.ok(&["claim", &id.to_string()]);
+    let home = fx.fx.env.home().display().to_string();
+    let brief = brief(&home);
+    assert_eq!(
+        text(
+            &fx,
+            &format!(
+                "SELECT text FROM context_records WHERE context = 'codereview' AND kind = 'brief' AND plan_id = '{PLAN}'"
+            )
+        ),
+        brief
+    );
+    assert_eq!(
+        text(
+            &fx,
+            &format!(
+                "SELECT text FROM context_records WHERE context = 'codereview' AND kind = 'plan' AND plan_id = '{PLAN}'"
+            )
+        ),
+        TITLE
+    );
+    let file = fs::read_to_string(
+        fx.fx
+            .env
+            .cpd_home()
+            .join(format!("run/{PLAN}/lead-message.md")),
+    )
+    .unwrap();
+    let header = format!(
+        "You are the Lead of Plan {PLAN} \"{TITLE}\" in Context codereview. Phase grounding: follow the cpd-lead skill."
+    );
+    assert_eq!(
+        file.trim_end_matches('\n'),
+        format!("{header}\n\n{brief}\n\n{POINTER}")
+    );
+}
+
+#[test]
+fn claim_starts_the_review_lead_window_and_still_queues_eyes() {
+    let (fx, id) = claimable();
+    fx.fx.cockpit();
+    fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(new_window_names(&fx), vec![format!("park-{PLAN}")]);
+    assert_eq!(queued(&fx), vec![eyes()]);
+}
+
+#[test]
+fn claim_output_names_item_plan_lead_and_manager() {
+    let (fx, id) = claimable();
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert!(out["item"]["claimed_at"].is_string(), "{out}");
+    assert_eq!(out["plan"], PLAN);
+    assert_eq!(out["manager"], MANAGER);
+    let lead = text(
+        &fx,
+        &format!("SELECT lead_session FROM plans WHERE id = '{PLAN}'"),
+    );
+    assert_eq!(out["lead"], lead.as_str(), "{out}");
+}
+
+#[test]
+fn claim_twice_creates_one_review_plan() {
+    let (fx, id) = claimable();
+    fx.fx.cockpit();
+    let id = id.to_string();
+    fx.ok(&["claim", &id]);
+    assert_eq!(fx.ok(&["claim", &id])["already"], true);
+    assert_eq!(plan_ids(&fx), vec![PLAN.to_owned()]);
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM sessions WHERE role = 'lead'"),
+        1
+    );
+    assert_eq!(new_window_names(&fx), vec![format!("park-{PLAN}")]);
+}
+
+#[test]
+fn claim_leaves_a_stopped_codereview_manager_stopped_and_unmessaged() {
+    let mut fx = Fixture::new();
+    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
+    codereview_context(&mut fx, "stopped");
+    write_cache(&fx, 812);
+    let mut all = base();
+    all.push(review_request());
+    reconcile(&mut fx.store, &all, T5).unwrap();
+    let id = fx.store_count(&format!(
+        "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
+    ));
+    fx.fx.cockpit();
+
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(out["manager"], MANAGER);
+    assert_eq!(out["plan"], PLAN, "{out}");
+    let manager_windows = fx
+        .fx
+        .calls("tmux")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|x| x == MANAGER))
+        .count();
+    assert_eq!(manager_windows, 0, "no pane started for the Manager");
+    let shown = fx.cpd(&["session", "show", MANAGER]).ok();
+    assert_eq!(shown["session"]["state"], "stopped", "{shown}");
+    assert_eq!(shown["session"]["tmux_pane"], Value::Null, "{shown}");
+    assert!(fx.events("session-message").is_empty());
 }

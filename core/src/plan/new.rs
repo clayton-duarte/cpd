@@ -15,8 +15,9 @@ use crate::config::WorkerRunner;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::{PlanId, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
+use crate::store::WriteTxn;
 
 /// The Plan as `plan new` reads it back, with its Lead's name and cwd as stored.
 /// No Workflow is needed (a Plan starts with none, R34 A12).
@@ -60,12 +61,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         .map_or_else(|| id.to_string(), |n| n.as_str().to_owned());
     let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
 
-    let context = env
-        .store
-        .read(|conn| ContextRow::require(conn, &args.context))?;
-    if context.owner.is_none() {
-        return Err(crate::policy::owner_unset(&args.context));
-    }
+    let context = require_context(&mut env, &args.context)?;
     if let Some(tier) = args.tier {
         let home = env.home.clone();
         let models = env.store.read(|conn| {
@@ -76,23 +72,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         let lead = env.config.range(&catalog, crate::config::Role::Lead)?;
         lead.check(tier, crate::config::Role::Lead)?;
     }
-    // A deleted Plan keeps its row, and so its id: never reused (contract §2.2 "Deleted").
-    let deleted: Option<bool> = env.store.read(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT deleted_at IS NOT NULL FROM plans WHERE id = ?1",
-                [id.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?)
-    })?;
-    if deleted == Some(true) {
-        return Err(CpdError::new(
-            ErrorCode::PlanExists,
-            format!("Plan {id} was deleted: its id is not reused."),
-        )
-        .with("plan", id.as_str()));
-    }
+    refuse_deleted(&mut env, &id)?;
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
         let same = plan.plan.context == args.context
@@ -110,17 +90,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         }
         return already(&mut env, &plan, brief.as_ref(), args.by_user);
     }
-    if context.archived_at.is_some() {
-        return Err(CpdError::new(
-            ErrorCode::Archived,
-            format!(
-                "Context {} is archived: unarchive it before creating a Plan in it.",
-                args.context
-            ),
-        )
-        .with("context", args.context.as_str())
-        .with("next", format!("cpd context unarchive {}", args.context)));
-    }
+    refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
     let lead_runner = args.runner.unwrap_or(env.config.lead_runner);
@@ -128,55 +98,182 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
     let tier = args.tier.unwrap_or(env.config.lead_tier).to_string();
-    env.store.write("plan new", |tx| {
-        let exists = tx.query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| Ok(())).optional()?;
-        if exists.is_some() {
-            return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} was created meanwhile.")).with("plan", id.as_str()));
-        }
-        tx.execute(
-            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at, by_user, runner)
-             SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at, ?7, ?8
-               FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, cwd, tier, args.by_user, lead_runner.as_str()],
-        )?;
-        tx.execute(
-            "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
-             SELECT ?1, ?2, ?3, ?4, 'grounding', ?5, at FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, session.as_str()],
-        )?;
-        let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd plan show --plan {id}", args.title, args.context);
-        let event = NewEvent::plan_created(text, args.title.as_str(), jira.as_deref(), &session, Value::Null, &cwd);
-        append(tx, event.plan(id.clone()))?;
-        let text = format!("Lead {name} of Plan {id} registered, a fresh Lead.");
-        let event = NewEvent::session_registered(text, "lead", &name, Value::Null, &tier);
-        append(tx, event.plan(id.clone()).session(session.clone()))?;
-        Ok(())
-    })?;
-    let Created { plan, .. } = env
-        .store
-        .read(|conn| find(conn, &id))?
-        .ok_or_else(|| CpdError::bad_row(format!("Plan {id} was just created")))?;
+    let creation = Creation {
+        id: &id,
+        context: &args.context,
+        title: args.title.as_str(),
+        jira: jira.as_deref(),
+        name: &name,
+        cwd: &cwd,
+        tier: &tier,
+        runner: lead_runner,
+        by_user: args.by_user,
+        session: &session,
+    };
+    env.store.write("plan new", |tx| insert(tx, &creation))?;
 
     // 2. The `plan` record; 3. the first message; 4. the Lead's window.
-    let record = write_record(&mut env, &plan)?;
-    if let Some(brief) = &brief {
-        write_brief(&mut env, &plan, brief)?;
+    let finished = finish(&mut env, &creation, brief.as_ref(), "plan new")?;
+    Ok(Output::success(json!({
+        "plan": summary(&finished.plan, &[]),
+        "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
+                 "pane": finished.pane, "window": finished.window},
+        "record": finished.record,
+    })))
+}
+
+/// The Context exists and has an owner (`plan new`; `inbox claim` leaves the owner to `ensure`).
+fn require_context(env: &mut Env, id: &ContextId) -> Result<ContextRow, CpdError> {
+    let context = env.store.read(|conn| ContextRow::require(conn, id))?;
+    if context.owner.is_none() {
+        return Err(crate::policy::owner_unset(id));
     }
-    if !args.by_user {
-        write_message(&mut env, &plan, brief.as_ref())?;
+    Ok(context)
+}
+
+/// The Context is not archived.
+pub(crate) fn refuse_archived(context: &ContextRow) -> Result<(), CpdError> {
+    if context.archived_at.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::Archived,
+            format!(
+                "Context {} is archived: unarchive it before creating a Plan in it.",
+                context.id
+            ),
+        )
+        .with("context", context.id.as_str())
+        .with("next", format!("cpd context unarchive {}", context.id)));
     }
-    let started = start_lead(&mut env, &plan, &cwd, &session, &name, lead_runner)?;
+    Ok(())
+}
+
+/// A deleted Plan keeps its row, and so its id: never reused (contract §2.2 "Deleted").
+pub(crate) fn refuse_deleted(env: &mut Env, id: &PlanId) -> Result<(), CpdError> {
+    let deleted: Option<bool> = env.store.read(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT deleted_at IS NOT NULL FROM plans WHERE id = ?1",
+                [id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    })?;
+    if deleted == Some(true) {
+        return Err(CpdError::new(
+            ErrorCode::PlanExists,
+            format!("Plan {id} was deleted: its id is not reused."),
+        )
+        .with("plan", id.as_str()));
+    }
+    Ok(())
+}
+
+/// A Plan and its Lead to create (`plan new`, `inbox claim`).
+pub(crate) struct Creation<'a> {
+    pub id: &'a PlanId,
+    pub context: &'a ContextId,
+    pub title: &'a str,
+    pub jira: Option<&'a str>,
+    /// The Lead's name.
+    pub name: &'a str,
+    pub cwd: &'a str,
+    pub tier: &'a str,
+    pub runner: WorkerRunner,
+    pub by_user: bool,
+    /// The Lead's Session id.
+    pub session: &'a SessionId,
+}
+
+/// Step 1, inside the caller's transaction: inserts the Lead Session and the Plan, appends `plan-created` and
+/// `session-registered`.
+pub(crate) fn insert(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
+    let Creation {
+        id,
+        context,
+        title,
+        jira,
+        name,
+        cwd,
+        tier,
+        runner,
+        by_user,
+        session,
+    } = c;
+    let exists = tx
+        .query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| {
+            Ok(())
+        })
+        .optional()?;
+    if exists.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::PlanExists,
+            format!("Plan {id} was created meanwhile."),
+        )
+        .with("plan", id.as_str()));
+    }
+    tx.execute(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
+                               state, state_label, state_at, created_at, by_user, runner)
+         SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at, ?7, ?8
+           FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![session.as_str(), context.as_str(), id.as_str(), name, cwd, tier, by_user, runner.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
+         SELECT ?1, ?2, ?3, ?4, 'grounding', ?5, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![id.as_str(), context.as_str(), title, jira, session.as_str()],
+    )?;
+    let text = format!(
+        "Plan {id} \"{title}\" created in Context {context}, phase grounding. Next: cpd plan show --plan {id}"
+    );
+    let event = NewEvent::plan_created(text, title, *jira, session, Value::Null, cwd);
+    append(tx, event.plan((*id).clone()))?;
+    let text = format!("Lead {name} of Plan {id} registered, a fresh Lead.");
+    let event = NewEvent::session_registered(text, "lead", name, Value::Null, tier);
+    append(tx, event.plan((*id).clone()).session((*session).clone()))?;
+    Ok(())
+}
+
+/// What [`finish`] did.
+pub(crate) struct Finished {
+    pub plan: PlanRow,
+    /// The `plan` record's id.
+    pub record: String,
+    pub pane: Value,
+    pub window: Value,
+}
+
+/// Steps 2 to 4, after the transaction: the `plan` record, the `brief` record, the first message (not for a
+/// `by_user` Plan) and the Lead's window. `source` is the command of the Events they append.
+pub(crate) fn finish(
+    env: &mut Env,
+    c: &Creation<'_>,
+    brief: Option<&Text>,
+    source: &str,
+) -> Result<Finished, CpdError> {
+    let plan = env
+        .store
+        .read(|conn| find(conn, c.id))?
+        .ok_or_else(|| CpdError::bad_row(format!("Plan {} was just created", c.id)))?
+        .plan;
+    let record = write_record(env, &plan, source)?;
+    if let Some(brief) = brief {
+        write_brief(env, &plan, brief, source)?;
+    }
+    if !c.by_user {
+        write_message(env, &plan, brief)?;
+    }
+    let started = start_lead(env, &plan, c.cwd, c.session, c.name, c.runner, source)?;
     let (pane, window) = match &started {
         Some(started) => (json!(started.pane.as_str()), json!(started.window.as_str())),
         None => (Value::Null, Value::Null),
     };
-    Ok(Output::success(json!({
-        "plan": summary(&plan, &[]),
-        "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
-                 "pane": pane, "window": window},
-        "record": record,
-    })))
+    Ok(Finished {
+        plan,
+        record,
+        pane,
+        window,
+    })
 }
 
 /// `plan new` again with the same flags: redoes the steps that did not happen
@@ -202,7 +299,7 @@ fn already(
     })?;
     let record = match record {
         Some(record) => record,
-        None => write_record(env, plan)?,
+        None => write_record(env, plan, "plan new")?,
     };
     if let Some(brief) = brief {
         let has_brief: bool = env.store.read(|conn| {
@@ -216,7 +313,7 @@ fn already(
                 .is_some())
         })?;
         if !has_brief {
-            write_brief(env, plan, brief)?;
+            write_brief(env, plan, brief, "plan new")?;
         }
     }
     let (state, pane, runner): (String, Option<String>, String) = env.store.read(|conn| {
@@ -240,6 +337,7 @@ fn already(
                 &plan.lead_session,
                 &name,
                 WorkerRunner::Pi,
+                "plan new",
             )?
             .expect("a pi Lead starts a window");
             (
@@ -280,7 +378,7 @@ fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
 
 /// Step 2: the Context record of kind `plan` (§4.6), `text` = the title.
 /// Returns its id.
-fn write_record(env: &mut Env, plan: &PlanRow) -> Result<String, CpdError> {
+fn write_record(env: &mut Env, plan: &PlanRow, source: &str) -> Result<String, CpdError> {
     let draft = Draft::Plan(PlanRef {
         id: plan.id.clone(),
         machine: env.config.machine.clone(),
@@ -292,7 +390,7 @@ fn write_record(env: &mut Env, plan: &PlanRow) -> Result<String, CpdError> {
         .map_err(|_| CpdError::bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
     let written = Contexts::new(&env.config, &mut env.store).write(
         &plan.context,
-        "plan new",
+        source,
         writer()?,
         &title,
         draft,
@@ -302,7 +400,12 @@ fn write_record(env: &mut Env, plan: &PlanRow) -> Result<String, CpdError> {
 
 /// Step 2, with `--brief-file`: the Context record of kind `brief` (B3-A4), `text` = the brief,
 /// `plan` = `{id, machine}`. Returns its id.
-fn write_brief(env: &mut Env, plan: &PlanRow, brief: &Text) -> Result<String, CpdError> {
+fn write_brief(
+    env: &mut Env,
+    plan: &PlanRow,
+    brief: &Text,
+    source: &str,
+) -> Result<String, CpdError> {
     let draft = Draft::Brief(PlanRef {
         id: plan.id.clone(),
         machine: env.config.machine.clone(),
@@ -310,7 +413,7 @@ fn write_brief(env: &mut Env, plan: &PlanRow, brief: &Text) -> Result<String, Cp
     });
     let written = Contexts::new(&env.config, &mut env.store).write(
         &plan.context,
-        "plan new",
+        source,
         writer()?,
         brief,
         draft,
@@ -375,6 +478,7 @@ fn start_lead(
     session: &SessionId,
     name: &str,
     runner: WorkerRunner,
+    source: &str,
 ) -> Result<Option<lead::Started>, CpdError> {
     if runner == WorkerRunner::Durable {
         return Ok(None);
@@ -387,7 +491,7 @@ fn start_lead(
         name,
         cwd: Path::new(cwd),
     };
-    lead::start(env, &lead, &window, "plan new").map(Some)
+    lead::start(env, &lead, &window, source).map(Some)
 }
 
 #[cfg(test)]

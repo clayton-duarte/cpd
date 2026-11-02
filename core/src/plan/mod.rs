@@ -36,7 +36,7 @@ mod lint_tests;
 mod lint_text_tests;
 mod list;
 pub(crate) mod lock;
-mod new;
+pub(crate) mod new;
 mod outline;
 mod overlap;
 pub mod parked;

@@ -176,7 +176,7 @@ impl Kind {
                 &["feedback", "jobs"],
             ),
             PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
-            PlanDone => spec([Y, Y, N, N, N], &["workflows"], &[]),
+            PlanDone => spec([Y, Y, N, N, N], &["workflows"], &["turn"]),
             JobAdded => spec(
                 [Y, Y, Y, N, N],
                 &[

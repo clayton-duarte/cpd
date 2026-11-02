@@ -173,6 +173,15 @@ impl NewEvent {
         make(Kind::PlanDone, text, json!({"workflows": workflows}))
     }
 
+    /// The `plan-done` of `review submit`: no Workflow, and `turn: false` (delivered as nothing to the Lead).
+    pub fn plan_done_quiet(text: impl Into<String>) -> NewEvent {
+        make(
+            Kind::PlanDone,
+            text,
+            json!({"workflows": [], "turn": false}),
+        )
+    }
+
     pub fn job_added(
         text: impl Into<String>,
         workflow: impl Serialize,
@@ -888,7 +897,7 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
             Kind::PlanOutlined => vec![NewEvent::plan_outlined(T, b)],
-            Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
+            Kind::PlanDone => vec![NewEvent::plan_done(T, [s]), NewEvent::plan_done_quiet(T)],
             Kind::JobAdded => vec![
                 NewEvent::job_added(T, s, s, s, b, Some(s), [s], b),
                 NewEvent::job_added(T, s, s, s, b, None, [s], b),

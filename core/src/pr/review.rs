@@ -9,10 +9,12 @@ use serde_json::{Value, json};
 use super::gh;
 use super::merge::PullRef;
 use crate::error::{CpdError, ErrorCode};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::ids::{ContextId, PlanId};
 use crate::output::Output;
 use crate::ports::Ports;
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 
 const STORE_BUSY_MS: u64 = 5000;
 
@@ -174,22 +176,57 @@ fn submit(ports: &Ports, args: SubmitArgs) -> Result<Output, CpdError> {
     };
     let review = json!({"id": id, "url": url, "state": posted.get("state").cloned().unwrap_or(Value::Null), "commit_id": head});
 
-    let reaction = match slack {
-        None => Value::Null,
-        Some((channel, ts)) => {
-            let queued = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)
-                .and_then(|mut store| {
-                    store.write("review submit", |tx| {
-                        super::reactions::queue(tx, channel, ts, emoji)
-                    })
+    let plan = std::env::var("CPD_PLAN")
+        .ok()
+        .and_then(|v| PlanId::parse(&v).ok());
+    let reaction = if slack.is_none() && plan.is_none() {
+        Value::Null
+    } else {
+        let queued = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)
+            .and_then(|mut store| {
+                store.write("review submit", |tx| {
+                    let queued = match slack {
+                        Some((channel, ts)) => {
+                            Some(super::reactions::queue(tx, channel, ts, emoji)?)
+                        }
+                        None => None,
+                    };
+                    if let Some(plan) = &plan {
+                        finish_plan(tx, plan)?;
+                    }
+                    Ok(queued)
                 })
-                .map_err(|e| e.with("review", review.clone()))?;
-            json!({"channel": channel, "ts": ts, "emoji": emoji, "already": !queued})
+            })
+            .map_err(|e| e.with("review", review.clone()))?;
+        match (slack, queued) {
+            (Some((channel, ts)), Some(queued)) => {
+                json!({"channel": channel, "ts": ts, "emoji": emoji, "already": !queued})
+            }
+            _ => Value::Null,
         }
     };
     Ok(Output::success(
         json!({"review": review, "reaction": reaction}),
     ))
+}
+
+/// Finishes a `codereview` Plan (FR10): `grounding → done` with `locked_at` and `done_at` the transaction's time, and a quiet `plan-done`.
+fn finish_plan(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<(), CpdError> {
+    let moved = tx.execute(
+        "UPDATE plans SET phase = 'done', locked_at = (SELECT at FROM txns WHERE id = cpd_txn()), done_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE id = ?1 AND context = 'codereview' AND deleted_at IS NULL AND phase <> 'done'",
+        [plan.as_str()],
+    )?;
+    if moved == 1 {
+        let text = format!("Plan {plan} is done: review submitted.");
+        append(
+            tx,
+            NewEvent::plan_done_quiet(text)
+                .plan(plan.clone())
+                .context(ContextId::parse("codereview")?),
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

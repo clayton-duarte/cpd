@@ -380,3 +380,22 @@ test("a session-message names the zone after the time", async (t) => {
   assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:59 +05:30): ship it");
   assert.equal(f.pi.delivered()[1]!.message.content, `Message from the manager (${OTHER}) (03:59 +05:30): ship it`);
 });
+
+test("a plan-done with data.turn false is no message and no turn for a Lead", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.emit(event(101, "plan-done", { data: { workflows: [], turn: false } }));
+  await f.drain();
+  assert.deepEqual(f.pi.delivered(), []);
+  assert.deepEqual(f.pi.sent, []);
+});
+
+test("a plan-done without data.turn is a follow-up turn for a Lead", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.emit(event(101, "plan-done", { data: { workflows: [] } }));
+  await f.drain();
+  assert.deepEqual(f.pi.delivered().map((s) => [(s.message.details as any).id, s.options]), [[101, { triggerTurn: true, deliverAs: "followUp" }]]);
+});

@@ -5,7 +5,7 @@ import { zoneTime } from "./time.ts";
 /**
  * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
  * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
- * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and the rest (`attempt-retry`, `job-cancelled`, `workflow-started`, `workflow-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the Workflow's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
+ * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind that is a message waits as a follow-up; `job-merged` is one only when `data.turn` is true, and `plan-done` is none when `data.turn` is false (the `plan-done` of `review submit`: it must not wake a review Lead that just submitted), and the rest (`attempt-retry`, `job-cancelled`, `workflow-started`, `workflow-base-changed`, `pr-merged`) add nothing. `all-merged` is no longer appended (the Workflow's open Job opens the pull request, contract §3.7 E4) and an old one is ignored.
  */
 export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: SendOptions["deliverAs"] }>> = {
   "job-merged": { turn: true, deliverAs: "followUp" },
@@ -16,8 +16,9 @@ export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: Sen
   escalation: { turn: true, deliverAs: "steer" },
 };
 
-/** The rule of an Event for a Plan Lead; `undefined`: no message (every other kind, and a `job-merged` whose `data.turn` is not true). */
-export const leadRule = (ev: CpdEvent) => (ev.kind === "job-merged" && ev.data.turn !== true ? undefined : LEAD_MESSAGES[ev.kind]);
+/** The rule of an Event for a Plan Lead; `undefined`: no message (every other kind, a `job-merged` whose `data.turn` is not true, and a `plan-done` whose `data.turn` is false). */
+export const leadRule = (ev: CpdEvent) =>
+  (ev.kind === "job-merged" && ev.data.turn !== true) || (ev.kind === "plan-done" && ev.data.turn === false) ? undefined : LEAD_MESSAGES[ev.kind];
 
 /** §15.7a: while a by-user Session's first message is pending, and §15.15 L4: while the loop guard is tripped, a send that would start a turn is queued for the next run instead. */
 export const gated = (r: { firstPending: boolean; tripped: boolean } | undefined, o: SendOptions): SendOptions => ((r?.firstPending || r?.tripped) && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
