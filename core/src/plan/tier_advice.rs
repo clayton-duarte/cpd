@@ -1,5 +1,6 @@
 //! The pure Tier advice (contract §3.4b): per Job kind, the Tier with the lowest expected cost over first-Attempt history.
 
+use crate::config::Range;
 use crate::config::{Letter, Tier};
 use crate::error::CpdError;
 
@@ -106,6 +107,17 @@ pub fn recommend(rows: &[Row], floor: u32, next: impl Fn(Tier) -> Option<Tier>) 
         }
     }
     best
+}
+
+/// `recommend` over the cells inside the Worker `range` only; `next` is the ladder inside that range.
+// stub: the implementation fills it in, only the tests call it
+pub fn recommend_in(
+    _rows: &[Row],
+    _floor: u32,
+    _range: Range,
+    _next: impl Fn(Tier) -> Option<Tier>,
+) -> Vec<Advice> {
+    todo!("advice inside the Worker range")
 }
 
 /// The first-Attempt history per (Job kind, Tier) from the store.
