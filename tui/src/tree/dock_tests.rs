@@ -5,7 +5,7 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
 use super::fixture::{context, tree};
 use super::rows::{ARCHIVE, STANDING};
