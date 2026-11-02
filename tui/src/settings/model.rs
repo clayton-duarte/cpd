@@ -256,7 +256,7 @@ pub struct Model {
     provider: String,
     models: [Option<String>; 4],
     tiers: RoleTiers,
-    base_provider: String,
+    saved_provider: String,
     base_models: [Option<String>; 4],
     base_tiers: RoleTiers,
     retier_pending: bool,
@@ -287,7 +287,7 @@ impl Model {
             providers: reads.providers,
             presets: reads.presets,
             preset: 0,
-            base_provider: provider.clone(),
+            saved_provider: provider.clone(),
             provider,
             base_models: refs.clone(),
             models: refs,
@@ -338,7 +338,7 @@ impl Model {
                     Row::Provider => (
                         "Provider".to_owned(),
                         String::new(),
-                        self.provider != self.base_provider,
+                        self.provider != self.saved_provider,
                         false,
                     ),
                     Row::Model(l) => {
@@ -617,7 +617,7 @@ impl Model {
         match step {
             Step::PresetSet(refs) => {
                 self.base_models = refs.clone().map(Some);
-                self.base_provider = provider_of(&refs[0]).to_owned();
+                self.saved_provider = provider_of(&refs[0]).to_owned();
                 self.retier_pending = true;
             }
             Step::TiersSet(tiers) => {

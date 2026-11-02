@@ -75,13 +75,13 @@ fn blank() -> BodyLine {
     Builder::default().done()
 }
 
-fn header(name: &str, note: &str) -> BodyLine {
+fn header(name: &str, hint: &str) -> BodyLine {
     let mut b = Builder::default();
     b.text(
         format!(" {name}"),
         Style::default().add_modifier(Modifier::BOLD),
     )
-    .text(format!("  {note}"), palette::muted_text());
+    .text(format!("  {hint}"), palette::muted_text());
     b.done()
 }
 
