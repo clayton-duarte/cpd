@@ -112,6 +112,23 @@ test("a Lead is delivered an Event id once when the follower prints it twice", a
   assert.deepEqual(sent[1]!.options, { triggerTurn: true, deliverAs: "followUp" });
 });
 
+test("a busy Lead gets a session-message steered after the current tool call", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await f.followerStarted();
+  await f.pi.busy();
+
+  f.emit(ev(101, "session-message", { session: ID, data: { from: null, text: "ship it", wake: false } }));
+  await f.drain();
+
+  const sent = f.pi.delivered();
+  assert.deepEqual(sent.map((s) => (s.message.details as any).id), [101]);
+  assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "steer" });
+});
+
 test("a Worker is delivered an attempt-nudge id once when the follower prints it twice", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
