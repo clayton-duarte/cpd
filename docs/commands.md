@@ -5246,7 +5246,7 @@ Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, 
 cpd inbox claim <id>
 ```
 
-The target is always the Context `codereview` (contract §2.2 "Permanent Contexts"): no config key names it. The retired key `inbox.review_context` is dropped by the config migration `drop-inbox-review-context` (contract §8.1). The claim's message goes to that Context's Manager, which is ensured first (§3.11).
+The target is always the Context `codereview` (contract §2.2 "Permanent Contexts"): no config key names it. The config key that named it before is retired and dropped by the config migration `drop-inbox-review-context` (contract §8.1). The claim's message goes to that Context's Manager, which is ensured first (§3.11).
 
 | Precondition | Code | Exit |
 |---|---|---|
