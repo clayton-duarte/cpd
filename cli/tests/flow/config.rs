@@ -1563,14 +1563,14 @@ fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
         "{rows:?}"
     );
     assert!(
-        rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4,5]")),
+        rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4]")),
         "{rows:?}"
     );
 
     // Unchanged bytes are a hit: node has no reply left.
     assert_eq!(
         fx.cpd(&["tiers"]).ok()["tiers"]["S"]["efforts"],
-        json!([0, 1, 2, 3, 4, 5])
+        json!([0, 1, 2, 3, 4])
     );
     assert_eq!(fx.calls("node").len(), 2);
 }
