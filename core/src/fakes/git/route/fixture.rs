@@ -838,6 +838,46 @@ pub(super) fn reset(c: &mut Ctx, args: &[String]) -> Run {
     }))
 }
 
+/// `clean -f [-d]`: removes the untracked entries `status` shows (a directory only with `-d`), one
+/// `Removing <path>` line each; ignored and tracked files stay. Other flags and pathspecs are unsupported.
+pub(super) fn clean(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("clean", args, &["-f", "-d", "-fd", "-df"], &[])?;
+    if !positionals(&toks).is_empty() {
+        return Err("clean (arguments)".to_owned());
+    }
+    let flags = flags(&toks);
+    let has = |letter: char| flags.iter().any(|f| f.contains(letter));
+    let wt = match c.worktree() {
+        Ok(wt) => wt,
+        Err(out) => return Ok(out),
+    };
+    if !has('f') {
+        return Ok(Out::fail(
+            128,
+            "fatal: clean.requireForce defaults to true and neither -i, -n, nor -f given; refusing to clean\n",
+        ));
+    }
+    let index = c.u.effective_index(&wt);
+    let known: Vec<&str> = index.iter().map(|(p, _, _)| p.as_str()).collect();
+    let files = work_files(&wt);
+    let mut out = String::new();
+    for entry in untracked_entries(&wt, &files, &known, "clean")? {
+        let is_dir = entry.ends_with('/');
+        if is_dir && !has('d') {
+            continue;
+        }
+        let target = wt.join(entry.trim_end_matches('/'));
+        let removed = if is_dir {
+            std::fs::remove_dir_all(&target)
+        } else {
+            std::fs::remove_file(&target)
+        };
+        removed.expect("an untracked entry of the worktree can be removed");
+        out.push_str(&format!("Removing {entry}\n"));
+    }
+    Ok(Out::ok(out))
+}
+
 /// How git names what a merge merged in its message: `branch 'x'`, `remote-tracking branch 'x'`, `tag 'x'`.
 fn merged_name(c: &Ctx, repo: RepoId, name: &str) -> String {
     match dwim_ref(c.u, repo, name).as_deref() {
