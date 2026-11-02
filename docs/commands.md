@@ -252,13 +252,15 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-touches` (§5.9a) | Lead | no | no |
 | `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
-| `cpd session retier` (§10.15) | Manager | no | no |
+| `cpd session retier` (§10.16) | Manager | yes | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd models refresh` (§14.5) | Manager, Lead | no | no |
 | `cpd models show` (§14.5) | Manager, Lead | no | no |
 | `cpd preset list` (§14.6) | Manager, Lead | no | no |
 | `cpd preset show` (§14.6) | Manager, Lead | no | no |
-| `cpd preset apply` (§14.6) | Manager | no | no |
+| `cpd preset apply` (§14.6) | Manager | yes | no |
+| `cpd preset set` (§14.6) | Manager | yes | no |
+| `cpd config tiers set` (§14.2) | none | yes | no |
 | `cpd context curation` (§3.16, internal) | none | yes | yes |
 | `cpd context retire` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
