@@ -171,6 +171,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_failed` | 1 | a write command failed on SQLite (contract §4.5); for `pr post` (§9.8b) means the message WAS posted and the link is in `details` |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `context_permanent` | 3 | `context rename`, `context archive` or `context delete` (§3.8, §3.9, §3.15) named a Permanent Context, `cpd`, `host` or `codereview` (contract §2.2 "Permanent Contexts"): refused before any write; `details.context` is the id. A Permanent Context is never archived, renamed or deleted |
+| `key_fixed` | 3 | `session rename` (§10.7) named a Session that is a Manager, a Lead that is not a fork, or a Worker: its name is its agent key (contract §2.2 "Agent key"), which never changes; nothing is written and no `session-renamed` Event; `details` `{session, key}`, `key` the Session's current name |
+| `id_taken` | 3 | `plan new` (§4.1) or `context new` (§3.1) named an id that an object of the other kind holds, deleted ones included: a Context id for a Plan, a Plan id for a Context; `details` `{id, kind}`, `kind` the kind that holds it (`context` or `plan`). A rerun for an object that exists is `already`, not this (contract §2.2 "Agent key") |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
@@ -301,6 +303,7 @@ cpd context new <id> --title <text> --owner <login> [--jira <key>]
 | Precondition | Code | Exit |
 |---|---|---|
 | no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
+| no Plan row with this id, deleted ones included, unless a Context row with this id exists (then the rows above decide, so a rerun is `already`) | `id_taken` | 3 |
 | the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
@@ -312,7 +315,7 @@ Effects:
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "created_at": "2026-10-14T21:10:00.000Z", "created_on": "hs"}}
 ```
 
-Idempotent: yes. The same id, title, Jira key and owner return `"already": true`.
+Idempotent: yes. The same id, title, Jira key and owner return `"already": true`, also for a Context whose id a Plan holds: the two archived pairs `bifrost` and `gatemac` predate `id_taken` and are left as they are.
 
 ### 3.2 `context list`
 
@@ -539,14 +542,14 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>` (the Manager's agent key, contract §2.2 "Agent key"); `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
 The command never moves the chat slot (hs-d103); `session open <manager>` does (§10.4).
 
 ```json
-{"ok": true, "manager": {"session": "3c9a…", "name": "building-cpd-manager", "state": "stopped", "pane": "%47", "window": "@21"}, "started": true}
+{"ok": true, "manager": {"session": "3c9a…", "name": "building-cpd", "state": "stopped", "pane": "%47", "window": "@21"}, "started": true}
 ```
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
@@ -792,10 +795,10 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
 ```
 
-A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the User's home directory, whatever directory `plan new` runs from (contract §2.2, pro-d343). `--repo` and `--base` are gone: either is `usage` (exit 2).
+A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the User's home directory, whatever directory `plan new` runs from (contract §2.2, pro-d343). `--repo` and `--base` are gone: either is `usage` (exit 2). `--name` is gone too: it is `usage` (exit 2). The Lead's name is its agent key, `<context>:<plan>` (contract §2.2 "Agent key").
 
 | Flag | Meaning |
 |---|---|
@@ -803,7 +806,6 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--context <c>` | required: the Plan's Context (D2) |
 | `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--jira <key>` | Jira ticket key, stored only |
-| `--name <name>` | the Lead's pi display name; default `<id>` |
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.11); omit it and the Lead starts with its first message, as today |
 | `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5), checked against the lead range (below). Omitted, the Tier is `lead_tier` (Effects, step 1) |
@@ -816,11 +818,12 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--tier` is not valid syntax (§5; effort 5 included), or an effort the catalog lacks for the Tier's model (the models of the Context, contract §8.3; the catalog is read only when `--tier` is given); `details.tier` and `details.efforts` for an effort | `tier_invalid` | 2 |
 | `--tier` is outside the lead range, from `lead_tier` (the floor) up to the highest valid rung strictly below `manager_tier` (contract §9 "Roles and ranges", checked after `tier_invalid`); `details` `{tier, role: "lead", floor, ceiling, allowed: "<floor>-<ceiling>", key: "lead_tier"}`, message `Tier <T> is outside the lead range <floor>-<ceiling>, set by lead_tier and below manager_tier.` | `tier_not_allowed` | 2 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
+| no Context row with this id, deleted ones included, when no Plan row has this id (a rerun for an existing Plan is `already` or `plan_exists`, as above) | `id_taken` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 | `--runner` is neither `pi` nor `durable` | `usage` | 2 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name` = `<context>:<plan>`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
@@ -834,7 +837,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
 
 ```json
 {"ok": true, "plan": {"id": "pay-4521", "context": "payments", "title": "Retry failed payouts", "jira": null, "phase": "grounding", "lead_session": "8d0e…", "workflows": []},
- "lead": {"session": "8d0e…", "name": "pay-4521", "forked_from": null, "cwd": "/home/clayton", "pane": "%41", "window": "@17"},
+ "lead": {"session": "8d0e…", "name": "payments:pay-4521", "forked_from": null, "cwd": "/home/clayton", "pane": "%41", "window": "@17"},
  "record": "hs-p4"}
 ```
 
@@ -2704,7 +2707,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 |---|---|
 | `<source>` | the Session to fork (the short forms of §1.3 are accepted); a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; no Worker is a fork (pro-d163) |
 | `--plan <id>` | the new Session's Plan; default the source's Plan. The fork is a **side session** of the Plan: the Plan's `lead_session` does not change, so Plan Events still go to the Plan's Lead only (§15.2). It is drawn in the tree **directly under its Context**, after the Context's Plans, never under the Plan or under `<source>` (B1, §13.2) |
-| `--name <name>` | default `<source name> (fork)`, cut to 80 characters |
+| `--name <name>` | default `<source name> (fork)`, cut to 98 characters (contract §2.2 "Agent key") |
 | `--message-file <file>` | its first message, copied to `run/<plan>/messages/<session>.md`; without it the fork starts with no message |
 
 | Precondition | Code | Exit |
@@ -2805,6 +2808,8 @@ cpd session rename <name> [--session <id>]
 ```
 
 cpd 1 §11 `session rename`, kept; the queue file becomes an Event. `--session` accepts the short forms of §1.3.
+
+**Refused `key_fixed`** (exit 3, `details` `{session, key}`) for a Session that is a Manager, a Lead that is not a fork (`forked_from` null) or a Worker: its name is its agent key (contract §2.2 "Agent key"). This is checked first, whatever the new name, so the unchanged name is refused too; nothing is written and no `session-renamed` Event is appended. A fork (`forked_from` set) is renamed as below.
 
 Effects: unchanged name: `"already": true`, nothing written. Otherwise **rows**, one transaction: `sessions.name`. **Event** `session-renamed` `{name}`, addressed to the Session (`session` set), which its adapter applies with `pi.setSessionName` (§15.4). **tmux**: sets `@cpd_title` to the new name on the Session's pane when it has one **and the Session has no dynamic `title`** (hs-d257, contract §6.1: the title wins; the rename still writes `sessions.name` and appends its Event); nothing else.
 
