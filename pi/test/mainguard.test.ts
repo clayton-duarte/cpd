@@ -185,7 +185,7 @@ async function started(role: string) {
 }
 
 type Result = { block?: boolean; reason?: string } | undefined;
-const call = async (f: Fixture, command: string, toolName = "bash") => (await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input: { command } }))[0] as Result;
+const call = async (f: Fixture, command: string, toolName = "bash") => (await f.pi.fire("agent_end", { messages: [] }), await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input: { command } }))[0] as Result;
 const inCwd = (f: Fixture, dir: string) => {
   const ctx = f.pi.ctx.bind(f.pi);
   f.pi.ctx = () => ({ ...ctx(), cwd: dir });

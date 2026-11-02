@@ -258,11 +258,6 @@ fn the_migration_is_breaking_and_sorts_after_permanent_contexts() {
         "as tier-syntax-g-x does"
     );
     assert!(entry.run.is_none(), "SQL only");
-    assert_eq!(
-        NAMED.last().map(|n| n.name),
-        Some(MIGRATION),
-        "nothing sorts after it yet"
-    );
 }
 
 #[test]

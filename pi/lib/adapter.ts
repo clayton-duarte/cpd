@@ -2,7 +2,7 @@ import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
-import { registerLoopGuard } from "./loop-guard.ts";
+import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { exploreGuard } from "./explore.ts";
@@ -65,6 +65,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // §15.11, §15.12, §15.16: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
   pi.on("tool_call", async (event, ctx) => {
+    const looped = toolCallGuard(host, { toolName: event.toolName, input: event.input, parentToolCallId: event.parentToolCallId });
+    if (looped !== undefined) return { block: true, reason: looped };
     const role = host.run?.info.role;
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };

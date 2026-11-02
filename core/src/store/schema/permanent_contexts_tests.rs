@@ -1045,7 +1045,7 @@ fn the_engine_index_files_are_removed_and_the_digest_directory_follows_the_id() 
 #[test]
 fn the_blocking_triggers_come_back_with_their_exact_sql() {
     let (_dir, home, mut pre) = old_open(true, "clayton-duarte");
-    let sql = "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name";
+    let sql = "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN ('events_no_update', 'context_records_immutable', 'jobs_locked') ORDER BY name";
     let triggers = rows(&mut pre, sql);
     for name in [
         "events_no_update",

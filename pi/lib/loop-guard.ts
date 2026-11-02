@@ -43,11 +43,72 @@ function trip(host: Host, r: Run, at: number): void {
   host.refresh(r);
 }
 
+/** L8: the fixed bounds of one turn. */
+export const READ_STREAK_LIMIT = 12;
+export const TURN_TOOL_LIMIT = 30;
+export const TURN_REFUSAL_TRIP = 3;
+
+const STATE_TOOLS = new Set(["write", "edit", "cpd_plan_review", "ask_user_question"]);
+/** L8: the state-mutating `cpd` commands, `group -> subcommands`; the one list. */
+const STATE_COMMANDS: Record<string, readonly string[]> = {
+  job: ["add", "edit", "cancel", "retry", "steer", "addendum", "urgent", "approve-tests", "approve-touches"],
+  workflow: ["add", "edit", "describe", "cancel", "start"],
+  plan: ["new", "phase", "outline", "lock", "review", "rename", "move", "done", "cancel", "archive"],
+  pr: ["open", "merge", "post", "rebase", "push", "describe", "reply", "rerun"],
+  context: ["new", "decide", "note", "ask", "answer", "brief", "plan", "rename", "archive", "delete"],
+  session: ["send", "close", "resume", "rename", "fork"],
+  escalation: ["answer"],
+  review: ["submit"],
+  inbox: ["claim"],
+  preset: ["apply"],
+  board: ["post"],
+};
+const STATE_COMMAND = new RegExp(
+  `(?<![A-Za-z0-9_.-])cpd\\s+(?:(?:${Object.entries(STATE_COMMANDS)
+    .map(([g, subs]) => `${g}\\s+(?:${subs.join("|")})`)
+    .join("|")})(?![A-Za-z0-9_-])|answer(?![A-Za-z0-9_-]))`,
+);
+
+/** L8: whether a tool call records state (resets the read streak); everything else is a read. */
+export function isStateWrite(toolName: string, input: unknown): boolean {
+  if (STATE_TOOLS.has(toolName)) return true;
+  const field = toolName === "bash" ? "command" : toolName === "codemode" ? "code" : undefined;
+  if (field === undefined || !isObject(input)) return false;
+  const text = input[field];
+  return typeof text === "string" && STATE_COMMAND.test(text);
+}
+
+const READ_STREAK_REASON =
+  "φ: loop guard: more than 12 consecutive read-only tool calls in one turn. Stop your turn now. Delegate codebase exploration to a scout Job (cpd job add <k> --kind scout), or run the cpd state command that records your decision.";
+const TOTAL_CALLS_REASON =
+  "φ: loop guard: more than 30 tool calls in one turn. Stop your turn now: end it with what you have, and delegate any further codebase exploration to a scout Job.";
+
+/** L8: counts a call of the model; the refusal reason, or undefined to let it run. */
+export function toolCallGuard(host: Host, call: { toolName: string; input: unknown; parentToolCallId?: string }): string | undefined {
+  const r = host.run;
+  if (!r || !guarded(r) || call.parentToolCallId !== undefined) return undefined;
+  r.totalCalls += 1;
+  if (isStateWrite(call.toolName, call.input)) r.readStreak = 0;
+  else r.readStreak += 1;
+  const reason = r.totalCalls > TURN_TOOL_LIMIT ? TOTAL_CALLS_REASON : r.readStreak > READ_STREAK_LIMIT ? READ_STREAK_REASON : undefined;
+  if (reason === undefined) return undefined;
+  r.turnRefusals += 1;
+  if (r.turnRefusals >= TURN_REFUSAL_TRIP && !r.tripped) trip(host, r, (host.options.now ?? Date.now)());
+  return reason;
+}
+
+const resetTurn = (r: Run) => {
+  r.readStreak = 0;
+  r.totalCalls = 0;
+  r.turnRefusals = 0;
+};
+
 /** Registered once (pi has no unsubscribe); the run and its role are read at each call. */
 export function registerLoopGuard(host: Host): void {
   host.pi.on("before_agent_start", function loopGuardHandler(event) {
     const r = host.run;
     if (!r || !guarded(r)) return;
+    resetTurn(r);
     // Only the User's prompt is `messageType: "user"` (not `startsReply`, which also counts a from-null session-message).
     if (event.messageType === "user") {
       clearTrip(host, r);
@@ -56,5 +117,9 @@ export function registerLoopGuard(host: Host): void {
     const now = (host.options.now ?? Date.now)();
     r.turnStarts = [...r.turnStarts.filter((t) => t > now - WINDOW_MS), now];
     if (!r.tripped && r.turnStarts.length > r.info.loopGuardTurns) trip(host, r, now);
+  });
+  host.pi.on("agent_end", function loopGuardAgentEnd() {
+    const r = host.run;
+    if (r && guarded(r)) resetTurn(r);
   });
 }
