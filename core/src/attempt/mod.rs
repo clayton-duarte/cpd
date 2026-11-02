@@ -9,6 +9,7 @@
 //! `attempt run` belongs to the driver (`crate::driver`).
 
 mod abort;
+pub(crate) mod footprint;
 mod kind;
 pub mod ledger;
 mod read;
@@ -19,6 +20,9 @@ mod submit;
 
 #[cfg(test)]
 mod cancel_tests;
+
+#[cfg(test)]
+mod footprint_tests;
 
 #[cfg(test)]
 mod incident_tests;

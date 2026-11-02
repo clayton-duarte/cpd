@@ -1832,7 +1832,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
             "base_sha": base, "driver_pid": 4242, "worker_session": "w1", "spec_path": "/specs/api-a1.md",
             "submitted_sha": null, "submitted_at": null, "check_tail": null, "gate_hook": null, "gate_command": null, "gate_exit": null, "merged_sha": null, "nudged": true,
             "stop_request": null, "metrics": {"turns": 3}, "started_at": "t", "ended_at": null,
-            "runner": "pi", "worker_pid": null, "actual_files": null,
+            "runner": "pi", "worker_pid": null, "actual_files": null, "footprint": null,
         })
     );
     assert_eq!(
@@ -1905,6 +1905,150 @@ fn show_prints_null_actual_files_for_an_attempt_that_never_captured() {
         "{out}"
     );
     assert_eq!(out["attempt"]["actual_files"], Value::Null);
+}
+
+impl Rows {
+    /// Job `key` of `kind` with Attempt `<key>-a1` (`running`), by SQL. `touches` is the JSON text of the Spec's
+    /// `touches` (`None`: a Job with no Spec, a draft stub); `actual` is the JSON text of `actual_files` (`None`: NULL).
+    /// An explore kind has no PR.
+    fn footprinted(&self, key: &str, kind: &str, touches: Option<&str>, actual: Option<&str>) {
+        let explore = matches!(kind, "scout" | "research");
+        let pr = if explore { "NULL" } else { "'repo'" };
+        let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |t| format!("'{t}'"));
+        let (status, spec, fingerprint) = match touches {
+            Some(t) => (
+                "running",
+                format!("'g', 'c', '{t}', '[\"b\"]', '[]'"),
+                format!("'{}'", "f".repeat(64)),
+            ),
+            None => (
+                "draft",
+                "NULL, NULL, NULL, NULL, NULL".to_owned(),
+                "NULL".to_owned(),
+            ),
+        };
+        let tier = if touches.is_some() { "'S2'" } else { "NULL" };
+        self.fx.env.sql(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                               status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+             VALUES ('pay', {pr}, '{key}', 'T', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't', '{kind}', {tests}, {tests});
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at, actual_files)
+             VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/pay--{key}-a1', '/w', '{BASE}', 't', {actual});",
+            actual = q(actual),
+            // A `test` Job carries its named tests and files (trigger `jobs_kind_spec_ins`).
+            tests = if kind == "test" { "'[\"t\"]'" } else { "NULL" }
+        ));
+    }
+
+    /// `attempt show <key>-a1`'s `attempt` object, which must carry the key `footprint`.
+    fn shown(&self, key: &str) -> Value {
+        let out = self.cpd(&["show", &format!("{key}-a1")]).ok();
+        let attempt = out["attempt"].clone();
+        assert!(
+            attempt.as_object().unwrap().contains_key("footprint"),
+            "{out}"
+        );
+        attempt
+    }
+}
+
+/// Job `t` of kind `work` with `touches` and `actual_files` `actual` (a Locked Job's Spec cannot be updated).
+fn set_job(fx: &Rows, touches: &str, actual: Option<&str>) {
+    fx.footprinted("t", "work", Some(touches), actual);
+}
+
+#[test]
+fn show_prints_the_footprint_of_a_captured_attempt() {
+    let fx = rows();
+    set_job(
+        &fx,
+        "[\"src/\",\"docs/a.md\"]",
+        Some("[\"src/x.rs\",\"Cargo.lock\",\"lib/y.rs\"]"),
+    );
+    let attempt = fx.shown("t");
+    assert_eq!(
+        attempt["footprint"],
+        json!({"class": "undeclared_write", "undeclared": ["lib/y.rs"], "untouched": ["docs/a.md"]})
+    );
+    assert_eq!(
+        attempt["actual_files"],
+        json!(["src/x.rs", "Cargo.lock", "lib/y.rs"])
+    );
+}
+
+#[test]
+fn show_prints_a_match_footprint_when_the_touches_cover_every_written_path() {
+    let fx = rows();
+    set_job(
+        &fx,
+        "[\"src/\",\"docs/a.md\"]",
+        Some("[\"docs/a.md\",\"src/b/c.rs\"]"),
+    );
+    assert_eq!(
+        fx.shown("t")["footprint"],
+        json!({"class": "match", "undeclared": [], "untouched": []})
+    );
+}
+
+#[test]
+fn show_prints_a_subset_footprint_for_an_empty_actual_files() {
+    let fx = rows();
+    set_job(&fx, "[\"a\",\"docs/\"]", Some("[]"));
+    assert_eq!(
+        fx.shown("t")["footprint"],
+        json!({"class": "subset", "undeclared": [], "untouched": ["a", "docs/"]})
+    );
+}
+
+#[test]
+fn show_reads_a_glob_entry_as_the_submit_guard_does() {
+    let fx = rows();
+    set_job(&fx, "[\"**\"]", Some("[\"a/b.rs\"]"));
+    assert_eq!(fx.shown("t")["footprint"]["class"], "match");
+}
+
+#[test]
+fn show_prints_a_null_footprint_for_the_kinds_that_have_none() {
+    let fx = rows();
+    for kind in ["open", "update", "scout", "research"] {
+        let key = format!("k-{kind}");
+        fx.footprinted(&key, kind, Some("[\"x.rs\"]"), Some("[\"x.rs\"]"));
+        let attempt = fx.shown(&key);
+        assert_eq!(attempt["footprint"], Value::Null, "{kind}");
+        assert_eq!(attempt["actual_files"], json!(["x.rs"]), "{kind}");
+    }
+}
+
+#[test]
+fn show_prints_a_footprint_for_the_kinds_that_declare_touches() {
+    let fx = rows();
+    for kind in ["docs", "test", "impl", "work", "verify"] {
+        let key = format!("k-{kind}");
+        fx.footprinted(&key, kind, Some("[\"x.rs\"]"), Some("[\"x.rs\"]"));
+        let attempt = fx.shown(&key);
+        assert_eq!(attempt["footprint"]["class"], "match", "{kind}");
+    }
+}
+
+#[test]
+fn show_prints_a_null_footprint_for_a_null_actual_files() {
+    let fx = rows();
+    fx.footprinted("w", "work", Some("[\"a.rs\"]"), None);
+    assert_eq!(fx.shown("w")["footprint"], Value::Null);
+}
+
+#[test]
+fn show_prints_a_null_footprint_for_a_job_with_no_spec() {
+    let fx = rows();
+    fx.footprinted("stub", "work", None, Some("[\"a.rs\"]"));
+    assert_eq!(fx.shown("stub")["footprint"], Value::Null);
+}
+
+#[test]
+fn show_refuses_an_actual_files_entry_that_is_not_a_string() {
+    let fx = rows();
+    set_job(&fx, "[\"**\"]", Some("[1]"));
+    refused(&fx.cpd(&["show", "t-a1"]), "store_failed", 1);
 }
 
 #[test]

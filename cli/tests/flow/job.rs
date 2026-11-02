@@ -1385,6 +1385,7 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
         "started_at",
         "ended_at",
         "actual_files",
+        "footprint",
     ] {
         assert!(attempt.get(field).is_some(), "{field}");
     }
@@ -1430,6 +1431,56 @@ fn show_prints_the_same_actual_files_as_attempt_show() {
     assert_eq!(printed, json!(["a.rs", "docs/x.md"]));
     let shown = fx.cpd(&["attempt", "show", "a-a1", "--plan", "pl"]).ok();
     assert_eq!(shown["attempt"]["actual_files"], printed);
+}
+
+#[test]
+fn show_prints_the_same_footprint_as_attempt_show() {
+    let fx = Fx::new();
+    drafted(&fx);
+    lock(&fx.env, "pl");
+    // The Job's touches are `src/a.rs` (spec_json).
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'running' WHERE key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
+         VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', '[\"src/a.rs\",\"lib/y.rs\"]', 't');",
+    );
+    let out = job(&fx, &["show", "a"], "pl").ok();
+    let printed = out["attempts"][0]["footprint"].clone();
+    assert_eq!(
+        printed,
+        json!({"class": "undeclared_write", "undeclared": ["lib/y.rs"], "untouched": []})
+    );
+    let shown = fx.cpd(&["attempt", "show", "a-a1", "--plan", "pl"]).ok();
+    assert_eq!(shown["attempt"]["footprint"], printed);
+}
+
+#[test]
+fn show_prints_a_null_footprint_for_an_open_job_and_for_a_null_actual_files() {
+    let fx = Fx::new();
+    drafted(&fx);
+    lock(&fx.env, "pl");
+    fixture(
+        &fx.env,
+        "UPDATE jobs SET status = 'running' WHERE key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
+         VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', NULL, 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at, kind)
+         SELECT plan, pr, 'o', 'T', 'S2', 'g', 'c', '[\"a sentence\"]', '[\"b\"]', '[]',
+                'running', 0, fingerprint, cpd_txn(), 't', 'open' FROM jobs WHERE key = 'a';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
+         VALUES ('pl', 'o-a1', 'o', 1, 'S2', 'ladder', 'running', 'cpd/pl--o-a1', '/w', '[\"x\"]', 't');",
+    );
+    for key in ["a", "o"] {
+        let out = job(&fx, &["show", key], "pl").ok();
+        let attempt = &out["attempts"][0];
+        assert!(
+            attempt.as_object().unwrap().contains_key("footprint"),
+            "{out}"
+        );
+        assert_eq!(attempt["footprint"], Value::Null, "{key}");
+    }
 }
 
 // ---------- --pr (R34, commands.md §1.3, §5.1, §5.2) ----------
