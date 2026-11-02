@@ -122,8 +122,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     })))
 }
 
-/// The checks `plan new` makes before it creates a Plan, shared with `inbox claim`: the Context exists and has an owner.
-pub(crate) fn require_context(env: &mut Env, id: &ContextId) -> Result<ContextRow, CpdError> {
+/// The Context exists and has an owner (`plan new`; `inbox claim` leaves the owner to `ensure`).
+fn require_context(env: &mut Env, id: &ContextId) -> Result<ContextRow, CpdError> {
     let context = env.store.read(|conn| ContextRow::require(conn, id))?;
     if context.owner.is_none() {
         return Err(crate::policy::owner_unset(id));

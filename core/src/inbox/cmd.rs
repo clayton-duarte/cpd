@@ -9,6 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, Time, UtcOffset};
 
 use super::model::{self, Filter, Item, Kind, State, Urgency};
+use super::review_plan;
 use super::team;
 use crate::clock::timestamp;
 use crate::env::Env;
@@ -16,7 +17,9 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::host::deadline::Failed;
 use crate::host::runner::{NO_DEADLINE, Runner};
-use crate::ids::ContextId;
+use crate::args::Text;
+use crate::ids::{ContextId, PlanId, SessionId};
+use crate::plan::new::Creation;
 use crate::output::Output;
 use crate::ports::Ports;
 use crate::session;
@@ -436,9 +439,9 @@ fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
 }
 
 /// `inbox claim` (§21.7): the preconditions in order, all before any write; then `claimed_at`, the Event `inbox-claimed` and
-/// the `session-message` to the review Context's Manager and the `eyes` reaction queued on the Workflow's Slack post (the cache's
-/// channel and the post's `ts_raw`) in one transaction, and a stopped Manager started after it. An already claimed item and a
-/// refusal queue nothing.
+/// the review Plan and its Lead and the `eyes` reaction queued on the Workflow's Slack post (the cache's channel and the post's
+/// `ts_raw`) in one transaction, then the Plan's records, first message and Lead window. The Manager is neither messaged nor
+/// woken. An already claimed item and a refusal queue nothing.
 fn approve(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
     approve_in(&mut env, args.id)
@@ -552,11 +555,12 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
         .ok_or_else(missing)?;
     let post = cache.primary_post(repo, number).ok_or_else(missing)?;
     let lookup = team::github_lookup_with(&*ports.runner, &env.home, &[(repo.to_owned(), number)])?;
-    let reason = match lookup
+    let found = lookup
         .workflows
         .get(&(repo.to_owned(), number))
-        .and_then(Option::as_ref)
-    {
+        .and_then(Option::as_ref);
+    let pr_title = found.map(|pr| pr.title.clone()).unwrap_or_default();
+    let reason = match found {
         None => Some("not-found"),
         Some(pr) => stale_reason(
             pr,
@@ -591,49 +595,116 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
         .with("kind", item.kind.as_str())
         .with("reason", reason));
     }
-    let url = item.url.clone().unwrap_or_default();
-    let text = format!(
-        "Please start a review of the pull request {url} in your Context {context}. It was posted in Slack channel {} at {} (the post's ts); the User claimed it from the Inbox.",
-        cache.channel, post.ts_raw
-    );
     let manager = crate::context::permanent::ensure(
         &env.home,
         &env.config,
         &mut env.store,
         crate::ids::PermanentContext::Codereview,
     )?;
+    // The owner is `ensure`'s: a `codereview` Context made by another path may have none, and the claim still works.
+    let context_row = env
+        .store
+        .read(|conn| crate::context::ContextRow::require(conn, &context))?;
+    crate::plan::new::refuse_archived(&context_row)?;
+    let cwd = session::agent_cwd()?;
+    let repo_name = repo.split_once('/').map_or(repo, |(_, name)| name);
+    let slug = review_plan::slug(repo_name);
+    let title = review_plan::title(&slug, number, &pr_title);
+    // The home as the User names it (not canonicalized, unlike the Lead's cwd): the brief shows paths the User knows.
+    let home = crate::host::pi::PiDirs::resolve(std::env::home_dir(), None, None)?
+        .home
+        .display()
+        .to_string();
+    let brief_text = review_plan::Brief {
+        repo,
+        number,
+        channel: &cache.channel,
+        ts_raw: &post.ts_raw,
+        home: &home,
+    }
+    .text();
+    let brief: Text = brief_text.parse()?;
     let claimed = timestamp(now);
     let (channel, ts_raw) = (cache.channel.clone(), post.ts_raw.clone());
-    let item = Ports::scope(ports, || {
-        session::send::send_as_user(
-            &mut env,
-            &manager,
-            "inbox claim",
-            &text,
-            &format!("the review of {}", model::one_line(&item.label)),
-            |tx| {
-                let item = open_item(tx, args.id)?;
-                tx.execute(
-                    "UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1",
-                    params![item.id, claimed],
-                )?;
-                let event = NewEvent::inbox_claimed(
-                    format!(
-                        "Inbox item {} claimed: {}.",
-                        item.id,
-                        model::one_line(&item.label)
-                    ),
-                    item.id,
-                );
-                events::append(tx, scoped(event, &item))?;
-                crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
-                model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
+    let (lead_tier, lead_runner) = (env.config.lead_tier.to_string(), env.config.lead_runner);
+    let lead = SessionId::new_v4();
+    let (item, plan) = env.store.write("inbox claim", |tx| {
+        let item = open_item(tx, args.id)?;
+        tx.execute(
+            "UPDATE inbox_items SET claimed_at = ?2 WHERE id = ?1",
+            params![item.id, claimed],
+        )?;
+        let event = NewEvent::inbox_claimed(
+            format!(
+                "Inbox item {} claimed: {}.",
+                item.id,
+                model::one_line(&item.label)
+            ),
+            item.id,
+        );
+        events::append(tx, scoped(event, &item))?;
+        crate::pr::reactions::queue(tx, &channel, &ts_raw, "eyes")?;
+        // The first free id, archived and deleted Plans counted: chosen in this transaction.
+        let mut attempt = 1;
+        let plan = loop {
+            let candidate = PlanId::parse(&review_plan::plan_id(&slug, number, attempt))?;
+            let taken = tx
+                .query_row(
+                    "SELECT 1 FROM plans WHERE id = ?1",
+                    [candidate.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?;
+            if taken.is_none() {
+                break candidate;
+            }
+            attempt += 1;
+        };
+        crate::plan::new::insert(
+            tx,
+            &Creation {
+                id: &plan,
+                context: &context,
+                title: &title,
+                jira: None,
+                name: plan.as_str(),
+                cwd: &cwd,
+                tier: &lead_tier,
+                runner: lead_runner,
+                by_user: false,
+                session: &lead,
             },
-        )
+        )?;
+        Ok((
+            model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?,
+            plan,
+        ))
     })?;
-    Ok(Output::success(
-        json!({"item": item_json(&item, now)?, "manager": manager.as_str()}),
-    ))
+    let creation = Creation {
+        id: &plan,
+        context: &context,
+        title: &title,
+        jira: None,
+        name: plan.as_str(),
+        cwd: &cwd,
+        tier: &lead_tier,
+        runner: lead_runner,
+        by_user: false,
+        session: &lead,
+    };
+    Ports::scope(ports, || {
+        crate::plan::new::finish(&mut env, &creation, Some(&brief), "inbox claim")
+    })
+    .map_err(|e| {
+        e.with("plan", plan.as_str())
+            .with("lead", lead.as_str())
+    })?;
+    Ok(Output::success(json!({
+        "item": item_json(&item, now)?,
+        "plan": plan.as_str(),
+        "lead": lead.as_str(),
+        "manager": manager.as_str(),
+    })))
 }
 
 /// `event` with the links of `item` (§5.2: `context?, plan?, job?, session?`).
