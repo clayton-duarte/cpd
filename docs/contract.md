@@ -133,7 +133,7 @@ $CPD_HOME/
     install-restart.json          `{by, at, engine_pid}`: the install's marker of a planned engine restart, written by `cpd watch --mark-restart` right before the old engine is retired and consumed (deleted) by the next engine at its start (§3.7 "A planned restart", hs-d471)
     tui/plan-scroll.json          the `plan` view's scroll offsets, `{"<plan id>": [x, y]}`, written by the view itself (a file a view writes, commands.md §13.2, hs-d254); read at its start
     tui/merging/<owner>__<repo>__<n>.json  a merge in progress for that pull request, `{"pid", "at", "merged"}` (the action's pid, an RFC 3339 time, and a boolean when the merge succeeded), written atomically (temporary file, rename) by `cpd tui action merge` (§13.2, hs-d495; the Lead's design); **B4** the marker's lifecycle: at start before `cpd pr merge`, rewritten with `"merged": true` on success after the merge, removed by the action on every exit, at start before later opens of the same PR rewritten as `{"pid", "at"}` when old; the views read it on each snapshot to show the spinner instead of the merge button while `pid` is alive or `merged` is true; **B5** a marker with `merged: true` whose row is not open, and a marker without it whose pid is not alive, are ignored; a second merge action for a pull request that is merging (`merged` field true or pid alive) does nothing and logs `merge already running` (commands.md §13.2, hs-d495, hs-d550)
-    tui/tree-folds.json           the `tree` view's folds, `{"collapsed": ["<context id>", …], "expanded": ["<context id>", …], "archived": true}`: the live Contexts the User collapsed, the archived Contexts the User expanded, and the archive row's fold (absent or false = folded, true = expanded); written by the view itself, under the same exception as `tui/plan-scroll.json` (commands.md §13.2, hs-d260); read at its start
+    tui/tree-folds.json           the `tree` view's folds, `{"collapsed": ["<context id>", …], "expanded": ["<context id>", …], "archived": true}`: the live Contexts the User collapsed, the archived Contexts the User expanded, and the Archive section's fold under the key `archived` (absent or false = folded, true = open); written by the view itself, under the same exception as `tui/plan-scroll.json` (commands.md §13.2, hs-d260); read at its start
     tui/<view>.log                one timestamped line per event in the view's log (appended), such as errors; when `CPD_TUI_TRACE` is exactly `1` at the view's start, also holds one `trace` line per draw of the view's main loop (commands.md §17 "Frame trace")
     tmux-restart.pending          a restart of the tmux server is pending (§6.1, hs-d294): JSON `{at, server, installed, failed}`; not in the store
     tmux-restart.log              the output of the detached tmux restart (§6.1)
@@ -587,7 +587,7 @@ Context, Plan and Session carry `asleep_at` (hs-d515, hs-d520). A Session is put
 
 #### Archived
 
-Context, Plan and Session carry `archived_at`. Archiving hides an object from the cockpit's tree (it collapses into a `…` row); it deletes nothing and changes no phase, status or state. Ids are unique and immutable; the **title** (Context, Plan) or **name** (Session) is the visible label. An asleep Session is not archived: archiving is the User's action only, and asleep is automatic and reversible.
+Context, Plan and Session carry `archived_at`. Archiving hides an object from the cockpit's tree (an archived Context moves into the tree's docked Archive section, folded by default, commands.md §13.2 "The Archive section"; pro-d348); it deletes nothing and changes no phase, status or state. Ids are unique and immutable; the **title** (Context, Plan) or **name** (Session) is the visible label. An asleep Session is not archived: archiving is the User's action only, and asleep is automatic and reversible.
 
 **Worker Sessions are archived by engine E12** (hs-d516): each tick, every Session with role `worker`, `archived_at` null, `state` `stopped`, and whose Attempt is `ended` gets `archived_at` set and one `session-archived` Event. Idempotent, so E12 archives the existing ones on its first tick.
 
@@ -3098,7 +3098,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Counter on an asleep Lead's row (every one, zeros too) | part of the row | fg 8 | palette: muted |
 | Counter separator `⋅` | no | fg 8 | palette: muted |
 | Closing toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes (click) | fg 7 | palette: read-only text |
-| Archive folder row (`╰󰬦 archive` / `╰󰬬 archive`) | yes (toggles the archived Contexts) | fg 8 | palette: muted |
+| Archive section header (`Archive` pill left, fold glyph pill right; pro-d348) | yes (folds or opens the Archive section) | block 7 inverted, caps 7 | `palette::pill_static()` |
 | Empty Context row `╰󰬪 new` | yes (left click opens New Plan) | the corner and glyph fg 8, the word new fg 15 | palette: muted and clickable text |
 | ` no Contexts` | no | fg 8 | palette: muted |
 | Scroll cues `▲ n more`, `▼ n more` (the tree and the Inbox only; they end at column `W - 2`) | no | fg 8 | `dialog/scroll.rs` through the palette: muted |
