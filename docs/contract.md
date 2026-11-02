@@ -557,9 +557,9 @@ A pi session cpd knows about: every Manager, Lead and Worker is one.
 | `id` | text | pi session id |
 | `role` | text | `manager`, `lead`, `worker`. A Manager is the Context's higher-level Lead (hs-d83..d86, §3.1); at most one live (not archived) per Context |
 | `context` | text | every Session belongs to a Context (vision: "a new session must belong to a Context") |
-| `plan` | text? | null exactly for a Context's Manager |
+| `plan` | text? | null for a Context's Manager, and for a fork (`forked_from` set) that has none: the schema allows that although `session fork` always writes one. Set for every Worker and for every Lead that is not a fork (§4.4 CHECKs; migration `20261103T0900-agent-key-schema`, pro-d345). At most one Lead that is not a fork per Plan (`sessions_one_lead`, §4.4), the Plan's Lead being the Session `plans.lead_session` names |
 | `attempt` | text? | set exactly for Workers |
-| `name` | text | pi display name (`-n`); 1–80 characters, no control characters |
+| `name` | text | pi display name (`-n`); 1–98 characters, no control characters (98 is the longest agent key, migration `20261103T0900-agent-key-schema`, pro-d345) |
 | `file` | text? | absolute path of the session JSONL, known once pi has created it |
 | `forked_from` | text? | the Session it was forked from. A fork is never drawn under its source or a Plan: §6.8 (B1) |
 | `cwd`, `tier` | text | a Manager's `tier` is the config key `manager_tier` (§8.2); its `cwd` is the User's home directory (`$HOME`, pro-d343; a Lead's too), never the directory the registering command ran from and never `$CPD_HOME`; `sessions.file` is untouched, so pi resumes the transcript in that cwd. **The `tier` of a Lead or a Manager is not fixed at registration** (hs-d506): a Manager starts as `manager_tier`; a Lead starts as `lead_tier`, or as the Tier that `plan new --tier` gives (commands.md §4.1). **`session retier`** (commands.md §10.16) is the command that sets a Session's `tier` after registration, with or without `--tier`: without it the Session moves to the config's target for its Context (`lead_tier` for a Lead, `manager_tier` for a Manager; `review_lead_tier` is gone, pro-d328 to pro-d332), appending a `session-retiered` Event (§5.2); with `--tier <T>` it moves to `<T>` for that one Session, when `<T>` is in the range of its role (the lead range for a Lead, the manager range for a Manager; §9 "Roles and ranges", "Where the ranges are enforced"; a Worker is never retiered); the Session then runs on it, live (§5.3) and at every relaunch (§6.5). A Worker's `tier` is its Job's and is never changed. No other command writes it |
@@ -1836,7 +1836,7 @@ CREATE TABLE sessions (
   context     TEXT NOT NULL REFERENCES contexts(id),
   plan        TEXT REFERENCES plans(id) DEFERRABLE INITIALLY DEFERRED,
   attempt     TEXT,
-  name        TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+  name        TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 98),  -- migration 20261103T0900-agent-key-schema (pro-d345): 98 = 40 + 1 + 24 + 1 + 32, the longest agent key
   file        TEXT,
   forked_from TEXT REFERENCES sessions(id),
   cwd         TEXT NOT NULL,
@@ -1858,11 +1858,13 @@ CREATE TABLE sessions (
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
   CHECK (role <> 'manager' OR plan IS NULL),
+  CHECK (role <> 'lead' OR forked_from IS NOT NULL OR plan IS NOT NULL),  -- migration 20261103T0900-agent-key-schema (pro-d345): a Lead that is not a fork belongs to a Plan
   CHECK (state NOT IN ('waiting', 'blocked') OR state_label IS NOT NULL),   -- migration waiting-state (hs-d303): `waiting` has a label as `blocked` has
   CHECK (state_label IS NULL OR state IN ('waiting', 'blocked') OR (state = 'stopped' AND state_label = 'host crash loop'))   -- migration session-crash-loop (P1.10, hs-d785): a crash-looped durable Session is `stopped` with the label `host crash loop`
 ) STRICT;
 CREATE INDEX sessions_plan ON sessions(plan);
 CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;   -- migration 0010
+CREATE UNIQUE INDEX sessions_one_lead ON sessions(plan) WHERE role = 'lead' AND forked_from IS NULL;   -- migration 20261103T0900-agent-key-schema (pro-d345): one Lead per Plan, archived or not; a fork is outside it, and a NULL plan is never a duplicate
 CREATE INDEX sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL;   -- migration read-indexes (engine-F2)
 -- migration 20261102T2100-session-working-pr (pro-d219, pro-d259; §3.6 "The Lead's Workflow"). A violation is the untyped refusal working_pr_invalid, by design (like review_pending)
 CREATE TRIGGER sessions_working_pr_new BEFORE INSERT ON sessions WHEN NEW.working_pr IS NOT NULL
@@ -2690,6 +2692,14 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
   - `DROP TRIGGER plans_phase;` then `CREATE TRIGGER plans_phase` with the definition of §4.4, which adds one allowed transition: `grounding>done` when `NEW.context = 'codereview'`. Every other Context still gets `illegal_transition`, and every transition the trigger allowed before is still allowed.
   - It changes no row, writes no `history` row and appends no Event. The pinned `SCHEMA_HASH` changes (`scripts/repin.sh`, §4.3); the reconcile (K4) is unchanged, since no history table changes.
   - Tests: a `codereview` Plan in `grounding` moves to `done` with `locked_at` and `done_at` set; a Plan of another Context in `grounding` moving to `done` gets `illegal_transition`; a `codereview` Plan in `plan` moving to `done` gets `illegal_transition`; the schema check passes.
+
+- **`20261103T0900-agent-key-schema`** (pro-d345, pro-d346; User, 2026-11-02 EST; Plan `agent-keys-core`, Workflow `schema`; named by hand after `20261103T0800-review-plan-done`, the newest on `main`, since `scripts/new-migration.sh` names by the UTC clock; `-- cpd-migration: breaking after 100`: the 100 `*.sql` migration files on `main` sort before it), declared **`breaking`**: it rebuilds `sessions` and creates a unique index on an existing table, so a binary older than it is refused (`store_too_new`, §4.5 "The window"). It is SQL only, no Rust hook, and runs in one transaction. **What it does:**
+  - `sessions` is rebuilt as `tier-rows-v2` rebuilt it: `sessions_new` with the §4.4 definition, every row and every column copied in rowid order, `DROP`, `RENAME`, then `sessions_plan`, `sessions_one_manager`, `sessions_live`, `sessions_working_pr_new`, `sessions_working_pr_valid` (over `workflows`) and `sessions_working_pr_clear` again. The history triggers are generated (K4), and the copy writes no history row.
+  - The `name` check goes from `BETWEEN 1 AND 80` to `BETWEEN 1 AND 98`, the length of the longest agent key (`<context>:<plan>:<job>`, 40 + 1 + 24 + 1 + 32).
+  - The check `CHECK (role <> 'lead' OR forked_from IS NOT NULL OR plan IS NOT NULL)` is added: a Lead that is not a fork belongs to a Plan. The check `CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL)` stays.
+  - The unique index `sessions_one_lead ON sessions(plan) WHERE role = 'lead' AND forked_from IS NULL` is created: at most one Lead that is not a fork per Plan, archived or not. A fork is outside it, and a NULL `plan` is never a duplicate in SQLite.
+  - No row is renamed, and no SQL CHECK constrains the value of `name` (pro-d345: 303 test fixtures insert free names). The names are written by the `keys` Workflow, which also adds the data-only backfill. **This migration repairs no data:** a store with two Leads that are not forks on one Plan, or one such Lead with no Plan, is refused loudly (`migration_failed`), and nothing is applied.
+  - **Tests** (`core/src/store/schema/agent_key_schema_tests.rs`): `agent_key_schema_is_a_breaking_migration_after_100`, `agent_key_schema_keeps_every_session_row_and_column`, `agent_key_schema_recreates_the_indexes_and_working_pr_triggers`, `agent_key_schema_accepts_a_name_of_98_characters_and_refuses_99_and_empty`, `agent_key_schema_refuses_a_second_non_fork_lead_on_a_plan`, `agent_key_schema_lets_a_fork_share_the_plan_of_a_lead`, `agent_key_schema_refuses_a_non_fork_lead_without_a_plan`, `agent_key_schema_lets_a_fork_have_no_plan_and_a_manager_never_has_one`, `agent_key_schema_refuses_a_store_with_two_non_fork_leads_on_a_plan`, `agent_key_schema_refuses_a_store_with_a_non_fork_lead_without_a_plan`.
 
 ## 5. Events
 
