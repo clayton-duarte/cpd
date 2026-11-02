@@ -2,7 +2,7 @@
 
 use super::tier_advice::{Row, first_attempts, qualifying, recommend, recommend_in, wilson_lower};
 use crate::config::{Catalog, Tier, TierModel};
-use crate::config::{Role, RoleTiers};
+use crate::config::{Range, Role, RoleTiers};
 use crate::home::CpdHome;
 use crate::store::Store;
 
@@ -19,7 +19,7 @@ fn model(name: &str, efforts: &[u8]) -> TierModel {
     }
 }
 
-/// The real `Catalog::next` as the ladder (H3 -> S1, S3 -> none).
+/// The real `Catalog::next_in` over the range H0..S3 as the ladder (H3 -> S1, S3 -> none).
 fn ladder() -> impl Fn(Tier) -> Option<Tier> {
     let catalog = Catalog {
         pi_version: "1.2.0".into(),
@@ -28,7 +28,11 @@ fn ladder() -> impl Fn(Tier) -> Option<Tier> {
         h: model("haiku", &[0, 1, 2, 3]),
         g: model("gemini", &[]),
     };
-    move |t| catalog.next(t).unwrap()
+    let range = Range {
+        floor: Tier::parse("H0").unwrap(),
+        ceiling: Tier::parse("S3").unwrap(),
+    };
+    move |t| catalog.next_in(range, t)
 }
 
 fn t(s: &str) -> Tier {
