@@ -124,7 +124,7 @@ fn tier_catalog_same_version_and_same_models_json_bytes_is_a_cache_hit() {
     assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3]);
     assert_eq!(runner.calls().len(), 1, "the catalog module ran once");
     assert_eq!(runner2.calls().len(), 0, "the second load asked nobody");
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
     // The rows carry the file's fingerprint: 64 lowercase hex digits (the hash itself is the crate's).
     let shas = rig.shas();
     assert!(shas.len() == 1 && is_hex_sha256(&shas[0]), "{shas:?}");
@@ -137,17 +137,17 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
     fs::write(rig.models_json(), SONNET_UP_TO_HIGH).unwrap();
     let (_, first) = rig.load(vec![levels(&UP_TO_HIGH)]);
     assert_eq!(efforts_of_s(&first.unwrap()), [0, 1, 2, 3]);
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
 
     fs::write(rig.models_json(), SONNET_UP_TO_MAX).unwrap();
     let (runner, second) = rig.load(vec![levels(&UP_TO_MAX)]);
     assert_eq!(
         efforts_of_s(&second.unwrap()),
-        [0, 1, 2, 3, 4, 5],
+        [0, 1, 2, 3, 4],
         "the new thinkingLevelMap is seen"
     );
     assert_eq!(runner.calls().len(), 1, "the catalog module ran again");
-    assert_eq!(rig.rows(), 6, "append-only: 3 + 3, not 3");
+    assert_eq!(rig.rows(), 8, "append-only: 4 + 4, not 4");
     let shas = rig.shas();
     assert!(
         shas.len() == 2 && shas.iter().all(|s| is_hex_sha256(s)) && shas[0] != shas[1],
@@ -156,7 +156,7 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
 
     // And the new bytes are warm, the old ones too (a file put back is a hit on its own rows).
     let (runner, third) = rig.load(vec![]);
-    assert_eq!(efforts_of_s(&third.unwrap()), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(efforts_of_s(&third.unwrap()), [0, 1, 2, 3, 4]);
     assert_eq!(runner.calls().len(), 0);
     fs::write(rig.models_json(), SONNET_UP_TO_HIGH).unwrap();
     let (runner, back) = rig.load(vec![]);
@@ -166,7 +166,7 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
         "the first bytes' rows are still there"
     );
     assert_eq!(runner.calls().len(), 0);
-    assert_eq!(rig.rows(), 6);
+    assert_eq!(rig.rows(), 8);
 }
 
 /// Rule 3: an absent `models.json` is a valid key, `""`.
@@ -180,7 +180,7 @@ fn tier_catalog_an_absent_models_json_is_a_valid_key_the_empty_string() {
     let (runner, second) = rig.load(vec![]);
     assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3]);
     assert_eq!(runner.calls().len(), 0, "an absent file stays a hit");
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
 }
 
 /// Rule 3: the file appearing later is a change.
@@ -192,9 +192,9 @@ fn tier_catalog_a_models_json_that_appears_later_is_a_change() {
 
     fs::write(rig.models_json(), SONNET_UP_TO_MAX).unwrap();
     let (runner, second) = rig.load(vec![levels(&UP_TO_MAX)]);
-    assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3, 4]);
     assert_eq!(runner.calls().len(), 1);
-    assert_eq!(rig.rows(), 6);
+    assert_eq!(rig.rows(), 8);
     let shas = rig.shas();
     assert_eq!(shas[0], "", "{shas:?}");
     assert!(is_hex_sha256(&shas[1]), "{shas:?}");
@@ -217,4 +217,110 @@ fn tier_catalog_an_unreadable_models_json_is_catalog_failed_with_its_path() {
     );
     assert_eq!(runner.calls().len(), 0, "no fallback: pi was not asked");
     assert_eq!(rig.rows(), 0);
+}
+
+/// pi's levels for each letter, as the catalog module prints them.
+fn all_levels(o: &[&str], s: &[&str], h: &[&str], g: &[&str]) -> Reply {
+    Reply::ok(&json!({"O": o, "S": s, "H": h, "G": g}).to_string())
+}
+
+/// Tier model v2: a model whose only level is `off`, or that has none, has no efforts: only `<letter>X` is valid for it.
+#[test]
+fn a_model_with_only_off_has_no_efforts() {
+    let mut rig = Rig::new();
+    let (_, result) = rig.load(vec![all_levels(
+        &["off"],
+        &[],
+        &["off", "low", "medium", "high"],
+        &["off"],
+    )]);
+    let catalog = result.unwrap();
+    assert_eq!(catalog.o.efforts, Vec::<u8>::new(), "only off");
+    assert_eq!(catalog.s.efforts, Vec::<u8>::new(), "no levels");
+    assert_eq!(catalog.h.efforts, [0, 1, 2, 3]);
+    assert_eq!(
+        catalog.g.efforts,
+        Vec::<u8>::new(),
+        "G is read like the others"
+    );
+    // The empty list is what the cache keeps, and a hit gives it back.
+    let (runner, again) = rig.load(vec![]);
+    assert_eq!(again.unwrap(), catalog);
+    assert_eq!(runner.calls().len(), 0);
+}
+
+/// pi's `minimal` and `max` have no effort digit: they are dropped; levels pi does not offer leave gaps, which are kept.
+#[test]
+fn minimal_and_max_are_dropped_and_gaps_are_kept() {
+    let mut rig = Rig::new();
+    let (_, result) = rig.load(vec![all_levels(
+        &["off", "medium", "high", "xhigh"],
+        &["minimal", "off", "low", "medium", "high", "xhigh", "max"],
+        &["minimal", "low", "high", "max"],
+        &["off"],
+    )]);
+    let catalog = result.unwrap();
+    assert_eq!(catalog.o.efforts, [0, 2, 3, 4], "a gap is kept");
+    assert_eq!(
+        catalog.s.efforts,
+        [0, 1, 2, 3, 4],
+        "minimal and max are dropped"
+    );
+    assert_eq!(catalog.h.efforts, [1, 3]);
+    assert_eq!(catalog.h.efforts.iter().max(), Some(&3), "no effort 5");
+}
+
+/// G is a letter like the others: its rows are written to `tier_catalog` and read back with their efforts.
+#[test]
+fn g_rows_are_cached_and_read_back_with_their_efforts() {
+    let mut rig = Rig::new();
+    let (_, first) = rig.load(vec![all_levels(
+        &["off", "low"],
+        &["off", "low"],
+        &["off", "low"],
+        &["off", "medium", "high"],
+    )]);
+    let first = first.unwrap();
+    assert_eq!(first.g.efforts, [0, 2, 3]);
+    assert_eq!(rig.rows(), 4, "one row per letter, G included");
+    let (runner, second) = rig.load(vec![]);
+    assert_eq!(second.unwrap(), first, "a hit reads G back from the cache");
+    assert_eq!(runner.calls().len(), 0);
+
+    // Through the cache's own functions: write a catalog, read it back.
+    let models = rig.models.clone();
+    let catalog = Catalog {
+        pi_version: "2.0.0".into(),
+        o: TierModel {
+            model: models.o.clone(),
+            efforts: vec![0, 2, 3, 4],
+        },
+        s: TierModel {
+            model: models.s.clone(),
+            efforts: vec![],
+        },
+        h: TierModel {
+            model: models.h.clone(),
+            efforts: vec![1, 3],
+        },
+        g: TierModel {
+            model: models.g.clone(),
+            efforts: vec![1, 2],
+        },
+    };
+    cache::write(&mut rig.store, "sha", &catalog).unwrap();
+    let refs = [models.o.as_str(), models.s.as_str(), models.h.as_str()];
+    let read = cache::read(&mut rig.store, "2.0.0", "sha", refs, &models.g).unwrap();
+    assert_eq!(read, Some(catalog));
+    let g_rows: i64 = rig
+        .store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM tier_catalog WHERE pi_version = '2.0.0' AND letter = 'G'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(g_rows, 1);
 }

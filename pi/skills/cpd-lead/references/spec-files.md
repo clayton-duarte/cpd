@@ -63,7 +63,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gem
 |---|---|---|
 | Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`no_submit`) raises effort by one on the next Attempt, and a `crashed` or `merge_conflict` Attempt is retried at the same Tier, up to `retry_cap` retries (default 2, so 3 Attempts). A provider error retries the same Tier up to 3 times first and uses no try. A `gate_failed` is retried once at the same Tier and uses a try. |
 | Docs, config, mechanical edits | `H3` | Cheap and enough. |
-| A Workflow's open and update Jobs | `open_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
+| A Workflow's open and update Jobs | `worker_tier` (default `H3`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
 ## A feedback fix Job
 

@@ -139,7 +139,7 @@ fn tier_catalog_migration_keys_rows_by_models_sha_and_still_refuses_a_duplicate_
     );
     let letter = write(
         &mut store,
-        &format!("{INSERT} ('1.3.0', 'abc', 'G', 'm', '[0]', 't')"),
+        &format!("{INSERT} ('1.3.0', 'abc', 'Z', 'm', '[0]', 't')"),
     );
     assert!(
         format!("{letter:?}").contains("CHECK constraint failed"),

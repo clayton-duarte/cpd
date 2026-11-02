@@ -74,7 +74,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     // `pr open` no longer opens the pull request itself: it adds and queues the Workflow's opener, whose submit runs the
     // Gate, pushes and opens the pull request (contract §7.6, §7.7). The write transaction decides again so two
     // openers can never race a concurrent `pr open` or engine E4 (hs-d573).
-    let tier = env.config.open_tier;
+    let tier = env.config.worker_tier;
     let job = env.store.write(COMMAND, |tx| {
         if let Some(live) = live_open_job(tx, &id, &key)? {
             return Err(open_job_live(&id, &key, &live));

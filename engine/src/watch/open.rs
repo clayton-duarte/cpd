@@ -46,7 +46,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(missing) => missing,
         Err(e) => return engine.fail(Step::E4, About::Machine, &e),
     };
-    let tier = engine.config.open_tier;
+    let tier = engine.config.worker_tier;
     let promotable = match engine.store.read(|conn| {
         let mut found = promotable(conn, None)?;
         // Incident mode on: a held Plan's draft open Job is not queued either (§3.7 E4).

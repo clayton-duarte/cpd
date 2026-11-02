@@ -23,6 +23,8 @@ fn migrate_reports_the_applied_names_in_order() {
             "distill-tier-gx",
             "drop-test-concurrency",
             "drop-plannotator-ports",
+            "open-tier-worker-tier",
+            "drop-review-lead-tier",
             "drop-inbox-review-context"
         ]
     );
@@ -95,6 +97,41 @@ fn migrate_drops_plannotator_ports() {
     let (text, names) = apply(input);
     assert_eq!(text, "version = 1\n# keep\nconcurrency = 5\n");
     assert_eq!(names, vec!["drop-plannotator-ports"]);
+}
+
+/// The key token of a top-level `open_tier` line becomes `worker_tier`; value and trailing comment stay.
+#[test]
+fn migrate_renames_open_tier_to_worker_tier_and_keeps_the_line() {
+    let input = "version = 1\n# keep\nopen_tier = \"S2\"  # old\nconcurrency = 5\n";
+    let (text, names) = apply(input);
+    assert_eq!(
+        text,
+        "version = 1\n# keep\nworker_tier = \"S2\"  # old\nconcurrency = 5\n"
+    );
+    assert_eq!(names, vec!["open-tier-worker-tier"]);
+}
+
+/// With a top-level `worker_tier` already there, `open_tier` is left exactly as it is and nothing is reported.
+#[test]
+fn migrate_leaves_open_tier_when_worker_tier_exists() {
+    let input = "version = 1\nopen_tier = \"S2\"\nworker_tier = \"H3\"\n";
+    let (text, names) = apply(input);
+    assert_eq!(text, input);
+    assert!(names.is_empty(), "{names:?}");
+
+    // Only the other migration acts when `review_lead_tier` is there too.
+    let (text, names) = apply(&format!("{input}review_lead_tier = \"S3\"\n"));
+    assert_eq!(text, input);
+    assert_eq!(names, vec!["drop-review-lead-tier"]);
+}
+
+/// The top-level `review_lead_tier` line is removed, its neighbours and comments kept.
+#[test]
+fn migrate_drops_review_lead_tier() {
+    let input = "version = 1\n# keep\nreview_lead_tier = \"S3\"  # old\nconcurrency = 5\n";
+    let (text, names) = apply(input);
+    assert_eq!(text, "version = 1\n# keep\nconcurrency = 5\n");
+    assert_eq!(names, vec!["drop-review-lead-tier"]);
 }
 
 /// The `review_context` line of `[inbox]`, with its trailing comment, is removed; everything else stays byte for byte,

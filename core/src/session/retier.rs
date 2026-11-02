@@ -20,9 +20,6 @@ use crate::output::Output;
 /// The Tier the config gives a Session of this role, `None` for a Worker (its Tier is its Job's).
 fn target(config: &Config, row: &Row) -> Option<Tier> {
     match row.role {
-        Role::Lead if row.context.as_str() == crate::ids::PermanentContext::Codereview.id() => {
-            Some(config.review_lead_tier)
-        }
         Role::Lead => Some(config.lead_tier),
         Role::Manager => Some(config.manager_tier),
         Role::Worker => None,

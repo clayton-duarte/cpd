@@ -84,7 +84,7 @@ fn fx() -> Fx {
     fx.fixture(&format!(
         "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
            ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
-           ('1.0.0', 'H', 'p/haiku', '[0,1,2,3]', 't');
+           ('1.0.0', 'H', 'p/haiku', '[0,1,2,3]', 't'), ('1.0.0', 'G', 'p/gemini', '[]', 't');
          INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, name, file, cwd, tier, tmux_pane, state, state_at, created_at)
            VALUES ('due', 'manager', 'ctx', 'due', '{file}', '/', 'O3', '{pane}', 'idle', 't', 't');

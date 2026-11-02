@@ -383,14 +383,14 @@ pub(super) fn open_jobs(fx: &Poll) -> Vec<(String, String)> {
         .unwrap()
 }
 
-/// Sets the top-level `open_tier` of the machine config.
-fn set_open_tier(fx: &Poll, tier: &str) {
+/// Sets the top-level `worker_tier` of the machine config.
+fn set_worker_tier(fx: &Poll, tier: &str) {
     let config = fs::read_to_string(fx.home.config()).unwrap();
     fs::write(
         fx.home.config(),
         config.replacen(
             "machine = \"t\"\n",
-            &format!("machine = \"t\"\nopen_tier = \"{tier}\"\n"),
+            &format!("machine = \"t\"\nworker_tier = \"{tier}\"\n"),
             1,
         ),
     )
@@ -398,11 +398,11 @@ fn set_open_tier(fx: &Poll, tier: &str) {
 }
 
 /// cpd pr open queues the PR's opener instead of opening the pull request (contract §7.6, commands.md §9.1): one `open` Job of the
-/// PR at `open_tier` with the fixed Spec and no Dependencies, its key printed as `job` and `status` `queued`.
+/// PR at `worker_tier` with the fixed Spec and no Dependencies, its key printed as `job` and `status` `queued`.
 #[test]
-fn pr_open_queues_a_fresh_open_job_at_open_tier() {
+fn pr_open_queues_a_fresh_open_job_at_worker_tier() {
     let fx = poll_fx("dispatch");
-    set_open_tier(&fx, "S3");
+    set_worker_tier(&fx, "S3");
     let txns = fx.txns();
 
     let out = fx.pr("open").ok();
@@ -2814,7 +2814,7 @@ impl Poll {
 }
 
 /// The poll queues the PR's `update` Job in the transaction that stores `conflicting` (contract §7.6 step 6, §3.7 E5): `up-repo`, Tier
-/// `open_tier`, `queued`, `appended`, no Dependencies, and `job-added` with `kind` `update`, `by` `poll`, `reason` `conflict`. The conflict
+/// `worker_tier`, `queued`, `appended`, no Dependencies, and `job-added` with `kind` `update`, `by` `poll`, `reason` `conflict`. The conflict
 /// is no `pr-feedback`, and the PR stays `open`. The same conflict seen again writes nothing.
 #[test]
 fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
