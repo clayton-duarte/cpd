@@ -216,9 +216,15 @@ fn session_row(
         format!("'{plan}'")
     };
     let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
+    // One non-fork Lead per Plan: every row but `l-ship` and the other Plans' Leads is a fork of `l-ship`.
+    let forked = if id.starts_with("f-") || plan.is_empty() || id == "g-alpha" {
+        "'l-ship'"
+    } else {
+        "NULL"
+    };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-         VALUES ('{id}', 'lead', '{context}', {plan}, NULL, '{name}', '/sessions/{id}.jsonl', '/repo', 'O3',
+        "INSERT INTO sessions (id, role, context, plan, forked_from, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('{id}', 'lead', '{context}', {plan}, {forked}, NULL, '{name}', '/sessions/{id}.jsonl', '/repo', 'O3',
                  NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}');"
     )
 }
@@ -355,20 +361,20 @@ pub(super) fn populate(env: &mut Env) {
         true,
     );
     s += &session_row(
-        "g-alpha",
-        "grounded",
-        "alpha",
-        "",
-        "idle",
-        None,
-        "2026-01-02T00:00:00.000Z",
-    );
-    s += &session_row(
         "l-ship",
         "ship lead",
         "alpha",
         "ship",
         "working",
+        None,
+        "2026-01-02T00:00:00.000Z",
+    );
+    s += &session_row(
+        "g-alpha",
+        "grounded",
+        "alpha",
+        "",
+        "idle",
         None,
         "2026-01-02T00:00:00.000Z",
     );

@@ -13,9 +13,15 @@ use crate::tree::View;
 
 fn session(id: &str, role: &str) -> String {
     format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-         VALUES ('{id}', '{role}', 'ctx', NULL, '{id}', '/repo', 'O3', 'working',
-                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+         VALUES ('{id}', '{role}', 'ctx',
+                 CASE WHEN '{role}' <> 'lead' THEN NULL ELSE CASE '{id}'
+                   WHEN 'l-grounding' THEN 'pg' WHEN 'l-plan' THEN 'pp' WHEN 'l-dispatch' THEN 'pd'
+                   WHEN 'l-deploy' THEN 'py' WHEN 'l-done' THEN 'pn' WHEN 'l-failed' THEN 'pf'
+                   WHEN 'l-arch' THEN 'pa' WHEN 'l-fork' THEN 'pd' WHEN 'l-x' THEN 'px' END END,
+                 '{id}', '/repo', 'O3', 'working',
+                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z',
+                 CASE WHEN '{id}' = 'l-fork' THEN 'l-dispatch' END);"
     )
 }
 

@@ -54,7 +54,7 @@ fn db_without_workflow() -> (tempfile::TempDir, Store) {
         &mut store,
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', NULL, 'lead1', '/repo', 'O3', 'idle', '2026-01-02T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'lead1', '/repo', 'O3', 'idle', '2026-01-02T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL);
          UPDATE sessions SET plan = 'pay' WHERE id = 'lead1';",

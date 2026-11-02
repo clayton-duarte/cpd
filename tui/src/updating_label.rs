@@ -147,7 +147,7 @@ fn the_plan_read_reports_the_update_job_state() {
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
              INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-             VALUES ('lead', 'lead', 'ctx', NULL, NULL, 'n', '/s/lead.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
+             VALUES ('lead', 'lead', 'ctx', 'p1', NULL, 'n', '/s/lead.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                      '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
              VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');

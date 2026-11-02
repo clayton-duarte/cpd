@@ -48,8 +48,9 @@ fn managers(store: &mut Store) {
             tx.execute("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx-a', 'ctx-a', ?1, 'm1')", [t])?;
             tx.execute_batch(&format!(
                 "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
-                   VALUES ('mgr-a', 'manager', 'ctx-a', 'Ma', '/', 'O3', 'idle', '{t}', '{t}', NULL),
-                          ('lead-a', 'lead', 'ctx-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
+                   VALUES ('mgr-a', 'manager', 'ctx-a', 'Ma', '/', 'O3', 'idle', '{t}', '{t}', NULL);
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at)
+               VALUES ('lead-a', 'lead', 'ctx-a', 'plan-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                    VALUES ('plan-a', 'ctx-a', 'Pa', 'grounding', 'lead-a', '{t}');"
             ))?;

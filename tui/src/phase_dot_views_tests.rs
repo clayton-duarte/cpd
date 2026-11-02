@@ -186,7 +186,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
         let phase = phase.as_str();
         sql.push_str(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('{lead}', 'lead', 'ctx', NULL, '{lead}', '/repo', 'O3', 'working', {at}, '2026-01-01T00:00:00.000Z');
+               VALUES ('{lead}', 'lead', 'ctx', '{plan}', '{lead}', '/repo', 'O3', 'working', {at}, '2026-01-01T00:00:00.000Z');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
                VALUES ('{plan}', 'ctx', '{lead}', '{phase}', '{lead}', '2026-01-01T00:00:00.000Z', {locked}, {done});
              UPDATE sessions SET plan = '{plan}' WHERE id = '{lead}';

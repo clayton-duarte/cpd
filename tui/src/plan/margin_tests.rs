@@ -14,7 +14,7 @@ fn row(buf: &Buffer, y: u16) -> String {
 fn session_row(id: &str, role: &str) -> String {
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-         VALUES ('{id}', '{role}', 'ctx', NULL, NULL, 'n', '/s/{id}.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
+         VALUES ('{id}', '{role}', 'ctx', CASE WHEN '{role}' = 'lead' THEN 'p1' END, NULL, 'n', '/s/{id}.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                  '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
     )
 }

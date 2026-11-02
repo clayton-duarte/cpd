@@ -31,12 +31,12 @@ fn live_fx() -> (Fx, Arc<FakeSpawn>, Arc<ManualClock>) {
 
 /// A Lead `id` in Context `ctx` with the stored `runner`, `cwd` and optional `plan`, `stopped` and never asleep.
 fn add_lead(fx: &mut Fx, id: &str, runner: &str, cwd: &str, plan: Option<&str>) {
-    let plan = plan
-        .map(|p| format!("'{p}'"))
-        .unwrap_or_else(|| "NULL".to_owned());
+    let plan = format!("'{}'", plan.unwrap_or(&format!("p-{id}")));
     fx.fixture(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
-           VALUES ('{id}', 'lead', 'ctx', {plan}, '{id}', '{cwd}', 'O3', 'stopped', 't', 't', '{runner}');"
+           VALUES ('{id}', 'lead', 'ctx', {plan}, '{id}', '{cwd}', 'O3', 'stopped', 't', 't', '{runner}');
+         INSERT OR IGNORE INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ({plan}, 'ctx', 'Plan', 'grounding', '{id}', 't');"
     ));
 }
 
