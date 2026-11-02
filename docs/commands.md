@@ -5107,6 +5107,10 @@ Decision pro-d260 (User, 2026-10-30; measured basis pro-n225: a reload refreshes
 
 **Rendering.** `cpd-skills` is one of the types of §15.9 'Which messages': `display` true, one renderer, and its summary is the first sentence of `content`, by the existing rule: here `Skill cpd-lead changed`.
 
+### 15.24 What the Lead and Manager skills say about agent keys and lateral comms (pro-d345, pro-d346)
+
+Skeleton: filled in below.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
