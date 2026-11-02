@@ -209,6 +209,7 @@ fn only_the_permanent_contexts_that_exist_are_drawn_and_none_draws_no_section() 
     drop(tree);
     drop(_engine);
     // none: the pane is the project tree alone, with no blank row and no header
+    drop(one);
     let none = fx();
     let _engine = engine(&none);
     populate(&none, &[("aa", &[]), ("bb", &[])]);
@@ -338,7 +339,7 @@ fn a_permanent_context_expands_to_its_plans_like_any_context() {
         tree.screen(),
         pane(16, "", &block("aa", &[]), "", Some((true, &folded)))
     );
-    tree.click(5, 14); // `expand` is now a row higher
+    tree.click(5, 15); // `expand`: the section is docked at the bottom, so it is on the last row too
     assert_eq!(
         tree.screen(),
         pane(16, "", &block("aa", &[]), "", Some((true, &expanded)))
