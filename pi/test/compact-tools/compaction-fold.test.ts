@@ -21,7 +21,11 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { install } from "@sinonjs/fake-timers";
 import { CompactionFoldController } from "../../compact-tools/extensions/compact-tools-compaction.ts";
+import { setClockFocused } from "../../compact-tools/extensions/compact-tools-clock.ts";
+import { chrome, paint, RUNNING, thinkingPill } from "../../compact-tools/extensions/compact-tools-indices.ts";
+import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "../../compact-tools/extensions/compact-tools-loader.ts";
 
 initTheme("dark", false);
 // The user's own settings.json must not decide the view these tests draw: an empty agent directory of their own.
@@ -191,5 +195,129 @@ test("fold: status and a style off keep pi's native compaction row", () => {
 		assert.ok(!view.includes(LEFT) && !view.includes(RIGHT) && !view.includes(EXPAND), "no cpd fold chrome");
 	} finally {
 		controller.dispose();
+	}
+});
+
+// The running compaction fold (docs/contract.md section 6.9, RUNNING state; pro-d353): a two-row widget
+// mounted from session_before_compact until session_compact, session_compact_failed or dispose.
+const WIDGET = "compact-tools-compaction";
+type Handler = (event: unknown, ctx: unknown) => unknown;
+
+function running(options: { enabled?: boolean; toggle?: boolean; hasUI?: boolean } = {}) {
+	setClockFocused(true);
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const handlers = new Map<string, Handler[]>();
+	const pi = { on: (name: string, handler: Handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]) } as unknown as ExtensionAPI;
+	const calls: { key: string; factory: unknown }[] = [];
+	const context = {
+		hasUI: options.hasUI ?? true,
+		ui: { theme, setWidget: (key: string, factory: unknown) => calls.push({ key, factory }) },
+	} as unknown as ExtensionContext;
+	const controller = new CompactionFoldController(
+		pi,
+		() => options.enabled ?? true,
+		() => (options.toggle === false ? undefined : NERD),
+	);
+	controller.bind(context);
+	const emit = (name: string) => { for (const handler of handlers.get(name) ?? []) handler({ type: name }, context); };
+	const renders = { count: 0 };
+	const mounted = () => {
+		const call = calls[calls.length - 1];
+		assert.ok(call && typeof call.factory === "function", "a widget factory is mounted");
+		const component = (call.factory as (tui: unknown, theme: unknown) => { render(width: number): string[] })(
+			{ requestRender: () => renders.count++ },
+			theme,
+		);
+		return component;
+	};
+	const cleanup = () => { controller.dispose(); clock.uninstall(); };
+	return { calls, clock, controller, emit, mounted, renders, cleanup };
+}
+
+const runningRows = (frame: number) => [
+	chrome("╭─") + thinkingPill("compaction"),
+	chrome("╰") + paint(RUNNING, LOADER_FRAMES[frame % LOADER_FRAMES.length]!) + chrome(" · Compacting…"),
+];
+
+test("session_before_compact mounts the running compaction widget with the head and the running closing row", () => {
+	const run = running();
+	try {
+		run.emit("session_before_compact");
+		assert.equal(run.calls.length, 1, "one setWidget call");
+		assert.equal(run.calls[0]!.key, WIDGET);
+		assert.deepEqual(run.mounted().render(80), runningRows(0));
+	} finally {
+		run.cleanup();
+	}
+});
+
+test("the running closing row steps one loader frame per loader interval", () => {
+	const run = running();
+	try {
+		run.emit("session_before_compact");
+		const component = run.mounted();
+		for (let frame = 1; frame <= 3; frame++) {
+			const before = run.renders.count;
+			run.clock.tick(LOADER_INTERVAL_MS);
+			assert.deepEqual(component.render(80), runningRows(frame), `frame ${frame}`);
+			assert.equal(run.renders.count, before + 1, "a re-render is requested each tick");
+		}
+	} finally {
+		run.cleanup();
+	}
+});
+
+function clearsAndStops(event: "session_compact" | "session_compact_failed" | "dispose"): void {
+	const run = running();
+	try {
+		run.emit("session_before_compact");
+		assert.equal(run.clock.countTimers(), 1, "the tick is subscribed");
+		if (event === "dispose") run.controller.dispose();
+		else run.emit(event);
+		assert.equal(run.calls.length, 2, "mount then clear");
+		assert.deepEqual(run.calls[1], { key: WIDGET, factory: undefined });
+		assert.equal(run.clock.countTimers(), 0, "no subscriber left");
+		const after = run.renders.count;
+		run.clock.tick(LOADER_INTERVAL_MS * 5);
+		assert.equal(run.renders.count, after, "nothing changes after the clear");
+		assert.equal(run.calls.length, 2);
+	} finally {
+		run.cleanup();
+	}
+}
+
+test("session_compact clears the running compaction widget and stops its tick", () => clearsAndStops("session_compact"));
+
+test("session_compact_failed clears the running compaction widget and stops its tick", () => clearsAndStops("session_compact_failed"));
+
+test("dispose clears the running compaction widget and stops its tick", () => clearsAndStops("dispose"));
+
+test("a second session_before_compact does not stack a second tick subscription", () => {
+	const run = running();
+	try {
+		run.emit("session_before_compact");
+		run.emit("session_before_compact");
+		assert.equal(run.calls.length, 1, "nothing new mounted");
+		assert.equal(run.clock.countTimers(), 1);
+		const before = run.renders.count;
+		run.clock.tick(LOADER_INTERVAL_MS);
+		assert.equal(run.renders.count, before + 1, "one subscription, one request per tick");
+		run.emit("session_compact");
+		assert.equal(run.clock.countTimers(), 0, "one clear leaves no subscriber");
+	} finally {
+		run.cleanup();
+	}
+});
+
+test("no running compaction widget is mounted when the fold is not toggle or the context has no UI", () => {
+	for (const options of [{ enabled: false }, { toggle: false }, { hasUI: false }]) {
+		const run = running(options);
+		try {
+			run.emit("session_before_compact");
+			assert.equal(run.calls.length, 0, JSON.stringify(options));
+			assert.equal(run.clock.countTimers(), 0, `${JSON.stringify(options)} subscribes to nothing`);
+		} finally {
+			run.cleanup();
+		}
 	}
 });
