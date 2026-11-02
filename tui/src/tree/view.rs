@@ -784,7 +784,8 @@ pub(crate) fn layout_sample(
     }
 }
 
-/// The layout test's sample (`layout_tests`): the tree's Contexts (the fixture's live ones and an archived one) in a
+/// The layout test's sample (`layout_tests`): the tree's live Contexts (the fixture's; its archived Context is in the docked Archive
+/// section, flush by design, so it is not sampled here) in a
 /// `width` x `height` pane, drawn by [`View::draw`] as in production. Placed is one Rail per Context, its rect from the
 /// rows the view saved for hit-testing: the blank row above, the Context's rows, the blank row below. The rows whose
 /// glyph sits against the rail by recorded design (`├─glyph`: hs-d337, hs-d339, hs-d484) are exempt by name; the fold is
@@ -803,7 +804,9 @@ pub(crate) fn layout_fold_sample(
         TreeCase::ContextFold,
         "the fold samples the Context fold"
     );
-    let mut view = View::new(super::fixture::archived(), true);
+    let mut tree = super::fixture::archived();
+    tree.contexts.retain(|c| c.archived_at.is_none());
+    let mut view = View::new(tree, true);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     let pane = Rect::new(0, 0, width, height); // what the tree column passed: the margin is the container's to leave
