@@ -20,8 +20,6 @@ const MANAGER: &str = "host-manager";
 const CHECKOUT: &str = "~/projects/cpd";
 /// The tmux client the StatusBar's click names.
 const CLIENT: &str = "c1";
-/// The report of a click with no host Manager.
-const NO_MANAGER: &str = "φ: no host Manager: apply dotfiles";
 
 fn home(env: &TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
@@ -232,7 +230,7 @@ fn a_click_when_the_state_is_ok_does_nothing() {
 }
 
 #[test]
-fn a_click_without_a_host_manager_reports_on_the_client_and_exits_0() {
+fn a_click_with_no_host_manager_ensures_host_and_opens_its_new_manager() {
     let env = fixture(false);
     write_state(&env, "skipped", Some("dirty"), "2026-10-24T10:00:00Z");
 
@@ -243,13 +241,57 @@ fn a_click_without_a_host_manager_reports_on_the_client_and_exits_0() {
         "{run:?}"
     );
 
-    assert!(messages(&env).is_empty(), "no Manager to wake");
-    let displays = display_messages(&env);
-    let call = displays
-        .iter()
-        .find(|c| c.iter().any(|a| a == NO_MANAGER))
-        .unwrap_or_else(|| panic!("no {NO_MANAGER:?}: {displays:?}"));
-    assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
+    let owner: String = env.query(&format!(
+        "SELECT owner FROM contexts WHERE id = '{CONTEXT}'"
+    ));
+    assert_eq!(owner, "clayton-duarte");
+    let live: i64 = env.query(&format!(
+        "SELECT count(*) FROM sessions WHERE role = 'manager' AND context = '{CONTEXT}' \
+         AND archived_at IS NULL AND state = 'stopped'"
+    ));
+    assert_eq!(live, 1, "one live stopped host Manager");
+    let id: String = env.query(&format!(
+        "SELECT id FROM sessions WHERE role = 'manager' AND context = '{CONTEXT}' AND archived_at IS NULL"
+    ));
+    assert_eq!(
+        chat_slot_session(&env),
+        id,
+        "the new Manager is in the chat slot"
+    );
+    assert!(
+        display_messages(&env).is_empty(),
+        "{:?}",
+        display_messages(&env)
+    );
+}
+
+#[test]
+fn a_click_with_only_an_archived_host_manager_ensures_a_new_one() {
+    let env = fixture(true);
+    env.sql(&format!(
+        "UPDATE sessions SET archived_at = '2026-02-01T00:00:00Z' WHERE id = '{MANAGER}'"
+    ));
+    write_state(&env, "skipped", Some("dirty"), "2026-10-24T10:00:00Z");
+
+    let run = action(&env);
+    assert_eq!(
+        (run.exit, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "", ""),
+        "{run:?}"
+    );
+
+    let archived: String = env.query(&format!(
+        "SELECT archived_at FROM sessions WHERE id = '{MANAGER}'"
+    ));
+    assert_eq!(
+        archived, "2026-02-01T00:00:00Z",
+        "the archived row is unchanged"
+    );
+    let id: String = env.query(&format!(
+        "SELECT id FROM sessions WHERE role = 'manager' AND context = '{CONTEXT}' AND archived_at IS NULL"
+    ));
+    assert_ne!(id, MANAGER);
+    assert_eq!(chat_slot_session(&env), id, "the new Manager is opened");
 }
 
 #[test]

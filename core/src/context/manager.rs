@@ -34,8 +34,8 @@ pub struct ManagerArgs {
 }
 
 /// The Context's live Manager, as `context manager` needs it.
-struct Live {
-    id: SessionId,
+pub(crate) struct Live {
+    pub(crate) id: SessionId,
     name: String,
     cwd: String,
     state: String,
@@ -43,7 +43,10 @@ struct Live {
     runner: String,
 }
 
-fn live(conn: &rusqlite::Connection, context: &ContextId) -> Result<Option<Live>, CpdError> {
+pub(crate) fn live(
+    conn: &rusqlite::Connection,
+    context: &ContextId,
+) -> Result<Option<Live>, CpdError> {
     conn.query_row(
         "SELECT id, name, cwd, state, tmux_pane, runner FROM sessions
               WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL",
@@ -114,6 +117,9 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         ..
     } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
+    if let Some(permanent) = context.permanent() {
+        super::permanent::ensure(&home, &config, &mut store, permanent)?;
+    }
     let (row, found) =
         store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
     if row.archived_at.is_some() {
@@ -229,7 +235,7 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
 
 /// Writes the Manager's first message, then registers its `stopped` Session and
 /// the `session-registered` Event in one transaction (§3.10).
-fn register(
+pub(crate) fn register(
     home: &crate::home::CpdHome,
     config: &crate::config::Config,
     store: &mut Store,
@@ -238,47 +244,87 @@ fn register(
     by_user: bool,
     runner: WorkerRunner,
 ) -> Result<Live, CpdError> {
-    let cwd = std::env::current_dir()
-        .and_then(|d| d.canonicalize())
-        .map_err(|e| {
-            CpdError::new(
-                ErrorCode::SetupFailed,
-                format!("Cannot resolve the current directory: {e}."),
-            )
-        })?
-        .display()
-        .to_string();
+    let prepared = prepare(home, config, context, &row.title, by_user)?;
+    store.write("context manager", |tx| {
+        insert(tx, context, &prepared, by_user, runner)
+    })?;
+    Ok(prepared.into_live(runner))
+}
+
+/// What `register` computes before its transaction: the cwd, the id and the name; the first message is written.
+pub(crate) struct Prepared {
+    id: SessionId,
+    name: String,
+    cwd: String,
+    tier: String,
+}
+
+impl Prepared {
+    pub(crate) fn id(&self) -> SessionId {
+        self.id.clone()
+    }
+
+    fn into_live(self, runner: WorkerRunner) -> Live {
+        Live {
+            id: self.id,
+            name: self.name,
+            cwd: self.cwd,
+            state: "stopped".to_owned(),
+            pane: None,
+            runner: runner.as_str().to_owned(),
+        }
+    }
+}
+
+/// The cwd, id and name of a new Manager, and its first message written unless `by_user`.
+pub(crate) fn prepare(
+    home: &crate::home::CpdHome,
+    config: &crate::config::Config,
+    context: &ContextId,
+    title: &str,
+    by_user: bool,
+) -> Result<Prepared, CpdError> {
+    let cwd = crate::session::agent_cwd()?;
     if !by_user {
         write_file(
             &home.manager_message(context),
-            &manager_message(context, &row.title),
+            &manager_message(context, title),
         )?;
     }
+    Ok(Prepared {
+        id: SessionId::new_v4(),
+        name: format!("{context}-manager"),
+        cwd,
+        tier: config.manager_tier.to_string(),
+    })
+}
 
-    let id = SessionId::new_v4();
-    let name = format!("{context}-manager");
-    let tier = config.manager_tier.to_string();
-    store.write("context manager", |tx| {
-        tx.execute(
-            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at, by_user, runner)
-             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6, ?7
-               FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, runner.as_str()],
-        )?;
-        let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
-        let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
-        append(tx, event.session(id.clone()).context(context.clone()))?;
-        Ok(())
-    })?;
-    Ok(Live {
+/// The `sessions` row and `session-registered` Event of a prepared Manager, inside `tx`.
+pub(crate) fn insert(
+    tx: &crate::store::WriteTxn<'_>,
+    context: &ContextId,
+    p: &Prepared,
+    by_user: bool,
+    runner: WorkerRunner,
+) -> Result<(), CpdError> {
+    let Prepared {
         id,
         name,
         cwd,
-        state: "stopped".to_owned(),
-        pane: None,
-        runner: runner.as_str().to_owned(),
-    })
+        tier,
+    } = p;
+    tx.execute(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
+                               state, state_label, state_at, created_at, by_user, runner)
+         SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6, ?7
+           FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user, runner.as_str()],
+    )?;
+    let text =
+        format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
+    let event = NewEvent::session_registered(text, "manager", name, Value::Null, tier);
+    append(tx, event.session(id.clone()).context(context.clone()))?;
+    Ok(())
 }
 
 /// A Manager's first message (commands.md §3.10): the header, then the pointer line. Nothing Context-wide is

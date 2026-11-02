@@ -118,7 +118,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     );
     assert_eq!(
         row["cwd"],
-        fx.env.root().canonicalize().unwrap().display().to_string()
+        fx.env.home().canonicalize().unwrap().display().to_string()
     );
     assert_eq!(row["tmux_pane"], manager["pane"]);
     assert_eq!(row["place"], "parked");
@@ -152,7 +152,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     assert_eq!(argv, ["cpd", "session", "run", id.as_str()]);
     assert_eq!(
         cwd,
-        fx.env.root().canonicalize().unwrap().display().to_string()
+        fx.env.home().canonicalize().unwrap().display().to_string()
     );
     assert_eq!(
         vars,

@@ -52,6 +52,16 @@ fn targets_of(
 
 /// `context delete` (§3.14).
 pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
+    if args.id.permanent().is_some() {
+        return Err(CpdError::new(
+            ErrorCode::ContextPermanent,
+            format!(
+                "Context {} is permanent and is never archived, renamed or deleted.",
+                args.id
+            ),
+        )
+        .with("context", args.id.as_str()));
+    }
     let id = args.id;
     let Env {
         home,

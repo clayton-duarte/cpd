@@ -89,8 +89,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
                 "slack_user_id": "",
-                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"],
-                "review_context": ""
+                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
             },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
@@ -108,6 +107,21 @@ fn test_concurrency_is_not_a_config_key() {
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
     assert_eq!(err["details"]["key"], "test_concurrency");
+}
+
+/// `inbox.review_context` is retired (`inbox claim` always targets `codereview`): a config still setting it is
+/// refused like every unknown key, with its key path.
+#[test]
+fn config_refuses_inbox_review_context_as_an_unknown_key() {
+    let fx = Fx::new();
+    let run = config_with(
+        &fx,
+        &format!("{MINIMAL}[inbox]\nreview_context = \"eec-codereview\"\n"),
+    );
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "inbox.review_context");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -152,7 +166,7 @@ fn config_takes_the_team_review_keys() {
     assert_eq!(shown["config"]["watch"]["team_review_seconds"], 900);
     assert_eq!(
         shown["config"]["inbox"],
-        json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"], "review_context": ""})
+        json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"]})
     );
     assert_eq!(shown["sources"]["inbox.team_channel"], "file");
     assert_eq!(shown["sources"]["watch.team_review_seconds"], "file");
@@ -294,7 +308,6 @@ stuck_job_minutes = 1
 team_channel = "C1"
 slack_user_id = "U1"
 bot_reviewers = ["a"]
-review_context = "eec-codereview"
 [events]
 poll_ms = 20
 [tmux]
@@ -1826,4 +1839,209 @@ fn config_migrate_renames_open_tier_and_drops_review_lead_tier() {
         fs::read_to_string(&path).unwrap(),
         "version = 1\nmachine = \"hs\"\nworker_tier = \"S3\"  # mine\nconcurrency = 5\n"
     );
+}
+
+// ---------------------------------------------------------------- config tiers set, tiers --model
+
+/// The `config.toml` of the tests of `config tiers set`: `lead_tier` present with a comment of the User's, the other
+/// three keys absent (their defaults are `GX`, `H3`, `O4`), a key after it and a table.
+const TIERS_SET_BEFORE: &str = "version = 1\nmachine = \"hs\"\nlead_tier = \"O2\"  # my own note\nconcurrency = 3\n\n[watch]\ntick_seconds = 5\n";
+
+/// `TIERS_SET_BEFORE` after `--auxiliar G1 --worker H2 --lead S3 --manager O4`: `manager_tier` is unchanged (`O4` is
+/// its default) so it is not written; the absent keys go after the last top-level key, in key order.
+const TIERS_SET_AFTER: &str = "version = 1\nmachine = \"hs\"\nlead_tier = \"S3\" # set by the Agent Tiers dialog, 2026-01-01\nconcurrency = 3\ncontext_distill_tier = \"G1\" # set by the Agent Tiers dialog, 2026-01-01\nworker_tier = \"H2\" # set by the Agent Tiers dialog, 2026-01-01\n\n[watch]\ntick_seconds = 5\n";
+
+/// An `Fx` on `TIERS_MODELS` (`H` offers efforts 0 to 2, the others 0 to 4) whose `node` answers with those levels,
+/// and `TIERS_SET_BEFORE` as `config.toml`.
+fn tiers_set_fx() -> Fx {
+    let fx = tiers_fx(TIERS_MODELS);
+    fx.env.write_config(TIERS_SET_BEFORE);
+    fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
+    fx
+}
+
+fn config_text(fx: &Fx) -> String {
+    fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap()
+}
+
+/// commands.md §14.2a: a changed key is rewritten whole with the dialog's comment and the clock's date, an absent
+/// key is inserted, an unchanged key is not written; the file is replaced by rename and `changed` names the keys.
+#[test]
+fn config_tiers_set_writes_the_changed_keys_atomically_and_reports_them() {
+    let fx = tiers_set_fx();
+    let path = fx.env.cpd_home().join("config.toml");
+    let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap());
+
+    let out = fx
+        .cpd(&[
+            "config",
+            "tiers",
+            "set",
+            "--auxiliar",
+            "G1",
+            "--worker",
+            "H2",
+            "--lead",
+            "S3",
+            "--manager",
+            "O4",
+        ])
+        .ok();
+    assert_eq!(
+        out["changed"],
+        json!(["context_distill_tier", "worker_tier", "lead_tier"]),
+        "{out}"
+    );
+    assert_eq!(out["already"], false, "{out}");
+    assert_eq!(out["config"]["lead_tier"], "S3", "{out}");
+    assert_eq!(out["config"]["manager_tier"], "O4", "{out}");
+    assert_eq!(config_text(&fx), TIERS_SET_AFTER);
+    assert_ne!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap()),
+        inode,
+        "config.toml is replaced by rename"
+    );
+    let names: Vec<_> = fs::read_dir(fx.env.cpd_home())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("config"))
+        .collect();
+    assert_eq!(names, ["config.toml"], "no temporary file is left");
+}
+
+/// The four must strictly ascend: `lead_tier` `H1` is below `worker_tier` `H2`.
+#[test]
+fn config_tiers_set_refuses_a_non_ascending_set_and_writes_nothing() {
+    let fx = tiers_set_fx();
+    let run = fx.cpd(&[
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H2",
+        "--lead",
+        "H1",
+        "--manager",
+        "O4",
+    ]);
+    let err = common::refused(&run, "config_invalid", 1);
+    assert_eq!(err["details"]["key"], "lead_tier", "{err}");
+    assert_eq!(config_text(&fx), TIERS_SET_BEFORE);
+}
+
+/// `H` here is `p/m-low`, which offers efforts 0 to 2: `H3` is not a rung of it.
+#[test]
+fn config_tiers_set_refuses_a_rung_the_catalog_lacks_and_writes_nothing() {
+    let fx = tiers_set_fx();
+    let run = fx.cpd(&[
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H3",
+        "--lead",
+        "S3",
+        "--manager",
+        "O4",
+    ]);
+    let err = common::refused(&run, "tier_invalid", 2);
+    assert_eq!(err["details"]["key"], "worker_tier", "{err}");
+    assert_eq!(err["details"]["efforts"], json!([0, 1, 2]), "{err}");
+    assert_eq!(config_text(&fx), TIERS_SET_BEFORE);
+}
+
+/// A rerun with the same four values writes nothing: `already`, `changed` empty, bytes and mtime unchanged.
+#[test]
+fn config_tiers_set_again_writes_nothing_and_says_already() {
+    let fx = tiers_set_fx();
+    let args = [
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H2",
+        "--lead",
+        "S3",
+        "--manager",
+        "O4",
+    ];
+    fx.cpd(&args).ok();
+    let path = fx.env.cpd_home().join("config.toml");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+    let out = fx.cpd(&args).ok();
+    assert_eq!(out["already"], true, "{out}");
+    assert_eq!(out["changed"], json!([]), "{out}");
+    assert_eq!(config_text(&fx), TIERS_SET_AFTER);
+    assert_eq!(
+        fs::metadata(&path).unwrap().modified().unwrap(),
+        modified,
+        "the file was written again"
+    );
+}
+
+/// All four flags are required: each missing one is `usage`, and nothing is written.
+#[test]
+fn config_tiers_set_needs_all_four_flags() {
+    let fx = tiers_set_fx();
+    let all = [
+        ("--auxiliar", "G1"),
+        ("--worker", "H2"),
+        ("--lead", "S3"),
+        ("--manager", "O4"),
+    ];
+    for skipped in 0..all.len() {
+        let mut args = vec!["config", "tiers", "set"];
+        for (i, (flag, value)) in all.iter().enumerate() {
+            if i != skipped {
+                args.extend([*flag, *value]);
+            }
+        }
+        common::refused(&fx.cpd(&args), "usage", 2);
+        assert_eq!(
+            config_text(&fx),
+            TIERS_SET_BEFORE,
+            "without {}",
+            all[skipped].0
+        );
+    }
+}
+
+/// commands.md §14.3: `--model H=<ref>` reads the catalog for the candidate instead of the configured `H` model; the
+/// output shows the candidate and `host.toml` keeps its bytes.
+#[test]
+fn tiers_model_flag_reads_candidate_models_without_changing_host_toml() {
+    let fx = Fx::with_ports();
+    write_tiers_config(&fx.env, TIERS_MODELS);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let host = fx.env.cpd_home().join("policy/host.toml");
+    let host_before = fs::read_to_string(&host).unwrap();
+
+    let out = fx.cpd(&["tiers", "--model", "H=p/m-new"]).ok();
+    assert_eq!(
+        out["tiers"]["H"],
+        json!({"model": "p/m-new", "efforts": [0, 1, 2, 3]}),
+        "{out}"
+    );
+    assert_eq!(out["tiers"]["O"]["model"], "p/m-opus", "{out}");
+    let calls = fx.calls("node");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].args[calls[0].args.len() - 4..],
+        [
+            "O=p/m-opus".to_owned(),
+            "S=p/m-sonnet".to_owned(),
+            "H=p/m-new".to_owned(),
+            "G=p/m-g".to_owned(),
+        ],
+        "the catalog module is asked for the candidate"
+    );
+    assert_eq!(fs::read_to_string(&host).unwrap(), host_before);
 }

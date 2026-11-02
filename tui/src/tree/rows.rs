@@ -54,6 +54,7 @@ use crate::fold;
 use crate::palette;
 use crate::read::{ContextNode, Dot, JobCounts, OrderKey, Place, PlanNode, SessionNode, Tree};
 use crate::widgets::Window;
+use cpd_core::ids::PermanentContext;
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
@@ -70,6 +71,11 @@ const SPACER: &str = "  ";
 /// The synthetic path id of the tree root's archive row (hs-d698, hs-d707). Context ids are lowercase `^[a-z]`, so it
 /// can never collide with a Context.
 pub(super) const ARCHIVE: &str = "Archive";
+
+/// The synthetic path id of the docked `Standing` section's header row. The section is open by default: it is FOLDED while
+/// this path is in the tree state's open set (so nothing has to seed the set); view state only, never stored. Capitalised,
+/// so it can never collide with a Context.
+pub(super) const STANDING: &str = "Standing";
 
 /// The columns a Plan row keeps for itself before its counters may be drawn: the branch, the glyph, its space and one cell of the name.
 const MIN_LEFT: usize = BRANCH_WIDTH + 3;
@@ -106,6 +112,8 @@ pub enum Row<'a> {
     /// The tree root's single archive row (hs-d698, hs-d707): `󰬦 archive` folded, `󰬬 archive` expanded; the whole
     /// row toggles the archived Contexts. No Session, Plan or Context, never selectable, no menu.
     Archive,
+    /// The header of the docked `Standing` section: a left click folds and opens the section. No menu, never selectable.
+    StandingHeader,
 }
 
 /// What a Context lists: the live rows, then the archived ones (the rows its toggle shows and hides).
@@ -171,6 +179,9 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
     if path == [ARCHIVE] {
         return Some(Row::Archive);
     }
+    if path == [STANDING] {
+        return Some(Row::StandingHeader);
+    }
     let (context, path) = path.split_first()?;
     let context = tree.contexts.iter().find(|c| c.id.as_str() == context)?;
     let Some((next, path)) = path.split_first() else {
@@ -203,7 +214,11 @@ impl<'a> Row<'a> {
     /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::Toggle | Row::NewPlan(_) | Row::Archive => None,
+            Row::Context(_)
+            | Row::Toggle
+            | Row::NewPlan(_)
+            | Row::Archive
+            | Row::StandingHeader => None,
             Row::Plan(_, p) => p.lead(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => Some(s),
         }
@@ -212,9 +227,12 @@ impl<'a> Row<'a> {
     /// The Plan of the row; none for a Context or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::Toggle | Row::NewPlan(_) | Row::Manager(..) | Row::Archive => {
-                None
-            }
+            Row::Context(_)
+            | Row::Toggle
+            | Row::NewPlan(_)
+            | Row::Manager(..)
+            | Row::Archive
+            | Row::StandingHeader => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -227,7 +245,7 @@ impl<'a> Row<'a> {
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
             Row::Manager(c, s) => c.is_archived() || s.is_archived(),
-            Row::Toggle | Row::NewPlan(_) | Row::Archive => false,
+            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => false,
         }
     }
 
@@ -240,7 +258,7 @@ impl<'a> Row<'a> {
                 Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
                 Row::Fork(_, _, s) => s.is_asleep(),
                 Row::Manager(..) => true,
-                Row::Toggle | Row::NewPlan(_) | Row::Archive => false,
+                Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => false,
             }
     }
 
@@ -255,9 +273,12 @@ impl<'a> Row<'a> {
                 c.is_archived() || (!c.plans.is_empty() && c.plans.iter().all(quiet))
             }
             Row::Plan(c, p) => c.is_archived() || quiet(p),
-            Row::Fork(..) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) | Row::Archive => {
-                false
-            }
+            Row::Fork(..)
+            | Row::Manager(..)
+            | Row::Toggle
+            | Row::NewPlan(_)
+            | Row::Archive
+            | Row::StandingHeader => false,
         }
     }
 
@@ -270,7 +291,12 @@ impl<'a> Row<'a> {
         let (context, plan, session) = match *self {
             Row::Plan(c, p) => (c, p, p.lead()?),
             Row::Fork(c, p, s) => (c, p, s),
-            Row::Context(_) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) | Row::Archive => {
+            Row::Context(_)
+            | Row::Manager(..)
+            | Row::Toggle
+            | Row::NewPlan(_)
+            | Row::Archive
+            | Row::StandingHeader => {
                 return None;
             }
         };
@@ -299,7 +325,7 @@ impl<'a> Row<'a> {
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
             Row::Manager(_, s) => Some(s.id.as_str().chars().take(8).collect()),
-            Row::Toggle | Row::NewPlan(_) | Row::Archive => None,
+            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => None,
         }
     }
 
@@ -310,7 +336,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => session_label(s),
-            Row::Toggle | Row::NewPlan(_) | Row::Archive => String::new(),
+            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => String::new(),
         }
     }
 }
@@ -546,6 +572,10 @@ pub struct FlatRow {
 /// What [`draw`] drew: the rectangle of the rows (the cue rows are not in it) and, one per row of it, the path drawn.
 #[derive(Debug, Default)]
 pub struct Hits {
+    /// The list's rectangle (the cue rows are not in it), full height whatever the rows drawn.
+    pub list: Rect,
+    /// The docked section's header row; empty for the project tree and a folded or absent section.
+    pub header: Rect,
     pub rows: Rect,
     pub paths: Vec<Vec<Id>>,
 }
@@ -685,8 +715,55 @@ pub fn items_with_costs(
     frame: usize,
     costs: bool,
 ) -> Vec<FlatRow> {
-    let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) =
-        tree.contexts.iter().partition(|c| c.is_archived());
+    let mut rows = project_items(tree, opened, width, frame, costs);
+    if !opened.contains(&vec![STANDING.to_owned()]) {
+        rows.extend(standing_items(tree, opened, width, frame, costs));
+    }
+    rows
+}
+
+/// The Permanent Contexts the section draws: the ones in the tree, in their fixed order (never sorted).
+fn permanent(tree: &Tree) -> Vec<&ContextNode> {
+    PermanentContext::ALL
+        .into_iter()
+        .filter_map(|p| tree.contexts.iter().find(|c| c.id.as_str() == p.id()))
+        .collect()
+}
+
+/// The rows of the docked `Standing` section (the header not in them): each Permanent Context that exists as any
+/// Context's rows, one blank row between two of them, whether the section is open or folded.
+fn standing_items(
+    tree: &Tree,
+    opened: &HashSet<Vec<Id>>,
+    width: u16,
+    frame: usize,
+    costs: bool,
+) -> Vec<FlatRow> {
+    let contexts = permanent(tree);
+    let mut rows = Vec::new();
+    for (i, c) in contexts.iter().enumerate() {
+        if i > 0 {
+            rows.push(spacer(contexts[i - 1]));
+        }
+        rows.extend(context_items(c, opened, width, frame, costs));
+    }
+    rows
+}
+
+/// The scrolling project tree's rows: [`items_with_costs`] without the Permanent Contexts, which the `Standing` section
+/// holds (never in the archive row either).
+fn project_items(
+    tree: &Tree,
+    opened: &HashSet<Vec<Id>>,
+    width: u16,
+    frame: usize,
+    costs: bool,
+) -> Vec<FlatRow> {
+    let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree
+        .contexts
+        .iter()
+        .filter(|c| c.id.permanent().is_none())
+        .partition(|c| c.is_archived());
     // The live Contexts by tier then creation, newest first (hs-d686, pro-d48); the archived ones keep their read-model order after them.
     live.sort_by_key(|a| a.dot.order_key(&a.created_at));
     let mut rows: Vec<FlatRow> = Vec::new();
@@ -727,12 +804,26 @@ pub struct Scroll {
     /// What the last [`draw`] drew: the click geometry (`draw` is called as a statement by the tests, so it hands the
     /// hits back through the state it already takes).
     hits: Hits,
+    /// The docked `Standing` section's own scroll, made by the first frame that draws it.
+    docked: Option<Box<Scroll>>,
 }
 
 impl Scroll {
     /// The rows the last frame drew, with the path of each.
     pub fn hits(&self) -> &Hits {
         &self.hits
+    }
+
+    /// What the last frame drew of the docked `Standing` section: its header and rows.
+    pub fn standing_hits(&self) -> Option<&Hits> {
+        self.docked.as_deref().map(Scroll::hits)
+    }
+
+    /// A wheel notch over the docked section: its rows scroll, never the project tree's.
+    pub fn wheel_standing(&mut self, down: bool, rows: usize) {
+        if let Some(docked) = self.docked.as_deref_mut() {
+            docked.wheel(down, rows);
+        }
     }
 
     /// A wheel notch: `rows` down or up, clamped to the rows as the last frame had them.
@@ -751,7 +842,7 @@ pub fn row_count(state: &TreeState<Id>, tree: &Tree) -> usize {
     if tree.contexts.is_empty() {
         1
     } else {
-        items(tree, state.opened(), 0, 0).len()
+        project_items(tree, state.opened(), 0, 0, false).len()
     }
 }
 
@@ -797,12 +888,82 @@ pub fn draw(
             ))),
             list_area(area),
         );
-        scroll.hits = Hits::default();
+        scroll.hits = Hits {
+            list: list_area(area),
+            ..Hits::default()
+        };
+        scroll.docked = None;
         return;
     }
-    let items = items_with_costs(tree, state.opened(), area.width, frame, costs);
-    let flat = items;
-    let list = list_area(area);
+    let standing = standing_items(tree, state.opened(), area.width, frame, costs);
+    let open = !state.opened().contains(&vec![STANDING.to_owned()]);
+    // the section (blank row, header, rows) is at most half the pane's height; with no room for the header it is not drawn
+    let section = if standing.is_empty() {
+        0
+    } else {
+        let wanted = 2 + if open { standing.len() } else { 0 };
+        let fits = usize::from(area.height / 2);
+        if fits < 2 { 0 } else { wanted.min(fits) }
+    };
+    let section = u16::try_from(section).unwrap_or(u16::MAX);
+    let project = Rect {
+        height: area.height - section,
+        ..area
+    };
+    let flat = project_items(tree, state.opened(), area.width, frame, costs);
+    let list = list_area(project);
+    draw_list(f, project, list, flat, tree, state, cursor, costs, scroll);
+    if section == 0 {
+        scroll.docked = None;
+        return;
+    }
+    let docked = scroll.docked.get_or_insert_with(Box::default);
+    let header = Rect::new(f.area().x, project.bottom() + 1, f.area().width, 1);
+    let glyph = if open { fold::UP } else { fold::DOWN };
+    f.render_widget(
+        Paragraph::new(crate::section::flush_title(
+            &format!("{glyph} Standing"),
+            None,
+            usize::from(header.width),
+        )),
+        header,
+    );
+    if !open {
+        docked.max = 0;
+        docked.hits = Hits {
+            header,
+            ..Hits::default()
+        };
+        return;
+    }
+    let region = Rect::new(area.x, header.bottom(), area.width, section - 2);
+    // rows that do not fit are scrolled between a ▲ and a ▼ row, as the project tree's; rows that fit have no cue rows
+    let list = if standing.len() > usize::from(region.height) {
+        list_area(region)
+    } else {
+        region
+    };
+    draw_list(
+        f, region, list, standing, tree, state, cursor, costs, docked,
+    );
+    docked.hits.header = header;
+}
+
+/// Draw `flat` in `list`, the rows of `area` between its cue rows: the first row from the scroll (the cursor's Session is
+/// brought into view when it moved), the counters and guides of each row, the archived rows muted, the cursor's row as the blue
+/// block. Records `scroll`'s hits.
+#[allow(clippy::too_many_arguments)] // the region's whole state; a struct would only rename the arguments
+fn draw_list(
+    f: &mut Frame,
+    area: Rect,
+    list: Rect,
+    flat: Vec<FlatRow>,
+    tree: &Tree,
+    state: &TreeState<Id>,
+    cursor: bool,
+    costs: bool,
+    scroll: &mut Scroll,
+) {
     let height = usize::from(list.height);
     scroll.max = Window::max_scroll(flat.len(), height);
     let key = (state.selected().to_vec(), flat.len(), list.height);
@@ -889,6 +1050,8 @@ pub fn draw(
         }
     }
     scroll.hits = Hits {
+        list,
+        header: Rect::default(),
         rows,
         paths: drawn.iter().map(|r| r.path.clone()).collect(),
     };
@@ -960,6 +1123,10 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
 /// `╰󰬪` of a Context with no row (nothing to fold) and the live Context's `╰󰬪 new` row do not toggle, so a click falls
 /// through to the caller.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
+    if path == [STANDING] {
+        state.toggle(path.to_vec());
+        return true;
+    }
     if path == [ARCHIVE] {
         if !tree.contexts.iter().any(ContextNode::is_archived) {
             return false;
@@ -1111,11 +1278,11 @@ mod tests {
         rust.dot = Dot::Red;
         tree(vec![managed(
             context(
-                "cpd",
+                "dev",
                 vec![
                     plan(
                         "v1",
-                        "cpd",
+                        "dev",
                         Phase::Done,
                         [0, 36, 0, 0, 1, 5],
                         session("s-v1", "v1", State::Idle, None, Place::Parked),
@@ -1123,7 +1290,7 @@ mod tests {
                     ),
                     plan(
                         "rust",
-                        "cpd",
+                        "dev",
                         Phase::Dispatch,
                         [0, 0, 1, 0, 0, 1],
                         rust,
@@ -1131,7 +1298,7 @@ mod tests {
                     ),
                     plan(
                         "ui",
-                        "cpd",
+                        "dev",
                         Phase::Deploy,
                         [0, 1, 0, 2, 0, 3],
                         session("s-ui", "cpd-ui", State::Idle, None, Place::Parked),
@@ -1150,7 +1317,7 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("╭{NEEDS_YOU} cpd"),
+                format!("╭{NEEDS_YOU} dev"),
                 row_of(&format!("├─{NEEDS_YOU} rust"), "1⋅1", 31),
                 row_of(&format!("├─{IDLE} v1"), "36⋅1⋅5", 31),
                 row_of(&format!("╰─{IDLE} ui"), "1⋅2⋅3", 31),

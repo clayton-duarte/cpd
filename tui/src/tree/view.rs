@@ -66,7 +66,7 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
         Row::Fork(_, _, s) | Row::Manager(_, s) => Ask::RenameSession(s.id.clone()),
-        Row::Toggle | Row::NewPlan(_) | Row::Archive => return None,
+        Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
 }
@@ -99,7 +99,7 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
         Row::Fork(_, _, s) | Row::Manager(_, s) => Some(Subject::Session(s.id.clone())),
-        Row::Toggle | Row::NewPlan(_) | Row::Archive => None,
+        Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => None,
     }
 }
 
@@ -424,6 +424,16 @@ impl View {
         match m.kind {
             // the wheel over the tree scrolls its rows, three rows a notch, as the Plan view; elsewhere it does nothing
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if self
+                    .tree_scroll
+                    .standing_hits()
+                    .is_some_and(|h| h.list.contains(at)) =>
+            {
+                self.tree_scroll
+                    .wheel_standing(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                Effect::None
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
                 if self.tree_area.contains(at) =>
             {
                 self.tree_scroll
@@ -533,7 +543,9 @@ impl View {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => vec![s],
-            Row::Toggle | Row::NewPlan(_) | Row::Archive => return Some(None),
+            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => {
+                return Some(None);
+            }
         };
         let manager_in_chat =
             matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
@@ -633,7 +645,18 @@ impl View {
 
     /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        let Hits { rows, paths } = self.tree_scroll.hits();
+        if self
+            .tree_scroll
+            .standing_hits()
+            .is_some_and(|h| h.header.contains(at))
+        {
+            return Some(vec![rows::STANDING.to_owned()]);
+        }
+        let Hits { rows, paths, .. } = self
+            .tree_scroll
+            .standing_hits()
+            .filter(|h| h.rows.contains(at))
+            .unwrap_or_else(|| self.tree_scroll.hits());
         let path = rows
             .contains(at)
             .then(|| paths.get(usize::from(at.y - rows.y)))??;
@@ -684,7 +707,7 @@ impl View {
             &mut self.tree_scroll,
         );
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
-        let list = rows::list_area(body);
+        let list = self.tree_scroll.hits().list;
         self.tree_area = Rect {
             height: list.height.min(tree_rows),
             ..list

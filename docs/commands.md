@@ -152,9 +152,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `mcp_unknown` | 4 | `mcp attach` (§24.1) named a server the machine policy does not list; `details: {name, machine, available}`, `available` the sorted server names (an empty array when none); nothing is written (pro-d8) |
 | `item_not_found` | 4 | `inbox show`, `snooze`, `dismiss`, `claim` or `approve` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze`, `dismiss`, `claim` or `approve` named an Inbox item that is closed (§21) |
-| `not_claimable` | 3 | `inbox claim` (§21.7): the item is not `review-requested` or is dismissed (C4); `details.kind` |
+| `not_claimable` | 3 | `inbox claim` (§21.7): the item is not `review-requested` or is dismissed (C4), `details.kind`; or the pull request is no longer one to review (FR9, pro-n345, §21.7): `details.reason` is one of `merged`, `closed`, `approved`, `draft`, `changes-requested`, `in-review`, `own`, `not-found`, and the item is closed by that refusal |
 | `not_approvable` | 3 | `inbox approve` (§21.13): the item is not `deploy`; `details.item`, `details.kind` |
-| `review_context_unset` | 3 | `inbox claim` (§21.7): config `inbox.review_context` is unset (C5) |
 | `post_not_found` | 3 | `inbox claim` (§21.7): the team review cache holds no primary post of the pull request (C4) |
 | `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
 | `slack_auth` | 3 | a Slack helper (§21.6, §21.7) found no usable Slack sign-in in pi's MCP credentials; the message says to run `pi mcp login slack` |
@@ -171,6 +170,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `jira_helper_failed` | 1 | the Jira helper (§21.12) could not load pi's MCP modules, or they are of another shape; `cpd_core::jira::answer` (J8) uses it for a helper error code it does not know. Only the `error` Event code of engine E19 (§21.11), never a command's refusal |
 | `store_failed` | 1 | a write command failed on SQLite (contract §4.5); for `pr post` (§9.8b) means the message WAS posted and the link is in `details` |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
+| `context_permanent` | 3 | `context rename`, `context archive` or `context delete` (§3.8, §3.9, §3.15) named a Permanent Context, `cpd`, `host` or `codereview` (contract §2.2 "Permanent Contexts"): refused before any write; `details.context` is the id. A Permanent Context is never archived, renamed or deleted |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
@@ -252,13 +252,15 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-touches` (§5.9a) | Lead | no | no |
 | `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
-| `cpd session retier` (§10.15) | Manager | no | no |
+| `cpd session retier` (§10.16) | Manager | yes | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd models refresh` (§14.5) | Manager, Lead | no | no |
 | `cpd models show` (§14.5) | Manager, Lead | no | no |
 | `cpd preset list` (§14.6) | Manager, Lead | no | no |
 | `cpd preset show` (§14.6) | Manager, Lead | no | no |
-| `cpd preset apply` (§14.6) | Manager | no | no |
+| `cpd preset apply` (§14.6) | Manager | yes | no |
+| `cpd preset set` (§14.6) | Manager | yes | no |
+| `cpd config tiers set` (§14.2) | none | yes | no |
 | `cpd context curation` (§3.16, internal) | none | yes | yes |
 | `cpd context retire` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
@@ -455,6 +457,7 @@ Changes the Context's visible label (contract §2.2: ids are immutable, titles e
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the Context is not a Permanent Context (`cpd`, `host`, `codereview`), checked first; `details.context` | `context_permanent` | 3 |
 | the Context exists | `context_not_found` | 4 |
 
 Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `contexts.title`; **Event** `context-renamed` `{title}`. Only the database changes.
@@ -475,6 +478,7 @@ Archives the Context with its Plans, all their Sessions and its Manager (contrac
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the Context is not a Permanent Context (`cpd`, `host`, `codereview`), checked first; `details.context` | `context_permanent` | 3 |
 | the Context exists | `context_not_found` | 4 |
 | no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued`, `running` or `draft` (§4.10, hs-d731), no open Escalation, no pending Plan review and no Workflow of a Plan of the Context that a Workflow of a Plan outside it names as base Workflow or need (a Context's Plans archive together; contract §2.2 "Archived"); `details.blockers` lists each as `{kind, id, reason}` | `archive_blocked` | 3 |
 | no Lead of the cascade is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
@@ -496,7 +500,7 @@ Effects, in this order (all or nothing):
 cpd context unarchive <id>
 ```
 
-Clears `archived_at` on the Context and, with the same cascade as `context archive`, on its Plans and Sessions.
+Clears `archived_at` on the Context and, with the same cascade as `context archive`, on its Plans and Sessions. Unchanged for a Permanent Context: `context_permanent` (§3.8) is not checked here.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -523,15 +527,19 @@ cpd context manager [--context <c>] [--by-user] [--runner <pi|durable>]
 
 Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers and starts it when the Context has none, starts it again when it is stopped. The Context is `--context`, else the selected Plan's (§1.3).
 
+**A Permanent Context** (`cpd`, `host`, `codereview`; contract §2.2 "Permanent Contexts") first runs **ensure** (contract §3.7 E22, the function the engine runs every tick): it creates the Context's row when missing, clears its `archived_at` (the row only, never its Plans' or Sessions'), and registers a `stopped` Manager, with no pane, when the Context has no live one (`by_user` 0, so its first message is written; tier `manager_tier`; runner `manager_runner`). A live Manager in any state is left alone. Then the rules below apply to the Manager as to any Context's: a Manager that is stopped with no pane gets its pane. So a Permanent Context that was never created, or whose row is archived, starts here.
+
 | Precondition | Code | Exit |
 |---|---|---|
-| the Context exists | `context_not_found` | 4 |
-| the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+| the Context exists (a Permanent Context is ensured first, so it exists) | `context_not_found` | 4 |
+| the Context is not archived (a Permanent Context's row is unarchived by ensure); `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+| a Permanent Context's row is deleted (`deleted_at` set): ensure refuses, an id is never reused | `context_exists` | 3 |
+| a Manager is registered and `HOME` is not known: its `cwd`, the User's home directory, cannot be read | `usage` | 2 |
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 | `--runner` is neither `pi` nor `durable`, or a `--runner` on an existing Manager differs from the stored `sessions.runner` (the message names the stored runner) | `usage` | 2 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the User's home directory (`$HOME`, canonicalized when that works; contract §2.2, pro-d343), never the caller's directory or `$CPD_HOME`; `tier` = config `manager_tier`, default `O5`; `runner` = the `--runner` flag, else config `manager_runner`, default `pi` (contract §6.19); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw. **For a durable Manager** (`runner` `durable`, contract §6.19) the tmux step and its `session-moved` are skipped: the new Session is left live and `stopped` and the engine's hosts step starts its host at the next tick, with a null `pane`/`window` in the output.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message. A durable Manager is started by the engine's hosts step instead, not here; a resume keeps the stored `sessions.runner` (it never changes after creation, contract §6.19).
 - **Otherwise** (it has a pane): nothing.
 
@@ -674,7 +682,7 @@ Idempotent: yes; the same owner again returns `"already": true` and writes nothi
 cpd context delete <id> [--yes]
 ```
 
-Deletes a Context: its Plans' rows, its records, its Manager and its run files, worktrees and local branches (hs-d527). The `contexts` row and the row of each of its Plans, stay as **tombstones** (`deleted_at` set, once only) and so do the Leads' Session rows, which the tombstoned Plans reference: all hidden from every list, view and lookup (contract §2.2 "Deleted", which has the design). Deletion is permanent and cannot be undone. Without `--yes` the command prints what would be deleted (a preview); with `--yes` it deletes.
+Deletes a Context: its Plans' rows, its records, its Manager and its run files, worktrees and local branches (hs-d527). A Permanent Context (`cpd`, `host`, `codereview`) is never deleted: `context_permanent`, checked first (below). The `contexts` row and the row of each of its Plans, stay as **tombstones** (`deleted_at` set, once only) and so do the Leads' Session rows, which the tombstoned Plans reference: all hidden from every list, view and lookup (contract §2.2 "Deleted", which has the design). Deletion is permanent and cannot be undone. Without `--yes` the command prints what would be deleted (a preview); with `--yes` it deletes.
 
 | Flag | Meaning |
 |---|
@@ -683,6 +691,7 @@ Deletes a Context: its Plans' rows, its records, its Manager and its run files, 
 
 | Precondition | Code | Exit |
 |---|---|---|
+| the Context is not a Permanent Context (`cpd`, `host`, `codereview`), checked first; `details.context` | `context_permanent` | 3 |
 | the Context exists and is not deleted; a deleted one is `already` (below) for this command and `context_not_found` for every other | `context_not_found` | 4 |
 | **archived or asleep**: the Context is archived, or every one of its Plans is asleep or archived; `details: {blockers: [{kind, id}]}` lists what is not | `archive_blocked` | 3 |
 | **nothing running**: no Job `queued` or `running`, no Attempt not `ended`, no Session `working`, `waiting` or `blocked`, every Escalation closed, no Plan review pending; `details.blockers` | `archive_blocked` | 3 |
@@ -786,7 +795,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user] [--tier <T>] [--runner <pi|durable>]
 ```
 
-A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the caller's cwd, the directory `plan new` runs from (usually `~`; §6.4). `--repo` and `--base` are gone: either is `usage` (exit 2).
+A Plan has no repo (R34, A12): its Workflows are added later with `workflow add` (§9.4) and its Lead starts in the User's home directory, whatever directory `plan new` runs from (contract §2.2, pro-d343). `--repo` and `--base` are gone: either is `usage` (exit 2).
 
 | Flag | Meaning |
 |---|---|
@@ -811,7 +820,7 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--runner` is neither `pi` nor `durable` | `usage` | 2 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
@@ -829,7 +838,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The cwd is not a flag and is never the caller's: a rerun from another directory is still `already` and keeps the stored `cwd`. `--tier` is one of 'the same flags' only when it equals the stored `sessions.tier` of the Plan's Lead session: then the result is `already`, as above; a different Tier is `plan_exists` (exit 3, as for the other flags). The `--runner` flag is also one of 'the same flags': a rerun of an existing Plan with a different `--runner` is `plan_exists` (exit 3), as for a different `--title`. The `--tier` checks of the table run first, so a refused Tier is refused whatever the Plan's state. A rerun without `--tier` compares no Tier, whatever the Lead's stored Tier is. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
 ### 4.2 `plan list`
 
@@ -2633,7 +2642,7 @@ cpd host repair
 
 ### 9.12 `cpd tui action host`
 
-(internal): what a click on the red version pill runs when `@cpd_host_alert` is set. Reads the install state file; when it is not `skipped` it does nothing. Finds the live (not archived) Manager of Context `host`; none: reports on the client with `display-message -c <client>` `cpd: no host Manager: apply dotfiles`. Else: brings that Manager into the chat slot as `session open` does (a stopped or asleep Manager is resumed), then, when `$CPD_HOME/run/cpd-install-notified` does not hold this incident's `since`, sends the Manager one message (as the User, `session send` with `--unblocks "cpd install skipped"`) and writes `since` and a newline to that file atomically; a later click on the same incident only opens the Manager. Message text (fixed): `cpd install skipped: <reason> (since <since>). Checkout: ~/projects/cpd. Read it with git -C ~/projects/cpd status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair.` (contract §3.7 E6, §1.4, commands.md §15.18).
+(internal): what a click on the red version pill runs when `@cpd_host_alert` is set. Reads the install state file; when it is not `skipped` it does nothing. First ensures Context `host` (§3.11, contract §3.7 E22), which returns its live Manager, registering it when there is none; a failure of ensure is reported on the client with `display-message -c <client>` and nothing is sent. Then brings that Manager into the chat slot as `session open` does (a stopped or asleep Manager is resumed), then, when `$CPD_HOME/run/cpd-install-notified` does not hold this incident's `since`, sends the Manager one message (as the User, `session send` with `--unblocks "cpd install skipped"`) and writes `since` and a newline to that file atomically; a later click on the same incident only opens the Manager. Message text (fixed): `cpd install skipped: <reason> (since <since>). Checkout: ~/projects/cpd. Read it with git -C ~/projects/cpd status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair.` (contract §3.7 E6, §1.4, commands.md §15.18).
 
 ### 9.13 `cpd tui action incident`
 
@@ -3632,6 +3641,37 @@ The Context block's rows (title, `├─` rows, closing row) end at column `W - 
 **Muted rows.** An archived row keeps its cost in colour 8, as its other marks. An asleep Plan row keeps its cost in colour 8: the muted restyle skips the cost cells as it skips the counters. The selected-name blue is the name's alone and the cost is never blue; the cursor's reversed block covers the whole row. A Context row's cost is never bold, though its title is.
 
 **Rows without a cost.** Fork, Manager, Worker and toggle rows draw no cost, though each Session node carries its own cost (`SessionNode.cost_usd`, the read model's data, not a row element). A tree whose every cost is `None` draws what it drew before, except that its rows now end at column `W - 2` (pro-d186).
+- **The Standing section** (User, 2026-11-02 EST, pro-d339; the Permanent Contexts of pro-d338 and pro-d340). Below the project tree the pane holds a docked section `Standing` with the Permanent Contexts that exist in the store, `cpd`, `host` and `codereview` (`ContextId::permanent()`, `PermanentContext::ALL`), in that fixed order, never sorted by tier or age. A Permanent Context that does not exist yet is not drawn; with none, there is no section. *Assumption (I infer it; the User did not state it):* a Permanent Context is drawn in Standing only, never in the project tree or in the `archive` row, so each row has one place. **Layout**, top to bottom: the project tree (its rows as above, its own `▲ n more` / `▼ n more` cue rows and its own wheel), then ONE blank row, then the **header** row, then the Standing rows. Two consecutive Standing Context blocks are separated by ONE blank spacer row, as two live Context blocks of the project tree are, and none follows the last. The section (blank row, header and rows, its spacer rows included) is at most half the pane's height, rounded down; its spacer rows count in that height, and when its rows do not fit they scroll inside the section, spacer rows with them, with their own cue rows (`dialog::scroll::cue`) and their own wheel. The project tree never shares that scroll, and the section never moves while the project tree scrolls. **Rows**: each Standing Context is drawn as any Context row, with the same text, its Plans under it, the same expansion of its archived rows, the same closing row and the same dots. **Header**: `section::flush_title` (`tui/src/section.rs`) at the pane's width, from column 0 to the last column, with the pill text `<glyph> Standing`: the glyph U+F0B2C (`󰬬`) when the section is open and U+F0B26 (`󰬦`) when it is folded; no count. **The section is open by default.** A left click on the header row folds it (then only the blank row and the header remain; the rows are hidden) and a second click opens it. The folded state lives in the view's memory only. **Keys**: the cursor (`j`/`k`, Down, Up, Enter, `x`, `n`) crosses from the last project row into the first Standing row and back, and each region keeps the cursor row in view; a folded section has no rows for the cursor. **Click**: a left click on a Standing Context row runs `context manager --context=<id> --by-user`, as any live Context row. **Menu**: a right click on a Standing Context row opens `New Plan…` and `Copy id` only (no `Rename…`, no `Archive`); every other Context row keeps its menu; the header row has no menu. Standing Contexts are never in the `archive` row.
+
+**Worked example**: a pane 30 columns wide and 24 rows high (columns and rows counted from 0; colours are not shown). A dot is drawn as §17 draws it:  where the Context or Plan needs the User,  where nothing does. The project tree has 22 rows, its 18 Context and Plan rows and the 4 blank spacer rows between its 5 Context blocks, and 11 of them are shown: row 0 is its `▲` line (blank: nothing is hidden above), rows 1 to 11 its rows, up to `receipts`, and row 12 its `▼ 11 more` line. The 11 hidden rows are `export-csv`, a blank row, `garden` with its two Plans, a blank row and a fifth Context of five rows (its title and four Plans). Row 13 is the blank row and row 14 the header. Rows 15 to 23 are the Standing rows: `cpd` (its Plan `perm-managers` and an archived Plan behind the `expand` toggle), a blank row, `host` (no Plan yet, so its row is the clickable ` ╰󰬪 new`), a blank row and `codereview` (one live Plan, so its last row is `╰─`). The section is 11 rows (the blank row, the header and 9 rows: 7 Context and Plan rows and 2 spacer rows), under the 12 that half of 24 allows, so nothing scrolls.
+
+```
+
+ ╭ building-cpd
+ ├─ cross-repo       2⋅1⋅1⋅4
+ ├─ billing-migrate
+ ╰─ spike-tui
+
+ ╭ homeserver
+ ├─ b2-budget
+ ╰─ speedtest
+
+ ╭ tax-2026
+ ├─ receipts         1⋅1⋅1⋅1
+                    ▼ 11 more
+
+───󰬬 Standing───────────────
+ ╭ cpd
+ ├─ perm-managers    2⋅1⋅1⋅4
+ ╰󰬦 expand
+
+ ╭ host
+ ╰󰬪 new
+
+ ╭ codereview
+ ╰─ review-queue
+```
+
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable) and, after the last Session row, on into the Inbox section's item rows (below; the header, the cue lines, the up-to-date row and the blank rows are skipped by the cursor and the cursor goes back up from the first item row to the last Session; there is no toggle row, pro-d147), is drawn as the blue block (colour 4 inverted: text in the terminal's background colour, contract §6.1.1) across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
 - **Inbox section** (hs-d165, hs-d167, hs-d168, hs-d298, hs-d337, hs-d339, hs-d345 to hs-d349, pro-d147, pro-d177; contract §2.2 "Inbox item", commands §21). The right column (the `widgets` view, below) shows, directly under the machine lines, the Inbox, the **single source of "needs you"**: the open, visible items (not snoozed, not dismissed) of **every** Context, in the order of `cpd inbox list` (red, yellow, magenta, blue, cyan, white; oldest first; `engine-down` first, when no live Manager exists). Its section header is the **flush form** of §17 (`flush_title`, pro-d147, which supersedes pro-d141 and the collapsible, rail-and-toggle Inbox of hs-d337 and hs-d476) and the Inbox is **flat and bottom-aligned**: no `│` rail, no closing row, no fold state, no 3-item limit; an item is one list row or two, by its content. **Rows**, top to bottom, of a section of `height` rows: row 0 blank (spacing above the header); row 1 the header; row 2 the ▲ cue line; rows 3 to `height - 2` the list, as many rows as the items' heights add up to (1 or 2 each, below), or with no item one muted row ` up to date, drink some water` (column 0 blank, the text from column 1); the last row, the pane's last row, the ▼ cue line. **The header** spans the full pane width from column 0: `───` (three muted `─`, columns 0 to 2), the title pill `Inbox` (caps U+E0B6 and U+E0B4, the static grey pill `palette::pill_static()`, its left cap at column 3), a muted `─` fill, the count pill `<n>` (`n` the count of visible open items; the same grey pill) and one muted `─` at column `W - 1`; no padding cell on either side. At `W` = 30 with 2 items it is 3 + 7 (the title pill) + 16 `─` + 3 (the count pill) + 1 = 30 cells. The header's column 0 `─` is the first cell of the pane, next to tmux's `┃` border cell; tmux draws its `┃` in the middle of its own cell, so half a cell lies between the vertical line and the header and the two do not join (pro-d157; docs/research/inbox-pane.md). **An item row** has one blank column on each side: it is drawn at columns 1 to `W - 2` (width `W - 2`) as ` <glyph> <label> … <age> `: the tier glyph at column 1 (the glyph in its tier's colour, bright, the row is clickable; §6.1.1; its tier glyph, or for three kinds its own, below), a space, the label cut with `…` so that it never reaches the age, the age right-aligned and ending at column `W - 2` (`42s`, `5m`, `3h`, `2d`: the largest whole unit of `age_seconds`), columns 0 and `W - 1` blank; for example ` \u{F12F4} cc-api-orc-apollo#2309 merg… 5h` over `   Add retries to the payment client` (two rows, below) and ` \u{F0362} cpd#129 merge conflict       18m` (a one-row item; the escape stands for the glyph, written here as its code point; the first glyph is yellow, the second red). An `unread` item is ` \u{F0366} cpd replied 2m` (white glyph) over `   Variable-height Inbox rows` (its Row 2, the Plan's title); a one-row item stays one row, with no blank row under it. **An item is one row or two** (pro-d171, amended by pro-d177; contract §2.2 "Inbox item"): its height is 1 when its label has no Row 2 (no `\n`, or nothing after it) and 2 otherwise (one function, `item_height` in `tui/src/widgets/inbox.rs`). **Row 1** is the row above, unchanged: the first line of the stored `label`. **Row 2**, when it has one, is its second line, in muted colour 8 (`palette::muted_text()`): column 0 blank, columns 1 and 2 the `LEAD_WIDTH` (2) spaces, the subtitle from column 3 (under the label), cut with `…` so that it ends at most at column `W - 2`; an item with no Row 2 takes one row and no blank row follows it. The state dots and spinner glyphs stay reserved for the Context tree (hs-d483). The Inbox's order is that of `cpd inbox list`. **Hits:** the header row is `Hit::Header` (no action); both rows of a two-row item and the only row of a one-row item are `Hit::Item(i)` (a left click jumps to its cause, a right click opens its menu) and the `Link` widget covers Row 1's label only; the spare blank row of a capped list, the cue lines and the up-to-date row are no hit; there is no toggle. **The tier glyphs** (hs-d483; User, 2026-10-20; decided work, hs-d301). The urgency levels are named by their colours and rise in urgency white < cyan < blue < magenta < yellow < red (hs-d570 added the notice tier between white and magenta as cyan; pro-d16 names it cyan: blue means focus and selection only, amended by pro-d58 for the blue Inbox tier for external support, `review-requested`, between cyan and magenta). The glyph comes from the item's **urgency** (its tier), never from its kind and is drawn in the urgency's existing colour, **with three exceptions by kind** (pro-d98, pro-d100; User, 2026-10-27; an exception to hs-d483 for these three kinds only): `deploy` draws U+F15A9 (`\u{F15A9}`, yellow tier), `pr-ready` draws U+F12F4 (`\u{F12F4}`, yellow tier; it was U+F069A) and `review-requested` draws U+F12F2 (`\u{F12F2}`, blue tier; it was U+F0368); each is coloured by the item's tier colour as before (`palette::color_clickable(...)`, `palette::tier_span`). Every other kind keeps its tier glyph. The six tier glyphs are named once, in `tui/src/palette.rs` beside the urgency colours:
 
@@ -3893,11 +3933,14 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 
 ```
 cpd config [--migrate]
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
+`config tiers set` (§14.2a) is the one other subcommand: it writes the four Tier keys.
+
+With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
@@ -3907,10 +3950,54 @@ With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive m
 
 `sources` has one entry per leaf key. Idempotent: read-only.
 
+### 14.2a `config tiers set`
+
+```
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
+```
+
+Sets the four Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All four flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
+
+| Argument | Meaning |
+|---|---|
+| `--auxiliar <T>` | the auxiliar role's default, `context_distill_tier` (§9 "Roles and ranges") |
+| `--worker <T>` | the worker role's default, `worker_tier` |
+| `--lead <T>` | the lead role's default, `lead_tier` |
+| `--manager <T>` | the manager role's default, `manager_tier` |
+
+**Validation.** The checks run in the order of the table below, and every one of them runs before any write. The catalog they need is read from the models of `host.toml`'s `[model]` table as they are when the command runs (the built-in default of contract §8.3 when the file has no `[model]` table, as `cpd tiers` reads them), so `config tiers set` opens the store (the catalog cache) like `cpd tiers` does (§14.3), and it is not a plain `config` read: it waits out a migration in progress (hs-n278; contract §4.2). Writing the catalog cache is not an Event.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `config.toml` exists (it is read first) | `config_missing` | 1 |
+| each of the four values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
+| the new text parses as a Config: each key's own rules hold, and the four defaults strictly ascend, `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
+| `host.toml` exists and parses, or is absent (the built-in default applies); a file that does not parse is `policy_invalid` (`details.file`) | `policy_invalid` | 1 |
+| the store cannot be opened for the catalog, or the migration wait ends (as `cpd tiers`) | `lock_timeout` | 5 |
+| pi is found as §9 says | `pi_not_found` | 1 |
+| the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
+| each model read for the catalog (the `[model]` refs of `host.toml`) is in the catalog | `tier_model_unknown` | 1 |
+| each value is a valid rung of its letter's model: a digit only for an effort the model offers, `X` only for a model with no effort levels (§9 "Valid efforts per model"); `details.key` and `details.efforts` (the model's valid efforts) | `tier_invalid` | 2 |
+| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
+
+**Effects.** Only a key whose effective value changes is written; an absent key has its default as its value. The rewrite keeps every other byte of the file:
+- a changed key's line is replaced whole by `<key> = "<T>" # set by the Agent Tiers dialog, <YYYY-MM-DD>`, the date from cpd's ports clock;
+- an absent key is inserted after the last top-level `key = value` line before the first `[table]` header, at the end when there is no table, as the runner pill's toggle inserts `worker_runner` (contract §8.2);
+- a key whose value is unchanged is not touched, its line and its comment stay.
+
+The file is written atomically (a temporary file in the same directory, then a rename: contract §8.1 "Every write is atomic"). No row, no Event. **No running Session moves**: a live Lead or Manager keeps its Tier until `cpd session retier --all` (§10.16) moves it to the new `lead_tier` or `manager_tier`. A Worker's Tier is its Job's: `worker_tier` applies to the Jobs cpd adds after the write, and a started Attempt keeps its Tier (§9 "Attempt Tier").
+
+```json
+{"ok": true, "changed": ["worker_tier", "lead_tier"], "already": false,
+ "config": {"version": 1, "machine": "hs", "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3", "...": "..."}}
+```
+
+`changed` lists the keys whose effective value changed, in the order `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`. When no value changes, `changed` is `[]` and `already` is `true`, and nothing is written (the file is not touched and its comment dates stay). `config` is the effective configuration after the write, as plain `cpd config` prints it (§14.2). Idempotence: yes, a rerun with the same four values writes nothing (`already`).
+
 ### 14.3 `tiers`
 
 ```
-cpd tiers
+cpd tiers [--model <L>=<ref>]...
 ```
 
 Kept from cpd 1 §7 and §11; output of §9.
@@ -3919,7 +4006,16 @@ Kept from cpd 1 §7 and §11; output of §9.
 |---|---|---|
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
-| each configured model is in the catalog | `tier_model_unknown` | 1 |
+| each model read is in the catalog: the configured one of each letter, or the `--model` candidate that replaces it | `tier_model_unknown` | 1 |
+| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
+
+**`--model <L>=<ref>`** (repeatable) names a candidate model for the letter `L`, for this call only. The catalog is read for the candidate instead of the configured model of `L`, and the output's `tiers.<L>.model` and `efforts` are the candidate's. Nothing is written to `host.toml` or `config.toml`; the candidate's catalog rows are cached like any model's (a cache, no Event). The output shape is unchanged, and `tiers.<L>.model` shows the candidate:
+
+```json
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
+```
+
+The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S` and `G` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
 
 It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
@@ -3944,7 +4040,7 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 1. **Preflight.** `~/.local/share/cpd/pi` is absent, a symlink or a directory; else refused.
 2. **The migration check.** `git fetch --quiet origin main` (a failed fetch refuses); every file of `core/src/store/migrations/` must be on `origin/main` with the same content; else refused, listing the names.
 3. **The verdict of the built binary.** `<target>/release/cpd --version` must succeed, carry a `store` field and not say `store.opens` false; else refused with the refusal's message and the fix of its code. Nothing migrates.
-4. **The config migration and validation.** `<target>/release/cpd config --migrate` reads `$CPD_HOME/config.toml`, applies the migrations (contract §8.1 "Config migrations", hs-d722; the migrations include `distill-tier-gx` and `drop-test-concurrency` (hs-d722, hs-d679) and a third migration (hs-d738)), validates the result and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` and each applied migration as a stderr line `cpd install: config.toml migrated: <name>`. Refusals: `config_missing` (the file is absent), `config_invalid` (the migrated file is still invalid, `details.key` names it). The migration happens before the binary is replaced, so that if it fails, the config is not mutated.
+4. **The config migration and validation.** `<target>/release/cpd config --migrate` reads `$CPD_HOME/config.toml`, applies the migrations (contract §8.1 "Config migrations", hs-d722; the migrations include `distill-tier-gx` and `drop-test-concurrency` (hs-d722, hs-d679), a third migration (hs-d738) and `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive)), validates the result and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` and each applied migration as a stderr line `cpd install: config.toml migrated: <name>`. Refusals: `config_missing` (the file is absent), `config_invalid` (the migrated file is still invalid, `details.key` names it). The migration happens before the binary is replaced, so that if it fails, the config is not mutated.
 4a. **The adapter packages.** Runs after step 4 and before step 5, so a failure leaves the binary, the adapter link and the config as they are. It reads `<root>/package.json`. When the file is absent, or has no `dependencies` key or an empty one, it does nothing and runs no pnpm (today the root package.json has no `dependencies`, so no machine runs pnpm at install). Otherwise `<root>/pnpm-lock.yaml` must exist; else refused: `cpd install refused: package.json has dependencies but the checkout has no pnpm-lock.yaml`. It creates `~/.local/share/cpd` if needed, copies `package.json`, `pnpm-lock.yaml` and, when present, `pnpm-workspace.yaml` there byte for byte and runs `pnpm install --prod --frozen-lockfile` with that directory as working directory, bounded at 10 minutes, output captured. Result: `~/.local/share/cpd/node_modules` holds the production packages only (no devDependencies); the adapter's `pi.<id>` finds them (implementing.md "The adapter swap"). A non-zero exit, a timeout, or a pnpm that cannot start (not installed) refuses the install (the refusals table below). Idempotent: the same package.json and lockfile give the same result.
 5. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
 6. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced, are not protected by a live pin (`pi.pin.<pid>` of a live pid, whose target is a version name; contract §3.7 "The pin") and are older than 60 minutes and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids and the pins of dead or unparseable pids, are removed (a failure only warns); the cleanup never touches `<share>/node_modules`, `<share>/package.json` or `<share>/pnpm-lock.yaml`. Prints `installed <bin> and <link>` on stderr.
@@ -4015,9 +4111,10 @@ Effects: `run/models-<provider>.json` written for each provider that has a good 
 cpd preset list
 cpd preset show <name>
 cpd preset apply <name>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
 ```
 
-The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` writes and its caller is `[Manager]` (§2). None of the three writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
+The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the four refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
 
 **`preset list`** prints every preset with the provider of its `O` ref. No precondition, no effect (one read of `config.toml`, no store):
 
@@ -4078,6 +4175,52 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 ```
 
 `host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
+
+### 14.6a `preset set`
+
+```
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
+```
+
+The switch of `preset apply` with the four refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All four flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
+
+| Argument | Meaning |
+|---|---|
+| `--O <ref>` | the model ref of the `O` letter |
+| `--S <ref>` | the model ref of the `S` letter |
+| `--H <ref>` | the model ref of the `H` letter |
+| `--G <ref>` | the model ref of the `G` letter |
+
+**Steps, in order.** Every refusal happens before any write: nothing is written and no Event is appended.
+
+1. **The refs.** Each `--O`, `--S`, `--H` and `--G` parses as a model ref (`usage` otherwise), before anything is read.
+2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' four refs as the preset's: the host file must hold a `[model]` table; when the four refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the four refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
+3. **The write and the live Sessions.** Exactly `preset apply`'s steps 6 and 7: the `[model]` table of `host.toml` is rewritten atomically, and one `session-model-changed` Event is appended for each live Lead and Manager whose model changed, in one store transaction.
+
+**Effects.** The `[model]` rewrite of `host.toml` and the Events of step 3, and nothing else: no `config.toml` write, no other row, and no write at all on a refusal or on the no-op of step 2.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a ref does not parse as a model ref of §8.3, or a flag is missing (step 1) | `usage` | 2 |
+| `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the four refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
+| the registry can be listed: the helper starts | `spawn_failed` | 1 |
+| the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
+| the registry can be listed: the answer is the JSON of contract §3.7 E15, in `--all` mode | `models_helper_failed` | 1 |
+| the ref's provider is in the registry | `preset_provider_unconfigured` | 3 |
+| every ref is among its provider's offered ids | `preset_model_unoffered` | 3 |
+
+It opens the store only to append the Events of step 3, so it waits out a migration in progress as `preset apply` does (contract §4.2). A rerun whose refs equal the host `[model]` is the no-op of step 2 and writes nothing.
+
+```json
+{"ok": true, "preset": null, "host": "/home/clayton/.cpd/policy/host.toml",
+ "already": false,
+ "changed": [
+   {"session": "596d007f-…", "role": "lead", "from": "github-copilot/claude-opus-5.5", "to": "github-copilot/claude-sonnet-5.5", "event": 48221}]}
+```
+
+The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same four refs is the no-op above.
 
 ### 14.7 `metrics`
 
@@ -4946,6 +5089,7 @@ A view with no clocks on screen wakes only for a signal and the safety read.
 - the lines are muted (colour 8), a fold's toggle arrow and words are colour 7, the pill is a read-only title pill (colour 7 inverted: text in the terminal's background colour);
 - **spacing** (hs-d476, replacing hs-d448's; a box's margin and padding are the Box rule, contract §6.1.1 "Boxes", hs-d578): every **panel** has **one column of padding on the left and on the right** and its titles sit inside it, so a title row **starts at column 1 and ends one column before the right edge**; a **collapsible section widget** (title row, content rows, closing row; `tui/src/fold.rs`) has a margin of **one empty row above and one below**; a **section title outside a collapsible widget** has one empty row above and one below (the Inbox's flush header has one empty row above and the cue line below it); a section's **body has no vertical spacing**;
 - **Manager's assumption** (the User may restrict it): the same title pill for **every** in-pane section title, not only the Inbox's. It replaces hs-d337's `┯━━ Inbox ━━ 32 ━━` and the heavy `━` titles.
+- **The tree's Standing header** (pro-d339) is the flush form of this section, with the pill `<glyph> Standing` and no count: the glyph is U+F0B2C open and U+F0B26 folded. Its layout, fold, cap, scroll, keys and menu are in §13.2 `tree`, "The Standing section".
 - Not covered: the tmux pane titles (the tree pane's CPD mark and a Lead's header, contract §6.1; hs-d729 removed the Context, Plan and Deploy titles, superseding the view-title part of hs-d671) and the popups' tmux titles (` legend `, ` logs `) are Plan tui-visuals', unchanged here; the dialog kit's title is the frame's pill (§13.2, hs-d578), not a section title.
 
 **Scroll cues** (User, hs-d348; amended by pro-d147, 2026-10-28, which supersedes pro-d141). **Only the tree and the Inbox draw scroll cues** (`rg 'cue\(' tui/src` finds no other caller); the Plan view, the popups, logs, the legend and the rest of the Dispatch column draw none and get none. A scrolling list is, top to bottom: a ▲ line directly under the list's header, the list rows, a ▼ line directly under the last list row. **Both lines are always reserved**, also when the list fits: then they are blank. When rows are hidden above, the ▲ line holds `▲ <n> more` (`n` = rows hidden above); when rows are hidden below, the ▼ line holds `▼ <n> more`. A cue is drawn by **one shared helper**, `dialog::scroll::cue` in `tui/src/dialog/scroll.rs` (muted, colour 8, right-aligned), in a row of width `W - 2` that starts at column 1, so a cue **ends at column `W - 2`** (column `W - 1` is blank), for the tree and the Inbox alike (the `W - 4` of the rail rule, contract §6.1.1 "The rail fold", is for rail folds only). A cue line never holds a list row and is no click target. No spacing is doubled: where the layout already has a blank row in that place, that row is the cue line. **Window arithmetic**, for `count` list items and `rows` list rows (the two cue lines are not in `rows`): `max_scroll = count - rows` (0 when `count <= rows`); `first` = the scroll clamped to `max_scroll`; `shown = min(count - first, rows)`; hidden above = `first`; hidden below = `count - first - shown`. One shared implementation: `Window::new(count, rows, scroll)` and `Window::max_scroll(count, rows)` in `tui/src/widgets/column.rs`, the case where every item is one row (the tree). For the Inbox an item is one row or two (pro-d177, §13.2): the same `Window` struct is built by `Window::weighted(heights, rows, scroll)` and its largest offset is `Window::max_scroll_weighted(heights, rows)` (`heights` the items' heights in order; `Window::new` and `Window::max_scroll` are the case of every height 1): `max_scroll` = the smallest offset from which the heights of the remaining items add up to at most `rows` (`count` when none does); `first` = the scroll clamped to it; `shown` = the longest run of items from `first` whose heights add up to at most `rows`; hidden above = `first`; hidden below = `count - first - shown`; the list rows left after `shown` (at most 1) are blank, above the ▼ line; the cues count items. The tree's and the Inbox's layouts are §13.2's.
@@ -5239,18 +5383,24 @@ Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, 
 cpd inbox claim <id>
 ```
 
+The target is always the Context `codereview` (contract §2.2 "Permanent Contexts"): no config key names it. The config key that named it before is retired and dropped by the config migration `drop-inbox-review-context` (contract §8.1). The claim's message goes to that Context's Manager, which is ensured first (§3.11).
+
 | Precondition | Code | Exit |
 |---|---|---|
 | the item exists | `item_not_found` | 4 |
 | the item is open | `item_closed` | 3 |
 | the item is not already claimed | (returns ok with `"already": true`, writes nothing) | 0 |
 | the item is `review-requested` and not dismissed (C4) | `not_claimable` | 3 |
-| config `inbox.review_context` is set (C5) | `review_context_unset` | 3 |
-| the Context exists and is not archived (C4) | `context_not_found` | 4 |
-| the Context has a live Manager Session (C4) | `no_manager` | 3 |
 | the team review cache holds a primary post of the pull request (C4) | `post_not_found` | 3 |
+| **the live check** (FR9, pro-n345), step (a): GitHub is asked for the pull request, ONE `gh api graphql` call, live, never the E8 memo (`GITHUB_TTL`); a failure to ask writes nothing, and the item stays open | `gh_failed` | 1 |
+| **the live check**, step (b): the pull request is open and its status is still `NeedsReview`, the status `team::status` of E8 gives with the cache post and `inbox.bot_reviewers` (contract §2.2 "The team review rule", §3.7 E8). Otherwise `details.reason` is one of `merged`, `closed`, `approved`, `draft`, `changes-requested`, `in-review`, `own`, or `not-found` (a pull request GitHub cannot find), and the message names it | `not_claimable` | 3 |
+| the Context `codereview` row has `deleted_at` set: ensure refuses (an id is never reused) | `context_exists` | 3 |
 
-Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4), whose text names the item by its one-line form `<row1>: <row2>` (the intro of this section); one `session-message` Event to the Context's Manager (C4), worded to ask the Manager to start a review of the pull request and to name the item by that one-line form, containing the URL and the Slack post's channel and `ts_raw`; **queue** one `slack_reactions` row with `emoji` = `eyes`, `channel` = the team review cache's channel, `ts` = the post's `ts_raw`, `queued_at` = now, `reacted_at` = NULL (the queue step drains it). Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4). That Event is appended as `session send` appends it (§10.13): for a Manager whose `runner` is `durable` it starts no pane and its host delivers it (contract §6.13, P1.4; unverified in the code: the Event is written by `inbox claim` itself, not through `session send`).
+The rows run in this order. The ensure of the Context and its Manager (§3.11) is the first write of the success path, after the last row: a refused claim messages no one.
+
+**A stale item.** When step (b) refuses, the item is closed in its own transaction before the refusal returns: `closed_at` = now and one `inbox-closed` Event, as E8 closes one. It gets no `claimed_at`, no `inbox-claimed` Event, no `eyes` reaction queued and no message to the Manager. A second claim of that item is `item_closed`. E8's memo can open a fresh item for the same pull request for up to `GITHUB_TTL` (5 minutes); the next claim of it refuses again. `cpd review submit` stays permissive on the pull request's state (pro-d108, pro-n102).
+
+Effects. (1) **ensure** the Context `codereview` and its Manager (§3.11, contract §3.7 E22); the Manager's session id is `manager` in the output. (2) On the success path, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4), whose text names the item by its one-line form `<row1>: <row2>` (the intro of this section); one `session-message` Event to the Manager (C4), worded to ask the Manager to start a review of the pull request and to name the item by that one-line form, containing the URL and the Slack post's channel and `ts_raw`; **queue** one `slack_reactions` row with `emoji` = `eyes`, `channel` = the team review cache's channel, `ts` = the post's `ts_raw`, `queued_at` = now, `reacted_at` = NULL (the queue step drains it). Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4). That Event is appended as `session send` appends it (§10.13): for a Manager whose `runner` is `durable` it starts no pane and its host delivers it (contract §6.13, P1.4; unverified in the code: the Event is written by `inbox claim` itself, not through `session send`).
 
 Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.
 

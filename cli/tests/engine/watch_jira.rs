@@ -257,7 +257,7 @@ impl Probe {
     /// The kinds of the Events the engine appended but its own `watch-started` and `watch-stopped`, `error` Events apart.
     fn events_but_errors(&self) -> Vec<String> {
         let conn = self.store();
-        let mut stmt = conn.prepare("SELECT kind FROM events WHERE kind NOT IN ('watch-started', 'watch-stopped', 'error') ORDER BY id").unwrap();
+        let mut stmt = conn.prepare("SELECT kind FROM events WHERE kind NOT IN ('watch-started', 'watch-stopped', 'error') AND COALESCE(context, '') NOT IN ('cpd', 'host', 'codereview') ORDER BY id").unwrap();
         stmt.query_map([], |r| r.get(0))
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()

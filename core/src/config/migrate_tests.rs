@@ -1,5 +1,5 @@
 //! The config migrations (contract §8.1 "Config migrations", commands.md §14.2, hs-d722):
-//! `distill-tier-gx`, `drop-test-concurrency` and `drop-plannotator-ports`, the ordered, additive, idempotent,
+//! `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports` and `drop-inbox-review-context`, the ordered, additive, idempotent,
 //! comment-preserving transforms `cpd config --migrate` applies before the binary is replaced.
 
 use super::migrate::{MIGRATIONS, apply};
@@ -24,8 +24,18 @@ fn migrate_reports_the_applied_names_in_order() {
             "drop-test-concurrency",
             "drop-plannotator-ports",
             "open-tier-worker-tier",
-            "drop-review-lead-tier"
+            "drop-review-lead-tier",
+            "drop-inbox-review-context"
         ]
+    );
+
+    // A config with the retired key reports its migration last.
+    let (_, names) = apply(
+        "version = 1\nmachine = \"hs\"\ntest_concurrency = 2\n[inbox]\nreview_context = \"eec-codereview\"\n",
+    );
+    assert_eq!(
+        names,
+        vec!["drop-test-concurrency", "drop-inbox-review-context"]
     );
 
     // A config only one migration touches reports only that one.
@@ -122,4 +132,20 @@ fn migrate_drops_review_lead_tier() {
     let (text, names) = apply(input);
     assert_eq!(text, "version = 1\n# keep\nconcurrency = 5\n");
     assert_eq!(names, vec!["drop-review-lead-tier"]);
+}
+
+/// The `review_context` line of `[inbox]`, with its trailing comment, is removed; everything else stays byte for byte,
+/// and a text without the key comes back unchanged with no name (idempotent).
+#[test]
+fn migrate_drops_inbox_review_context_and_keeps_every_other_line() {
+    let input = "# top\nversion = 1\n[inbox]\nteam_channel = \"C1\"  # chan\nreview_context = \"eec-codereview\"  # old\n\n[tmux]\nsocket = \"s\"\n";
+    let expected =
+        "# top\nversion = 1\n[inbox]\nteam_channel = \"C1\"  # chan\n\n[tmux]\nsocket = \"s\"\n";
+    let (text, names) = apply(input);
+    assert_eq!(text, expected);
+    assert_eq!(names, vec!["drop-inbox-review-context"]);
+
+    let (again, names) = apply(&text);
+    assert_eq!(again, expected);
+    assert!(names.is_empty(), "{names:?}");
 }

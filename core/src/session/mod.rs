@@ -381,6 +381,17 @@ pub struct RunArgs {
     pi_stale: bool,
 }
 
+/// The cwd of every Manager and Lead: the User's home directory (decision pro-d343).
+pub fn agent_cwd() -> Result<String, CpdError> {
+    agent_cwd_in(std::env::home_dir())
+}
+
+/// [`agent_cwd`] for a given home directory (`None`: unknown, `usage`).
+pub fn agent_cwd_in(home: Option<PathBuf>) -> Result<String, CpdError> {
+    let home = crate::host::pi::PiDirs::resolve(home, None, None)?.home;
+    Ok(home.canonicalize().unwrap_or(home).display().to_string())
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::List(args) => row::list(args),

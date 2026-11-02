@@ -57,7 +57,12 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
 const FOUR: [&str; 3] = ["[0,2,3,4]", "[0,1,2,3,4]", "[0,1,2,3]"];
 /// Efforts 0-5 for S.
 const FIVE: [&str; 3] = ["[0,2,3,4]", "[0,1,2,3,4,5]", "[0,1,2,3]"];
-const REVIEW: &str = "[inbox]\nreview_context = \"ctx\"\n";
+
+/// The Context `codereview`, with `lead1` moved into it.
+fn in_codereview(env: &TestEnv) {
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('codereview', 'codereview', 't', 'm1')");
+    env.sql("UPDATE sessions SET context = 'codereview' WHERE id = 'lead1'");
+}
 
 fn tier(fx: &Fx, id: &str) -> String {
     show(fx, id)["tier"].as_str().unwrap().to_owned()
@@ -158,6 +163,30 @@ fn retier_tier_moves_the_manager_too() {
 }
 
 #[test]
+fn retier_tier_beats_the_codereview_target() {
+    let fx = Fx::new();
+    fixture(&fx.env, "", FOUR);
+    in_codereview(&fx.env);
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "O2"]).ok();
+    assert_eq!(
+        tier(&fx, LEAD1),
+        "O2",
+        "not the codereview target lead_tier S4"
+    );
+    assert_eq!(
+        events(&fx, "session-retiered")[0]["data"],
+        json!({"from": "O3", "to": "O2"})
+    );
+}
+
+#[test]
+fn retier_tier_refuses_a_g_tier_and_changes_nothing() {
+    let fx = Fx::new();
+    fixture(&fx.env, "", FOUR);
+    not_allowed(&fx, LEAD1, "GX", "lead", "S4", "O2", "lead_tier");
+}
+
+#[test]
 fn retier_tier_refuses_effort_5_as_tier_invalid_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FIVE);
@@ -225,7 +254,8 @@ fn retier_tier_is_not_sticky() {
 
     drop(fx);
     let review = Fx::new();
-    fixture(&review.env, REVIEW, FOUR);
+    fixture(&review.env, "", FOUR);
+    in_codereview(&review.env);
     review
         .cpd(&["session", "retier", LEAD1, "--tier", "S4"])
         .ok();

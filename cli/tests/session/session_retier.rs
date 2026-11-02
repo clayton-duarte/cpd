@@ -348,29 +348,24 @@ fn a_fresh_lead_started_after_a_retier_runs_on_the_new_tier() {
     );
 }
 
-/// `fixture` plus a config with `review` as `inbox.review_context` (empty text for none); `lead2` moves to another
-/// Context, so `lead1` and `fork1` are review-Context Leads and `lead2` not.
-fn review_fixture(env: &TestEnv, review: &str) {
+/// `fixture` plus the Context `codereview`, holding `lead1` and `fork1`; `lead2` moves to another Context, so the
+/// Manager stays in `ctx`.
+fn review_fixture(env: &TestEnv) {
     fixture(env);
-    let inbox = if review.is_empty() {
-        String::new()
-    } else {
-        format!("[inbox]\nreview_context = \"{review}\"\n")
-    };
-    env.write_tmux_config(&format!(
-        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n{inbox}"
-    ));
+    env.write_tmux_config(
+        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n",
+    );
     env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('elsewhere', 'Else', 't', 'm1')");
     env.sql("UPDATE sessions SET context = 'elsewhere' WHERE id = 'lead2'");
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('codereview', 'codereview', 't', 'm1')");
+    env.sql("UPDATE sessions SET context = 'codereview' WHERE id IN ('lead1', 'fork1')");
 }
 
-/// `--all`: every Lead goes to `lead_tier` whatever its Context (the review Context included), the Manager to
-/// `manager_tier`.
-/// Fails now: a review-Context Lead goes to a separate review Lead Tier (S3).
+/// `--all`: every Lead goes to `lead_tier` whatever its Context (`codereview` included), the Manager to `manager_tier`.
 #[test]
 fn retier_all_moves_every_lead_to_lead_tier_whatever_its_context() {
     let fx = Fx::new();
-    review_fixture(&fx.env, "ctx");
+    review_fixture(&fx.env);
 
     fx.cpd(&["session", "retier", "--all"]).ok();
     for id in [LEAD1, FORK, LEAD2] {
@@ -379,12 +374,12 @@ fn retier_all_moves_every_lead_to_lead_tier_whatever_its_context() {
     assert_eq!(tier(&fx, MANAGER), "O4");
 }
 
-/// A review Lead on an override (`S2`, as `plan new --tier S2` leaves it) is reset to `lead_tier`; the Manager
+/// A Lead on an override (`S2`, as `plan new --tier S2` leaves it) is reset to `lead_tier`; the Manager
 /// goes to `manager_tier`.
 #[test]
 fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
     let fx = Fx::new();
-    review_fixture(&fx.env, "ctx");
+    review_fixture(&fx.env);
     fx.env
         .sql("UPDATE sessions SET tier = 'S2' WHERE id = 'lead1'");
 
@@ -405,18 +400,5 @@ fn retier_resets_a_plan_new_tier_override_and_leaves_the_manager_alone() {
     assert!(moved.contains(&(LEAD1, "S2", "O2")), "{out}");
     assert!(moved.contains(&(MANAGER, "O2", "O4")), "{out}");
     assert_eq!(tier(&fx, LEAD1), "O2");
-    assert_eq!(tier(&fx, MANAGER), "O4");
-}
-
-/// With no `inbox.review_context`, every Lead goes to `lead_tier`.
-#[test]
-fn retier_with_an_empty_review_context_moves_every_lead_to_lead_tier() {
-    let fx = Fx::new();
-    review_fixture(&fx.env, "");
-
-    fx.cpd(&["session", "retier", "--all"]).ok();
-    for id in [LEAD1, LEAD2, FORK] {
-        assert_eq!(tier(&fx, id), "O2", "{id}");
-    }
     assert_eq!(tier(&fx, MANAGER), "O4");
 }

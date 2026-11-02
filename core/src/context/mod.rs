@@ -29,6 +29,9 @@ mod list;
 pub(crate) mod manager;
 mod owner;
 mod pending;
+pub mod permanent;
+#[cfg(test)]
+mod permanent_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;

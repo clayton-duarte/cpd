@@ -4759,7 +4759,8 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     );
     assert_eq!(
         fx.events("context-created").len() + fx.events("context-record").len(),
-        0
+        3,
+        "only E22 creates the three Permanent Contexts"
     );
     assert_eq!(fx.events("error").len(), 0);
     assert!(
