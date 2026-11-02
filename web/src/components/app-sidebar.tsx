@@ -108,19 +108,19 @@ function RowLabel({ label, id }: { label: string; id: string }): React.ReactElem
  * muted (web/README.md "Context tree rows"). Working and waiting share the in-progress mizu;
  * blocked is anko; idle and an unknown state are the dim text; asleep is the plain grey.
  */
-function stateDot(state: string | undefined): { colour: string; muted: boolean } {
+function stateDot(state: string | undefined): { colour: string; asleep: boolean } {
   switch (state) {
     case "working":
     case "waiting":
-      return { colour: "bg-[var(--dango-mizu)]", muted: false }
+      return { colour: "bg-[var(--dango-mizu)]", asleep: false }
     case "blocked":
-      return { colour: "bg-[var(--dango-anko)]", muted: false }
+      return { colour: "bg-[var(--dango-anko)]", asleep: false }
     case "asleep":
     case "sleeping":
-      return { colour: "bg-[var(--dango-plain)]", muted: true }
+      return { colour: "bg-[var(--dango-plain)]", asleep: true }
     case "idle":
     default:
-      return { colour: "bg-[var(--dango-dim)]", muted: false }
+      return { colour: "bg-[var(--dango-dim)]", asleep: false }
   }
 }
 
@@ -237,7 +237,14 @@ function PlanRow({
 }): React.ReactElement {
   const lead = planSession(plan, sessions)
   const leadId = plan.lead_session
-  const muted = plan.archived_at !== null || stateDot(lead?.state).muted
+  // An asleep Lead's whole row (key and counters) is the palette's dim grey, its dot still plain;
+  // an archived Plan's row is muted (web/README.md "Context tree rows").
+  const rowText =
+    stateDot(lead?.state).asleep
+      ? "text-[var(--dango-dim)]"
+      : plan.archived_at !== null
+        ? "text-muted-foreground"
+        : undefined
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={leadId !== null && selectedId === leadId}>
@@ -245,7 +252,7 @@ function PlanRow({
           type="button"
           title={leadId ?? plan.id}
           disabled={leadId === null}
-          className={muted ? "text-muted-foreground" : undefined}
+          className={rowText}
           onClick={() => {
             if (leadId !== null) onSelectSession(leadId)
           }}

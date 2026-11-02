@@ -665,6 +665,10 @@ Every token is a Dango v3 value, mapped the way the TUI uses the palette. The ma
 | `--sidebar-accent-foreground` | `#d8d2cc` |
 | `--sidebar-border` | `#5a504a` |
 | `--sidebar-ring` | `#7aa2ce` |
+| `--dango-mizu` | `#67ada7` |
+| `--dango-anko` | `#e17f6e` |
+| `--dango-dim` | `#87808c` |
+| `--dango-plain` | `#aba3af` |
 
 Plus the selection rule, a `.dark ::selection` of **`#5a504a` over `#d8d2cc`**.
 
