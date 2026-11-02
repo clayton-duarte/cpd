@@ -69,7 +69,7 @@ fn fixture(store: &mut Store) {
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
                        ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
-                       ('side', 'manager', 'ctx', NULL, NULL, 'Side', '/', 'O5', 'idle', 't', 't'),
+                       ('side', 'manager', 'ctx', NULL, NULL, 'Side', '/', 'O4', 'idle', 't', 't'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'Worker', '/', 'S2', 'working', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),

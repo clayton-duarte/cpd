@@ -4189,7 +4189,7 @@ fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_
     let manager = |id: &str, context: &str, plan: &str| {
         format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O4', 'stopped', 't', 't')"
         )
     };
     write(&mut store, &manager("m-1", "ctx", "NULL")).unwrap();
@@ -4575,7 +4575,7 @@ fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_an
         &mut before,
         &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O4', 'idle', 't', 't'),
            ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
            ('w', 'worker', 'ctx', 'pay', 'api-a1', 'W', '/', 'S2', 'working', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l', 't');
@@ -5181,7 +5181,7 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
         &mut before,
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O4', 'idle', 't', 't'),
            ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
            ('lo', 'lead', 'other', 'live', NULL, 'LO', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES

@@ -306,7 +306,7 @@ fn working_pr_cmd_a_worker_or_the_user_names_nothing() {
         "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
          VALUES ('w1', 'worker', 'ctx', 'pl', 'k-a1', 'k-a1', '/w', 'S2', 'working', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-         VALUES ('mgr', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'working', 't', 't');",
+         VALUES ('mgr', 'manager', 'ctx', NULL, 'Manager', '/', 'O4', 'working', 't', 't');",
     );
     for (n, session) in [None, Some("w1"), Some("mgr")].into_iter().enumerate() {
         // Each run is a real write (a new Job appended to `b`), so a naming would have happened.

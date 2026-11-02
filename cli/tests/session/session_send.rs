@@ -202,7 +202,7 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
     fx.env.write_tmux_config("");
     fx.cockpit();
     fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
-         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'stopped', 't5', 't5', NULL)",
+         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O4', 'stopped', 't5', 't5', NULL)",
     );
     let out = fx
         .cpd_with(

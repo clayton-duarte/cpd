@@ -44,7 +44,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
            ('lead-pay', 'lead', 'ctx', 'pay', NULL, 'Lead', '/', 'O3', 'working', 't', 't'),
            ('lead-other', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'working', 't', 't'),
-           ('mgr', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'working', 't', 't'),
+           ('mgr', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O4', 'working', 't', 't'),
            ('w', 'worker', 'ctx', 'pay', 'api-a1', 'W', '/', 'S2', 'working', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
            ('pay', 'ctx', 'Pay', 'plan', 'lead-pay', 't'),
