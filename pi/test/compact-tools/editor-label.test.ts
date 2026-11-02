@@ -10,6 +10,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { WorkingStatusIndicator } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { ProgressController } from "../../compact-tools/extensions/compact-tools-progress.ts";
+import { hookEditor, setWorkingWords } from "../../compact-tools/extensions/compact-tools-editor.ts";
 import { restoreClocks, timerClock } from "./indicator-harness.ts";
 import { MOON_FRAMES } from "./loader-frames.ts";
 
@@ -147,4 +148,63 @@ test("the left cap is the third cell of the row: corner, one line cell, cap", ()
 		assert.ok(row.startsWith(`╭─${LEFT_CAP}`), `got ${JSON.stringify(row)}`);
 		assert.equal([...row].indexOf(LEFT_CAP), 2, "two cells sit between the container's limit and the cap");
 	} finally { w.dispose(); }
+});
+
+/** A real CustomEditor carrying the indicator pi mounts for a compaction, with the shared words as given. */
+function withIndicator(indicator: unknown, words?: string) {
+	hookEditor();
+	setWorkingWords(words, 0);
+	const ui = { requestRender: () => {}, terminal: { rows: 40, columns: PANE } };
+	const editor = new CustomEditor(ui as never, { borderColor: (text: string) => text } as never, { matches: () => false } as never, { embedWorkingStatus: true } as never);
+	(editor as unknown as { workingStatusIndicator?: unknown }).workingStatusIndicator = indicator;
+	return { top: () => editor.render(PANE)[0]!, dispose: () => setWorkingWords(undefined) };
+}
+
+/** The top border of a pill row: cyan 6 corner, the pill (frame 0, no padding), cyan 6 fill and corner. */
+function pillRow(words: string): string {
+	const body = `${LOADER[0]} ${words}`;
+	const fill = PANE - 2 - 1 - 2 - 2 - visibleWidth(words);
+	return `\x1b[36m╭─\x1b[39m\x1b[36m${LEFT_CAP}\x1b[7m${body}\x1b[27m\x1b[36m${RIGHT_CAP}\x1b[39m\x1b[36m${"─".repeat(fill)}╮\x1b[39m`;
+}
+
+test("a compaction indicator on the editor draws the Compacting pill in the top border when no words are set", () => {
+	const w = withIndicator({ kind: "compaction" });
+	try {
+		const row = w.top();
+		assert.equal(JSON.stringify(row), JSON.stringify(pillRow("Compacting…")));
+	} finally { w.dispose(); }
+});
+
+test("a compaction indicator paints the whole border running cyan 6 when no words are set", () => {
+	const w = withIndicator({ kind: "compaction" });
+	try {
+		const row = w.top();
+		assert.ok(strip(row).includes("Compacting…"), "the pill is drawn");
+		assert.ok(row.startsWith("\x1b[36m╭─"), "the corner is 6");
+		assert.ok(row.endsWith("╮\x1b[39m") && row.includes("\x1b[36m─"), "the fill and corner are 6");
+		assert.ok(!row.includes("\x1b[94m") && !row.includes("\x1b[97m") && !row.includes("\x1b[38;5;12m") && !row.includes("\x1b[38;5;15m"), "no focused or unfocused colour");
+	} finally { w.dispose(); }
+});
+
+test("a compaction indicator keeps the working words already set instead of replacing them", () => {
+	const w = withIndicator({ kind: "compaction" });
+	try {
+		assert.equal(JSON.stringify(w.top()), JSON.stringify(pillRow("Compacting…")), "no words yet: the compaction label");
+		setWorkingWords("Responding…", 0);
+		const row = w.top();
+		assert.ok(!strip(row).includes("Compacting…"), "the words are not replaced");
+		assert.equal(JSON.stringify(row), JSON.stringify(pillRow("Responding…")));
+	} finally { w.dispose(); }
+});
+
+test("a non compaction indicator with no words still draws a plain border", () => {
+	const compaction = withIndicator({ kind: "compaction" });
+	try { assert.ok(strip(compaction.top()).includes("Compacting…"), "only a compaction indicator draws a pill"); } finally { compaction.dispose(); }
+	for (const indicator of [{ kind: "working" }, undefined]) {
+		const w = withIndicator(indicator);
+		try {
+			assert.equal(strip(w.top()), `╭${"─".repeat(PANE - 2)}╮`);
+			assert.ok(!w.top().includes(LEFT_CAP), "no pill");
+		} finally { w.dispose(); }
+	}
 });

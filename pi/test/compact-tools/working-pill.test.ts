@@ -107,3 +107,86 @@ test("a label that changes from Thinking to Responding stays a pill", () => {
 		assert.ok(message.includes("\x1b[7m") && !message.includes("\x1b[30m"), "inverted text");
 	}
 });
+
+/** A controller whose label is observed as set (string) or cleared (undefined); `idle` and the events are the test's. */
+function compaction(idle: boolean) {
+	const handlers = new Map<string, Handler>();
+	const pi = { on: (name: string, handler: Handler) => handlers.set(name, handler), getThinkingLevel: () => "medium" } as unknown as ExtensionAPI;
+	let label: string | undefined;
+	const controller = new ProgressController(pi);
+	controller.bind({
+		isIdle: () => idle,
+		ui: {
+			theme,
+			setWorkingVisible: () => {},
+			setWorkingIndicator: () => {},
+			setWorkingMessage: (message?: string) => { label = message; },
+		},
+	} as unknown as ExtensionContext);
+	return {
+		emit: (name: string, event: unknown = {}) => handlers.get(name)?.(event),
+		label: () => (label === undefined ? undefined : strip(label).replace(LEFT_CAP, "").replace(RIGHT_CAP, "")),
+		dispose: () => controller.dispose(),
+	};
+}
+
+const START_BASH = { toolCallId: "1", toolName: "bash", args: { command: "ls" } };
+
+test("session_before_compact sets the working label to Compacting", () => {
+	const c = compaction(false);
+	try {
+		c.emit("session_before_compact");
+		assert.equal(c.label(), "Compacting…");
+	} finally { c.dispose(); }
+});
+
+test("session_compact clears the working label when the agent is idle and no tool is running", () => {
+	const c = compaction(true);
+	try {
+		c.emit("session_before_compact");
+		assert.equal(c.label(), "Compacting…");
+		c.emit("session_compact");
+		assert.equal(c.label(), undefined);
+	} finally { c.dispose(); }
+});
+
+test("session_compact restores the last running tool label when a tool is running", () => {
+	const c = compaction(false);
+	try {
+		c.emit("tool_execution_start", START_BASH);
+		c.emit("session_before_compact");
+		assert.equal(c.label(), "Compacting…");
+		c.emit("session_compact");
+		assert.equal(c.label(), "Running command…");
+	} finally { c.dispose(); }
+});
+
+test("session_compact_failed clears the working label when the agent is idle and no tool is running", () => {
+	const c = compaction(true);
+	try {
+		c.emit("session_before_compact");
+		assert.equal(c.label(), "Compacting…");
+		c.emit("session_compact_failed");
+		assert.equal(c.label(), undefined);
+	} finally { c.dispose(); }
+});
+
+test("session_compact_failed restores the last running tool label when a tool is running", () => {
+	const c = compaction(false);
+	try {
+		c.emit("tool_execution_start", START_BASH);
+		c.emit("session_before_compact");
+		assert.equal(c.label(), "Compacting…");
+		c.emit("session_compact_failed");
+		assert.equal(c.label(), "Running command…");
+	} finally { c.dispose(); }
+});
+
+test("session_compact restores the Thinking label when the agent is busy and no tool is running", () => {
+	const c = compaction(false);
+	try {
+		c.emit("session_before_compact");
+		c.emit("session_compact");
+		assert.equal(c.label(), "Thinking…");
+	} finally { c.dispose(); }
+});
