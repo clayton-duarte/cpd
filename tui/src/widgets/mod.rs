@@ -292,8 +292,8 @@ impl Opener<'_> {
                 }
             }
             // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
-            Some(Jump::Curate(kind, context)) => {
-                if let Err(why) = self.runner.curate(kind, &context) {
+            Some(Jump::Curate(context)) => {
+                if let Err(why) = self.runner.curate(&context) {
                     dialog::report_why(self.tmux, self.log, "Curate", why);
                 }
             }

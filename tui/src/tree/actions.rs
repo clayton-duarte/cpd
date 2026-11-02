@@ -436,30 +436,17 @@ impl Runner {
         question.ask(self)
     }
 
-    /// A click on a `curate-retire` or `curate-docs` item: `cpd context curation`, the checklist popup of what is
-    /// pending, and on approve the command of the ticks (`cpd context retire|docs`); cancel runs nothing. A refusal is
+    /// A click on a `curate-retire` item: `cpd context curation`, the checklist popup of what is
+    /// pending, and on approve the command of the ticks (`cpd context retire`); cancel runs nothing. A refusal is
     /// a `text` dialog (commands.md §17 "No notes"); returns when the dialogs close.
-    pub fn curate(
-        &self,
-        kind: cpd_core::inbox::model::Kind,
-        context: &ContextId,
-    ) -> Result<(), String> {
-        let title = if kind == cpd_core::inbox::model::Kind::CurateDocs {
-            "Documentation candidates"
-        } else {
-            "Retire records"
-        };
-        match self.curate_flow(kind, context) {
+    pub fn curate(&self, context: &ContextId) -> Result<(), String> {
+        match self.curate_flow(context) {
             Ok(()) => Ok(()),
-            Err(why) => self.error(title, &why),
+            Err(why) => self.error("Retire records", &why),
         }
     }
 
-    fn curate_flow(
-        &self,
-        kind: cpd_core::inbox::model::Kind,
-        context: &ContextId,
-    ) -> Result<(), String> {
+    fn curate_flow(&self, context: &ContextId) -> Result<(), String> {
         use crate::widgets::inbox::{approved, checklist};
         let call_cpd = |argv: Vec<String>| {
             call_argv(&*self.processes, argv).map_err(|failure| match failure {
@@ -468,7 +455,7 @@ impl Runner {
             })
         };
         let reply = call_cpd(crate::widgets::inbox::curation_argv(context))?;
-        let Some(list) = checklist(kind, context, &reply) else {
+        let Some(list) = checklist(context, &reply) else {
             return Ok(());
         };
         let rows: Vec<_> = list
@@ -479,7 +466,7 @@ impl Runner {
         let checked = dialog::checklist(&self.tmux, &list.title, &rows)
             .map_err(|e| e.message().to_owned())?;
         if checked.approved {
-            call_cpd(approved(kind, context, &checked.ticked, &checked.unticked))?;
+            call_cpd(approved(context, &checked.ticked, &checked.unticked))?;
         }
         Ok(())
     }

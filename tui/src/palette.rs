@@ -435,8 +435,6 @@ pub const NEEDS_YOU: &str = SPINNER[0];
 pub const TIER_WHITE: &str = "\u{F0366}";
 /// Magenta: a decision before the work runs (the generic system item), U+F173A (hs-d570 returns it from U+F06F1).
 pub const TIER_MAGENTA: &str = "\u{F173A}";
-/// A documentation candidate (an Inbox item of kind `curate-docs`), cyan.
-pub const ITEM_DOCS: &str = "\u{F0653}";
 /// A record to retire (an Inbox item of kind `curate-retire`), cyan.
 pub const ITEM_RETIRE: &str = "\u{F116E}";
 /// Blue: external support, a review asked of you, U+F0368 (md-message_reply_text).
@@ -473,7 +471,6 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
 pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'static> {
     use cpd_core::inbox::model::Kind as Item;
     match kind {
-        Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Notice)),
         Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
         Item::Deploy => Span::styled(ITEM_DEPLOY, fg_clickable(Meaning::Review)),
         Item::PrReady => {

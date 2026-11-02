@@ -1,5 +1,5 @@
-//! Engine step E8, the `curate-retire` and `curate-docs` Inbox items (contract §2.2 "Inbox item", §3.7; hs-d549,
-//! hs-d551): one magenta item per Context and kind, its count following the pending rows, closed when none is.
+//! Engine step E8, the `curate-retire` Inbox item (contract §2.2 "Inbox item", §3.7; hs-d549,
+//! hs-d551): one cyan item per Context, its count following the pending rows, closed when none is.
 
 use crate::common;
 
@@ -137,7 +137,6 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
         "{:?}",
         fx.items("curate-retire")
     );
-    assert!(fx.items("curate-docs").is_empty());
 
     // the count follows the pending rows, and the item closes when none is
     fx.fx
@@ -174,42 +173,6 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
 }
 
 #[test]
-fn e8_opens_a_curate_docs_item_and_closes_it_when_none_pending() {
-    let fx = fx();
-    fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
-    fx.propose(
-        "building",
-        &["hs-n1", "hs-n2", "hs-n3"],
-        &[],
-        &["hs-n1", "hs-n3"],
-    );
-    fx.tick();
-    fx.assert_item("curate-docs", "building", "building: 2 doc candidates");
-    assert!(
-        fx.items("curate-retire").is_empty(),
-        "{:?}",
-        fx.items("curate-retire")
-    );
-
-    fx.fx
-        .cpd(&[
-            "context",
-            "docs",
-            "--context",
-            "building",
-            "--dismiss",
-            "hs-n1,hs-n3",
-        ])
-        .ok();
-    fx.tick();
-    assert!(
-        fx.items("curate-docs").is_empty(),
-        "curate-docs is closed: {:?}",
-        fx.items("curate-docs")
-    );
-}
-
-#[test]
 fn e8_opens_the_curate_items_cyan() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
@@ -221,14 +184,13 @@ fn e8_opens_the_curate_items_cyan() {
     );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 1 to retire");
-    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
-    for kind in ["curate-retire", "curate-docs"] {
-        assert!(
-            fx.items(kind).iter().all(|i| i["urgency"] == "cyan"),
-            "{:?}",
-            fx.items(kind)
-        );
-    }
+    assert!(
+        fx.items("curate-retire")
+            .iter()
+            .all(|i| i["urgency"] == "cyan"),
+        "{:?}",
+        fx.items("curate-retire")
+    );
 }
 
 impl Curate {
@@ -270,7 +232,6 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
     );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
-    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     let before = fx.pending("building");
 
     fx.fx
@@ -278,10 +239,9 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
         .sql("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'building'");
     fx.tick();
     assert!(
-        fx.items("curate-retire").is_empty() && fx.items("curate-docs").is_empty(),
-        "both items closed: {:?} {:?}",
-        fx.items("curate-retire"),
-        fx.items("curate-docs")
+        fx.items("curate-retire").is_empty(),
+        "the item closed: {:?}",
+        fx.items("curate-retire")
     );
     assert_eq!(fx.pending("building"), before, "the rows stay pending");
     assert_eq!(before, (2, 1));
@@ -291,7 +251,6 @@ fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
         .sql("UPDATE contexts SET archived_at = NULL WHERE id = 'building'");
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
-    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     assert_eq!(fx.pending("building"), before);
 }
 
@@ -318,9 +277,7 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
     );
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
-    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     fx.assert_item("curate-retire", "control", "control: 1 to retire");
-    fx.assert_item("curate-docs", "control", "control: 1 doc candidates");
     let before = (fx.pending("building"), fx.pending("control"));
 
     fx.set_floor(5);
@@ -328,11 +285,9 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
     assert!(
         fx.items("curate-retire")
             .iter()
-            .chain(fx.items("curate-docs").iter())
             .all(|i| i["context"] != "building"),
-        "building's items closed: {:?} {:?}",
-        fx.items("curate-retire"),
-        fx.items("curate-docs")
+        "building's item closed: {:?}",
+        fx.items("curate-retire")
     );
     assert_eq!(
         (fx.pending("building"), fx.pending("control")),
@@ -344,12 +299,10 @@ fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
         1,
         "control keeps its items"
     );
-    assert_eq!(fx.items("curate-docs").len(), 1, "control keeps its items");
 
     fx.set_floor(3);
     fx.tick();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
-    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     fx.assert_item("curate-retire", "control", "control: 1 to retire");
     assert_eq!((fx.pending("building"), fx.pending("control")), before);
 }

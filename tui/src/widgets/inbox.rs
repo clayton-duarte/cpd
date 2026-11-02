@@ -153,8 +153,8 @@ fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
 pub enum Jump {
     /// Run this command and focus the chat slot (a click on a Session row).
     Run(Action),
-    /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
-    Curate(Kind, cpd_core::ids::ContextId),
+    /// The checklist dialog of a `curate-retire` item of this Context (hs-d549, hs-d551).
+    Curate(cpd_core::ids::ContextId),
     /// The read-only `text` dialog of the announced ids of a `models-changed` item: its provider and `changes.at`.
     Models(String, String),
 }
@@ -204,33 +204,19 @@ pub struct Checklist {
     pub rows: Vec<Row>,
 }
 
-/// The checklist of `kind` for `context` from the reply of `cpd context curation` (commands.md §13.2): the pending
-/// `retire` or `docs` entries; `None` when none is pending (or the reply has none of the shape).
+/// The checklist for `context` from the reply of `cpd context curation` (commands.md §13.2): the pending
+/// `retire` entries; `None` when none is pending (or the reply has none of the shape).
 pub fn checklist(
-    kind: Kind,
     context: &cpd_core::ids::ContextId,
     reply: &serde_json::Value,
 ) -> Option<Checklist> {
-    let (key, title) = match kind {
-        Kind::CurateRetire => ("retire", format!("Retire records of {context}")),
-        Kind::CurateDocs => ("docs", format!("Documentation candidates of {context}")),
-        _ => return None,
-    };
+    let (key, title) = ("retire", format!("Retire records of {context}"));
     let text = |e: &serde_json::Value, k: &str| e[k].as_str().map(str::to_owned);
     let rows = reply[key]
         .as_array()?
         .iter()
         .map(|e| {
-            let detail = if key == "retire" {
-                format!("{} {}", text(e, "reason")?, text(e, "target")?)
-            } else {
-                e["paths"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(|p| p.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+            let detail = format!("{} {}", text(e, "reason")?, text(e, "target")?);
             Some(Row {
                 id: text(e, "record")?,
                 text: text(e, "text")?,
@@ -265,22 +251,16 @@ pub fn curation_argv(context: &cpd_core::ids::ContextId) -> Vec<String> {
 
 /// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
 pub fn approved(
-    kind: Kind,
     context: &cpd_core::ids::ContextId,
     ticked: &[String],
     unticked: &[String],
 ) -> Vec<String> {
-    let (verb, yes, no) = if kind == Kind::CurateDocs {
-        ("docs", "send", "dismiss")
-    } else {
-        ("retire", "approve", "reject")
-    };
     let mut argv = vec![
         "context".to_owned(),
-        verb.to_owned(),
+        "retire".to_owned(),
         format!("--context={context}"),
     ];
-    for (flag, ids) in [(yes, ticked), (no, unticked)] {
+    for (flag, ids) in [("approve", ticked), ("reject", unticked)] {
         if !ids.is_empty() {
             argv.push(format!("--{flag}={}", ids.join(",")));
         }
@@ -313,7 +293,12 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             .as_ref()
             .map(|s| Jump::Run(open_or_history(tree, s))),
         // no click: the engine's errors, the stuck Jobs and Workflow check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
-        Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
+        // `curate-docs` is no longer opened (pro-d327): a history row has no click
+        Kind::EngineError
+        | Kind::JobStuck
+        | Kind::PrFailing
+        | Kind::PrChanges
+        | Kind::CurateDocs => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item
             .context
@@ -323,10 +308,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             // a plan-review has no url (hs-d739): the Lead of its Plan opens
             open_lead(tree, item.plan.as_ref()?).map(Jump::Run)
         }
-        Kind::CurateRetire | Kind::CurateDocs => item
-            .context
-            .as_ref()
-            .map(|c| Jump::Curate(item.kind, c.clone())),
+        Kind::CurateRetire => item.context.as_ref().map(|c| Jump::Curate(c.clone())),
         // one background `session resume`: the pane does not open; a refusal is the failure dialog
         Kind::LoopGuard => item
             .session
@@ -815,7 +797,6 @@ mod tests {
     }
 
     fn curate_click(
-        kind: Kind,
         label: &str,
         reply: serde_json::Value,
         title: &str,
@@ -832,11 +813,11 @@ mod tests {
         );
         let tree = sample();
         let alpha = ContextId::parse("alpha").unwrap();
-        let mut it = item(5, kind, Urgency::Magenta, label, OPENED);
+        let mut it = item(5, Kind::CurateRetire, Urgency::Magenta, label, OPENED);
         assert_eq!(jump(&tree, &it), None, "no Context: nowhere to go");
         it.context = Some(alpha.clone());
-        assert_eq!(jump(&tree, &it), Some(Jump::Curate(kind, alpha.clone())));
-        let list = checklist(kind, &alpha, &reply).expect("something is pending");
+        assert_eq!(jump(&tree, &it), Some(Jump::Curate(alpha.clone())));
+        let list = checklist(&alpha, &reply).expect("something is pending");
         assert_eq!(list.title, title);
         let want: Vec<Row> = rows
             .iter()
@@ -850,18 +831,17 @@ mod tests {
         let ticked = vec!["r-1".to_owned()];
         let unticked = vec!["r-2".to_owned()];
         assert_eq!(
-            approved(kind, &alpha, &ticked, &unticked),
+            approved(&alpha, &ticked, &unticked),
             command.map(String::from).to_vec()
         );
         // a flag with no ids is left out
-        let only = approved(kind, &alpha, &ticked, &[]);
+        let only = approved(&alpha, &ticked, &[]);
         assert_eq!(only.len(), 4, "{only:?}");
     }
 
     #[test]
     fn a_curate_retire_click_opens_the_checklist_and_runs_retire_with_the_ticks() {
         curate_click(
-            Kind::CurateRetire,
             "alpha: 2 to retire",
             serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": [
                 {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "reason": "duplicate", "target": "r-0"},
@@ -882,29 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn a_curate_docs_click_opens_the_checklist_and_runs_docs_with_the_ticks() {
-        curate_click(
-            Kind::CurateDocs,
-            "alpha: 2 doc candidates",
-            serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": [
-                {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "paths": ["docs/a.md", "README.md"]},
-                {"record": "r-2", "kind": "note", "text": "old plan is the full text", "paths": ["docs/b.md"]}]}),
-            "Documentation candidates of alpha",
-            [
-                ("r-1", "use sqlite is the full text", "docs/a.md, README.md"),
-                ("r-2", "old plan is the full text", "docs/b.md"),
-            ],
-            [
-                "context",
-                "docs",
-                "--context=alpha",
-                "--send=r-1",
-                "--dismiss=r-2",
-            ],
-        );
-    }
-
-    #[test]
     fn a_checklist_title_says_how_many_of_the_pending_entries_it_shows() {
         let alpha = ContextId::parse("alpha").unwrap();
         let entries = |n: usize, key: &str| -> Vec<serde_json::Value> {
@@ -917,19 +874,12 @@ mod tests {
         };
         let retire = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(10, "retire"), "retire_total": 56, "docs_total": 0});
         assert_eq!(
-            checklist(Kind::CurateRetire, &alpha, &retire)
-                .unwrap()
-                .title,
+            checklist(&alpha, &retire).unwrap().title,
             "Retire records of alpha (10 of 56)"
-        );
-        let docs = serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": entries(10, "docs"), "docs_total": 11, "retire_total": 0});
-        assert_eq!(
-            checklist(Kind::CurateDocs, &alpha, &docs).unwrap().title,
-            "Documentation candidates of alpha (10 of 11)"
         );
         let all = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(3, "retire"), "retire_total": 3, "docs_total": 0});
         assert_eq!(
-            checklist(Kind::CurateRetire, &alpha, &all).unwrap().title,
+            checklist(&alpha, &all).unwrap().title,
             "Retire records of alpha",
             "no suffix when all are shown"
         );
@@ -1000,11 +950,6 @@ mod tests {
     {
         let cyan = Some(palette::color_clickable(Meaning::Notice));
         let row = |kind| glyph_of(&item(1, kind, Urgency::Cyan, "alpha: 2", OPENED));
-        assert_eq!(
-            row(Kind::CurateDocs),
-            ("\u{F0653}".to_owned(), cyan),
-            "a documentation candidate"
-        );
         assert_eq!(
             row(Kind::CurateRetire),
             ("\u{F116E}".to_owned(), cyan),
