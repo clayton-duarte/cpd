@@ -721,13 +721,15 @@ fn claim_review_plan_id_uses_the_known_short_slugs() {
 
 #[test]
 fn claim_review_plan_id_takes_the_next_free_suffix() {
-    let (mut fx, id) = claimable();
-    old_plan(&mut fx, PLAN, "", "");
-    fx.ok(&["claim", &id.to_string()]);
-    assert_eq!(
-        plan_ids(&fx),
-        vec![PLAN.to_owned(), "r-pay-812-2".to_owned()]
-    );
+    {
+        let (mut fx, id) = claimable();
+        old_plan(&mut fx, PLAN, "", "");
+        fx.ok(&["claim", &id.to_string()]);
+        assert_eq!(
+            plan_ids(&fx),
+            vec![PLAN.to_owned(), "r-pay-812-2".to_owned()]
+        );
+    }
 
     let (mut fx, id) = claimable();
     old_plan(&mut fx, PLAN, "", "");
@@ -763,10 +765,12 @@ fn claim_review_plan_id_fits_24_characters() {
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     };
-    let (fx, id) = claimable_pr("acme", "a-very-long-repository-name-indeed", 123_456);
-    fx.ok(&["claim", &id.to_string()]);
-    assert_eq!(plan_ids(&fx), vec!["r-a-very-long-rep-123456".to_owned()]);
-    assert!(grammar(&plan_ids(&fx)[0]));
+    {
+        let (fx, id) = claimable_pr("acme", "a-very-long-repository-name-indeed", 123_456);
+        fx.ok(&["claim", &id.to_string()]);
+        assert_eq!(plan_ids(&fx), vec!["r-a-very-long-rep-123456".to_owned()]);
+        assert!(grammar(&plan_ids(&fx)[0]));
+    }
 
     let (mut fx, id) = claimable_pr("acme", "a-very-long-repository-name-indeed", 123_456);
     old_plan(&mut fx, "r-a-very-long-rep-123456", "", "");

@@ -610,7 +610,7 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let repo_name = repo.split_once('/').map_or(repo, |(_, name)| name);
     let slug = review_plan::slug(repo_name);
     let title = review_plan::title(&slug, number, &pr_title);
-    // The home as the User names it (not canonicalized, unlike the Lead's cwd): the brief shows paths the User knows.
+    // Not canonicalized, unlike the Lead's cwd: commands.md §21.7 says the User's home directory as given.
     let home = crate::host::pi::PiDirs::resolve(std::env::home_dir(), None, None)?
         .home
         .display()
