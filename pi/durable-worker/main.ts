@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, loadProjectContextFiles, ModelRuntime, resolveCliModel } from "@earendil-works/pi-coding-agent";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { callCpd, CpdError } from "../lib/cpd.ts";
 import { DEFAULT_TIMING, Follower } from "../lib/follower.ts";
 import { parseConfig } from "./config.ts";
@@ -18,6 +20,8 @@ const exec = (command: string, args: string[], options: { timeout?: number; sign
       resolve({ stdout, stderr, code: e ? (typeof e.code === "number" ? e.code : 1) : 0, killed: Boolean(e?.killed) || e?.name === "AbortError" });
     });
   });
+
+const sandbox = new CodemodeSandbox();
 
 try {
   const config = parseConfig(process.argv.slice(2), process.env, process.cwd());
@@ -37,6 +41,7 @@ try {
       process.once("SIGTERM", handler);
       process.once("SIGINT", handler);
     },
+    codemode: (namespaces) => createCodemodeExtension({ sandbox, namespaces: [...namespaces] }),
     mcp: piMcpPort(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")), config.cwd),
     homeDir: homedir,
     now: () => new Date(),

@@ -1,4 +1,4 @@
-import type { Extension } from "@earendil-works/pi-durable";
+import { defineExtension, type Extension } from "@earendil-works/pi-durable";
 import type { FollowerHooks } from "../lib/follower.ts";
 import { CpdError } from "../lib/cpd.ts";
 import { parseLine } from "../lib/event.ts";
@@ -21,10 +21,11 @@ export type Deps = {
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   resolveModel(pattern: string): Model;
   contextFiles(cwd: string): readonly { path: string; content: string }[];
-  open(o: { file: string; cwd: string; model: Model; extension: Extension }): Promise<Conversation>;
+  open(o: { file: string; cwd: string; model: Model; extension: Extension; codemode: Extension }): Promise<Conversation>;
   follow(hooks: FollowerHooks): { start(): void; stop(): void };
   writeReport(file: string, report: EndReport): Promise<void>;
   onTerminate(handler: () => void): void;
+  codemode(namespaces: readonly { name: string; prefix: string }[]): Extension;
   mcp: McpPort;
   homeDir(): string;
   now(): Date;
@@ -68,7 +69,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
       { contextFiles: contextText(deps.contextFiles(config.cwd)), policy, zone: zoneLine(deps.now()) },
       { cwd: config.cwd, home: deps.homeDir(), cpdHome: config.home, kind: config.jobKind, plan: config.plan },
     );
-    const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension });
+    const conversation = await deps.open({ file: storePath(config.home, config.plan, config.attempt), cwd: config.cwd, model, extension, codemode: defineExtension({ name: "codemode" } as Parameters<typeof defineExtension>[0]) });
     opened = conversation;
     conversation.closed.then(
       (reason) => {
@@ -104,7 +105,7 @@ export async function runWorker(config: Config, deps: Deps): Promise<number> {
     if (shownState === "stopped") reporter.want({ state: "idle" });
     await submit({ content: `Read ${config.spec} and follow it exactly. Your attempt id is ${config.attempt}.`, requestId: config.attempt, whenBusy: "followUp" });
 
-    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, over: () => over });
+    const handler = mcpHandler({ session: config.session, port: deps.mcp, install: (x) => conversation.install(x), cpd: deps.cpd, submit, log: deps.log, attached: () => {}, over: () => over });
     mcp = handler;
     await handler.replay();
 

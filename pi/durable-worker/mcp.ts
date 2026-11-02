@@ -2,6 +2,7 @@ import { defineExtension, type Extension } from "@earendil-works/pi-durable";
 import type { TSchema } from "typebox";
 import { CpdError } from "../lib/cpd.ts";
 import { parseMcpEvents, type EventOf } from "../lib/event.ts";
+import type { CodemodeServer } from "../durable-host/codemode.ts";
 import type { Input } from "./deliver.ts";
 
 export type McpConnection = {
@@ -19,6 +20,7 @@ export type McpHost = {
   cpd(args: readonly string[]): Promise<Record<string, unknown>>;
   submit(input: Input): Promise<void>;
   log(line: string): void;
+  attached(servers: readonly CodemodeServer[]): void;
   over(): boolean;
 };
 

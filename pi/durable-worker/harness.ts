@@ -89,12 +89,13 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
 /** The one adapter from a real pi-durable Harness to `Deps.open`. It never closes the Harness (contract §6.12). */
 export async function openConversation(
   models: Models,
-  o: { file: string; cwd: string; model: { provider: string; modelId: string; thinkingLevel?: string }; extension: Extension },
+  o: { file: string; cwd: string; model: { provider: string; modelId: string; thinkingLevel?: string }; extension: Extension; codemode?: Extension },
 ): Promise<Omit<HostConversation, "submit" | "entries"> & { entries(): Promise<readonly never[]>; submit(input: Omit<Input, "entry" | "reply"> & Partial<Pick<Input, "entry" | "reply">>): ReturnType<HostConversation["submit"]> }> {
   await mkdir(dirname(o.file), { recursive: true });
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(o.extension);
+  if (o.codemode !== undefined) registry.install(o.codemode);
   const harness = await Harness.open(
     await openNodeSqliteStorage(o.file),
     { models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: process.env }) },
