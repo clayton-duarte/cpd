@@ -507,3 +507,46 @@ test("an asleep row and a working row take different palette dots", () => {
   // No Tailwind hue (emerald, violet, red) is used anywhere in the rail.
   expect(container.innerHTML).not.toMatch(/emerald|violet|(?:bg|text|border|ring|from|to|via)-red-/);
 });
+
+test("an asleep lead's row is dim, keyed on asleep_at", () => {
+  // The read marks a put-to-sleep lead with `asleep_at` set while its `state` stays `stopped`;
+  // `idle` says nothing about sleep. The row is dim keyed on `asleep_at`, whatever the state
+  // (web/README.md "Context tree rows").
+  const SLEEP_STOPPED = "cccccccc-0000-0000-0000-000000000001";
+  const AWAKE_IDLE = "cccccccc-0000-0000-0000-000000000002";
+  const SLEEP_IDLE = "cccccccc-0000-0000-0000-000000000003";
+  const AWAKE_STOPPED = "cccccccc-0000-0000-0000-000000000004";
+  const AWAKE_WORKING = "cccccccc-0000-0000-0000-000000000005";
+  const plan = (key: string, lead: string): LivePlan => ({ ...PLAN_ALPHA, id: key, lead_session: lead });
+  const ASLEEP_AT = "2026-11-01T00:00:00Z";
+
+  renderContexts(
+    [{ id: CONTEXT, archived: false }],
+    [
+      plan("sleep-stopped", SLEEP_STOPPED),
+      plan("awake-idle", AWAKE_IDLE),
+      plan("sleep-idle", SLEEP_IDLE),
+      plan("awake-stopped", AWAKE_STOPPED),
+      plan("awake-working", AWAKE_WORKING),
+    ],
+    [
+      { id: SLEEP_STOPPED, role: "lead", runner: "durable", context: CONTEXT, name: "Sleeping Stopped", state: "stopped", asleep_at: ASLEEP_AT },
+      { id: AWAKE_IDLE, role: "lead", runner: "durable", context: CONTEXT, name: "Awake Idle", state: "idle" },
+      { id: SLEEP_IDLE, role: "lead", runner: "durable", context: CONTEXT, name: "Sleeping Idle", state: "idle", asleep_at: ASLEEP_AT },
+      { id: AWAKE_STOPPED, role: "lead", runner: "durable", context: CONTEXT, name: "Awake Stopped", state: "stopped" },
+      { id: AWAKE_WORKING, role: "lead", runner: "durable", context: CONTEXT, name: "Awake Working", state: "working" },
+    ],
+  );
+
+  // Only the rows whose lead carries `asleep_at` take the dim row class, whatever the state says.
+  for (const key of ["sleep-stopped", "sleep-idle"]) {
+    expect(rowContaining(key)?.className).toContain("text-[var(--dango-dim)]");
+  }
+  for (const key of ["awake-idle", "awake-stopped", "awake-working"]) {
+    expect(rowContaining(key)?.className ?? "").not.toContain("text-[var(--dango-dim)]");
+  }
+  // An asleep row does not take the working row's class, and its dot is the palette's plain grey.
+  expect(rowContaining("sleep-stopped")?.className).not.toBe(rowContaining("awake-working")?.className);
+  expect(dotColour(dotFor("sleep-stopped"))).toMatch(/dango-plain/);
+  expect(dotColour(dotFor("awake-working"))).toMatch(/dango-mizu/);
+});

@@ -109,18 +109,23 @@ function RowLabel({ label, id }: { label: string; id: string }): React.ReactElem
 /**
  * A Session state's palette dot: the Dango custom property class plus whether the whole row is
  * muted (web/README.md "Context tree rows"). Working and waiting share the in-progress mizu;
- * blocked is anko; idle and an unknown state are the dim text; asleep is the plain grey.
+ * blocked is anko; idle and an unknown state are the dim text; asleep is the plain grey. A
+ * Session is asleep when the read's `asleep_at` is set, whatever its `state` string says; the
+ * `"asleep"`/`"sleeping"` state literals stay as a fallback.
  */
-function stateDot(state: string | undefined): { colour: string; asleep: boolean } {
+function stateDot(
+  state: string | undefined,
+  asleepAt?: string | null,
+): { colour: string; asleep: boolean } {
+  if (asleepAt != null || state === "asleep" || state === "sleeping") {
+    return { colour: "bg-[var(--dango-plain)]", asleep: true }
+  }
   switch (state) {
     case "working":
     case "waiting":
       return { colour: "bg-[var(--dango-mizu)]", asleep: false }
     case "blocked":
       return { colour: "bg-[var(--dango-anko)]", asleep: false }
-    case "asleep":
-    case "sleeping":
-      return { colour: "bg-[var(--dango-plain)]", asleep: true }
     case "idle":
     default:
       return { colour: "bg-[var(--dango-dim)]", asleep: false }
@@ -128,8 +133,19 @@ function stateDot(state: string | undefined): { colour: string; asleep: boolean 
 }
 
 /** The row's glyph: a Session state dot, no text, so a row's key is its only text. */
-function Glyph({ state }: { state: string | undefined }): React.ReactElement {
-  return <span aria-hidden className={`size-2 shrink-0 rounded-full ${stateDot(state).colour}`} />
+function Glyph({
+  state,
+  asleepAt,
+}: {
+  state: string | undefined
+  asleepAt?: string | null
+}): React.ReactElement {
+  return (
+    <span
+      aria-hidden
+      className={`size-2 shrink-0 rounded-full ${stateDot(state, asleepAt).colour}`}
+    />
+  )
 }
 
 /** One drawn Job counter: its number and the status colour it takes. */
@@ -242,12 +258,12 @@ function PlanRow({
   const leadId = plan.lead_session
   // An asleep Lead's whole row (key and counters) is the palette's dim grey, its dot still plain;
   // an archived Plan's row is muted (web/README.md "Context tree rows").
-  const rowText =
-    stateDot(lead?.state).asleep
-      ? "text-[var(--dango-dim)]"
-      : plan.archived_at !== null
-        ? "text-muted-foreground"
-        : undefined
+  const asleep = stateDot(lead?.state, lead?.asleep_at).asleep
+  const rowText = asleep
+    ? "text-[var(--dango-dim)]"
+    : plan.archived_at !== null
+      ? "text-muted-foreground"
+      : undefined
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={leadId !== null && selectedId === leadId}>
@@ -260,7 +276,7 @@ function PlanRow({
             if (leadId !== null) onSelectSession(leadId)
           }}
         >
-          <Glyph state={lead?.state} />
+          <Glyph state={lead?.state} asleepAt={lead?.asleep_at} />
           <span>{plan.id}</span>
           <PlanCounters counts={plan.counts} />
         </button>

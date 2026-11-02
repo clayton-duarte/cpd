@@ -22,6 +22,8 @@ export interface LiveSession {
   runner: "pi" | "durable";
   title?: string;
   state?: string;
+  /** The read's `asleep_at`: set means the Session was put to sleep (web/README.md "Context tree rows"), whatever its `state` string says. */
+  asleep_at?: string | null;
   /** The Context the Session belongs to (`cpd session list` row's `context`); the tree groups by it. */
   context?: string;
   /** The Session's display name (`cpd session list` row's `name`); the tree labels rows with it. */

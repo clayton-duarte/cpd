@@ -487,7 +487,7 @@ Each rail row renders a **glyph**, then the row's **key**, then — a gap away �
 - **Working** and **waiting** are the palette's in-progress cyan **mizu `#67ada7`** — the cockpit draws both in that one colour and tells them apart by glyph, so the web does not invent a second colour.
 - **Blocked** is **anko `#e17f6e`**.
 - **Idle** is the dim text **`#87808c`**.
-- An **asleep** Session is the plain grey **`#aba3af`**, with its whole row **muted**.
+- An **asleep** Session — the read's **`asleep_at`** set, a durable Session put to sleep, never a `state` literal (a sleeping lead's `state` stays `stopped`) — is the plain grey **`#aba3af`**, with its whole row **muted**.
 
 **No Tailwind hue (emerald, violet, red) is used anywhere in the rail.** These four colours are **custom properties of the dark theme in `web/src/index.css`**, named for the palette colour — `mizu`, `anko`, `plain`, `dim` — with their hexes in the Dango table (“The Dango theme”, above); **never a hex inside a component**.
 
