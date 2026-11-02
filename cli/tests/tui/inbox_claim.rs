@@ -2,6 +2,7 @@
 //! §21.1; contract §8.2): a temporary `$CPD_HOME`, the Inbox fixture of `inbox.rs`, a fake tmux.
 
 use crate::inbox::{CLOSED_Y, Fixture, T0, condition};
+use cpd_core::host::runner::Reply;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
 use std::fs;
@@ -81,7 +82,13 @@ fn write_cache(fx: &Fixture, number: u64) {
 /// The Fixture with an open `review-requested` item for `acme/pay#812`, the Context `codereview` with an idle live
 /// Manager and the post in the cache. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
+    claimable_with(NEEDS_REVIEW)
+}
+
+/// [`claimable`] with the one `gh` answering `gh` (the live GraphQL lookup of the claim).
+fn claimable_with(gh: &str) -> (Fixture, i64) {
     let mut fx = Fixture::new();
+    fx.fx.fake_gh(Reply::ok(gh));
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "idle");
     write_cache(&fx, 812);
@@ -92,6 +99,27 @@ fn claimable() -> (Fixture, i64) {
         "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
     ));
     (fx, id)
+}
+
+/// The GraphQL answer of a pull request nobody reviewed.
+const NEEDS_REVIEW: &str = r#"{"data":{"viewer":{"login":"clayton-duarte"},"p0":{"pullRequest":{"title":"Pay the bills","isDraft":false,"state":"OPEN","reviewDecision":null,"author":{"login":"ryan"},"latestReviews":{"nodes":[]}}}}}"#;
+
+/// The same shape for the one pull request (alias `p0`); the viewer stays the User.
+fn gh_answer(
+    state: &str,
+    draft: bool,
+    decision: Option<&str>,
+    author: &str,
+    reviews: &[(&str, &str)],
+) -> String {
+    let nodes: Vec<Value> = reviews
+        .iter()
+        .map(|(state, login)| json!({"state": state, "author": {"login": login}}))
+        .collect();
+    json!({"data": {"viewer": {"login": "clayton-duarte"}, "p0": {"pullRequest": {
+        "title": "Pay the bills", "isDraft": draft, "state": state, "reviewDecision": decision,
+        "author": {"login": author}, "latestReviews": {"nodes": nodes}}}}})
+    .to_string()
 }
 
 /// A refusal wrote nothing: no Event, no message, no `claimed_at`.
@@ -228,6 +256,7 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
 #[test]
 fn claim_wakes_a_stopped_manager_as_session_send_does() {
     let mut fx = Fixture::new();
+    fx.fx.fake_gh(Reply::ok(NEEDS_REVIEW));
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     codereview_context(&mut fx, "stopped");
     write_cache(&fx, 812);
@@ -358,7 +387,13 @@ fn claiming_an_already_claimed_item_queues_nothing_more() {
 
 /// A Fixture whose store has the Inbox item and the cache but no `codereview` Context; the fake cockpit is up.
 fn without_codereview() -> (Fixture, i64) {
+    without_codereview_with(Reply::ok(NEEDS_REVIEW))
+}
+
+/// [`without_codereview`] with the one `gh` answering `gh`.
+fn without_codereview_with(gh: Reply) -> (Fixture, i64) {
     let mut fx = Fixture::new();
+    fx.fx.fake_gh(gh);
     fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
     write_cache(&fx, 812);
     let mut all = base();
@@ -439,5 +474,157 @@ fn claim_gives_an_archived_codereview_manager_a_new_one() {
         )),
         1,
         "the archived row is unchanged"
+    );
+}
+
+/// The claim of `id` is refused `not_claimable` for `reason`, and the item is closed, never claimed.
+fn assert_stale(fx: &Fixture, id: i64, reason: &str) {
+    let (exit, error) = fx.fail(&["claim", &id.to_string()]);
+    assert_eq!(exit, 3, "{reason}: {error}");
+    assert_eq!(error["code"], "not_claimable", "{reason}: {error}");
+    assert_eq!(error["details"]["reason"], reason, "{error}");
+    assert_eq!(error["details"]["item"], id, "{error}");
+    assert_eq!(
+        fx.store_count(&format!(
+            "SELECT count(*) FROM inbox_items WHERE id = {id} AND closed_at IS NOT NULL AND claimed_at IS NULL"
+        )),
+        1,
+        "{reason}: closed, not claimed"
+    );
+    let closed: Vec<Value> = fx
+        .events("inbox-closed")
+        .into_iter()
+        .filter(|e| e["data"]["item"] == id)
+        .collect();
+    assert_eq!(closed.len(), 1, "{reason}: {closed:?}");
+    assert!(fx.events("inbox-claimed").is_empty(), "{reason}");
+    assert!(fx.events("session-message").is_empty(), "{reason}");
+    assert!(queued(fx).is_empty(), "{reason}");
+}
+
+#[test]
+fn claim_refuses_a_merged_pull_request_and_closes_the_item() {
+    let (fx, id) = claimable_with(&gh_answer("MERGED", false, None, "ryan", &[]));
+    assert_stale(&fx, id, "merged");
+}
+
+#[test]
+fn claim_refuses_a_closed_pull_request_and_closes_the_item() {
+    let (fx, id) = claimable_with(&gh_answer("CLOSED", false, None, "ryan", &[]));
+    assert_stale(&fx, id, "closed");
+}
+
+#[test]
+fn claim_refuses_an_approved_pull_request_and_closes_the_item() {
+    let (fx, id) = claimable_with(&gh_answer("OPEN", false, Some("APPROVED"), "ryan", &[]));
+    assert_stale(&fx, id, "approved");
+}
+
+#[test]
+fn claim_refuses_every_other_status_that_is_not_needs_review_with_its_reason() {
+    let not_found = r#"{"data":{"viewer":{"login":"clayton-duarte"},"p0":null}}"#.to_owned();
+    let cases = [
+        (gh_answer("OPEN", true, None, "ryan", &[]), "draft"),
+        (
+            gh_answer("OPEN", false, Some("CHANGES_REQUESTED"), "ryan", &[]),
+            "changes-requested",
+        ),
+        (
+            gh_answer("OPEN", false, None, "ryan", &[("COMMENTED", "bea")]),
+            "in-review",
+        ),
+        (gh_answer("OPEN", false, None, "clayton-duarte", &[]), "own"),
+        (not_found, "not-found"),
+    ];
+    for (answer, reason) in cases {
+        let (fx, id) = claimable_with(&answer);
+        assert_stale(&fx, id, reason);
+    }
+}
+
+#[test]
+fn a_stale_claim_writes_only_the_item_close() {
+    let merged = gh_answer("MERGED", false, None, "ryan", &[]);
+    let (fx, id) = claimable_with(&merged);
+    let counts = |fx: &Fixture| {
+        [
+            "SELECT count(*) FROM contexts",
+            "SELECT count(*) FROM sessions",
+            "SELECT count(*) FROM events WHERE kind <> 'inbox-closed'",
+        ]
+        .map(|q| fx.store_count(q))
+    };
+    let before = counts(&fx);
+    let reactions = queued_rows(&fx).len();
+    let (exit, error) = fx.fail(&["claim", &id.to_string()]);
+    assert_eq!((exit, error["code"].as_str()), (3, Some("not_claimable")));
+    assert_eq!(counts(&fx), before);
+    assert_eq!(queued_rows(&fx).len(), reactions);
+    assert!(fx.events("session-message").is_empty());
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "item_closed".to_owned()),
+        "a second claim"
+    );
+
+    // no `codereview` Context: the stale claim creates none and starts nothing
+    let (fx, id) = without_codereview_with(Reply::ok(&merged));
+    assert_eq!(
+        refusal(&fx, &id.to_string()),
+        (3, "not_claimable".to_owned())
+    );
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM contexts WHERE id = 'codereview'"),
+        0
+    );
+    assert_eq!(new_windows(&fx), 0);
+}
+
+#[test]
+fn claim_asks_github_live_once_and_an_already_claimed_item_asks_nothing() {
+    let (fx, id) = claimable();
+    let id = id.to_string();
+    let out = fx.ok(&["claim", &id]);
+    assert_eq!(out["ok"], true);
+    let calls = fx.fx.calls("gh");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let args = &calls[0].args;
+    assert_eq!(args[..2], ["api", "graphql"], "{args:?}");
+    let query = args
+        .iter()
+        .find_map(|a| a.strip_prefix("query="))
+        .unwrap_or_else(|| panic!("{args:?}"));
+    assert!(
+        query.contains(r#"repository(owner: "acme", name: "pay")"#),
+        "{query}"
+    );
+    assert!(query.contains("pullRequest(number: 812)"), "{query}");
+
+    assert_eq!(fx.ok(&["claim", &id])["already"], true);
+    assert_eq!(fx.fx.calls("gh").len(), 1, "no further gh call");
+}
+
+#[test]
+fn claim_with_a_failing_gh_is_gh_failed_and_writes_nothing() {
+    let (fx, id) = without_codereview_with(Reply::exit(1, "", "gh: HTTP 502"));
+    let (exit, error) = fx.fail(&["claim", &id.to_string()]);
+    assert_eq!(
+        (exit, error["code"].as_str()),
+        (1, Some("gh_failed")),
+        "{error}"
+    );
+    assert_eq!(
+        fx.store_count(&format!(
+            "SELECT count(*) FROM inbox_items WHERE id = {id} AND closed_at IS NULL AND claimed_at IS NULL"
+        )),
+        1
+    );
+    assert!(fx.events("inbox-closed").is_empty());
+    assert!(queued(&fx).is_empty());
+    assert!(fx.events("session-message").is_empty());
+    assert_nothing_written(&fx);
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM contexts WHERE id = 'codereview'"),
+        0
     );
 }
