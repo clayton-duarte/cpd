@@ -2,7 +2,13 @@
 // Red tests for the Context tree in the left rail (web/README.md "The Context tree in the left
 // rail selects the Chat"): the live Sessions grouped by Context, each Context's manager at the
 // root with that Context's leads nested beneath it, every row a <button> carrying its Session's
-// id, and the selected row marked active. The tree props (`sessions`, `selectedId`,
+// id, and the selected row marked active.
+//
+// The corrected Context tree (web/README.md "Context tree rows"): the rail lists EVERY Context
+// of the Contexts read, an archived Context starts folded, a Context row selects its manager
+// Session and is disabled only without one, a Context's archived Plans hide behind its
+// `aria-expanded` fold, and the rows' dots are the palette's mizu / plain values, never a
+// Tailwind hue. The tree props (`sessions`, `plans`, `contexts`, `selectedId`,
 // `onSelectSession`) do not exist on the base branch, so the component is reached through a
 // narrow cast and the red is a failed assertion, never a build error.
 //
@@ -14,7 +20,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { AppSidebar } from "./app-sidebar";
 import { SidebarProvider } from "./ui/sidebar";
-import type { LivePlan, LiveSession } from "../api/live-server";
+import type { LiveContext, LivePlan, LiveSession } from "../api/live-server";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -25,6 +31,7 @@ type TreeSession = LiveSession & { context: string; name?: string };
 interface TreeProps {
   sessions: readonly TreeSession[];
   plans?: readonly LivePlan[];
+  contexts?: readonly LiveContext[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }
@@ -70,6 +77,9 @@ const PLAN_BETA: LivePlan = {
   counts: { draft: 0, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 },
 };
 const PLANS: readonly LivePlan[] = [PLAN_BETA, PLAN_ALPHA];
+
+// The Contexts read for the Plan tree: every Context the Plans hang beneath, none archived.
+const CONTEXTS: readonly LiveContext[] = [{ id: CONTEXT, archived: false }];
 
 // The Plans' Lead Sessions, so the rail can draw each Plan row's glyph from a real state dot.
 const PLAN_SESSIONS: readonly TreeSession[] = [
@@ -124,11 +134,37 @@ function renderPlans(
   plans: readonly LivePlan[],
   sessions: readonly TreeSession[] = PLAN_SESSIONS,
   onSelectSession: (id: string) => void = () => {},
+  contexts?: readonly LiveContext[],
 ): void {
   act(() => {
     root.render(
       <SidebarProvider>
-        <Tree sessions={sessions} plans={plans} onSelectSession={onSelectSession} />
+        <Tree sessions={sessions} plans={plans} contexts={contexts} onSelectSession={onSelectSession} />
+      </SidebarProvider>,
+    );
+  });
+}
+
+/**
+ * Renders the corrected Context tree: the Contexts read (`contexts`) is the row source, the Plans
+ * read (`plans`) hangs its rows beneath each Context, and the Sessions read (`sessions`) supplies
+ * each row's manager / lead (web/README.md "Context tree rows").
+ */
+function renderContexts(
+  contexts: readonly LiveContext[],
+  plans: readonly LivePlan[] = [],
+  sessions: readonly TreeSession[] = [],
+  onSelectSession: (id: string) => void = () => {},
+): void {
+  act(() => {
+    root.render(
+      <SidebarProvider>
+        <Tree
+          sessions={sessions}
+          plans={plans}
+          contexts={contexts}
+          onSelectSession={onSelectSession}
+        />
       </SidebarProvider>,
     );
   });
@@ -168,6 +204,24 @@ function ids(buttons: readonly HTMLElement[]): string[] {
 /** A nested row lives inside a `SidebarMenuSub`; a root row does not. */
 function nested(button: HTMLElement): boolean {
   return button.closest('[data-slot="sidebar-menu-sub"]') !== null;
+}
+
+/** The Context's fold control: the `aria-expanded` button inside that Context's row (web/README.md "Context tree rows"). */
+function foldControlFor(contextId: string): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((button) =>
+    (button.closest('[data-slot="sidebar-menu-item"]')?.textContent ?? "").includes(contextId),
+  );
+}
+
+/** The row's glyph dot: the rounded element inside the row carrying `key`. */
+function dotFor(key: string): HTMLElement | undefined {
+  const glyph = rowContaining(key)?.querySelector<HTMLElement>('[class*="rounded-full"]');
+  return glyph ?? undefined;
+}
+
+/** A dot's colour value: its class list plus any inline style, never a pixel. */
+function dotColour(dot: HTMLElement | undefined): string {
+  return `${dot?.className ?? ""} ${dot?.getAttribute("style") ?? ""}`;
 }
 
 test("the tree shows one root row per Context with that Context's leads nested beneath it", () => {
@@ -259,7 +313,7 @@ test("the row of the selected Session is marked active", () => {
 // counters in the contract's order (`·` apart), and a Plan row selects its Lead Session.
 
 test("a Context row shows its id and no counter digits", () => {
-  renderPlans(PLANS);
+  renderPlans(PLANS, PLAN_SESSIONS, () => {}, CONTEXTS);
 
   const context = rowContaining(CONTEXT);
   expect(context).toBeDefined();
@@ -271,7 +325,7 @@ test("a Context row shows its id and no counter digits", () => {
 });
 
 test("a Plan row shows its key, its nonzero counters in the contract's order and never a zero", () => {
-  renderPlans(PLANS);
+  renderPlans(PLANS, PLAN_SESSIONS, () => {}, CONTEXTS);
 
   // Listed beta-first, the Context/Plan-key sort puts `alpha` first.
   const first = planRows()[0];
@@ -285,7 +339,7 @@ test("a Plan row shows its key, its nonzero counters in the contract's order and
 });
 
 test("a Plan row with no counts shows its key and no number", () => {
-  renderPlans(PLANS);
+  renderPlans(PLANS, PLAN_SESSIONS, () => {}, CONTEXTS);
 
   const beta = rowContaining(PLAN_BETA.id);
   expect(beta).toBeDefined();
@@ -297,7 +351,7 @@ test("a Plan row with no counts shows its key and no number", () => {
 
 test("clicking a Plan row reports its Lead Session", () => {
   const clicked: string[] = [];
-  renderPlans(PLANS, PLAN_SESSIONS, (id) => clicked.push(id));
+  renderPlans(PLANS, PLAN_SESSIONS, (id) => clicked.push(id), CONTEXTS);
 
   const alpha = rowContaining(PLAN_ALPHA.id);
   expect(alpha).toBeDefined();
@@ -313,4 +367,143 @@ test("a rail given no plans still renders its Session rows", () => {
   renderPlans([], SESSIONS);
 
   expect(new Set(ids(rows()))).toEqual(new Set([MA, MB, LA1, LA2]));
+});
+
+// The corrected Context tree (web/README.md "Context tree rows", User 2026-11-02 "cockpit
+// behaviour"): the rail lists EVERY Context of the Contexts read (not just those with a live
+// Plan), an archived Context comes folded, a Context row selects its manager Session and is
+// disabled only without one, a Context's archived Plans hide behind its `aria-expanded` fold,
+// and the rows' dots are the palette's meanings, never a Tailwind hue.
+
+const CTX_ALONE = "solo-cpd";
+const CTX_ARCHIVED = "old-cpd";
+const MANAGER = "cccccccc-0000-0000-0000-000000000001";
+const LEAD_WORK = "dddddddd-0000-0000-0000-000000000001";
+const LEAD_SLEEP = "dddddddd-0000-0000-0000-000000000002";
+
+/** The manager Session of a Context, as the Sessions read carries it. */
+function manager(context: string): TreeSession {
+  return { id: MANAGER, role: "manager", runner: "durable", context, name: "Manager One" };
+}
+
+/** An archived Plan of `context`, listed after the live ones however the read orders them. */
+function archivedPlan(context: string, id: string): LivePlan {
+  return { ...PLAN_ALPHA, id, context, archived_at: "2026-11-02T00:00:00Z" };
+}
+
+test("a Context without any Plan is still listed", () => {
+  // Neither a live Plan nor an archived one: the Contexts read alone lists the row.
+  renderContexts([{ id: CTX_ALONE, archived: false }], [], []);
+
+  const context = rowContaining(CTX_ALONE);
+  expect(context).toBeDefined();
+  expect(context?.textContent ?? "").toContain(CTX_ALONE);
+});
+
+test("an archived Context starts folded", () => {
+  renderContexts(
+    [
+      { id: CONTEXT, archived: false },
+      { id: CTX_ARCHIVED, archived: true },
+    ],
+    [PLAN_ALPHA, archivedPlan(CTX_ARCHIVED, "arch-plan")],
+    PLAN_SESSIONS,
+  );
+
+  const fold = foldControlFor(CTX_ARCHIVED);
+  expect(fold).toBeDefined();
+  // Folded by default: the control reports `aria-expanded` false.
+  expect(fold?.getAttribute("aria-expanded")).toBe("false");
+});
+
+test("clicking a Context row selects its manager Session", () => {
+  const clicked: string[] = [];
+  renderContexts([{ id: CONTEXT, archived: false }], [], [manager(CONTEXT)], (id) => clicked.push(id));
+
+  const context = rowContaining(CONTEXT);
+  expect(context).toBeDefined();
+  if (context === undefined) return;
+  act(() => {
+    context.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(clicked).toEqual([MANAGER]);
+});
+
+test("a Context with no manager Session is disabled", () => {
+  const clicked: string[] = [];
+  renderContexts(
+    [
+      { id: CTX_ALONE, archived: false },
+      { id: CONTEXT, archived: false },
+    ],
+    [],
+    [manager(CONTEXT)],
+    (id) => clicked.push(id),
+  );
+
+  const orphan = rowContaining(CTX_ALONE);
+  expect(orphan).toBeDefined();
+  expect(orphan?.disabled).toBe(true);
+  if (orphan !== undefined) {
+    act(() => {
+      orphan.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+  expect(clicked).toEqual([]);
+
+  // A Context WITH a manager is not disabled: it is never disabled for want of a live Plan.
+  const staffed = rowContaining(CONTEXT);
+  expect(staffed).toBeDefined();
+  expect(staffed?.disabled).toBe(false);
+  if (staffed === undefined) return;
+  act(() => {
+    staffed.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(clicked).toEqual([MANAGER]);
+});
+
+test("a Context's archived Plan hides until its fold is opened", () => {
+  const live: LivePlan = { ...PLAN_ALPHA, id: "live-plan" };
+  const archived = archivedPlan(CONTEXT, "arch-plan");
+  renderContexts([{ id: CONTEXT, archived: false }], [live, archived], PLAN_SESSIONS);
+
+  // A live Plan always shows; the archived one hides behind the fold.
+  expect(rowContaining(live.id)).toBeDefined();
+  expect(rowContaining(archived.id)).toBeUndefined();
+
+  const fold = foldControlFor(CONTEXT);
+  expect(fold).toBeDefined();
+  expect(fold?.getAttribute("aria-expanded")).toBe("false");
+  if (fold === undefined) return;
+  act(() => {
+    fold.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  expect(foldControlFor(CONTEXT)?.getAttribute("aria-expanded")).toBe("true");
+  expect(rowContaining(archived.id)).toBeDefined();
+  expect(rowContaining(live.id)).toBeDefined();
+});
+
+test("an asleep row and a working row take different palette dots", () => {
+  renderContexts(
+    [{ id: CONTEXT, archived: false }],
+    [
+      { ...PLAN_ALPHA, id: "work-plan", lead_session: LEAD_WORK },
+      { ...PLAN_ALPHA, id: "sleep-plan", lead_session: LEAD_SLEEP },
+    ],
+    [
+      { id: LEAD_WORK, role: "lead", runner: "durable", context: CONTEXT, name: "Working Lead", state: "working" },
+      { id: LEAD_SLEEP, role: "lead", runner: "durable", context: CONTEXT, name: "Asleep Lead", state: "sleeping" },
+    ],
+  );
+
+  const workDot = dotFor("work-plan");
+  const sleepDot = dotFor("sleep-plan");
+  expect(workDot).toBeDefined();
+  expect(sleepDot).toBeDefined();
+  // The working dot takes the palette's mizu value; the asleep one is a different value.
+  expect(dotColour(workDot)).toMatch(/mizu/);
+  expect(dotColour(sleepDot)).not.toBe(dotColour(workDot));
+  // No Tailwind hue (emerald, violet, red) is used anywhere in the rail.
+  expect(container.innerHTML).not.toMatch(/emerald|violet|(?:bg|text|border|ring|from|to|via)-red-/);
 });

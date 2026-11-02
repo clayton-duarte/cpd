@@ -116,6 +116,10 @@
   --sidebar-accent-foreground: #d8d2cc;
   --sidebar-border: #5a504a;
   --sidebar-ring: #7aa2ce;
+  --dango-mizu: #67ada7;
+  --dango-anko: #e17f6e;
+  --dango-plain: #aba3af;
+  --dango-dim: #87808c;
 }
 
 @layer base {

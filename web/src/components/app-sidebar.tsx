@@ -6,22 +6,26 @@
 // `isActive`, and clicking a row reports it through `onSelectSession` (not `onSelect`: the DOM
 // already declares that one on `Sidebar`).
 //
-// With the Plans read wired it renders the Plan tree instead (web/README.md "Context tree rows"): a
-// Context row of glyph + key with no numbers, then one Plan row per non-archived Plan of that
-// Context, sorted by Context name and then by Plan key. A Plan row is glyph + key + its nonzero Job
-// counters in the cockpit's order (planned, active, failed, merged), a dot between two drawn roles,
-// each in its status colour; clicking a Plan row selects its Lead Session. Given no plans at all the
-// rail keeps drawing its Session tree, so a Chat-only fake never regresses.
+// With the Contexts read wired the rail draws the cockpit's Context tree instead (web/README.md
+// "Context tree rows"): every Context of the read, sorted by id with the archived ones last,
+// each a Context row of glyph + id with no numbers and a fold button carrying `aria-expanded`. The
+// fold, closed by default, hides only that Context's archived Plans while its live Plans always
+// show; clicking a Context row selects its manager Session (disabled only when there is none) and
+// clicking a Plan row selects its Lead Session. An awake row's dot takes its state's palette colour
+// (working and waiting mizu, blocked anko, idle and unknown dim, asleep plain with its row dim), and
+// no Tailwind hue is used anywhere. Given no Contexts read the rail keeps drawing its Session tree,
+// so a Chat-only fake never regresses.
 import * as React from "react"
-import { GalleryVerticalEnd } from "lucide-react"
+import { GalleryVerticalEnd, ChevronRight } from "lucide-react"
 
-import type { LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
+import type { LiveContext, LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
@@ -61,26 +65,35 @@ export function groupSessions(sessions: readonly LiveSession[]): ContextGroup[] 
     .sort((a, b) => a.context.localeCompare(b.context))
 }
 
-/** One Context's Plans, the Context name and its Plans sorted by key. */
-interface PlanGroup {
-  context: string
-  plans: readonly LivePlan[]
+/** One Context's Plans split by archived state, each half sorted by key. */
+export interface ContextPlans {
+  live: readonly LivePlan[]
+  archived: readonly LivePlan[]
 }
 
-/** Groups Plans by Context, sorting the Contexts by name and each Context's Plans by key. */
-export function groupPlans(plans: readonly LivePlan[]): PlanGroup[] {
-  const byContext = new Map<string, LivePlan[]>()
+/**
+ * The Plans of one Context, split into the live ones (always drawn) and the archived ones (behind
+ * the Context row's fold), each sorted by Plan key (web/README.md "Context tree rows").
+ */
+export function plansForContext(plans: readonly LivePlan[], context: string): ContextPlans {
+  const live: LivePlan[] = []
+  const archived: LivePlan[] = []
   for (const plan of plans) {
-    const group = byContext.get(plan.context)
-    if (group === undefined) byContext.set(plan.context, [plan])
-    else group.push(plan)
+    if (plan.context !== context) continue
+    ;(plan.archived_at === null ? live : archived).push(plan)
   }
-  return [...byContext.entries()]
-    .map(([context, contextPlans]) => ({
-      context,
-      plans: [...contextPlans].sort((a, b) => a.id.localeCompare(b.id)),
-    }))
-    .sort((a, b) => a.context.localeCompare(b.context))
+  live.sort((a, b) => a.id.localeCompare(b.id))
+  archived.sort((a, b) => a.id.localeCompare(b.id))
+  return { live, archived }
+}
+
+/** The Contexts in the rail's order: the live ones first, the archived after, each block sorted by id. */
+export function orderContexts(contexts: readonly LiveContext[]): LiveContext[] {
+  const byId = (a: LiveContext, b: LiveContext): number => a.id.localeCompare(b.id)
+  return [
+    ...contexts.filter((context) => !context.archived).sort(byId),
+    ...contexts.filter((context) => context.archived).sort(byId),
+  ]
 }
 
 /** A row's label: the Session's name, falling back to the given fallback. The id's first 8 characters show muted beside it. */
@@ -93,25 +106,30 @@ function RowLabel({ label, id }: { label: string; id: string }): React.ReactElem
   )
 }
 
-/** The state dot colour for a Session's state (web/README.md "Context tree rows"). */
-function stateDot(state: string | undefined): string {
+/**
+ * A Session state's palette dot: the Dango custom property class plus whether the whole row is
+ * muted (web/README.md "Context tree rows"). Working and waiting share the in-progress mizu;
+ * blocked is anko; idle and an unknown state are the dim text; asleep is the plain grey.
+ */
+function stateDot(state: string | undefined): { colour: string; asleep: boolean } {
   switch (state) {
     case "working":
-      return "bg-emerald-500"
     case "waiting":
-      return "bg-violet-500"
+      return { colour: "bg-[var(--dango-mizu)]", asleep: false }
     case "blocked":
-      return "bg-red-500"
+      return { colour: "bg-[var(--dango-anko)]", asleep: false }
+    case "asleep":
+    case "sleeping":
+      return { colour: "bg-[var(--dango-plain)]", asleep: true }
     case "idle":
-      return "bg-muted-foreground"
     default:
-      return "bg-muted-foreground"
+      return { colour: "bg-[var(--dango-dim)]", asleep: false }
   }
 }
 
 /** The row's glyph: a Session state dot, no text, so a row's key is its only text. */
 function Glyph({ state }: { state: string | undefined }): React.ReactElement {
-  return <span aria-hidden className={`size-2 shrink-0 rounded-full ${stateDot(state)}`} />
+  return <span aria-hidden className={`size-2 shrink-0 rounded-full ${stateDot(state).colour}`} />
 }
 
 /** One drawn Job counter: its number and the status colour it takes. */
@@ -222,6 +240,14 @@ function PlanRow({
 }): React.ReactElement {
   const lead = planSession(plan, sessions)
   const leadId = plan.lead_session
+  // An asleep Lead's whole row (key and counters) is the palette's dim grey, its dot still plain;
+  // an archived Plan's row is muted (web/README.md "Context tree rows").
+  const rowText =
+    stateDot(lead?.state).asleep
+      ? "text-[var(--dango-dim)]"
+      : plan.archived_at !== null
+        ? "text-muted-foreground"
+        : undefined
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={leadId !== null && selectedId === leadId}>
@@ -229,6 +255,7 @@ function PlanRow({
           type="button"
           title={leadId ?? plan.id}
           disabled={leadId === null}
+          className={rowText}
           onClick={() => {
             if (leadId !== null) onSelectSession(leadId)
           }}
@@ -242,30 +269,56 @@ function PlanRow({
   )
 }
 
-/** One Context row (glyph + key, no numbers) with its Plan rows nested beneath it. */
-function PlanContextRow({
-  group,
+/**
+ * One Context row: glyph + the Context's id, no numbers, and a fold button carrying `aria-expanded`
+ * (web/README.md "Context tree rows"). Clicking the row selects the Context's manager Session and
+ * is disabled only when there is none; the fold hides only that Context's archived Plans, folded by
+ * default, while its live Plans always show. An archived Context is muted and starts folded.
+ */
+function ContextNode({
+  context,
+  plans,
   sessions,
   selectedId,
   onSelectSession,
 }: {
-  group: PlanGroup
+  context: LiveContext
+  plans: readonly LivePlan[]
   sessions: readonly LiveSession[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }): React.ReactElement {
+  const [expanded, setExpanded] = React.useState(false)
   const manager = sessions.find(
-    (session) => session.context === group.context && session.role === "manager",
+    (session) => session.context === context.id && session.role === "manager",
   )
+  const { live, archived } = plansForContext(plans, context.id)
+  const shown = expanded ? archived : []
+  const muted = context.archived
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled>
+    <SidebarMenuItem className={muted ? "text-muted-foreground" : undefined}>
+      <SidebarMenuButton
+        isActive={manager !== undefined && selectedId === manager.id}
+        data-session-id={manager?.id}
+        title={manager?.id}
+        disabled={manager === undefined}
+        onClick={() => {
+          if (manager !== undefined) onSelectSession(manager.id)
+        }}
+      >
         <Glyph state={manager?.state} />
-        <span>{group.context}</span>
+        <span>{context.id}</span>
       </SidebarMenuButton>
-      {group.plans.length > 0 ? (
+      <SidebarMenuAction
+        aria-expanded={expanded}
+        aria-label={expanded ? `collapse ${context.id}` : `expand ${context.id}`}
+        onClick={() => setExpanded((open) => !open)}
+      >
+        <ChevronRight className={expanded ? "rotate-90" : undefined} />
+      </SidebarMenuAction>
+      {live.length + shown.length > 0 ? (
         <SidebarMenuSub>
-          {group.plans.map((plan) => (
+          {[...live, ...shown].map((plan) => (
             <PlanRow
               key={plan.id}
               plan={plan}
@@ -285,6 +338,8 @@ export interface AppSidebarProps {
   sessions: readonly LiveSession[]
   /** The Plans read; when absent, or empty, the rail draws its Session tree as before, and when present it draws the Plan tree (web/README.md "Context tree rows"). */
   plans?: readonly LivePlan[]
+  /** The Contexts read; the corrected rail lists every Context from it (web/README.md "Context tree rows"). */
+  contexts?: readonly LiveContext[]
   selectedId?: string
   onSelectSession: (id: string) => void
 }
@@ -293,18 +348,17 @@ export interface AppSidebarProps {
 export function AppSidebar({
   sessions,
   plans,
+  contexts,
   selectedId,
   onSelectSession,
   ...props
 }: React.ComponentProps<typeof Sidebar> & AppSidebarProps): React.ReactElement {
-  // With the Plans read wired and plans to draw, the rail is the Plan tree; otherwise it keeps the
-  // Session tree it draws today (web/README.md "The fallback").
-  const planGroups = plans === undefined || plans.length === 0 ? undefined : groupPlans(plans)
-  if (planGroups !== undefined) {
-    const contextCount =
-      planGroups.length === 0
-        ? "No contexts"
-        : `${planGroups.length} context${planGroups.length === 1 ? "" : "s"}`
+  // Every Context of the Contexts read is the rail's row source (web/README.md "Context tree
+  // rows"). With no Contexts read wired — or an empty one — the rail keeps the Session tree it
+  // draws today, so a Chat-only fake never regresses ("The fallback").
+  const ordered = contexts === undefined ? undefined : orderContexts(contexts)
+  if (ordered !== undefined && ordered.length > 0) {
+    const contextCount = ordered.length === 1 ? "1 context" : `${ordered.length} contexts`
     return (
       <Sidebar {...props}>
         <SidebarHeader>
@@ -327,10 +381,11 @@ export function AppSidebar({
         <SidebarContent>
           <SidebarGroup>
             <SidebarMenu>
-              {planGroups.map((group) => (
-                <PlanContextRow
-                  key={group.context}
-                  group={group}
+              {ordered.map((context) => (
+                <ContextNode
+                  key={context.id}
+                  context={context}
+                  plans={plans ?? []}
                   sessions={sessions}
                   selectedId={selectedId}
                   onSelectSession={onSelectSession}
@@ -343,11 +398,11 @@ export function AppSidebar({
     )
   }
 
-  const contexts = groupSessions(sessions)
+  const groups = groupSessions(sessions)
   const contextCount =
-    contexts.length === 0
+    groups.length === 0
       ? "No contexts"
-      : `${contexts.length} context${contexts.length === 1 ? "" : "s"}`
+      : `${groups.length} context${groups.length === 1 ? "" : "s"}`
   return (
     <Sidebar {...props}>
       <SidebarHeader>
@@ -370,12 +425,12 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
-            {contexts.length === 0 ? (
+            {groups.length === 0 ? (
               <SidebarMenuItem>
                 <span className="px-2 py-1.5 text-sm text-sidebar-foreground/70">No contexts.</span>
               </SidebarMenuItem>
             ) : (
-              contexts.map((group) => (
+              groups.map((group) => (
                 <ContextRow
                   key={group.context}
                   group={group}

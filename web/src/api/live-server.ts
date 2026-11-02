@@ -52,6 +52,15 @@ export interface LivePlan {
   counts: LivePlanCounts;
 }
 
+/**
+ * One Context the contexts read answers (web/README.md "Context tree rows"): the `cpd context
+ * list` row's id and whether the Context is archived. The rail's Context tree reads them.
+ */
+export interface LiveContext {
+  id: string;
+  archived: boolean;
+}
+
 /** Every external boundary is injected; the handler itself touches nothing real. */
 export interface LiveDeps {
   /** The lead and manager Sessions, from `cpd session list --role lead --role manager`. */
@@ -70,6 +79,8 @@ export interface LiveDeps {
   inbox?(): Promise<readonly InboxItem[]>;
   /** The Plans, from `cpd plan list`; the rail's Plan tree reads them (web/README.md "Where the numbers come from"). Optional so the handler's other routes build without it. */
   plans?(): Promise<readonly LivePlan[]>;
+  /** The Contexts, from `cdp context list`; the rail's Context tree reads them (web/README.md "Context tree rows"). Optional so the handler's other routes build without it. */
+  contexts?(): Promise<readonly LiveContext[]>;
 }
 
 /** Handles one request; resolves true when it matched a /__cpd/ route (the caller stops), false to pass through. */
@@ -311,8 +322,20 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     }
     if (path === "/__cpd/plans" && method === "GET") {
       // The read is optional: an adapter with no plans wiring answers an empty list, so the
+      // rail falls back to its Session tree (web/README.md "The fallback"). Every Plan of every
+      // Context is answered, archived ones included, each row carrying its `archived` flag from
+      // the CLI's `archived_at` (web/README.md "Context tree rows").
+      const plans = (await deps.plans?.()) ?? [];
+      sendJson(res, 200, {
+        ok: true,
+        plans: plans.map((plan) => ({ ...plan, archived: plan.archived_at !== null })),
+      });
+      return true;
+    }
+    if (path === "/__cpd/contexts" && method === "GET") {
+      // The read is optional: an adapter with no contexts wiring answers an empty list, so the
       // rail falls back to its Session tree (web/README.md "The fallback").
-      sendJson(res, 200, { ok: true, plans: (await deps.plans?.()) ?? [] });
+      sendJson(res, 200, { ok: true, contexts: (await deps.contexts?.()) ?? [] });
       return true;
     }
 
