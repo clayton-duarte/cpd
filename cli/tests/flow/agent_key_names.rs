@@ -136,8 +136,8 @@ fn agent_key_names_fork_name_is_cut_to_98_characters() {
     assert_eq!(fork.chars().count(), 98, "{fork}");
     assert_eq!(fork, long);
 
-    // A 90-character source: the suffix is cut after 98.
-    let mid = format!("ctx:pay-{}", "y".repeat(90 - 8));
+    // A 92-character source: the suffix is cut after 98.
+    let mid = format!("ctx:pay-{}", "y".repeat(92 - 8));
     fixture(
         &fx.env,
         &format!("UPDATE sessions SET name = '{mid}' WHERE role = 'lead';"),

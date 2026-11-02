@@ -1338,7 +1338,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
             &pay["workflows"][0]["key"],
             &pay["workflows"][0]["base_workflow"]
         ),
-        (&json!("ctx:pay"), &Value::Null)
+        (&json!("pay"), &Value::Null)
     );
     // §4.2: every listed Plan, archived ones included, carries the Plan's Created,
     // the same `plan show` reports.
