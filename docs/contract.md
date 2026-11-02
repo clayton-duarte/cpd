@@ -5309,7 +5309,7 @@ Rules:
 - `drop-plannotator-ports` (hs-d739): remove the top-level `plannotator_ports` key, as `drop-test-concurrency` removes its key.
 - `open-tier-worker-tier` (pro-d328 to pro-d332): rename the top-level `open_tier` key to `worker_tier`, keeping its value; the new name is the worker role's default (§9 "Roles and ranges").
 - `drop-review-lead-tier` (pro-d328 to pro-d332, superseding pro-d139 and pro-d140): remove the top-level `review_lead_tier` key. Every Lead uses `lead_tier`.
-- `drop-test-concurrency` (hs-d679): remove the top-level `test_concurrency` key (hs-d679: the test-slot pool `test_concurrency`, `CPD_TEST_SLOT` and `run/test-<i>.lock` are removed; a config.toml that still sets `test_concurrency` is config_invalid as any unknown key).
+- `drop-inbox-review-context` (pro-d338): remove the `review_context` line of the `[inbox]` table; other keys and comments survive. The key is retired (`inbox claim` always targets `codereview`, commands.md §21.7); after the migration a config that still sets it is refused as an unknown key, as `test_concurrency` is.
 
 **The command** `cpd config --migrate` (commands.md §14.2): reads `$CPD_HOME/config.toml`, applies the migrations in order, validates the result, and writes the file only when it changed and only when the result is valid. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty `migrated` array when nothing changed. Returns `config_missing` when the file is missing; `config_invalid` when the migrated file is still invalid; the file is untouched on any refusal. Plain `cpd config` (no flag) is unchanged and still refuses an invalid config.
 

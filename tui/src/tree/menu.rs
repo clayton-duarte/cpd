@@ -50,6 +50,8 @@ impl Entry for Item {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Context,
+    /// A Permanent Context's row (never renamed or archived).
+    Permanent,
     Plan,
     /// A side Session of a Plan.
     Fork,
@@ -64,9 +66,13 @@ impl Kind {
     pub fn of(row: Option<Row<'_>>) -> Option<Kind> {
         match row {
             None => Some(Kind::Empty),
-            Some(Row::Toggle) | Some(Row::NewPlan(_)) | Some(Row::Archive) => None,
+            Some(Row::Toggle)
+            | Some(Row::NewPlan(_))
+            | Some(Row::Archive)
+            | Some(Row::StandingHeader) => None,
             Some(row) if row.archived() => Some(Kind::Archived),
             Some(Row::Manager(..)) => Some(Kind::Fork),
+            Some(Row::Context(c)) if c.id.permanent().is_some() => Some(Kind::Permanent),
             Some(Row::Context(_)) => Some(Kind::Context),
             Some(Row::Plan(..)) => Some(Kind::Plan),
             Some(Row::Fork(..)) => Some(Kind::Fork),
@@ -77,6 +83,7 @@ impl Kind {
     pub fn items(self) -> &'static [Item] {
         match self {
             Kind::Context => &[Item::NewPlan, Item::Rename, Item::CopyId, Item::Archive],
+            Kind::Permanent => &[Item::NewPlan, Item::CopyId],
             Kind::Plan => &[Item::NewSession, Item::Rename, Item::CopyId, Item::Archive],
             Kind::Fork => &[
                 Item::Open,
