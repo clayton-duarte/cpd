@@ -3,6 +3,11 @@
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
+#[allow(dead_code)] // stub: only the tests call it until the implementation lands
+mod model;
+#[cfg(test)]
+mod model_tests;
+
 use super::box_widget::SectionTitle;
 use super::{Capture, RunCommand, popup, run_view_on};
 use cpd_core::error::CpdError;
