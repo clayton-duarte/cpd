@@ -151,9 +151,9 @@ fn a_tick_unarchives_an_archived_permanent_context_and_gives_it_a_manager() {
     let fx = fx();
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on, archived_at) VALUES ('host', 'Host: local maintenance of this machine', 'clayton-duarte', 't', 'm1', 't');
-         INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
-           VALUES ('oldm', 'manager', 'host', 'Manager', '/', 'O3', 'stopped', 't', 't', 't'),
-                  ('oldl', 'lead', 'host', 'Lead', '/', 'O3', 'stopped', 't', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at)
+           VALUES ('oldm', 'manager', 'host', NULL, 'Manager', '/', 'O3', 'stopped', 't', 't', 't'),
+                  ('oldl', 'lead', 'host', 'oldp', 'Lead', '/', 'O3', 'stopped', 't', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, archived_at)
            VALUES ('oldp', 'host', 'Old', 'grounding', 'oldl', 't', 't');",
     );

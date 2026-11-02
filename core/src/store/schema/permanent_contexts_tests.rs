@@ -329,7 +329,7 @@ fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
         "/work",
         false,
     );
-    sql += "UPDATE sessions SET forked_from = 'h2l' WHERE id = 'h2f';\n";
+    sql += "UPDATE sessions SET forked_from = 'h2l' WHERE id IN ('h2f', 'h2x', 'h2y', 'h2z');\n";
     sql += &plan("h2p", "host-2", "dispatch", "h2l", false);
     for n in [1, 2, 3, 4, 5, 7, 6] {
         let supersedes = (n == 2).then_some("box-n1");

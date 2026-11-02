@@ -111,6 +111,8 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     )
 }
 
+/// `forked_from`: the Lead this row forks (contract §4.4: a Lead is a fork or has a Plan).
+#[allow(clippy::too_many_arguments)]
 fn session_row(
     id: &str,
     name: &str,
@@ -119,7 +121,9 @@ fn session_row(
     state: &str,
     label: Option<&str>,
     created: &str,
+    forked_from: Option<&str>,
 ) -> String {
+    let forked_from = forked_from.map_or("NULL".to_owned(), |f| format!("'{f}'"));
     let plan = if plan.is_empty() {
         "NULL".to_owned()
     } else {
@@ -127,9 +131,9 @@ fn session_row(
     };
     let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from)
          VALUES ('{id}', 'lead', '{context}', {plan}, NULL, '{name}', '/sessions/{id}.jsonl', '/repo', 'O3',
-                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}');"
+                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}', {forked_from});"
     )
 }
 
@@ -268,15 +272,6 @@ fn populate_at(env: &TestEnv, opened: &str) {
         true,
     );
     s += &session_row(
-        "g-alpha",
-        "grounded",
-        "alpha",
-        "",
-        "idle",
-        None,
-        "2026-01-02T00:00:00.000Z",
-    );
-    s += &session_row(
         "l-ship",
         "ship lead",
         "alpha",
@@ -284,6 +279,17 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "working",
         None,
         "2026-01-02T00:00:00.000Z",
+        None,
+    );
+    s += &session_row(
+        "g-alpha",
+        "grounded",
+        "alpha",
+        "",
+        "idle",
+        None,
+        "2026-01-02T00:00:00.000Z",
+        Some("l-ship"),
     );
     s += &session_row(
         "f-idle",
@@ -293,6 +299,7 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "idle",
         None,
         "2026-01-02T00:00:02.000Z",
+        Some("l-ship"),
     );
     s += &session_row(
         "f-blocked",
@@ -302,6 +309,7 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "blocked",
         Some("cpd: Worker question"),
         "2026-01-02T00:00:09.000Z",
+        Some("l-ship"),
     );
     s += &session_row(
         "l-sketch",
@@ -311,6 +319,7 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "idle",
         None,
         "2026-01-02T00:00:01.000Z",
+        None,
     );
     s += &session_row(
         "l-rel",
@@ -320,6 +329,7 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "blocked",
         Some("cpd: PR feedback"),
         "2026-01-02T00:00:02.000Z",
+        None,
     );
     s += &session_row(
         "l-old",
@@ -329,6 +339,7 @@ fn populate_at(env: &TestEnv, opened: &str) {
         "stopped",
         None,
         "2026-01-02T00:00:03.000Z",
+        None,
     );
     for (key, status) in [
         ("a", "merged"),

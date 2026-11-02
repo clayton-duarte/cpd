@@ -61,8 +61,8 @@ impl Fixture {
     fn fork(&mut self, id: &str, plan: Option<&str>) {
         let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
         self.sql(&format!(
-            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-             VALUES ('{id}', 'lead', 'ctx', {plan}, 'n', '/', 'O3', 'working', '{T}', '{T}');"
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+             VALUES ('{id}', 'lead', 'ctx', {plan}, 'n', '/', 'O3', 'working', '{T}', '{T}', 'l-pay');"
         ));
     }
 
