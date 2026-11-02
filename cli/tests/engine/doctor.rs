@@ -418,16 +418,6 @@ fn tiers_fail_for_a_lead_tier_its_model_does_not_support() {
 }
 
 #[test]
-fn tiers_fail_for_a_review_lead_tier_its_model_does_not_support() {
-    let fx = healthy();
-    // H is p/m-low: efforts 0 to 2; lead_tier stays valid.
-    write_config(&fx, "review_lead_tier = \"H4\"");
-    let run = doctor(&fx);
-    assert_doctor_failed(&run);
-    assert_fails(&run, "tiers", "error", "tier_invalid");
-}
-
-#[test]
 fn tiers_fail_when_pi_has_no_release() {
     let fx = healthy();
     fs::remove_file(fx.env.root().join("install/current-version")).unwrap();

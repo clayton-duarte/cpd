@@ -1,5 +1,5 @@
-//! `plan new`'s Lead Tier (commands.md §4.1, contract §2.2, §8.2; pro-d139, pro-d140): the default for a Plan in the review
-//! Context (`review_lead_tier`), `--tier`, its refusals and its idempotency. On the fake tmux; the Tier catalog is seeded in the
+//! `plan new`'s Lead Tier (commands.md §4.1, contract §2.2, §8.2; pro-d139, pro-d140): the default (`lead_tier`, in every
+//! Context), `--tier`, its refusals and its idempotency. On the fake tmux; the Tier catalog is seeded in the
 //! store with a fake pi install, so no real pi, node or tmux runs.
 
 use crate::common;
@@ -107,24 +107,17 @@ fn not_allowed(run: &common::Run, tier: &str) {
 }
 
 #[test]
-fn a_review_context_plan_defaults_its_lead_to_review_lead_tier() {
+fn a_plan_defaults_its_lead_to_lead_tier_in_every_context() {
     let fx = Fx::with_ports();
     setup(&fx, "", "review");
-    assert_eq!(lead_tier(&fx, "rv", "review", None), "S3");
-}
-
-#[test]
-fn a_plan_in_another_context_defaults_its_lead_to_lead_tier() {
-    let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"H1\"", "review");
     assert_eq!(lead_tier(&fx, "pay", "ctx", None), "O2");
-    assert_eq!(lead_tier(&fx, "rv", "review", None), "H1");
+    assert_eq!(lead_tier(&fx, "rv", "review", None), "O2");
 }
 
 #[test]
 fn with_no_review_context_a_plan_defaults_its_lead_to_lead_tier() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"H1\"", "");
+    setup(&fx, "", "");
     assert_eq!(lead_tier(&fx, "pay", "ctx", None), "O2");
     assert_eq!(lead_tier(&fx, "rv", "review", None), "O2");
 }
@@ -132,7 +125,7 @@ fn with_no_review_context_a_plan_defaults_its_lead_to_lead_tier() {
 /// `--tier S2` wins in `context`: the session row and the `session-registered` Event say S2.
 fn override_wins(context: &str) {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"H1\"", "review");
+    setup(&fx, "", "review");
     assert_eq!(lead_tier(&fx, "pl", context, Some("S2")), "S2");
     let registered = fx
         .cpd(&["events", "list", "--kind", "session-registered"])
@@ -160,7 +153,7 @@ fn tier_flag_overrides_the_default_in_another_context() {
 #[test]
 fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     let before = counts(&fx);
     not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX");
     assert_eq!(counts(&fx), before);
@@ -169,7 +162,7 @@ fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
 #[test]
 fn tier_flag_refuses_effort_5_as_tier_invalid_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     seed_catalog(&fx, "[0,1,2,3,4,5]", "[0,1,2,3,4]");
     let before = counts(&fx);
     // Tier model v2: effort 5 exists for no letter, so it is a syntax error, not a role refusal.
@@ -181,7 +174,7 @@ fn tier_flag_refuses_effort_5_as_tier_invalid_and_writes_nothing() {
 #[test]
 fn tier_flag_refuses_an_effort_pi_does_not_support_and_writes_nothing() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     let before = counts(&fx);
     // H lists efforts 0-3 only.
     let e = common::refused(&plan_new(&fx, "pl", "ctx", Some("H4")), "tier_invalid", 2);
@@ -195,7 +188,7 @@ fn tier_flag_refuses_an_effort_pi_does_not_support_and_writes_nothing() {
 #[test]
 fn a_rerun_with_the_same_tier_is_already() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", Some("S2")).ok()["already"], true);
     assert_eq!((count(&fx, "plans"), count(&fx, "sessions")), (1, 1));
@@ -204,7 +197,7 @@ fn a_rerun_with_the_same_tier_is_already() {
 #[test]
 fn a_rerun_with_another_tier_is_plan_exists() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     common::refused(&plan_new(&fx, "pl", "ctx", Some("S1")), "plan_exists", 3);
     // A first run without `--tier` stored `lead_tier`: the same Tier is `already`, another is `plan_exists`.
@@ -216,7 +209,7 @@ fn a_rerun_with_another_tier_is_plan_exists() {
 #[test]
 fn a_rerun_without_tier_compares_no_tier() {
     let fx = Fx::with_ports();
-    setup(&fx, "review_lead_tier = \"S3\"", "review");
+    setup(&fx, "", "review");
     let first = plan_new(&fx, "pl", "ctx", Some("S2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", None).ok()["already"], true);
     assert_eq!(tier_of(&fx, &lead(&first)), "S2");

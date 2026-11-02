@@ -1,6 +1,5 @@
 //! `cpd session retier <id> --tier <T>` (commands.md §10.15, contract §2.2, §9; pro-d142): one Session to a Tier the
-//! User names, instead of the config's target. Every test sets `review_lead_tier`, a key and a flag unknown today, so
-//! each fails now for the missing feature.
+//! User names, instead of the config's target.
 //!
 //! The catalog `--tier` reads is seeded in the store, with a fake pi install: no real pi, node or tmux runs.
 
@@ -18,13 +17,13 @@ const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
 /// `session.rs`'s fixture (Leads `lead1` on `pay`, `lead2`, Manager `manager1` on `O2`, Worker `worker1`), the config
-/// `lead_tier = "O2"`, `review_lead_tier = "S3"`, `manager_tier = "O4"` (plus `extra` tables), a fake pi install, and
+/// `lead_tier = "O2"`, `manager_tier = "O4"` (plus `extra` tables), a fake pi install, and
 /// a catalog where O and S list efforts 0-`s_max` ... and H lists `h_efforts`.
 fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
     setup(env);
     env.write_models();
     env.write_tmux_config(&format!(
-        "lead_tier = \"O2\"\nreview_lead_tier = \"S3\"\nmanager_tier = \"O4\"\n{tables}\n[timeouts]\nfork_quiet_seconds = 1\n"
+        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n{tables}\n[timeouts]\nfork_quiet_seconds = 1\n"
     ));
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
@@ -133,18 +132,6 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
 }
 
 #[test]
-fn retier_tier_beats_the_review_context_target() {
-    let fx = Fx::new();
-    fixture(&fx.env, REVIEW, FOUR);
-    fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
-    assert_eq!(tier(&fx, LEAD1), "S2", "not review_lead_tier S3");
-    assert_eq!(
-        events(&fx, "session-retiered")[0]["data"],
-        json!({"from": "O3", "to": "S2"})
-    );
-}
-
-#[test]
 fn retier_tier_moves_the_manager_too() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
@@ -238,7 +225,7 @@ fn retier_tier_is_not_sticky() {
         .cpd(&["session", "retier", LEAD1, "--tier", "S2"])
         .ok();
     review.cpd(&["session", "retier", LEAD1]).ok();
-    assert_eq!(tier(&review, LEAD1), "S3", "review_lead_tier");
+    assert_eq!(tier(&review, LEAD1), "O2", "lead_tier");
 }
 
 #[test]

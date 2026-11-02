@@ -53,12 +53,11 @@ fn config_defaults_context_distill_tier_to_gx() {
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O2",
-            "review_lead_tier": "S3",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
-            "open_tier": "H3",
+            "worker_tier": "H3",
             "lead_pi_packages": [],
             "pi_adapter": "",
             "worker_runner": "pi",
@@ -224,10 +223,9 @@ fn config_has_one_source_per_leaf_key() {
     for key in [
         "retry_cap",
         "lead_tier",
-        "review_lead_tier",
         "manager_tier",
         "context_distill_tier",
-        "open_tier",
+        "worker_tier",
         "lead_pi_packages",
         "pi_adapter",
         "timeouts.attempt_minutes",
@@ -254,11 +252,10 @@ concurrency = 1
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
-lead_tier = "H0"
-review_lead_tier = "S3"
-manager_tier = "H1"
+lead_tier = "O2"
+manager_tier = "O4"
 context_distill_tier = "GX"
-open_tier = "S3"
+worker_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 context_engine_enabled = false
@@ -322,7 +319,7 @@ work_session = "w"
     assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["context_distill_tier"], "GX");
-    assert_eq!(out["config"]["open_tier"], "S3");
+    assert_eq!(out["config"]["worker_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert!(
@@ -604,36 +601,24 @@ fn config_refuses_each_bad_file_with_its_key_path() {
             "manager_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"S2\"\n",
-            "context_distill_tier",
-        ),
-        (
-            "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"O2\"\n",
-            "context_distill_tier",
-        ),
-        (
             "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H5\"\n",
             "context_distill_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"O2\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"S5\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"S5\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"X2\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"X2\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"S6\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"S6\"\n",
-            "open_tier",
-        ),
-        (
-            "version = 1\nmachine = \"hs\"\nopen_tier = 2\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = 2\n",
+            "worker_tier",
         ),
         (
             "version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n",
@@ -698,41 +683,6 @@ fn config_refuses_each_bad_file_with_its_key_path() {
     }
 }
 
-/// pro-d82: `open_tier` is a Worker Tier: H0-H3 or S0-S3.
-#[test]
-fn config_accepts_an_open_tier_in_the_worker_range() {
-    let fx = Fx::new();
-    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
-        let ok = config_with(
-            &fx,
-            &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"),
-        )
-        .ok();
-        assert_eq!(ok["config"]["open_tier"], tier);
-    }
-    // The range ends at H3: H4 is not part of it.
-    assert_eq!(
-        config_with(&fx, "version = 1\nmachine = \"hs\"\nopen_tier = \"H4\"\n").error()["code"],
-        "config_invalid"
-    );
-}
-
-/// pro-d82 (hs-d554 for the cost reason): `open_tier` outside H0-H3, S0-S3 is refused.
-#[test]
-fn config_refuses_an_open_tier_outside_the_worker_range() {
-    let fx = Fx::new();
-    for tier in ["H4", "H5", "S4", "S5", "O2"] {
-        let run = config_with(
-            &fx,
-            &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"),
-        );
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{tier}");
-        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
-        assert_eq!(err["details"]["key"], "open_tier", "{tier}: {err}");
-    }
-}
-
 /// Tier model v2: the auxiliary default is any Tier of the syntax that ascends below `worker_tier` (default H3): `G0` and
 /// `H0` are accepted, a Tier at or above H3 or with effort 5 is `config_invalid`.
 #[test]
@@ -746,7 +696,7 @@ fn config_takes_a_context_distill_tier_below_the_worker_tier() {
         .ok();
         assert_eq!(ok["config"]["context_distill_tier"], tier);
     }
-    for tier in ["H4", "S1", "O2", "G5"] {
+    for tier in ["G5", "H5"] {
         let run = config_with(
             &fx,
             &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"),
@@ -766,7 +716,7 @@ fn config_takes_a_context_distill_tier_below_the_worker_tier() {
 #[test]
 fn config_refuses_gx_where_the_role_defaults_would_not_ascend() {
     let fx = Fx::new();
-    for key in ["lead_tier", "manager_tier", "open_tier"] {
+    for key in ["lead_tier", "manager_tier", "worker_tier"] {
         let run = config_with(
             &fx,
             &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"),
@@ -774,6 +724,7 @@ fn config_refuses_gx_where_the_role_defaults_would_not_ascend() {
         let err = run.error();
         assert_eq!(run.exit, 1, "{key}");
         assert_eq!(err["code"], "config_invalid", "{key}: {err}");
+        assert_eq!(err["details"]["key"], *key, "{key}: {err}");
     }
 }
 
@@ -1636,7 +1587,7 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     let fx = Fx::new();
     let out = config_with(
         &fx,
-        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nopen_tier = \"H3\"\n",
+        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nworker_tier = \"H3\"\n",
     )
     .ok();
     let config = &out["config"];
@@ -1645,7 +1596,7 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
             &config["lead_tier"],
             &config["manager_tier"],
             &config["context_distill_tier"],
-            &config["open_tier"]
+            &config["worker_tier"]
         ),
         (&json!("O0"), &json!("O4"), &json!("GX"), &json!("H3"))
     );
@@ -1796,69 +1747,83 @@ fn watch_janitor_minutes_below_1_is_config_invalid() {
     }
 }
 
-fn review_tier_file(value: &str) -> String {
-    format!("version = 1\nmachine = \"hs\"\nreview_lead_tier = {value}\n")
-}
-
+/// Tier model v2: `worker_tier` (new name of `open_tier`) defaults to H3 and takes any Tier that sits between the
+/// auxiliary and the Lead defaults on the ladder.
 #[test]
-fn config_defaults_review_lead_tier_to_s3_and_takes_a_lead_tier() {
+fn config_defaults_worker_tier_to_h3_and_takes_a_worker_tier() {
     let fx = Fx::new();
     let out = config_with(&fx, MINIMAL).ok();
-    assert_eq!(out["config"]["review_lead_tier"], "S3");
-    assert_eq!(out["sources"]["review_lead_tier"], "default");
-    let out = config_with(&fx, &review_tier_file("\"O3\"")).ok();
-    assert_eq!(out["config"]["review_lead_tier"], "O3");
-    assert_eq!(out["sources"]["review_lead_tier"], "file");
-    for tier in ["O0", "O4", "S4"] {
-        let out = config_with(&fx, &review_tier_file(&format!("\"{tier}\""))).ok();
-        assert_eq!(out["config"]["review_lead_tier"], tier);
+    assert_eq!(out["config"]["worker_tier"], "H3");
+    assert_eq!(out["sources"]["worker_tier"], "default");
+    assert!(out["config"].get("open_tier").is_none(), "{out}");
+    assert!(out["config"].get("review_lead_tier").is_none(), "{out}");
+    for tier in ["H0", "H4", "S1", "S4"] {
+        let out = config_with(
+            &fx,
+            &format!("version = 1\nmachine = \"hs\"\nworker_tier = \"{tier}\"\n"),
+        )
+        .ok();
+        assert_eq!(out["config"]["worker_tier"], tier);
+        assert_eq!(out["sources"]["worker_tier"], "file");
     }
 }
 
+/// Tier model v2: `context_distill_tier < worker_tier < lead_tier < manager_tier` on the ladder, equal is refused too;
+/// `details.key` is the key that breaks the order and the message names the key below it.
 #[test]
-fn config_refuses_a_g_review_lead_tier() {
+fn config_refuses_role_tiers_that_do_not_strictly_ascend() {
     let fx = Fx::new();
-    let run = config_with(&fx, &review_tier_file("\"GX\""));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid", "{err}");
-    assert_eq!(err["details"]["key"], "review_lead_tier", "{err}");
-    let message = err["message"].as_str().unwrap();
-    assert!(
-        message.contains("must not be a G Tier") && message.contains("hs-d562"),
-        "{message}"
-    );
-}
-
-#[test]
-fn config_refuses_an_effort_5_review_lead_tier() {
-    let fx = Fx::new();
-    for tier in ["O5", "S5"] {
-        let run = config_with(&fx, &review_tier_file(&format!("\"{tier}\"")));
+    let cases = [
+        (
+            "context_distill_tier = \"H3\"\n",
+            "worker_tier",
+            "context_distill_tier",
+        ),
+        (
+            "context_distill_tier = \"S0\"\n",
+            "worker_tier",
+            "context_distill_tier",
+        ),
+        ("worker_tier = \"O2\"\n", "lead_tier", "worker_tier"),
+        ("worker_tier = \"O3\"\n", "lead_tier", "worker_tier"),
+        ("lead_tier = \"O4\"\n", "manager_tier", "lead_tier"),
+        (
+            "lead_tier = \"H1\"\nworker_tier = \"S1\"\n",
+            "lead_tier",
+            "worker_tier",
+        ),
+        ("manager_tier = \"S4\"\n", "manager_tier", "lead_tier"),
+    ];
+    for (lines, key, below) in cases {
+        let text = format!("version = 1\nmachine = \"hs\"\n{lines}");
+        let run = config_with(&fx, &text);
         let err = run.error();
-        assert_eq!(run.exit, 1, "{tier}");
-        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
-        assert_eq!(err["details"]["key"], "review_lead_tier", "{tier}: {err}");
+        assert_eq!(run.exit, 1, "{text}");
+        assert_eq!(err["code"], "config_invalid", "{text}: {err}");
+        assert_eq!(err["details"]["key"], key, "{text}: {err}");
         let message = err["message"].as_str().unwrap();
-        assert!(message.contains("<G|H|S|O><0-4|X>"), "{tier}: {message}");
+        assert!(message.contains(below), "{text}: {message}");
     }
 }
 
+/// `config --migrate` renames `open_tier` to `worker_tier` keeping value and comment, and drops `review_lead_tier`.
 #[test]
-fn config_refuses_an_invalid_review_lead_tier() {
+fn config_migrate_renames_open_tier_and_drops_review_lead_tier() {
     let fx = Fx::new();
-    for value in ["\"X3\"", "\"O6\"", "\"s3\"", "3"] {
-        let run = config_with(&fx, &review_tier_file(value));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{value}");
-        assert_eq!(err["code"], "config_invalid", "{value}: {err}");
-        assert_eq!(err["details"]["key"], "review_lead_tier", "{value}: {err}");
-        assert!(
-            !err["message"]
-                .as_str()
-                .unwrap()
-                .contains("is not a known key"),
-            "{value}: {err}"
-        );
-    }
+    let path = fx.env.cpd_home().join("config.toml");
+    fx.env.write_config(
+        "version = 1\nmachine = \"hs\"\nopen_tier = \"S3\"  # mine\nreview_lead_tier = \"S3\"\nconcurrency = 5\n",
+    );
+
+    let out = fx.cpd(&["config", "--migrate"]).ok();
+    assert_eq!(out["path"], path.to_str().unwrap(), "{out}");
+    assert_eq!(
+        out["migrated"],
+        json!(["open-tier-worker-tier", "drop-review-lead-tier"]),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "version = 1\nmachine = \"hs\"\nworker_tier = \"S3\"  # mine\nconcurrency = 5\n"
+    );
 }

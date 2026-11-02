@@ -2873,8 +2873,8 @@ fn polling(config_extra: &str) -> Ip {
 /// Job `blocked` that waits for a draft, so no other Job of the PR could run: E3 starts nothing. `gh` answers the search with what
 /// [`Says`] holds.
 fn open_pr() -> (Ip, Says) {
-    // The update Job is queued at the config's `open_tier` (default H3 since #383): this one is S1.
-    let fx = polling("open_tier = \"S1\"");
+    // The update Job is queued at the config's `worker_tier` (default H3 since #383): this one is S1.
+    let fx = polling("worker_tier = \"S1\"");
     fx.engine_plan();
     fx.env.sql(
         "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';
