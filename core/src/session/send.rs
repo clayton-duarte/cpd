@@ -213,35 +213,6 @@ fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
     Ok(wake)
 }
 
-/// What `cpd session send <manager> <text> --unblocks <reason>` run with no sender Session does, for another command's
-/// transaction: the same checks, the `session-message` Event written in the transaction of `inside` (whose value is
-/// returned), and, after the commit, the start of a stopped Manager. Refuses before any write.
-pub(crate) fn send_as_user<T>(
-    env: &mut Env,
-    id: &SessionId,
-    command: &str,
-    text: &str,
-    unblocks: &str,
-    inside: impl FnOnce(&WriteTxn<'_>) -> Result<T, CpdError>,
-) -> Result<T, CpdError> {
-    let needs_pane = {
-        let target = env.store.read(|conn| row::load(conn, id))?;
-        check(&target)?;
-        needs_pane(env, &target)?
-    };
-    let (value, target) = env.store.write(command, |tx| {
-        let target = row::load(tx, id)?;
-        check(&target)?;
-        let value = inside(tx)?;
-        write(tx, &target, &None, text, Some(unblocks), true)?;
-        Ok((value, target))
-    })?;
-    if needs_pane {
-        start_parked(env, &target, command)?;
-    }
-    Ok(value)
-}
-
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,

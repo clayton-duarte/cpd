@@ -11,16 +11,16 @@ use time::{Duration, OffsetDateTime, Time, UtcOffset};
 use super::model::{self, Filter, Item, Kind, State, Urgency};
 use super::review_plan;
 use super::team;
+use crate::args::Text;
 use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::host::deadline::Failed;
 use crate::host::runner::{NO_DEADLINE, Runner};
-use crate::args::Text;
 use crate::ids::{ContextId, PlanId, SessionId};
-use crate::plan::new::Creation;
 use crate::output::Output;
+use crate::plan::new::Creation;
 use crate::ports::Ports;
 use crate::session;
 
@@ -695,10 +695,7 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     Ports::scope(ports, || {
         crate::plan::new::finish(&mut env, &creation, Some(&brief), "inbox claim")
     })
-    .map_err(|e| {
-        e.with("plan", plan.as_str())
-            .with("lead", lead.as_str())
-    })?;
+    .map_err(|e| e.with("plan", plan.as_str()).with("lead", lead.as_str()))?;
     Ok(Output::success(json!({
         "item": item_json(&item, now)?,
         "plan": plan.as_str(),

@@ -140,7 +140,10 @@ mod tests {
         assert_eq!(plan_id(long, 123_456, 2), "r-a-very-long-r-123456-2");
         // the cut lands on a `-`: it is trimmed
         assert_eq!(plan_id("abcdefgh-ijklmnop", 1, 1), "r-abcdefgh-ijklmnop-1");
-        assert_eq!(plan_id("abcdefghijklmn-opqrst", 123, 1), "r-abcdefghijklmn-123");
+        assert_eq!(
+            plan_id("abcdefghijklmn-opqrst", 123, 1),
+            "r-abcdefghijklmn-123"
+        );
         for attempt in 1..30 {
             assert!(PlanId::parse(&plan_id(long, 12_345, attempt)).is_ok());
         }
@@ -148,7 +151,10 @@ mod tests {
 
     #[test]
     fn the_title_cleans_the_pr_title_and_is_cut() {
-        assert_eq!(title("pay", 812, "Pay the bills"), "Review pay#812 Pay the bills");
+        assert_eq!(
+            title("pay", 812, "Pay the bills"),
+            "Review pay#812 Pay the bills"
+        );
         assert_eq!(title("pay", 812, "a\tb\nc "), "Review pay#812 a b c");
         assert_eq!(title("pay", 812, " \n "), "Review pay#812");
         let long = title("pay", 812, &"x".repeat(300));
@@ -171,6 +177,8 @@ mod tests {
             "Review PR https://github.com/acme/pay/pull/812 (`acme/pay#812`).\nSlack post: `C1/1.2` (`--slack C1/1.2`).\n\nRead `/h/cpd-codereview/cpd-code-review/SKILL.md` (v10, `pro-d6`) first and follow it strictly:\n1. Turn 1: run `~/cpd-codereview/cpd-code-review/prefetch.sh \"https://github.com/acme/pay/pull/812\" \"/tmp/$CPD_PLAN\"`.\n"
         ));
         assert!(text.contains("3. Use `/h/projects/pay` (`git show`"));
-        assert!(text.ends_with("`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop."));
+        assert!(text.ends_with(
+            "`cpd review submit ... --slack C1/1.2 && cpd context note ...`) and stop."
+        ));
     }
 }

@@ -16,8 +16,8 @@ use crate::context::{By, ContextRow, Contexts, Draft, PlanRef};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{ContextId, PlanId, SessionId};
-use crate::store::WriteTxn;
 use crate::output::Output;
+use crate::store::WriteTxn;
 
 /// The Plan as `plan new` reads it back, with its Lead's name and cwd as stored.
 /// No Workflow is needed (a Plan starts with none, R34 A12).
@@ -187,10 +187,29 @@ pub(crate) struct Creation<'a> {
 /// Step 1, inside the caller's transaction: inserts the Lead Session and the Plan, appends `plan-created` and
 /// `session-registered`.
 pub(crate) fn insert(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError> {
-    let Creation { id, context, title, jira, name, cwd, tier, runner, by_user, session } = c;
-    let exists = tx.query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| Ok(())).optional()?;
+    let Creation {
+        id,
+        context,
+        title,
+        jira,
+        name,
+        cwd,
+        tier,
+        runner,
+        by_user,
+        session,
+    } = c;
+    let exists = tx
+        .query_row("SELECT 1 FROM plans WHERE id = ?1", [id.as_str()], |_| {
+            Ok(())
+        })
+        .optional()?;
     if exists.is_some() {
-        return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} was created meanwhile.")).with("plan", id.as_str()));
+        return Err(CpdError::new(
+            ErrorCode::PlanExists,
+            format!("Plan {id} was created meanwhile."),
+        )
+        .with("plan", id.as_str()));
     }
     tx.execute(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
@@ -204,7 +223,9 @@ pub(crate) fn insert(tx: &WriteTxn<'_>, c: &Creation<'_>) -> Result<(), CpdError
          SELECT ?1, ?2, ?3, ?4, 'grounding', ?5, at FROM txns WHERE id = cpd_txn()",
         rusqlite::params![id.as_str(), context.as_str(), title, jira, session.as_str()],
     )?;
-    let text = format!("Plan {id} \"{title}\" created in Context {context}, phase grounding. Next: cpd plan show --plan {id}");
+    let text = format!(
+        "Plan {id} \"{title}\" created in Context {context}, phase grounding. Next: cpd plan show --plan {id}"
+    );
     let event = NewEvent::plan_created(text, title, *jira, session, Value::Null, cwd);
     append(tx, event.plan((*id).clone()))?;
     let text = format!("Lead {name} of Plan {id} registered, a fresh Lead.");
@@ -247,7 +268,12 @@ pub(crate) fn finish(
         Some(started) => (json!(started.pane.as_str()), json!(started.window.as_str())),
         None => (Value::Null, Value::Null),
     };
-    Ok(Finished { plan, record, pane, window })
+    Ok(Finished {
+        plan,
+        record,
+        pane,
+        window,
+    })
 }
 
 /// `plan new` again with the same flags: redoes the steps that did not happen
