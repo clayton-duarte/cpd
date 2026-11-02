@@ -543,7 +543,9 @@ impl View {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => vec![s],
-            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => return Some(None),
+            Row::Toggle | Row::NewPlan(_) | Row::Archive | Row::StandingHeader => {
+                return Some(None);
+            }
         };
         let manager_in_chat =
             matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));

@@ -72,8 +72,9 @@ const SPACER: &str = "  ";
 /// can never collide with a Context.
 pub(super) const ARCHIVE: &str = "Archive";
 
-/// The synthetic path id of the docked `Standing` section's header row. It is in the open set while the section is open
-/// (the default, set by [`open_new`]); view state only, never stored. Capitalised, so it can never collide with a Context.
+/// The synthetic path id of the docked `Standing` section's header row. The section is open by default: it is FOLDED while
+/// this path is in the tree state's open set (so nothing has to seed the set); view state only, never stored. Capitalised,
+/// so it can never collide with a Context.
 pub(super) const STANDING: &str = "Standing";
 
 /// The columns a Plan row keeps for itself before its counters may be drawn: the branch, the glyph, its space and one cell of the name.
@@ -715,7 +716,7 @@ pub fn items_with_costs(
     costs: bool,
 ) -> Vec<FlatRow> {
     let mut rows = project_items(tree, opened, width, frame, costs);
-    if opened.contains(&vec![STANDING.to_owned()]) {
+    if !opened.contains(&vec![STANDING.to_owned()]) {
         rows.extend(standing_items(tree, opened, width, frame, costs));
     }
     rows
@@ -895,7 +896,7 @@ pub fn draw(
         return;
     }
     let standing = standing_items(tree, state.opened(), area.width, frame, costs);
-    let open = state.opened().contains(&vec![STANDING.to_owned()]);
+    let open = !state.opened().contains(&vec![STANDING.to_owned()]);
     // the section (blank row, header, rows) is at most half the pane's height; with no room for the header it is not drawn
     let section = if standing.is_empty() {
         0
@@ -942,7 +943,9 @@ pub fn draw(
     } else {
         region
     };
-    draw_list(f, region, list, standing, tree, state, cursor, costs, docked);
+    draw_list(
+        f, region, list, standing, tree, state, cursor, costs, docked,
+    );
     docked.hits.header = header;
 }
 
@@ -1054,14 +1057,9 @@ fn draw_list(
     };
 }
 
-
 /// Open every Context the first time it is seen, so that its live rows show, and expand each live one (its archived rows
 /// show; a fold by the User is kept across refreshes). The archived Contexts start folded.
 pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &Tree) {
-    // the `Standing` section starts open
-    if known.insert(vec![STANDING.to_owned()]) {
-        state.open(vec![STANDING.to_owned()]);
-    }
     for c in &tree.contexts {
         let context = vec![c.id.to_string()];
         if known.insert(context.clone()) {
@@ -1280,11 +1278,11 @@ mod tests {
         rust.dot = Dot::Red;
         tree(vec![managed(
             context(
-                "cpd",
+                "dev",
                 vec![
                     plan(
                         "v1",
-                        "cpd",
+                        "dev",
                         Phase::Done,
                         [0, 36, 0, 0, 1, 5],
                         session("s-v1", "v1", State::Idle, None, Place::Parked),
@@ -1292,7 +1290,7 @@ mod tests {
                     ),
                     plan(
                         "rust",
-                        "cpd",
+                        "dev",
                         Phase::Dispatch,
                         [0, 0, 1, 0, 0, 1],
                         rust,
@@ -1300,7 +1298,7 @@ mod tests {
                     ),
                     plan(
                         "ui",
-                        "cpd",
+                        "dev",
                         Phase::Deploy,
                         [0, 1, 0, 2, 0, 3],
                         session("s-ui", "cpd-ui", State::Idle, None, Place::Parked),
@@ -1319,7 +1317,7 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("╭{NEEDS_YOU} cpd"),
+                format!("╭{NEEDS_YOU} dev"),
                 row_of(&format!("├─{NEEDS_YOU} rust"), "1⋅1", 31),
                 row_of(&format!("├─{IDLE} v1"), "36⋅1⋅5", 31),
                 row_of(&format!("╰─{IDLE} ui"), "1⋅2⋅3", 31),
