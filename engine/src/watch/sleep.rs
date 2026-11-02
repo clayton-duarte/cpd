@@ -13,7 +13,7 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::close_lead;
 
 /// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
-/// visible Inbox item. E13 ([`ready_sql`]) and E14 ([`super::archive_leads`]) share it, so the two cannot drift.
+/// visible Inbox item. E13 ([`ready_sql`]) and both selections of E14 ([`super::archive_leads`]) share it, so the two cannot drift.
 /// Both queries alias the Session `s` and its Plan `p`, and pass `?1` = `now`.
 pub(super) const LEAD_FINISHED: &str = "
        p.phase = 'done'
