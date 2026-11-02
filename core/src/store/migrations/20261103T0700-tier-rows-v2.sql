@@ -46,14 +46,22 @@ ALTER TABLE sessions_new RENAME TO sessions;
 CREATE INDEX sessions_plan ON sessions(plan);
 CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;
 CREATE INDEX sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL;
-CREATE TRIGGER sessions_working_pr_new BEFORE INSERT ON sessions WHEN NEW.working_pr IS NOT NULL
-BEGIN SELECT RAISE(ABORT, 'working_pr_invalid'); END;
+CREATE TRIGGER sessions_working_pr_new BEFORE INSERT ON sessions
+WHEN NEW.working_pr IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'working_pr_invalid');
+END;
 CREATE TRIGGER sessions_working_pr_valid BEFORE UPDATE OF working_pr ON sessions
-WHEN NEW.working_pr IS NOT NULL AND NOT (NEW.role = 'lead' AND NEW.state = 'working' AND EXISTS (SELECT 1 FROM workflows WHERE plan = NEW.plan AND key = NEW.working_pr))
-BEGIN SELECT RAISE(ABORT, 'working_pr_invalid'); END;
+WHEN NEW.working_pr IS NOT NULL
+  AND NOT (NEW.role = 'lead' AND NEW.state = 'working' AND EXISTS (SELECT 1 FROM "workflows" WHERE plan = NEW.plan AND key = NEW.working_pr))
+BEGIN
+  SELECT RAISE(ABORT, 'working_pr_invalid');
+END;
 CREATE TRIGGER sessions_working_pr_clear AFTER UPDATE OF state ON sessions
 WHEN OLD.state = 'working' AND NEW.state <> 'working' AND NEW.working_pr IS NOT NULL
-BEGIN UPDATE sessions SET working_pr = NULL WHERE id = NEW.id; END;
+BEGIN
+  UPDATE sessions SET working_pr = NULL WHERE id = NEW.id;
+END;
 
 CREATE TABLE attempts_new (
   plan             TEXT NOT NULL,
