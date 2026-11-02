@@ -1,7 +1,6 @@
-//! `cpd inbox claim <id>`, the `inbox.review_context` key and the `hidden` object's `claimed` count (commands.md §21.7,
+//! `cpd inbox claim <id>`, the fixed `codereview` target and the `hidden` object's `claimed` count (commands.md §21.7,
 //! §21.1; contract §8.2): a temporary `$CPD_HOME`, the Inbox fixture of `inbox.rs`, a fake tmux.
 
-use crate::common::fx::Fx;
 use crate::inbox::{CLOSED_Y, Fixture, T0, condition};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use serde_json::{Value, json};
@@ -14,10 +13,8 @@ const TS_RAW: &str = "1700000000.000100";
 const MANAGER: &str = "mgr-rc";
 const T5: &str = "2026-01-01T05:00:00.000Z";
 
-fn config(socket: &str, context: &str) -> String {
-    format!(
-        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n[inbox]\nreview_context = \"{context}\"\n"
-    )
+fn config(socket: &str) -> String {
+    format!("version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n")
 }
 
 /// The five open items `Fixture::new` leaves, as conditions: a reconcile that omits one closes it.
@@ -57,8 +54,9 @@ fn sql(fx: &mut Fixture, statements: &str) {
         .unwrap();
 }
 
-/// A Context `id` with a Manager Session `MANAGER` in `state`.
-fn review_context(fx: &mut Fixture, id: &str, state: &str) {
+/// The Context `codereview` with a Manager Session `MANAGER` in `state`.
+fn codereview_context(fx: &mut Fixture, state: &str) {
+    let id = "codereview";
     sql(
         fx,
         &format!(
@@ -80,14 +78,12 @@ fn write_cache(fx: &Fixture, number: u64) {
     fs::write(path, cache.to_string()).unwrap();
 }
 
-/// The Fixture with an open `review-requested` item for `acme/pay#812`, the Context `eec-codereview` with an idle live
-/// Manager, the post in the cache and the key set. Returns the item's id.
+/// The Fixture with an open `review-requested` item for `acme/pay#812`, the Context `codereview` with an idle live
+/// Manager and the post in the cache. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
-    review_context(&mut fx, "eec-codereview", "idle");
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
+    codereview_context(&mut fx, "idle");
     write_cache(&fx, 812);
     let mut all = base();
     all.push(review_request());
@@ -151,14 +147,14 @@ fn claim_marks_the_item_claimed_hides_it_and_writes_inbox_claimed() {
 }
 
 #[test]
-fn claim_tells_the_review_contexts_live_manager_with_the_pull_request_url_and_the_slack_post() {
+fn claim_tells_the_codereview_manager_with_the_pull_request_url_and_the_slack_post() {
     let (fx, id) = claimable();
     fx.ok(&["claim", &id.to_string()]);
     let messages = fx.events("session-message");
     assert_eq!(messages.len(), 1, "{messages:?}");
     let message = &messages[0];
     assert_eq!(message["session"], MANAGER);
-    assert_eq!(message["context"], "eec-codereview");
+    assert_eq!(message["context"], "codereview");
     assert_eq!(
         message["data"]["from"],
         Value::Null,
@@ -211,35 +207,6 @@ fn claim_refuses_an_item_that_is_missing_closed_dismissed_or_not_a_review_reques
 }
 
 #[test]
-fn claim_refuses_without_a_review_context_and_writes_nothing() {
-    let (fx, id) = claimable();
-    fx.fx.env.write_config("version = 1\nmachine = \"m1\"\n");
-    assert_eq!(
-        refusal(&fx, &id.to_string()),
-        (3, "review_context_unset".to_owned())
-    );
-    assert_nothing_written(&fx);
-}
-
-#[test]
-fn claim_refuses_a_review_context_without_a_live_manager_and_writes_nothing() {
-    let (fx, id) = claimable();
-    // ctx1 exists and has no Manager
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "no-such-context"));
-    assert_eq!(
-        refusal(&fx, &id.to_string()),
-        (4, "context_not_found".to_owned())
-    );
-    assert_nothing_written(&fx);
-}
-
-#[test]
 fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
     let (fx, id) = claimable();
     let cache = fx.fx.env.cpd_home().join("run/team-review.json");
@@ -261,10 +228,8 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
 #[test]
 fn claim_wakes_a_stopped_manager_as_session_send_does() {
     let mut fx = Fixture::new();
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
-    review_context(&mut fx, "eec-codereview", "stopped");
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
+    codereview_context(&mut fx, "stopped");
     write_cache(&fx, 812);
     let mut all = base();
     all.push(review_request());
@@ -293,30 +258,6 @@ fn claim_wakes_a_stopped_manager_as_session_send_does() {
     let shown = fx.cpd(&["session", "show", MANAGER]).ok();
     assert!(shown["session"]["tmux_pane"].is_string(), "{shown}");
     assert_eq!(fx.events("session-message").len(), 1);
-}
-
-#[test]
-fn the_review_context_config_defaults_to_empty_and_accepts_only_a_context_id() {
-    let fx = Fx::new();
-    fx.env.write_config("version = 1\nmachine = \"hs\"\n");
-    assert_eq!(
-        fx.cpd(&["config"]).ok()["config"]["inbox"]["review_context"],
-        ""
-    );
-
-    fx.env
-        .write_config(&config(fx.env.tmux_socket(), "eec-codereview"));
-    let shown = fx.cpd(&["config"]).ok();
-    assert_eq!(shown["config"]["inbox"]["review_context"], "eec-codereview");
-    assert_eq!(shown["sources"]["inbox.review_context"], "file");
-
-    fx.env
-        .write_config(&config(fx.env.tmux_socket(), "Not A Context"));
-    let run = fx.cpd(&["config"]);
-    let error = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(error["code"], "config_invalid");
-    assert_eq!(error["details"]["key"], "inbox.review_context");
 }
 
 #[test]
@@ -396,18 +337,6 @@ fn a_refused_claim_queues_nothing() {
         refusal(&fx, &fx.id("unread").to_string()),
         (3, "not_claimable".to_owned())
     );
-    fx.fx.env.write_config("version = 1\nmachine = \"m1\"\n");
-    assert_eq!(
-        refusal(&fx, &id.to_string()),
-        (3, "review_context_unset".to_owned())
-    );
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
-    assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
-    fx.fx
-        .env
-        .write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     write_cache(&fx, 7);
     assert_eq!(
         refusal(&fx, &id.to_string()),
@@ -425,4 +354,90 @@ fn claiming_an_already_claimed_item_queues_nothing_more() {
     fx.ok(&["claim", &id]);
     assert_eq!(fx.ok(&["claim", &id])["already"], true);
     assert_eq!(queued(&fx), vec![eyes()]);
+}
+
+/// A Fixture whose store has the Inbox item and the cache but no `codereview` Context; the fake cockpit is up.
+fn without_codereview() -> (Fixture, i64) {
+    let mut fx = Fixture::new();
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket()));
+    write_cache(&fx, 812);
+    let mut all = base();
+    all.push(review_request());
+    reconcile(&mut fx.store, &all, T5).unwrap();
+    let id = fx.store_count(&format!(
+        "SELECT id FROM inbox_items WHERE subject = '{SUBJECT}'"
+    ));
+    fx.fx.cockpit();
+    (fx, id)
+}
+
+fn new_windows(fx: &Fixture) -> usize {
+    fx.fx
+        .calls("tmux")
+        .into_iter()
+        .filter(|c| c.args.iter().any(|x| x == "new-window"))
+        .count()
+}
+
+#[test]
+fn claim_creates_the_codereview_context_and_manager_when_none_exists() {
+    let (fx, id) = without_codereview();
+    assert_eq!(
+        fx.store_count("SELECT count(*) FROM contexts WHERE id = 'codereview'"),
+        0
+    );
+    let out = fx.ok(&["claim", &id.to_string()]);
+    assert_eq!(
+        fx.store_count(
+            "SELECT count(*) FROM contexts WHERE id = 'codereview' AND owner = 'clayton-duarte'"
+        ),
+        1
+    );
+    assert_eq!(
+        fx.store_count(
+            "SELECT count(*) FROM sessions WHERE role = 'manager' AND context = 'codereview'"
+        ),
+        1
+    );
+    let manager = out["manager"].as_str().unwrap();
+    let messages = fx.events("session-message");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0]["session"], manager);
+    assert_eq!(messages[0]["context"], "codereview");
+    assert_eq!(new_windows(&fx), 1, "the stopped Manager is started");
+    let shown = fx.cpd(&["session", "show", manager]).ok();
+    assert!(shown["session"]["tmux_pane"].is_string(), "{shown}");
+}
+
+#[test]
+fn claim_gives_an_archived_codereview_manager_a_new_one() {
+    let (mut fx, id) = without_codereview();
+    sql(
+        &mut fx,
+        &format!(
+            "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('codereview', 'codereview', 'clayton-duarte', 't', 'm1');
+             INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
+             VALUES ('{MANAGER}', 'manager', 'codereview', NULL, NULL, 'codereview-manager', '/sessions/{MANAGER}.jsonl', '/repo', 'O5', NULL, 'stopped', NULL,
+                     '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z');"
+        ),
+    );
+    let out = fx.ok(&["claim", &id.to_string()]);
+    let manager = out["manager"].as_str().unwrap();
+    assert_ne!(manager, MANAGER);
+    assert_eq!(
+        fx.store_count(
+            "SELECT count(*) FROM sessions WHERE role = 'manager' AND context = 'codereview' AND archived_at IS NULL"
+        ),
+        1
+    );
+    let messages = fx.events("session-message");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0]["session"], manager);
+    assert_eq!(
+        fx.store_count(&format!(
+            "SELECT count(*) FROM sessions WHERE id = '{MANAGER}' AND archived_at = '2026-01-03T00:00:00.000Z' AND state = 'stopped'"
+        )),
+        1,
+        "the archived row is unchanged"
+    );
 }

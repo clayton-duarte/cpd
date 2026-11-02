@@ -90,8 +90,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
                 "slack_user_id": "",
-                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"],
-                "review_context": ""
+                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
             },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
@@ -109,6 +108,21 @@ fn test_concurrency_is_not_a_config_key() {
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
     assert_eq!(err["details"]["key"], "test_concurrency");
+}
+
+/// `inbox.review_context` is retired (`inbox claim` always targets `codereview`): a config still setting it is
+/// refused like every unknown key, with its key path.
+#[test]
+fn config_refuses_inbox_review_context_as_an_unknown_key() {
+    let fx = Fx::new();
+    let run = config_with(
+        &fx,
+        &format!("{MINIMAL}[inbox]\nreview_context = \"eec-codereview\"\n"),
+    );
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "inbox.review_context");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -153,7 +167,7 @@ fn config_takes_the_team_review_keys() {
     assert_eq!(shown["config"]["watch"]["team_review_seconds"], 900);
     assert_eq!(
         shown["config"]["inbox"],
-        json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"], "review_context": ""})
+        json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"]})
     );
     assert_eq!(shown["sources"]["inbox.team_channel"], "file");
     assert_eq!(shown["sources"]["watch.team_review_seconds"], "file");
@@ -297,7 +311,6 @@ stuck_job_minutes = 1
 team_channel = "C1"
 slack_user_id = "U1"
 bot_reviewers = ["a"]
-review_context = "eec-codereview"
 [events]
 poll_ms = 20
 [tmux]

@@ -52,7 +52,12 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
 const FOUR: [&str; 3] = ["[0,1,2,3,4]", "[0,1,2,3,4]", "[0,1,2,3]"];
 /// Efforts 0-5 for O and S.
 const FIVE: [&str; 3] = ["[0,1,2,3,4,5]", "[0,1,2,3,4,5]", "[0,1,2,3]"];
-const REVIEW: &str = "[inbox]\nreview_context = \"ctx\"\n";
+
+/// The Context `codereview`, with `lead1` moved into it.
+fn in_codereview(env: &TestEnv) {
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('codereview', 'codereview', 't', 'm1')");
+    env.sql("UPDATE sessions SET context = 'codereview' WHERE id = 'lead1'");
+}
 
 fn tier(fx: &Fx, id: &str) -> String {
     show(fx, id)["tier"].as_str().unwrap().to_owned()
@@ -133,9 +138,10 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
 }
 
 #[test]
-fn retier_tier_beats_the_review_context_target() {
+fn retier_tier_beats_the_codereview_target() {
     let fx = Fx::new();
-    fixture(&fx.env, REVIEW, FOUR);
+    fixture(&fx.env, "", FOUR);
+    in_codereview(&fx.env);
     fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
     assert_eq!(tier(&fx, LEAD1), "S2", "not review_lead_tier S3");
     assert_eq!(
@@ -227,7 +233,8 @@ fn retier_tier_is_not_sticky() {
 
     drop(fx);
     let review = Fx::new();
-    fixture(&review.env, REVIEW, FOUR);
+    fixture(&review.env, "", FOUR);
+    in_codereview(&review.env);
     review
         .cpd(&["session", "retier", LEAD1, "--tier", "S2"])
         .ok();
