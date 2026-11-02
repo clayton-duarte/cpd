@@ -96,7 +96,10 @@ fn read_with_builds_the_catalog_from_a_scripted_success() {
     assert_eq!(catalog.o.efforts, vec![0, 1, 2, 3]);
     assert_eq!(catalog.s.efforts, vec![0, 1], "minimal has no digit");
     assert_eq!(catalog.h.efforts, vec![0, 1, 2]);
-    assert!(catalog.g.efforts.is_empty(), "G offers only off: no efforts");
+    assert!(
+        catalog.g.efforts.is_empty(),
+        "G offers only off: no efforts"
+    );
 }
 
 #[test]

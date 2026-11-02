@@ -1137,7 +1137,10 @@ fn a_cache_without_a_g_row_is_a_miss_and_is_written_again_with_four_rows() {
         json!({"model": "github-copilot/gemini-3.8-flash", "efforts": [0, 1, 2, 3]})
     );
     assert_eq!(cached_rows(&fx.env).len(), 4);
-    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"]["efforts"], json!([0, 1, 2, 3]));
+    assert_eq!(
+        fx.cpd(&["tiers"]).ok()["tiers"]["G"]["efforts"],
+        json!([0, 1, 2, 3])
+    );
     assert_eq!(fx.calls("node").len(), 1, "now the four rows serve it");
 }
 
@@ -1497,7 +1500,11 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
-    assert_eq!(out["tiers"]["H"]["efforts"], json!([]), "only off: no efforts");
+    assert_eq!(
+        out["tiers"]["H"]["efforts"],
+        json!([]),
+        "only off: no efforts"
+    );
     // The table is append-only (§4.4): the new version's rows join the old ones.
     assert_eq!(
         cached_rows(&fx.env),
@@ -1833,10 +1840,7 @@ fn config_refuses_an_effort_5_review_lead_tier() {
         assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
         assert_eq!(err["details"]["key"], "review_lead_tier", "{tier}: {err}");
         let message = err["message"].as_str().unwrap();
-        assert!(
-            message.contains("<G|H|S|O><0-4|X>"),
-            "{tier}: {message}"
-        );
+        assert!(message.contains("<G|H|S|O><0-4|X>"), "{tier}: {message}");
     }
 }
 
