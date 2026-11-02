@@ -22,7 +22,7 @@ use common::sql;
 use common::tree::{Gate, GateKey, Tree, engine, stamp};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::deadline::Failed;
-use cpd_core::host::runner::{Call, Reply, Runner};
+use cpd_core::host::runner::{Call, Handler, Reply, Runner};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::output::Output;
