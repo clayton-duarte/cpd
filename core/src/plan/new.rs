@@ -88,6 +88,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         }
         return already(&mut env, &plan, brief.as_ref(), args.by_user);
     }
+    refuse_id_taken(&mut env, &id)?;
     refuse_archived(&context)?;
     let cwd = crate::session::agent_cwd()?;
     // The runner of the new Lead: read once at creation and stored, never changed (contract §6.19, Q10).
@@ -160,6 +161,25 @@ pub(crate) fn refuse_deleted(env: &mut Env, id: &PlanId) -> Result<(), CpdError>
         return Err(CpdError::new(
             ErrorCode::PlanExists,
             format!("Plan {id} was deleted: its id is not reused."),
+        )
+        .with("plan", id.as_str()));
+    }
+    Ok(())
+}
+
+/// A Plan id is refused when a Context holds it (deleted ones included): agent keys stay unambiguous.
+fn refuse_id_taken(env: &mut Env, id: &PlanId) -> Result<(), CpdError> {
+    let taken: bool = env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM contexts WHERE id = ?1)",
+            [id.as_str()],
+            |r| r.get(0),
+        )?)
+    })?;
+    if taken {
+        return Err(CpdError::new(
+            ErrorCode::IdTaken,
+            format!("Plan id {id} is taken by a Context."),
         )
         .with("plan", id.as_str()));
     }
