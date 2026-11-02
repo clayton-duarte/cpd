@@ -87,15 +87,14 @@ pub(super) fn add_in(env: &mut Env, args: AddArgs) -> Result<Output, CpdError> {
         }
     }
     if let (true, Some(tier)) = (explore, args.tier) {
-        super::check_kind_tier(&kind, tier)?;
-        env.check_explore_tier(&plan, tier)?;
+        env.check_explore_tier(&plan, &kind, tier)?;
     } else if let Some(tier) = args.tier {
         let workflows = env.store.read(|conn| {
             super::plan_phase(conn, &plan)?;
             load_workflows(conn, &plan)
         })?;
         let workflow = args.workflow.select(&plan, &workflows)?.key.clone();
-        env.check_tier(&plan, &args.key, Some(&workflow), tier)?;
+        env.check_tier(&plan, &args.key, Some(&workflow), &kind, tier)?;
     }
     let wanted = Wanted {
         key: args.key,

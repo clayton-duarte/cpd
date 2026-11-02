@@ -1100,10 +1100,18 @@ impl TestEnv {
                 ),
             );
         }
-        // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
-        fs::create_dir_all(env.cpd_home().join("policy/acme")).expect("create the acme directory");
-        fs::write(env.cpd_home().join("policy/acme/owner.toml"), "")
-            .expect("write the acme owner file");
+        // Every test env has the owners `acme` and `clayton-duarte` (each an empty policy file: cpd's default).
+        // `acme` is for `context new --owner acme`; every Permanent Context is owned by policy::FALLBACK_OWNER
+        // (`clayton-duarte`), and starting its Manager resolves that owner's policy.
+        for owner in ["acme", "clayton-duarte"] {
+            fs::create_dir_all(env.cpd_home().join("policy").join(owner))
+                .expect("create the owner directory");
+            fs::write(
+                env.cpd_home().join("policy").join(owner).join("owner.toml"),
+                "",
+            )
+            .expect("write the owner file");
+        }
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
@@ -1167,7 +1175,7 @@ impl TestEnv {
         self.dir.path()
     }
 
-    /// Replaces the owner `owner`'s policy file (every test env has `acme`, an empty one) with `toml`.
+    /// Replaces the owner `owner`'s policy file (every test env has `acme` and `clayton-duarte`, each an empty one) with `toml`.
     pub fn owner_policy(&self, owner: &str, toml: &str) {
         let dir = self.cpd_home().join("policy").join(owner);
         fs::create_dir_all(&dir).expect("create the owner policy directory");

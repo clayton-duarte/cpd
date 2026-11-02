@@ -452,7 +452,7 @@ fn policy_invalid_names_the_file_and_key() {
 #[test]
 fn a_misnamed_policy_file_is_policy_invalid_with_its_path() {
     for (rel, invalid) in [
-        ("Clayton-Duarte/owner.toml", "Clayton-Duarte"),
+        ("Acme-Corp/owner.toml", "Acme-Corp"),
         ("clayton_duarte/owner.toml", "clayton_duarte"),
         ("o/Bad Name.toml", "o/Bad Name.toml"),
     ] {

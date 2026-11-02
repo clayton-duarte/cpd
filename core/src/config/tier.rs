@@ -21,8 +21,14 @@ pub enum Letter {
 }
 
 impl Letter {
-    /// The ladder's order of models, weakest to strongest: Workers never use `O` (contract §9, hs-d506).
-    pub const LADDER: [Letter; 2] = [Letter::H, Letter::S];
+    /// The letter an explore Job keeps: H for a `scout`, S for `research`; `None` for every other kind.
+    pub fn of_explore_kind(kind: &str) -> Option<Letter> {
+        match kind {
+            "scout" => Some(Letter::H),
+            "research" => Some(Letter::S),
+            _ => None,
+        }
+    }
 
     pub fn as_char(self) -> char {
         match self {
@@ -75,8 +81,8 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
         .map(|i| Some(i as u8))
 }
 
-/// The Tiers a Worker may have (pro-d53, hs-d554), as `details.allowed` and the message give them.
-const WORKER_RANGE: &str = "H0-H3, S0-S3";
+/// The highest effort digit; effort 5 is valid for no letter.
+const TOP_EFFORT: u8 = 4;
 
 /// A Tier: a model letter and an effort 0-4 or `X`, `^[GHSO]([0-4]|X)$`, e.g. `S3`, `GX`.
 /// `X` (no effort) is distinct from effort 0; it is the one Tier of a model with no effort levels.
@@ -90,7 +96,7 @@ pub struct Tier {
 impl Tier {
     /// `None` when `effort` is above 4.
     pub fn new(letter: Letter, effort: u8) -> Option<Tier> {
-        (effort <= Tier::MAX_EFFORT).then_some(Tier {
+        (effort <= TOP_EFFORT).then_some(Tier {
             letter,
             effort: Some(effort),
         })
@@ -127,55 +133,6 @@ impl Tier {
             )
             .with("tier", s)
         })
-    }
-
-    /// The highest effort any agent may use (hs-d506, contract §9 "Tier rules").
-    pub const MAX_EFFORT: u8 = 4;
-
-    /// What a Worker may have: exactly H0-H3 and S0-S3 (pro-d82, hs-d554). `MAX_EFFORT`
-    /// stays for Leads, the Manager and the distill ladder.
-    pub fn is_worker_allowed(self) -> bool {
-        match (self.letter, self.effort) {
-            (Letter::H | Letter::S, Some(effort)) => effort <= 3,
-            _ => false,
-        }
-    }
-
-    /// `tier_not_allowed` (exit 2) unless a Worker may have this Tier (pro-d53, hs-d554).
-    pub fn check_worker(self) -> Result<(), CpdError> {
-        if self.is_worker_allowed() {
-            return Ok(());
-        }
-        Err(CpdError::new(
-            ErrorCode::TierNotAllowed,
-            format!(
-                "Tier {self} is not allowed for a Worker: Workers use only the Tiers {WORKER_RANGE}, to keep cost down (pro-d82, hs-d554)."
-            ),
-        )
-        .with("tier", self.to_string())
-        .with("allowed", WORKER_RANGE)
-        .with("rule", "pro-d82"))
-    }
-
-    /// What a Lead may have: any letter but G, effort 0-4 (hs-d506, hs-d562).
-    pub fn is_lead_allowed(self) -> bool {
-        self.letter != Letter::G
-    }
-
-    /// `tier_not_allowed` (exit 2) unless a Lead may have this Tier (hs-d506, hs-d562).
-    pub fn check_lead(self) -> Result<(), CpdError> {
-        if self.is_lead_allowed() {
-            return Ok(());
-        }
-        Err(CpdError::new(
-            ErrorCode::TierNotAllowed,
-            format!(
-                "Tier {self} is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562)."
-            ),
-        )
-        .with("tier", self.to_string())
-        .with("allowed", "O0-O4, S0-S4, H0-H4")
-        .with("rule", "hs-d506, hs-d562"))
     }
 
     pub fn letter(self) -> Letter {
@@ -215,6 +172,38 @@ pub enum Role {
     Manager,
 }
 
+impl Role {
+    /// The role's name, as an error and `details.role` give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Auxiliar => "auxiliar",
+            Role::Worker => "worker",
+            Role::Lead => "lead",
+            Role::Manager => "manager",
+        }
+    }
+
+    /// The config key of the role's default, which sets the floor of its range.
+    pub fn key(self) -> &'static str {
+        match self {
+            Role::Auxiliar => "context_distill_tier",
+            Role::Worker => "worker_tier",
+            Role::Lead => "lead_tier",
+            Role::Manager => "manager_tier",
+        }
+    }
+
+    /// The role above, whose default bounds the ceiling; `None` for the manager.
+    fn above(self) -> Option<Role> {
+        match self {
+            Role::Auxiliar => Some(Role::Worker),
+            Role::Worker => Some(Role::Lead),
+            Role::Lead => Some(Role::Manager),
+            Role::Manager => None,
+        }
+    }
+}
+
 /// The role defaults: `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RoleTiers {
@@ -222,6 +211,63 @@ pub struct RoleTiers {
     pub worker: Tier,
     pub lead: Tier,
     pub manager: Tier,
+}
+
+impl RoleTiers {
+    /// The range of `role` in `catalog`. `config_invalid` (naming the role's key) when no valid rung lies in its span.
+    pub fn range(&self, catalog: &Catalog, role: Role) -> Result<Range, CpdError> {
+        catalog.range(role, self).ok_or_else(|| {
+            CpdError::new(
+                ErrorCode::ConfigInvalid,
+                format!(
+                    "{} has no valid Tier in its span: the {} range holds no rung of the catalog.",
+                    role.key(),
+                    role.name()
+                ),
+            )
+            .with("key", role.key())
+        })
+    }
+
+    /// `tier_not_allowed` (exit 2) unless `tier` is in the range of a Job of `kind` ([`RoleTiers::job_range`]).
+    pub fn check_job(&self, catalog: &Catalog, kind: &str, tier: Tier) -> Result<(), CpdError> {
+        let worker = self.range(catalog, Role::Worker)?;
+        let Some(letter) = Letter::of_explore_kind(kind) else {
+            return worker.check(tier, Role::Worker);
+        };
+        let range = catalog.explore_range(letter, worker);
+        if range.is_some_and(|r| r.contains(tier)) {
+            return Ok(());
+        }
+        let allowed = range.map_or_else(
+            || format!("no {letter} Tier up to {}", worker.ceiling),
+            |r| r.allowed(),
+        );
+        Err(CpdError::new(
+            ErrorCode::TierNotAllowed,
+            format!(
+                "Tier {tier} is not allowed for a {kind} Job: it keeps letter {letter}, effort 1 or more or X, up to the worker ceiling {} ({allowed}); {} and {} set the worker range.",
+                worker.ceiling,
+                Role::Worker.key(),
+                Role::Lead.key()
+            ),
+        )
+        .with("tier", tier.to_string())
+        .with("kind", kind)
+        .with("allowed", allowed)
+        .with("ceiling", worker.ceiling.to_string())
+        .with("key", Role::Worker.key()))
+    }
+
+    /// The range of a Job of `kind`: the worker range; for a `scout` or `research` Job the range inside its letter
+    /// (`None` when no rung is left).
+    pub fn job_range(&self, catalog: &Catalog, kind: &str) -> Result<Option<Range>, CpdError> {
+        let worker = self.range(catalog, Role::Worker)?;
+        Ok(match Letter::of_explore_kind(kind) {
+            None => Some(worker),
+            Some(letter) => catalog.explore_range(letter, worker),
+        })
+    }
 }
 
 /// The Tiers a role may have: `floor` to `ceiling`, both valid rungs of the ladder.
@@ -235,6 +281,41 @@ impl Range {
     /// Whether `tier` lies on the ladder from `floor` to `ceiling`, both included.
     pub fn contains(&self, tier: Tier) -> bool {
         self.floor <= tier && tier <= self.ceiling
+    }
+
+    /// The range as `details.allowed` gives it: `<floor>-<ceiling>`.
+    pub fn allowed(&self) -> String {
+        format!("{}-{}", self.floor, self.ceiling)
+    }
+
+    /// `tier_not_allowed` (exit 2) unless `tier` is in this range of `role`. The message names the range and the
+    /// config keys that set it; `details.key` is the key of the floor.
+    pub fn check(&self, tier: Tier, role: Role) -> Result<(), CpdError> {
+        if self.contains(tier) {
+            return Ok(());
+        }
+        let allowed = self.allowed();
+        let keys = match role.above() {
+            Some(above) if role != Role::Auxiliar => format!(
+                "{} sets its floor and {} (the next role's default) bounds its ceiling",
+                role.key(),
+                above.key()
+            ),
+            _ => format!("{} sets it", role.key()),
+        };
+        Err(CpdError::new(
+            ErrorCode::TierNotAllowed,
+            format!(
+                "Tier {tier} is not allowed for a {}: its Tiers are {allowed}; {keys}.",
+                role.name()
+            ),
+        )
+        .with("tier", tier.to_string())
+        .with("role", role.name())
+        .with("floor", self.floor.to_string())
+        .with("ceiling", self.ceiling.to_string())
+        .with("allowed", allowed)
+        .with("key", role.key()))
     }
 }
 
@@ -375,6 +456,20 @@ impl Catalog {
         (floor <= ceiling).then_some(Range { floor, ceiling })
     }
 
+    /// The range of an explore Job of `letter` inside the worker range `worker`: the letter's lowest valid effort >= 1
+    /// (or `X`) up to the worker ceiling (or the letter's top rung); `None` when no rung is left.
+    pub fn explore_range(&self, letter: Letter, worker: Range) -> Option<Range> {
+        let rungs: Vec<Tier> = self
+            .ladder()
+            .into_iter()
+            .filter(|r| r.letter == letter && r.effort != Some(0) && *r <= worker.ceiling)
+            .collect();
+        Some(Range {
+            floor: *rungs.first()?,
+            ceiling: *rungs.last()?,
+        })
+    }
+
     /// The next valid rung inside `range`; leaving a letter lands on its lowest effort >= 1 (or X); `None` at the ceiling.
     pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
         self.ladder()
@@ -388,109 +483,5 @@ impl Catalog {
         self.ladder()
             .into_iter()
             .find(|r| range.contains(*r) && *r >= tier)
-    }
-
-    /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554, hs-d791): within the same
-    /// letter, the smallest valid effort a Worker may have (H0-H3, S0-S3) strictly greater than
-    /// `tier`'s — not effort + 1, which may not be a valid effort of the model; only when none
-    /// exists, leaving the letter, the lowest valid allowed S effort ≥ 1; otherwise none. It never
-    /// enters `O`; the ladder ends at S3. A Tier a Worker may not have (effort 5, S4, `O`, `GX`)
-    /// has no ladder.
-    pub fn next(&self, tier: Tier) -> Result<Option<Tier>, CpdError> {
-        self.check(tier)?;
-        if !tier.is_worker_allowed() {
-            return Ok(None);
-        }
-        let allowed = |t: &Tier| t.is_worker_allowed();
-        // Within the letter: the smallest valid effort strictly above the Tier's (hs-d791).
-        if let Some(up) = self
-            .model(tier.letter)
-            .efforts
-            .iter()
-            .copied()
-            .find(|e| *e > tier.effort())
-            .and_then(|effort| Tier::new(tier.letter, effort))
-            .filter(|t| allowed(t) && self.is_valid(*t))
-        {
-            return Ok(Some(up));
-        }
-        let at = Letter::LADDER
-            .iter()
-            .position(|l| *l == tier.letter)
-            .expect("an allowed letter is on the ladder");
-        for letter in &Letter::LADDER[at + 1..] {
-            let lowest = self
-                .model(*letter)
-                .efforts
-                .iter()
-                .copied()
-                .find(|e| *e >= 1);
-            if let Some(next) = lowest
-                .and_then(|effort| Tier::new(*letter, effort))
-                .filter(allowed)
-            {
-                return Ok(Some(next));
-            }
-        }
-        Ok(None)
-    }
-
-    /// The Tier a Worker takes when the catalog refuses `tier` (hs-n465,
-    /// hs-d632): `None` when a Worker may not have `tier` (hs-d554);
-    /// otherwise the lowest valid, Worker-allowed Tier at or above `tier`'s
-    /// effort, its own letter first and then `H → S` (the Tier itself when the
-    /// catalog accepts it).
-    pub fn step_up(&self, tier: Tier) -> Option<Tier> {
-        if !tier.is_worker_allowed() {
-            return None;
-        }
-        let allowed = |t: &Tier| t.is_worker_allowed() && self.is_valid(*t);
-        // Same letter first: its lowest valid effort at or above the Tier's.
-        if let Some(same) = self
-            .model(tier.letter)
-            .efforts
-            .iter()
-            .copied()
-            .find(|e| *e >= tier.effort())
-            .and_then(|effort| Tier::new(tier.letter, effort))
-            .filter(allowed)
-        {
-            return Some(same);
-        }
-        // Then `H → S`, at the lowest valid effort at or above the Tier's.
-        let at = Letter::LADDER
-            .iter()
-            .position(|l| *l == tier.letter)
-            .expect("an allowed letter is on the ladder");
-        for letter in &Letter::LADDER[at + 1..] {
-            let lowest = self
-                .model(*letter)
-                .efforts
-                .iter()
-                .copied()
-                .find(|e| *e >= 1);
-            if let Some(next) = lowest
-                .and_then(|effort| Tier::new(*letter, effort))
-                .filter(allowed)
-            {
-                return Some(next);
-            }
-        }
-        None
-    }
-
-    /// The Tier of automatic Attempt `n` (from 1): `next` applied `n - 1`
-    /// times from the Job's Tier; `None` when the ladder runs out first.
-    pub fn attempt_tier(&self, job_tier: Tier, n: u32) -> Result<Option<Tier>, CpdError> {
-        assert!(n >= 1, "Attempt numbers start at 1");
-        self.check(job_tier)?;
-        let mut tier = Some(job_tier);
-        for _ in 1..n {
-            tier = match tier {
-                Some(t) => self.next(t)?,
-                None => return Ok(None),
-            };
-        }
-        Ok(tier)
     }
 }

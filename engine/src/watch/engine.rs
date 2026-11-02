@@ -19,8 +19,8 @@ use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{
     SOURCE, archive, archive_leads, auto_merge, closed, distill, escalations, host_alert, hosts,
-    inbox, janitor, jira, liveness, models, open, parked, pr, react, restart, schedule, sleep,
-    team, titles, wake, workers,
+    inbox, janitor, jira, liveness, models, open, parked, permanent, pr, react, restart, schedule,
+    sleep, team, titles, wake, workers,
 };
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
@@ -223,6 +223,20 @@ impl Engine {
         self.catalog_of(|store| store.read(|conn| models_of_job(conn, &home, plan, job)))
     }
 
+    /// pi's catalog of the models of Workflow `workflow` of `plan` (its repo key), for its open Job's Tier.
+    pub(super) fn catalog_of_workflow(
+        &mut self,
+        plan: &PlanId,
+        workflow: &WorkflowKey,
+    ) -> Result<Catalog, CpdError> {
+        let home = self.home.clone();
+        self.catalog_of(|store| {
+            store.read(|conn| {
+                cpd_core::policy::model::models_of_workflow(conn, &home, plan, workflow)
+            })
+        })
+    }
+
     /// [`Engine::catalog_of_job`] of the Job of Attempt `id`.
     pub(super) fn catalog_of_attempt(
         &mut self,
@@ -261,10 +275,11 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E16 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 25] = [
+        let steps: [fn(&mut Engine); 26] = [
             restart::drain,
             workers::run,
             host_alert::run,
+            permanent::run,
             escalations::run,
             liveness::run,
             schedule::run,

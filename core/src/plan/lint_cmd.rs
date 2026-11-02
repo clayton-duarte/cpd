@@ -6,7 +6,7 @@ use super::jobs::{self, Job};
 use super::lint::{Finding, Input, Severity, run};
 use super::prs::{WorkflowRow, load_workflows};
 use super::row::{self, Phase, PlanRow};
-use super::tier_advice::{self, Advice, FLOOR, recommend};
+use super::tier_advice::{self, Advice, FLOOR, recommend_in};
 use crate::args::PlanArg;
 use crate::config;
 use crate::env::Env;
@@ -41,10 +41,7 @@ pub(super) fn find(
 /// The Tier advice the `tier_advice` rule reads (contract §2.7). The catalog is read only when a cell can advise.
 pub(super) fn advice(env: &mut Env, context: &str) -> Result<Vec<Advice>, CpdError> {
     let rows = env.store.read(tier_advice::first_attempts)?;
-    if !rows
-        .iter()
-        .any(|r| r.n >= FLOOR && r.tier.is_worker_allowed())
-    {
+    if !rows.iter().any(|r| r.n >= FLOOR) {
         return Ok(Vec::new());
     }
     let catalog = match env.catalog.clone() {
@@ -61,8 +58,9 @@ pub(super) fn advice(env: &mut Env, context: &str) -> Result<Vec<Advice>, CpdErr
         .into_iter()
         .filter(|r| catalog.is_valid(r.tier))
         .collect();
-    Ok(recommend(&rows, FLOOR, |t| {
-        catalog.next(t).expect("the Tier is valid")
+    let range = env.config.range(&catalog, config::Role::Worker)?;
+    Ok(recommend_in(&rows, FLOOR, range, |t| {
+        catalog.next_in(range, t)
     }))
 }
 

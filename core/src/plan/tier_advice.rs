@@ -1,6 +1,6 @@
 //! The pure Tier advice (contract §3.4b): per Job kind, the Tier with the lowest expected cost over first-Attempt history.
 
-use crate::config::{Letter, Tier};
+use crate::config::{Range, Tier};
 use crate::error::CpdError;
 
 /// The smallest sample a cell needs (pro-d278).
@@ -45,26 +45,15 @@ pub fn wilson_lower(passed: u32, n: u32) -> f64 {
     lower.clamp(0.0, 1.0)
 }
 
-/// Ladder order: letter H before S (then O, G), then the effort.
-pub(crate) fn rank(tier: Tier) -> (u8, u8) {
-    let letter = match tier.letter() {
-        Letter::H => 0,
-        Letter::S => 1,
-        Letter::O => 2,
-        Letter::G => 3,
-    };
-    (letter, tier.effort())
-}
-
-/// Every cell that passes the floor, the Wilson bound, the Worker rule and has an expected cost, in ladder order per kind.
+/// Every cell that passes the floor, the Wilson bound and has an expected cost, in ladder order per kind.
 pub fn qualifying(rows: &[Row], floor: u32, next: impl Fn(Tier) -> Option<Tier>) -> Vec<Advice> {
     let mut sorted: Vec<&Row> = rows.iter().collect();
-    sorted.sort_by(|a, b| a.kind.cmp(&b.kind).then(rank(a.tier).cmp(&rank(b.tier))));
+    sorted.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.tier.cmp(&b.tier)));
     sorted
         .into_iter()
         .filter_map(|r| {
             let lower = wilson_lower(r.passed, r.n);
-            if r.n < floor || lower < MIN_LOWER || !r.tier.is_worker_allowed() {
+            if r.n < floor || lower < MIN_LOWER {
                 return None;
             }
             let own = r.avg_cost?;
@@ -108,6 +97,21 @@ pub fn recommend(rows: &[Row], floor: u32, next: impl Fn(Tier) -> Option<Tier>) 
     best
 }
 
+/// `recommend` over the cells inside the Worker `range` only; `next` is the ladder inside that range.
+pub fn recommend_in(
+    rows: &[Row],
+    floor: u32,
+    range: Range,
+    next: impl Fn(Tier) -> Option<Tier>,
+) -> Vec<Advice> {
+    let inside: Vec<Row> = rows
+        .iter()
+        .filter(|r| range.contains(r.tier))
+        .cloned()
+        .collect();
+    recommend(&inside, floor, next)
+}
+
 /// The first-Attempt history per (Job kind, Tier) from the store.
 pub fn first_attempts(conn: &rusqlite::Connection) -> Result<Vec<Row>, CpdError> {
     let mut stmt = conn.prepare(
@@ -143,6 +147,6 @@ pub fn first_attempts(conn: &rusqlite::Connection) -> Result<Vec<Row>, CpdError>
             })
         })
         .collect::<Result<Vec<_>, CpdError>>()?;
-    rows.sort_by(|a, b| a.kind.cmp(&b.kind).then(rank(a.tier).cmp(&rank(b.tier))));
+    rows.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.tier.cmp(&b.tier)));
     Ok(rows)
 }

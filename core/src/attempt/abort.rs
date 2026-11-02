@@ -49,6 +49,7 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
     // The expensive refusals (no Plan, no Attempt, not running) before the write; the write re-reads (ADR-0014).
     let attempt = env.store.read(|conn| decide(conn, &plan, &id))?;
     let retry_cap = env.config.retry_cap;
+    let roles = env.config.role_tiers();
     let catalog = no_catalog();
     let job = attempt.job.clone();
     env.store.write(COMMAND, |tx| {
@@ -59,7 +60,7 @@ pub(super) fn abort(args: AbortArgs) -> Result<Output, CpdError> {
             params![plan.as_str(), id.to_string()],
         )?;
         let detail = format!("The Lead aborted Attempt {id} of Job {job}: stop, its work is not merged.");
-        let ladder = Ladder { catalog: &catalog, retry_cap };
+        let ladder = Ladder { catalog: &catalog, retry_cap, roles };
         // `Cause::Aborted` is no-ladder: `next_rung` returns `None`, so the Job goes `failed` with a `job-failed`
         // Event that already names `cpd job retry <key> --tier <T>` (contract §3.4).
         ledger::end(tx, &attempt, &End::Failed { cause: Cause::Aborted, detail }, None, &ladder, Stage::Driver)?;

@@ -17,7 +17,7 @@ use super::posts;
 use super::pulls::{self, Change, Excused, PostFacts, Reason};
 use super::row::PlanWorkflows;
 use super::start::unstack;
-use super::status::{ChecksSummary, PrState};
+use super::status::{ChecksSummary, Mergeable, PrState};
 use super::{Env, PollArgs};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
@@ -281,20 +281,30 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
             }
             Ok(false)
         })?;
-    let worker_tier = env.config.worker_tier;
+    // The `update` Job of a Workflow runs at `worker_tier` floored to a valid rung of that Workflow's catalog.
+    let mut tiers: Vec<(PlanId, WorkflowKey, Tier)> = Vec::new();
+    if dirty {
+        let mut wanting: Vec<(PlanId, WorkflowKey)> = owned
+            .iter()
+            .filter(|(_, _, row)| {
+                seen.iter().any(|l| {
+                    l.pr.repo == row.repo
+                        && l.pr.number == row.number
+                        && l.pr.mergeable == Mergeable::Conflicting
+                })
+            })
+            .map(|(plan, key, _)| (plan.clone(), key.clone()))
+            .collect();
+        wanting.extend(follows.iter().map(|f| (f.plan.clone(), f.workflow.clone())));
+        for (plan, key) in wanting {
+            let tier = open::tier_of_workflow(&mut env, &plan, &key)?;
+            tiers.push((plan, key, tier));
+        }
+    }
     // A poll that finds nothing new opens no write transaction (D5).
     let outcome = if dirty {
         env.store.write(COMMAND, |tx| {
-            apply(
-                tx,
-                &seen,
-                &reads,
-                &owned,
-                &checks,
-                &follows,
-                &ahead,
-                worker_tier,
-            )
+            apply(tx, &seen, &reads, &owned, &checks, &follows, &ahead, &tiers)
         })?
     } else {
         Outcome::default()
@@ -381,8 +391,19 @@ fn apply(
     checks: &[Resolved],
     follows: &[Follow],
     ahead: &[Ahead],
-    worker_tier: Tier,
+    tiers: &[(PlanId, WorkflowKey, Tier)],
 ) -> Result<Outcome, CpdError> {
+    let tier_of = |plan: &PlanId, key: &WorkflowKey| -> Result<Tier, CpdError> {
+        tiers
+            .iter()
+            .find(|(p, k, _)| p == plan && k == key)
+            .map(|(_, _, tier)| *tier)
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "no open Tier was read for Workflow {key} of Plan {plan}"
+                ))
+            })
+    };
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -422,7 +443,9 @@ fn apply(
                 if tell(tx, plan, key, resolved, &change)? {
                     out.feedback.push((plan.clone(), key.clone()));
                 }
-                if let Some(job) = update_for_conflict(tx, plan, key, &change, worker_tier)? {
+                if let Some(job) =
+                    update_for_conflict(tx, plan, key, &change, || tier_of(plan, key))?
+                {
                     out.update_jobs
                         .push((plan.clone(), key.clone(), job, Cause::Conflict));
                 }
@@ -433,7 +456,12 @@ fn apply(
         let is_ahead = ahead
             .iter()
             .any(|a| a.plan == follow.plan && a.workflow == follow.workflow && a.ahead);
-        let (base_changed, job) = follow_base(tx, follow, is_ahead, worker_tier)?;
+        let (base_changed, job) = follow_base(
+            tx,
+            follow,
+            is_ahead,
+            tier_of(&follow.plan, &follow.workflow)?,
+        )?;
         out.base_changed.push(base_changed);
         if let Some(job) = job {
             out.update_jobs.push((
@@ -766,7 +794,7 @@ fn update_for_conflict(
     plan: &PlanId,
     key: &WorkflowKey,
     change: &Change,
-    tier: Tier,
+    tier: impl FnOnce() -> Result<Tier, CpdError>,
 ) -> Result<Option<JobKey>, CpdError> {
     let became = change.after.mergeable == "conflicting"
         && change
@@ -788,7 +816,7 @@ fn update_for_conflict(
     let Some(workflow) = workflows.iter().find(|p| p.key == *key) else {
         return Ok(None);
     };
-    open::queue_update(tx, plan, workflow, tier, COMMAND_BY, Cause::Conflict)
+    open::queue_update(tx, plan, workflow, tier()?, COMMAND_BY, Cause::Conflict)
 }
 
 /// Why the poll queues a Workflow's `update` Job (§3.7 E5, hs-d794, hs-n617): the conflict transition

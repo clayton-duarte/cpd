@@ -106,6 +106,7 @@ pub fn merge(
     let ladder = Ladder {
         catalog: ctx.catalog,
         retry_cap: ctx.config.retry_cap,
+        roles: ctx.config.role_tiers(),
     };
     let workflow = crate::ids::WorkflowKey::parse(target.workflow_str()).map_err(|_| {
         CpdError::bad_row(format!(

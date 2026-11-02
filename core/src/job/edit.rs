@@ -100,7 +100,7 @@ pub(super) fn edit_in(env: &mut Env, args: EditArgs) -> Result<Output, CpdError>
         .transpose()?;
     if let Some(tier) = args.tier {
         let workflow = args.workflow.clone();
-        env.check_tier(&plan, &args.key, workflow.as_ref(), tier)?;
+        env.check_tier(&plan, &args.key, workflow.as_ref(), &spec_kind, tier)?;
     }
     let edits = Edits {
         title: args.title.map(|t| t.as_str().to_owned()),

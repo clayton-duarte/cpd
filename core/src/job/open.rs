@@ -6,10 +6,11 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::config::Tier;
+use crate::config::{Catalog, Config, Role, Tier};
+use crate::env::Env;
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
-use crate::ids::{JobKey, PlanId};
+use crate::ids::{JobKey, PlanId, WorkflowKey};
 use crate::plan::WorkflowRow;
 use crate::plan::jobs::{Job, JobSpec, locked_fingerprint};
 use crate::store::WriteTxn;
@@ -186,6 +187,30 @@ fn update_spec(workflow: &WorkflowRow, cause: Cause) -> JobSpec {
         ]),
         out_of_scope,
     }
+}
+
+/// The Tier of an `open` or `update` Job: `worker_tier` floored to a valid rung, which is the floor of the worker range.
+pub fn tier(config: &Config, catalog: &Catalog) -> Result<Tier, CpdError> {
+    Ok(config.range(catalog, Role::Worker)?.floor)
+}
+
+/// [`tier`] with the catalog of Workflow `workflow`'s repo key (`env`'s fixed catalog when a test handed one in).
+pub fn tier_of_workflow(
+    env: &mut Env,
+    plan: &PlanId,
+    workflow: &WorkflowKey,
+) -> Result<Tier, CpdError> {
+    let catalog = match &env.catalog {
+        Some(fixed) => fixed.clone(),
+        None => {
+            let home = env.home.clone();
+            let models = env.store.read(|conn| {
+                crate::policy::model::models_of_workflow(conn, &home, plan, workflow)
+            })?;
+            crate::config::catalog::load_with(&models, &mut env.store)?
+        }
+    };
+    tier(&env.config, &catalog)
 }
 
 /// Inserts Workflow `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its

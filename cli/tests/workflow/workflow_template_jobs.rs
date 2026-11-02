@@ -50,6 +50,10 @@ impl Crud {
         ];
         args.extend(extra);
         args.extend(["--plan", "pay-1"]);
+        if extra.contains(&"--jobs") {
+            // The template's Tiers are checked against the catalog and the worker range.
+            self.install_catalog();
+        }
         self.cpd(&args)
     }
 

@@ -2,32 +2,26 @@
 //! install state file, finds the machine's host Manager, brings it into the chat slot and wakes it
 //! with the install incident once per incident.
 //!
-//! The Manager is the live (not archived) `manager` Session of Context `host` (contract §3.7 E6),
-//! created by dotfiles' `scripts/cpd-install.sh` (assumption A4); none: the click reports on the
-//! client and exits 0. The message is one `session send` as the User (`--unblocks "cpd install
+//! The Manager is the live (not archived) `manager` Session of Context `host` (contract §3.7 E6);
+//! the click ensures the Context and its Manager. The message is one `session send` as the User (`--unblocks "cpd install
 //! skipped"`); `$CPD_HOME/run/cpd-install-notified` holds the `since` of the incident already
 //! announced, so a later click on the same incident only opens the Manager (commands.md §9.12).
 
 use std::ffi::OsString;
 use std::path::Path;
 
-use rusqlite::OptionalExtension;
-
 use super::RunCommand;
 
 use cpd_core::config::Config;
+use cpd_core::context::permanent;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::install_state::InstallState;
-use cpd_core::ids::SessionId;
+use cpd_core::ids::{PermanentContext, SessionId};
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
-/// The Context of the machine's host Manager (contract §3.7 E6).
-const CONTEXT: &str = "host";
-/// The report of a click with no host Manager.
-const NO_MANAGER: &str = "φ: no host Manager: apply dotfiles";
 /// What the incident message unblocks (`session send --unblocks`).
 const UNBLOCKS: &str = "cpd install skipped";
 /// The checkout the incident message names, literally.
@@ -39,7 +33,7 @@ pub fn run(
     home: &CpdHome,
     config: &Config,
     tmux: &Tmux,
-    client: &str,
+    _client: &str,
     run_command: RunCommand,
 ) -> Result<(), CpdError> {
     let Some(state) = InstallState::read(home)? else {
@@ -48,17 +42,7 @@ pub fn run(
     let Some(reason) = state.alert() else {
         return Ok(());
     };
-    let Some(manager) = host_manager(home, config)? else {
-        // The click prints nothing; the failure is a `display-message` on the client, as the other actions do.
-        let _ = tmux.run(&[
-            "display-message".to_owned(),
-            "-l".to_owned(),
-            "-c".to_owned(),
-            client.to_owned(),
-            NO_MANAGER.to_owned(),
-        ]);
-        return Ok(());
-    };
+    let manager = host_manager(home, config)?;
     // Bring the Manager into the chat slot as `session open` does (a stopped or asleep one is resumed).
     super::widgets::open_lead(
         run_command,
@@ -76,19 +60,10 @@ pub fn run(
     write_atomic(&marker, &format!("{}\n", state.since()))
 }
 
-/// The live (not archived) Manager of Context `host`, oldest first: the one the install script made.
-fn host_manager(home: &CpdHome, config: &Config) -> Result<Option<SessionId>, CpdError> {
+/// The live Manager of Context `host`: ensured, so the Context and a Manager exist.
+fn host_manager(home: &CpdHome, config: &Config) -> Result<SessionId, CpdError> {
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
-    let id: Option<String> = store.read(|conn| {
-        Ok(conn
-            .query_row(
-                "SELECT id FROM sessions WHERE context = ?1 AND role = 'manager' AND archived_at IS NULL ORDER BY created_at, id LIMIT 1",
-                [CONTEXT],
-                |r| r.get(0),
-            )
-            .optional()?)
-    })?;
-    id.map(|id| SessionId::parse(&id)).transpose()
+    permanent::ensure(home, config, &mut store, PermanentContext::Host)
 }
 
 /// One `session send` as the User (`--unblocks "cpd install skipped"`), the code `cpd session send` uses.

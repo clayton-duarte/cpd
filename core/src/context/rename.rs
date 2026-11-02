@@ -4,11 +4,21 @@ use serde_json::json;
 
 use super::{ContextRow, RenameArgs};
 use crate::env::Env;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::output::Output;
 
 pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
+    if args.id.permanent().is_some() {
+        return Err(CpdError::new(
+            ErrorCode::ContextPermanent,
+            format!(
+                "Context {} is permanent and is never archived, renamed or deleted.",
+                args.id
+            ),
+        )
+        .with("context", args.id.as_str()));
+    }
     let Env { mut store, .. } = Env::open()?;
     let (id, title) = (&args.id, args.title.as_str());
     let row = store.read(|conn| ContextRow::require(conn, id))?;

@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use super::add::add_in;
 use super::cancel::{Shape, cancel_in};
-use super::check_kind_tier;
 use super::edit::edit_in;
 use super::retry::retry_in;
 use super::{AddArgs, EditArgs, RetryArgs};
@@ -436,64 +435,6 @@ fn assert_out_of_range(e: CpdError, kind: &str, range: &str) {
 }
 
 #[test]
-fn scout_tier_is_limited_to_h1_to_h3() {
-    for t in ["H0", "S1"] {
-        assert_out_of_range(
-            check_kind_tier("scout", tier(t))
-                .expect_err(&format!("{t} is outside the scout range")),
-            "scout",
-            "H1-H3",
-        );
-    }
-    for t in ["H1", "H2", "H3"] {
-        check_kind_tier("scout", tier(t)).unwrap_or_else(|e| panic!("{t}: {e}"));
-    }
-    let mut f = fixture("dispatch");
-    let spec = f.explore_spec("s.json");
-    for (i, t) in ["H0", "S1"].into_iter().enumerate() {
-        assert_out_of_range(
-            f.add(&format!("o{i}"), "scout", t, &spec, None, false, &[])
-                .expect_err("outside the range"),
-            "scout",
-            "H1-H3",
-        );
-    }
-    assert_eq!(f.jobs(), 0);
-    for (i, t) in ["H1", "H2", "H3"].into_iter().enumerate() {
-        fields(f.add(&format!("k{i}"), "scout", t, &spec, None, false, &[]));
-    }
-}
-
-#[test]
-fn research_tier_is_limited_to_s1_to_s3() {
-    for t in ["S0", "H3"] {
-        assert_out_of_range(
-            check_kind_tier("research", tier(t))
-                .expect_err(&format!("{t} is outside the research range")),
-            "research",
-            "S1-S3",
-        );
-    }
-    for t in ["S1", "S2", "S3"] {
-        check_kind_tier("research", tier(t)).unwrap_or_else(|e| panic!("{t}: {e}"));
-    }
-    let mut f = fixture("dispatch");
-    let spec = f.explore_spec("s.json");
-    for (i, t) in ["S0", "H3"].into_iter().enumerate() {
-        assert_out_of_range(
-            f.add(&format!("o{i}"), "research", t, &spec, None, false, &[])
-                .expect_err("outside the range"),
-            "research",
-            "S1-S3",
-        );
-    }
-    assert_eq!(f.jobs(), 0);
-    for (i, t) in ["S1", "S2", "S3"].into_iter().enumerate() {
-        fields(f.add(&format!("k{i}"), "research", t, &spec, None, false, &[]));
-    }
-}
-
-#[test]
 fn explore_spec_has_exactly_four_fields() {
     let mut f = fixture("dispatch");
     for (field, value) in [
@@ -744,9 +685,9 @@ fn explore_retry_refuses_a_tier_outside_the_range() {
         )
     };
     assert_out_of_range(
-        retry(&mut f, "S1").expect_err("S1 is outside the scout range"),
+        retry(&mut f, "S1").expect_err("S1 is outside the scout range (letter H)"),
         "scout",
-        "H1-H3",
+        "S1",
     );
     assert_eq!(f.column("s1", "status").as_deref(), Some("failed"));
     let out = fields(retry(&mut f, "H3"));

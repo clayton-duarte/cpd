@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use crate::config::{Catalog, TierModel};
+use crate::config::{Catalog, Tier, TierModel};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
@@ -101,6 +101,12 @@ fn incident_mode_interrupts_a_running_attempt_and_requeues_the_job() {
     let ladder = Ladder {
         catalog: &catalog,
         retry_cap: 3,
+        roles: crate::config::RoleTiers {
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
     };
     f.store
         .write("test", |tx| {

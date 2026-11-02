@@ -16,15 +16,21 @@ const LEAD2: &str = "lead2";
 const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
+/// The config: roles GX / H3 / `lead` / O3 (plus `tables`). On the catalog of [`fixture`] the lead range is `lead` up to
+/// O2 and the manager range O3..O4.
+fn config(env: &TestEnv, lead: &str, tables: &str) {
+    env.write_tmux_config(&format!(
+        "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n{tables}\n[timeouts]\nfork_quiet_seconds = 1\n"
+    ));
+}
+
 /// `session.rs`'s fixture (Leads `lead1` on `pay`, `lead2`, Manager `manager1` on `O2`, Worker `worker1`), the config
-/// `lead_tier = "O2"`, `manager_tier = "O4"` (plus `extra` tables), a fake pi install, and
-/// a catalog where O and S list efforts 0-`s_max` ... and H lists `h_efforts`.
+/// of [`config`] with `lead_tier = "S4"` (plus `tables`), a fake pi install, and a catalog of `efforts` for O, S and H
+/// (G has none).
 fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
     setup(env);
     env.write_models();
-    env.write_tmux_config(&format!(
-        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n{tables}\n[timeouts]\nfork_quiet_seconds = 1\n"
-    ));
+    config(env, "S4", tables);
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
@@ -47,11 +53,16 @@ fn fixture(env: &TestEnv, tables: &str, efforts: [&str; 3]) {
     ));
 }
 
-/// Efforts 0-4 for O and S, 0-3 for H.
-const FOUR: [&str; 3] = ["[0,1,2,3,4]", "[0,1,2,3,4]", "[0,1,2,3]"];
-/// Efforts 0-5 for O and S.
-const FIVE: [&str; 3] = ["[0,1,2,3,4,5]", "[0,1,2,3,4,5]", "[0,1,2,3]"];
-const REVIEW: &str = "[inbox]\nreview_context = \"ctx\"\n";
+/// O has efforts 0, 2, 3, 4, S 0-4, H 0-3.
+const FOUR: [&str; 3] = ["[0,2,3,4]", "[0,1,2,3,4]", "[0,1,2,3]"];
+/// Efforts 0-5 for S.
+const FIVE: [&str; 3] = ["[0,2,3,4]", "[0,1,2,3,4,5]", "[0,1,2,3]"];
+
+/// The Context `codereview`, with `lead1` moved into it.
+fn in_codereview(env: &TestEnv) {
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('codereview', 'codereview', 't', 'm1')");
+    env.sql("UPDATE sessions SET context = 'codereview' WHERE id = 'lead1'");
+}
 
 fn tier(fx: &Fx, id: &str) -> String {
     show(fx, id)["tier"].as_str().unwrap().to_owned()
@@ -83,7 +94,8 @@ fn state(fx: &Fx) -> (Vec<(String, String)>, i64, i64) {
     )
 }
 
-fn not_allowed(fx: &Fx, id: &str, tier: &str) {
+/// A refusal of the `role` range `floor`..`ceiling`, whose floor `key` sets; it changes nothing.
+fn not_allowed(fx: &Fx, id: &str, tier: &str, role: &str, floor: &str, ceiling: &str, key: &str) {
     let before = state(fx);
     let e = refused(
         &fx.cpd(&["session", "retier", id, "--tier", tier]),
@@ -92,8 +104,13 @@ fn not_allowed(fx: &Fx, id: &str, tier: &str) {
     );
     assert_eq!(
         e["details"],
-        json!({"tier": tier, "allowed": "O0-O4, S0-S4, H0-H4", "rule": "hs-d506, hs-d562"})
+        json!({"tier": tier, "role": role, "floor": floor, "ceiling": ceiling, "allowed": format!("{floor}-{ceiling}"), "key": key}),
+        "{id} {tier}"
     );
+    let message = e["message"].as_str().unwrap();
+    for part in [tier, role, &format!("{floor}-{ceiling}"), key] {
+        assert!(message.contains(part), "`{part}` missing from: {message}");
+    }
     assert_eq!(state(fx), before, "a refusal changes nothing");
 }
 
@@ -101,7 +118,7 @@ fn not_allowed(fx: &Fx, id: &str, tier: &str) {
 fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    let out = fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
+    let out = fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
     assert_eq!(out["retiered"].as_array().unwrap().len(), 1, "{out}");
     let one = &out["retiered"][0];
     assert_eq!(
@@ -110,21 +127,21 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
             one["from"].as_str(),
             one["to"].as_str()
         ),
-        (Some(LEAD1), Some("O3"), Some("S2"))
+        (Some(LEAD1), Some("O3"), Some("S4"))
     );
     assert_eq!(out["unchanged"], json!([]));
 
-    assert_eq!(tier(&fx, LEAD1), "S2");
+    assert_eq!(tier(&fx, LEAD1), "S4");
     let shown = show(&fx, LEAD1);
     assert_eq!(
         (shown["model"].as_str(), shown["thinking"].as_str()),
-        (Some("p/sonnet"), Some("medium")),
+        (Some("p/sonnet"), Some("xhigh")),
         "{shown}"
     );
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0]["session"], LEAD1);
-    assert_eq!(sent[0]["data"], json!({"from": "O3", "to": "S2"}));
+    assert_eq!(sent[0]["data"], json!({"from": "O3", "to": "S4"}));
 
     assert_eq!(tier(&fx, LEAD2), "O3");
     assert_eq!(tier(&fx, MANAGER), "O2");
@@ -135,13 +152,30 @@ fn retier_tier_moves_one_session_to_that_tier_with_one_event() {
 fn retier_tier_moves_the_manager_too() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    fx.cpd(&["session", "retier", MANAGER, "--tier", "O3"]).ok();
-    assert_eq!(tier(&fx, MANAGER), "O3", "not manager_tier O4");
+    fx.cpd(&["session", "retier", MANAGER, "--tier", "O4"]).ok();
+    assert_eq!(tier(&fx, MANAGER), "O4", "not manager_tier O3");
     let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1);
     assert_eq!(
         (sent[0]["session"].as_str(), sent[0]["data"].clone()),
-        (Some(MANAGER), json!({"from": "O2", "to": "O3"}))
+        (Some(MANAGER), json!({"from": "O2", "to": "O4"}))
+    );
+}
+
+#[test]
+fn retier_tier_beats_the_codereview_target() {
+    let fx = Fx::new();
+    fixture(&fx.env, "", FOUR);
+    in_codereview(&fx.env);
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "O2"]).ok();
+    assert_eq!(
+        tier(&fx, LEAD1),
+        "O2",
+        "not the codereview target lead_tier S4"
+    );
+    assert_eq!(
+        events(&fx, "session-retiered")[0]["data"],
+        json!({"from": "O3", "to": "O2"})
     );
 }
 
@@ -149,7 +183,7 @@ fn retier_tier_moves_the_manager_too() {
 fn retier_tier_refuses_a_g_tier_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    not_allowed(&fx, LEAD1, "GX");
+    not_allowed(&fx, LEAD1, "GX", "lead", "S4", "O2", "lead_tier");
 }
 
 #[test]
@@ -201,8 +235,8 @@ fn retier_tier_with_all_is_usage_and_changes_nothing() {
 fn retier_tier_on_the_tier_it_has_is_already() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
-    let out = fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
+    let out = fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
     assert_eq!(out["already"], true, "{out}");
     assert_eq!(out["retiered"], json!([]));
     assert_eq!(out["unchanged"], json!([LEAD1]));
@@ -213,19 +247,20 @@ fn retier_tier_on_the_tier_it_has_is_already() {
 fn retier_tier_is_not_sticky() {
     let fx = Fx::new();
     fixture(&fx.env, "", FOUR);
-    fx.cpd(&["session", "retier", LEAD1, "--tier", "S2"]).ok();
-    assert_eq!(tier(&fx, LEAD1), "S2");
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "S4");
     fx.cpd(&["session", "retier", LEAD1]).ok();
-    assert_eq!(tier(&fx, LEAD1), "O2", "lead_tier");
+    assert_eq!(tier(&fx, LEAD1), "S4", "lead_tier");
 
     drop(fx);
     let review = Fx::new();
-    fixture(&review.env, REVIEW, FOUR);
+    fixture(&review.env, "", FOUR);
+    in_codereview(&review.env);
     review
-        .cpd(&["session", "retier", LEAD1, "--tier", "S2"])
+        .cpd(&["session", "retier", LEAD1, "--tier", "S4"])
         .ok();
     review.cpd(&["session", "retier", LEAD1]).ok();
-    assert_eq!(tier(&review, LEAD1), "O2", "lead_tier");
+    assert_eq!(tier(&review, LEAD1), "S4", "lead_tier");
 }
 
 #[test]
@@ -239,4 +274,37 @@ fn retier_tier_refuses_a_worker() {
         3,
     );
     assert_eq!(state(&fx), before);
+}
+
+/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O2 and the manager range O3..O4.
+/// A Lead is refused a Tier outside the first, the Manager a Tier outside the second, with the details of the range.
+/// Then `lead_tier = S2` moves the lead floor.
+#[test]
+fn retier_tier_is_checked_against_the_lead_and_manager_ranges() {
+    let fx = Fx::new();
+    fixture(&fx.env, "", FOUR);
+    for tier in ["S3", "H3", "GX", "O3", "O4"] {
+        not_allowed(&fx, LEAD1, tier, "lead", "S4", "O2", "lead_tier");
+    }
+    for tier in ["O2", "S4", "H3", "GX", "O0"] {
+        not_allowed(&fx, MANAGER, tier, "manager", "O3", "O4", "manager_tier");
+    }
+    // `tier_invalid` first: O1 is no effort of O.
+    refused(
+        &fx.cpd(&["session", "retier", LEAD1, "--tier", "O1"]),
+        "tier_invalid",
+        2,
+    );
+    // Inside the ranges: the lead floor and ceiling, the manager floor.
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "O2"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "O2");
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "S4"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "S4");
+    fx.cpd(&["session", "retier", MANAGER, "--tier", "O3"]).ok();
+    assert_eq!(tier(&fx, MANAGER), "O3");
+    // A second config moves the lead floor to S2; the manager range is the same.
+    config(&fx.env, "S2", "");
+    not_allowed(&fx, LEAD1, "S1", "lead", "S2", "O2", "lead_tier");
+    fx.cpd(&["session", "retier", LEAD1, "--tier", "S3"]).ok();
+    assert_eq!(tier(&fx, LEAD1), "S3");
 }

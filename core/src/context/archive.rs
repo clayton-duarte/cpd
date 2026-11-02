@@ -3,11 +3,21 @@
 
 use super::{ArchiveArgs, ContextRow, UnarchiveArgs};
 use crate::env::Env;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 use crate::plan::archive::{self, Objects};
 
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
+    if args.id.permanent().is_some() {
+        return Err(CpdError::new(
+            ErrorCode::ContextPermanent,
+            format!(
+                "Context {} is permanent and is never archived, renamed or deleted.",
+                args.id
+            ),
+        )
+        .with("context", args.id.as_str()));
+    }
     let Env {
         config, mut store, ..
     } = Env::open()?;

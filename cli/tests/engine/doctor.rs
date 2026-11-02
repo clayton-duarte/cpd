@@ -86,10 +86,14 @@ fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
     .unwrap();
 }
 
+/// Role defaults that are rungs of the healthy catalog (G `p/m-aux` 0-4, H `p/m-low` 0-2, S and O 0-4), ascending: the
+/// built-in GX and H3 are no rungs of it.
+const ROLES: &str = "context_distill_tier = \"G0\"\nworker_tier = \"H2\"\nlead_tier = \"S4\"";
+
 /// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
 fn healthy() -> Fx {
     let fx = Fx::with_ports();
-    write_config(&fx, "");
+    write_config(&fx, ROLES);
     fx.healthy_tools();
     fx
 }
@@ -417,6 +421,32 @@ fn tiers_fail_for_a_lead_tier_its_model_does_not_support() {
     assert_fails(&run, "tiers", "error", "tier_invalid");
 }
 
+/// A role default that is no rung of the catalog fails the check and names its key (it is no error at config parse).
+/// The healthy catalog: every model has levels 0 to 4, but H is `p/m-low` (0 to 2) and G is `p/m-aux` (0 to 4, so `GX` is no rung).
+#[test]
+fn tiers_fail_for_a_default_that_is_not_a_catalog_rung() {
+    // Every default is a rung: G0 (G has levels), H2, O2, O4.
+    let fx = healthy();
+    write_config(
+        &fx,
+        "context_distill_tier = \"G0\"\nworker_tier = \"H2\"\nlead_tier = \"S4\"",
+    );
+    assert_passes(&doctor(&fx), "tiers");
+    // `worker_tier` H3 is no rung: H offers only 0 to 2.
+    write_config(&fx, "context_distill_tier = \"G0\"\nworker_tier = \"H3\"");
+    let run = doctor(&fx);
+    assert_doctor_failed(&run);
+    assert_fails(&run, "tiers", "error", "worker_tier");
+    // `context_distill_tier` GX (its default) is no rung when G has levels.
+    write_config(&fx, "worker_tier = \"H2\"");
+    let run = doctor(&fx);
+    assert_doctor_failed(&run);
+    assert_fails(&run, "tiers", "error", "context_distill_tier");
+    // A lead_tier outside the catalog is still `tier_invalid`, checked first.
+    write_config(&fx, "lead_tier = \"H4\"");
+    assert_fails(&doctor(&fx), "tiers", "error", "tier_invalid");
+}
+
 #[test]
 fn tiers_fail_when_pi_has_no_release() {
     let fx = healthy();
@@ -495,7 +525,9 @@ fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
     let fx = healthy();
     write_config(
         &fx,
-        "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]",
+        &format!(
+            "{ROLES}\nlead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]"
+        ),
     );
     let run = doctor(&fx);
     run.ok();
@@ -948,7 +980,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
     // No runner file, and a Node too old for the runner: `pi` does not care.
     for extra in ["", "worker_runner = \"pi\""] {
         let fx = healthy();
-        write_config(&fx, extra);
+        write_config(&fx, &format!("{ROLES}\n{extra}"));
         script(
             &fx,
             "node",
@@ -972,7 +1004,7 @@ fn worker_runner_passes_for_pi_and_never_looks_at_the_adapter() {
 #[test]
 fn worker_runner_durable_passes_with_the_runner_file_and_node_22_19_0() {
     let fx = healthy();
-    write_config(&fx, "worker_runner = \"durable\"");
+    write_config(&fx, &format!("{ROLES}\nworker_runner = \"durable\""));
     add_runner_file(&fx);
     script(
         &fx,

@@ -8,11 +8,11 @@ use serde_json::{Value, json};
 use super::check::{Check, Severity};
 use super::deadline;
 use cpd_core::config::catalog::read as read_catalog;
-use cpd_core::config::{Config, locate_pi};
+use cpd_core::config::{Config, Role, locate_pi};
 use cpd_core::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
 use cpd_core::policy::model::Models;
 
-/// Each model of the machine layer's `[model]` (over cpd's default) is in pi's catalog and `lead_tier` is valid for its model.
+/// Each model of the machine layer's `[model]` (over cpd's default) is in pi's catalog `lead_tier` is valid for its model, every role default is a rung of the catalog and every role range holds a rung.
 ///
 /// The catalog is asked of pi each time, never read from the cache, so the check
 /// proves pi answers and doctor writes nothing.
@@ -34,10 +34,36 @@ pub fn tiers(config: &Config) -> Check {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    match catalog.check(config.lead_tier) {
-        Ok(()) => Check::pass(name, Severity::Error).found(catalog.pi_version),
-        Err(e) => Check::from_error(name, Severity::Error, &e),
+    if let Err(e) = catalog.check(config.lead_tier) {
+        return Check::from_error(name, Severity::Error, &e);
     }
+    // Every role default is a rung of the catalog, and every role's span holds a valid rung (Tier model v2).
+    let defaults = config.role_tiers();
+    let roles = [
+        (Role::Auxiliar, defaults.auxiliar),
+        (Role::Worker, defaults.worker),
+        (Role::Lead, defaults.lead),
+        (Role::Manager, defaults.manager),
+    ];
+    for (role, tier) in roles {
+        if !catalog.is_valid(tier) {
+            let model = catalog.model(tier.letter());
+            return Check::fail(
+                name,
+                Severity::Error,
+                format!(
+                    "{} = {tier} is not a Tier of the catalog: {} offers efforts {:?}.",
+                    role.key(),
+                    model.model,
+                    model.efforts
+                ),
+            );
+        }
+        if let Err(e) = config.range(&catalog, role) {
+            return Check::from_error(name, Severity::Error, &e);
+        }
+    }
+    Check::pass(name, Severity::Error).found(catalog.pi_version)
 }
 
 /// The `pi_adapter` directory has a `package.json`.
