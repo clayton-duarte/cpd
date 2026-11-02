@@ -1419,6 +1419,10 @@ mod tests {
     fn assert_margins_blank(view: &mut View, width: u16, height: u16, what: &str) {
         let buf = buffer(view, width, height);
         for y in 0..height {
+            // a docked section's header runs across the whole pane, column 0 to the last column (pro-d348)
+            if text_rows(&buf)[usize::from(y)].starts_with('─') {
+                continue;
+            }
             for x in [0, width - 1] {
                 let cell = &buf[(x, y)];
                 assert_eq!(
@@ -1866,7 +1870,7 @@ mod tests {
     /// The labels of the open menu, as drawn: the rows inside its box.
     fn menu_items(view: &mut View) -> Vec<String> {
         let rect = view.menu.as_ref().expect("a menu is open").rect(view.pane);
-        let rows = drawn(view, view.pane.width, view.pane.height);
+        let rows = drawn(view, view.pane.width, view.pane.height + 1);
         (rect.y + 1..rect.bottom() - 1)
             .map(|y| {
                 let row: Vec<char> = rows[y as usize].chars().collect();
