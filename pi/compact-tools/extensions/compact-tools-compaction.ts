@@ -1,5 +1,5 @@
 /*
- * The compaction fold (docs/contract.md section 6.9, hs-d650): pi-core's compaction notice
+ * The compaction fold (docs/contract.md section 6.9): pi-core's compaction notice
  * (CompactionSummaryMessageComponent, mounted for a `compactionSummary` entry) is drawn as a cpd
  * fold in the compact style with `fold: toggle` only.
  *
@@ -15,8 +15,10 @@ import {
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { MouseRegion, type Component } from "@earendil-works/pi-tui";
-import { chrome, fgOpen, TEXT, thinkingPill } from "./compact-tools-indices.ts";
+import { onTick } from "./compact-tools-clock.ts";
+import { chrome, fgOpen, paint, RUNNING, TEXT, thinkingPill } from "./compact-tools-indices.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
+import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "./compact-tools-loader.ts";
 import { compactDetail, toggleRow } from "./compact-tools-thinking.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
 
@@ -72,20 +74,59 @@ export class CompactionFoldController {
 	readonly enabled: () => boolean;
 	readonly toggle: () => ToggleGlyphs | undefined;
 	private theme: Theme | undefined;
+	private context: ExtensionContext | undefined;
+	/** Stops the running fold's share of the animation clock; set while the widget is mounted. */
+	private stopTicking: (() => void) | undefined;
+	private frame = 0;
 
-	constructor(_pi: ExtensionAPI, enabled: () => boolean, toggle: () => ToggleGlyphs | undefined) {
+	constructor(pi: ExtensionAPI, enabled: () => boolean, toggle: () => ToggleGlyphs | undefined) {
 		this.enabled = enabled;
 		this.toggle = toggle;
+		// The running fold (docs/contract.md section 6.9): mounted while compaction is in flight.
+		pi.on("session_before_compact", () => this.startRunning());
+		pi.on("session_compact", () => this.stopRunning());
+		pi.on("session_compact_failed", () => this.stopRunning());
+	}
+
+	private startRunning(): void {
+		let tuiRender: (() => void) | undefined;
+		const context = this.context;
+		if (this.stopTicking || !context?.hasUI || !this.enabled() || this.toggle() === undefined) return;
+		this.frame = 0;
+		context.ui.setWidget("compact-tools-compaction", (tui) => {
+			tuiRender = () => tui.requestRender();
+			return {
+			render: (): string[] => [
+				chrome("╭─") + thinkingPill("compaction"),
+				chrome("╰") + paint(RUNNING, LOADER_FRAMES[this.frame % LOADER_FRAMES.length]!) + chrome(" · Compacting…"),
+			],
+			invalidate() {},
+			};
+		});
+		this.stopTicking = onTick(() => {
+			this.frame++;
+			tuiRender?.();
+		}, LOADER_INTERVAL_MS);
+	}
+
+	private stopRunning(): void {
+		if (!this.stopTicking) return;
+		this.stopTicking();
+		this.stopTicking = undefined;
+		this.context?.ui.setWidget("compact-tools-compaction", undefined);
 	}
 
 	bind(ctx: ExtensionContext): void {
 		this.theme = ctx.ui.theme;
+		this.context = ctx;
 		if (!bound.includes(this)) bound.push(this);
 		hookMethod(CompactionSummaryMessageComponent.prototype, "updateDisplay", HOOK_NAME, compactionBehavior);
 	}
 
 	dispose(): void {
+		this.stopRunning();
 		this.theme = undefined;
+		this.context = undefined;
 		if (bound.includes(this)) bound.splice(bound.indexOf(this), 1);
 	}
 }

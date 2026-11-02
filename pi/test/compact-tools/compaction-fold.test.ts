@@ -296,6 +296,7 @@ test("a second session_before_compact does not stack a second tick subscription"
 	const run = running();
 	try {
 		run.emit("session_before_compact");
+		run.mounted();
 		run.emit("session_before_compact");
 		assert.equal(run.calls.length, 1, "nothing new mounted");
 		assert.equal(run.clock.countTimers(), 1);
