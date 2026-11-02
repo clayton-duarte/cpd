@@ -93,7 +93,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     let id = manager["session"].as_str().unwrap().to_owned();
     assert_eq!(
         (&manager["name"], &manager["state"]),
-        (&json!("ctx-manager"), &json!("stopped"))
+        (&json!("ctx"), &json!("stopped"))
     );
 
     // The Session row.
@@ -138,7 +138,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     assert_eq!(registered[0]["session"], json!(id));
     assert_eq!(
         registered[0]["data"],
-        json!({"role": "manager", "name": "ctx-manager", "forked_from": null, "tier": "O4"})
+        json!({"role": "manager", "name": "ctx", "forked_from": null, "tier": "O4"})
     );
     let moved = events(&fx, "session-moved");
     assert_eq!(moved.len(), 1);
