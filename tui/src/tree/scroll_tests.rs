@@ -516,3 +516,21 @@ const FROZEN: [&[&str]; 6] = [
         r##"43*[" "|Reset|Reset|NONE]"##,
     ],
 ];
+
+/// pro-d351: a folded docked section is its header and ONE blank row below it. With the Archive section folded (the
+/// fixture's archived Context `zeta`) the header is the pane's last row but one and the last row is blank, and a wheel over
+/// that blank row scrolls nothing.
+#[test]
+fn a_folded_archive_header_leaves_the_last_row_blank_and_the_wheel_over_it_moves_nothing() {
+    let mut view = View::new(archived(), true);
+    let height = 20;
+    let before = text_rows(&draw_now(&mut view, 43, height));
+    let header = before
+        .iter()
+        .position(|r| r.contains("Archive"))
+        .expect("the Archive header");
+    assert_eq!(header, usize::from(height) - 2, "{before:#?}");
+    assert_eq!(before[usize::from(height) - 1], "", "{before:#?}");
+    wheel(&mut view, true, 10, height - 1);
+    assert_eq!(text_rows(&draw_now(&mut view, 43, height)), before);
+}

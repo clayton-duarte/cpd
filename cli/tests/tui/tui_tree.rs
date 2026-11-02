@@ -490,6 +490,10 @@ fn a_missing_folds_file_is_every_context_open() {
         .iter()
         .position(|r| r.contains("Archive"))
         .expect("the Archive header");
+    assert_eq!(
+        archive, 24,
+        "a folded Archive header is the pane's last row but one, a blank row below it (pro-d351): {screen:?}"
+    );
     tree.click(5, archive as u16);
     let screen = tree.until("the Archive section open", |s| {
         s.iter().any(|r| r.contains(" beta"))
@@ -1232,6 +1236,10 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
         .iter()
         .position(|r| r.contains("Archive"))
         .expect("the Archive header");
+    assert_eq!(
+        archive, 24,
+        "a folded Archive header is the pane's last row but one, a blank row below it (pro-d351): {screen:?}"
+    );
     tree.click(5, archive as u16);
     let screen = tree.until("the Archive section open", |s| {
         s.iter().any(|r| r.contains(" beta"))

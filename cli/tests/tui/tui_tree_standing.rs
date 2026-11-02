@@ -125,8 +125,8 @@ fn fit(rows: &[String]) -> Vec<String> {
 
 /// The rows of the docked group (R2 of the docs), from its blank row to its last row, built from the sections given as
 /// `(open, rows)`: `rows` of an open section are its own `▲` cue row, its list and its `▼` cue row (see [`fit`]); a folded
-/// section is its header only. Between Standing and Archive there is exactly ONE row: Standing's reserved end row when
-/// Standing is open, one blank row when it is folded. No section, no group: no rows at all.
+/// section is its header and ONE blank row below it (pro-d351). Between Standing and Archive there is exactly ONE row:
+/// Standing's reserved end row when Standing is open, Standing's own blank row below its header when it is folded. No section, no group: no rows at all.
 fn group(standing: Option<(bool, &[String])>, archive: Option<(bool, &[String])>) -> Vec<String> {
     if standing.is_none() && archive.is_none() {
         return Vec::new();
@@ -136,12 +136,11 @@ fn group(standing: Option<(bool, &[String])>, archive: Option<(bool, &[String])>
         let Some((open, list)) = section else {
             continue;
         };
-        if title == "Archive" && matches!(standing, Some((false, _))) {
-            rows.push(String::new());
-        }
         rows.push(header(title, if open { OPEN } else { FOLDED }));
         if open {
             rows.extend(list.iter().cloned());
+        } else {
+            rows.push(String::new());
         }
     }
     rows
@@ -402,9 +401,9 @@ fn a_click_on_the_header_folds_and_opens_the_section_with_the_fold_glyph() {
     assert_eq!(
         tree.screen(),
         pane(18, "", &block("aa", &[]), "", Some((false, &[]))),
-        "folded: the blank row and the header remain, at the pane's bottom"
+        "folded: the blank row, the header and one blank row below it remain, at the pane's bottom"
     );
-    tree.click(5, 17);
+    tree.click(5, 16); // the folded header: the blank row above it is 15, the blank row below it is the last row, 17
     assert_eq!(tree.screen(), open, "a second click opens it");
     assert!(
         drive::calls(&fx).is_empty(),
@@ -664,7 +663,7 @@ fn the_archive_section_is_docked_below_standing_folded_by_default_with_one_share
     archive(&with, &["zed"]);
     let tree = Tree::start(&with, W as u16, 24);
     let standing = fit(&block("cpd", &[]));
-    // Standing open (its reserved end row is the one row shared with Archive), Archive folded: its header is the last row.
+    // Standing open (its reserved end row is the one row shared with Archive), Archive folded: its header is the last row but one.
     // The project tree holds `aa` at the top: no `archive` row, no `zed`.
     assert_eq!(
         tree.screen(),
@@ -677,12 +676,17 @@ fn the_archive_section_is_docked_below_standing_folded_by_default_with_one_share
         )
     );
     assert_eq!(
-        tree.screen()[23],
+        tree.screen()[22],
         header("Archive", FOLDED),
-        "the Archive header is the pane's last row, its glyph U+F0B2C"
+        "the Archive header is the pane's last row but one, its glyph U+F0B2C"
     );
     assert_eq!(
-        tree.screen()[22],
+        tree.screen().len(),
+        23,
+        "the pane's last row, 23, is the blank row below the folded header"
+    );
+    assert_eq!(
+        tree.screen()[21],
         "",
         "Standing's reserved end row: the one blank row above Archive's header"
     );
@@ -728,7 +732,7 @@ fn a_click_on_the_archive_header_opens_and_folds_it_with_the_fold_glyph() {
         &group(Some((true, &standing)), Some((false, &[]))),
     );
     assert_eq!(tree.screen(), folded, "folded by default");
-    tree.click(5, 23); // the Archive header, the pane's last row
+    tree.click(5, 22); // the Archive header, the pane's last row but one
     // open (glyph U+F0B26): a reserved blank row under the header, zed's block (title, its archived Plan, its closing row),
     // the reserved last row at the bottom (dropped by the screen). Group: 12 rows, the half of the pane, so nothing scrolls.
     let archived = fit(&archived_block("zed", &["zp"], true));
@@ -761,9 +765,9 @@ fn a_folded_standing_leaves_one_blank_row_above_the_archive_header() {
     populate(&fx, &[("cpd", &[]), ("aa", &[]), ("zed", &["zp"])]);
     archive(&fx, &["zed"]);
     let mut tree = Tree::start(&fx, W as u16, 24);
-    // the group: blank row, Standing's header (rows 17), 4 rows of its own, Archive's header; Standing's header is row 18
-    tree.click(5, 18);
-    // the rows at the bottom: blank row, Standing header (U+F0B2C), one blank row, Archive header at the pane's last row
+    // the group: blank row, Standing's header (row 17), 4 rows of its own, Archive's header, a blank row; Standing's header is row 17
+    tree.click(5, 17);
+    // the rows at the bottom: blank row, Standing header (U+F0B2C), one blank row, Archive header, then the pane's last row blank
     let folded = group(Some((false, &[])), Some((false, &[])));
     assert_eq!(
         folded,
@@ -771,17 +775,19 @@ fn a_folded_standing_leaves_one_blank_row_above_the_archive_header() {
             String::new(),
             header("Standing", FOLDED),
             String::new(),
-            header("Archive", FOLDED)
+            header("Archive", FOLDED),
+            String::new()
         ]
     );
     assert_eq!(
         tree.screen(),
         docked(24, "", &block("aa", &[]), "", &folded)
     );
-    assert_eq!(tree.screen()[23], header("Archive", FOLDED));
-    assert_eq!(tree.screen()[22], "");
-    assert_eq!(tree.screen()[21], header("Standing", FOLDED));
-    assert_eq!(tree.screen()[20], "");
+    assert_eq!(tree.screen()[22], header("Archive", FOLDED));
+    assert_eq!(tree.screen()[21], "");
+    assert_eq!(tree.screen()[20], header("Standing", FOLDED));
+    assert_eq!(tree.screen()[19], "");
+    assert_eq!(tree.screen().len(), 23, "the pane's last row is blank");
 }
 
 #[test]
@@ -902,7 +908,7 @@ fn a_click_on_an_archived_contexts_title_in_the_archive_section_unarchives_it_an
         r#"{"ok":true,"manager":{"session":"m-zed","name":"zed-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-zed","displaced":null}"#,
     );
     let mut tree = Tree::start(&fx, W as u16, 24);
-    // no Standing: the group is the blank row and Archive's header, the pane's last row
+    // no Standing: the group is the blank row, Archive's header (row 22) and the blank last row
     assert_eq!(
         tree.screen(),
         docked(
@@ -913,7 +919,7 @@ fn a_click_on_an_archived_contexts_title_in_the_archive_section_unarchives_it_an
             &group(None, Some((false, &[])))
         )
     );
-    tree.click(5, 23);
+    tree.click(5, 22);
     // open, zed folded: the group is 1 + 3 + 2 = 6 rows; header 19, `▲` row 20, title 21, `expand` 22, `▼` row 23
     let archived = fit(&archived_block("zed", &["zp"], false));
     assert_eq!(
