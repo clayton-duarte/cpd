@@ -3107,6 +3107,9 @@ fn add_says_tier_invalid_before_tier_not_allowed() {
     refused(&job_add(&fx, "pl", "k", "X5", &[]), "tier_invalid", 2);
     // H has no effort 9 (hs-n632): the brief's `H9` case is `tier_invalid`, and nothing is written.
     refused(&job_add(&fx, "pl", "k", "H9", &[]), "tier_invalid", 2);
+    // Tier model v2: effort 5 exists for no letter, so `O5` and `G5` are `tier_invalid` too, before any role check.
+    refused(&job_add(&fx, "pl", "k", "O5", &[]), "tier_invalid", 2);
+    refused(&job_add(&fx, "pl", "k", "G5", &[]), "tier_invalid", 2);
 }
 
 /// B (hs-d796, hs-d797): a Lead replaces a cancelled `update` Job with a plain `work` Job at the chosen
@@ -3363,16 +3366,16 @@ fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
     assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
 }
 
-/// hs-d562: G has no number; `G0` is `tier_invalid` (not `tier_not_allowed`) and the message says to write `GX`.
+/// Tier model v2: G is a letter like the others, so `G0` parses; it is no Worker's Tier (`tier_not_allowed`, the fixed
+/// Worker check), while `G5` is `tier_invalid`: effort 5 exists for no letter.
 #[test]
-fn a_job_tier_g0_is_tier_invalid_and_says_write_gx() {
+fn a_job_tier_g0_parses_and_is_tier_not_allowed_while_g5_is_tier_invalid() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    let e = refused(&job_add(&fx, "pl", "k", "G0", &[]), "tier_invalid", 2);
-    let message = e["message"].as_str().unwrap();
-    assert!(message.contains("GX"), "{message}");
-    assert!(message.contains("hs-d562"), "{message}");
+    let e = refused(&job_add(&fx, "pl", "k", "G0", &[]), "tier_not_allowed", 2);
+    assert_eq!(e["details"]["tier"], "G0", "{e}");
+    refused(&job_add(&fx, "pl", "k", "G5", &[]), "tier_invalid", 2);
 }
 
 #[test]

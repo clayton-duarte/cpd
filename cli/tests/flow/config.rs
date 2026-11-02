@@ -733,11 +733,20 @@ fn config_refuses_an_open_tier_outside_the_worker_range() {
     }
 }
 
-/// hs-d562: an auxiliary run uses only `GX`.
+/// Tier model v2: the auxiliary default is any Tier of the syntax that ascends below `worker_tier` (default H3): `G0` and
+/// `H0` are accepted, a Tier at or above H3 or with effort 5 is `config_invalid`.
 #[test]
-fn config_refuses_a_context_distill_tier_that_is_not_gx() {
+fn config_takes_a_context_distill_tier_below_the_worker_tier() {
     let fx = Fx::new();
-    for tier in ["H0", "H4", "S1", "O2", "G0", "G5"] {
+    for tier in ["GX", "G0", "G4", "H0", "H2"] {
+        let ok = config_with(
+            &fx,
+            &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"),
+        )
+        .ok();
+        assert_eq!(ok["config"]["context_distill_tier"], tier);
+    }
+    for tier in ["H4", "S1", "O2", "G5"] {
         let run = config_with(
             &fx,
             &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"),
@@ -749,25 +758,13 @@ fn config_refuses_a_context_distill_tier_that_is_not_gx() {
             err["details"]["key"], "context_distill_tier",
             "{tier}: {err}"
         );
-        if tier == "H0" {
-            let message = err["message"].as_str().unwrap();
-            assert!(
-                message.contains("GX") && message.contains("hs-d562"),
-                "{message}"
-            );
-        }
     }
-    let ok = config_with(
-        &fx,
-        "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n",
-    )
-    .ok();
-    assert_eq!(ok["config"]["context_distill_tier"], "GX");
 }
 
-/// hs-d562: a Lead or the Manager is never on G; `open_tier` is a Worker's Tier (hs-d554), and GX is not one.
+/// Tier model v2: G is a letter, but the role defaults must ascend strictly above the auxiliary default `GX`, so a Lead,
+/// the Manager or a Worker default of `GX` is `config_invalid`.
 #[test]
-fn config_refuses_g_for_lead_manager_and_open_tier() {
+fn config_refuses_gx_where_the_role_defaults_would_not_ascend() {
     let fx = Fx::new();
     for key in ["lead_tier", "manager_tier", "open_tier"] {
         let run = config_with(
@@ -777,14 +774,6 @@ fn config_refuses_g_for_lead_manager_and_open_tier() {
         let err = run.error();
         assert_eq!(run.exit, 1, "{key}");
         assert_eq!(err["code"], "config_invalid", "{key}: {err}");
-        assert_eq!(err["details"]["key"], key, "{key}: {err}");
-        if key != "open_tier" {
-            let message = err["message"].as_str().unwrap();
-            assert!(
-                message.contains('G') && message.contains("hs-d562"),
-                "{key}: {message}"
-            );
-        }
     }
 }
 

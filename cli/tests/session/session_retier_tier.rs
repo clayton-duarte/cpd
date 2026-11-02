@@ -166,10 +166,16 @@ fn retier_tier_refuses_a_g_tier_and_changes_nothing() {
 }
 
 #[test]
-fn retier_tier_refuses_effort_5_and_changes_nothing() {
+fn retier_tier_refuses_effort_5_as_tier_invalid_and_changes_nothing() {
     let fx = Fx::new();
     fixture(&fx.env, "", FIVE);
-    not_allowed(&fx, LEAD1, "S5");
+    // Tier model v2: effort 5 exists for no letter, so it is a syntax error, not a role refusal.
+    let e = refused(
+        &fx.cpd(&["session", "retier", LEAD1, "--tier", "S5"]),
+        "tier_invalid",
+        2,
+    );
+    assert_eq!(e["details"]["tier"], "S5", "{e}");
 }
 
 #[test]

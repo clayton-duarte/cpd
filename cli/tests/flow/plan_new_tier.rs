@@ -167,12 +167,14 @@ fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
 }
 
 #[test]
-fn tier_flag_refuses_effort_5_and_writes_nothing() {
+fn tier_flag_refuses_effort_5_as_tier_invalid_and_writes_nothing() {
     let fx = Fx::with_ports();
     setup(&fx, "review_lead_tier = \"S3\"", "review");
     seed_catalog(&fx, "[0,1,2,3,4,5]", "[0,1,2,3,4]");
     let before = counts(&fx);
-    not_allowed(&plan_new(&fx, "pl", "ctx", Some("S5")), "S5");
+    // Tier model v2: effort 5 exists for no letter, so it is a syntax error, not a role refusal.
+    let e = common::refused(&plan_new(&fx, "pl", "ctx", Some("S5")), "tier_invalid", 2);
+    assert_eq!(e["details"]["tier"], "S5", "{e}");
     assert_eq!(counts(&fx), before);
 }
 
