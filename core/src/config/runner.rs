@@ -52,6 +52,12 @@ pub fn set_in_text(text: &str, to: WorkerRunner) -> String {
     if let Some((start, body_end, _, _)) = top_level_line(text, "worker_runner") {
         return format!("{}{line}{}", &text[..start], &text[body_end..]);
     }
+    insert_top_level(text, &line)
+}
+
+/// `text` with `line` (no newline) inserted after the last top-level `key = value` line before the first table (at the
+/// end when there is no table).
+pub(super) fn insert_top_level(text: &str, line: &str) -> String {
     // The end of the last top-level `key = value` line (after its newline), before the first table header.
     let mut at = 0;
     let mut start = 0;

@@ -148,6 +148,20 @@
     },
     "required": []
   },
+  "config tiers set": {
+    "flags": {
+      "--auxiliar": true,
+      "--help": false,
+      "--lead": true,
+      "--manager": true,
+      "--worker": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context answer": {
     "flags": {
       "--context": true,
@@ -1110,6 +1124,20 @@
     },
     "required": []
   },
+  "preset set": {
+    "flags": {
+      "--G": true,
+      "--H": true,
+      "--O": true,
+      "--S": true,
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "preset show": {
     "flags": {
       "--help": false
@@ -1547,6 +1575,7 @@
     "flags": {
       "--context": true,
       "--help": false,
+      "--model": true,
       "--owner": true,
       "--plan": true,
       "--repo": true,
