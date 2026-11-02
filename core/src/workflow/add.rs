@@ -618,23 +618,24 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
+    let worker_tier = env.config.worker_tier;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
-    let catalog = match &env.catalog {
-        Some(fixed) => fixed.clone(),
-        None => crate::config::catalog::load_with(
-            &crate::policy::model::Models::of(&policy),
-            &mut env.store,
-        )?,
-    };
-    // The opener stub runs at `worker_tier` floored to a valid rung of the repo's catalog.
-    let worker_tier = open::tier(&env.config, &catalog)?;
     // The template's Jobs are worker Jobs: each Tier is valid in the catalog and in the worker range.
-    let roles = env.config.role_tiers();
-    for (tier, _) in jobs.iter().flat_map(|j| j.values()) {
-        catalog.check(*tier)?;
-        roles.check_job(&catalog, "work", *tier)?;
+    if let Some(jobs) = &jobs {
+        let catalog = match &env.catalog {
+            Some(fixed) => fixed.clone(),
+            None => crate::config::catalog::load_with(
+                &crate::policy::model::Models::of(&policy),
+                &mut env.store,
+            )?,
+        };
+        let roles = env.config.role_tiers();
+        for (tier, _) in jobs.values() {
+            catalog.check(*tier)?;
+            roles.check_job(&catalog, "work", *tier)?;
+        }
     }
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
         .then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
