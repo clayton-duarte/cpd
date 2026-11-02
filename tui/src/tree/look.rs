@@ -229,7 +229,7 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
 fn an_archived_context_is_all_archived_rows_folded_it_shows_its_title_and_the_down_arrow() {
     let mut view = View::new(archived(), true);
     let got = rows(&draw(&mut view, 44, 24));
-    click(&mut view, 3, find(&got, " archive") as u16);
+    click(&mut view, 3, find(&got, "Archive") as u16);
     let got = rows(&draw(&mut view, 44, 24));
     let zeta = find(&got, "zeta");
     assert_eq!(got[zeta + 1], format!(" ╰{DOWN} expand"), "{got:#?}");
@@ -358,13 +358,11 @@ fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_
     let mut gamma = super::fixture::context("gamma", vec![]);
     gamma.archived_at = Some(super::fixture::WHEN.into());
     let mut empty = View::new(super::fixture::tree(vec![gamma]), true);
-    let closed = rows(&draw(&mut empty, 44, 10));
-    click(&mut empty, 3, find(&closed, " archive") as u16);
-    let archived_empty = (
-        "an archived Context with no row",
-        draw(&mut empty, 44, 10),
-        3u16,
-    );
+    let closed = rows(&draw(&mut empty, 44, 20));
+    click(&mut empty, 3, find(&closed, "Archive") as u16);
+    let opened = draw(&mut empty, 44, 20);
+    let y = u16::try_from(find(&rows(&opened), TERMINATOR)).unwrap();
+    let archived_empty = ("an archived Context with no row", opened, y);
     for (name, buf, y) in [archived_empty] {
         let width = buf.area.width;
         let cells: Vec<(u16, &str)> = (0..width)

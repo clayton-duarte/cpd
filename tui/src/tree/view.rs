@@ -426,11 +426,21 @@ impl View {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
                 if self
                     .tree_scroll
-                    .standing_hits()
-                    .is_some_and(|h| h.list.contains(at)) =>
+                    .dock_hits()
+                    .any(|(_, h)| h.list.contains(at)) =>
             {
-                self.tree_scroll
-                    .wheel_standing(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                let id = self
+                    .tree_scroll
+                    .dock_hits()
+                    .find(|(_, h)| h.list.contains(at))
+                    .map(|(id, _)| id);
+                if let Some(id) = id {
+                    self.tree_scroll.wheel_dock(
+                        id,
+                        m.kind == MouseEventKind::ScrollDown,
+                        WHEEL_ROWS,
+                    );
+                }
                 Effect::None
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
@@ -645,17 +655,18 @@ impl View {
 
     /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        if self
+        if let Some((id, _)) = self
             .tree_scroll
-            .standing_hits()
-            .is_some_and(|h| h.header.contains(at))
+            .dock_hits()
+            .find(|(_, h)| h.header.contains(at))
         {
-            return Some(vec![rows::STANDING.to_owned()]);
+            return Some(vec![id.to_owned()]);
         }
         let Hits { rows, paths, .. } = self
             .tree_scroll
-            .standing_hits()
-            .filter(|h| h.rows.contains(at))
+            .dock_hits()
+            .map(|(_, h)| h)
+            .find(|h| h.rows.contains(at))
             .unwrap_or_else(|| self.tree_scroll.hits());
         let path = rows
             .contains(at)
@@ -773,7 +784,8 @@ pub(crate) fn layout_sample(
     }
 }
 
-/// The layout test's sample (`layout_tests`): the tree's Contexts (the fixture's live ones and an archived one) in a
+/// The layout test's sample (`layout_tests`): the tree's live Contexts (the fixture's; its archived Context is in the docked Archive
+/// section, flush by design, so it is not sampled here) in a
 /// `width` x `height` pane, drawn by [`View::draw`] as in production. Placed is one Rail per Context, its rect from the
 /// rows the view saved for hit-testing: the blank row above, the Context's rows, the blank row below. The rows whose
 /// glyph sits against the rail by recorded design (`├─glyph`: hs-d337, hs-d339, hs-d484) are exempt by name; the fold is
@@ -792,7 +804,9 @@ pub(crate) fn layout_fold_sample(
         TreeCase::ContextFold,
         "the fold samples the Context fold"
     );
-    let mut view = View::new(super::fixture::archived(), true);
+    let mut tree = super::fixture::archived();
+    tree.contexts.retain(|c| c.archived_at.is_none());
+    let mut view = View::new(tree, true);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     let pane = Rect::new(0, 0, width, height); // what the tree column passed: the margin is the container's to leave
@@ -1199,8 +1213,20 @@ mod tests {
     const EXPAND: &str = " ╰\u{F0B26} expand";
     /// The closing row `╰󰬬 collapse`.
     const COLLAPSE: &str = " ╰\u{F0B2C} collapse";
-    /// The tree root's archive row, folded and expanded (hs-d698, hs-d707); drawn with the pane's leading margin.
-    const ARCHIVE_DOWN: &str = "\u{F0B26} archive";
+    /// The row of the Archive section's header (docked at the bottom of the pane, pro-d348): found by its text, since its
+    /// place moves with the section.
+    fn archive_header_at(rows: &[String]) -> usize {
+        rows.iter()
+            .position(|r| r.contains("Archive"))
+            .unwrap_or_else(|| panic!("no Archive header: {rows:#?}"))
+    }
+
+    /// Opens the Archive section (a click on its header, folded by default) and draws the pane again at `width` by `height`.
+    fn open_archive(view: &mut View, width: u16, height: u16) -> Vec<String> {
+        let rows = drawn(view, width, height);
+        click(view, 3, u16::try_from(archive_header_at(&rows)).unwrap());
+        drawn(view, width, height)
+    }
 
     #[test]
     fn a_click_folds_a_context_and_opens_a_session_and_hides_the_cursor() {
@@ -1308,19 +1334,20 @@ mod tests {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 30);
         assert_eq!(
-            rows[15].trim(),
-            ARCHIVE_DOWN,
-            "the archive row starts folded: {rows:?}"
+            archive_header_at(&rows),
+            29,
+            "the Archive section starts folded, its header the last row: {rows:?}"
         );
-        click(&mut view, 3, 15); // the archive row
-        let rows = drawn(&mut view, 44, 30);
+        let rows = open_archive(&mut view, 44, 30);
+        let at = archive_header_at(&rows);
+        let title = u16::try_from(at + 2).unwrap();
         assert_eq!(
-            (rows[16].as_str(), rows[17].as_str()),
+            (rows[at + 2].as_str(), rows[at + 3].as_str()),
             (format!(" ╭{STOPPED} zeta").as_str(), EXPAND),
             "{rows:?}"
         );
         assert_eq!(
-            click(&mut view, 6, 16),
+            click(&mut view, 6, title),
             Effect::Run(resume(
                 Subject::Context(cid("zeta")),
                 Action::OpenManager(cid("zeta"))
@@ -1332,19 +1359,22 @@ mod tests {
             rows,
             "its title folds and unfolds nothing"
         );
-        click(&mut view, 3, 17);
+        click(&mut view, 3, title + 1);
         let rows = drawn(&mut view, 44, 30);
-        assert_eq!(rows[16], format!(" ╭{STOPPED} zeta"));
-        assert_eq!(rows[19], COLLAPSE, "its closing row unfolds it");
+        let at = archive_header_at(&rows);
+        let title = u16::try_from(at + 2).unwrap();
+        assert_eq!(rows[at + 2], format!(" ╭{STOPPED} zeta"));
+        assert_eq!(rows[at + 5], COLLAPSE, "its closing row unfolds it");
         assert_eq!(
-            click(&mut view, 6, 16),
+            click(&mut view, 6, title),
             Effect::Run(resume(
                 Subject::Context(cid("zeta")),
                 Action::OpenManager(cid("zeta"))
             ))
         );
-        assert_eq!(click(&mut view, 8, 19), Effect::None);
-        assert_eq!(drawn(&mut view, 44, 30)[17], EXPAND, "and folds it");
+        assert_eq!(click(&mut view, 8, title + 3), Effect::None);
+        let rows = drawn(&mut view, 44, 30);
+        assert_eq!(rows[archive_header_at(&rows) + 3], EXPAND, "and folds it");
     }
 
     #[test]
@@ -1395,6 +1425,10 @@ mod tests {
     fn assert_margins_blank(view: &mut View, width: u16, height: u16, what: &str) {
         let buf = buffer(view, width, height);
         for y in 0..height {
+            // a docked section's header runs across the whole pane, column 0 to the last column (pro-d348)
+            if text_rows(&buf)[usize::from(y)].starts_with('─') {
+                continue;
+            }
             for x in [0, width - 1] {
                 let cell = &buf[(x, y)];
                 assert_eq!(
@@ -1604,19 +1638,27 @@ mod tests {
                 .any(|r| r.contains(" old") || r.contains("f-bl")),
             "{rows:?}"
         );
-        // an archived Context is under the archive row: open the archive row, then unfold it at its own closing row
-        assert_eq!(rows[13].trim(), ARCHIVE_DOWN, "the archive row: {rows:?}");
-        assert_eq!(click(&mut view, 3, 13), Effect::None);
-        let rows = drawn(&mut view, 44, 23);
+        // an archived Context is in the Archive section: open the section, then unfold it at its own closing row
         assert_eq!(
-            (rows[14].as_str(), rows[15].as_str()),
+            archive_header_at(&rows),
+            22,
+            "the Archive header, the pane's last row: {rows:?}"
+        );
+        let rows = open_archive(&mut view, 44, 23);
+        let at = archive_header_at(&rows);
+        assert_eq!(
+            (rows[at + 2].as_str(), rows[at + 3].as_str()),
             (format!(" ╭{STOPPED} zeta").as_str(), EXPAND),
             "{rows:?}"
         );
-        assert_eq!(click(&mut view, 3, 15), Effect::None);
-        let rows = drawn(&mut view, 44, 23);
         assert_eq!(
-            (rows[14].as_str(), rows[17].as_str()),
+            click(&mut view, 3, u16::try_from(at + 3).unwrap()),
+            Effect::None
+        );
+        let rows = drawn(&mut view, 44, 23);
+        let at = archive_header_at(&rows);
+        assert_eq!(
+            (rows[at + 2].as_str(), rows[at + 5].as_str()),
             (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE),
             "{rows:?}"
         );
@@ -1657,7 +1699,11 @@ mod tests {
                 && !rows.iter().any(|r| r.contains(" old")),
             "{rows:#?}"
         );
-        click(&mut view, 4, row_of(&rows, 1, ARCHIVE_DOWN)); // expands the archive row
+        click(
+            &mut view,
+            4,
+            u16::try_from(archive_header_at(&rows)).unwrap(),
+        ); // opens the Archive section
         let rows = drawn(&mut view, 44, 30);
         let zeta = rows
             .iter()
@@ -1736,20 +1782,26 @@ mod tests {
     fn a_click_below_the_last_row_does_nothing() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 23);
-        assert_eq!(rows[15].trim(), ARCHIVE_DOWN);
-        assert_eq!(rows[16], "", "the row right below the last tree row");
+        // the project tree's last row is `gamma`'s closing row; the Archive section is docked at the bottom, folded
+        let last = rows
+            .iter()
+            .position(|r| r == " ╰\u{F0B2A} new")
+            .expect("gamma's closing row");
+        assert_eq!(archive_header_at(&rows), 22);
+        let below = u16::try_from(last + 1).unwrap();
+        assert_eq!(rows[last + 1], "", "the row right below the last tree row");
         assert_eq!(
-            click(&mut view, 1, 16),
+            click(&mut view, 1, below),
             Effect::None,
             "the row right below the last"
         );
-        assert_eq!(click(&mut view, 3, 17), Effect::None);
+        assert_eq!(click(&mut view, 3, below + 1), Effect::None);
         assert_eq!(drawn(&mut view, 44, 23), rows);
-        let _ = right_click(&mut view, 1, 16);
+        let _ = right_click(&mut view, 1, below);
         assert_eq!(drawn(&mut view, 44, 23).len(), rows.len());
         assert_eq!(
-            drawn(&mut view, 44, 23)[15].trim(),
-            ARCHIVE_DOWN,
+            archive_header_at(&drawn(&mut view, 44, 23)),
+            22,
             "only the left button clicks, and no row was hit"
         );
     }
@@ -1757,14 +1809,14 @@ mod tests {
     #[test]
     fn a_click_on_an_archived_row_unarchives_and_opens_it_and_enter_n_and_x_never_act_on_one() {
         let mut view = View::new(archived(), true);
-        drawn(&mut view, 44, 30);
-        click(&mut view, 1, 15); // the archive row
-        drawn(&mut view, 44, 30); // the archive row's rows are drawn before the next click
-        click(&mut view, 1, 17); // `╰󰬦 expand` of the archived Context
+        let rows = open_archive(&mut view, 44, 30); // the Archive section's rows are drawn before the next click
+        let at = u16::try_from(archive_header_at(&rows)).unwrap();
+        click(&mut view, 1, at + 3); // `╰󰬦 expand` of the archived Context
         let rows = drawn(&mut view, 44, 30);
+        let zeta = u16::try_from(archive_header_at(&rows) + 2).unwrap();
         assert!(
             rows[8].starts_with(&format!(" ├─{STOPPED} old"))
-                && rows[16] == format!(" ╭{STOPPED} zeta"),
+                && rows[usize::from(zeta)] == format!(" ╭{STOPPED} zeta"),
             "{rows:?}"
         );
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
@@ -1772,8 +1824,8 @@ mod tests {
         let archived_objects = [
             ((8, 8), Subject::Plan(pid("old")), "l-old"),
             ((8, 9), Subject::Session(sid("f-blocked")), "f-blocked"),
-            ((8, 17), Subject::Context(cid("zeta")), "l-zp"),
-            ((8, 18), Subject::Context(cid("zeta")), "f-zp"),
+            ((8, zeta + 1), Subject::Context(cid("zeta")), "l-zp"),
+            ((8, zeta + 2), Subject::Context(cid("zeta")), "f-zp"),
         ];
         for ((column, row), subject, id) in archived_objects {
             assert_eq!(
@@ -1789,7 +1841,7 @@ mod tests {
         }
         // the archived Context's title resumes its Manager
         assert_eq!(
-            click(&mut view, 5, 16),
+            click(&mut view, 5, zeta),
             Effect::Run(resume(
                 Subject::Context(cid("zeta")),
                 Action::OpenManager(cid("zeta"))
@@ -1831,7 +1883,7 @@ mod tests {
     /// The labels of the open menu, as drawn: the rows inside its box.
     fn menu_items(view: &mut View) -> Vec<String> {
         let rect = view.menu.as_ref().expect("a menu is open").rect(view.pane);
-        let rows = drawn(view, view.pane.width, view.pane.height);
+        let rows = drawn(view, view.pane.width, view.pane.height + 1);
         (rect.y + 1..rect.bottom() - 1)
             .map(|y| {
                 let row: Vec<char> = rows[y as usize].chars().collect();
@@ -1889,19 +1941,20 @@ mod tests {
         );
     }
 
-    /// A view of `archived()` with the archived Context unfolded (a tall pane, 30 rows): the archived Plan `old` is
-    /// at row 8, its fork `f-blocked` at 9, the archived Context `zeta` at 16, its Plan at 17 and fork at 18.
+    /// A view of `archived()` with the Archive section open and its archived Context unfolded (a tall pane, 30 rows): the
+    /// archived Plan `old` is at row 8, its fork `f-blocked` at 9; in the section docked at the bottom the archived Context
+    /// `zeta` is at row 25, its Plan at 26 and fork at 27, its closing row at 28 (the header at 23).
     fn archived_open() -> View {
         let mut view = View::new(archived(), true);
-        let rows = drawn(&mut view, 44, 30);
-        click(&mut view, 1, row_of(&rows, 1, ARCHIVE_DOWN)); // the archive row
-        let rows = drawn(&mut view, 44, 30);
-        assert_eq!(rows[16], format!(" ╭{STOPPED} zeta"), "{rows:?}");
-        click(&mut view, 1, 17); // `╰󰬦 expand` of the archived Context
+        let rows = open_archive(&mut view, 44, 30);
+        let at = archive_header_at(&rows);
+        assert_eq!(rows[at + 2], format!(" ╭{STOPPED} zeta"), "{rows:?}");
+        click(&mut view, 1, u16::try_from(at + 3).unwrap()); // `╰󰬦 expand` of the archived Context
         let rows = drawn(&mut view, 44, 30);
         assert!(
             rows[8].starts_with(&format!(" ├─{STOPPED} old"))
-                && rows[16] == format!(" ╭{STOPPED} zeta"),
+                && rows[25] == format!(" ╭{STOPPED} zeta")
+                && archive_header_at(&rows) == 23,
             "{rows:?}"
         );
         view
@@ -1916,9 +1969,9 @@ mod tests {
         for (column, row, delete) in [
             (8, 8, true),
             (8, 9, false),
-            (8, 16, true),
-            (8, 17, true),
-            (8, 18, false),
+            (8, 25, true),
+            (8, 26, true),
+            (8, 27, false),
         ] {
             let items: &[&str] = if delete {
                 &["Rename…", "Copy id", "Unarchive", "Delete"]
@@ -1930,7 +1983,7 @@ mod tests {
         }
         // the closing rows have none, the empty area has one
         drawn(&mut view, 44, 30);
-        for (column, row) in [(3, 10), (3, 13), (3, 19), (1, 20)] {
+        for (column, row) in [(3, 10), (3, 13), (3, 28), (1, 20)] {
             let _ = right_click(&mut view, column, row);
             assert_eq!(
                 view.menu.is_some(),
@@ -2229,7 +2282,7 @@ mod tests {
         for (row, subject) in [
             (8, Subject::Plan(PlanId::parse("old").unwrap())),
             (9, Subject::Session(sid("f-blocked"))),
-            (16, Subject::Context(ContextId::parse("zeta").unwrap())),
+            (25, Subject::Context(ContextId::parse("zeta").unwrap())),
         ] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
@@ -2257,7 +2310,7 @@ mod tests {
             }))
         );
         drawn(&mut view, 44, 30);
-        right_click(&mut view, 8, 16);
+        right_click(&mut view, 8, 25);
         let rename = Question::input(
             "Rename",
             Ask::RenameContext(ContextId::parse("zeta").unwrap()),
@@ -2297,7 +2350,7 @@ mod tests {
         }
         // archived rows: a Plan, a fork of it, an archived Context
         let mut view = archived_open();
-        for (row, id) in [(8, "old"), (9, "ship·f-bl"), (16, "zeta")] {
+        for (row, id) in [(8, "old"), (9, "ship·f-bl"), (25, "zeta")] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
             assert_eq!(
@@ -2915,19 +2968,20 @@ mod tests {
         );
         assert_eq!(rows[14], "");
         assert_eq!(
-            rows[15].trim(),
-            ARCHIVE_DOWN,
-            "the archive row follows the last live Context"
+            archive_header_at(&rows),
+            25,
+            "the Archive header is docked at the bottom, folded"
         );
         // opening it shows the archived Context and its own closing row
-        click(&mut view, 3, 15);
-        let rows = drawn(&mut view, 44, 26);
-        assert_eq!(rows[16], format!(" ╭{STOPPED} zeta"));
+        let rows = open_archive(&mut view, 44, 26);
+        let at = archive_header_at(&rows);
+        assert_eq!(rows[at + 2], format!(" ╭{STOPPED} zeta"));
         assert_eq!(
-            rows[17], EXPAND,
+            rows[at + 3],
+            EXPAND,
             "the folded Context with archived rows: `╰󰬦 expand`"
         );
-        assert_eq!(rows[18], "");
+        assert_eq!(rows[at + 4], "");
     }
 
     #[test]

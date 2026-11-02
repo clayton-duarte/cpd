@@ -727,8 +727,8 @@ fn an_empty_live_context_draws_the_clickable_new_row() {
     let closed = draw(&mut view, 46, 30);
     let archive = text_rows(&closed)
         .iter()
-        .position(|r| r.contains("archive"))
-        .expect("the archive row") as u16;
+        .position(|r| r.contains("Archive"))
+        .expect("the Archive header") as u16;
     click(&mut view, 3, archive);
     let buf = draw(&mut view, 46, 30);
     let rows = text_rows(&buf);
