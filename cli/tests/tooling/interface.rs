@@ -167,3 +167,24 @@ fn janitor_command_is_in_the_help_tree() {
         "`janitor` is a runnable command the User calls: {node}"
     );
 }
+
+#[test]
+fn the_tier_write_commands_are_cockpit_callable() {
+    let tree = help_tree();
+    for path in [
+        "preset apply",
+        "preset set",
+        "config tiers set",
+        "session retier",
+    ] {
+        assert_eq!(find(&tree, path)["cockpit"], true, "{path}");
+    }
+    assert_eq!(
+        find(&tree, "preset set")["callers"],
+        serde_json::json!(["Manager"])
+    );
+    assert_eq!(
+        find(&tree, "config tiers set")["callers"],
+        serde_json::json!([])
+    );
+}
