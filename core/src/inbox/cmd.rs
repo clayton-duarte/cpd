@@ -494,6 +494,23 @@ pub(super) fn approve_in(env: &mut Env, id: i64) -> Result<Output, CpdError> {
     Ok(Output::success(fields))
 }
 
+/// Why a pull request is no longer worth claiming, or `None` when it still needs review.
+fn stale_reason(pr: &team::GhPr, status: team::Status) -> Option<&'static str> {
+    match pr.state {
+        team::GhState::Merged => return Some("merged"),
+        team::GhState::Closed => return Some("closed"),
+        team::GhState::Open => {}
+    }
+    match status {
+        team::Status::NeedsReview(_) => None,
+        team::Status::Done => Some("approved"),
+        team::Status::Draft => Some("draft"),
+        team::Status::ChangesRequested => Some("changes-requested"),
+        team::Status::InReview => Some("in-review"),
+        team::Status::Hidden => Some("own"),
+    }
+}
+
 fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
     let mut env = Env::open_with(ports)?;
     let now = ports.clock.utc();
@@ -534,6 +551,46 @@ fn claim(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
         .and_then(|(repo, n)| Some((repo, n.parse::<u64>().ok()?)))
         .ok_or_else(missing)?;
     let post = cache.primary_post(repo, number).ok_or_else(missing)?;
+    let lookup = team::github_lookup_with(&*ports.runner, &env.home, &[(repo.to_owned(), number)])?;
+    let reason = match lookup
+        .workflows
+        .get(&(repo.to_owned(), number))
+        .and_then(Option::as_ref)
+    {
+        None => Some("not-found"),
+        Some(pr) => stale_reason(
+            pr,
+            team::status(post, pr, &lookup.me, &env.config.inbox.bot_reviewers),
+        ),
+    };
+    if let Some(reason) = reason {
+        env.store.write("inbox claim", |tx| {
+            if let Some(current) = model::get(tx, item.id)?
+                && current.closed_at.is_none()
+                && current.claimed_at.is_none()
+            {
+                model::close_item(tx, &current, &timestamp(now))?;
+            }
+            Ok(())
+        })?;
+        let why = match reason {
+            "merged" => "already merged",
+            "closed" => "closed",
+            "approved" => "already approved",
+            "not-found" => "not found on GitHub",
+            other => other,
+        };
+        return Err(CpdError::new(
+            ErrorCode::NotClaimable,
+            format!(
+                "Inbox item {} is not claimable: pull request {repo}#{number} is {why}; the item is closed.",
+                item.id
+            ),
+        )
+        .with("item", item.id)
+        .with("kind", item.kind.as_str())
+        .with("reason", reason));
+    }
     let url = item.url.clone().unwrap_or_default();
     let text = format!(
         "Please start a review of the pull request {url} in your Context {context}. It was posted in Slack channel {} at {} (the post's ts); the User claimed it from the Inbox.",
