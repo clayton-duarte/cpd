@@ -19,6 +19,7 @@ import * as React from "react"
 import { GalleryVerticalEnd, ChevronRight } from "lucide-react"
 
 import type { LiveContext, LivePlan, LivePlanCounts, LiveSession } from "../api/live-server"
+import { cn } from "../lib/utils"
 import {
   Sidebar,
   SidebarContent,
@@ -226,7 +227,13 @@ function planSession(plan: LivePlan, sessions: readonly LiveSession[]): LiveSess
     : sessions.find((session) => session.id === plan.lead_session)
 }
 
-/** One Plan row: glyph + key + its nonzero counters; clicking selects its Lead Session. */
+/**
+ * One Plan row: glyph + key + its nonzero counters; clicking selects its Lead Session. The row's
+ * button stretches to the rail's width (`w-full`), so the counters' `ml-auto` pushes them to the
+ * pane's inner edge — the way the cockpit right-aligns a Plan's counters (web/README.md "Context
+ * tree rows", hs-d841). Without the stretch a button shrink-wraps its content and the counters sit
+ * inline right after the key.
+ */
 function PlanRow({
   plan,
   sessions,
@@ -255,7 +262,7 @@ function PlanRow({
           type="button"
           title={leadId ?? plan.id}
           disabled={leadId === null}
-          className={rowText}
+          className={cn("w-full", rowText)}
           onClick={() => {
             if (leadId !== null) onSelectSession(leadId)
           }}
