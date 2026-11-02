@@ -76,6 +76,7 @@ mod open_tests;
 mod parked;
 #[cfg(test)]
 mod parked_tests;
+mod permanent;
 #[cfg(test)]
 mod pill_texts;
 mod poll_run;
