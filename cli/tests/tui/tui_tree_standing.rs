@@ -255,9 +255,9 @@ fn project_contexts_scroll_above_the_section_and_it_never_moves() {
             ("p4", &[]),
         ],
     );
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     let standing = blocks(&[block("cpd", &[]), block("host", &[])]);
-    // the project tree: p4, p3, p2, p1 (11 rows with the spacers); 5 list rows between its two cue rows
+    // the project tree: p4, p3, p2, p1 (11 rows with the spacers); 7 list rows between its two cue rows
     let all = blocks(&[
         block("p4", &[]),
         block("p3", &[]),
@@ -266,29 +266,29 @@ fn project_contexts_scroll_above_the_section_and_it_never_moves() {
     ]);
     let shown = |from: usize, above: String, below: String| {
         pane(
-            16,
+            18,
             &above,
-            &all[from..from + 5],
+            &all[from..from + 7],
             &below,
             Some((true, &fit(&standing))),
         )
     };
-    assert_eq!(tree.screen(), shown(0, String::new(), cue("▼", 6)));
+    assert_eq!(tree.screen(), shown(0, String::new(), cue("▼", 4)));
     wheel(&mut tree, true, 3); // over the project tree: 3 rows a notch
-    assert_eq!(tree.screen(), shown(3, cue("▲", 3), cue("▼", 3)));
+    assert_eq!(tree.screen(), shown(3, cue("▲", 3), cue("▼", 1)));
     wheel(&mut tree, true, 3);
     wheel(&mut tree, true, 3); // clamped at the end
-    assert_eq!(tree.screen(), shown(6, cue("▲", 6), String::new()));
+    assert_eq!(tree.screen(), shown(4, cue("▲", 4), String::new()));
     wheel(&mut tree, true, 12); // over the section's rows, which have nothing to scroll
     assert_eq!(
         tree.screen(),
-        shown(6, cue("▲", 6), String::new()),
+        shown(4, cue("▲", 4), String::new()),
         "the wheel over the section moves nothing"
     );
     for _ in 0..4 {
         wheel(&mut tree, false, 3);
     }
-    assert_eq!(tree.screen(), shown(0, String::new(), cue("▼", 6)));
+    assert_eq!(tree.screen(), shown(0, String::new(), cue("▼", 4)));
 }
 
 #[test]
@@ -296,17 +296,17 @@ fn a_click_on_the_header_folds_and_opens_the_section_with_the_fold_glyph() {
     let fx = fx();
     let _engine = engine(&fx);
     populate(&fx, &[("cpd", &[]), ("host", &[]), ("aa", &[])]);
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     let standing = blocks(&[block("cpd", &[]), block("host", &[])]);
-    let open = pane(16, "", &block("aa", &[]), "", Some((true, &fit(&standing))));
+    let open = pane(18, "", &block("aa", &[]), "", Some((true, &fit(&standing))));
     assert_eq!(tree.screen(), open);
-    tree.click(5, 8); // the header: tree rows 0 to 6, the blank row 7
+    tree.click(5, 10); // the header: tree rows 0 to 8, the blank row 9
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((false, &[]))),
+        pane(18, "", &block("aa", &[]), "", Some((false, &[]))),
         "folded: the blank row and the header remain, at the pane's bottom"
     );
-    tree.click(5, 15);
+    tree.click(5, 17);
     assert_eq!(tree.screen(), open, "a second click opens it");
     assert!(
         drive::calls(&fx).is_empty(),
@@ -328,34 +328,34 @@ fn a_permanent_context_expands_to_its_plans_like_any_context() {
         .unwrap(),
         "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'a0';",
     );
-    let mut tree = Tree::start(&fx, W as u16, 16);
+    let mut tree = Tree::start(&fx, W as u16, 18);
     // expanded by default, as every Context: the live Plans, the archived one, then `collapse`
     let expanded = vec![
         title("cpd"),
         plan("a2", false),
         plan("a1", false),
         plan("a0", false),
-        format!(" ╰{OPEN} collapse"),
+        format!(" ╰{FOLDED} collapse"),
     ];
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
     );
-    tree.click(5, 14); // the closing row `collapse`, in the section, above its reserved last row
+    tree.click(5, 16); // the closing row `collapse`, in the section, above its reserved last row
     let folded = vec![
         title("cpd"),
         plan("a2", false),
         plan("a1", false),
-        format!(" ╰{FOLDED} expand"),
+        format!(" ╰{OPEN} expand"),
     ];
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &fit(&folded))))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&folded))))
     );
-    tree.click(5, 14); // `expand`: the section grew up, so it is on the same row
+    tree.click(5, 16); // `expand`: the section grew up, so it is on the same row
     assert_eq!(
         tree.screen(),
-        pane(16, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
+        pane(18, "", &block("aa", &[]), "", Some((true, &fit(&expanded))))
     );
 }
 
