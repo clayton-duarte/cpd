@@ -6,12 +6,15 @@
 // `isActive`, and clicking a row reports it through `onSelectSession` (not `onSelect`: the DOM
 // already declares that one on `Sidebar`).
 //
-// With the Plans read wired it renders the Plan tree instead (web/README.md "Context tree rows"): a
-// Context row of glyph + key with no numbers, then one Plan row per non-archived Plan of that
-// Context, sorted by Context name and then by Plan key. A Plan row is glyph + key + its nonzero Job
-// counters in the cockpit's order (planned, active, failed, merged), a dot between two drawn roles,
-// each in its status colour; clicking a Plan row selects its Lead Session. Given no plans at all the
-// rail keeps drawing its Session tree, so a Chat-only fake never regresses.
+// With the Contexts read wired the rail draws the cockpit's Context tree instead (web/README.md
+// "Context tree rows"): every Context of the read, sorted by id with the archived ones last,
+// each a Context row of glyph + id with no numbers and a fold button carrying `aria-expanded`. The
+// fold, closed by default, hides only that Context's archived Plans while its live Plans always
+// show; clicking a Context row selects its manager Session (disabled only when there is none) and
+// clicking a Plan row selects its Lead Session. An awake row's dot takes its state's palette colour
+// (working and waiting mizu, blocked anko, idle and unknown dim, asleep plain with its row dim), and
+// no Tailwind hue is used anywhere. Given no Contexts read the rail keeps drawing its Session tree,
+// so a Chat-only fake never regresses.
 import * as React from "react"
 import { GalleryVerticalEnd, ChevronRight } from "lucide-react"
 
