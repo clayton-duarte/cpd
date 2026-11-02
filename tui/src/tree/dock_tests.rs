@@ -92,3 +92,30 @@ fn a_pane_of_8_rows_draws_standing_first_and_cuts_archive_at_the_bottom() {
     assert_eq!(headers(&screen), [5], "{screen:#?}");
     assert!(screen[5].contains("Standing"), "{screen:#?}");
 }
+
+#[test]
+fn a_folded_section_is_its_header_and_one_blank_row_below_it() {
+    // pro-d351, the folded cases on a 16-row pane (the group is capped at 8 rows and every case fits)
+    // Standing folded + Archive folded: `. H . H .`, rows 11 to 15
+    let mut view = both();
+    view.state.open(vec![STANDING.to_owned()]);
+    let screen = draw(&mut view, 16);
+    assert_eq!(headers(&screen), [12, 14], "{screen:#?}");
+    assert!(screen[12].contains("Standing") && screen[14].contains("Archive"));
+    assert!(
+        screen[11].is_empty() && screen[13].is_empty() && screen[15].is_empty(),
+        "{screen:#?}"
+    );
+    // Standing open + Archive folded: Archive's header is the last row but one, the last row is blank
+    let mut view = both();
+    let screen = draw(&mut view, 16);
+    assert_eq!(headers(&screen), [9, 14], "{screen:#?}");
+    assert!(screen[15].is_empty(), "{screen:#?}");
+    // Standing folded + Archive open: Standing's own blank row separates them
+    let mut view = both();
+    view.state.open(vec![STANDING.to_owned()]);
+    view.state.open(vec![ARCHIVE.to_owned()]);
+    let screen = draw(&mut view, 16);
+    assert_eq!(headers(&screen), [9, 11], "{screen:#?}");
+    assert!(screen[10].is_empty(), "{screen:#?}");
+}

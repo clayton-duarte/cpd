@@ -1335,7 +1335,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 30);
         assert_eq!(
             archive_header_at(&rows),
-            29,
+            28,
             "the Archive section starts folded, its header the last row: {rows:?}"
         );
         let rows = open_archive(&mut view, 44, 30);
@@ -1641,8 +1641,8 @@ mod tests {
         // an archived Context is in the Archive section: open the section, then unfold it at its own closing row
         assert_eq!(
             archive_header_at(&rows),
-            22,
-            "the Archive header, the pane's last row: {rows:?}"
+            21,
+            "the Archive header, the row above the pane's last: {rows:?}"
         );
         let rows = open_archive(&mut view, 44, 23);
         let at = archive_header_at(&rows);
@@ -1787,7 +1787,7 @@ mod tests {
             .iter()
             .position(|r| r == " ╰\u{F0B2A} new")
             .expect("gamma's closing row");
-        assert_eq!(archive_header_at(&rows), 22);
+        assert_eq!(archive_header_at(&rows), 21);
         let below = u16::try_from(last + 1).unwrap();
         assert_eq!(rows[last + 1], "", "the row right below the last tree row");
         assert_eq!(
@@ -1801,7 +1801,7 @@ mod tests {
         assert_eq!(drawn(&mut view, 44, 23).len(), rows.len());
         assert_eq!(
             archive_header_at(&drawn(&mut view, 44, 23)),
-            22,
+            21,
             "only the left button clicks, and no row was hit"
         );
     }
@@ -2969,7 +2969,7 @@ mod tests {
         assert_eq!(rows[14], "");
         assert_eq!(
             archive_header_at(&rows),
-            25,
+            24,
             "the Archive header is docked at the bottom, folded"
         );
         // opening it shows the archived Context and its own closing row

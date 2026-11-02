@@ -953,12 +953,7 @@ pub fn draw(
     // the group's rows, drawn from its blank row at `y`; whatever does not fit in it is cut at the bottom
     let bounds = Rect::new(f.area().x, project.bottom(), f.area().width, group);
     let mut y = project.bottom() + 1;
-    let mut previous_open = true;
     for (dock, rows_shown) in docks.into_iter().zip(shown) {
-        if !previous_open {
-            y += 1; // the blank row between a folded section and the next
-        }
-        previous_open = dock.open;
         let at = DOCKED.iter().position(|d| *d == dock.path).unwrap_or(0);
         let docked = scroll.docked[at].get_or_insert_with(Box::default);
         let header = Rect::new(f.area().x, y, f.area().width, 1).intersection(bounds);
@@ -975,6 +970,7 @@ pub fn draw(
         }
         y += 1;
         if !dock.open {
+            y += 1; // the blank row below a folded header
             docked.max = 0;
             docked.hits = Hits {
                 header,
@@ -1004,20 +1000,16 @@ struct Dock {
 
 /// How the docked group of `docks` is shared in a budget of `budget` rows (half the pane; none under 2 rows): the list rows
 /// each open section shows (0 for a folded one), and the group's height. The group is a blank row, then each section (its
-/// header and, open, its two reserved rows and its list rows), with one blank row after a folded section that another
-/// follows. It shows every row when it fits; else the rows left by the fixed ones are shared, the first section first, each
+/// header and, open, its two reserved rows and its list rows; folded, one blank row below the header). It shows every row when it fits; else the rows left by the fixed ones are shared, the first section first, each
 /// later open section keeping one; with fewer than that the rows are all kept and the group is cut at the bottom.
 fn share(docks: &[Dock], budget: usize) -> (Vec<usize>, usize) {
     if budget < 2 || docks.is_empty() {
         return (vec![0; docks.len()], 0);
     }
-    let separator = usize::from(docks.len() == 2 && !docks[0].open);
-    let fixed: usize = 1
-        + separator
-        + docks
-            .iter()
-            .map(|d| if d.open { 3 } else { 1 })
-            .sum::<usize>();
+    let fixed: usize = 1 + docks
+        .iter()
+        .map(|d| if d.open { 3 } else { 2 })
+        .sum::<usize>();
     let mut shown: Vec<usize> = docks.iter().map(|d| d.rows.len()).collect();
     if fixed + shown.iter().sum::<usize>() > budget {
         let open = docks.iter().filter(|d| d.open).count();

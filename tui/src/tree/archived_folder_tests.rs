@@ -5,7 +5,7 @@
 //! static grey pills, the lines colour 8. It is folded by default, drawn only when at least one Context is archived, its
 //! fold is persisted under `"archived"` in `run/tui/tree-folds.json`; its archived Contexts keep their own closing toggle
 //! and are never cursor stops. The group is ONE blank row, then the section: open, a header, one reserved row, the blocks
-//! and one reserved row; folded, the header only (the pane's last row).
+//! and one reserved row; folded, the header and one blank row below it (the pane's last row).
 //!
 //! Red until the tree docks the section: today's tree draws the row `󰬦 archive` instead, so every test here fails at
 //! runtime on an assertion, never at build time. Every pane is 30 columns wide and 16 rows high (the group is capped at
@@ -37,6 +37,8 @@ const CAP_RIGHT: &str = "\u{E0B4}";
 /// The pane's size.
 const W: u16 = 30;
 const H: u16 = 16;
+/// The row of a folded Archive header: the pane's last row but one, a blank row (pro-d351) below it.
+const FOLDED_AT: u16 = H - 2;
 
 /// Colour 8, the archived rows' and the lines' colour.
 fn muted() -> Color {
@@ -135,9 +137,9 @@ fn header(glyph: &str) -> String {
     )
 }
 
-/// The group of a FOLDED Archive section: the blank row and the header, the pane's last row.
+/// The group of a FOLDED Archive section: the blank row above, the header and the blank row below, the pane's last row.
 fn folded_group() -> Vec<String> {
-    vec![String::new(), header(UP)]
+    vec![String::new(), header(UP), String::new()]
 }
 
 /// The group of an OPEN Archive section: the blank row, the header, the reserved row, the blocks, the reserved row.
@@ -183,7 +185,7 @@ fn the_archive_header_reads_archive_with_the_down_and_up_glyphs_in_the_right_pil
     let mut view = View::new(small(), true);
     // folded: the pane's last row, the glyph U+F0B2C in the right pill
     let buf = pane(&mut view);
-    let last = H - 1;
+    let last = FOLDED_AT;
     assert_eq!(rows(&buf)[usize::from(last)], header(UP));
     assert_eq!(header(UP).chars().count(), usize::from(W), "30 cells");
     // `Archive` is the left grey pill (columns 3 to 11), the glyph the right grey pill (26 to 28)
@@ -216,7 +218,7 @@ fn archived_contexts_render_in_the_archive_section_and_none_in_the_project_tree(
         "folded: gamma at the top, the header at the bottom"
     );
     // open: zeta's block (folded as an archived Context starts) between the two reserved rows
-    click(&mut view, 5, H - 1);
+    click(&mut view, 5, FOLDED_AT);
     let buf = pane(&mut view);
     let group = open_group(&zeta_folded());
     assert_eq!(rows(&buf), screen(&gamma(), &group));
@@ -235,7 +237,7 @@ fn archived_contexts_render_in_the_archive_section_and_none_in_the_project_tree(
     // the fixture with archived objects in a live Context: no row above the group holds the archived Context, none reads `archive`
     let mut view = View::new(archived(), true);
     draw(&mut view, W, 40);
-    click(&mut view, 5, 39);
+    click(&mut view, 5, 38);
     let screen = rows(&draw(&mut view, W, 40));
     let header_at = find(&screen, "Archive");
     for (y, row) in screen[..header_at].iter().enumerate() {
@@ -270,7 +272,7 @@ fn a_click_on_the_archive_header_toggles_the_archived_contexts_and_each_keeps_it
     let folded = screen(&gamma(), &folded_group());
     assert_eq!(rows(&pane(&mut view)), folded, "folded by default");
     // a click on the header opens it: zeta's block, still folded
-    assert_eq!(click(&mut view, 5, H - 1), Effect::None);
+    assert_eq!(click(&mut view, 5, FOLDED_AT), Effect::None);
     let closed = screen(&gamma(), &open_group(&zeta_folded()));
     assert_eq!(rows(&pane(&mut view)), closed);
     // zeta's own closing toggle (`expand`, at row 14) shows its Plan and fork while the section stays open
@@ -284,7 +286,7 @@ fn a_click_on_the_archive_header_toggles_the_archived_contexts_and_each_keeps_it
     assert_eq!(click(&mut view, 5, 11), Effect::None);
     assert_eq!(rows(&pane(&mut view)), folded);
     // the reserved rows and the blank rows are no hit: opened again, a click on one changes nothing
-    click(&mut view, 5, H - 1);
+    click(&mut view, 5, FOLDED_AT);
     assert_eq!(rows(&pane(&mut view)), closed);
     for y in [10, 12, 15] {
         assert_eq!(click(&mut view, 5, y), Effect::None);
@@ -307,7 +309,7 @@ fn the_archive_section_appears_only_when_a_context_is_archived() {
         .collect();
     assert_eq!(
         headers,
-        [usize::from(H) - 1],
+        [usize::from(FOLDED_AT)],
         "exactly one Archive header: {all:#?}"
     );
 }
@@ -320,16 +322,16 @@ fn the_archive_header_is_clickable_and_never_selectable() {
     // a View has hit geometry from its last frame only
     pane(&mut view);
     // the whole header row is one hit target that toggles it and runs no command
-    assert_eq!(click(&mut view, 1, H - 1), Effect::None);
+    assert_eq!(click(&mut view, 1, FOLDED_AT), Effect::None);
     assert_eq!(rows(&pane(&mut view)), open);
     let header_at = header_row(&open_group(&zeta_folded()));
     assert_eq!(click(&mut view, 28, header_at), Effect::None);
     assert_eq!(rows(&pane(&mut view)), folded);
     // a right click on the header opens no menu
-    assert_eq!(right_click(&mut view, 5, H - 1), Effect::None);
+    assert_eq!(right_click(&mut view, 5, FOLDED_AT), Effect::None);
     assert_eq!(rows(&pane(&mut view)), folded, "no menu");
     // open again: the cursor crosses the rows but never stops on the header or on an archived Context
-    click(&mut view, 5, H - 1);
+    click(&mut view, 5, FOLDED_AT);
     assert_eq!(rows(&pane(&mut view)), open);
     for delta in [1isize, -1] {
         for _ in 0..40 {
@@ -370,7 +372,7 @@ fn the_archive_fold_defaults_folded_and_persists_under_the_archived_key() {
         screen(&gamma(), &folded_group()),
         "folded by default"
     );
-    assert_eq!(click(&mut view, 5, H - 1), Effect::None);
+    assert_eq!(click(&mut view, 5, FOLDED_AT), Effect::None);
     view.save_folds();
     let text = std::fs::read_to_string(dir.path().join("run/tui/tree-folds.json")).unwrap();
     assert!(

@@ -52,6 +52,7 @@ use ratatui::backend::Backend;
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
+use super::background::Background;
 use super::dialog;
 use super::menu::{Menu, Outcome};
 use super::pace::{self, Reads};
@@ -209,14 +210,14 @@ pub fn show_with<B: Backend>(
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ctx.ports.runner.clone());
     let log = ViewLog::of(&home, "widgets");
     let runner = actions::Runner::new(home.clone(), &config, ctx.ports);
-    let lead = Opener {
-        home: &home,
+    let lead = Arc::new(Opener {
+        home: home.clone(),
         busy_ms: u64::from(config.timeouts.store_busy_ms),
         run_command,
-        tmux: &tmux,
-        log: &log,
-        runner: &runner,
-    };
+        tmux,
+        log,
+        runner,
+    });
     show(
         ctx,
         feed,
@@ -235,16 +236,17 @@ pub(crate) fn menu_pane(pane: Rect) -> Rect {
     pane.inner(Margin::new(1, 0))
 }
 
-/// What a click on an Inbox item runs. `log` is `run/tui/widgets.log`.
-struct Opener<'a> {
-    home: &'a CpdHome,
+/// What a click on an Inbox item runs. `log` is `run/tui/widgets.log`. It owns what it holds and is shared as an
+/// `Arc`, so a pick or a click runs on a [`Background`] job, off the view's thread.
+struct Opener {
+    home: CpdHome,
     /// `timeouts.store_busy_ms`, for the read a pick makes.
     busy_ms: u64,
     run_command: RunCommand,
-    tmux: &'a Tmux,
-    log: &'a ViewLog,
+    tmux: Tmux,
+    log: ViewLog,
     /// What runs the actions of an Inbox item's jump (the tree's, shared).
-    runner: &'a actions::Runner,
+    runner: actions::Runner,
 }
 
 /// The right-click menu of an Inbox item, while it is open: its entries and the item it is about.
@@ -263,38 +265,38 @@ fn drive<E: Entry>(menu: &mut Menu<E>, pane: Rect, event: &Event) -> Outcome<E> 
     }
 }
 
-impl Opener<'_> {
+impl Opener {
     /// A left click on `item`: its jump ([`inbox::click`]), run on the tree's runner; a failure is the error dialog and a
     /// line of the log. The Sessions are read as of `now` (contract §1.3 text).
     fn jump(&self, item: &Item, now: &str) {
         let tree = match self.runner.tree(now) {
             Ok(tree) => tree,
-            Err(why) => return dialog::report_why(self.tmux, self.log, "Inbox", why),
+            Err(why) => return dialog::report_why(&self.tmux, &self.log, "Inbox", why),
         };
         match inbox::click(&tree, item) {
             None => {}
             Some(Jump::Run(action)) => self.said(self.runner.run(&action)),
             Some(Jump::Models(provider, at)) => {
-                let shown = inbox::models_body(self.home, &provider, &at)
+                let shown = inbox::models_body(&self.home, &provider, &at)
                     .map_err(|e| format!("{}: {}", e.code(), e.message()));
                 match shown {
                     Ok(body) => {
                         // a dialog that cannot open is logged: another dialog would fail the same way
                         if let Err(e) =
-                            dialog::text(self.tmux, &format!("Models: {provider}"), &body)
+                            dialog::text(&self.tmux, &format!("Models: {provider}"), &body)
                         {
                             let _ = self
                                 .log
                                 .append(&format!("failed: Models: dialog: {}", e.message()));
                         }
                     }
-                    Err(why) => dialog::report_why(self.tmux, self.log, "Models", why),
+                    Err(why) => dialog::report_why(&self.tmux, &self.log, "Models", why),
                 }
             }
             // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
             Some(Jump::Curate(context)) => {
                 if let Err(why) = self.runner.curate(&context) {
-                    dialog::report_why(self.tmux, self.log, "Curate", why);
+                    dialog::report_why(&self.tmux, &self.log, "Curate", why);
                 }
             }
         }
@@ -303,12 +305,12 @@ impl Opener<'_> {
     /// The result of an action: a failure is the error dialog and a line of the log (a success says nothing).
     fn said(&self, result: Result<String, Failed>) {
         if let Err(Failed { step, why }) = result {
-            dialog::report_why(self.tmux, self.log, &step.argv().join(" "), why);
+            dialog::report_why(&self.tmux, &self.log, &step.argv().join(" "), why);
         }
     }
 
     /// `Post`: `pr post --workflow <key> --plan <plan>`, `<key>` read now from the workflow row of the item's Plan that points at the item's
-    /// pull request; no popup, the cockpit waits. A refusal, or no such row, is the failure dialog.
+    /// pull request; no popup; it runs on a `Background` job, off the view's thread. A refusal, or no such row, is the failure dialog.
     fn post(&self, item: &Item) {
         const TITLE: &str = "Post Pull Request";
         let (Some(plan), Some(pull)) =
@@ -316,7 +318,7 @@ impl Opener<'_> {
         else {
             return;
         };
-        let key = Store::open(self.home, self.busy_ms).and_then(|mut store| {
+        let key = Store::open(&self.home, self.busy_ms).and_then(|mut store| {
             store.read(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT r.key FROM workflows r JOIN pull_requests q ON q.id = r.pull_request \
@@ -333,10 +335,10 @@ impl Opener<'_> {
             })
         });
         match key {
-            Err(e) => dialog::report(self.tmux, self.log, TITLE, &e),
+            Err(e) => dialog::report(&self.tmux, &self.log, TITLE, &e),
             Ok(None) => dialog::report_why(
-                self.tmux,
-                self.log,
+                &self.tmux,
+                &self.log,
                 TITLE,
                 format!("No Workflow of Plan {plan} has the pull request {pull}."),
             ),
@@ -348,7 +350,7 @@ impl Opener<'_> {
                     .map(std::ffi::OsString::from)
                     .collect();
                 if let Err(e) = (self.run_command)(all) {
-                    dialog::report(self.tmux, self.log, TITLE, &e);
+                    dialog::report(&self.tmux, &self.log, TITLE, &e);
                 }
             }
         }
@@ -359,7 +361,7 @@ impl Opener<'_> {
         let Some(url) = item.url.as_ref() else { return };
         let args = ["set-buffer", "-w", "--", url.as_str()].map(str::to_owned);
         if let Err(e) = self.tmux.run(&args) {
-            dialog::report(self.tmux, self.log, "Copy Link", &e);
+            dialog::report(&self.tmux, &self.log, "Copy Link", &e);
         }
     }
 
@@ -372,7 +374,7 @@ impl Opener<'_> {
             .map(std::ffi::OsString::from)
             .collect();
         if let Err(e) = (self.run_command)(all) {
-            dialog::report(self.tmux, self.log, &words, &e);
+            dialog::report(&self.tmux, &self.log, &words, &e);
         }
     }
 }
@@ -388,12 +390,15 @@ fn show<B: Backend>(
     (mut inbox, mut engine_running, mut snooze_end, mut merging): Seen,
     mut machine: Machine,
     mut sampler: Sampler,
-    opener: &Opener,
+    opener: &Arc<Opener>,
     poll_ms: u32,
 ) -> Result<(), ViewError> {
     let ports = ctx.ports;
     let Feed { pump, watch } = feed;
     let mut reads = Reads::<Read>::on(&pump);
+    // A pick or a click of the Inbox runs off this thread (tui-W7, pro-d350): the menu closes and the view redraws at
+    // once; a failure opens its dialog from the job, and the job's end forces the Inbox read.
+    let mut background = Background::<()>::on(&pump);
     let poll = Duration::from_millis(u64::from(poll_ms));
     let (every, watch_failure) = match &watch {
         Ok(Some(_)) => (pump::SAFETY, None),
@@ -421,6 +426,10 @@ fn show<B: Backend>(
     let mut inbox_scroll = 0usize;
     let mut drawn_second = wall_ms(ports) / 1000;
     loop {
+        while background.finished().is_some() {
+            redraw = true;
+            schedule.force(); // the Inbox shows the result on the next read
+        }
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let (frame, second) = (frame_now(ports), wall_ms(ports) / 1000);
         let wants = needs(&inbox, &merging, sampled_at);
@@ -478,7 +487,12 @@ fn show<B: Backend>(
             schedule.deadline(now),
         );
         let signal = if pump.is_driven() {
-            pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out())
+            pump.wait_driven(
+                ports,
+                &mut *ctx.input,
+                until,
+                schedule.is_out() || background.busy(),
+            )
         } else {
             pump.wait(until)
         };
@@ -497,29 +511,31 @@ fn show<B: Backend>(
                         Outcome::Pick(entry) => {
                             let InboxMenu { item, .. } =
                                 inbox_menu.take().expect("the menu was open");
+                            let (opener, now) =
+                                (Arc::clone(opener), clock::timestamp(ports.clock.utc()));
                             match entry {
-                                InboxEntry::Choice(choice) => opener.choose(choice, item.id),
-                                InboxEntry::Merge => {
-                                    if let Some(pull) = inbox::Pull::from_subject(&item.subject)
-                                        && let Err(e) =
-                                            crate::merge::start(opener.tmux, &pull.to_string())
-                                    {
-                                        dialog::report(
-                                            opener.tmux,
-                                            opener.log,
-                                            "Merge Pull Request",
-                                            &e,
-                                        );
-                                    }
-                                }
-                                InboxEntry::Post => opener.post(&item),
-                                InboxEntry::GoToLead => {
-                                    opener.jump(&item, &clock::timestamp(ports.clock.utc()))
-                                }
-                                InboxEntry::CopyLink => opener.copy_link(&item),
                                 InboxEntry::Merging => {}
+                                entry => background.submit(move || match entry {
+                                    InboxEntry::Choice(choice) => opener.choose(choice, item.id),
+                                    InboxEntry::Merge => {
+                                        if let Some(pull) = inbox::Pull::from_subject(&item.subject)
+                                            && let Err(e) =
+                                                crate::merge::start(&opener.tmux, &pull.to_string())
+                                        {
+                                            dialog::report(
+                                                &opener.tmux,
+                                                &opener.log,
+                                                "Merge Pull Request",
+                                                &e,
+                                            );
+                                        }
+                                    }
+                                    InboxEntry::Post => opener.post(&item),
+                                    InboxEntry::GoToLead => opener.jump(&item, &now),
+                                    InboxEntry::CopyLink => opener.copy_link(&item),
+                                    InboxEntry::Merging => {}
+                                }),
                             }
-                            schedule.force(); // the Inbox shows the result on the next read
                         }
                     }
                 } else {
@@ -552,20 +568,24 @@ fn show<B: Backend>(
                         {
                             match drawn.inbox_shape.hit(m.row - drawn.inbox.y) {
                                 Some(InboxHit::Item(i)) => {
-                                    opener.jump(&inbox[i], &clock::timestamp(ports.clock.utc()));
-                                    schedule.force(); // the result shows on the next read
+                                    let (opener, item) = (Arc::clone(opener), inbox[i].clone());
+                                    let now = clock::timestamp(ports.clock.utc());
+                                    background.submit(move || opener.jump(&item, &now));
                                 }
                                 Some(InboxHit::Header) | None => {}
                             }
                         }
                         Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                             let at = Position::new(m.column, m.row);
-                            if let Some(url) = drawn.links.at(at)
-                                && let Err(e) = crate::link::open_url(&*ports.runner, url)
-                            {
-                                dialog::report(opener.tmux, opener.log, "Open Link", &e);
+                            if let Some(url) = drawn.links.at(at) {
+                                let (opener, runner, url) =
+                                    (Arc::clone(opener), ports.runner.clone(), url.to_owned());
+                                background.submit(move || {
+                                    if let Err(e) = crate::link::open_url(&*runner, &url) {
+                                        dialog::report(&opener.tmux, &opener.log, "Open Link", &e);
+                                    }
+                                });
                             }
-                            schedule.force();
                         }
                         Event::Mouse(m) if drawn.inbox.contains(Position::new(m.column, m.row)) => {
                             match m.kind {
