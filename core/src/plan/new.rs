@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::lead::{self, Lead};
 use super::row::{self, PlanRow};
 use super::{Env, NewArgs, read_text_file, write_file};
+use crate::agent_key::AgentKey;
 use crate::args::Text;
 use crate::config::WorkerRunner;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef};
@@ -55,10 +56,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         .transpose()?;
     let mut env = Env::open()?;
     let id = args.id.clone();
-    let name = args
-        .name
-        .as_ref()
-        .map_or_else(|| id.to_string(), |n| n.as_str().to_owned());
+    let name = AgentKey::lead(args.context.clone(), id.clone()).to_string();
     let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
 
     let context = require_context(&mut env, &args.context)?;

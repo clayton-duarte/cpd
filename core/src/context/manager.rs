@@ -10,6 +10,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::{ContextRow, Select};
+use crate::agent_key::AgentKey;
 use crate::config::WorkerRunner;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -293,7 +294,7 @@ pub(crate) fn prepare(
     }
     Ok(Prepared {
         id: SessionId::new_v4(),
-        name: format!("{context}-manager"),
+        name: AgentKey::manager(context.clone()).to_string(),
         cwd,
         tier: config.manager_tier.to_string(),
     })

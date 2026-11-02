@@ -799,7 +799,12 @@ impl Driver {
         session: &SessionId,
         spec: &std::path::Path,
     ) -> Result<(), CpdError> {
-        let name = format!("{} {} a{}", target.plan, target.job, target.id.number());
+        let name = crate::agent_key::AgentKey::worker(
+            target.context.clone(),
+            target.plan.clone(),
+            target.job.clone(),
+        )
+        .to_string();
         let worktree = target.worktree.to_string_lossy().into_owned();
         let tier = target.tier.to_string();
         self.store.write(SOURCE, |tx| {
