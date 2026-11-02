@@ -1940,12 +1940,12 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     fx.pane_exit(&dead, 3);
     assert_eq!(new(&["list-panes", "-t", &dead, "-F", "#{pane_dead}"]), "1");
     fx.env.sql(&format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-           VALUES ('s-live', 'lead', 'ctx', 'pay', 'Live', '/', 'O3', '{live}', 'idle', NULL, 't', 't'),
-                  ('s-dead', 'lead', 'ctx', 'pay', 'Dead', '/', 'O3', '{dead}', 'blocked', 'cpd: dialog', 't', 't'),
-                  ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', NULL, 't', 't'),
-                  ('s-waiting', 'lead', 'ctx', 'pay', 'Waiting', '/', 'O3', '{waiting}', 'stopped', NULL, 't', 't'),
-                  ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
+        "INSERT INTO sessions (id, role, context, plan, name, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+           VALUES ('s-live', 'lead', 'ctx', 'pay', 'Live', 'lead1', '/', 'O3', '{live}', 'idle', NULL, 't', 't'),
+                  ('s-dead', 'lead', 'ctx', 'pay', 'Dead', 'lead1', '/', 'O3', '{dead}', 'blocked', 'cpd: dialog', 't', 't'),
+                  ('s-gone', 'lead', 'ctx', NULL, 'Gone', 'lead1', '/', 'O3', '%999', 'working', NULL, 't', 't'),
+                  ('s-waiting', 'lead', 'ctx', 'pay', 'Waiting', 'lead1', '/', 'O3', '{waiting}', 'stopped', NULL, 't', 't'),
+                  ('s-shut', 'lead', 'ctx', 'pay', 'Shut', 'lead1', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
     ));
 
     fx.watch_ticks(OVER_ONE_TICK).unwrap();
@@ -4277,10 +4277,22 @@ impl Titles {
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_at, created_at, title, titled_at)
                VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, '{id}', '{file}', '/', 'O3', '{pane}', '{state}', 't', 't', {title}, {titled_at});
              INSERT INTO events (txn, at, kind, context, session, text, data)
-               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');",
+               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');{lead_plan}",
             file = conversation(&self.fx, id).display(),
             pane = self.panes[pane],
-            plan = if role == "worker" { "'pay'" } else { "NULL" },
+            plan = match role {
+                "worker" => "'pay'".to_owned(),
+                "lead" => format!("'p-{id}'"),
+                _ => "NULL".to_owned(),
+            },
+            // A Lead is the one Lead of its own Plan (`sessions_one_lead`).
+            lead_plan = if role == "lead" {
+                format!(
+                    "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p-{id}', 'ctx', 'P', 'grounding', '{id}', 't');"
+                )
+            } else {
+                String::new()
+            },
             attempt = if role == "worker" { "'api-a1'" } else { "NULL" }
         ));
     }

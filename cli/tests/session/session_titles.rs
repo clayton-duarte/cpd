@@ -91,12 +91,12 @@ fn setup(fx: &Fx) -> Arc<FakePi> {
                ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
                ('1.0.0', 'H', 'p/haiku', '[1,2,3]', 't'), ('1.0.0', 'G', 'p/gemini', '[]', 't');
              INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-             INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at, archived_at) VALUES
-               ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{lead}', '/', 'O3', 'idle', 't', 't1', NULL),
-               ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{manager}', '/', 'O4', 'idle', 't', 't0', NULL),
-               ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{lead}', '/', 'S2', 'working', 't', 't3', NULL),
-               ('lead2', 'lead', 'ctx', 'pay', NULL, 'Lead two', '{lead}', '/', 'O3', 'stopped', 't', 't2', 't9'),
-               ('lead3', 'lead', 'ctx', 'pay', NULL, 'Lead three', NULL, '/', 'O3', 'idle', 't', 't4', NULL);
+             INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at, archived_at, forked_from) VALUES
+               ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{lead}', '/', 'O3', 'idle', 't', 't1', NULL, NULL),
+               ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{manager}', '/', 'O4', 'idle', 't', 't0', NULL, NULL),
+               ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{lead}', '/', 'S2', 'working', 't', 't3', NULL, NULL),
+               ('lead2', 'lead', 'ctx', 'pay', NULL, 'Lead two', '{lead}', '/', 'O3', 'stopped', 't', 't2', 't9', 'lead1'),
+               ('lead3', 'lead', 'ctx', 'pay', NULL, 'Lead three', NULL, '/', 'O3', 'idle', 't', 't4', NULL, 'lead1');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
              INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');

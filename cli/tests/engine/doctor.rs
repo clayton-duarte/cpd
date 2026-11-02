@@ -835,8 +835,8 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
         .write("test", |tx| {
             tx.execute_batch(&format!(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'hs');
-                 INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('pay', 'ctx', 'Pay', '{phase}', 'lead1', 't', {locked});
                  {pull}
@@ -1078,12 +1078,22 @@ fn worker_runner_durable_fails_when_node_is_older_than_22_19_0() {
 /// A live durable Session (`runner = 'durable'`, `archived_at` null) of `role` (`lead` or `manager`), with a Context
 /// for it: the row `host_runner` must see under an otherwise-`pi` config (contract §6.19).
 fn live_durable_session(env: &TestEnv, role: &str) {
+    // A Lead is the one Lead of a Plan (`sessions_one_lead`); a Manager has none.
+    let (plan, plan_row) = if role == "lead" {
+        (
+            "'pay'",
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'durable-lead', 't');",
+        )
+    } else {
+        ("NULL", "")
+    };
     open_store(env)
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'hs');
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
-                   VALUES ('durable-{role}', '{role}', 'ctx', NULL, '{role}', '/repo', 'O3', 'idle', 't', 't', 'durable');"
+                   VALUES ('durable-{role}', '{role}', 'ctx', {plan}, '{role}', '/repo', 'O3', 'idle', 't', 't', 'durable');
+                 {plan_row}"
             ))?;
             Ok(())
         })
