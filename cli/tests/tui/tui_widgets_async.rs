@@ -11,12 +11,18 @@
 use crate::common;
 
 use std::ffi::OsString;
+use std::os::unix::process::ExitStatusExt;
+use std::process::{Command, ExitStatus};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::fx::Fx;
 use common::inbox::{W, condition, open, plan_row, seed, session_row, view_fx};
+use common::sql;
 use common::tree::{Gate, GateKey, Tree, engine, stamp};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::host::runner::{Call, Reply};
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::{Call, Reply, Runner};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::output::Output;
@@ -29,8 +35,10 @@ const URL: &str = "https://github.com/acme/shop/pull/4";
 /// What the gated call answers: the code and the message of the cpd error the failure line carries.
 const CODE: &str = "item_closed";
 const MESSAGE: &str = "Item is closed.";
-/// The labels of the Inbox's menu entries (the tests' "no menu" check); the next Job adds `Post`, `Merge` and the like.
-const ENTRIES: [&str; 7] = [
+/// The labels of the Inbox's menu entries (the tests' "no menu" check).
+const ENTRIES: [&str; 9] = [
+    "Merge",
+    "Post",
     "Dismiss",
     "Go to Lead",
     "Copy Link",
@@ -209,45 +217,163 @@ fn menu_is_open(screen: &[String]) -> bool {
         .any(|r| r.contains('╮') || r.contains('╯') || ENTRIES.iter().any(|e| r.contains(e)))
 }
 
-/// The one step list of every test of the file (the next Job's Post, Copy Link, Merge and clicks call it too, with their
-/// `row`, `entry`, `gated` call and `title`): the widgets view on `fx`; a pick of `entry` in the menu of `row` returns while its
-/// command waits on the gate `key` holds; the menu is gone and the view goes on (another row's menu opens and closes); then
-/// the gate opens, the failure `failed: <title>: ` is logged, the gated call was made once (`gated` says whether a call of
-/// `cpd` is the one) and the Inbox was read again.
-fn off_the_view_thread(
-    fx: &Fx,
-    key: GateKey,
-    run_command: cpd_tui::RunCommand,
-    row: &str,
-    entry: &str,
-    gated: impl Fn(&Call) -> bool,
-    title: &str,
-) {
+/// A call of `tmux` held on a gate: the view's runner waits on it for a call whose argv has `verb`, then answers a failure
+/// (`denied`). `made` counts the held calls. `FakeRunner::on` takes a static `Reply` under the script's lock, so a `tmux`
+/// call cannot be gated there: this wraps the view's own runner instead.
+#[derive(Clone)]
+struct Hold {
+    gate: Arc<Gate>,
+    verb: &'static str,
+    made: Arc<AtomicUsize>,
+}
+
+/// Holds a `tmux` call whose argv has `verb`: the `Hold` for the entry and the key that opens it.
+fn hold_tmux(verb: &'static str) -> (Hold, GateKey) {
+    let (gate, key) = Gate::new(Reply::exit(1, "", "denied"));
+    let made = Arc::new(AtomicUsize::new(0));
+    (Hold { gate, verb, made }, key)
+}
+
+/// The view's runner: everything is `inner`'s but the held `tmux` call.
+struct Holding {
+    inner: Arc<dyn Runner>,
+    hold: Hold,
+}
+
+impl Holding {
+    fn held(&self, call: &Call) -> Option<std::process::Output> {
+        let tmux = std::path::Path::new(&call.program).file_name() == Some("tmux".as_ref());
+        if !(tmux && call.args.iter().any(|a| a == self.hold.verb)) {
+            return None;
+        }
+        self.hold.made.fetch_add(1, Ordering::SeqCst);
+        let _ = self.hold.gate.handle(call); // waits until the key opens the gate
+        Some(std::process::Output {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: vec![],
+            stderr: b"denied".to_vec(),
+        })
+    }
+}
+
+fn call_of(cmd: &Command, tool: &str, deadline: std::time::Duration) -> Call {
+    Call {
+        tool: tool.to_owned(),
+        program: cmd.get_program().to_string_lossy().into_owned(),
+        args: cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
+        envs: vec![],
+        cwd: None,
+        deadline,
+        stdin: None,
+        stderr_to: None,
+    }
+}
+
+impl Runner for Holding {
+    fn output(
+        &self,
+        cmd: &mut Command,
+        tool: &str,
+        deadline: std::time::Duration,
+    ) -> Result<std::process::Output, Failed> {
+        match self.held(&call_of(cmd, tool, deadline)) {
+            Some(out) => Ok(out),
+            None => self.inner.output(cmd, tool, deadline),
+        }
+    }
+
+    fn output_unbounded(
+        &self,
+        cmd: &mut Command,
+        tool: &str,
+    ) -> std::io::Result<std::process::Output> {
+        match self.held(&call_of(cmd, tool, std::time::Duration::MAX)) {
+            Some(out) => Ok(out),
+            None => self.inner.output_unbounded(cmd, tool),
+        }
+    }
+
+    fn run(&self, call: &Call) -> Result<std::process::Output, Failed> {
+        match self.held(call) {
+            Some(out) => Ok(out),
+            None => self.inner.run(call),
+        }
+    }
+}
+
+/// What the test does to the row under test.
+#[derive(Clone, Copy)]
+enum Act<'a> {
+    /// A right click on the row, then the pick of the menu entry.
+    Pick(&'a str),
+    /// A left click on the row: on the label's first column when `Some(label)`, else on column 10.
+    Click(Option<&'a str>),
+}
+
+/// What the test waits for and counts: `held` is the `tmux` call held by a wrapper (`None`: a call of `cpd` or `open` held by
+/// a route of the fake runner); `expect` is the text of the failure line; `made` counts the gated calls.
+struct Wait<'a> {
+    held: Option<Hold>,
+    expect: String,
+    made: &'a dyn Fn() -> usize,
+}
+
+/// The one step list of every test of the file: the widgets view on `fx`; the `act` on `row` returns while its command waits
+/// on the gate `key` holds; the menu is gone and the view goes on (another row's menu opens and closes); then the gate
+/// opens, the failure `wait.expect` is logged, the gated call was made once and the Inbox was read again.
+fn drive(fx: &Fx, key: GateKey, run_command: cpd_tui::RunCommand, row: &str, act: Act, wait: Wait) {
+    let held = wait.held.clone();
     let mut tree = Tree::run(
         fx,
         "widgets",
         u16::try_from(W).unwrap(),
         HEIGHT,
-        Box::new(move |ports, tty, out, terminal, input| {
-            widgets::run_on(ports, run_command, tty, out, terminal, input)
+        Box::new(move |ports, tty, out, terminal, input| match &held {
+            None => widgets::run_on(ports, run_command, tty, out, terminal, input),
+            Some(hold) => {
+                let ports = Ports {
+                    runner: Arc::new(Holding {
+                        inner: ports.runner.clone(),
+                        hold: hold.clone(),
+                    }),
+                    ..ports.clone()
+                };
+                widgets::run_on(&ports, run_command, tty, out, terminal, input)
+            }
         }),
     );
     let key = key; // dropped before `tree`: a view that waits on a command that waits on the gate cannot end
     tree.until_shows(row);
     tree.eager(true);
 
-    // (2) the menu of the row, and the pick of the entry
-    tree.right_click(10, row_of(&tree.screen(), row));
-    let screen = tree.screen();
-    let labels = menu_labels(&screen);
-    let down = labels
-        .iter()
-        .position(|l| l == entry)
-        .unwrap_or_else(|| panic!("{entry} in the menu {labels:?} on\n{}", screen.join("\n")));
-    for _ in 0..down {
-        tree.keys(&["Down"]);
+    // (2) the act on the row
+    match act {
+        Act::Pick(entry) => {
+            tree.right_click(10, row_of(&tree.screen(), row));
+            let screen = tree.screen();
+            let labels = menu_labels(&screen);
+            let down = labels.iter().position(|l| l == entry).unwrap_or_else(|| {
+                panic!("{entry} in the menu {labels:?} on\n{}", screen.join("\n"))
+            });
+            for _ in 0..down {
+                tree.keys(&["Down"]);
+            }
+            tree.keys(&["Enter"]); // returns while the command waits on its gate
+        }
+        Act::Click(label) => {
+            let screen = tree.screen();
+            let at = row_of(&screen, row);
+            let column = label.map_or(10, |l| {
+                let line = &screen[usize::from(at)];
+                let byte = line.find(l).unwrap_or_else(|| panic!("{l} on {line}"));
+                u16::try_from(line[..byte].chars().count()).unwrap()
+            });
+            tree.click(column, at); // returns while the command waits on its gate
+        }
     }
-    tree.keys(&["Enter"]); // returns while the command waits on its gate
 
     // (3) the next frame has no menu, and nothing has failed yet
     let screen = tree.screen();
@@ -282,14 +408,84 @@ fn off_the_view_thread(
     // (5) the command ends: the failure is logged and the Inbox is read again
     let before = tree.snapshots();
     key.open();
-    let line = format!("failed: {title}: {CODE}: {MESSAGE}");
-    tree.until_that(&line, |_| log(fx).contains(&line));
-    let made = fx.calls("cpd").into_iter().filter(&gated).count();
-    assert_eq!(made, 1, "the gated call was made once");
+    tree.until_that(&wait.expect, |_| log(fx).contains(&wait.expect));
+    assert_eq!((wait.made)(), 1, "the gated call was made once");
     assert!(
         tree.snapshots() > before,
         "the Inbox was read again once the job ended"
     );
+}
+
+/// `drive` for a pick through a gated call of `cpd` (`gated` says which): the failure is `CODE`, `MESSAGE`.
+fn off_the_view_thread(
+    fx: &Fx,
+    key: GateKey,
+    run_command: cpd_tui::RunCommand,
+    row: &str,
+    entry: &str,
+    gated: impl Fn(&Call) -> bool,
+    title: &str,
+) {
+    let made = || fx.calls("cpd").into_iter().filter(&gated).count();
+    drive(
+        fx,
+        key,
+        run_command,
+        row,
+        Act::Pick(entry),
+        Wait {
+            held: None,
+            expect: format!("failed: {title}: {CODE}: {MESSAGE}"),
+            made: &made,
+        },
+    );
+}
+
+/// The words of the `pull_requests` row `acme/shop#4` (clean) and the Plan `ship`'s `workflows` row pointing at it.
+fn pull_request(fx: &Fx) {
+    let mut store = open(&fx.env);
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, merge_state)
+         VALUES ('acme/shop', 4, 'https://github.com/acme/shop/pull/4', 'A title', 0, 'open', 'none', 'passed',
+                 '2026-01-03T00:00:00.000Z', NULL, '2026-02-02T00:00:00.000Z', 'clean');",
+    );
+    sql(
+        &mut store,
+        "UPDATE workflows SET status = 'open', pr_number = 4, pr_url = 'https://github.com/acme/shop/pull/4', pr_opened_at = '2026-01-03T00:00:00.000Z',
+         pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/shop' AND number = 4) WHERE plan = 'ship';",
+    );
+}
+
+/// The cockpit (session `cpd`, window `main`) in the fake server of `fx` with a client, so that `list-clients` names one.
+fn cockpit(fx: &Fx) {
+    let ok = |args: &[&str]| {
+        let out = fx.tmux(args);
+        assert!(
+            out.status.success(),
+            "tmux {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let view = ok(&[
+        "new-session",
+        "-d",
+        "-s",
+        "cpd",
+        "-n",
+        "main",
+        "-x",
+        "120",
+        "-y",
+        "40",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "cpd tui view widgets",
+    ]);
+    ok(&["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
+    fx.tmux_route.fake().add_client("/dev/pts/9", 200, 60);
 }
 
 // ---------- the tests ----------
@@ -327,5 +523,122 @@ fn a_picked_go_to_lead_closes_the_menu_and_the_view_goes_on_while_its_command_ru
                 .starts_with(&["session".to_owned(), "open".to_owned()])
         },
         "session open l-ship",
+    );
+}
+
+#[test]
+fn a_picked_post_closes_the_menu_and_the_view_goes_on_while_its_command_runs() {
+    let fx = rig(vec![pr_row("ready for user review", true), other()]);
+    pull_request(&fx);
+    let _engine = engine(&fx);
+    let key = gate_cpd(&fx);
+    off_the_view_thread(
+        &fx,
+        key,
+        through_the_gate,
+        "shop#4 ready for user review",
+        "Post",
+        |call| call.args.starts_with(&["pr".to_owned(), "post".to_owned()]),
+        "Post Pull Request",
+    );
+}
+
+#[test]
+fn a_picked_copy_link_closes_the_menu_and_the_view_goes_on_while_its_command_runs() {
+    let fx = rig(vec![pr_row("ready to merge", false), other()]);
+    let _engine = engine(&fx);
+    let (hold, key) = hold_tmux("set-buffer");
+    let made = hold.made.clone();
+    drive(
+        &fx,
+        key,
+        through_the_gate,
+        ROW,
+        Act::Pick("Copy Link"),
+        Wait {
+            held: Some(hold),
+            expect: "failed: Copy Link: ".to_owned(),
+            made: &|| made.load(Ordering::SeqCst),
+        },
+    );
+}
+
+#[test]
+fn a_picked_merge_closes_the_menu_and_the_view_goes_on_while_its_command_runs() {
+    let fx = rig(vec![pr_row("ready to merge", true), other()]);
+    pull_request(&fx);
+    cockpit(&fx);
+    let _engine = engine(&fx);
+    let (hold, key) = hold_tmux("run-shell");
+    let made = hold.made.clone();
+    drive(
+        &fx,
+        key,
+        through_the_gate,
+        ROW,
+        Act::Pick("Merge"),
+        Wait {
+            held: Some(hold),
+            expect: "failed: Merge Pull Request: ".to_owned(),
+            made: &|| made.load(Ordering::SeqCst),
+        },
+    );
+}
+
+#[test]
+fn a_left_click_on_an_item_jumps_while_the_view_goes_on_drawing_and_reading() {
+    let closed = Condition {
+        session: Some(SessionId::parse("l-ship").unwrap()),
+        plan: Some(PlanId::parse("ship").unwrap()),
+        ..condition(
+            Kind::PrClosed,
+            Urgency::Yellow,
+            "pr:acme/shop#4",
+            "shop#4 closed",
+        )
+    };
+    let fx = rig(vec![closed, other()]);
+    let _engine = engine(&fx);
+    let key = gate_cpd(&fx);
+    let made = || {
+        (fx.calls("cpd").into_iter())
+            .filter(|c| {
+                c.args
+                    .starts_with(&["session".to_owned(), "open".to_owned()])
+            })
+            .count()
+    };
+    drive(
+        &fx,
+        key,
+        through_the_gate,
+        "shop#4 closed",
+        Act::Click(None),
+        Wait {
+            held: None,
+            expect: format!("failed: session open l-ship: {CODE}: {MESSAGE}"),
+            made: &made,
+        },
+    );
+}
+
+#[test]
+fn a_left_click_on_a_link_opens_it_while_the_view_goes_on_drawing_and_reading() {
+    let fx = rig(vec![pr_row("ready to merge", false), other()]);
+    let _engine = engine(&fx);
+    let (gate, key) = Gate::new(Reply::exit(3, "", "denied"));
+    let _ = (*fx.fakes.runner).clone().route("open", gate);
+    let made = || fx.calls("open").len();
+    drive(
+        &fx,
+        key,
+        through_the_gate,
+        ROW,
+        Act::Click(Some("shop#4")),
+        Wait {
+            held: None,
+            expect: "failed: Open Link: ".to_owned(),
+            made: &made,
+        },
     );
 }
