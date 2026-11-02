@@ -1,4 +1,4 @@
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { hookMethod, type MethodBehavior } from "../compact-tools/extensions/compact-tools-hook.ts";
 
 /**
@@ -106,7 +106,11 @@ export function reserveTokensOf(compaction: CompactionSettings, model: ReserveMo
   return compaction.reserveTokens;
 }
 
+/** Idle-only threshold compaction (docs/commands.md section 15.19): installs its wrappers on `target`. Stub. */
+export function hookIdleCompaction(_target: object): void {}
+
 /** Wraps `getCompactionReserveTokens` once per process, as the adapter loads. */
 export function registerCompactionRatio(): void {
+	hookIdleCompaction(AgentSession.prototype);
 	hookMethod(SettingsManager.prototype, "getCompactionReserveTokens", "cpd-compaction-ratio", behavior);
 }
