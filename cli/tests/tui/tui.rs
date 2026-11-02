@@ -19,7 +19,8 @@ use common::fx::Fx;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
 use cpd_core::host::tmux::{
-    LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS, STATUS_CLICK, STATUS_FORMAT,
+    LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS, SETTINGS_GLYPH, STATUS_CLICK,
+    STATUS_FORMAT,
 };
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -277,7 +278,8 @@ fn buttons() -> String {
         "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{RESET_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
          #[fg=colour8]\u{2501}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
          #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{LOGS_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2501}#[default]#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1} #[noreverse]\u{e0b4}#[default]#[norange]"
+         #[fg=colour8]\u{2501}#[default]#[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]\u{EEC1} #[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|settings]#[fg=colour15]\u{e0b6}#[reverse]{SETTINGS_GLYPH} #[noreverse]\u{e0b4}#[default]#[norange]"
     )
 }
 
@@ -1054,6 +1056,21 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     assert_eq!(popups.len(), 2, "{popups:?}");
     assert!(popups[1].iter().any(|a| a == " logs "), "{:?}", popups[1]);
 
+    // the settings button opens the settings
+    let args = click("settings", &client);
+    assert_eq!(args, ["action", "settings", "--client", &client]);
+    action(
+        &fx,
+        &args[1..].iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let popups = fx.tmux_state().unwrap().popups();
+    assert_eq!(popups.len(), 3, "{popups:?}");
+    assert!(
+        popups[2].iter().any(|a| a == " settings "),
+        "{:?}",
+        popups[2]
+    );
+
     // the reset button resets the layout
     let tree = view(&main_panes(&fx), "tree").clone();
     out(&fx, &["resize-pane", "-t", &tree.id, "-x", "70"]);
@@ -1080,6 +1097,32 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
         steps(&fx, from)
     );
     assert_eq!(ran().len(), ran_before, "the actions run no other command");
+}
+
+#[test]
+fn a_click_on_the_settings_button_opens_the_settings_popup_on_the_clicking_client() {
+    let fx = fx();
+    tui(&fx, &[]);
+    fx.tmux_route.fake().add_client("/dev/pts/0", 120, 30);
+    let client = shown(&fx, &["list-clients", "-F", "#{client_name}"]);
+    let ran_before = ran().len();
+    let args = click("settings", &client);
+    assert_eq!(args, ["action", "settings", "--client", &client]);
+    action(
+        &fx,
+        &args[1..].iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let popups = fx.tmux_state().unwrap().popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0][..3], ["display-popup", "-c", &client]);
+    assert!(
+        popups[0].iter().any(|a| a == " settings ")
+            && popups[0].last().unwrap().contains("cpd tui view settings"),
+        "{:?}",
+        popups[0]
+    );
+    assert_eq!(ran().len(), ran_before, "the action runs no other command");
+    assert!(fx.tmux_state().unwrap().keys().is_empty());
 }
 
 #[test]

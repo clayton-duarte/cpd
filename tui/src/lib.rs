@@ -26,6 +26,8 @@ mod buffer;
 mod cells;
 mod chat;
 mod cockpit;
+#[cfg(test)]
+mod cockpit_settings_tests;
 pub mod dialog;
 #[cfg(test)]
 mod failed_pill_tests;
@@ -125,6 +127,7 @@ mod scroll_width_tests;
 pub mod section;
 #[cfg(test)]
 mod section_width_tests;
+pub mod settings;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;
@@ -238,6 +241,8 @@ pub enum View {
     Logs(logs::Args),
     /// A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup)
     Dialog(dialog::Args),
+    /// The settings (opened by the StatusBar's settings button, in a tmux popup)
+    Settings,
     /// The chat slot's placeholder
     Chat,
 }
@@ -264,6 +269,7 @@ pub fn run_with(
                 View::Legend => widgets::legend::run(ports),
                 View::Logs(args) => logs::run(ports, args),
                 View::Dialog(args) => dialog::run(ports, args),
+                View::Settings => settings::run(ports, run_command),
                 View::Chat => chat::run(),
             },
         ),

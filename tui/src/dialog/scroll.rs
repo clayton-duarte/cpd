@@ -74,6 +74,17 @@ impl Scroll {
         self.total > self.page
     }
 
+    /// Moves the least that shows rows `first..=last` (`first` wins when they do not all fit).
+    pub(crate) fn show(&mut self, first: usize, last: usize) {
+        if last >= self.offset + self.page {
+            self.offset = (last + 1).saturating_sub(self.page);
+        }
+        if first < self.offset {
+            self.offset = first;
+        }
+        self.offset = self.offset.min(self.max_offset());
+    }
+
     /// Moves by `delta` rows, clamped.
     pub(crate) fn by(&mut self, delta: isize) {
         let moved = if delta < 0 {

@@ -1395,7 +1395,7 @@ fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan
     let manager = |id: &str, context: &str, plan: &str| {
         format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O4', 'stopped', 't', 't')"
         )
     };
     store.write("test", |tx| exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c2', 'C2', 't', 'm')")).unwrap();

@@ -186,16 +186,16 @@ fn status_line_pills_follow_the_rule() {
             "#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]"
         )
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},27},#{?@cpd_runner,#{e|+:#{n:@cpd_runner},3},0}},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let incident_range = format!(
         "#[range=user|incident]{}#[norange]",
         italic_pill("colour9", "Incident Mode: #{@cpd_incident}")
     );
     let want = format!(
-        "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
+        "{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?@cpd_runner,{JOIN}{},}}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
-         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},20}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},25}},#{{?@cpd_runner,#{{e|+:#{{n:@cpd_runner}},3}},0}}}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
@@ -206,6 +206,7 @@ fn status_line_pills_follow_the_rule() {
         button("legend", "colour15", super::LEGEND_GLYPH),
         button("logs", "colour15", super::LOGS_GLYPH),
         button("costs", "colour15", "\u{EEC1}"),
+        button("settings", "colour15", super::SETTINGS_GLYPH),
         pill_button("runner", "colour15", "#{@cpd_runner}"),
         pill("colour3", "preview: #{@cpd_preview}"),
         incident_range,
@@ -354,7 +355,7 @@ fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_
 /// The status line's format, exactly (hs-d479): one grey `━` line across the row, starting and ending with a `━`; the
 /// three button pills each in its own range, joined by a single `━` outside the ranges; the optional unpadded
 /// preview pill after a join; the fill; then the workers' pill and the closing `━`
-/// (long form from `#{w:@cpd_workers}` plus its two caps and 22: the left group's 20, the closing `━` and a fill of 1).
+/// (long form from `#{w:@cpd_workers}` plus its two caps and 27: the left group's 25, the closing `━` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
@@ -365,13 +366,16 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
              #[fg=colour8]\u{2501}#[default]\
              #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2501}#[default]\
-             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|costs]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2501}#[default]\
+             #[range=user|settings]#[fg=colour15]\u{e0b6}#[reverse]{} #[noreverse]\u{e0b4}#[default]#[norange]",
         super::RESET_GLYPH,
         super::LEGEND_GLYPH,
         super::LOGS_GLYPH,
-        "\u{EEC1}"
+        "\u{EEC1}",
+        super::SETTINGS_GLYPH
     );
-    // The fifth item (pro-d199): the runner pill, after a join, only while `@cpd_runner` is set.
+    // The sixth item (pro-d199): the runner pill, after a join, only while `@cpd_runner` is set.
     let runner = "#[fg=colour8]\u{2501}#[default]#[range=user|runner]#[fg=colour15]\u{e0b6}#[reverse]#{@cpd_runner}#[noreverse]\u{e0b4}#[default]#[norange]";
     let after_costs = |cond: &str| format!("{prefix}#{{?{cond},{runner},}}");
     let rest = "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
@@ -379,7 +383,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let suffix = "#[default]\
          #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},27},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
          #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2501}#[default]";
@@ -403,7 +407,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     assert!(format.ends_with(tail), "{format}");
 }
 
-/// pro-d199: the runner pill is the fifth item of the left group, after the costs button, in its own range, its text the
+/// pro-d199: the runner pill is the fifth item of the left group, after the settings button, in its own range, its text the
 /// option's value alone between the caps.
 #[test]
 fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
@@ -421,15 +425,15 @@ fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
         .map(|r| &r[..r.find(']').expect("a closed range")])
         .collect();
     assert_eq!(
-        ranges[..5],
-        ["reset", "legend", "logs", "costs", "runner"],
+        ranges[..6],
+        ["reset", "legend", "logs", "costs", "settings", "runner"],
         "{ranges:?}"
     );
     let pill = "#[range=user|runner]#[fg=colour15]\u{e0b6}#[reverse]#{@cpd_runner}#[noreverse]\u{e0b4}#[default]#[norange]";
     let at = format
         .find(pill)
         .unwrap_or_else(|| panic!("no runner pill in {format}"));
-    let costs_end = format.find("range=user|costs").unwrap();
+    let costs_end = format.find("range=user|settings").unwrap();
     assert!(
         at > costs_end && at < format.find("@cpd_preview").unwrap(),
         "after costs, before the preview marker: {format}"
@@ -449,7 +453,7 @@ fn the_runner_pill_follows_the_costs_button_in_its_own_range() {
 }
 
 /// Display columns as tmux's format_width counts them: a closed `#[..]` is 0 cells, `##` is 1, every other char is 1.
-fn display_width(s: &str) -> usize {
+pub(super) fn display_width(s: &str) -> usize {
     let (mut n, mut rest) = (0, s);
     while let Some(c) = rest.chars().next() {
         if let Some(run) = rest.strip_prefix("#[") {
@@ -594,13 +598,17 @@ fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option
         super::LEGEND_GLYPH,
         super::LOGS_GLYPH,
         "\u{EEC1}",
+        super::SETTINGS_GLYPH,
     ];
     for runner in [Some("pi"), Some("durable"), None] {
         let runner_width = runner.map_or(0, |r| r.chars().count() + 3);
         for preview in [None, Some(PREVIEW)] {
             let widths: Vec<usize> = match preview {
                 None => [60, 80, 120, 215].to_vec(),
-                Some(_) => [79, 95, 96, 120].iter().map(|w| w + runner_width).collect(),
+                Some(_) => [84, 100, 101, 125]
+                    .iter()
+                    .map(|w| w + runner_width)
+                    .collect(),
             };
             for width in widths {
                 let vars = |name: &str| {
@@ -622,7 +630,7 @@ fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option
                 if preview.is_some() {
                     assert_eq!(
                         row.contains("2 running 1 waiting"),
-                        width >= 96 + runner_width,
+                        width >= 101 + runner_width,
                         "{what}"
                     );
                 }
@@ -656,10 +664,10 @@ fn the_status_row_keeps_its_width_with_pi_with_durable_and_with_no_runner_option
 /// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).
 #[test]
 fn the_button_glyphs_are_the_hs_d235_code_points() {
-    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SETTINGS_GLYPH};
     assert_eq!(
-        [RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH],
-        ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}"]
+        [RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH, SETTINGS_GLYPH],
+        ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}", "\u{F013}"]
     );
     assert!(
         STATUS_FORMAT.contains("\u{EEC1}"),
@@ -715,7 +723,7 @@ fn the_status_row_keeps_its_width_with_the_plain_workers_texts() {
     let short = "9\u{f0798}4\u{f0798}6/6".to_owned();
     let long = "workers 9\u{f0798}4\u{f0798}6/6".to_owned();
     assert_eq!((display_width(&long), display_width(&short)), (15, 7));
-    for width in [30usize, 38, 39, 60, 120] {
+    for width in [35usize, 43, 44, 60, 120] {
         let vars = |name: &str| {
             Some(match name {
                 "client_width" => width.to_string(),
@@ -729,15 +737,15 @@ fn the_status_row_keeps_its_width_with_the_plain_workers_texts() {
         assert_eq!(display_width(&row), width, "width {width}: {row:?}");
         assert_eq!(
             row.contains("workers "),
-            width >= 39,
-            "the long text is drawn from 39 columns: {row:?}"
+            width >= 44,
+            "the long text is drawn from 44 columns: {row:?}"
         );
         assert!(row.contains(&short), "{row:?}");
     }
 }
 
 /// The substring of `STATUS_FORMAT` from `#[range=user|<name>]` to its `#[norange]`, inclusive.
-fn range_of(name: &str) -> &'static str {
+pub(super) fn range_of(name: &str) -> &'static str {
     let format = STATUS_FORMAT.as_str();
     let from = format
         .find(&format!("#[range=user|{name}]"))
@@ -746,15 +754,16 @@ fn range_of(name: &str) -> &'static str {
     &format[from..from + len]
 }
 
-/// Each glyph button is the left cap, the glyph, ONE SPACE inside the pill, the right cap: 4 cells; the left group is 20.
+/// Each glyph button is the left cap, the glyph, ONE SPACE inside the pill, the right cap: 4 cells; the left group is 25.
 #[test]
-fn each_glyph_button_is_cap_glyph_space_cap_and_the_left_group_is_20_cells() {
-    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+fn each_glyph_button_is_cap_glyph_space_cap_and_the_left_group_is_25_cells() {
+    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SETTINGS_GLYPH};
     for (name, glyph) in [
         ("reset", RESET_GLYPH),
         ("legend", LEGEND_GLYPH),
         ("logs", LOGS_GLYPH),
         ("costs", "\u{EEC1}"),
+        ("settings", SETTINGS_GLYPH),
     ] {
         let pill = range_of(name);
         assert_eq!(
@@ -767,12 +776,12 @@ fn each_glyph_button_is_cap_glyph_space_cap_and_the_left_group_is_20_cells() {
         assert_eq!(display_width(pill), 4, "{name}");
     }
     let format = STATUS_FORMAT.as_str();
-    let costs = range_of("costs");
-    let end = format.find(costs).unwrap() + costs.len();
+    let settings = range_of("settings");
+    let end = format.find(settings).unwrap() + settings.len();
     assert_eq!(
         display_width(&format[..end]),
-        20,
-        "the left group: `━`, 4 buttons of 4 cells and 3 joins"
+        25,
+        "the left group: `━`, 5 buttons of 4 cells and 4 joins"
     );
     assert_eq!(
         range_of("runner"),
@@ -782,14 +791,20 @@ fn each_glyph_button_is_cap_glyph_space_cap_and_the_left_group_is_20_cells() {
 }
 
 /// A click range wraps its whole pill (caps included); tmux's range also owns the cell after it, the join. The space is
-/// inside the range, so the four ranges start at columns 1, 6, 11 and 16 and own 5 cells each, without overlap.
+/// inside the range, so the five ranges start at columns 1, 6, 11, 16 and 21 and own 5 cells each, without overlap.
 #[test]
 fn a_click_range_wraps_its_whole_pill_and_the_space_shifts_no_other_range() {
     const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
     let format = STATUS_FORMAT.as_str();
     let mut owned: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
     let mut previous_end = 0;
-    for (name, start) in [("reset", 1), ("legend", 6), ("logs", 11), ("costs", 16)] {
+    for (name, start) in [
+        ("reset", 1),
+        ("legend", 6),
+        ("logs", 11),
+        ("costs", 16),
+        ("settings", 21),
+    ] {
         let pill = range_of(name);
         let at = format.find(pill).unwrap();
         assert_eq!(
@@ -827,5 +842,5 @@ fn a_click_range_wraps_its_whole_pill_and_the_space_shifts_no_other_range() {
         }
         previous_end = at + pill.len();
     }
-    assert_eq!(owned, [1..=5, 6..=10, 11..=15, 16..=20]);
+    assert_eq!(owned, [1..=5, 6..=10, 11..=15, 16..=20, 21..=25]);
 }

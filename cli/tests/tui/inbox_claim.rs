@@ -452,7 +452,7 @@ fn claim_gives_an_archived_codereview_manager_a_new_one() {
         &format!(
             "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('codereview', 'codereview', 'clayton-duarte', 't', 'm1');
              INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
-             VALUES ('{MANAGER}', 'manager', 'codereview', NULL, NULL, 'codereview-manager', '/sessions/{MANAGER}.jsonl', '/repo', 'O5', NULL, 'stopped', NULL,
+             VALUES ('{MANAGER}', 'manager', 'codereview', NULL, NULL, 'codereview-manager', '/sessions/{MANAGER}.jsonl', '/repo', 'O4', NULL, 'stopped', NULL,
                      '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z');"
         ),
     );
