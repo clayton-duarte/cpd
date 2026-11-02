@@ -73,9 +73,9 @@ fn pi_install(env: &TestEnv) {
 
 /// The cached catalog of the refs `github-copilot/<prefix>-{o,s,h}`: `efforts` for O, S, H in order.
 fn cache(env: &TestEnv, prefix: &str, efforts: [&str; 3]) {
-    let rows: String = [("O", "o"), ("S", "s"), ("H", "h")]
+    let rows: String = [("O", "o"), ("S", "s"), ("H", "h"), ("G", "g")]
         .iter()
-        .zip(efforts)
+        .zip(efforts.into_iter().chain(["[]"]))
         .map(|((letter, low), efforts)| {
             format!(
                 "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{}', '{efforts}', 't');",

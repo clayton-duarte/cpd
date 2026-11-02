@@ -38,7 +38,7 @@ fn fx(lead_runner: &str, manager_runner: &str, state: &str) -> (Fx, Arc<ManualCl
     fx.fixture(&format!(
         "UPDATE sessions SET state = '{state}', runner = '{lead_runner}' WHERE id = 'lead1';
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, runner)
-           VALUES ('mgr1', 'manager', 'ctx', NULL, 'ctx-manager', '/', 'O5', '{state}', 't', 't', '{manager_runner}');"
+           VALUES ('mgr1', 'manager', 'ctx', NULL, 'ctx-manager', '/', 'O4', '{state}', 't', 't', '{manager_runner}');"
     ));
     (fx, clock, runner)
 }

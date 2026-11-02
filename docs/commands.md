@@ -135,9 +135,9 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `attempt_running` | 3 | `pr rebase` (§9.3) or `pr rebase --continue` found an Attempt of the Workflow of any kind (work, open, update) running (pro-d103, pro-d105); `details` is `{workflow, jobs: [keys], attempts: [ids]}`; nothing is changed, checked before the fetch; the message tells the Lead to steer the Worker to do the rebase instead |
 | `needs_unavailable` | 3 | `job add` (A4, pro-d89): a named Job is `cancelled`, `failed`, a draft in a phase after plan, or an `open` or `update` Job; or in phase `dispatch` a failed Job has no fix appended yet (A4): that failed leaf refuses to queue a new Job that needs it; `details.jobs` lists them; may include `fix_job` with the Job key for the failed leaf |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_workflow_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
-| `config_missing`, `config_invalid` | 1 | §8.1; hs-d562, pro-d53, hs-d554 and hs-d506 add the Tier checks of contract §8.2 (§9 "Tier rules"): G0–G5 are `tier_invalid` (exit 2, below); `context_distill_tier` must be GX, not H0 or anything else, else `config_invalid` (hs-d562); `lead_tier`, `review_lead_tier` or `manager_tier` cannot be letter G ("must not be a G Tier..."), else `config_invalid`, or effort 5, else `config_invalid`; `open_tier` must be a Tier a Worker may have (§9), else `config_invalid`. Each with `details.key` |
+| `config_missing`, `config_invalid` | 1 | §8.1; the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` that is not a Tier in the syntax of §5 (effort 5 never valid) is `config_invalid`; the four role defaults must strictly ascend (`context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`), else `config_invalid` with `details.key` the key that breaks the order. A default that is not a valid rung is refused where it is checked (`doctor`'s `tiers` check, §14.1), never here. `review_lead_tier` is removed: a file that still sets it is `config_invalid`, as any unknown key. `open_tier` is renamed `worker_tier` (§8.1). Each with `details.key` |
 | `tier_not_allowed` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5): the Job's Tier is outside the Worker range of contract §9 "Tier rules" (`H0`–`H3` and `S0`–`S3`); Workers use only these Tiers to keep cost down (pro-d82, hs-d554, contract §9 "Tier rules"); `details` `{tier, allowed, rule}`; also an `error` Event of engine E3 (contract §3.7) for a stored Job on such a Tier. `plan new --tier` (§4.1) and `session retier --tier` (§10.16) refuse a Lead's or the Manager's Tier of letter G or effort 5 the same way, `tier_not_allowed` with `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}` (contract §9 "Tier rules", pro-d139, pro-d140, pro-d142) |
-| `tier_invalid` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4), `plan new --tier` (§4.1) and `session retier --tier` (§10.16): a Tier that is not valid at all: bad syntax, `G0`–`G5` (§5, the Tier flag), or an effort the Tier's model lacks; `details.tier` and `details.efforts` for an effort. A Lead's `--tier` is checked before anything is written |
+| `tier_invalid` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4), `plan new --tier` (§4.1) and `session retier --tier` (§10.16): a Tier that is not valid at all: bad syntax, effort 5 (never valid, for any letter), `X` for a model that has effort levels, or a digit its letter's model lacks (§5, the Tier flag); `details.tier` and `details.efforts` for an effort. A Lead's `--tier` is checked before anything is written |
 | `store_too_new` | 1 | the store has a breaking migration this binary does not know, or a later scheme (contract §4.5 "The window"; it keeps its code and exit); `details: {user_version, floor, unknown}`: the store's `user_version`, its floor (the name of its newest breaking migration, or `null`) and every applied name this binary lacks. A store with a numbered migration this binary lacks (`user_version` above the legacy set and below 1000) is the same code, with `unknown` empty |
 | `migration_failed` | 1 | a migration, or the conversion, failed and rolled back (§4.5); `details: {from, to, sqlite_message}` |
 | `migration_changed` | 1 | an applied migration this binary knows has another checksum than the store recorded (§4.5 R3); `details: {name, recorded, embedded}` |
@@ -252,13 +252,15 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-touches` (§5.9a) | Lead | no | no |
 | `cpd job addendum` (§5.10) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
-| `cpd session retier` (§10.15) | Manager | no | no |
+| `cpd session retier` (§10.16) | Manager | yes | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd models refresh` (§14.5) | Manager, Lead | no | no |
 | `cpd models show` (§14.5) | Manager, Lead | no | no |
 | `cpd preset list` (§14.6) | Manager, Lead | no | no |
 | `cpd preset show` (§14.6) | Manager, Lead | no | no |
-| `cpd preset apply` (§14.6) | Manager | no | no |
+| `cpd preset apply` (§14.6) | Manager | yes | no |
+| `cpd preset set` (§14.6) | Manager | yes | no |
+| `cpd config tiers set` (§14.2) | none | yes | no |
 | `cpd context curation` (§3.16, internal) | none | yes | yes |
 | `cpd context retire` (§3.17, internal) | none | yes | yes |
 | `cpd pr reply` (§9.8a) | Lead | no | no |
@@ -804,21 +806,21 @@ A Plan has no repo (R34, A12): its Workflows are added later with `workflow add`
 | `--name <name>` | the Lead's pi display name; default `<id>` |
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 | `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.11); omit it and the Lead starts with its first message, as today |
-| `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5: `O`, `S` or `H` with an effort, or `GX`), checked by the Lead rule (below). Omitted, the Tier is `review_lead_tier` when `--context` is `codereview`, the review Context (contract §2.2 "Permanent Contexts", §8.2; A10), else `lead_tier` (Effects, step 1) |
+| `--tier <T>` | the Lead's Tier (contract §2.2, §9): a Tier in the Tier flag syntax (§5), checked by the Lead rule (below). Omitted, the Tier is `lead_tier` (Effects, step 1) |
 | `--runner <pi|durable>` | the new Lead's runner; default the config key `lead_runner`, default `pi` (contract §6.19) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
 | the Context has an owner (contract §8.3; null only for a Context made before the owner existed); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
-| `--tier` is not valid syntax (§5; `G0`–`G5` included), or an effort the catalog lacks for the Tier's model (the models of the Context, contract §8.3; the catalog is read only when `--tier` is given); `details.tier` and `details.efforts` for an effort | `tier_invalid` | 2 |
+| `--tier` is not valid syntax (§5; effort 5 included), or an effort the catalog lacks for the Tier's model (the models of the Context, contract §8.3; the catalog is read only when `--tier` is given); `details.tier` and `details.efforts` for an effort | `tier_invalid` | 2 |
 | `--tier` is letter G (`GX`) or effort 5, the Lead rule (contract §9); `details` `{tier, allowed: "O0-O4, S0-S4, H0-H4", rule: "hs-d506, hs-d562"}`, message `Tier <T> is not allowed for a Lead: Leads use only the Tiers O0-O4, S0-S4, H0-H4, never effort 5 and never G (hs-d506, hs-d562).` | `tier_not_allowed` | 2 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 | `--runner` is neither `pi` nor `durable` | `usage` | 2 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `review_lead_tier` when the Context is `codereview`; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the User's home directory (contract §2.2, pro-d343), never the caller's cwd; `tier` = the Lead's Tier (the `--tier` flag; else `lead_tier`; contract §2.2); `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `workflows` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
    ```
@@ -913,7 +915,7 @@ Idempotent: yes; in phase `plan` it returns `"already": true` and writes nothing
 cpd plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothing else. The render reads the Plan's Jobs, Workflows and outline, and the Tier advice (§3.4b; the catalog when needed); a catalog read may fail with the catalog's own error (`pi_not_found`, `catalog_failed`, `tier_model_unknown`, exit 1). Content of `plan.md`, kept from cpd 1 §11 `plan render` and grouped by Workflow (R34): title, Context and phase; a table of the Workflows that are not `merged`, with key, repo, base and needs, each row muted and marked `cancelled` when the Workflow is `cancelled` (hs-d518), with its `status` and `cancel_reason` or `superseded by <ref>` when the Event carries `superseded_by`; and, when there are two or more, a Mermaid `graph LR` of their needs (cancelled Workflows not in the graph, hs-d518); then the section `## Overlaps` (below); then one section per Workflow that is not `cancelled` (hs-d518), in the order of the needs graph (ties by key), headed `Workflow <key>`, with its repo, base and needs, a table of its Jobs with key, title, Tier, status, needs and touches, each row muted and marked `cancelled` when the Job is `cancelled` (hs-d518), with its `status` and `cancel_reason` (hs-d518), a Mermaid `graph TD` of its Jobs' Dependencies (cancelled Jobs not in the graph) and one subsection per Job that is not `cancelled` (hs-d518) with its Spec. The Tier column and each Job section's `Tier:` line show the Tier the Job is displayed at (contract §3.4a): the active Attempt's Tier, or `retry_tier` while queued at it after `job retry`, or the latest Attempt's Tier, or the stored `tier`. The `open` Job placeholder keeps `open_tier`. **Waiting display** (hs-d521): a Job or Workflow table row whose status is `waiting` (display only, hs-d523) shows the blockers as `waiting on <keys>` in its status column or as a separate line (hs-d521); in the Mermaid graph (hs-d518), a cancelled Workflow is omitted and in the render's graph of needs a cancelled Workflow appears neither as a node nor in edges; in the per-Workflow Job graph, cancelled Jobs do not appear. **The open Job's placeholder** (hs-d497): a Workflow that has not started has no `open` Job yet (engine E4 adds it at the start), so the render shows one for each such Workflow, as the last row of its Jobs table and as the last Job section: key `open-<workflow>`, title `Open the pull request: <pull request title>`, Tier `open_tier` (contract §8.2), status `—` (not a Job yet), needs `every other Job of the Workflow` and, in place of the Spec, `Added by cpd when the Workflow starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.` It is not a row, is in no fingerprint and no Mermaid graph and is shown in every phase until the Workflow starts (once the Workflow has started the real `open` Job is shown as any Job, with its derived needs, contract §3.2). A Job's section is under its Workflow only. In a phase after `plan`, the Jobs that are not `draft` are Locked Jobs, shown as context: the render shows them as such and marks every `draft` Job **under review** except a `draft` `open` Job, which cpd added and the Lead does not review: it is shown as context, never `**under review**` (hs-d573) (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). It also writes the **Plan summary**, `run/<plan>/summary.md` (below, hs-d502). Output: the path, `summary` (the path of the summary), the plan fingerprint (§2.3: Jobs, Workflows and the outline when set), the number of `draft` Jobs (`draft_jobs`, not counting a `draft` `open` Job: it is not under review, hs-d573), the number of Workflows that are not `cancelled` and the overlaps.
+Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothing else. The render reads the Plan's Jobs, Workflows and outline, and the Tier advice (§3.4b; the catalog when needed); a catalog read may fail with the catalog's own error (`pi_not_found`, `catalog_failed`, `tier_model_unknown`, exit 1). Content of `plan.md`, kept from cpd 1 §11 `plan render` and grouped by Workflow (R34): title, Context and phase; a table of the Workflows that are not `merged`, with key, repo, base and needs, each row muted and marked `cancelled` when the Workflow is `cancelled` (hs-d518), with its `status` and `cancel_reason` or `superseded by <ref>` when the Event carries `superseded_by`; and, when there are two or more, a Mermaid `graph LR` of their needs (cancelled Workflows not in the graph, hs-d518); then the section `## Overlaps` (below); then one section per Workflow that is not `cancelled` (hs-d518), in the order of the needs graph (ties by key), headed `Workflow <key>`, with its repo, base and needs, a table of its Jobs with key, title, Tier, status, needs and touches, each row muted and marked `cancelled` when the Job is `cancelled` (hs-d518), with its `status` and `cancel_reason` (hs-d518), a Mermaid `graph TD` of its Jobs' Dependencies (cancelled Jobs not in the graph) and one subsection per Job that is not `cancelled` (hs-d518) with its Spec. The Tier column and each Job section's `Tier:` line show the Tier the Job is displayed at (contract §3.4a): the active Attempt's Tier, or `retry_tier` while queued at it after `job retry`, or the latest Attempt's Tier, or the stored `tier`. The `open` Job placeholder keeps `worker_tier`. **Waiting display** (hs-d521): a Job or Workflow table row whose status is `waiting` (display only, hs-d523) shows the blockers as `waiting on <keys>` in its status column or as a separate line (hs-d521); in the Mermaid graph (hs-d518), a cancelled Workflow is omitted and in the render's graph of needs a cancelled Workflow appears neither as a node nor in edges; in the per-Workflow Job graph, cancelled Jobs do not appear. **The open Job's placeholder** (hs-d497): a Workflow that has not started has no `open` Job yet (engine E4 adds it at the start), so the render shows one for each such Workflow, as the last row of its Jobs table and as the last Job section: key `open-<workflow>`, title `Open the pull request: <pull request title>`, Tier `worker_tier` (contract §8.2), status `—` (not a Job yet), needs `every other Job of the Workflow` and, in place of the Spec, `Added by cpd when the Workflow starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.` It is not a row, is in no fingerprint and no Mermaid graph and is shown in every phase until the Workflow starts (once the Workflow has started the real `open` Job is shown as any Job, with its derived needs, contract §3.2). A Job's section is under its Workflow only. In a phase after `plan`, the Jobs that are not `draft` are Locked Jobs, shown as context: the render shows them as such and marks every `draft` Job **under review** except a `draft` `open` Job, which cpd added and the Lead does not review: it is shown as context, never `**under review**` (hs-d573) (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). It also writes the **Plan summary**, `run/<plan>/summary.md` (below, hs-d502). Output: the path, `summary` (the path of the summary), the plan fingerprint (§2.3: Jobs, Workflows and the outline when set), the number of `draft` Jobs (`draft_jobs`, not counting a `draft` `open` Job: it is not under review, hs-d573), the number of Workflows that are not `cancelled` and the overlaps.
 
 **Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the Workflow's table and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files` and a Job's section lists its `resources` with the Spec when it has any. The Workflow's `open` Job, once the Workflow has started, is a Job of its Workflow like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and the `open` Job as `plan render`'s placeholder (§4.5, hs-d497), the one every Workflow will get.
 
@@ -1404,7 +1406,7 @@ Both are required for a `test` Job that is not a stub and refused for every othe
 
 **The optional `resources` Spec field** (contract §2.2): a list of one or more distinct names, each matching `^[a-z][a-z0-9-]{0,31}$`; absent means none. It names the declared resources (contract §8.3 "The `resources` domain") the Job is the tenant of from its first Attempt until it is merged or cancelled (contract §3.4 "Tenancy"):
 
-**Tier flag** (`--tier`): `^(O|S|H)([0-5])$` or exactly `GX`. `G0`–`G5` are `tier_invalid` (exit 2, `details.tier`), before any catalog check, with the message `invalid Tier "G0": G has no effort, write GX (hs-d562).` A Tier from the pattern with an effort the letter's model supports (§9) is valid; otherwise `tier_invalid` (exit 2), with `details.efforts` listing the valid ones. **For a Job's Tier, the rule of pro-d82 applies next** (the User's decision, 2026-10-26; contract §9 "Tier rules"): a Worker uses only H0–H3 and S0–S3, so the Tier must be `H0`–`H3` or `S0`–`S3`, else `tier_not_allowed` (an explore Job's range is its kind's, below) (exit 2, `details` `{tier, allowed: "H0-H3, S0-S3", rule: "pro-d82"}`), message `Tier <T> is not allowed for a Worker: Workers use only the Tiers H0-H3, S0-S3, to keep cost down (pro-d82, hs-d554)`. `job add`, `job edit`, `job retry` and `job dispatch` apply it, after `tier_invalid`; a stub draft's Tier is checked too. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Stored Jobs and Plans") say what happens to it.
+**Tier flag** (`--tier`): `^(G|H|S|O)([0-4]|X)$` (contract §9): one letter, then an effort digit `0`–`4` or `X`. Every letter is alike, `G` included. A digit is valid only when the letter's model offers that effort (`cpd tiers`, §14.3; digits may skip, as O's efforts `0, 2, 3, 4` do); `X` is valid only when the letter's model offers no effort levels. Effort 5 is never valid for any letter. A Tier that breaks the syntax, or uses a digit or an `X` its model does not offer, is `tier_invalid` (exit 2, `details.tier`), with `details.efforts` listing the valid efforts for an effort. A Job's Tier must also be in the range of its role (contract §9 "Roles and ranges"). The refusal that enforces the range, `tier_not_allowed` (§5.1, §5.2, §5.4), belongs to the Workflow `tier-enforce`: until it lands, §5.1 and §5.2 still state the fixed Worker range of pro-d82. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Ranges are enforced by the commands and the engine") say what happens to it.
 
 ### 5.1 `job add`
 
@@ -2218,7 +2220,7 @@ The five `adopt_*` rows are checked in the order above, after every other check 
 
 Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so no `illegal_phase`. A new Workflow has no dependents, so it creates no cycle of its own; `dependency_cycle` is possible only through `workflow edit` (§9.5).
 
-**The template** (hs-d341). The shape's Jobs are **stub drafts** (§5.1: a title, no Tier and no Spec; the exception is the `open-<workflow>` stub, below, which has Tier `open_tier` and cpd's fixed Spec from the insert): `jobs` rows with their `kind`, the titles `Docs: <Workflow title>`, `Red tests: <Workflow title>`, `Implement: <Workflow title>` and `Config: <Workflow title>`, `status = draft`, `appended` 0 before the lock and 1 after it (as `job add --draft` writes them), no fingerprint and for `tdd` the `dependencies` rows `<key>-tests → <key>-docs` and `<key>-impl → <key>-tests`. The Lead completes each (`job edit --tier --spec`, §5.2) or cancels the ones it does not need (never, one by one, the `test` and `impl` Jobs of a `tdd` Workflow: `job cancel` is refused `shape_incomplete`; `workflow cancel` of the whole Workflow cancels them itself, §9.6, hs-d573) and adds the Workflow's other Jobs with `job add --workflow`. The engine runs nothing of them until the batch is approved (§4.6, §4.8). **After the lock** (hs-d731) the stubs are laid out as above only for a Workflow that waits for another Workflow; **with `--jobs`** the non-open Jobs are written `queued` instead, as `job add` without `--draft` writes them (`appended` 1, Tier, Spec, fingerprint, `tests` and `test_files` of the `test` Job, the same titles and kinds and for `tdd` the same chain of `dependencies` rows), one `job-added` Event each and the Workflow's `open` Job stays the draft it is; without `--jobs` a Workflow that would start at once is refused `draft_parked` (the rows above). The Workflow's `open` Job is a **stub draft** laid out by the template, Tier `open_tier` (contract §8.2), no Dependencies, and a stored Spec: cpd's fixed text, written by `workflow add` when it inserts the stub and never edited (`job edit` refuses it, `job_locked`); the Lead may cancel it. Engine E4 (§3.7) is a **fallback**: when the Workflow becomes `dispatch`, if it has no `open` Job at all, E4 adds a fresh one `queued`; a `draft`, `queued`, `running`, `failed` or `cancelled` one it leaves alone and it still promotes a `draft` opener to `queued` when no other draft of its Workflow remains (contract §3.7, hs-d573).
+**The template** (hs-d341). The shape's Jobs are **stub drafts** (§5.1: a title, no Tier and no Spec; the exception is the `open-<workflow>` stub, below, which has Tier `worker_tier` and cpd's fixed Spec from the insert): `jobs` rows with their `kind`, the titles `Docs: <Workflow title>`, `Red tests: <Workflow title>`, `Implement: <Workflow title>` and `Config: <Workflow title>`, `status = draft`, `appended` 0 before the lock and 1 after it (as `job add --draft` writes them), no fingerprint and for `tdd` the `dependencies` rows `<key>-tests → <key>-docs` and `<key>-impl → <key>-tests`. The Lead completes each (`job edit --tier --spec`, §5.2) or cancels the ones it does not need (never, one by one, the `test` and `impl` Jobs of a `tdd` Workflow: `job cancel` is refused `shape_incomplete`; `workflow cancel` of the whole Workflow cancels them itself, §9.6, hs-d573) and adds the Workflow's other Jobs with `job add --workflow`. The engine runs nothing of them until the batch is approved (§4.6, §4.8). **After the lock** (hs-d731) the stubs are laid out as above only for a Workflow that waits for another Workflow; **with `--jobs`** the non-open Jobs are written `queued` instead, as `job add` without `--draft` writes them (`appended` 1, Tier, Spec, fingerprint, `tests` and `test_files` of the `test` Job, the same titles and kinds and for `tdd` the same chain of `dependencies` rows), one `job-added` Event each and the Workflow's `open` Job stays the draft it is; without `--jobs` a Workflow that would start at once is refused `draft_parked` (the rows above). The Workflow's `open` Job is a **stub draft** laid out by the template, Tier `worker_tier` (contract §8.2), no Dependencies, and a stored Spec: cpd's fixed text, written by `workflow add` when it inserts the stub and never edited (`job edit` refuses it, `job_locked`); the Lead may cancel it. Engine E4 (§3.7) is a **fallback**: when the Workflow becomes `dispatch`, if it has no `open` Job at all, E4 adds a fresh one `queued`; a `draft`, `queued`, `running`, `failed` or `cancelled` one it leaves alone and it still promotes a `draft` opener to `queued` when no other draft of its Workflow remains (contract §3.7, hs-d573).
 
 **The repo's key** (contract §8.3, hs-d288). `workflow add` parses the repo's `origin` once, at the boundary: `git -C <repo> remote get-url origin`, which must be `https://github.com/<owner>/<name>` or `git@github.com:<owner>/<name>`, each with or without `.git`, `<owner>` and `<name>` valid by contract §2.1 (stored lowercased). Nothing else is accepted: no `origin`, another host, or an SSH host alias (`git@github-work:<work-owner>/x.git`) is `repo_unkeyed`; cpd never asks the network to resolve one. `<owner>` must be the Context's (`owner_mismatch`): one GitHub owner per Context and a Plan may span several repos of it. The Workflow stores `<name>` only; its owner is the Context's.
 
@@ -3062,7 +3064,7 @@ Idempotent: yes; rerunning renders the message again (the same if no Events occu
 cpd session retier [--all | <id> [--tier <T>]]
 ```
 
-Moves live Leads and Managers to the Tier the config names for them now (hs-d506: the User sets `lead_tier`, `review_lead_tier` and `manager_tier` and every running Session must follow, not only those registered later; pro-d139, pro-d140). With `--tier <T>` it instead moves the one Session `<id>` to `<T>` (pro-d142, below). **A Session's `tier` is not fixed at registration** (contract §2.2 Session): this command is the one that changes it. Workers are not touched: a Worker's Tier is its Job's (contract §9).
+Moves live Leads and Managers to the Tier the config names for them now (hs-d506: the User sets `lead_tier` and `manager_tier` and every running Session must follow, not only those registered later; pro-d139, pro-d140). With `--tier <T>` it instead moves the one Session `<id>` to `<T>` (pro-d142, below). **A Session's `tier` is not fixed at registration** (contract §2.2 Session): this command is the one that changes it. Workers are not touched: a Worker's Tier is its Job's (contract §9).
 
 | Argument | Meaning |
 |---|---|
@@ -3072,7 +3074,7 @@ Moves live Leads and Managers to the Tier the config names for them now (hs-d506
 
 Exactly one of the two: neither, or both, is `usage` (exit 2). `--tier` with `--all` is `usage` too (a clap conflict: nothing is changed) and so is `--tier` without `<id>`.
 
-**The target.** A Session of role `lead` (a Plan's Lead and a side fork alike) moves to the config's `review_lead_tier` when its Context is `codereview` (contract §2.2 "Permanent Contexts"), else to `lead_tier`; one of role `manager` to `manager_tier` (contract §8.2; pro-d139, pro-d140). A later retier without `--tier` moves a Session to its target again, so a `--tier` override is reset by it.
+**The target.** A Session of role `lead` (a Plan's Lead and a side fork alike) moves to the config's `lead_tier`; one of role `manager` to `manager_tier` (contract §8.2; `review_lead_tier` is removed, pro-d328 to pro-d332, superseding pro-d139 and pro-d140). A later retier without `--tier` moves a Session to its target again, so a `--tier` override is reset by it.
 
 **`--tier <T>`** (pro-d142). The one Session `<id>` moves to `<T>` instead of its target, with no config change. `<T>` is checked before anything is written, in the order of `plan new --tier` (§4.1): a bad syntax, or an effort the catalog lacks for the Tier's model (the models of the Session's Context, contract §8.3; the catalog is read only when `--tier` is given), is `tier_invalid` (exit 2); letter G or effort 5 is `tier_not_allowed` (exit 2), with the `details` and message of §4.1 (the Lead rule applies to the Manager too). A refusal changes nothing. A Session already on `<T>` is unchanged (`already`).
 
@@ -3908,7 +3910,7 @@ Checks, in order:
 | `git`, `tmux`, `pi`, `gh` | error | found on `PATH` at or above the minimum above |
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
-| `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9) and `lead_tier`, `review_lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, pro-d82, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H0`–`H3` or `S0`–`S3`); effort 0–3) |
+| `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9); `lead_tier`, `manager_tier`, `context_distill_tier` and `worker_tier` are Tiers in the syntax of §5, each a valid rung of its model (contract §9 "Roles and ranges"), and they strictly ascend (`context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`). These replace the fixed ranges of hs-d562, pro-d82, hs-d554 and hs-d506 (pro-d328 to pro-d332). `review_lead_tier` is no longer checked: it is removed |
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms` and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `worker_runner` | error | for `pi`, passes without looking at anything; for `durable`, passes when `<pi_adapter>/durable-worker/main.ts` exists and pi's Node is at least 22.19.0 (the `engines.node` of the runner's package, contract §6.12): `found` is the Node version, `expected` is `>= 22.19.0` (contract §3.4 "The Worker runner and its seam") |
@@ -3931,11 +3933,14 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 
 ```
 cpd config [--migrate]
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
 ```
 
-Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, pro-d53, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier`, `review_lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9) and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `lead_tier` `O2`, `review_lead_tier` `S3` (pro-d139), `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Without `--migrate`, prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` outside the Tier syntax (effort 5 included), the role defaults out of ascending order, and `worker_runner`, `lead_runner` or `manager_runner` other than `"pi"` or `"durable"` (contract §8.2: each key is validated and printed, with its source like every key; `lead_runner` and `manager_runner` default to `pi` and are independent, contract §6.19). Defaults: `context_distill_tier` `GX` (the auxiliar role's default: the Tier every distill run uses, one step only, no ladder, hs-d560), `worker_tier` `H3` (the worker role's default: the Tier of the `open` and `update` Jobs), `lead_tier` `O2`, `manager_tier` `O4` (pro-d328 to pro-d332; contract §9 "Roles and ranges"), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). `timeouts.explore_minutes` `20` (Plan `explore-roles`: the active-time limit of an explore Attempt, `scout` or `research`, used instead of `timeouts.attempt_minutes`; an integer >= 1, else `config_invalid` with `details.key`). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278; `config tiers set`, §14.2a, opens it); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
-With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722; the migrations include `distill-tier-gx` and `drop-test-concurrency` (hs-d722, hs-d679), a third migration (hs-d738) and `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
+`config tiers set` (§14.2a) is the one other subcommand: it writes the four Tier keys.
+
+With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive migrations (contract §8.1 "Config migrations", hs-d722: `distill-tier-gx`, `drop-test-concurrency`, `drop-plannotator-ports`, `open-tier-worker-tier` and `drop-review-lead-tier`, in that order, then `drop-inbox-review-context` (pro-d338: the `review_context` line of the `[inbox]` table is removed, other keys and comments survive)), validates the result (the same checks as plain `config` above) and writes the file only when it changed and only when the result is valid. The file is untouched on any refusal. Refusals: `config_missing` (exit 1) when the file is missing; `config_invalid` (exit 1, `details.key`) when the migrated file is still invalid after the migrations; any other code the migrations may return. It prints `{"ok":true,"path":"<path>","migrated":["<name>",...]}` with an empty array when nothing changed. Used only by `cpd install` before replacing the binary (contract §3.7 "The config migration and validation", commands.md §14.4 step 3).
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
@@ -3945,10 +3950,54 @@ With `--migrate`, reads `$CPD_HOME/config.toml`, applies the ordered, additive m
 
 `sources` has one entry per leaf key. Idempotent: read-only.
 
+### 14.2a `config tiers set`
+
+```
+cpd config tiers set --auxiliar <T> --worker <T> --lead <T> --manager <T>
+```
+
+Sets the four Tier keys of `$CPD_HOME/config.toml` (contract §8.2): `--auxiliar` is `context_distill_tier`, `--worker` is `worker_tier`, `--lead` is `lead_tier` and `--manager` is `manager_tier`. All four flags are required (a missing one is `usage`, exit 2); each value is a Tier of the syntax of contract §9. Callers: none, the User at a shell (§2); cockpit: yes (§2).
+
+| Argument | Meaning |
+|---|---|
+| `--auxiliar <T>` | the auxiliar role's default, `context_distill_tier` (§9 "Roles and ranges") |
+| `--worker <T>` | the worker role's default, `worker_tier` |
+| `--lead <T>` | the lead role's default, `lead_tier` |
+| `--manager <T>` | the manager role's default, `manager_tier` |
+
+**Validation.** The checks run in the order of the table below, and every one of them runs before any write. The catalog they need is read from the models of `host.toml`'s `[model]` table as they are when the command runs (the built-in default of contract §8.3 when the file has no `[model]` table, as `cpd tiers` reads them), so `config tiers set` opens the store (the catalog cache) like `cpd tiers` does (§14.3), and it is not a plain `config` read: it waits out a migration in progress (hs-n278; contract §4.2). Writing the catalog cache is not an Event.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `config.toml` exists (it is read first) | `config_missing` | 1 |
+| each of the four values is a Tier of the syntax of §9, effort 5 included; `details.key` is the config key | `tier_invalid` | 2 |
+| the new text parses as a Config: each key's own rules hold, and the four defaults strictly ascend, `context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier` (§9 "Roles and ranges"); `details.key` is the key that breaks the order, or the key whose value is refused | `config_invalid` | 1 |
+| `host.toml` exists and parses, or is absent (the built-in default applies); a file that does not parse is `policy_invalid` (`details.file`) | `policy_invalid` | 1 |
+| the store cannot be opened for the catalog, or the migration wait ends (as `cpd tiers`) | `lock_timeout` | 5 |
+| pi is found as §9 says | `pi_not_found` | 1 |
+| the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
+| each model read for the catalog (the `[model]` refs of `host.toml`) is in the catalog | `tier_model_unknown` | 1 |
+| each value is a valid rung of its letter's model: a digit only for an effort the model offers, `X` only for a model with no effort levels (§9 "Valid efforts per model"); `details.key` and `details.efforts` (the model's valid efforts) | `tier_invalid` | 2 |
+| each role's span holds a valid rung: the floor (the lowest valid rung at or above the role's new value) is at or below its ceiling (the highest valid rung strictly below the next role's new value; the top valid rung for the manager; the value itself for the auxiliar), §9 "Roles and ranges"; `details.key` is the role's key | `config_invalid` | 1 |
+
+**Effects.** Only a key whose effective value changes is written; an absent key has its default as its value. The rewrite keeps every other byte of the file:
+- a changed key's line is replaced whole by `<key> = "<T>" # set by the Agent Tiers dialog, <YYYY-MM-DD>`, the date from cpd's ports clock;
+- an absent key is inserted after the last top-level `key = value` line before the first `[table]` header, at the end when there is no table, as the runner pill's toggle inserts `worker_runner` (contract §8.2);
+- a key whose value is unchanged is not touched, its line and its comment stay.
+
+The file is written atomically (a temporary file in the same directory, then a rename: contract §8.1 "Every write is atomic"). No row, no Event. **No running Session moves**: a live Lead or Manager keeps its Tier until `cpd session retier --all` (§10.16) moves it to the new `lead_tier` or `manager_tier`. A Worker's Tier is its Job's: `worker_tier` applies to the Jobs cpd adds after the write, and a started Attempt keeps its Tier (§9 "Attempt Tier").
+
+```json
+{"ok": true, "changed": ["worker_tier", "lead_tier"], "already": false,
+ "config": {"version": 1, "machine": "hs", "context_distill_tier": "GX", "worker_tier": "H3", "lead_tier": "S4", "manager_tier": "O3", "...": "..."}}
+```
+
+`changed` lists the keys whose effective value changed, in the order `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`. When no value changes, `changed` is `[]` and `already` is `true`, and nothing is written (the file is not touched and its comment dates stay). `config` is the effective configuration after the write, as plain `cpd config` prints it (§14.2). Idempotence: yes, a rerun with the same four values writes nothing (`already`).
+
 ### 14.3 `tiers`
 
 ```
-cpd tiers
+cpd tiers [--model <L>=<ref>]...
 ```
 
 Kept from cpd 1 §7 and §11; output of §9.
@@ -3957,17 +4006,26 @@ Kept from cpd 1 §7 and §11; output of §9.
 |---|---|---|
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
-| each configured model is in the catalog | `tier_model_unknown` | 1 |
+| each model read is in the catalog: the configured one of each letter, or the `--model` candidate that replaces it | `tier_model_unknown` | 1 |
+| `--model` is `<L>=<ref>` with `L` one of `O`, `S`, `H`, `G`, `<ref>` a model ref of §8.3 (`<provider>/<model-id>`), and no letter is given twice | `usage` | 2 |
+
+**`--model <L>=<ref>`** (repeatable) names a candidate model for the letter `L`, for this call only. The catalog is read for the candidate instead of the configured model of `L`, and the output's `tiers.<L>.model` and `efforts` are the candidate's. Nothing is written to `host.toml` or `config.toml`; the candidate's catalog rows are cached like any model's (a cache, no Event). The output shape is unchanged, and `tiers.<L>.model` shows the candidate:
+
+```json
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-sonnet-4.5", "efforts": [0, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
+```
+
+The example is `cpd tiers --model H=github-copilot/claude-sonnet-4.5` (an illustration, not a verified model): `H` is the candidate, and `O`, `S` and `G` are as the host file gives them. Idempotent: yes; read-only for every file but the catalog cache.
 
 It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
-Effects: the cache is keyed by `install/current-version` and the fingerprint of `<agentDir>/models.json` (`models_sha`: lowercase hex SHA-256 of its bytes, `""` when the file does not exist; any other read error is `catalog_failed` with the path in `details`), so the key is `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp; contract §4.4, §9). When either differs from the cached rows, one transaction inserting `tier_catalog` rows (append-only; old rows stay) (a cache: no Event). No tmux, no git.
+Effects: the cache is keyed by `install/current-version` and the fingerprint of `<agentDir>/models.json` (`models_sha`: lowercase hex SHA-256 of its bytes, `""` when the file does not exist; any other read error is `catalog_failed` with the path in `details`), so the key is `(pi_version, models_sha, letter, model)` (pro-d26, Plan bifrost, PR catfp; contract §4.4, §9). When either differs from the cached rows, one transaction inserting `tier_catalog` rows (append-only; old rows stay) (a cache: no Event). The rows of every letter are cached, `G` included (contract §4.4, §9). No tmux, no git.
 
 ```json
-{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 1, 2, 3, 4, 5]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4, 5]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
+{"ok": true, "pi_version": "1.2.0", "tiers": {"O": {"model": "github-copilot/claude-opus-5.5", "efforts": [0, 2, 3, 4]}, "S": {"model": "github-copilot/claude-sonnet-5.5", "efforts": [0, 1, 2, 3, 4]}, "H": {"model": "github-copilot/claude-haiku-4.5", "efforts": [0, 1, 2, 3, 4]}, "G": {"model": "github-copilot/gemini-3.8-flash", "efforts": []}}}
 ```
 
-The `efforts` above are an illustration, not verified values. Idempotent: yes.
+The `efforts` above are an illustration, not verified values. `G` reads like the other letters (pro-d328 to pro-d332): its model here has only `off`, so its `efforts` are `[]` and `GX` is its one valid Tier; a model with an effort level gives `G` efforts like any letter. Efforts are 0–4 (`minimal` and `max` are dropped, §9). Idempotent: yes.
 
 ### 14.4 `install`
 
@@ -4053,9 +4111,10 @@ Effects: `run/models-<provider>.json` written for each provider that has a good 
 cpd preset list
 cpd preset show <name>
 cpd preset apply <name>
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
 ```
 
-The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` writes and its caller is `[Manager]` (§2). None of the three writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
+The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four model refs — the `O`, `S`, `H` and `G` keys of a `[presets.<name>]` table of `$CPD_HOME/config.toml` (contract §8.1, §8.2) — applied to the machine by rewriting the `[model]` table of its host policy. `list` and `show` are read-only and their callers are `[Manager, Lead]`; `apply` and `set` write and their caller is `[Manager]` (§2). `set` takes the four refs as flags, with no name (§14.6a). None of the four writes `config.toml`: presets are the User's, managed by dotfiles. A provider is the text before the first `/` of a ref. `apply` writes a single-provider table (step 4), as contract §8.3 "One provider per table" holds of any written model table.
 
 **`preset list`** prints every preset with the provider of its `O` ref. No precondition, no effect (one read of `config.toml`, no store):
 
@@ -4116,6 +4175,52 @@ The tier-preset switch (D1–D5 of Plan `tier-presets`): a named set of four mod
 ```
 
 `host` is the path of the rewritten file; `changed` lists one entry per Session whose model changed, with the Session's id and role and its Event's `from`, `to` and `event` (the Event's id). When step 3 finds the host already on the preset, the output is `{"ok": true, "preset": "fast", "already": true, "changed": []}`. Idempotent: yes — a rerun whose preset already equals the host `[model]` is the no-op above.
+
+### 14.6a `preset set`
+
+```
+cpd preset set --O <ref> --S <ref> --H <ref> --G <ref>
+```
+
+The switch of `preset apply` with the four refs given as flags instead of a `[presets.<name>]` table: steps 2 to 7 of `preset apply` below are shared, and `set` replaces its step 1 (the name lookup) with the flags. Each ref is `<provider>/<model-id>` (contract §8.3, 1 to 200 characters, no NUL). All four flags are required; a missing one is `usage`. Callers: `[Manager]`, as `apply` (§2); cockpit: yes (§2). It needs no `[presets]` table in `config.toml`, and it writes nothing to `config.toml`.
+
+| Argument | Meaning |
+|---|---|
+| `--O <ref>` | the model ref of the `O` letter |
+| `--S <ref>` | the model ref of the `S` letter |
+| `--H <ref>` | the model ref of the `H` letter |
+| `--G <ref>` | the model ref of the `G` letter |
+
+**Steps, in order.** Every refusal happens before any write: nothing is written and no Event is appended.
+
+1. **The refs.** Each `--O`, `--S`, `--H` and `--G` parses as a model ref (`usage` otherwise), before anything is read.
+2. **The host file, equality, one provider, registry.** Exactly `preset apply`'s steps 2 to 5 with the flags' four refs as the preset's: the host file must hold a `[model]` table; when the four refs equal the host's, the command is a no-op (`already`, no registry run, no store opened); the four refs must be one provider; the registry (pi's full list, §14.6 `apply` step 5) must hold each provider and each model id, `preset_provider_unconfigured` and `preset_model_unoffered` otherwise.
+3. **The write and the live Sessions.** Exactly `preset apply`'s steps 6 and 7: the `[model]` table of `host.toml` is rewritten atomically, and one `session-model-changed` Event is appended for each live Lead and Manager whose model changed, in one store transaction.
+
+**Effects.** The `[model]` rewrite of `host.toml` and the Events of step 3, and nothing else: no `config.toml` write, no other row, and no write at all on a refusal or on the no-op of step 2.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a ref does not parse as a model ref of §8.3, or a flag is missing (step 1) | `usage` | 2 |
+| `host.toml` exists and holds a `[model]` table; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the four refs are one provider; `details.file`, `details.key` `model` (step 2) | `policy_invalid` | 1 |
+| the registry can be listed: pi is found as §9 says | `pi_not_found` | 1 |
+| the registry can be listed: the helper starts | `spawn_failed` | 1 |
+| the registry can be listed: the helper answers within 120 s | `tool_timeout` | 5 |
+| the registry can be listed: the answer is the JSON of contract §3.7 E15, in `--all` mode | `models_helper_failed` | 1 |
+| the ref's provider is in the registry | `preset_provider_unconfigured` | 3 |
+| every ref is among its provider's offered ids | `preset_model_unoffered` | 3 |
+
+It opens the store only to append the Events of step 3, so it waits out a migration in progress as `preset apply` does (contract §4.2). A rerun whose refs equal the host `[model]` is the no-op of step 2 and writes nothing.
+
+```json
+{"ok": true, "preset": null, "host": "/home/clayton/.cpd/policy/host.toml",
+ "already": false,
+ "changed": [
+   {"session": "596d007f-…", "role": "lead", "from": "github-copilot/claude-opus-5.5", "to": "github-copilot/claude-sonnet-5.5", "event": 48221}]}
+```
+
+The output is `apply`'s, with `preset` `null` (there is no name). When the refs equal the host `[model]`, the output is `{"ok": true, "preset": null, "already": true, "changed": []}`, as `apply`'s no-op. Idempotence: yes; a rerun with the same four refs is the no-op above.
 
 ### 14.7 `metrics`
 

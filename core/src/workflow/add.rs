@@ -619,7 +619,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         .transpose()?;
     let mut env = Env::open()?;
     let home = env.home.clone();
-    let open_tier = env.config.open_tier;
+    let worker_tier = env.config.worker_tier;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
@@ -702,7 +702,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         reopen(tx, &plan, phase, key)?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
-                    let stubs = insert_stubs(tx, &home, &plan, &wanted, appended, open_tier)?;
+                    let stubs = insert_stubs(tx, &home, &plan, &wanted, appended, worker_tier)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
                         "Workflow {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
@@ -727,7 +727,7 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
                             NewEvent::job_added(text, key, stub.kind, "queued", appended, Some(&tier.to_string()), needs, false)
                         } else if stub.kind == "open" {
                             let text = format!("Job {} added to Plan {plan} as draft (the {} template of Workflow {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
-                            NewEvent::job_added_by_cpd(text, key, stub.kind, "draft", &open_tier.to_string(), open::BY_TEMPLATE, None)
+                            NewEvent::job_added_by_cpd(text, key, stub.kind, "draft", &worker_tier.to_string(), open::BY_TEMPLATE, None)
                         } else {
                             let text = format!("Job {} added to Plan {plan} as draft (the {} template of Workflow {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
                             NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false)
@@ -1142,14 +1142,14 @@ fn insert(
 
 /// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
 /// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template. The opener stub is
-/// the exception: it carries the fixed Spec of [`open::spec`] and the config's `open_tier`, and no Dependency rows.
+/// the exception: it carries the fixed Spec of [`open::spec`] and the config's `worker_tier`, and no Dependency rows.
 fn insert_stubs(
     tx: &Connection,
     home: &CpdHome,
     plan: &PlanId,
     wanted: &Wanted,
     appended: bool,
-    open_tier: Tier,
+    worker_tier: Tier,
 ) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
     let workflow = load_workflows(tx, plan)?
@@ -1274,7 +1274,7 @@ fn insert_stubs(
                     wanted.key.as_str(),
                     stub.key,
                     stub.title,
-                    open_tier.to_string(),
+                    worker_tier.to_string(),
                     spec.goal,
                     spec.context,
                     spec.touches.to_string(),

@@ -266,14 +266,6 @@ pub fn read_with(
             missing.push(serde_json::json!({"letter": letter.to_string(), "model": model}));
             continue;
         };
-        if letter == Letter::G {
-            // G has no effort levels (hs-d562): pi's levels for it are ignored, only that pi has the model matters.
-            models.push(TierModel {
-                model: model.clone(),
-                efforts: vec![],
-            });
-            continue;
-        }
         let mut efforts = Vec::new();
         for level in entry {
             match effort_of_level(level) {
@@ -290,11 +282,9 @@ pub fn read_with(
         }
         efforts.sort_unstable();
         efforts.dedup();
-        if efforts.is_empty() {
-            return Err(catalog_failed(format!(
-                "pi reports no usable thinking level for {model}."
-            ))
-            .with("model", model.clone()));
+        // Only `off`, or no level at all: no efforts, only `<letter>X` is valid (Tier model v2).
+        if efforts == [0] {
+            efforts.clear();
         }
         models.push(TierModel {
             model: model.clone(),

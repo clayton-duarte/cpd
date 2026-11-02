@@ -200,7 +200,7 @@ fn list_filters_and_derives_place_and_leads() {
             &Value::Null,
             &Value::Null,
             &json!(false),
-            &json!("O5")
+            &json!("O2")
         )
     );
     assert!(

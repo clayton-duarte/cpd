@@ -342,3 +342,111 @@ fn list_and_show_print_the_presets_and_the_current_model() {
     fx.config("");
     assert_eq!(fx.cpd(&["preset", "list"]).ok()["presets"], json!([]));
 }
+
+// ---------- preset set (commands.md §14.6a) ----------
+
+/// `preset set` with the four refs as flags.
+fn set_args<'a>(o: &'a str, s: &'a str, h: &'a str, g: &'a str) -> Vec<&'a str> {
+    vec!["preset", "set", "--O", o, "--S", s, "--H", h, "--G", g]
+}
+
+const OPUS: &str = "github-copilot/claude-opus-5.5";
+const SONNET: &str = "github-copilot/claude-sonnet-5.5";
+const HAIKU: &str = "github-copilot/claude-haiku-4.5";
+const GEMINI: &str = "github-copilot/gemini-3.8-flash";
+
+#[test]
+fn preset_set_writes_the_model_table_and_one_event_per_live_lead_and_manager() {
+    let fx = Fx::new();
+    fx.config("");
+    fx.host(HOST);
+    fx.sessions();
+
+    // O and S both change: the Lead is on O, the Manager on S.
+    let out = fx.cpd(&set_args(HAIKU, OPUS, HAIKU, GEMINI)).ok();
+    assert_eq!(out["preset"], Value::Null, "{out}");
+    assert_eq!(out["already"], false, "{out}");
+    assert!(
+        out["host"].as_str().unwrap().ends_with("policy/host.toml"),
+        "{out}"
+    );
+    let changed = out["changed"].as_array().unwrap();
+    assert_eq!(changed.len(), 2, "{out}");
+    let mut roles: Vec<&str> = changed
+        .iter()
+        .map(|c| c["role"].as_str().unwrap())
+        .collect();
+    roles.sort();
+    assert_eq!(roles, ["lead", "manager"], "{out}");
+
+    assert_eq!(
+        fx.host_text(),
+        format!(
+            "# not part of the model\n[model]\nO = \"{HAIKU}\"\nS = \"{OPUS}\"\nH = \"{HAIKU}\"\nG = \"{GEMINI}\"\n\n[pr]\nfeedback.checks = \"none\"\n"
+        )
+    );
+    let mut events = fx.env.model_changed();
+    events.sort_by_key(|e| e["session"].as_str().unwrap().to_owned());
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[0]["session"], "lead1", "{events:?}");
+    assert_eq!(events[0]["data"]["from"], OPUS, "{events:?}");
+    assert_eq!(events[0]["data"]["to"], HAIKU, "{events:?}");
+    assert_eq!(events[1]["session"], "mgr1", "{events:?}");
+    assert_eq!(events[1]["data"]["from"], SONNET, "{events:?}");
+    assert_eq!(events[1]["data"]["to"], OPUS, "{events:?}");
+}
+
+#[test]
+fn preset_set_refuses_two_providers_and_writes_nothing() {
+    let fx = Fx::new();
+    fx.config("");
+    fx.host(HOST);
+    fx.sessions();
+
+    let run = fx.cpd(&set_args(HAIKU, "other-provider/x", HAIKU, GEMINI));
+    let err = refused(&run, "policy_invalid", 1);
+    assert_eq!(err["details"]["key"], "model", "{err}");
+    assert_eq!(
+        fx.host_text(),
+        HOST,
+        "host.toml is untouched by the refusal"
+    );
+    assert!(fx.env.model_changed().is_empty(), "no Event is appended");
+}
+
+#[test]
+fn preset_set_refuses_an_unoffered_model_and_writes_nothing() {
+    let fx = Fx::new();
+    fx.config("");
+    fx.host(HOST);
+    fx.sessions();
+
+    refused(
+        &fx.cpd(&set_args(HAIKU, SONNET, "github-copilot/ghost", GEMINI)),
+        "preset_model_unoffered",
+        3,
+    );
+    assert_eq!(
+        fx.host_text(),
+        HOST,
+        "host.toml is untouched by the refusal"
+    );
+    assert!(fx.env.model_changed().is_empty(), "no Event is appended");
+}
+
+#[test]
+fn preset_set_with_the_same_models_writes_nothing() {
+    let fx = Fx::new();
+    fx.config("");
+    fx.host(HOST);
+    fx.sessions();
+    // The no-op lists no registry: with no answer the fake `node` would fail the listing.
+    fs::remove_file(fx.env.root().join("registry-answer")).unwrap();
+
+    let out = fx.cpd(&set_args(OPUS, SONNET, HAIKU, GEMINI)).ok();
+    assert_eq!(out["already"], true, "{out}");
+    assert_eq!(out["preset"], Value::Null, "{out}");
+    assert_eq!(out["changed"], json!([]), "{out}");
+    assert_eq!(fx.host_text(), HOST, "host.toml bytes are unchanged");
+    assert!(fx.env.model_changed().is_empty(), "no Event is appended");
+}

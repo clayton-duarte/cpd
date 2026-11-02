@@ -481,7 +481,7 @@ fn fixture(env: &common::TestEnv, attempt: Option<&str>) -> Option<Flock<fs::Fil
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
                        ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '{at}', '{at}'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'idle', '{at}', '{at}'),
-                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'idle', '{at}', '{at}');
+                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O4', 'idle', '{at}', '{at}');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', '{at}'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', '{at}');"

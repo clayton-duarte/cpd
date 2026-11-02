@@ -53,12 +53,11 @@ fn config_defaults_context_distill_tier_to_gx() {
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O2",
-            "review_lead_tier": "S3",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
-            "open_tier": "H3",
+            "worker_tier": "H3",
             "lead_pi_packages": [],
             "pi_adapter": "",
             "worker_runner": "pi",
@@ -238,10 +237,9 @@ fn config_has_one_source_per_leaf_key() {
     for key in [
         "retry_cap",
         "lead_tier",
-        "review_lead_tier",
         "manager_tier",
         "context_distill_tier",
-        "open_tier",
+        "worker_tier",
         "lead_pi_packages",
         "pi_adapter",
         "timeouts.attempt_minutes",
@@ -268,11 +266,10 @@ concurrency = 1
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
-lead_tier = "H0"
-review_lead_tier = "S3"
-manager_tier = "H1"
+lead_tier = "O2"
+manager_tier = "O4"
 context_distill_tier = "GX"
-open_tier = "S3"
+worker_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 context_engine_enabled = false
@@ -335,7 +332,7 @@ work_session = "w"
     assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["context_distill_tier"], "GX");
-    assert_eq!(out["config"]["open_tier"], "S3");
+    assert_eq!(out["config"]["worker_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert!(
@@ -617,36 +614,24 @@ fn config_refuses_each_bad_file_with_its_key_path() {
             "manager_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"S2\"\n",
-            "context_distill_tier",
-        ),
-        (
-            "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"O2\"\n",
-            "context_distill_tier",
-        ),
-        (
             "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H5\"\n",
             "context_distill_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"O2\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"S5\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"S5\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"X2\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"X2\"\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = \"S6\"\n",
+            "worker_tier",
         ),
         (
-            "version = 1\nmachine = \"hs\"\nopen_tier = \"S6\"\n",
-            "open_tier",
-        ),
-        (
-            "version = 1\nmachine = \"hs\"\nopen_tier = 2\n",
-            "open_tier",
+            "version = 1\nmachine = \"hs\"\nworker_tier = 2\n",
+            "worker_tier",
         ),
         (
             "version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n",
@@ -711,46 +696,20 @@ fn config_refuses_each_bad_file_with_its_key_path() {
     }
 }
 
-/// pro-d82: `open_tier` is a Worker Tier: H0-H3 or S0-S3.
+/// Tier model v2: the auxiliary default is any Tier of the syntax that ascends below `worker_tier` (default H3): `G0` and
+/// `H0` are accepted, a Tier at or above H3 or with effort 5 is `config_invalid`.
 #[test]
-fn config_accepts_an_open_tier_in_the_worker_range() {
+fn config_takes_a_context_distill_tier_below_the_worker_tier() {
     let fx = Fx::new();
-    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
+    for tier in ["GX", "G0", "G4", "H0", "H2"] {
         let ok = config_with(
             &fx,
-            &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"),
+            &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"),
         )
         .ok();
-        assert_eq!(ok["config"]["open_tier"], tier);
+        assert_eq!(ok["config"]["context_distill_tier"], tier);
     }
-    // The range ends at H3: H4 is not part of it.
-    assert_eq!(
-        config_with(&fx, "version = 1\nmachine = \"hs\"\nopen_tier = \"H4\"\n").error()["code"],
-        "config_invalid"
-    );
-}
-
-/// pro-d82 (hs-d554 for the cost reason): `open_tier` outside H0-H3, S0-S3 is refused.
-#[test]
-fn config_refuses_an_open_tier_outside_the_worker_range() {
-    let fx = Fx::new();
-    for tier in ["H4", "H5", "S4", "S5", "O2"] {
-        let run = config_with(
-            &fx,
-            &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"),
-        );
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{tier}");
-        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
-        assert_eq!(err["details"]["key"], "open_tier", "{tier}: {err}");
-    }
-}
-
-/// hs-d562: an auxiliary run uses only `GX`.
-#[test]
-fn config_refuses_a_context_distill_tier_that_is_not_gx() {
-    let fx = Fx::new();
-    for tier in ["H0", "H4", "S1", "O2", "G0", "G5"] {
+    for tier in ["G5", "H5"] {
         let run = config_with(
             &fx,
             &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"),
@@ -762,27 +721,15 @@ fn config_refuses_a_context_distill_tier_that_is_not_gx() {
             err["details"]["key"], "context_distill_tier",
             "{tier}: {err}"
         );
-        if tier == "H0" {
-            let message = err["message"].as_str().unwrap();
-            assert!(
-                message.contains("GX") && message.contains("hs-d562"),
-                "{message}"
-            );
-        }
     }
-    let ok = config_with(
-        &fx,
-        "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n",
-    )
-    .ok();
-    assert_eq!(ok["config"]["context_distill_tier"], "GX");
 }
 
-/// hs-d562: a Lead or the Manager is never on G; `open_tier` is a Worker's Tier (hs-d554), and GX is not one.
+/// Tier model v2: G is a letter, but the role defaults must ascend strictly above the auxiliary default `GX`, so a Lead,
+/// the Manager or a Worker default of `GX` is `config_invalid`.
 #[test]
-fn config_refuses_g_for_lead_manager_and_open_tier() {
+fn config_refuses_gx_where_the_role_defaults_would_not_ascend() {
     let fx = Fx::new();
-    for key in ["lead_tier", "manager_tier", "open_tier"] {
+    for key in ["lead_tier", "manager_tier", "worker_tier"] {
         let run = config_with(
             &fx,
             &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"),
@@ -790,14 +737,7 @@ fn config_refuses_g_for_lead_manager_and_open_tier() {
         let err = run.error();
         assert_eq!(run.exit, 1, "{key}");
         assert_eq!(err["code"], "config_invalid", "{key}: {err}");
-        assert_eq!(err["details"]["key"], key, "{key}: {err}");
-        if key != "open_tier" {
-            let message = err["message"].as_str().unwrap();
-            assert!(
-                message.contains('G') && message.contains("hs-d562"),
-                "{key}: {message}"
-            );
-        }
+        assert_eq!(err["details"]["key"], *key, "{key}: {err}");
     }
 }
 
@@ -1043,10 +983,10 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
             "ok": true,
             "pi_version": "9.9.9",
             "tiers": {
-                "O": {"model": "p/m-opus", "efforts": [0, 1, 2, 3, 4, 5]},
-                "S": {"model": "p/m-sonnet", "efforts": [0, 1, 2, 3, 4, 5]},
+                "O": {"model": "p/m-opus", "efforts": [0, 1, 2, 3, 4]},
+                "S": {"model": "p/m-sonnet", "efforts": [0, 1, 2, 3, 4]},
                 "H": {"model": "p/m-low", "efforts": [0, 1, 2]},
-                "G": {"model": "p/m-g", "efforts": []}
+                "G": {"model": "p/m-g", "efforts": [0, 1, 2, 3, 4]}
             }
         })
     );
@@ -1060,11 +1000,14 @@ fn tiers_runs_the_catalog_module_from_argv() {
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.2.0");
-    // `minimal` is dropped; the levels map to efforts by position.
-    assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
+    // `minimal` and `max` are dropped; the levels map to efforts by position.
+    assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4]));
     assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0, 1, 2, 3]));
-    assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
+    assert_eq!(
+        out["tiers"]["G"],
+        json!({"model": "p/m-g", "efforts": [0, 1, 2, 3]})
+    );
 
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let calls = fx.calls("node");
@@ -1099,13 +1042,13 @@ fn tiers_runs_the_catalog_module_from_argv() {
 const TIERS_MODELS_DEFAULT_G: &str = "O = \"github-copilot/m-opus\"\nS = \"github-copilot/m-sonnet\"\nH = \"github-copilot/m-low\"\n";
 
 #[test]
-fn tiers_prints_g_without_an_effort() {
+fn tiers_reads_the_efforts_of_g_like_the_other_letters() {
     let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(
         out["tiers"]["G"],
-        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []})
+        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": [0, 1, 2, 3]})
     );
     assert_eq!(
         fx.calls("node")[0].args.last().unwrap(),
@@ -1120,7 +1063,7 @@ fn tiers_prints_g_without_an_effort() {
     fx.fake_node(levels(ALL_LEVELS_JSON));
     assert_eq!(
         fx.cpd(&["tiers"]).ok()["tiers"]["G"],
-        json!({"model": "github-copilot/gemini", "efforts": []})
+        json!({"model": "github-copilot/gemini", "efforts": [0, 1, 2, 3]})
     );
 }
 
@@ -1138,28 +1081,31 @@ fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
     );
 }
 
+/// Tier model v2: the cache holds four rows per version, G included. A cache of only O, S and H rows is a miss: `cpd tiers`
+/// asks pi again and writes the four rows.
 #[test]
-fn a_cache_written_before_g_still_serves_the_catalog() {
+fn a_cache_without_a_g_row_is_a_miss_and_is_written_again_with_four_rows() {
     let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
-    // Only the cold call has a reply: a second call of node would be unscripted and fail the test.
-    fx.fake_once("node", levels(ALL_LEVELS_JSON));
-    fx.cpd(&["tiers"]).ok();
-    assert_eq!(
-        cached_rows(&fx.env),
-        [
-            row("1.2.0", "H", "github-copilot/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "github-copilot/m-opus", "[0,1,2,3,4,5]"),
-            row("1.2.0", "S", "github-copilot/m-sonnet", "[0,1]"),
-        ],
-        "G is never cached"
+    fx.env.sql(
+        "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
+           ('1.2.0', 'O', 'github-copilot/m-opus', '[0,1,2,3,4]', 't'),
+           ('1.2.0', 'S', 'github-copilot/m-sonnet', '[0,1]', 't'),
+           ('1.2.0', 'H', 'github-copilot/m-low', '[0,1,2,3]', 't');",
     );
+    // Only one reply: a second call of node would be unscripted and fail the test.
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
+    assert_eq!(fx.calls("node").len(), 1, "the three-row cache was a miss");
     assert_eq!(
         out["tiers"]["G"],
-        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []})
+        json!({"model": "github-copilot/gemini-3.8-flash", "efforts": [0, 1, 2, 3]})
     );
-    assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
-    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
+    assert_eq!(cached_rows(&fx.env).len(), 4);
+    assert_eq!(
+        fx.cpd(&["tiers"]).ok()["tiers"]["G"]["efforts"],
+        json!([0, 1, 2, 3])
+    );
+    assert_eq!(fx.calls("node").len(), 1, "now the four rows serve it");
 }
 
 /// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
@@ -1344,10 +1290,6 @@ fn tiers_catalog_failures_are_catalog_failed() {
             levels(r#"{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}"#),
         ),
         (
-            "a model with no usable level",
-            levels(r#"{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}"#),
-        ),
-        (
             "levels that are not text",
             levels(r#"{"O":[1],"S":["off"],"H":["off"],"G":["off"]}"#),
         ),
@@ -1481,8 +1423,9 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     assert_eq!(
         cached_rows(&fx.env),
         [
+            row("1.2.0", "G", "p/m-g", "[0,1,2,3]"),
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4]"),
             row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
         ]
     );
@@ -1521,15 +1464,21 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
-    assert_eq!(out["tiers"]["H"]["efforts"], json!([0]));
+    assert_eq!(
+        out["tiers"]["H"]["efforts"],
+        json!([]),
+        "only off: no efforts"
+    );
     // The table is append-only (§4.4): the new version's rows join the old ones.
     assert_eq!(
         cached_rows(&fx.env),
         [
+            row("1.2.0", "G", "p/m-g", "[0,1,2,3]"),
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4]"),
             row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
-            row("1.3.0", "H", "p/m-low", "[0]"),
+            row("1.3.0", "G", "p/m-g", "[]"),
+            row("1.3.0", "H", "p/m-low", "[]"),
             row("1.3.0", "O", "p/m-opus", "[0,1]"),
             row("1.3.0", "S", "p/m-sonnet", "[0,1]"),
         ]
@@ -1566,26 +1515,26 @@ fn tiers_sees_a_models_json_changed_under_the_same_pi_version() {
     assert_eq!(second["pi_version"], "1.2.0");
     assert_eq!(
         second["tiers"]["S"]["efforts"],
-        json!([0, 1, 2, 3, 4, 5]),
+        json!([0, 1, 2, 3, 4]),
         "the changed models.json is seen"
     );
     assert_eq!(fx.calls("node").len(), 2);
     // Append-only: the first bytes' rows stay beside the second's.
     let rows = cached_rows(&fx.env);
-    assert_eq!(rows.len(), 6, "{rows:?}");
+    assert_eq!(rows.len(), 8, "{rows:?}");
     assert!(
         rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3]")),
         "{rows:?}"
     );
     assert!(
-        rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4,5]")),
+        rows.contains(&row("1.2.0", "S", "p/m-sonnet", "[0,1,2,3,4]")),
         "{rows:?}"
     );
 
     // Unchanged bytes are a hit: node has no reply left.
     assert_eq!(
         fx.cpd(&["tiers"]).ok()["tiers"]["S"]["efforts"],
-        json!([0, 1, 2, 3, 4, 5])
+        json!([0, 1, 2, 3, 4])
     );
     assert_eq!(fx.calls("node").len(), 2);
 }
@@ -1623,7 +1572,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     assert_eq!(fx.calls("node").len(), 2);
     assert!(cached_rows(&fx.env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
     // The unchanged models' rows are kept, not duplicated or rewritten.
-    assert_eq!(cached_rows(&fx.env).len(), 4);
+    assert_eq!(cached_rows(&fx.env).len(), 5);
 }
 
 #[test]
@@ -1651,7 +1600,7 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     let fx = Fx::new();
     let out = config_with(
         &fx,
-        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nopen_tier = \"H3\"\n",
+        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nworker_tier = \"H3\"\n",
     )
     .ok();
     let config = &out["config"];
@@ -1660,7 +1609,7 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
             &config["lead_tier"],
             &config["manager_tier"],
             &config["context_distill_tier"],
-            &config["open_tier"]
+            &config["worker_tier"]
         ),
         (&json!("O0"), &json!("O4"), &json!("GX"), &json!("H3"))
     );
@@ -1811,72 +1760,288 @@ fn watch_janitor_minutes_below_1_is_config_invalid() {
     }
 }
 
-fn review_tier_file(value: &str) -> String {
-    format!("version = 1\nmachine = \"hs\"\nreview_lead_tier = {value}\n")
-}
-
+/// Tier model v2: `worker_tier` (new name of `open_tier`) defaults to H3 and takes any Tier that sits between the
+/// auxiliary and the Lead defaults on the ladder.
 #[test]
-fn config_defaults_review_lead_tier_to_s3_and_takes_a_lead_tier() {
+fn config_defaults_worker_tier_to_h3_and_takes_a_worker_tier() {
     let fx = Fx::new();
     let out = config_with(&fx, MINIMAL).ok();
-    assert_eq!(out["config"]["review_lead_tier"], "S3");
-    assert_eq!(out["sources"]["review_lead_tier"], "default");
-    let out = config_with(&fx, &review_tier_file("\"O3\"")).ok();
-    assert_eq!(out["config"]["review_lead_tier"], "O3");
-    assert_eq!(out["sources"]["review_lead_tier"], "file");
-    for tier in ["O0", "O4", "S4"] {
-        let out = config_with(&fx, &review_tier_file(&format!("\"{tier}\""))).ok();
-        assert_eq!(out["config"]["review_lead_tier"], tier);
+    assert_eq!(out["config"]["worker_tier"], "H3");
+    assert_eq!(out["sources"]["worker_tier"], "default");
+    assert!(out["config"].get("open_tier").is_none(), "{out}");
+    assert!(out["config"].get("review_lead_tier").is_none(), "{out}");
+    for tier in ["H0", "H4", "S1", "S4"] {
+        let out = config_with(
+            &fx,
+            &format!("version = 1\nmachine = \"hs\"\nworker_tier = \"{tier}\"\n"),
+        )
+        .ok();
+        assert_eq!(out["config"]["worker_tier"], tier);
+        assert_eq!(out["sources"]["worker_tier"], "file");
     }
 }
 
+/// Tier model v2: `context_distill_tier < worker_tier < lead_tier < manager_tier` on the ladder, equal is refused too;
+/// `details.key` is the key that breaks the order and the message names the key below it.
 #[test]
-fn config_refuses_a_g_review_lead_tier() {
+fn config_refuses_role_tiers_that_do_not_strictly_ascend() {
     let fx = Fx::new();
-    let run = config_with(&fx, &review_tier_file("\"GX\""));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid", "{err}");
-    assert_eq!(err["details"]["key"], "review_lead_tier", "{err}");
-    let message = err["message"].as_str().unwrap();
-    assert!(
-        message.contains("must not be a G Tier") && message.contains("hs-d562"),
-        "{message}"
+    let cases = [
+        (
+            "context_distill_tier = \"H3\"\n",
+            "worker_tier",
+            "context_distill_tier",
+        ),
+        (
+            "context_distill_tier = \"S0\"\n",
+            "worker_tier",
+            "context_distill_tier",
+        ),
+        ("worker_tier = \"O2\"\n", "lead_tier", "worker_tier"),
+        ("worker_tier = \"O3\"\n", "lead_tier", "worker_tier"),
+        ("lead_tier = \"O4\"\n", "manager_tier", "lead_tier"),
+        (
+            "lead_tier = \"H1\"\nworker_tier = \"S1\"\n",
+            "lead_tier",
+            "worker_tier",
+        ),
+        ("manager_tier = \"S4\"\n", "manager_tier", "lead_tier"),
+    ];
+    for (lines, key, below) in cases {
+        let text = format!("version = 1\nmachine = \"hs\"\n{lines}");
+        let run = config_with(&fx, &text);
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{text}");
+        assert_eq!(err["code"], "config_invalid", "{text}: {err}");
+        assert_eq!(err["details"]["key"], key, "{text}: {err}");
+        let message = err["message"].as_str().unwrap();
+        assert!(message.contains(below), "{text}: {message}");
+    }
+}
+
+/// `config --migrate` renames `open_tier` to `worker_tier` keeping value and comment, and drops `review_lead_tier`.
+#[test]
+fn config_migrate_renames_open_tier_and_drops_review_lead_tier() {
+    let fx = Fx::new();
+    let path = fx.env.cpd_home().join("config.toml");
+    fx.env.write_config(
+        "version = 1\nmachine = \"hs\"\nopen_tier = \"S3\"  # mine\nreview_lead_tier = \"S3\"\nconcurrency = 5\n",
+    );
+
+    let out = fx.cpd(&["config", "--migrate"]).ok();
+    assert_eq!(out["path"], path.to_str().unwrap(), "{out}");
+    assert_eq!(
+        out["migrated"],
+        json!(["open-tier-worker-tier", "drop-review-lead-tier"]),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "version = 1\nmachine = \"hs\"\nworker_tier = \"S3\"  # mine\nconcurrency = 5\n"
     );
 }
 
+// ---------------------------------------------------------------- config tiers set, tiers --model
+
+/// The `config.toml` of the tests of `config tiers set`: `lead_tier` present with a comment of the User's, the other
+/// three keys absent (their defaults are `GX`, `H3`, `O4`), a key after it and a table.
+const TIERS_SET_BEFORE: &str = "version = 1\nmachine = \"hs\"\nlead_tier = \"O2\"  # my own note\nconcurrency = 3\n\n[watch]\ntick_seconds = 5\n";
+
+/// `TIERS_SET_BEFORE` after `--auxiliar G1 --worker H2 --lead S3 --manager O4`: `manager_tier` is unchanged (`O4` is
+/// its default) so it is not written; the absent keys go after the last top-level key, in key order.
+const TIERS_SET_AFTER: &str = "version = 1\nmachine = \"hs\"\nlead_tier = \"S3\" # set by the Agent Tiers dialog, 2026-01-01\nconcurrency = 3\ncontext_distill_tier = \"G1\" # set by the Agent Tiers dialog, 2026-01-01\nworker_tier = \"H2\" # set by the Agent Tiers dialog, 2026-01-01\n\n[watch]\ntick_seconds = 5\n";
+
+/// An `Fx` on `TIERS_MODELS` (`H` offers efforts 0 to 2, the others 0 to 4) whose `node` answers with those levels,
+/// and `TIERS_SET_BEFORE` as `config.toml`.
+fn tiers_set_fx() -> Fx {
+    let fx = tiers_fx(TIERS_MODELS);
+    fx.env.write_config(TIERS_SET_BEFORE);
+    fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
+    fx
+}
+
+fn config_text(fx: &Fx) -> String {
+    fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap()
+}
+
+/// commands.md §14.2a: a changed key is rewritten whole with the dialog's comment and the clock's date, an absent
+/// key is inserted, an unchanged key is not written; the file is replaced by rename and `changed` names the keys.
 #[test]
-fn config_refuses_an_effort_5_review_lead_tier() {
-    let fx = Fx::new();
-    for tier in ["O5", "S5"] {
-        let run = config_with(&fx, &review_tier_file(&format!("\"{tier}\"")));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{tier}");
-        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
-        assert_eq!(err["details"]["key"], "review_lead_tier", "{tier}: {err}");
-        let message = err["message"].as_str().unwrap();
-        assert!(
-            message.contains("effort 0-4") && message.contains("hs-d506"),
-            "{tier}: {message}"
+fn config_tiers_set_writes_the_changed_keys_atomically_and_reports_them() {
+    let fx = tiers_set_fx();
+    let path = fx.env.cpd_home().join("config.toml");
+    let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap());
+
+    let out = fx
+        .cpd(&[
+            "config",
+            "tiers",
+            "set",
+            "--auxiliar",
+            "G1",
+            "--worker",
+            "H2",
+            "--lead",
+            "S3",
+            "--manager",
+            "O4",
+        ])
+        .ok();
+    assert_eq!(
+        out["changed"],
+        json!(["context_distill_tier", "worker_tier", "lead_tier"]),
+        "{out}"
+    );
+    assert_eq!(out["already"], false, "{out}");
+    assert_eq!(out["config"]["lead_tier"], "S3", "{out}");
+    assert_eq!(out["config"]["manager_tier"], "O4", "{out}");
+    assert_eq!(config_text(&fx), TIERS_SET_AFTER);
+    assert_ne!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).unwrap()),
+        inode,
+        "config.toml is replaced by rename"
+    );
+    let names: Vec<_> = fs::read_dir(fx.env.cpd_home())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("config"))
+        .collect();
+    assert_eq!(names, ["config.toml"], "no temporary file is left");
+}
+
+/// The four must strictly ascend: `lead_tier` `H1` is below `worker_tier` `H2`.
+#[test]
+fn config_tiers_set_refuses_a_non_ascending_set_and_writes_nothing() {
+    let fx = tiers_set_fx();
+    let run = fx.cpd(&[
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H2",
+        "--lead",
+        "H1",
+        "--manager",
+        "O4",
+    ]);
+    let err = common::refused(&run, "config_invalid", 1);
+    assert_eq!(err["details"]["key"], "lead_tier", "{err}");
+    assert_eq!(config_text(&fx), TIERS_SET_BEFORE);
+}
+
+/// `H` here is `p/m-low`, which offers efforts 0 to 2: `H3` is not a rung of it.
+#[test]
+fn config_tiers_set_refuses_a_rung_the_catalog_lacks_and_writes_nothing() {
+    let fx = tiers_set_fx();
+    let run = fx.cpd(&[
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H3",
+        "--lead",
+        "S3",
+        "--manager",
+        "O4",
+    ]);
+    let err = common::refused(&run, "tier_invalid", 2);
+    assert_eq!(err["details"]["key"], "worker_tier", "{err}");
+    assert_eq!(err["details"]["efforts"], json!([0, 1, 2]), "{err}");
+    assert_eq!(config_text(&fx), TIERS_SET_BEFORE);
+}
+
+/// A rerun with the same four values writes nothing: `already`, `changed` empty, bytes and mtime unchanged.
+#[test]
+fn config_tiers_set_again_writes_nothing_and_says_already() {
+    let fx = tiers_set_fx();
+    let args = [
+        "config",
+        "tiers",
+        "set",
+        "--auxiliar",
+        "G1",
+        "--worker",
+        "H2",
+        "--lead",
+        "S3",
+        "--manager",
+        "O4",
+    ];
+    fx.cpd(&args).ok();
+    let path = fx.env.cpd_home().join("config.toml");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+    let out = fx.cpd(&args).ok();
+    assert_eq!(out["already"], true, "{out}");
+    assert_eq!(out["changed"], json!([]), "{out}");
+    assert_eq!(config_text(&fx), TIERS_SET_AFTER);
+    assert_eq!(
+        fs::metadata(&path).unwrap().modified().unwrap(),
+        modified,
+        "the file was written again"
+    );
+}
+
+/// All four flags are required: each missing one is `usage`, and nothing is written.
+#[test]
+fn config_tiers_set_needs_all_four_flags() {
+    let fx = tiers_set_fx();
+    let all = [
+        ("--auxiliar", "G1"),
+        ("--worker", "H2"),
+        ("--lead", "S3"),
+        ("--manager", "O4"),
+    ];
+    for skipped in 0..all.len() {
+        let mut args = vec!["config", "tiers", "set"];
+        for (i, (flag, value)) in all.iter().enumerate() {
+            if i != skipped {
+                args.extend([*flag, *value]);
+            }
+        }
+        common::refused(&fx.cpd(&args), "usage", 2);
+        assert_eq!(
+            config_text(&fx),
+            TIERS_SET_BEFORE,
+            "without {}",
+            all[skipped].0
         );
     }
 }
 
+/// commands.md §14.3: `--model H=<ref>` reads the catalog for the candidate instead of the configured `H` model; the
+/// output shows the candidate and `host.toml` keeps its bytes.
 #[test]
-fn config_refuses_an_invalid_review_lead_tier() {
-    let fx = Fx::new();
-    for value in ["\"X3\"", "\"O6\"", "\"s3\"", "3"] {
-        let run = config_with(&fx, &review_tier_file(value));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{value}");
-        assert_eq!(err["code"], "config_invalid", "{value}: {err}");
-        assert_eq!(err["details"]["key"], "review_lead_tier", "{value}: {err}");
-        assert!(
-            !err["message"]
-                .as_str()
-                .unwrap()
-                .contains("is not a known key"),
-            "{value}: {err}"
-        );
-    }
+fn tiers_model_flag_reads_candidate_models_without_changing_host_toml() {
+    let fx = Fx::with_ports();
+    write_tiers_config(&fx.env, TIERS_MODELS);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let host = fx.env.cpd_home().join("policy/host.toml");
+    let host_before = fs::read_to_string(&host).unwrap();
+
+    let out = fx.cpd(&["tiers", "--model", "H=p/m-new"]).ok();
+    assert_eq!(
+        out["tiers"]["H"],
+        json!({"model": "p/m-new", "efforts": [0, 1, 2, 3]}),
+        "{out}"
+    );
+    assert_eq!(out["tiers"]["O"]["model"], "p/m-opus", "{out}");
+    let calls = fx.calls("node");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].args[calls[0].args.len() - 4..],
+        [
+            "O=p/m-opus".to_owned(),
+            "S=p/m-sonnet".to_owned(),
+            "H=p/m-new".to_owned(),
+            "G=p/m-g".to_owned(),
+        ],
+        "the catalog module is asked for the candidate"
+    );
+    assert_eq!(fs::read_to_string(&host).unwrap(), host_before);
 }
