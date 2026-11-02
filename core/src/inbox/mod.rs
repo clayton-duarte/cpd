@@ -6,6 +6,7 @@ pub mod cmd;
 pub mod model;
 pub mod models;
 pub mod pr;
+pub mod review_plan;
 pub mod rules;
 pub mod team;
 
