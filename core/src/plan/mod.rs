@@ -137,7 +137,7 @@ pub struct NewArgs {
     /// The User's brief for the Lead
     #[arg(long = "brief-file", value_name = "file")]
     brief_file: Option<PathBuf>,
-    /// The Lead's Tier [default: review_lead_tier in the review Context, else lead_tier]
+    /// The Lead's Tier [default: lead_tier]
     #[arg(long, value_name = "T")]
     tier: Option<Tier>,
     /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt

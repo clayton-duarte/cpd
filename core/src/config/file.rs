@@ -14,7 +14,7 @@ use serde::Serialize;
 use toml::{Table, Value};
 
 use super::runner::WorkerRunner;
-use super::tier::{Letter, Tier};
+use super::tier::{RoleTiers, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{ContextId, MachineName};
@@ -40,8 +40,6 @@ pub struct Config {
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
-    /// The Tier of the Lead of a Plan in the review Context (`inbox.review_context`).
-    pub review_lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
@@ -50,8 +48,8 @@ pub struct Config {
     pub context_curation_min_records: u32,
     /// The loop-guard breaker trips when more than this many self-started turns run in 600 ms (§3.6, §8.2, hs-d552, hs-d571).
     pub loop_guard_turns: u32,
-    /// The Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
-    pub open_tier: Tier,
+    /// The Worker role default, and the Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
+    pub worker_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -240,6 +238,16 @@ impl Watch {
 }
 
 impl Config {
+    /// The four role defaults, ascending (checked at parse).
+    pub fn role_tiers(&self) -> RoleTiers {
+        RoleTiers {
+            auxiliar: self.context_distill_tier,
+            worker: self.worker_tier,
+            lead: self.lead_tier,
+            manager: self.manager_tier,
+        }
+    }
+
     /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,
     /// `config_invalid` (with `details.key`) for anything wrong inside it.
     pub fn load(home: &CpdHome) -> Result<Config, CpdError> {
@@ -291,37 +299,32 @@ impl Config {
         })?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
-        // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
-        // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
-        // The default is the Tier `docs/research/opener-tier.md` recommends.
-        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| {
-            leader_tier(&v)
-        })?;
-        let review_lead_tier = r.get(
-            "review_lead_tier",
-            Tier::parse("S3").expect("a valid Tier"),
-            |v| leader_tier(&v),
-        )?;
-        let manager_tier = r.get(
-            "manager_tier",
-            Tier::parse("O4").expect("a valid Tier"),
-            |v| leader_tier(&v),
-        )?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
-            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
-            if tier.letter() != Letter::G {
-                return Err(format!("must be GX, not {tier}: an auxiliary run uses only GX, to keep cost down (hs-d562)"));
-            }
-            Ok(tier)
-        })?;
+        // Tier model v2: each role default is a Tier by syntax only (the catalog is not read here) and the four
+        // strictly ascend on the ladder (checked below).
+        let tier_key = |r: &mut Reader, key: &str, default: &str| {
+            r.get(key, Tier::parse(default).expect("a valid Tier"), |v| {
+                Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+            })
+        };
+        let lead_tier = tier_key(&mut r, "lead_tier", "O2")?;
+        let manager_tier = tier_key(&mut r, "manager_tier", "O4")?;
+        let context_distill_tier = tier_key(&mut r, "context_distill_tier", "GX")?;
         let context_curation_min_records =
             r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
-        let open_tier = r.get("open_tier", Tier::parse("H3").expect("a valid Tier"), |v| {
-            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
-            tier.check_worker().map_err(|e| e.message().to_owned())?;
-            Ok(tier)
-        })?;
+        let worker_tier = tier_key(&mut r, "worker_tier", "H3")?;
+        for (below_key, below, key, above) in [
+            ("context_distill_tier", context_distill_tier, "worker_tier", worker_tier),
+            ("worker_tier", worker_tier, "lead_tier", lead_tier),
+            ("lead_tier", lead_tier, "manager_tier", manager_tier),
+        ] {
+            if above <= below {
+                return Err(r.invalid(
+                    key,
+                    format!("must be above `{below_key}` ({below}) on the ladder, not {above}"),
+                ));
+            }
+        }
         let lead_pi_packages = r.get("lead_pi_packages", Vec::new(), |v| match v {
             Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
             other => Err(format!(
@@ -478,12 +481,11 @@ impl Config {
             concurrency,
             retry_cap,
             lead_tier,
-            review_lead_tier,
             manager_tier,
             context_distill_tier,
             context_curation_min_records,
             loop_guard_turns,
-            open_tier,
+            worker_tier,
             lead_pi_packages,
             pi_adapter,
             worker_runner,
@@ -739,22 +741,6 @@ impl Reader<'_> {
 const KNOWN_SECTIONS: [&str; 6] = ["timeouts", "watch", "inbox", "events", "tmux", "presets"];
 
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
-fn leader_tier(value: &Value) -> Result<Tier, String> {
-    let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
-    if tier.letter() == Letter::G {
-        return Err(
-            "must not be a G Tier, not GX: a Lead or the Manager is never on G (hs-d562)"
-                .to_owned(),
-        );
-    }
-    if !tier.is_lead_allowed() {
-        return Err(format!(
-            "must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"
-        ));
-    }
-    Ok(tier)
-}
-
 fn text_of(value: &Value) -> Result<&str, String> {
     match value {
         Value::String(s) => Ok(s),

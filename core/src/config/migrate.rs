@@ -28,6 +28,14 @@ pub const MIGRATIONS: &[ConfigMigration] = &[
         name: "drop-plannotator-ports",
         run: drop_plannotator_ports,
     },
+    ConfigMigration {
+        name: "open-tier-worker-tier",
+        run: open_tier_worker_tier,
+    },
+    ConfigMigration {
+        name: "drop-review-lead-tier",
+        run: drop_review_lead_tier,
+    },
 ];
 
 /// Folds the migrations in order over `text`, returning the final text and the names of
@@ -114,6 +122,28 @@ fn drop_test_concurrency(text: &str) -> Option<String> {
 /// `drop-plannotator-ports` (hs-d739): the top-level `plannotator_ports` line is removed, as above.
 fn drop_plannotator_ports(text: &str) -> Option<String> {
     drop_top_level_key(text, "plannotator_ports")
+}
+
+/// `open-tier-worker-tier`: the key token of a top-level `open_tier` line becomes `worker_tier`;
+/// value and trailing comment survive. Nothing when a top-level `worker_tier` exists.
+fn open_tier_worker_tier(text: &str) -> Option<String> {
+    let table: Table = text.parse().ok()?;
+    if table.contains_key("worker_tier") || !table.contains_key("open_tier") {
+        return None;
+    }
+    let (start, _, _, eq) = top_level_line(text, "open_tier")?;
+    let key_end = start + text[start..eq].trim_end().len();
+    let key_start = start + (text[start..key_end].len() - text[start..key_end].trim_start().len());
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..key_start]);
+    out.push_str("worker_tier");
+    out.push_str(&text[key_end..]);
+    Some(out)
+}
+
+/// `drop-review-lead-tier`: the top-level `review_lead_tier` line is removed, as above.
+fn drop_review_lead_tier(text: &str) -> Option<String> {
+    drop_top_level_key(text, "review_lead_tier")
 }
 
 fn drop_top_level_key(text: &str, key: &str) -> Option<String> {

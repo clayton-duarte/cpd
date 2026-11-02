@@ -111,7 +111,7 @@ fn tick_e3_e4(fx: &mut Fx) {
     tick(fx);
 }
 
-/// E4 adds the Workflow's `open` Job once the Workflow is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (H3),
+/// E4 adds the Workflow's `open` Job once the Workflow is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `worker_tier` (H3),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
 /// that follow add nothing. (A draft of the Workflow keeps it from being Ready, so E3 starts nothing here.)
 #[test]
@@ -275,10 +275,10 @@ fn e4_leaves_a_queued_open_job_queued_when_a_draft_is_added_to_its_pr_later() {
     assert_eq!(fx.count("job-added"), 0);
 }
 
-/// `open_tier` is a key of its own (§8.2): the Job takes its Tier from it.
+/// `worker_tier` is a key of its own (§8.2): the Job takes its Tier from it.
 #[test]
 fn e4_gives_the_open_job_the_tier_open_tier_names() {
-    let mut fx = Fx::with_plan("open_tier = \"H3\"");
+    let mut fx = Fx::with_plan("worker_tier = \"H3\"");
     add_merged_api(&mut fx);
     add_draft(&mut fx, "later");
 

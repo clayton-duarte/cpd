@@ -25,7 +25,7 @@ const OPEN_PLACEHOLDER: &str = "Added by cpd when the Workflow starts: merges th
 /// The placeholder's `Needs` (the Job's Ready rule, contract §3.2): not Dependencies, so no row and no graph edge.
 const OPEN_NEEDS: &str = "every other Job of the Workflow";
 
-/// The `open` Job a Workflow that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
+/// The `open` Job a Workflow that has not started will get (hs-d497): shown, never stored. `tier` is `worker_tier`.
 /// Only for a Workflow whose Plan holds no `open` Job (an older Workflow): a template's opener stub is a real Job and is shown as its own row.
 struct OpenPlaceholder<'a> {
     workflow: &'a WorkflowRow,
@@ -302,14 +302,14 @@ fn workflow_section(
     workflow: &WorkflowRow,
     jobs: &[&Job],
     later: bool,
-    open_tier: &str,
+    worker_tier: &str,
     shown: &Shown,
 ) {
     // A Workflow that has not started, and whose Plan holds no `open` Job (an older Workflow), has no opener stub: its placeholder is the last row and the last section.
     let placeholder = (workflow.status == "waiting" && !jobs.iter().any(|j| j.kind == "open"))
         .then_some(OpenPlaceholder {
             workflow,
-            tier: open_tier,
+            tier: worker_tier,
         });
     out.extend([
         format!("## Workflow {}", workflow.key),
@@ -654,7 +654,7 @@ pub enum Heading<'a> {
 
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
 /// Workflows and Jobs are shown, after the live ones, and counted nowhere. `display` says what waits and what was superseded.
-/// `overlaps` are those of [`super::overlap::find`]; `open_tier` is the config key of that name, the Tier of the
+/// `overlaps` are those of [`super::overlap::find`]; `worker_tier` is the config key of that name, the Tier of the
 /// placeholder `open` Job of a Workflow that has not started (§4.5, hs-d497). Pure: the same Workflows, Jobs
 /// and overlaps give the same text.
 #[allow(clippy::too_many_arguments)] // a signature change is out of scope for the lint cleanup
@@ -665,7 +665,7 @@ pub fn markdown(
     workflows: &[WorkflowRow],
     jobs: &[Job],
     overlaps: &[Overlap],
-    open_tier: &str,
+    worker_tier: &str,
     display: &Display,
     lint: &[Finding],
 ) -> String {
@@ -741,7 +741,7 @@ pub fn markdown(
             .iter()
             .filter(|j| j.workflow_str() == workflow.key.as_str())
             .collect();
-        workflow_section(&mut out, workflow, &jobs, later, open_tier, &shown);
+        workflow_section(&mut out, workflow, &jobs, later, worker_tier, &shown);
     }
     out.join("\n")
 }
@@ -873,7 +873,7 @@ mod tests {
     }
 
     /// The Plan `T` as `markdown` renders it for `prs` and `jobs` alone: no needs of other Plans, nothing superseded.
-    fn plain(phase: &str, workflows: &[WorkflowRow], jobs: &[Job], open_tier: &str) -> String {
+    fn plain(phase: &str, workflows: &[WorkflowRow], jobs: &[Job], worker_tier: &str) -> String {
         markdown(
             &Heading::Plan {
                 title: "T",
@@ -884,7 +884,7 @@ mod tests {
             workflows,
             jobs,
             &[],
-            open_tier,
+            worker_tier,
             &Display::of(workflows),
             &[],
         )
@@ -915,7 +915,7 @@ mod tests {
             md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"),
             "{md}"
         );
-        // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
+        // The last row of the table: key, title, kind, `worker_tier`, no status, the Ready rule in place of needs.
         let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
         assert_eq!(
             rows.last().unwrap(),
