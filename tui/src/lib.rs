@@ -124,10 +124,10 @@ mod runner_tests;
 mod scroll;
 #[cfg(test)]
 mod scroll_width_tests;
-mod settings;
 pub mod section;
 #[cfg(test)]
 mod section_width_tests;
+mod settings;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;

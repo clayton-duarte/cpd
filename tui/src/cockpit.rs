@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::view_ports::RunFn;
 use super::settings;
+use super::view_ports::RunFn;
 use super::widgets::legend;
 use super::{
     Restart, RestartOutcome, RunCommand, RunOn, logs, merge, not_a_terminal, on_a_terminal,
