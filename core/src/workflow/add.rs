@@ -622,21 +622,6 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
-    // The template's Jobs are worker Jobs: each Tier is valid in the catalog and in the worker range.
-    if let Some(jobs) = &jobs {
-        let catalog = match &env.catalog {
-            Some(fixed) => fixed.clone(),
-            None => crate::config::catalog::load_with(
-                &crate::policy::model::Models::of(&policy),
-                &mut env.store,
-            )?,
-        };
-        let roles = env.config.role_tiers();
-        for (tier, _) in jobs.values() {
-            catalog.check(*tier)?;
-            roles.check_job(&catalog, "work", *tier)?;
-        }
-    }
     let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none())
         .then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
     let adopt = args
@@ -704,6 +689,9 @@ pub(crate) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Decision::Insert { .. } => {
             // git, outside any transaction.
             no_branch_clash(&repo, &plan, &workflow_branch(&plan, &wanted.key))?;
+            if let Some(jobs) = &wanted.jobs {
+                check_template_tiers(&mut env, &policy, jobs)?;
+            }
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, None)? {
                 Decision::Already { status, lead_branch, appended, base, base_workflow, needs } => {
                     Ok((status, lead_branch, appended, base, base_workflow, needs, true))
@@ -804,6 +792,27 @@ fn key_repo_policy(
     let file = crate::policy::repo_path(&env.home, &owner, &name);
     let policy = resolve(&env.home, &PolicyKey::Repo(owner, name.clone()))?.policy;
     Ok((name, file, policy))
+}
+
+/// The template's Jobs are worker Jobs: each Tier is valid in the catalog of the repo's models and in the worker range.
+fn check_template_tiers(
+    env: &mut Env,
+    policy: &Policy,
+    jobs: &BTreeMap<&'static str, (Tier, Spec)>,
+) -> Result<(), CpdError> {
+    let catalog = match &env.catalog {
+        Some(fixed) => fixed.clone(),
+        None => crate::config::catalog::load_with(
+            &crate::policy::model::Models::of(policy),
+            &mut env.store,
+        )?,
+    };
+    let roles = env.config.role_tiers();
+    for (tier, _) in jobs.values() {
+        catalog.check(*tier)?;
+        roles.check_job(&catalog, "work", *tier)?;
+    }
+    Ok(())
 }
 
 /// `workflow add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
