@@ -620,7 +620,7 @@ The rail's data is the **real Inbox**: the open items `cpd inbox list` prints, o
 
 **The row's parts, one by one.** The name is the **actor**: for the kind `review-requested` it is `peer review`; otherwise, when the item names a Session, it is that Session's `name` (falling back to the first 8 characters of its id); otherwise it is `cpd engine`. The date is the item's `age_seconds` rendered relative: `just now` under a minute; `1 minute ago`, `N minutes ago` under an hour; `1 hour ago`, `N hours ago`; `Yesterday` from 24 to 48 hours; `N days ago` under a week (the day form is plural only: `Yesterday` holds the 24 to 48 hour range, so a day is never one); `1 week ago`, `N weeks ago` under 30 days; `1 month ago`, `N months ago` after that — the plural of each unit only for N ≥ 2. The subject line is the item's `label`'s first line. The teaser is the label's second line when it has one (the pull request's title, for a `pr-ready`), and the row has no teaser line when it does not.
 
-**What the row links to.** The row is an anchor: its `href` is the item's `url` when the item has one, and `#` when it does not (a `curate-docs` item has none).
+**What the row links to.** The row is an anchor: its `href` is the item's `url` when the item has one, and `#` when it does not (a `curate-docs` item, a history-only kind since pro-d327, has none).
 
 **An empty Inbox.** No items renders an empty list under the header — no placeholder copy is invented.
 
