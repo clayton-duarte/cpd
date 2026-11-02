@@ -53,6 +53,15 @@ fn table(store: &mut Store, sql: &str) -> (Vec<String>, Vec<Vec<Value>>) {
         .unwrap()
 }
 
+/// `SELECT <every column of t, in table order> FROM t ORDER BY <by>`: the columns are named, never `*`.
+fn select_all(store: &mut Store, t: &str, by: &str) -> String {
+    let names = strings(
+        store,
+        &format!("SELECT name FROM pragma_table_info('{t}') ORDER BY cid"),
+    );
+    format!("SELECT {} FROM {t} ORDER BY {by}", names.join(", "))
+}
+
 /// The first column of every row, as text (`NULL` for a null).
 fn strings(store: &mut Store, sql: &str) -> Vec<String> {
     table(store, sql)
@@ -298,7 +307,10 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
     ];
     let snapshot: Vec<_> = order
         .iter()
-        .map(|(t, by)| table(&mut old, &format!("SELECT * FROM {t} ORDER BY {by}")))
+        .map(|(t, by)| {
+            let sql = select_all(&mut old, t, by);
+            table(&mut old, &sql)
+        })
         .collect();
     let history = count(&mut old, "SELECT count(*) FROM history");
     drop(old);
@@ -325,7 +337,8 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
                 }
             }
         }
-        let (new_cols, new_rows) = table(&mut store, &format!("SELECT * FROM {t} ORDER BY {by}"));
+        let sql = select_all(&mut store, t, by);
+        let (new_cols, new_rows) = table(&mut store, &sql);
         assert_eq!(new_cols, cols, "{t}: the same columns, in the same order");
         assert_eq!(new_rows, rows, "{t}: every row, every column");
     }
