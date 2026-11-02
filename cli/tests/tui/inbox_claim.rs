@@ -566,7 +566,11 @@ fn a_stale_claim_writes_only_the_item_close() {
         (3, "item_closed".to_owned()),
         "a second claim"
     );
+}
 
+#[test]
+fn a_stale_claim_creates_no_context_and_starts_no_window() {
+    let merged = gh_answer("MERGED", false, None, "ryan", &[]);
     // no `codereview` Context: the stale claim creates none and starts nothing
     let (fx, id) = without_codereview_with(Reply::ok(&merged));
     assert_eq!(
@@ -607,6 +611,7 @@ fn claim_asks_github_live_once_and_an_already_claimed_item_asks_nothing() {
 #[test]
 fn claim_with_a_failing_gh_is_gh_failed_and_writes_nothing() {
     let (fx, id) = without_codereview_with(Reply::exit(1, "", "gh: HTTP 502"));
+    let closed_before = fx.events("inbox-closed").len();
     let (exit, error) = fx.fail(&["claim", &id.to_string()]);
     assert_eq!(
         (exit, error["code"].as_str()),
@@ -619,7 +624,7 @@ fn claim_with_a_failing_gh_is_gh_failed_and_writes_nothing() {
         )),
         1
     );
-    assert!(fx.events("inbox-closed").is_empty());
+    assert_eq!(fx.events("inbox-closed").len(), closed_before);
     assert!(queued(&fx).is_empty());
     assert!(fx.events("session-message").is_empty());
     assert_nothing_written(&fx);
