@@ -11,13 +11,12 @@ use serde::{Serialize, Serializer};
 
 use crate::error::{CpdError, ErrorCode};
 
-/// A model letter: `O`pus, `S`onnet, `H`aiku (the `[model]` of a policy key).
+/// A model letter: `G`, `H`aiku, `S`onnet, `O`pus (the `[model]` of a policy key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Letter {
     O,
     S,
     H,
-    /// Auxiliary agents only, written `GX` (hs-d562).
     G,
 }
 
@@ -31,6 +30,16 @@ impl Letter {
             Letter::S => 'S',
             Letter::H => 'H',
             Letter::G => 'G',
+        }
+    }
+
+    /// The place on the ladder: G < H < S < O.
+    fn rank(self) -> u8 {
+        match self {
+            Letter::G => 0,
+            Letter::H => 1,
+            Letter::S => 2,
+            Letter::O => 3,
         }
     }
 
@@ -51,13 +60,13 @@ impl fmt::Display for Letter {
     }
 }
 
-/// pi's thinking levels by effort digit; `minimal` is never used (contract §9).
-const LEVELS: [&str; 6] = ["off", "low", "medium", "high", "xhigh", "max"];
+/// pi's thinking levels by effort digit; `minimal` and `max` have no digit (contract §9).
+const LEVELS: [&str; 5] = ["off", "low", "medium", "high", "xhigh"];
 
 /// The effort digit of one of pi's thinking-level names. `Some(None)` is
-/// `minimal`, which has no digit; `None` is a name pi does not have.
+/// `minimal` or `max`, which have no digit; `None` is a name pi does not have.
 pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
-    if level == "minimal" {
+    if level == "minimal" || level == "max" {
         return Some(None);
     }
     LEVELS
@@ -69,56 +78,52 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
 /// The Tiers a Worker may have (pro-d53, hs-d554), as `details.allowed` and the message give them.
 const WORKER_RANGE: &str = "H0-H3, S0-S3";
 
-/// A Tier: a model letter and an effort 0–5, `^(O|S|H)([0-5])$`, e.g. `S3`, or exactly `GX` (hs-d562).
-/// A G Tier keeps effort 0 inside and is written `GX`: no value displays as `G0`.
+/// A Tier: a model letter and an effort 0-4 or `X`, `^[GHSO]([0-4]|X)$`, e.g. `S3`, `GX`.
+/// `X` (no effort) is distinct from effort 0; it is the one Tier of a model with no effort levels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tier {
     letter: Letter,
-    effort: u8,
+    /// `None` is `X`.
+    effort: Option<u8>,
 }
 
 impl Tier {
-    /// `None` when `effort` is above 5.
+    /// `None` when `effort` is above 4.
     pub fn new(letter: Letter, effort: u8) -> Option<Tier> {
-        let effort = if letter == Letter::G { 0 } else { effort };
-        (effort <= 5).then_some(Tier { letter, effort })
+        (effort <= Tier::MAX_EFFORT).then_some(Tier {
+            letter,
+            effort: Some(effort),
+        })
     }
 
-    /// `tier_invalid` (exit 2) when `s` is not `^(O|S|H)([0-5])$` or `GX`.
+    /// The `X` Tier of `letter`.
+    pub fn x(letter: Letter) -> Tier {
+        Tier {
+            letter,
+            effort: None,
+        }
+    }
+
+    /// Whether this is an `X` Tier (no effort).
+    pub fn is_x(self) -> bool {
+        self.effort.is_none()
+    }
+
+    /// `tier_invalid` (exit 2) when `s` is not `^[GHSO]([0-4]|X)$`.
     pub fn parse(s: &str) -> Result<Tier, CpdError> {
-        if s == "GX" {
-            return Ok(Tier {
-                letter: Letter::G,
-                effort: 0,
-            });
-        }
-        let mut peek = s.chars();
-        if peek.next() == Some('G')
-            && peek.next().is_some_and(|c| c.is_ascii_digit())
-            && peek.next().is_none()
-        {
-            return Err(CpdError::new(
-                ErrorCode::TierInvalid,
-                format!("invalid Tier {s:?}: G has no effort, write GX (hs-d562)."),
-            )
-            .with("tier", s));
-        }
         let mut chars = s.chars();
         let tier = (|| {
             let letter = Letter::from_char(chars.next()?)?;
-            let effort = chars.next()?.to_digit(10)? as u8;
-            if letter == Letter::G {
-                return None;
-            }
-            if chars.next().is_some() {
-                return None;
-            }
-            Tier::new(letter, effort)
+            let tier = match chars.next()? {
+                'X' => Tier::x(letter),
+                c => Tier::new(letter, c.to_digit(10)? as u8)?,
+            };
+            chars.next().is_none().then_some(tier)
         })();
         tier.ok_or_else(|| {
             CpdError::new(
                 ErrorCode::TierInvalid,
-                format!("invalid Tier {s:?}: expected <O|S|H><0-5> or GX, for example S3."),
+                format!("invalid Tier {s:?}: expected <G|H|S|O><0-4|X>, for example S3."),
             )
             .with("tier", s)
         })
@@ -130,10 +135,9 @@ impl Tier {
     /// What a Worker may have: exactly H0-H3 and S0-S3 (pro-d82, hs-d554). `MAX_EFFORT`
     /// stays for Leads, the Manager and the distill ladder.
     pub fn is_worker_allowed(self) -> bool {
-        match self.letter {
-            Letter::H => self.effort <= 3,
-            Letter::S => self.effort <= 3,
-            Letter::O | Letter::G => false,
+        match (self.letter, self.effort) {
+            (Letter::H | Letter::S, Some(effort)) => effort <= 3,
+            _ => false,
         }
     }
 
@@ -155,7 +159,7 @@ impl Tier {
 
     /// What a Lead may have: any letter but G, effort 0-4 (hs-d506, hs-d562).
     pub fn is_lead_allowed(self) -> bool {
-        self.letter != Letter::G && self.effort <= Tier::MAX_EFFORT
+        self.letter != Letter::G
     }
 
     /// `tier_not_allowed` (exit 2) unless a Lead may have this Tier (hs-d506, hs-d562).
@@ -178,20 +182,21 @@ impl Tier {
         self.letter
     }
 
+    /// The effort digit; 0 for `X` (see [`Tier::is_x`]).
     pub fn effort(self) -> u8 {
-        self.effort
+        self.effort.unwrap_or(0)
     }
 
-    /// pi's thinking level for this effort: `off`, `low`, `medium`, `high`, `xhigh`, `max`.
+    /// pi's thinking level for this effort: `off`, `low`, `medium`, `high`, `xhigh`; `X` is `off`.
     pub fn level(self) -> &'static str {
-        LEVELS[self.effort as usize]
+        LEVELS[self.effort() as usize]
     }
 }
 
 /// The ladder's order (Tier model v2): letters G < H < S < O, then effort ascending, `X` lowest of its letter.
 impl Ord for Tier {
-    fn cmp(&self, _other: &Tier) -> std::cmp::Ordering {
-        todo!("stub: the implementation fills it in, only the tests call it")
+    fn cmp(&self, other: &Tier) -> std::cmp::Ordering {
+        (self.letter.rank(), self.effort).cmp(&(other.letter.rank(), other.effort))
     }
 }
 
@@ -228,16 +233,16 @@ pub struct Range {
 
 impl Range {
     /// Whether `tier` lies on the ladder from `floor` to `ceiling`, both included.
-    pub fn contains(&self, _tier: Tier) -> bool {
-        todo!("stub: the implementation fills it in, only the tests call it")
+    pub fn contains(&self, tier: Tier) -> bool {
+        self.floor <= tier && tier <= self.ceiling
     }
 }
 
 impl fmt::Display for Tier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.letter {
-            Letter::G => f.write_str("GX"),
-            letter => write!(f, "{letter}{}", self.effort),
+        match self.effort {
+            None => write!(f, "{}X", self.letter),
+            Some(effort) => write!(f, "{}{effort}", self.letter),
         }
     }
 }
@@ -264,14 +269,13 @@ pub struct TierModel {
     pub efforts: Vec<u8>,
 }
 
-/// The three Tier letters' models with their valid efforts, read from pi.
+/// The four Tier letters' models with their valid efforts, read from pi.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub pi_version: String,
     pub o: TierModel,
     pub s: TierModel,
     pub h: TierModel,
-    /// Never cached; `efforts` is empty: G has no effort levels, `GX` is its one Tier (hs-d562).
     pub g: TierModel,
 }
 
@@ -287,7 +291,11 @@ impl Catalog {
 
     /// Whether `tier`'s effort is valid for its model.
     pub fn is_valid(&self, tier: Tier) -> bool {
-        tier.letter == Letter::G || self.model(tier.letter).efforts.contains(&tier.effort)
+        let efforts = &self.model(tier.letter).efforts;
+        match tier.effort {
+            None => efforts.is_empty(),
+            Some(effort) => efforts.contains(&effort),
+        }
     }
 
     /// `tier_invalid` (exit 2) when `tier`'s effort is not valid for its model.
@@ -322,22 +330,64 @@ impl Catalog {
 
     /// Every valid rung, ascending (effort-0 rungs included; `X` is the one rung of a model without levels).
     pub fn ladder(&self) -> Vec<Tier> {
-        todo!("stub: the implementation fills it in, only the tests call it")
+        [Letter::G, Letter::H, Letter::S, Letter::O]
+            .into_iter()
+            .flat_map(|letter| {
+                let efforts = &self.model(letter).efforts;
+                if efforts.is_empty() {
+                    vec![Tier::x(letter)]
+                } else {
+                    let mut tiers: Vec<Tier> = efforts
+                        .iter()
+                        .filter_map(|e| Tier::new(letter, *e))
+                        .collect();
+                    tiers.sort();
+                    tiers.dedup();
+                    tiers
+                }
+            })
+            .collect()
     }
 
     /// The range of `role` under the role defaults; `None` when no valid rung lies in its span.
-    pub fn range(&self, _role: Role, _defaults: &RoleTiers) -> Option<Range> {
-        todo!("stub: the implementation fills it in, only the tests call it")
+    /// Floor: the lowest rung at or above the role's default; ceiling: the highest rung strictly below the
+    /// next role's default (the Manager: the top rung). The auxiliar is its default only.
+    pub fn range(&self, role: Role, defaults: &RoleTiers) -> Option<Range> {
+        if role == Role::Auxiliar {
+            let default = defaults.auxiliar;
+            return self.is_valid(default).then_some(Range {
+                floor: default,
+                ceiling: default,
+            });
+        }
+        let (own, above) = match role {
+            Role::Auxiliar => unreachable!("handled above"),
+            Role::Worker => (defaults.worker, Some(defaults.lead)),
+            Role::Lead => (defaults.lead, Some(defaults.manager)),
+            Role::Manager => (defaults.manager, None),
+        };
+        let ladder = self.ladder();
+        let floor = ladder.iter().copied().find(|r| *r >= own)?;
+        let ceiling = ladder
+            .iter()
+            .copied()
+            .rfind(|r| above.is_none_or(|a| *r < a))?;
+        (floor <= ceiling).then_some(Range { floor, ceiling })
     }
 
     /// The next valid rung inside `range`; leaving a letter lands on its lowest effort >= 1 (or X); `None` at the ceiling.
-    pub fn next_in(&self, _range: Range, _tier: Tier) -> Option<Tier> {
-        todo!("stub: the implementation fills it in, only the tests call it")
+    pub fn next_in(&self, range: Range, tier: Tier) -> Option<Tier> {
+        self.ladder()
+            .into_iter()
+            .filter(|r| range.contains(*r) && *r > tier)
+            .find(|r| r.letter == tier.letter || r.effort != Some(0))
     }
 
     /// The lowest valid rung of `range` at or above `tier`.
-    pub fn step_up_in(&self, _range: Range, _tier: Tier) -> Option<Tier> {
-        todo!("stub: the implementation fills it in, only the tests call it")
+    pub fn step_up_in(&self, range: Range, tier: Tier) -> Option<Tier> {
+        self.ladder()
+            .into_iter()
+            .find(|r| range.contains(*r) && *r >= tier)
     }
 
     /// The ladder's next step (contract §9, pro-d82, pro-d83, hs-d554, hs-d791): within the same
@@ -358,7 +408,7 @@ impl Catalog {
             .efforts
             .iter()
             .copied()
-            .find(|e| *e > tier.effort)
+            .find(|e| *e > tier.effort())
             .and_then(|effort| Tier::new(tier.letter, effort))
             .filter(|t| allowed(t) && self.is_valid(*t))
         {
@@ -401,7 +451,7 @@ impl Catalog {
             .efforts
             .iter()
             .copied()
-            .find(|e| *e >= tier.effort)
+            .find(|e| *e >= tier.effort())
             .and_then(|effort| Tier::new(tier.letter, effort))
             .filter(allowed)
         {
