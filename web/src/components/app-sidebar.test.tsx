@@ -362,6 +362,30 @@ test("clicking a Plan row reports its Lead Session", () => {
   expect(clicked).toEqual([LEAD_A]);
 });
 
+test("a Plan row right-aligns its counters", () => {
+  renderPlans(PLANS, PLAN_SESSIONS, () => {}, CONTEXTS);
+
+  const row = rowContaining(PLAN_ALPHA.id);
+  expect(row).toBeDefined();
+  if (row === undefined) return;
+
+  // The row's content stretches to the rail's width (`w-full`): without the stretch the button
+  // shrink-wraps its content, so nothing is left for the counters' `ml-auto` to push against and
+  // they sit inline right after the key.
+  expect(row.className).toContain("w-full");
+
+  const key = [...row.children].find(
+    (child) => child.tagName === "SPAN" && (child.textContent ?? "") === PLAN_ALPHA.id,
+  );
+  const counters = row.querySelector<HTMLElement>("span.ml-auto");
+  expect(key).toBeDefined();
+  expect(counters).not.toBeNull();
+
+  // The counters carry the class that pins them to the edge; the key does not.
+  expect(counters?.className ?? "").toContain("ml-auto");
+  expect(key?.className ?? "").not.toContain("ml-auto");
+});
+
 test("a rail given no plans still renders its Session rows", () => {
   // An API without the plans read passes an empty list; the rail falls back to its Session tree.
   renderPlans([], SESSIONS);
