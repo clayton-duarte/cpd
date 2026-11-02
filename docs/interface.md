@@ -139,6 +139,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view dialog checklist` | Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` | internal | |
 | `cpd tui view dialog select` | A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}` | internal | |
 | `cpd tui view dialog form` | A labelled text box and a labelled radio list, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value, choice}` | internal | |
+| `cpd tui view settings` | The settings (opened by the StatusBar's settings button, in a tmux popup) | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
 | `cpd tui action` | A click on a StatusBar button, or a merge started at once (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |

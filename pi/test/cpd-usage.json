@@ -1761,6 +1761,16 @@
     },
     "required": []
   },
+  "tui view settings": {
+    "flags": {
+      "--help": false
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "tui view tree": {
     "flags": {
       "--help": false
