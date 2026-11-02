@@ -40,7 +40,7 @@ fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), Cpd
         .map(|plan| {
             json!({
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
-                "lead_session": plan.lead_session, "archived_at": plan.archived_at,
+                "lead_session": plan.lead_session, "created_at": plan.created_at, "archived_at": plan.archived_at,
                 "counts": counts_value(&counts.remove(plan.id.as_str()).unwrap_or_default()),
                 "workflows": workflows.remove(plan.id.as_str()).unwrap_or_default(),
             })

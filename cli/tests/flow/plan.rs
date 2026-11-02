@@ -1316,6 +1316,8 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     inproc::new_plan(&fx, "refund", &repo);
+    // An archived Plan is still listed, `created_at` included (§4.2).
+    fx.cpd(&["plan", "archive", "--plan", "refund"]).ok();
     fx.cpd(&[
         "context", "new", "other", "--title", "Other", "--owner", "acme",
     ])
@@ -1353,6 +1355,18 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
         ),
         (&json!("pay"), &Value::Null)
     );
+    // §4.2: every listed Plan, archived ones included, carries the Plan's Created,
+    // the same `plan show` reports.
+    for listed in plans {
+        let id = listed["id"].as_str().unwrap();
+        let created = &listed["created_at"];
+        assert!(!created.as_str().unwrap().is_empty(), "{id} created_at");
+        assert_eq!(
+            created,
+            &inproc::show(&fx, id)["plan"]["created_at"],
+            "{id} created_at"
+        );
+    }
     let ids = |args: &[&str]| -> Vec<String> {
         fx.cpd(args).ok()["plans"]
             .as_array()
