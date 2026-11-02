@@ -7,13 +7,21 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 mod model;
 #[cfg(test)]
 mod model_tests;
+#[allow(dead_code)] // stub: the implementation fills it in, only the tests call it
+mod view;
+#[cfg(test)]
+mod view_tests;
 
 use super::box_widget::SectionTitle;
+use super::view_ports::{Input, RunFn, Tty};
 use super::{Capture, RunCommand, popup, run_view_on};
 use cpd_core::error::CpdError;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use std::io::Write;
 
 /// The section's title.
 const TITLE: &str = "Agent Tiers";
@@ -61,4 +69,18 @@ pub(crate) fn run(ports: &Ports, _run_command: RunCommand) -> Result<Output, Cpd
             }
         },
     )
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives, and the commands it runs through `run_command`
+/// (a test's `TestBackend`, scripted input and a fake [`RunFn`]).
+#[allow(dead_code)] // stub: the implementation fills it in, only the tests call it
+pub fn run_on<B: Backend, W: Write>(
+    _ports: &Ports,
+    _run_command: RunFn,
+    _tty: &mut dyn Tty,
+    _out: &mut W,
+    _terminal: Terminal<B>,
+    _input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    todo!("run_on: the implementation Job")
 }
