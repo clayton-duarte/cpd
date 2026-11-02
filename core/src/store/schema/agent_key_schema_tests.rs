@@ -239,7 +239,7 @@ fn agent_key_schema_recreates_the_indexes_and_working_pr_triggers() {
         assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
     }
     assert!(
-        old_triggers.iter().any(|n| n.contains("history")),
+        old_triggers.iter().any(|n| n.contains("_hist_")),
         "the history triggers are generated: {old_triggers:?}"
     );
     let history = count(&mut store, "SELECT count(*) FROM history");
