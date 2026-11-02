@@ -200,11 +200,14 @@ fn review_done_plan_that_is_not_finished_is_kept() {
                VALUES ('{plan}', 'repo', '/nowhere', 'main', 'cancelled', 'cpd/{plan}', NULL, cpd_txn(), 't', NULL);"
         )
     };
-    // An open visible Inbox item of its Lead.
+    // An open visible Inbox item of its Lead: an `unread` item, its condition (the Lead replied, `working` to `idle`,
+    // and its chat was never in the slot) held by an Event, so the engine's reconcile keeps it open.
     let inbox = fx.plan("codereview", "inbox", "done", "idle");
     fx.fixture(
-        "INSERT INTO inbox_items (kind, urgency, subject, context, plan, session, label, opened_at)
-           VALUES ('dialog', 'red', 'inbox-lead', 'codereview', 'inbox', 'inbox-lead', 'cpd: question', 't');",
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+           VALUES (cpd_txn(), 't', 'session-state', 'codereview', 'inbox', 'inbox-lead', 'x', '{\"from\":\"working\",\"to\":\"idle\",\"reply\":true}');
+         INSERT INTO inbox_items (kind, urgency, subject, context, plan, session, label, opened_at)
+           VALUES ('unread', 'white', 'inbox-lead', 'codereview', 'inbox', 'inbox-lead', 'inbox replied', 't');",
     );
     // A running Job.
     let running = fx.plan("codereview", "running", "done", "idle");
@@ -219,8 +222,9 @@ fn review_done_plan_that_is_not_finished_is_kept() {
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
            VALUES ('escalated', 'j-a1', 'j', 1, 'S2', 'ladder', 'ended', 'failed', 'crashed', 'cpd/escalated--j-a1', '/w', 't', 't');
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-           VALUES ('escalated', 'j-a1-q1', 'j-a1', 1, 'Why?', 'open', 4242, 't');",
-        workflow("escalated")
+           VALUES ('escalated', 'j-a1-q1', 'j-a1', 1, 'Why?', 'open', {pid}, 't');",
+        workflow("escalated"),
+        pid = fx.env.live_pid()
     ));
     // A pending Plan review.
     let reviewed = fx.plan("codereview", "reviewed", "done", "idle");
@@ -261,7 +265,8 @@ fn review_archive_never_messages_or_wakes_the_manager() {
     let pane = fx.plan("codereview", "rv", "done", "idle");
     let manager = "SELECT state || '|' || state_at || '|' || coalesce(tmux_pane, '') || '|' || coalesce(asleep_at, '') || '|' || coalesce(archived_at, '') FROM sessions WHERE id = 'mgr-review'";
     let before: String = fx.env.env.query(manager);
-    let rows = fx.count("SELECT count(*) FROM sessions");
+    let leads = "SELECT count(*) FROM sessions WHERE role = 'lead'";
+    let rows = fx.count(leads);
     let panes = fx.env.panes().len();
     fx.run(1);
     assert!(fx.archived("plans", "rv"), "the Plan is archived");
@@ -272,7 +277,7 @@ fn review_archive_never_messages_or_wakes_the_manager() {
         "no session-message Event"
     );
     assert_eq!(fx.env.panes().len(), panes - 1, "no pane is started");
-    assert_eq!(fx.count("SELECT count(*) FROM sessions"), rows);
+    assert_eq!(fx.count(leads), rows, "no Lead is created");
     assert_eq!(fx.env.env.query::<String>(manager), before);
 }
 
