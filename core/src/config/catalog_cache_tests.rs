@@ -124,7 +124,7 @@ fn tier_catalog_same_version_and_same_models_json_bytes_is_a_cache_hit() {
     assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3]);
     assert_eq!(runner.calls().len(), 1, "the catalog module ran once");
     assert_eq!(runner2.calls().len(), 0, "the second load asked nobody");
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
     // The rows carry the file's fingerprint: 64 lowercase hex digits (the hash itself is the crate's).
     let shas = rig.shas();
     assert!(shas.len() == 1 && is_hex_sha256(&shas[0]), "{shas:?}");
@@ -137,17 +137,17 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
     fs::write(rig.models_json(), SONNET_UP_TO_HIGH).unwrap();
     let (_, first) = rig.load(vec![levels(&UP_TO_HIGH)]);
     assert_eq!(efforts_of_s(&first.unwrap()), [0, 1, 2, 3]);
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
 
     fs::write(rig.models_json(), SONNET_UP_TO_MAX).unwrap();
     let (runner, second) = rig.load(vec![levels(&UP_TO_MAX)]);
     assert_eq!(
         efforts_of_s(&second.unwrap()),
-        [0, 1, 2, 3, 4, 5],
+        [0, 1, 2, 3, 4],
         "the new thinkingLevelMap is seen"
     );
     assert_eq!(runner.calls().len(), 1, "the catalog module ran again");
-    assert_eq!(rig.rows(), 6, "append-only: 3 + 3, not 3");
+    assert_eq!(rig.rows(), 8, "append-only: 4 + 4, not 4");
     let shas = rig.shas();
     assert!(
         shas.len() == 2 && shas.iter().all(|s| is_hex_sha256(s)) && shas[0] != shas[1],
@@ -156,7 +156,7 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
 
     // And the new bytes are warm, the old ones too (a file put back is a hit on its own rows).
     let (runner, third) = rig.load(vec![]);
-    assert_eq!(efforts_of_s(&third.unwrap()), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(efforts_of_s(&third.unwrap()), [0, 1, 2, 3, 4]);
     assert_eq!(runner.calls().len(), 0);
     fs::write(rig.models_json(), SONNET_UP_TO_HIGH).unwrap();
     let (runner, back) = rig.load(vec![]);
@@ -166,7 +166,7 @@ fn tier_catalog_changed_models_json_under_the_same_version_is_seen_and_the_old_r
         "the first bytes' rows are still there"
     );
     assert_eq!(runner.calls().len(), 0);
-    assert_eq!(rig.rows(), 6);
+    assert_eq!(rig.rows(), 8);
 }
 
 /// Rule 3: an absent `models.json` is a valid key, `""`.
@@ -180,7 +180,7 @@ fn tier_catalog_an_absent_models_json_is_a_valid_key_the_empty_string() {
     let (runner, second) = rig.load(vec![]);
     assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3]);
     assert_eq!(runner.calls().len(), 0, "an absent file stays a hit");
-    assert_eq!(rig.rows(), 3);
+    assert_eq!(rig.rows(), 4);
 }
 
 /// Rule 3: the file appearing later is a change.
@@ -192,9 +192,9 @@ fn tier_catalog_a_models_json_that_appears_later_is_a_change() {
 
     fs::write(rig.models_json(), SONNET_UP_TO_MAX).unwrap();
     let (runner, second) = rig.load(vec![levels(&UP_TO_MAX)]);
-    assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(efforts_of_s(&second.unwrap()), [0, 1, 2, 3, 4]);
     assert_eq!(runner.calls().len(), 1);
-    assert_eq!(rig.rows(), 6);
+    assert_eq!(rig.rows(), 8);
     let shas = rig.shas();
     assert_eq!(shas[0], "", "{shas:?}");
     assert!(is_hex_sha256(&shas[1]), "{shas:?}");
