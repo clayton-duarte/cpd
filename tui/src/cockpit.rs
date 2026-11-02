@@ -35,6 +35,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
 use super::view_ports::RunFn;
+use super::settings;
 use super::widgets::legend;
 use super::{
     Restart, RestartOutcome, RunCommand, RunOn, logs, merge, not_a_terminal, on_a_terminal,
@@ -419,6 +420,7 @@ enum Action {
     Reset,
     Legend,
     Logs,
+    Settings,
     Costs,
     Runner,
     Merge,
@@ -432,6 +434,7 @@ impl Action {
             "reset" => Some(Action::Reset),
             "legend" => Some(Action::Legend),
             "logs" => Some(Action::Logs),
+            "settings" => Some(Action::Settings),
             "costs" => Some(Action::Costs),
             "runner" => Some(Action::Runner),
             "merge" => Some(Action::Merge),
@@ -442,7 +445,7 @@ impl Action {
     }
 }
 
-/// `cpd tui action <reset|legend|logs|costs|runner|host|incident> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|costs|settings|runner|host|incident> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge a click started, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
@@ -499,7 +502,7 @@ fn run_action(
         CpdError::new(
             ErrorCode::Usage,
             format!(
-                "unknown action {:?}: reset, legend, logs, costs, runner, host or incident.",
+                "unknown action {:?}: reset, legend, logs, costs, settings, runner, host or incident.",
                 name.unwrap_or("")
             ),
         )
@@ -541,6 +544,7 @@ fn run_action(
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Costs, None) => return toggle_costs(&tmux, &config.tmux.cockpit_session),
         (Action::Runner, None) => unreachable!("handled above"),
+        (Action::Settings, None) => settings::popup_args(client_size(&tmux, client)?),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)

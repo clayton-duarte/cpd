@@ -267,6 +267,11 @@ macro_rules! costs_glyph {
         "\u{EEC1}"
     };
 } // nf-fa-comment_dollar
+macro_rules! settings_glyph {
+    () => {
+        "\u{F013}"
+    };
+} // nf-fa-gear
 
 /// The reset-layout button's glyph, U+F0A1D md-view_dashboard_outline.
 pub const RESET_GLYPH: &str = reset_glyph!();
@@ -276,8 +281,8 @@ pub const LEGEND_GLYPH: &str = legend_glyph!();
 pub const LOGS_GLYPH: &str = logs_glyph!();
 /// The costs button's glyph, U+EEC1 nf-fa-comment_dollar.
 pub const COSTS_GLYPH: &str = costs_glyph!();
-/// The settings button (nf-fa-gear). Stub: the status format does not use it yet.
-pub const SETTINGS_GLYPH: &str = "\u{F013}";
+/// The settings button's glyph, U+F013 nf-fa-gear.
+pub const SETTINGS_GLYPH: &str = settings_glyph!();
 
 /// The base colour of every status button (pro-d195): drawn bright, `spec().clickable(7)` = 15, so the four look alike.
 const BUTTON_BASE: u8 = 7;
@@ -295,12 +300,12 @@ macro_rules! preview_width {
     };
 }
 // Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
-// whose one space is the join), the closing `━`'s cell, the left group's 20 and a fill of at least 1 (22 in all), the
+// whose one space is the join), the closing `━`'s cell, the left group's 25 and a fill of at least 1 (27 in all), the
 // preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
         concat!(
-            "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},22},",
+            "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},27},",
             runner_width!(),
             "},",
             preview_width!(),
@@ -325,11 +330,11 @@ macro_rules! incident_width {
         "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}"
     };
 }
-// The fill's first column, F0: the left group's 20 cells and the preview pill.
+// The fill's first column, F0: the left group's 25 cells and the preview pill.
 macro_rules! fill_start {
     () => {
         concat!(
-            "#{e|+:#{e|+:20,",
+            "#{e|+:#{e|+:25,",
             runner_width!(),
             "},",
             preview_width!(),
@@ -337,12 +342,12 @@ macro_rules! fill_start {
         )
     };
 }
-// The fill's cell count: `#{client_width}` minus the left group's 20, the preview pill, the version pill, the incident
+// The fill's cell count: `#{client_width}` minus the left group's 25, the preview pill, the version pill, the incident
 // pill and the right group's workers pill in the form drawn plus the closing `━`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},20},",
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},25},",
             runner_width!(),
             "},",
             preview_width!(),
@@ -427,16 +432,16 @@ macro_rules! join {
 /// left, the four one-glyph buttons (a cap `\u{e0b6}`, the glyph and one space as a grey block, a cap
 /// `\u{e0b4}`, 4 cells), each in its own click range, joined by a single `\u{2501}` outside
 /// the ranges (a range also owns the cell after it, so the join does what the space did;
-/// the leading `\u{2501}` is outside the first range): the left group is 20 cells. The space is there because a terminal draws a Nerd Font glyph full size
+/// the leading `\u{2501}` is outside the first range): the left group is 25 cells. The space is there because a terminal draws a Nerd Font glyph full size
 /// only with an empty cell after it (hs-d730, pro-d296); the click range wraps the whole 4-cell pill, caps and
 /// space, and owns the join after it as before.
 /// Then the `\u{2501}` fill over the free width: `#{client_width}` minus
-/// the left group's 20, the preview pill and the right group in the form drawn (the
+/// the left group's 25, the preview pill and the right group in the form drawn (the
 /// workers pill's width, `#{w:@cpd_workers}` plus its two caps, plus the closing `\u{2501}`).
 /// At the right, each its own pill on
 /// bg 8 (text 0), joined by a single `\u{2501}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
-/// least `#{w:@cpd_workers}` plus the two caps and 22), else the short form in
+/// least `#{w:@cpd_workers}` plus the two caps and 27), else the short form in
 /// `@cpd_workers_short`, whose width is `#{w:@cpd_workers_short}`.
 ///
 /// The fill is split by a `#{P/i/:}` loop over the window's panes in index order (tmux 3.6+): each
@@ -465,7 +470,7 @@ macro_rules! join {
 /// cells); the range `incident` wraps the whole pill, caps included, and a click opens the
 /// incident's Lead.
 ///
-/// Colours follow §6.1.1 (hs-d534): the reset, legend, logs and costs buttons take the one bright
+/// Colours follow §6.1.1 (hs-d534): the reset, legend, logs, costs and settings buttons take the one bright
 /// colour 15 ([`BUTTON_BASE`] 7, pro-d195), the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
 pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
@@ -511,12 +516,13 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         status(m.nothing, "#{@cpd_version}")
     );
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}{join}{costs}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}{join}{costs}{join}{settings}#{{?@cpd_runner,{join}{runner},}}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
         reset = glyph_button("reset", reset_glyph!()),
         legend = glyph_button("legend", legend_glyph!()),
         logs = glyph_button("logs", logs_glyph!()),
         costs = glyph_button("costs", costs_glyph!()),
+        settings = glyph_button("settings", settings_glyph!()),
         runner = button("runner", "#{@cpd_runner}", BUTTON_BASE),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
