@@ -410,10 +410,9 @@ fn drive(fx: &Fx, key: GateKey, run_command: cpd_tui::RunCommand, row: &str, act
     key.open();
     tree.until_that(&wait.expect, |_| log(fx).contains(&wait.expect));
     assert_eq!((wait.made)(), 1, "the gated call was made once");
-    assert!(
-        tree.snapshots() > before,
-        "the Inbox was read again once the job ended"
-    );
+    tree.until_that("the Inbox was read again once the job ended", |t| {
+        t.snapshots() > before
+    });
 }
 
 /// `drive` for a pick through a gated call of `cpd` (`gated` says which): the failure is `CODE`, `MESSAGE`.
