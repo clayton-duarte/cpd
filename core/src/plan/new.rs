@@ -125,8 +125,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 
     // 1. The Plan and its Lead, in one transaction.
     let session = SessionId::new_v4();
-    let review = !env.config.inbox.review_context.is_empty()
-        && args.context.as_str() == env.config.inbox.review_context;
+    let review = args.context.as_str() == crate::ids::PermanentContext::Codereview.id();
     let tier = args
         .tier
         .unwrap_or(if review {

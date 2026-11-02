@@ -17,7 +17,7 @@ use super::runner::WorkerRunner;
 use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, MachineName};
+use crate::ids::MachineName;
 
 /// Where a leaf key's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -40,7 +40,7 @@ pub struct Config {
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
-    /// The Tier of the Lead of a Plan in the review Context (`inbox.review_context`).
+    /// The Tier of the Lead of a Plan in the review Context (the permanent `codereview` Context).
     pub review_lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
@@ -205,8 +205,6 @@ pub struct Inbox {
     pub team_channel: String,
     /// The User's Slack user id; set when `team_channel` is.
     pub slack_user_id: String,
-    /// The Context whose Manager `cpd inbox claim` tells to review a claimed pull request; `""` refuses the claim (§8.2, §21.7).
-    pub review_context: String,
     /// GitHub logins whose reviews do not count as a human's (hermes `BOT_REVIEWERS`).
     pub bot_reviewers: Vec<String>,
 }
@@ -416,16 +414,6 @@ impl Config {
             stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)?,
             team_channel: r.get("inbox.team_channel", String::new(), slack_id('C'))?,
             slack_user_id: r.get("inbox.slack_user_id", String::new(), slack_id('U'))?,
-            review_context: r.get("inbox.review_context", String::new(), |v| {
-                let id = text_of(&v)?;
-                if id.is_empty() {
-                    Ok(String::new())
-                } else {
-                    ContextId::parse(id)
-                        .map(|c| c.as_str().to_owned())
-                        .map_err(|e| e.to_string())
-                }
-            })?,
             bot_reviewers: r.get(
                 "inbox.bot_reviewers",
                 DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(),

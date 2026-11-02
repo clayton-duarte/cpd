@@ -28,6 +28,10 @@ pub const MIGRATIONS: &[ConfigMigration] = &[
         name: "drop-plannotator-ports",
         run: drop_plannotator_ports,
     },
+    ConfigMigration {
+        name: "drop-inbox-review-context",
+        run: drop_inbox_review_context,
+    },
 ];
 
 /// Folds the migrations in order over `text`, returning the final text and the names of
@@ -126,4 +130,28 @@ fn drop_top_level_key(text: &str, key: &str) -> Option<String> {
     out.push_str(&text[..start]);
     out.push_str(&text[line_end..]);
     Some(out)
+}
+
+/// `drop-inbox-review-context`: the `review_context` line of the `[inbox]` table is removed (`inbox claim` always
+/// targets `codereview`); every other line, comment and the formatting survive.
+fn drop_inbox_review_context(text: &str) -> Option<String> {
+    let table: Table = text.parse().ok()?;
+    table.get("inbox")?.as_table()?.get("review_context")?;
+    let mut in_inbox = false;
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim();
+        if body.starts_with('[') {
+            in_inbox = body.split('#').next().unwrap_or("").trim() == "[inbox]";
+        } else if in_inbox
+            && let Some((name, _)) = body.split_once('=')
+            && name.trim().trim_matches(['"', '\'']) == "review_context"
+            && body.parse::<Table>().is_ok()
+        {
+            let end = start + line.len();
+            return Some(format!("{}{}", &text[..start], &text[end..]));
+        }
+        start += line.len();
+    }
+    None
 }
