@@ -1,7 +1,8 @@
-// The read-only host-socket client of the dev live adapter (web/README.md "`web/src/api/host.ts` —
-// the socket client", hs-d819/chat-host). One connect + `hello` + `attach` per `attach()` call, the
-// parsed frames out, reconnecting per the README's rule. The node socket is the one external
-// boundary: `node:net` in production, a fake in tests. No test opens a real socket.
+// The host-socket client of the dev live adapter (web/README.md "`web/src/api/host.ts` — the
+// socket client", hs-d819/chat-host). One connect + `hello` + `attach` per `attach()` call, the
+// parsed frames out, reconnecting per the README's rule; `submit()` is the durable send (the
+// audit's Verdict 4, web/README.md "Send"). The node socket is the one external boundary:
+// `node:net` in production, a fake in tests. No test opens a real socket.
 import type { Socket } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -26,10 +27,16 @@ export type HostFrame =
 /** The one external boundary: the node socket (node:net in production, replaced in tests). */
 export type HostConnect = (path: string) => Promise<Socket>;
 
-/** The read-only socket client: one connect + hello + attach per attach() call, frames out, reconnecting per the rule below. */
+/** The host-socket client: one connect + hello + attach per attach() call, frames out, reconnecting per the rule below. */
 export interface HostClient {
-  /** Attaches to the Session's host socket and calls onFrame per received frame until the returned closure closes the socket. */
-  attach(id: string, onFrame: (frame: HostFrame) => void): () => void;
+  /**
+   * Attaches to the Session's host socket and calls onFrame per received frame until the returned
+   * closure closes the socket. `onUnavailable` is called once when no live host answers (a refused
+   * connect), so a one-shot read can fall back to `cpd session tail` instead of retrying forever.
+   */
+  attach(id: string, onFrame: (frame: HostFrame) => void, onUnavailable?: () => void): () => void;
+  /** One durable send: hello + attach + `submit`, settling on the host's `result` (web/README.md "Send"). */
+  submit?(id: string, text: string, whenBusy?: "followUp" | "steer" | "reject"): Promise<void>;
 }
 
 /** The reconnect back-off of the README's rule: 100 ms doubling to a 1 s cap over a 30 s deadline. */
@@ -56,7 +63,7 @@ function hostSocketPath(id: string): string {
 
 export function createHostClient(connect: HostConnect): HostClient {
   return {
-    attach(id, onFrame) {
+    attach(id, onFrame, onUnavailable) {
       const path = hostSocketPath(id);
       let closed = false;
       let cursor: { epoch: string; seq: number } | undefined;
@@ -80,6 +87,7 @@ export function createHostClient(connect: HostConnect): HostClient {
         try {
           next = await connect(path);
         } catch {
+          onUnavailable?.();
           scheduleReconnect();
           return;
         }
@@ -159,6 +167,72 @@ export function createHostClient(connect: HostConnect): HostClient {
         if (timer !== undefined) clearTimeout(timer);
         socket?.destroy();
       };
+    },
+
+    submit(id, text, whenBusy = "followUp") {
+      const path = hostSocketPath(id);
+      return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let socket: Socket | undefined;
+        let buffer = "";
+        const finish = (error?: Error): void => {
+          if (settled) return;
+          settled = true;
+          socket?.destroy();
+          if (error === undefined) resolve();
+          else reject(error);
+        };
+        // The submit handshake: `hello` → `welcome` → `attach` → `attached` → `submit` → `result`.
+        let stage = 0;
+        const handleLine = (line: string): void => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            return;
+          }
+          if (typeof parsed !== "object" || parsed === null) return;
+          const frame = parsed as Record<string, unknown>;
+          const type = frame["type"];
+          if (type === "welcome" && stage === 0) {
+            stage = 1;
+            socket?.write(`${JSON.stringify({ type: "attach", req: "r1" })}\n`);
+          } else if (type === "attached" && stage === 1) {
+            stage = 2;
+            socket?.write(
+              `${JSON.stringify({ type: "submit", req: "r1", text, when_busy: whenBusy })}\n`,
+            );
+          } else if (type === "result" && stage === 2) {
+            finish();
+          } else if (type === "error") {
+            finish(new Error(`host error: ${String(frame["code"])}`));
+          } else if (type === "bye") {
+            finish(new Error("host closed the connection"));
+          }
+        };
+        connect(path).then(
+          (next) => {
+            if (settled) {
+              next.destroy();
+              return;
+            }
+            socket = next;
+            next.on("data", (chunk: Buffer | string) => {
+              buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+              for (let index = buffer.indexOf("\n"); index >= 0; index = buffer.indexOf("\n")) {
+                const line = buffer.slice(0, index);
+                buffer = buffer.slice(index + 1);
+                if (line.length > 0) handleLine(line);
+              }
+            });
+            next.on("error", () => finish(new Error("host socket error")));
+            next.on("end", () => finish(new Error("host socket ended")));
+            next.on("close", () => finish(new Error("host socket closed")));
+            next.write(`${JSON.stringify(HELLO)}\n`);
+          },
+          () => finish(new Error("host socket unavailable")),
+        );
+      });
     },
   };
 }
