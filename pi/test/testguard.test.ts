@@ -141,7 +141,7 @@ async function started(role: string) {
   return f;
 }
 
-const call = async (f: Fixture, command: string, toolName = "bash") => (await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input: { command } }))[0] as { block?: boolean; reason?: string } | undefined;
+const call = async (f: Fixture, command: string, toolName = "bash") => (await f.pi.fire("agent_end", { messages: [] }), await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input: { command } }))[0] as { block?: boolean; reason?: string } | undefined;
 
 test("a Worker's full test runs get block and the rule's reason; the targeted ones run", async (t) => {
   const f = await started("worker");

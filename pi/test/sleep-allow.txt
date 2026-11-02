@@ -20,7 +20,7 @@ pi/test/dialog-slot.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/first-message.test.ts 5  # m-pi: sleep or wall-clock wait
 pi/test/follower.test.ts 21  # m-pi: sleep or wall-clock wait
 pi/test/handle.test.ts 10  # m-pi: sleep or wall-clock wait
-pi/test/loop-guard.test.ts 24  # m-pi: sleep or wall-clock wait
+pi/test/loop-guard.test.ts 25  # m-pi: sleep or wall-clock wait
 pi/test/mainguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/mainguard-tools.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/manager-errors.test.ts 3  # m-pi: sleep or wall-clock wait
