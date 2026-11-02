@@ -435,8 +435,11 @@ impl View {
                     .find(|(_, h)| h.list.contains(at))
                     .map(|(id, _)| id);
                 if let Some(id) = id {
-                    self.tree_scroll
-                        .wheel_dock(id, m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                    self.tree_scroll.wheel_dock(
+                        id,
+                        m.kind == MouseEventKind::ScrollDown,
+                        WHEEL_ROWS,
+                    );
                 }
                 Effect::None
             }
@@ -1645,7 +1648,10 @@ mod tests {
             (format!(" ╭{STOPPED} zeta").as_str(), EXPAND),
             "{rows:?}"
         );
-        assert_eq!(click(&mut view, 3, u16::try_from(at + 3).unwrap()), Effect::None);
+        assert_eq!(
+            click(&mut view, 3, u16::try_from(at + 3).unwrap()),
+            Effect::None
+        );
         let rows = drawn(&mut view, 44, 23);
         let at = archive_header_at(&rows);
         assert_eq!(
@@ -1690,7 +1696,11 @@ mod tests {
                 && !rows.iter().any(|r| r.contains(" old")),
             "{rows:#?}"
         );
-        click(&mut view, 4, u16::try_from(archive_header_at(&rows)).unwrap()); // opens the Archive section
+        click(
+            &mut view,
+            4,
+            u16::try_from(archive_header_at(&rows)).unwrap(),
+        ); // opens the Archive section
         let rows = drawn(&mut view, 44, 30);
         let zeta = rows
             .iter()

@@ -4,7 +4,8 @@
 //! `separator.rs`; the prompt is gone, its questions are dialog popups now) onto the read model.
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and the forked Sessions after them (B1), labelled by title and
-//!   name, and the archived ones after the live ones inside the Context's block;
+//!   name, and the archived ones after the live ones inside the Context's block; the Permanent Contexts and the archived
+//!   Contexts are not in the project tree: they are the docked `Standing` and `Archive` sections below it (pro-d339, pro-d348);
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`menu`]: its parts (the right-click menu); [`ask`]: the dialog popups (the dialog kit's) it opens
 //!   before a command, with no inline prompt row;
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
@@ -39,6 +40,8 @@ mod counter_tests;
 #[cfg(test)]
 mod cue_lines_tests;
 mod cursor;
+#[cfg(test)]
+mod dock_tests;
 #[cfg(test)]
 mod fixing_tests;
 pub(crate) mod folds;

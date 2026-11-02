@@ -26,8 +26,8 @@
 //!
 //! **Archived rows** (hs-d339, hs-d344). An expanded Context's block lists its archived Plans, and the forks that are
 //! archived or of an archived Plan, after the live rows, muted, with the same `├─` rows. There is no `…` row and no
-//! separate toggle. Archived Contexts follow the live ones, each its own block, with every row archived; they start
-//! folded. The widget's open set holds every Context (its live rows always show); a Context is **expanded** when the open
+//! separate toggle. Archived Contexts are not in the project tree: each is a block, with every row archived, of the
+//! docked `Archive` section below `Standing` (pro-d348); a block starts folded. The widget's open set holds every Context (its live rows always show); a Context is **expanded** when the open
 //! set holds its closing row's identifier, so view state only. The cursor never rests on archived rows.
 //!
 //! Rows (identifiers are paths):
@@ -1032,7 +1032,10 @@ fn share(docks: &[Dock], budget: usize) -> (Vec<usize>, usize) {
             }
         }
     }
-    (shown.clone(), (fixed + shown.iter().sum::<usize>()).min(budget))
+    (
+        shown.clone(),
+        (fixed + shown.iter().sum::<usize>()).min(budget),
+    )
 }
 
 /// Draw `flat` in `list`, the rows of `area` between its cue rows: the first row from the scroll (the cursor's Session is
@@ -2717,7 +2720,11 @@ mod tests {
             .expect("the Archive header");
         assert_eq!(
             rows[12..15],
-            [format!("╭{STOPPED} gamma"), NEW_PLAN.to_owned(), String::new()],
+            [
+                format!("╭{STOPPED} gamma"),
+                NEW_PLAN.to_owned(),
+                String::new()
+            ],
             "the live Contexts end the project tree, with no archive row under them: {rows:#?}"
         );
         assert!(
