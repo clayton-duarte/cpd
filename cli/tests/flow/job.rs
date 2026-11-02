@@ -1465,9 +1465,9 @@ fn show_prints_a_null_footprint_for_an_open_job_and_for_a_null_actual_files() {
         "UPDATE jobs SET status = 'running' WHERE key = 'a';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
          VALUES ('pl', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pl--a-a1', '/w', NULL, 't');
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+         INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at, kind)
-         SELECT plan, pr, 'o', 'T', 'S2', 'g', 'c', '[\"a sentence\"]', '[\"b\"]', '[]',
+         SELECT plan, workflow, 'o', 'T', 'S2', 'g', 'c', '[\"a sentence\"]', '[\"b\"]', '[]',
                 'running', 0, fingerprint, cpd_txn(), 't', 'open' FROM jobs WHERE key = 'a';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, actual_files, started_at)
          VALUES ('pl', 'o-a1', 'o', 1, 'S2', 'ladder', 'running', 'cpd/pl--o-a1', '/w', '[\"x\"]', 't');",

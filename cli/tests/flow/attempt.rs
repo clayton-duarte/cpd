@@ -1914,7 +1914,7 @@ impl Rows {
     /// An explore kind has no PR.
     fn footprinted(&self, key: &str, kind: &str, touches: Option<&str>, actual: Option<&str>) {
         let explore = matches!(kind, "scout" | "research");
-        let pr = if explore { "NULL" } else { "'repo'" };
+        let workflow = if explore { "NULL" } else { "'repo'" };
         let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |t| format!("'{t}'"));
         let (status, spec, fingerprint) = match touches {
             Some(t) => (
@@ -1930,9 +1930,9 @@ impl Rows {
         };
         let tier = if touches.is_some() { "'S2'" } else { "NULL" };
         self.fx.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+            "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-             VALUES ('pay', {pr}, '{key}', 'T', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't', '{kind}', {tests}, {tests});
+             VALUES ('pay', {workflow}, '{key}', 'T', {tier}, {spec}, '{status}', 0, {fingerprint}, cpd_txn(), 't', '{kind}', {tests}, {tests});
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at, actual_files)
              VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/pay--{key}-a1', '/w', '{BASE}', 't', {actual});",
             actual = q(actual),
