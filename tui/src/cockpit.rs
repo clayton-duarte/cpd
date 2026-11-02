@@ -513,6 +513,16 @@ fn run_action(
         let tmux = failure_tmux(ports);
         return toggle_runner(&home, &tmux, client);
     }
+    // The settings popup reads nothing itself (its view reads through commands): a config that does not parse is the view's error.
+    if let (Action::Settings, None) = (action, pull) {
+        let tmux = failure_tmux(ports);
+        return tmux
+            .run(&on_client(
+                settings::popup_args(client_size(&tmux, client)?),
+                client,
+            ))
+            .map(drop);
+    }
     let config = Config::load(&home)?;
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ports.runner.clone());
     let popup = match (action, pull) {
@@ -544,7 +554,7 @@ fn run_action(
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Costs, None) => return toggle_costs(&tmux, &config.tmux.cockpit_session),
         (Action::Runner, None) => unreachable!("handled above"),
-        (Action::Settings, None) => settings::popup_args(client_size(&tmux, client)?),
+        (Action::Settings, None) => unreachable!("handled above"),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)
