@@ -11,7 +11,7 @@ use super::archive::archived;
 use super::row::{self, Role, Row};
 use super::state::scoped;
 use super::{Env, RetierArgs, not_a_lead};
-use crate::config::{Config, Tier};
+use crate::config::{self, Config, Tier};
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
 use crate::ids::SessionId;
@@ -52,7 +52,7 @@ fn selected(
     }
 }
 
-/// `session retier` (commands.md §10.15).
+/// `session retier` (commands.md §10.16).
 pub(super) fn retier(args: RetierArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let one = args
@@ -63,12 +63,23 @@ pub(super) fn retier(args: RetierArgs) -> Result<Output, CpdError> {
     let config = env.config.clone();
     if let (Some(tier), Some(id)) = (args.tier, one.as_ref()) {
         let home = env.home.clone();
-        let models = env.store.read(|conn| {
+        let (role, models) = env.store.read(|conn| {
             let row = row::load(conn, id)?;
-            crate::policy::model::models_of_context(conn, &home, row.context.as_str())
+            let models =
+                crate::policy::model::models_of_context(conn, &home, row.context.as_str())?;
+            Ok((row.role, models))
         })?;
-        crate::config::catalog::load_with(&models, &mut env.store)?.check(tier)?;
-        tier.check_lead()?;
+        let catalog = crate::config::catalog::load_with(&models, &mut env.store)?;
+        catalog.check(tier)?;
+        // A Lead's range is the lead range, a Manager's the manager range; a Worker is refused below.
+        let role = match role {
+            Role::Lead => Some(config::Role::Lead),
+            Role::Manager => Some(config::Role::Manager),
+            Role::Worker => None,
+        };
+        if let Some(role) = role {
+            config.range(&catalog, role)?.check(tier, role)?;
+        }
     }
     let chosen = env
         .store

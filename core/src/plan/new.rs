@@ -71,8 +71,10 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         let models = env.store.read(|conn| {
             crate::policy::model::models_of_context(conn, &home, args.context.as_str())
         })?;
-        crate::config::catalog::load_with(&models, &mut env.store)?.check(tier)?;
-        tier.check_lead()?;
+        let catalog = crate::config::catalog::load_with(&models, &mut env.store)?;
+        catalog.check(tier)?;
+        let lead = env.config.range(&catalog, crate::config::Role::Lead)?;
+        lead.check(tier, crate::config::Role::Lead)?;
     }
     // A deleted Plan keeps its row, and so its id: never reused (contract §2.2 "Deleted").
     let deleted: Option<bool> = env.store.read(|conn| {

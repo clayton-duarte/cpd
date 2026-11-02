@@ -1,7 +1,8 @@
 //! The pure Tier advice (contract §3.4b): the rule over in-memory rows and the first-Attempt query over a tempdir store.
 
-use super::tier_advice::{Row, first_attempts, qualifying, recommend, wilson_lower};
+use super::tier_advice::{Row, first_attempts, qualifying, recommend, recommend_in, wilson_lower};
 use crate::config::{Catalog, Tier, TierModel};
+use crate::config::{Range, Role, RoleTiers};
 use crate::home::CpdHome;
 use crate::store::Store;
 
@@ -18,7 +19,7 @@ fn model(name: &str, efforts: &[u8]) -> TierModel {
     }
 }
 
-/// The real `Catalog::next` as the ladder (H3 -> S1, S3 -> none).
+/// The real `Catalog::next_in` over the range H0..S3 as the ladder (H3 -> S1, S3 -> none).
 fn ladder() -> impl Fn(Tier) -> Option<Tier> {
     let catalog = Catalog {
         pi_version: "1.2.0".into(),
@@ -27,7 +28,11 @@ fn ladder() -> impl Fn(Tier) -> Option<Tier> {
         h: model("haiku", &[0, 1, 2, 3]),
         g: model("gemini", &[]),
     };
-    move |t| catalog.next(t).unwrap()
+    let range = Range {
+        floor: Tier::parse("H0").unwrap(),
+        ceiling: Tier::parse("S3").unwrap(),
+    };
+    move |t| catalog.next_in(range, t)
 }
 
 fn t(s: &str) -> Tier {
@@ -294,16 +299,51 @@ fn a_cell_without_a_cost_gives_no_advice() {
     assert!(recommend(&rows, 30, ladder()).is_empty());
 }
 
+/// H [0-4], S [0-4], O [0,2,3,4], G []; roles GX / H3 / S4 / O3 give the worker range H3..S3.
+fn worker_catalog() -> Catalog {
+    Catalog {
+        pi_version: "1.2.0".into(),
+        o: model("opus", &[0, 2, 3, 4]),
+        s: model("sonnet", &[0, 1, 2, 3, 4]),
+        h: model("haiku", &[0, 1, 2, 3, 4]),
+        g: model("gemini", &[]),
+    }
+}
+
+fn roles(lead: &str) -> RoleTiers {
+    RoleTiers {
+        auxiliar: t("GX"),
+        worker: t("H3"),
+        lead: t(lead),
+        manager: t("O3"),
+    }
+}
+
 #[test]
-fn a_tier_a_worker_may_not_have_is_never_advised() {
-    let o2 = row("work", "O2", 100, 100, Some(0.01));
-    assert!(recommend(std::slice::from_ref(&o2), 30, ladder()).is_empty());
+fn advice_stays_inside_the_worker_range() {
+    let catalog = worker_catalog();
+    let range = catalog.range(Role::Worker, &roles("S4")).unwrap();
+    assert_eq!((range.floor, range.ceiling), (t("H3"), t("S3")));
+    let next = |tier| catalog.next_in(range, tier);
+    // Cheap and sure cells outside H3..S3 (below the floor, above the ceiling, another letter) are never advised.
     let rows = [
-        o2,
-        row("work", "S1", 40, 40, Some(0.3)),
-        row("work", "S2", 3, 3, Some(0.5)),
+        row("work", "H1", 100, 100, Some(0.01)),
+        row("work", "S4", 100, 100, Some(0.02)),
+        row("work", "O2", 100, 100, Some(0.03)),
+        row("work", "S2", 40, 40, Some(0.3)),
+        row("work", "S3", 3, 3, Some(0.5)),
     ];
-    let got = recommend(&rows, 30, ladder());
+    let got = recommend_in(&rows, 30, range, next);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].tier, t("S2"));
+    // The ceiling follows lead_tier: with lead_tier = S2 the range is H3..S1 and S2 is out.
+    let low = catalog.range(Role::Worker, &roles("S2")).unwrap();
+    assert_eq!((low.floor, low.ceiling), (t("H3"), t("S1")));
+    let rows = [
+        row("work", "S1", 40, 40, Some(0.3)),
+        row("work", "S2", 100, 100, Some(0.01)),
+    ];
+    let got = recommend_in(&rows, 30, low, |tier| catalog.next_in(low, tier));
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].tier, t("S1"));
 }

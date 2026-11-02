@@ -3039,39 +3039,76 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
         .to_string()
 }
 
-// ---------- Tier rules (pro-d82, hs-d554): Workers use only H0-H3 and S0-S3 ----------
+// ---------- Tier ranges (pro-d328 to pro-d332): a Job's Tier is in the worker range ----------
 
-/// The refusal of pro-d82 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
-fn not_allowed(run: &Run, tier: &str) {
+/// The ranged config of these tests: roles GX / H3 / `lead` / O3 with `worker` as `worker_tier`, on the catalog
+/// H [0-4], S [0-4], O [0,2,3,4], G []. With `lead` = S4 the worker range is H3..S3, with S2 it is H3..S1.
+fn ranged_with(env: &TestEnv, worker: &str, lead: &str) {
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        format!(
+            "version = 1\nmachine = \"m1\"\ncontext_distill_tier = \"GX\"\nworker_tier = \"{worker}\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n"
+        ),
+    )
+    .unwrap();
+    fixture(
+        env,
+        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter IN ('H', 'S');
+         UPDATE tier_catalog SET efforts = '[0,2,3,4]' WHERE letter = 'O';
+         UPDATE tier_catalog SET efforts = '[]' WHERE letter = 'G';",
+    );
+}
+
+/// [`ranged_with`] `worker_tier = H3`: the worker range is H3..`ceiling` where `lead` is the first Tier above it.
+fn ranged(env: &TestEnv, lead: &str) {
+    ranged_with(env, "H3", lead);
+}
+
+/// The refusal of the worker range `floor`..`ceiling`: `tier_not_allowed`, exit 2, with the details of the range and a
+/// message that names the range and the keys that set it.
+fn not_allowed_in(run: &Run, tier: &str, floor: &str, ceiling: &str, key: &str) {
     let e = refused(run, "tier_not_allowed", 2);
-    assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], "H0-H3, S0-S3", "{run:?}");
-    assert_eq!(e["details"]["rule"], "pro-d82", "{run:?}");
+    assert_eq!(
+        e["details"],
+        json!({"tier": tier, "role": "worker", "floor": floor, "ceiling": ceiling, "allowed": format!("{floor}-{ceiling}"), "key": key}),
+        "{run:?}"
+    );
     let message = e["message"].as_str().unwrap();
-    for part in ["pro-d82", "hs-d554", "cost", "H0-H3, S0-S3"] {
+    for part in [
+        tier,
+        "worker",
+        &format!("{floor}-{ceiling}"),
+        "worker_tier",
+        "lead_tier",
+    ] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
 
+/// [`not_allowed_in`] for the range H3..S3 of `worker_tier`.
+fn not_allowed(run: &Run, tier: &str) {
+    not_allowed_in(run, tier, "H3", "S3", "worker_tier");
+}
+
+/// Below the floor, above the ceiling, another letter and the auxiliar's: all outside H3..S3.
+const OUTSIDE: [&str; 6] = ["H0", "H2", "S4", "O0", "O2", "GX"];
+
 #[test]
-fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
+fn add_refuses_a_tier_outside_the_worker_range_and_names_the_range() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    fixture(
-        &fx.env,
-        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
-    ); // H4 reaches the Worker range check
+    ranged(&fx.env, "S4");
     let (txns, evs, rows) = (
         count(&fx.env, "txns"),
         count(&fx.env, "events"),
         count(&fx.env, "jobs"),
     );
-    for tier in ["H4", "O1", "O3", "S4"] {
+    for tier in OUTSIDE {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    for tier in ["H4", "O1", "O3", "S4"] {
+    for tier in OUTSIDE {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!(
@@ -3082,14 +3119,8 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
         ),
         (txns, evs, rows)
     );
-}
-
-#[test]
-fn add_accepts_h0_to_h3_and_s0_to_s3() {
-    let fx = Fx::new();
-    setup(&fx.env);
-    plan(&fx.env, "pl", "plan");
-    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
+    // The whole range is taken, H4 and the gap-free S efforts included.
+    for tier in ["H3", "H4", "S0", "S1", "S2", "S3"] {
         let key = format!("j-{}", tier.to_lowercase());
         assert_eq!(
             job_add(&fx, "pl", &key, tier, &[]).ok()["job"]["tier"],
@@ -3177,34 +3208,11 @@ fn a_lead_replaces_a_cancelled_update_job_with_a_work_job_at_the_chosen_tier() {
 }
 
 #[test]
-fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
+fn edit_accepts_the_worker_range() {
     let fx = Fx::new();
     drafted(&fx);
-    fixture(
-        &fx.env,
-        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
-    ); // H4 reaches the Worker range check
-    let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["H4", "O1", "O3", "S4"] {
-        not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
-        not_allowed(
-            &job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"),
-            tier,
-        );
-    }
-    assert_eq!(
-        (count(&fx.env, "txns"), count(&fx.env, "events")),
-        (txns, evs)
-    );
-    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
-    assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
-}
-
-#[test]
-fn edit_accepts_h0_to_h3_and_s0_to_s3() {
-    let fx = Fx::new();
-    drafted(&fx);
-    for tier in ["H0", "H1", "H2", "S0", "S1", "S2", "H3", "S3"] {
+    ranged(&fx.env, "S4");
+    for tier in ["H3", "H4", "S0", "S1", "S2", "S3"] {
         assert_eq!(
             job(&fx, &["edit", "b", "--tier", tier], "pl").ok()["fields"],
             json!(["tier"]),
@@ -3214,33 +3222,14 @@ fn edit_accepts_h0_to_h3_and_s0_to_s3() {
     }
 }
 
+/// A draft stored outside the range (a store written under another config) is repaired by `edit --tier`, and an edit
+/// that gives no Tier is not blocked by the one it holds.
 #[test]
 fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_blocked() {
     let fx = Fx::new();
     drafted(&fx);
-    // A store written before hs-d554.
-    fixture(
-        &fx.env,
-        "UPDATE jobs SET tier = 'O3' WHERE plan = 'pl' AND key = 'b';",
-    );
-    assert_eq!(
-        job(&fx, &["edit", "b", "--title", "Renamed"], "pl").ok()["fields"],
-        json!(["title"])
-    );
-    assert_eq!(
-        job_row(&fx.env, "pl", "b", "tier"),
-        "O3",
-        "no migration and no edit rewrites it"
-    );
-    not_allowed(&job(&fx, &["edit", "b", "--tier", "O4"], "pl"), "O4");
-    assert_eq!(
-        job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"],
-        json!(["tier"])
-    );
-    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
-    // Second pass: Tiers that were allowed before hs-d554.
-    {
-        let stored = "S4";
+    ranged(&fx.env, "S4");
+    for stored in ["O3", "S4", "H2"] {
         fixture(
             &fx.env,
             &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"),
@@ -3254,7 +3243,12 @@ fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_
             .ok()["fields"],
             json!(["title"])
         );
-        assert_eq!(job_row(&fx.env, "pl", "b", "tier"), stored);
+        assert_eq!(
+            job_row(&fx.env, "pl", "b", "tier"),
+            stored,
+            "no edit rewrites it"
+        );
+        not_allowed(&job(&fx, &["edit", "b", "--tier", "O2"], "pl"), "O2");
         assert_eq!(
             job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"],
             json!(["tier"])
@@ -3263,108 +3257,56 @@ fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_
     }
 }
 
+/// `edit --tier` and `retry --tier` check the worker range (after `tier_invalid`) and a refusal writes nothing; retry
+/// checks it first, so a Job that is not failed still gets the Tier refusal.
 #[test]
-fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_nothing() {
+fn edit_and_retry_refuse_a_tier_outside_the_worker_range() {
     let fx = Fx::new();
     drafted(&fx);
     job_add(&fx, "pl", "c", "S2", &[]).ok();
     lock(&fx.env, "pl");
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
-    fixture(
-        &fx.env,
-        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
-    ); // H4 reaches the Worker range check
-    let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["H4", "O1", "O3", "S4"] {
+    ranged(&fx.env, "S4");
+    let (txns, evs, rows) = (
+        count(&fx.env, "txns"),
+        count(&fx.env, "events"),
+        count(&fx.env, "jobs"),
+    );
+    for tier in OUTSIDE {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
+        // Checked first: a Job that is not failed still gets the Tier refusal.
+        not_allowed(&job(&fx, &["retry", "c", "--tier", tier], "pl"), tier);
     }
-    // Checked first: a Job that is not failed still gets the Tier refusal.
-    not_allowed(&job(&fx, &["retry", "c", "--tier", "O4"], "pl"), "O4");
+    assert_eq!(
+        (
+            count(&fx.env, "txns"),
+            count(&fx.env, "events"),
+            count(&fx.env, "jobs")
+        ),
+        (txns, evs, rows)
+    );
+    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
+    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
+    // `edit` checks the same range, with or without another field, on a draft.
+    drop(fx);
+    let fx = Fx::new();
+    drafted(&fx);
+    ranged(&fx.env, "S4");
+    let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
+    for tier in OUTSIDE {
+        not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
+        not_allowed(
+            &job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"),
+            tier,
+        );
+    }
     assert_eq!(
         (count(&fx.env, "txns"), count(&fx.env, "events")),
         (txns, evs)
     );
-    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
-    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
-}
-
-/// pro-d82: H4 is refused as tier_not_allowed even when the catalog has H4 (the catalog check passes, the Worker range does not).
-#[test]
-fn add_edit_and_retry_refuse_h4_even_when_the_catalog_has_h4() {
-    let fx = Fx::new();
-    drafted(&fx);
-    job_add(&fx, "pl", "c", "S2", &[]).ok();
-    lock(&fx.env, "pl");
-    engine(&fx.env, "pl", "a", "failed");
-    fixture(
-        &fx.env,
-        "UPDATE tier_catalog SET efforts = '[0,1,2,3,4]' WHERE letter = 'H';",
-    );
-    let (txns, evs, rows) = (
-        count(&fx.env, "txns"),
-        count(&fx.env, "events"),
-        count(&fx.env, "jobs"),
-    );
-    not_allowed(&job_add(&fx, "pl", "k", "H4", &[]), "H4");
-    not_allowed(
-        &stub_add(&fx, "pl", "k", &["--tier", "H4", "--needs", "c"]),
-        "H4",
-    );
-    not_allowed(&job(&fx, &["edit", "b", "--tier", "H4"], "pl"), "H4");
-    not_allowed(&job(&fx, &["retry", "a", "--tier", "H4"], "pl"), "H4");
-    assert_eq!(
-        (
-            count(&fx.env, "txns"),
-            count(&fx.env, "events"),
-            count(&fx.env, "jobs")
-        ),
-        (txns, evs, rows)
-    );
-    assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
-    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
-    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
-}
-
-/// hs-d562: `GX` is the auxiliaries' Tier, never a Worker's: refused as `S4` is, after `tier_invalid`.
-#[test]
-fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
-    let fx = Fx::new();
-    drafted(&fx);
-    job_add(&fx, "pl", "c", "S2", &[]).ok();
-    lock(&fx.env, "pl");
-    engine(&fx.env, "pl", "a", "failed");
-    engine(&fx.env, "pl", "c", "running");
-    let (txns, evs, rows) = (
-        count(&fx.env, "txns"),
-        count(&fx.env, "events"),
-        count(&fx.env, "jobs"),
-    );
-    not_allowed(&job_add(&fx, "pl", "k", "GX", &[]), "GX");
-    not_allowed(
-        &stub_add(&fx, "pl", "k", &["--tier", "GX", "--needs", "c"]),
-        "GX",
-    );
-    not_allowed(&job(&fx, &["edit", "b", "--tier", "GX"], "pl"), "GX");
-    not_allowed(
-        &job(&fx, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"),
-        "GX",
-    );
-    not_allowed(&job(&fx, &["retry", "a", "--tier", "GX"], "pl"), "GX");
-    // Checked first: a Job that is not failed still gets the Tier refusal.
-    not_allowed(&job(&fx, &["retry", "c", "--tier", "GX"], "pl"), "GX");
-    assert_eq!(
-        (
-            count(&fx.env, "txns"),
-            count(&fx.env, "events"),
-            count(&fx.env, "jobs")
-        ),
-        (txns, evs, rows)
-    );
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S2");
     assert_eq!(job_row(&fx.env, "pl", "b", "title"), "Title of b");
-    assert_eq!(job_row(&fx.env, "pl", "a", "status"), "failed");
-    assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), Value::Null);
 }
 
 /// Tier model v2: G is a letter like the others, so `G0` parses; it is no Worker's Tier (`tier_not_allowed`, the fixed
@@ -3384,12 +3326,13 @@ fn a_job_tier_g0_parses_and_is_tier_not_allowed_while_g5_is_tier_invalid() {
 }
 
 #[test]
-fn retry_accepts_h0_to_h3_and_s0_to_s3() {
-    for tier in ["H0", "H1", "H2", "S0", "S3", "H3"] {
+fn retry_accepts_the_worker_range() {
+    for tier in ["H3", "H4", "S0", "S3"] {
         let fx = Fx::new();
         drafted(&fx);
         lock(&fx.env, "pl");
         engine(&fx.env, "pl", "a", "failed");
+        ranged(&fx.env, "S4");
         let out = job(&fx, &["retry", "a", "--tier", tier], "pl").ok();
         assert_eq!(
             out,
@@ -3397,6 +3340,98 @@ fn retry_accepts_h0_to_h3_and_s0_to_s3() {
         );
         assert_eq!(job_row(&fx.env, "pl", "a", "retry_tier"), tier);
     }
+}
+
+/// The range follows the config: `lead_tier = S2` cuts the worker range to H3..S1 and `worker_tier = S0` lifts its floor.
+#[test]
+fn the_worker_range_follows_worker_tier_and_lead_tier_in_config() {
+    let fx = Fx::new();
+    setup(&fx.env);
+    plan(&fx.env, "pl", "plan");
+    // lead_tier = S2: H3..S1, so S2 and S3 are out and H4 and S1 are in.
+    ranged(&fx.env, "S2");
+    for tier in ["H2", "S2", "S3", "O0"] {
+        not_allowed_in(
+            &job_add(&fx, "pl", "k", tier, &[]),
+            tier,
+            "H3",
+            "S1",
+            "worker_tier",
+        );
+    }
+    for tier in ["H3", "H4", "S0", "S1"] {
+        job_add(&fx, "pl", &format!("a-{}", tier.to_lowercase()), tier, &[]).ok();
+    }
+    // worker_tier = S0, lead_tier = S4: S0..S3, so every H is below the floor.
+    ranged_with(&fx.env, "S0", "S4");
+    for tier in ["H3", "H4"] {
+        not_allowed_in(
+            &job_add(&fx, "pl", "k", tier, &[]),
+            tier,
+            "S0",
+            "S3",
+            "worker_tier",
+        );
+    }
+    not_allowed_in(
+        &job_add(&fx, "pl", "k", "S4", &[]),
+        "S4",
+        "S0",
+        "S3",
+        "worker_tier",
+    );
+    job_add(&fx, "pl", "b-s0", "S0", &[]).ok();
+    // A Tier the catalog does not offer is `tier_invalid`, before the range: O1 is no effort of O.
+    refused(&job_add(&fx, "pl", "k", "O1", &[]), "tier_invalid", 2);
+}
+
+/// A `scout` keeps letter H and a `research` letter S, each at effort 1 or more, up to the worker ceiling (S3 here).
+#[test]
+fn a_scout_and_a_research_job_keep_their_letter_and_the_worker_ceiling() {
+    let fx = Fx::new();
+    setup(&fx.env);
+    plan(&fx.env, "pl", "plan");
+    ranged(&fx.env, "S4");
+    let spec = write_spec(
+        &fx.env,
+        "explore.json",
+        &json!({"goal": "Where is it?", "context": "Look.", "acceptance": ["names the file"], "out_of_scope": []}).to_string(),
+    );
+    let add = |kind: &str, key: &str, tier: &str| {
+        fx.cpd(&[
+            "job", "add", key, "--kind", kind, "--title", "Look", "--tier", tier, "--spec", &spec,
+            "--plan", "pl",
+        ])
+    };
+    let refuse = |kind: &str, tier: &str| {
+        let e = refused(&add(kind, "k", tier), "tier_not_allowed", 2);
+        assert_eq!(e["details"]["tier"], tier, "{kind} {tier}: {e}");
+        let message = e["message"].as_str().unwrap();
+        assert!(message.contains(kind), "{kind} {tier}: {message}");
+    };
+    let rows = count(&fx.env, "jobs");
+    // A scout: H1..H4 (below the ceiling S3); effort 0, another letter and a Tier above the ceiling are refused.
+    for tier in ["H0", "S1", "S3", "O2", "GX"] {
+        refuse("scout", tier);
+    }
+    // A research Job: S1..S3; effort 0, another letter and the ceiling's excess are refused.
+    for tier in ["S0", "H3", "H4", "S4", "O2", "GX"] {
+        refuse("research", tier);
+    }
+    assert_eq!(count(&fx.env, "jobs"), rows, "a refusal writes nothing");
+    for tier in ["H1", "H2", "H3", "H4"] {
+        add("scout", &format!("s-{}", tier.to_lowercase()), tier).ok();
+    }
+    for tier in ["S1", "S2", "S3"] {
+        add("research", &format!("r-{}", tier.to_lowercase()), tier).ok();
+    }
+    // lead_tier = S2 cuts the worker ceiling to S1: a research Job is S1 only, a scout still H1..H4.
+    ranged(&fx.env, "S2");
+    for tier in ["S2", "S3"] {
+        refuse("research", tier);
+    }
+    add("research", "r-low", "S1").ok();
+    add("scout", "s-low", "H4").ok();
 }
 
 // ---------- the shape's `shape_incomplete` and `test_job_required` at the review, the lock and the cancel; `job approve-tests` ----------

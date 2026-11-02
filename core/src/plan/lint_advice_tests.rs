@@ -239,11 +239,16 @@ fn catalog(s_efforts: &[u8]) -> Catalog {
     }
 }
 
-/// An Env on a tempdir store with context `ctx`, Plan `pl`, Workflow `r` and the catalog fixed.
+/// An Env on a tempdir store with context `ctx`, Plan `pl`, Workflow `r` and the catalog fixed. `lead_tier = S4` makes the
+/// worker range H3..S3 (the default roles reach O1).
 fn env(dir: &tempfile::TempDir, catalog: Catalog) -> Env {
     let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
     std::fs::create_dir_all(home.config().parent().unwrap()).unwrap();
-    std::fs::write(home.config(), "version = 1\nmachine = \"m1\"\n").unwrap();
+    std::fs::write(
+        home.config(),
+        "version = 1\nmachine = \"m1\"\nlead_tier = \"S4\"\n",
+    )
+    .unwrap();
     let owner = home.config().parent().unwrap().join("policy").join("acme");
     std::fs::create_dir_all(&owner).unwrap();
     std::fs::write(owner.join("owner.toml"), "").unwrap();

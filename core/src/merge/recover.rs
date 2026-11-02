@@ -60,6 +60,7 @@ fn recover_one(
     let ladder = Ladder {
         catalog: ctx.catalog,
         retry_cap: ctx.config.retry_cap,
+        roles: ctx.config.role_tiers(),
     };
     let lead_ref = format!("refs/heads/{}", attempt.lead_branch);
     // A linear Attempt's branch is the Lead Branch (hs-d680, A5): the commit to test is its `submitted_sha`, and

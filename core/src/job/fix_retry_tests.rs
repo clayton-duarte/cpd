@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::fix_retry::retry_after_fix;
 use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
-use crate::config::{Catalog, TierModel};
+use crate::config::{Catalog, Tier, TierModel};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::store::Store;
@@ -208,6 +208,12 @@ impl Fixture {
         let ladder = Ladder {
             catalog: &catalog,
             retry_cap: 3,
+            roles: crate::config::RoleTiers {
+                auxiliar: Tier::parse("GX").unwrap(),
+                worker: Tier::parse("H0").unwrap(),
+                lead: Tier::parse("S4").unwrap(),
+                manager: Tier::parse("O4").unwrap(),
+            },
         };
         self.store
             .write("test", |tx| {

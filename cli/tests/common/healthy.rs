@@ -70,7 +70,19 @@ fn catalog(args: &[&str]) -> String {
     format!("{}\n", serde_json::Value::Object(out))
 }
 
+/// The levels pi's catalog module prints when every model has them all but `max` and `minimal` are dropped: O, S and H are
+/// 0 to 4, G has only `off` (so `GX`).
+pub const CATALOG_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh"],"S":["off","low","medium","high","xhigh"],"H":["off","low","medium","high","xhigh"],"G":["off"]}"#;
+
 impl Fx {
+    /// pi installed ([`Fx::install_pi`]) with a fake `node` that answers the catalog module with [`CATALOG_LEVELS`]: a command that
+    /// floors or checks a Tier reads that catalog.
+    pub fn install_catalog(&self) {
+        self.install_pi();
+        self.fake_pi(Reply::ok(""));
+        self.fake_node(Reply::ok(&format!("{CATALOG_LEVELS}\n")));
+    }
+
     /// Makes the machine's tools healthy: routes for git, tmux, pi, gh and node on the `FakeRunner`, and the pi install
     /// on disk ([`Fx::install_pi`]).
     pub fn healthy_tools(&self) {

@@ -1856,6 +1856,8 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
         &poll.lead,
         &poll.merged_sha,
     );
+    // The poll reads the catalog to floor the `update` Job's Tier to a valid rung.
+    poll.install_catalog();
     poll
 }
 

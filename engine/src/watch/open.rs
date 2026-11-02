@@ -46,7 +46,6 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(missing) => missing,
         Err(e) => return engine.fail(Step::E4, About::Machine, &e),
     };
-    let tier = engine.config.worker_tier;
     let promotable = match engine.store.read(|conn| {
         let mut found = promotable(conn, None)?;
         // Incident mode on: a held Plan's draft open Job is not queued either (§3.7 E4).
@@ -63,8 +62,19 @@ pub(super) fn run(engine: &mut Engine) {
         engine.clear(Step::E4, &About::Machine);
         return;
     }
+    // Each open Job runs at `worker_tier` floored to a valid rung of its Workflow's catalog.
+    let mut tiers = Vec::new();
+    for (plan, key) in &missing {
+        match engine
+            .catalog_of_workflow(plan, key)
+            .and_then(|catalog| open::tier(&engine.config, &catalog))
+        {
+            Ok(tier) => tiers.push((plan.clone(), key.clone(), tier)),
+            Err(e) => return engine.fail(Step::E4, About::Machine, &e),
+        }
+    }
     match engine.store.write(SOURCE, |tx| {
-        Ok((add_all(tx, &missing, tier)?, promote_all(tx)?))
+        Ok((add_all(tx, &missing, &tiers)?, promote_all(tx)?))
     }) {
         Ok((added, promoted)) => {
             for (plan, workflow, key) in added {
@@ -122,7 +132,7 @@ fn promote_all(tx: &WriteTxn<'_>) -> Result<Vec<(String, String)>, CpdError> {
 fn add_all(
     tx: &WriteTxn<'_>,
     missing: &[(PlanId, WorkflowKey)],
-    tier: cpd_core::config::Tier,
+    tiers: &[(PlanId, WorkflowKey, cpd_core::config::Tier)],
 ) -> Result<Vec<(PlanId, WorkflowKey, cpd_core::ids::JobKey)>, CpdError> {
     let mut added = Vec::new();
     for (plan, key) in missing {
@@ -143,6 +153,15 @@ fn add_all(
             [plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
+        let tier = tiers
+            .iter()
+            .find(|(p, k, _)| p == plan && k == key)
+            .map(|(_, _, tier)| *tier)
+            .ok_or_else(|| {
+                CpdError::bad_row(format!(
+                    "no open Tier was read for Workflow {key} of Plan {plan}"
+                ))
+            })?;
         let job = open::add(tx, plan, workflow, tier, draft, open::BY_ENGINE)?;
         added.push((plan.clone(), key.clone(), job));
     }

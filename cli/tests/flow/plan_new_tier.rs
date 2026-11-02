@@ -9,15 +9,20 @@ use std::fs;
 use common::fx::Fx;
 use serde_json::Value;
 
-const ALLOWED: &str = "O0-O4, S0-S4, H0-H4";
-
-/// The config: `lead_tier = "O2"`, and `extra` (top-level keys).
-fn config(fx: &Fx, extra: &str) {
-    fx.env
-        .write_tmux_config(&format!("lead_tier = \"O2\"\n{extra}\n"));
+/// The config: the role tiers GX / H3 / `lead` / O3, and `extra` (top-level keys). On the catalog of [`seed_catalog`] the
+/// lead range is `lead` up to O2 (just below `manager_tier`).
+fn config_with(fx: &Fx, lead: &str, extra: &str) {
+    fx.env.write_tmux_config(&format!(
+        "context_distill_tier = \"GX\"\nworker_tier = \"H3\"\nlead_tier = \"{lead}\"\nmanager_tier = \"O3\"\n{extra}\n"
+    ));
 }
 
-/// Contexts `ctx` and `codereview`, a fake pi install with a Tier catalog (O and S efforts 0-4, H 0-3), and the cockpit.
+/// The default config: `lead_tier = "S4"`, so the lead range is S4..O2.
+fn config(fx: &Fx, extra: &str) {
+    config_with(fx, "S4", extra);
+}
+
+/// Contexts `ctx` and `codereview`, a fake pi install with a Tier catalog (S 0-4, O 0, 2, 3, 4, H 0-3, G none), and the cockpit.
 fn setup(fx: &Fx, extra: &str) {
     fx.env.write_models();
     config(fx, extra);
@@ -46,7 +51,7 @@ fn setup(fx: &Fx, extra: &str) {
         "acme",
     ])
     .ok();
-    seed_catalog(fx, "[0,1,2,3,4]", "[0,1,2,3,4]");
+    seed_catalog(fx, "[0,1,2,3,4]", "[0,2,3,4]");
     fx.cockpit();
 }
 
@@ -99,31 +104,46 @@ fn counts(fx: &Fx) -> (i64, i64, i64, i64) {
     )
 }
 
-fn not_allowed(run: &common::Run, tier: &str) {
+/// The refusal of the lead range `floor`..`ceiling`, set by `lead_tier` and below `manager_tier`.
+fn not_allowed(run: &common::Run, tier: &str, floor: &str, ceiling: &str) {
     let e = common::refused(run, "tier_not_allowed", 2);
-    assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], ALLOWED, "{run:?}");
-    assert_eq!(e["details"]["rule"], "hs-d506, hs-d562", "{run:?}");
-    let message = e["message"].as_str().unwrap();
-    assert!(
-        message.contains("Lead") && message.contains(tier),
-        "{message}"
+    assert_eq!(
+        e["details"],
+        serde_json::json!({
+            "tier": tier,
+            "role": "lead",
+            "floor": floor,
+            "ceiling": ceiling,
+            "allowed": format!("{floor}-{ceiling}"),
+            "key": "lead_tier",
+        }),
+        "{run:?}"
     );
+    let message = e["message"].as_str().unwrap();
+    for part in [
+        tier,
+        "lead",
+        &format!("{floor}-{ceiling}"),
+        "lead_tier",
+        "manager_tier",
+    ] {
+        assert!(message.contains(part), "`{part}` missing from: {message}");
+    }
 }
 
 #[test]
 fn a_plan_defaults_its_lead_to_lead_tier_in_every_context() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    assert_eq!(lead_tier(&fx, "pay", "ctx", None), "O2");
-    assert_eq!(lead_tier(&fx, "rv", "codereview", None), "O2");
+    assert_eq!(lead_tier(&fx, "pay", "ctx", None), "S4");
+    assert_eq!(lead_tier(&fx, "rv", "codereview", None), "S4");
 }
 
-/// `--tier S2` wins in `context`: the session row and the `session-registered` Event say S2.
+/// `--tier O2` wins in `context`: the session row and the `session-registered` Event say O2.
 fn override_wins(context: &str) {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    assert_eq!(lead_tier(&fx, "pl", context, Some("S2")), "S2");
+    assert_eq!(lead_tier(&fx, "pl", context, Some("O2")), "O2");
     let registered = fx
         .cpd(&["events", "list", "--kind", "session-registered"])
         .ok()["events"]
@@ -132,7 +152,7 @@ fn override_wins(context: &str) {
         .clone();
     assert_eq!(
         registered.last().unwrap()["data"]["tier"],
-        "S2",
+        "O2",
         "{registered:?}"
     );
 }
@@ -152,7 +172,7 @@ fn tier_flag_refuses_a_g_tier_and_writes_nothing() {
     let fx = Fx::with_ports();
     setup(&fx, "");
     let before = counts(&fx);
-    not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX");
+    not_allowed(&plan_new(&fx, "pl", "ctx", Some("GX")), "GX", "S4", "O2");
     assert_eq!(counts(&fx), before);
 }
 
@@ -186,8 +206,8 @@ fn tier_flag_refuses_an_effort_pi_does_not_support_and_writes_nothing() {
 fn a_rerun_with_the_same_tier_is_already() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    plan_new(&fx, "pl", "ctx", Some("S2")).ok();
-    assert_eq!(plan_new(&fx, "pl", "ctx", Some("S2")).ok()["already"], true);
+    plan_new(&fx, "pl", "ctx", Some("O2")).ok();
+    assert_eq!(plan_new(&fx, "pl", "ctx", Some("O2")).ok()["already"], true);
     assert_eq!((count(&fx, "plans"), count(&fx, "sessions")), (1, 1));
 }
 
@@ -195,19 +215,46 @@ fn a_rerun_with_the_same_tier_is_already() {
 fn a_rerun_with_another_tier_is_plan_exists() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    plan_new(&fx, "pl", "ctx", Some("S2")).ok();
-    common::refused(&plan_new(&fx, "pl", "ctx", Some("S1")), "plan_exists", 3);
+    plan_new(&fx, "pl", "ctx", Some("O2")).ok();
+    common::refused(&plan_new(&fx, "pl", "ctx", Some("S4")), "plan_exists", 3);
     // A first run without `--tier` stored `lead_tier`: the same Tier is `already`, another is `plan_exists`.
     plan_new(&fx, "p2", "ctx", None).ok();
-    assert_eq!(plan_new(&fx, "p2", "ctx", Some("O2")).ok()["already"], true);
-    common::refused(&plan_new(&fx, "p2", "ctx", Some("S1")), "plan_exists", 3);
+    assert_eq!(plan_new(&fx, "p2", "ctx", Some("S4")).ok()["already"], true);
+    common::refused(&plan_new(&fx, "p2", "ctx", Some("O2")), "plan_exists", 3);
 }
 
 #[test]
 fn a_rerun_without_tier_compares_no_tier() {
     let fx = Fx::with_ports();
     setup(&fx, "");
-    let first = plan_new(&fx, "pl", "ctx", Some("S2")).ok();
+    let first = plan_new(&fx, "pl", "ctx", Some("O2")).ok();
     assert_eq!(plan_new(&fx, "pl", "ctx", None).ok()["already"], true);
-    assert_eq!(tier_of(&fx, &lead(&first)), "S2");
+    assert_eq!(tier_of(&fx, &lead(&first)), "O2");
+}
+
+/// Roles GX / H3 / S4 / O3 on S [0-4], O [0,2,3,4], H [0-3], G []: the lead range is S4..O2. A Tier outside it is
+/// `tier_not_allowed` with the details of the range and nothing written; one inside is taken. Then `lead_tier = S2`
+/// moves the floor: the range is S2..O2.
+#[test]
+fn plan_new_tier_flag_is_checked_against_the_lead_range() {
+    let fx = Fx::with_ports();
+    setup(&fx, "");
+    let before = counts(&fx);
+    for tier in ["S3", "H3", "GX", "O3", "O4"] {
+        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S4", "O2");
+    }
+    assert_eq!(counts(&fx), before);
+    // `tier_invalid` first: O1 is no effort of O.
+    common::refused(&plan_new(&fx, "pl", "ctx", Some("O1")), "tier_invalid", 2);
+    assert_eq!(counts(&fx), before);
+    // The ends and the middle of the range are taken.
+    for (id, tier) in [("pa", "S4"), ("pb", "O0"), ("pc", "O2")] {
+        assert_eq!(lead_tier(&fx, id, "ctx", Some(tier)), tier);
+    }
+    // A second config moves the floor.
+    config_with(&fx, "S2", "");
+    for tier in ["S1", "H3"] {
+        not_allowed(&plan_new(&fx, "pl", "ctx", Some(tier)), tier, "S2", "O2");
+    }
+    assert_eq!(lead_tier(&fx, "pd", "ctx", Some("S3")), "S3");
 }

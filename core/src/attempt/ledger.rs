@@ -9,7 +9,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use crate::config::{Catalog, Tier};
+use crate::config::{Catalog, Range, RoleTiers, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::repeat::{self, Same, Scope};
 use crate::events::{self, NewEvent};
@@ -346,10 +346,19 @@ impl End {
     }
 }
 
-/// What the ladder needs (§9): pi's catalog and `retry_cap`.
+/// What the ladder needs (§9): pi's catalog, `retry_cap` and the role defaults, whose worker range the ladder runs inside.
 pub struct Ladder<'a> {
     pub catalog: &'a Catalog,
     pub retry_cap: u32,
+    pub roles: RoleTiers,
+}
+
+impl Ladder<'_> {
+    /// The range a Job of `kind` climbs: the worker range, or inside the letter of an explore kind; `None` when an
+    /// explore kind has no rung left.
+    fn range(&self, kind: &str) -> Result<Option<Range>, CpdError> {
+        self.roles.job_range(self.catalog, kind)
+    }
 }
 
 /// Who ends the Attempt, and so which status it must still be in.
@@ -742,22 +751,19 @@ fn ended_with(tx: &WriteTxn<'_>, plan: &str, job: &str, cause: Cause) -> Result<
     )?)
 }
 
-/// The next Tier (§3.2, §9) for a `no_submit` (a ladder cause: `catalog.next`, if the
-/// ladder has one) or a `crashed` / `merge_conflict` (the Attempt's own Tier), while the
+/// The next Tier (§3.2, §9) for a `no_submit` (a ladder cause: the next rung inside the Job's range, if there is
+/// one) or a `crashed` / `merge_conflict` (the Attempt's own Tier), while the
 /// automatic Attempts since the last `job retry` are fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 /// (A `merging` Attempt always had a driver.) A `provider_error` is a retry cause: see below.
+/// The range is the worker range; an explore Job stays inside the letter of its kind (scout H, research S).
 fn next_tier(
     tx: &WriteTxn<'_>,
     attempt: &Attempt,
     cause: Cause,
     ladder: &Ladder<'_>,
 ) -> Result<Option<Tier>, CpdError> {
-    let next = next_rung(tx, attempt, cause, ladder)?;
-    // An explore Job stays inside the letter of its kind (scout H, research S): a `no_submit` after the top rung fails.
-    Ok(next.filter(|t| {
-        !crate::plan::jobs::is_explore(&attempt.kind) || t.letter() == attempt.tier.letter()
-    }))
+    next_rung(tx, attempt, cause, ladder)
 }
 
 fn next_rung(
@@ -793,14 +799,17 @@ fn next_rung(
         params![attempt.plan.as_str(), attempt.id.to_string()],
         |r| r.get(0),
     )?;
+    let range = ladder.range(&attempt.kind)?;
     if never_started {
         return Ok(Some(
-            ladder.catalog.step_up(attempt.tier).unwrap_or(attempt.tier),
+            range
+                .and_then(|r| ladder.catalog.step_up_in(r, attempt.tier))
+                .unwrap_or(attempt.tier),
         ));
     }
-    // hs-n465, hs-d632: the catalog refuses the Attempt's Tier: step to the next valid Worker Tier at or above it, never propagate `tier_invalid`.
+    // hs-n465, hs-d632: the catalog refuses the Attempt's Tier: step to the next valid Tier of the range at or above it, never propagate `tier_invalid`.
     if !ladder.catalog.is_valid(attempt.tier) {
-        return Ok(ladder.catalog.step_up(attempt.tier));
+        return Ok(range.and_then(|r| ladder.catalog.step_up_in(r, attempt.tier)));
     }
     if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())?
         > i64::from(ladder.retry_cap)
@@ -809,7 +818,7 @@ fn next_rung(
     }
     // pro-d265: a crash or a conflict is not a capability problem: same Tier. Only `no_submit` climbs.
     if cause.is_ladder() {
-        ladder.catalog.next(attempt.tier)
+        Ok(range.and_then(|r| ladder.catalog.next_in(r, attempt.tier)))
     } else {
         Ok(Some(attempt.tier))
     }

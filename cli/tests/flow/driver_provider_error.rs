@@ -7,7 +7,7 @@
 use std::fs;
 
 use cpd_core::attempt::ledger::{self, Cause, End, Ladder, Stage, Stored};
-use cpd_core::config::{Catalog, TierModel};
+use cpd_core::config::{Catalog, Tier, TierModel};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use serde_json::{Value, json};
@@ -339,6 +339,12 @@ fn provider_error_is_a_cause_the_ledger_stores_and_reads_back() {
     let ladder = Ladder {
         catalog: &catalog,
         retry_cap: 2,
+        roles: cpd_core::config::RoleTiers {
+            auxiliar: Tier::parse("GX").unwrap(),
+            worker: Tier::parse("H0").unwrap(),
+            lead: Tier::parse("S4").unwrap(),
+            manager: Tier::parse("O4").unwrap(),
+        },
     };
     let plan = PlanId::parse(PLAN).unwrap();
     let mut store = store(&live.fx.env);

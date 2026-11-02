@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::lock::Starter;
 use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
-use crate::config::{Catalog, Config, Tier};
+use crate::config::{Catalog, Config, RoleTiers, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::git;
@@ -137,7 +137,17 @@ pub fn start_with_allocation(
     key: &JobKey,
     allocation: Option<Allocation>,
 ) -> Result<Started, CpdError> {
-    let next = store.read(|conn| decide(conn, ctx.home, ctx.catalog, plan, key, allocation))?;
+    let next = store.read(|conn| {
+        decide(
+            conn,
+            ctx.home,
+            ctx.catalog,
+            &ctx.config.role_tiers(),
+            plan,
+            key,
+            allocation,
+        )
+    })?;
     // A name the repo policy no longer declares refuses the start before any lock is taken (§3.4 "Resources of a Job").
     let (wanted, pools) = store.read(|conn| {
         let wanted = resource::wanted(conn, plan, key.as_str())?;
@@ -218,7 +228,7 @@ pub fn start_with_allocation(
         Vec::new()
     };
     store.write(ctx.command, |tx| {
-        if decide(tx, ctx.home, ctx.catalog, plan, key, allocation)? != next {
+        if decide(tx, ctx.home, ctx.catalog, &ctx.config.role_tiers(), plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
@@ -260,6 +270,7 @@ pub fn start_with_allocation(
             let ladder = Ladder {
                 catalog: ctx.catalog,
                 retry_cap: ctx.config.retry_cap,
+                roles: ctx.config.role_tiers(),
             };
             store.write(ctx.command, |tx| {
                 let target = ledger::load(tx, plan, &next.attempt)?;
@@ -304,6 +315,7 @@ fn decide(
     conn: &Connection,
     home: &CpdHome,
     catalog: &Catalog,
+    roles: &RoleTiers,
     plan: &PlanId,
     key: &JobKey,
     allocation: Option<Allocation>,
@@ -380,6 +392,7 @@ fn decide(
         Some(tier) if crate::job::retried_since_last_start(conn, plan, key)? => Some(tier),
         _ => None,
     };
+    let range = roles.job_range(catalog, &job.kind)?;
     let (tier, origin) = match (retry, &previous) {
         (Some(tier), _) => (
             Tier::parse(tier).map_err(|_| bad(format!("retry_tier {tier:?} of Job {key}")))?,
@@ -402,21 +415,24 @@ fn decide(
                 // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {
-                let next = catalog.next(last)?.ok_or_else(|| {
+                let next = range.and_then(|r| catalog.next_in(r, last)).ok_or_else(|| {
                     bad(format!("Job {key} is queued after Attempt {number} at Tier {last}, but the ladder has no next Tier"))
                 })?;
                 (next, Origin::Ladder)
             }
         }
     };
-    // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
+    // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Tier of its range.
     let tier = if catalog.is_valid(tier) {
         tier
     } else {
-        catalog.step_up(tier).unwrap_or(tier)
+        range
+            .and_then(|r| catalog.step_up_in(r, tier))
+            .unwrap_or(tier)
     };
-    // pro-d82, hs-d554: a Job stored on a Tier outside H0-H3, S0-S3 is never started (E3 raises one `error` per Job).
-    tier.check_worker()?;
+    // pro-d328 to pro-d332: a Job stored on a Tier outside its range (the worker range, or inside the letter of an
+    // explore kind) is never started (E3 raises one `error` per Job).
+    roles.check_job(catalog, &job.kind, tier)?;
     let number = previous.map_or(1, |(n, ..)| n + 1);
     let attempt = AttemptId::new(
         key.clone(),

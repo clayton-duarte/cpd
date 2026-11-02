@@ -42,10 +42,13 @@ pub(super) fn retry_in(env: &mut Env, args: RetryArgs) -> Result<Output, CpdErro
             )
             .optional()?)
     })?;
-    if let Some(kind) = &kind {
-        super::check_kind_tier(kind, args.tier)?;
-    }
-    env.check_tier(&plan, &key, None, args.tier)?;
+    env.check_tier(
+        &plan,
+        &key,
+        None,
+        kind.as_deref().unwrap_or("work"),
+        args.tier,
+    )?;
 
     let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier))? {
         Decision::Already => true,

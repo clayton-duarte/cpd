@@ -9,7 +9,7 @@ use super::review::{drafts_incomplete, outline_incomplete, outline_missing};
 use super::row::Phase;
 use super::shape;
 use super::shared::is_shared;
-use super::tier_advice::{self, Advice};
+use super::tier_advice::Advice;
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::PlanId;
@@ -471,7 +471,7 @@ fn tier_advice_rule(i: &Input) -> Vec<Finding> {
                 CpdError::bad_row(format!("Job {} has tier {raw:?}", j.key))
             )
         });
-        if tier_advice::rank(advice.tier) >= tier_advice::rank(tier) {
+        if advice.tier >= tier {
             continue;
         }
         out.push(Finding {
