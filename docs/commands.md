@@ -5109,7 +5109,25 @@ Decision pro-d260 (User, 2026-10-30; measured basis pro-n225: a reload refreshes
 
 ### 15.24 What the Lead and Manager skills say about agent keys and lateral comms (pro-d345, pro-d346)
 
-Skeleton: filled in below.
+Decision (User, 2026-11-02 EST, pro-d345 and pro-d346): cpd's agents are one hierarchy, `Manager > Lead > Worker`, mapped one to one to `Context > Plan > Job`. This section fixes what the two skills must say about it: `pi/skills/cpd-lead/SKILL.md` and `pi/skills/cpd-manager/SKILL.md`. It does not edit them (a later Job does), and it does not define the keys, the resolver, `key_fixed` or the migration: those are defined by pro-d345. Accepted assumption A1: the resolver that makes `cpd session send <context>` and `cpd session send <context>:<plan>` resolve is another Plan's work; this Workflow only documents the keys.
+
+**Agent keys.** Each skill has a `## Agent keys` section, placed before `## Rules`, that states the hierarchy and the three keys:
+
+- `Manager > Lead > Worker` and `Context > Plan > Job`, each agent's key being the key of its object, joined by `:`: the keys are `<context>`, `<context>:<plan>` and `<context>:<plan>:<job>`, for a Manager, a Lead and a Worker.
+- A Manager's key is `<context>`, never `<context>-manager`.
+- The key is fixed. No skill tells an agent to rename its session (`session rename` is refused for a Manager, a Lead and a Worker) or to pass `--name` to `plan new`, and the Lead skill's list of Session commands does not list `rename`.
+
+**Addressing.** The skills teach the keys only. The legacy Plan id, `<plan>.<prefix>` and a UUID prefix still resolve, but no skill names them as an address, so neither skill names `<manager-id>` or `<lead-session>`. The Lead skill sends to its Manager with `cpd session send <context> "<text>" --unblocks "<reason>"`; the Manager skill sends to a Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"`.
+
+**Lateral comms.** Each skill's `### Communication rules` states these four rules:
+
+- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work. The three permanent Managers: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect is sent as `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
+- The `cpd` Manager applies the bug report protocol (pro-d204).
+- Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting (pro-d305).
+- Lead-to-Manager (`<context>`) with `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
+- Board posts (`cpd board post`) are `FYI only, never a request that blocks`.
+
+**`--unblocks`.** Every code span or fenced line of either skill that contains `cpd session send` also contains `--unblocks`, so a bare `cpd session send` in a code span is not allowed. The existing fact check of `pi/skills/skill.test.ts` keeps the skills to the error codes, flags, commands and ids this document defines.
 
 ## 16. The Worker contract
 
