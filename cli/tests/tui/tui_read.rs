@@ -141,6 +141,13 @@ fn session_row(
     label: Option<&str>,
     created: &str,
 ) -> String {
+    // A Lead of the schema has a Plan; a `f-` Session is a fork of its Plan's Lead, and a Lead with no Plan (a legacy
+    // Lead) is a fork of `l-ship`, which the caller inserts first.
+    let forked = match (role, plan) {
+        ("lead", "") => "'l-ship'".to_owned(),
+        ("lead", plan) if id.starts_with("f-") => format!("'l-{plan}'"),
+        _ => "NULL".to_owned(),
+    };
     let plan = if plan.is_empty() {
         "NULL".to_owned()
     } else {
@@ -150,9 +157,9 @@ fn session_row(
     let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
     let tier = if role == "lead" { "O3" } else { "S3" };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from)
          VALUES ('{id}', '{role}', '{context}', {plan}, {attempt}, 'name of {id}', '/sessions/{id}.jsonl', '/repo', '{tier}',
-                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}');"
+                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}', {forked});"
     )
 }
 
@@ -326,16 +333,6 @@ fn populate(store: &mut Store) {
     );
 
     s += &session_row(
-        "g-alpha",
-        "lead",
-        "alpha",
-        "",
-        None,
-        "idle",
-        None,
-        "2026-01-02T00:00:00.000Z",
-    );
-    s += &session_row(
         "l-ship",
         "lead",
         "alpha",
@@ -394,6 +391,16 @@ fn populate(store: &mut Store) {
         "stopped",
         None,
         "2026-01-01T12:00:00.000Z",
+    );
+    s += &session_row(
+        "g-alpha",
+        "lead",
+        "alpha",
+        "",
+        None,
+        "idle",
+        None,
+        "2026-01-02T00:00:00.000Z",
     );
 
     // ship: every Job status.

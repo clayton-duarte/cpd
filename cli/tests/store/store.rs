@@ -73,8 +73,8 @@ fn fixture(store: &mut Store) -> i64 {
                 tx,
                 &format!(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
-                     INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-                       VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
                      INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)
@@ -636,7 +636,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("dependencies", "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'ui')".to_owned()),
         ("attempts", "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at) VALUES ('pay', 'ui-a1', 'ui', 1, 'S2', 'ladder', 'reviewing', 'cpd/pay--ui-a1', '/w', 't')".to_owned()),
         ("escalations", "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at) VALUES ('pay', 'api-a1-q2', 'api-a1', 2, 'Q', 'pending', 1, 't')".to_owned()),
-        ("sessions", "INSERT INTO sessions (id, role, context, name, cwd, tier, tmux_pane, state, state_at, created_at) VALUES ('s2', 'lead', 'ctx', 'L', '/', 'O3', 'x1', 'idle', 't', 't')".to_owned()),
+        ("sessions", "INSERT INTO sessions (id, role, context, name, cwd, tier, tmux_pane, state, state_at, created_at, forked_from) VALUES ('s2', 'lead', 'ctx', 'L', '/', 'O3', 'x1', 'idle', 't', 't', 'lead1')".to_owned()),
         ("events", "INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', 'review-needed', 'ctx', 'x', '{}')".to_owned()),
         ("tier_catalog", "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1', 'X', 'm', '[]', 't')".to_owned()),
     ];
@@ -1233,9 +1233,9 @@ fn only_the_live_sessions_are_in_sessions_live() {
         .write("test", |tx| {
             exec(
                 tx,
-                "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, tmux_pane)
-                   VALUES ('gone', 'lead', 'ctx', 'Gone', '/', 'O3', 'stopped', 't', 't', NULL),
-                          ('parked', 'lead', 'ctx', 'Parked', '/', 'O3', 'stopped', 't', 't', '%7');",
+                "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, tmux_pane, forked_from)
+                   VALUES ('gone', 'lead', 'ctx', 'Gone', '/', 'O3', 'stopped', 't', 't', NULL, 'lead1'),
+                          ('parked', 'lead', 'ctx', 'Parked', '/', 'O3', 'stopped', 't', 't', '%7', 'lead1');",
             )
         })
         .unwrap();

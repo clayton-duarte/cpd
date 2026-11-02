@@ -68,9 +68,9 @@ fn the_history_view_leaves_the_last_row_of_its_pane_empty() {
         "INSERT INTO contexts (id, title, jira, created_at, created_on)
          VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at,
-                               created_at, archived_at)
+                               created_at, archived_at, forked_from)
          VALUES ('l1', 'lead', 'alpha', NULL, NULL, 'old lead', '{}', '/repo', 'O3', NULL, 'stopped', NULL,
-                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-04T00:00:00.000Z');",
+                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-04T00:00:00.000Z', 'l1');",
         path.display()
     ));
     let display = Display::new(40, 12);

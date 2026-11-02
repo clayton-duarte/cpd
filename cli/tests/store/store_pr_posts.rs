@@ -34,8 +34,8 @@ fn fixture_store(env: &Home) -> Store {
                 tx,
                 &format!(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
-                     INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-                       VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
                      INSERT INTO workflows (plan, key, repo, base, status, lead_branch, created_txn, created_at)

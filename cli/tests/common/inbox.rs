@@ -130,15 +130,22 @@ pub fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str)
 
 /// An idle Session `id` of `role` in `context` (a Lead's `plan`, or `""`), created at `created`.
 pub fn session_row(id: &str, role: &str, context: &str, plan: &str, created: &str) -> String {
+    // A Plan has one Lead, `l-<plan>`: any other `lead` Session of the Plan is a fork of it, which the caller
+    // inserts first. A `lead` with no Plan is a legacy Lead: a fork of itself (a row may reference itself).
+    let forked = match role {
+        "lead" if plan.is_empty() => format!("'{id}'"),
+        "lead" if id != format!("l-{plan}") => format!("'l-{plan}'"),
+        _ => "NULL".to_owned(),
+    };
     let plan = if plan.is_empty() {
         "NULL".to_owned()
     } else {
         format!("'{plan}'")
     };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from)
          VALUES ('{id}', '{role}', '{context}', {plan}, NULL, '{id} name', '/sessions/{id}.jsonl', '/repo', 'O3',
-                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '{created}');"
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '{created}', {forked});"
     )
 }
 
