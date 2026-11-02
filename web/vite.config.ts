@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin, type PluginOption } from "vite";
-import { createLiveHandler, type LiveDeps, type LiveSession, type InboxItem, type LivePlan } from "./src/api/live-server.ts";
+import { createLiveHandler, type LiveDeps, type LiveContext, type LiveSession, type InboxItem, type LivePlan } from "./src/api/live-server.ts";
 
 // The web client dev/build config (docs/research/web-client-api.md §6, A2): React + the
 // Tailwind v4 plugin, and the dev server on port 5173 against the typed mock. With
@@ -49,6 +49,12 @@ interface PlanListRow {
   lead_session?: unknown;
   archived_at?: unknown;
   counts?: unknown;
+}
+
+/** One `context list` row (only the fields realDeps reads). */
+interface ContextListRow {
+  id?: unknown;
+  archived_at?: unknown;
 }
 
 /** The six Job counts `cpd plan list` prints, coerced to numbers with a missing one at zero. */
@@ -137,22 +143,38 @@ function realDeps(): LiveDeps {
       return parsed.items ?? [];
     },
     async plans() {
-      // The CLI's own rows; an archived Plan is never drawn (web/README.md "Context tree rows").
+      // The CLI's own rows, archived ones kept: the rail lists every Plan of a Context and hides
+      // the archived behind the fold (web/README.md "Context tree rows"). Each row carries its
+      // `archived_at`; the route derives the wire's `archived` flag from it.
       const parsed = JSON.parse(await runCpd(["plan", "list"])) as { plans?: readonly PlanListRow[] };
       const plans: LivePlan[] = [];
       for (const row of parsed.plans ?? []) {
-        if (row.archived_at !== null && row.archived_at !== undefined) continue;
         plans.push({
           id: String(row.id),
           context: String(row.context ?? ""),
           title: String(row.title ?? ""),
           phase: String(row.phase ?? ""),
           lead_session: typeof row.lead_session === "string" ? row.lead_session : null,
-          archived_at: null,
+          archived_at: typeof row.archived_at === "string" ? row.archived_at : null,
           counts: planCounts(row.counts),
         });
       }
       return plans;
+    },
+    async contexts() {
+      // The Contexts read (web/README.md "Context tree rows"): the rows of `cpd context list`,
+      // each reduced to its id and whether it is archived.
+      const parsed = JSON.parse(await runCpd(["context", "list"])) as {
+        contexts?: readonly ContextListRow[];
+      };
+      const contexts: LiveContext[] = [];
+      for (const row of parsed.contexts ?? []) {
+        contexts.push({
+          id: String(row.id),
+          archived: typeof row.archived_at === "string",
+        });
+      }
+      return contexts;
     },
   };
 }

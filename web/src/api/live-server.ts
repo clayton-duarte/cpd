@@ -322,8 +322,20 @@ export function createLiveHandler(deps: LiveDeps): LiveHandler {
     }
     if (path === "/__cpd/plans" && method === "GET") {
       // The read is optional: an adapter with no plans wiring answers an empty list, so the
+      // rail falls back to its Session tree (web/README.md "The fallback"). Every Plan of every
+      // Context is answered, archived ones included, each row carrying its `archived` flag from
+      // the CLI's `archived_at` (web/README.md "Context tree rows").
+      const plans = (await deps.plans?.()) ?? [];
+      sendJson(res, 200, {
+        ok: true,
+        plans: plans.map((plan) => ({ ...plan, archived: plan.archived_at !== null })),
+      });
+      return true;
+    }
+    if (path === "/__cpd/contexts" && method === "GET") {
+      // The read is optional: an adapter with no contexts wiring answers an empty list, so the
       // rail falls back to its Session tree (web/README.md "The fallback").
-      sendJson(res, 200, { ok: true, plans: (await deps.plans?.()) ?? [] });
+      sendJson(res, 200, { ok: true, contexts: (await deps.contexts?.()) ?? [] });
       return true;
     }
 

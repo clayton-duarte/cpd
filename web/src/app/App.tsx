@@ -9,7 +9,7 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from "reac
 import { usePanelRef } from "react-resizable-panels";
 import { uiResponsePost } from "../api/actions";
 import type { LiveApi } from "../api/live";
-import type { LiveSession, LivePlan } from "../api/live-server";
+import type { LiveSession, LivePlan, LiveContext } from "../api/live-server";
 import type { InboxItem } from "../api/readmodel";
 import type { CpdApi } from "../api/mock";
 import type { UiRequest } from "../api/types";
@@ -105,11 +105,13 @@ export function ApprovalDialog({
 function ContextColumn({
   sessions,
   plans,
+  contexts,
   selectedId,
   onSelectSession,
 }: {
   sessions: readonly LiveSession[];
   plans?: readonly LivePlan[];
+  contexts?: readonly LiveContext[];
   selectedId?: string;
   onSelectSession: (id: string) => void;
 }): ReactElement {
@@ -122,6 +124,7 @@ function ContextColumn({
         <AppSidebar
           sessions={sessions}
           plans={plans}
+          contexts={contexts}
           selectedId={selectedId}
           onSelectSession={onSelectSession}
         />
@@ -142,6 +145,7 @@ export function App({ token, live }: AppProps): ReactElement {
   const inboxPanel = usePanelRef();
   const [sessions, setSessions] = useState<readonly LiveSession[]>([]);
   const [plans, setPlans] = useState<readonly LivePlan[] | undefined>(undefined);
+  const [contexts, setContexts] = useState<readonly LiveContext[] | undefined>(undefined);
   const [inbox, setInbox] = useState<readonly InboxItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
 
@@ -176,6 +180,15 @@ export function App({ token, live }: AppProps): ReactElement {
         () => {},
       );
     }
+    const contextsRead = live.contexts?.();
+    if (contextsRead !== undefined) {
+      void contextsRead.then(
+        (list) => {
+          if (!cancelled) setContexts(list);
+        },
+        () => {},
+      );
+    }
     return () => {
       cancelled = true;
     };
@@ -195,6 +208,7 @@ export function App({ token, live }: AppProps): ReactElement {
         <ContextColumn
           sessions={sessions}
           plans={plans}
+          contexts={contexts}
           selectedId={selectedId}
           onSelectSession={setSelectedId}
         />
