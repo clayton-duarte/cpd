@@ -663,7 +663,10 @@ pub fn curates_all(batch_md: &str) -> String {
     batch_md
         .lines()
         .filter_map(|line| line.strip_prefix('[')?.split_once(']'))
-        .map(|(id, _)| json!({"id": id, "topic": "t", "short": format!("s {id}"), "retire": null, "doc": false}).to_string() + "\n")
+        .map(|(id, _)| {
+            json!({"id": id, "topic": "t", "short": format!("s {id}"), "retire": null}).to_string()
+                + "\n"
+        })
         .collect()
 }
 

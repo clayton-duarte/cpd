@@ -232,20 +232,6 @@
     },
     "required": []
   },
-  "context docs": {
-    "flags": {
-      "--context": true,
-      "--dismiss": true,
-      "--help": false,
-      "--plan": true,
-      "--send": true
-    },
-    "positionals": {
-      "max": 0,
-      "min": 0
-    },
-    "required": []
-  },
   "context list": {
     "flags": {
       "--help": false

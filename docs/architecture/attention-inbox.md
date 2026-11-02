@@ -12,7 +12,7 @@ Keep the User on top of what matters, and nothing else. The Inbox is shown by `c
 - **Consumer** — the User, through `cpd inbox list` and the cockpit. The commands **read** the items and **hide** them: `inbox snooze` ([commands §21.3](../commands.md)) and `inbox dismiss` ([commands §21.4](../commands.md)) write `snoozed_until` and `dismissed_at`. The one command that closes an item is `cpd inbox approve`, and only a `deploy` item's run ([commands §21](../commands.md), [commands §21.13](../commands.md)).
 - **Purpose** — the User never has to poll: the engine reconciles the Inbox every tick and the cockpit draws it.
 
-The Inbox owns only what the User must act on. Escalations from Workers go to their Lead, a stuck Job and an engine step error go to the Context's Manager as a message, and an unanswered Context question raises nothing ([contract §2.2](../contract.md) "Inbox item"). Curation proposals from the knowledge plane reach the User here, as the `curate-retire` and `curate-docs` items ([[knowledge-plane]]).
+The Inbox owns only what the User must act on. Escalations from Workers go to their Lead, a stuck Job and an engine step error go to the Context's Manager as a message, and an unanswered Context question raises nothing ([contract §2.2](../contract.md) "Inbox item"). Curation proposals from the knowledge plane reach the User here, as the `curate-retire` item ([[knowledge-plane]]); the documentation candidates that a `curate-docs` item once carried are gone (pro-d327).
 
 ## Guarantee
 
@@ -20,7 +20,7 @@ The Inbox owns only what the User must act on. Escalations from Workers go to th
 
 ## Related notes
 
-- [[knowledge-plane]] — the curation this Inbox decides (`curate-retire`, `curate-docs`).
+- [[knowledge-plane]] — the curation this Inbox decides (`curate-retire`; `curate-docs` is history-only, pro-d327).
 - [[message-board]] — the other queue-like concept, which never reaches the User.
 - [[clocks]] — the engine loop whose E8 reconciles the Inbox.
 - [[sdk]] — the store the `inbox_items` table lives in.

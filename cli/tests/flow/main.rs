@@ -12,6 +12,7 @@ mod config;
 mod context;
 mod context_curation;
 mod context_distill;
+mod context_docs_gone;
 mod context_engine;
 mod context_inbox_cyan;
 mod context_manager;

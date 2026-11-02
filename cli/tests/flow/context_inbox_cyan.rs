@@ -18,7 +18,7 @@ const CTX: &str = "building-cpd";
 const T0: &str = "2026-01-01T00:00:00.000Z";
 const T1: &str = "2026-01-01T01:00:00.000Z";
 
-/// A machine `hs` with Context `building-cpd`, a doc candidate and a pending retirement.
+/// A machine `hs` with Context `building-cpd`, a pending retirement.
 fn fx() -> TestEnv {
     let env = TestEnv::new();
     fs::create_dir_all(env.cpd_home()).unwrap();
@@ -40,17 +40,12 @@ fn fx() -> TestEnv {
     for text in ["Old fact.", "Same fact.", "Worth documenting."] {
         env.cpd(&["context", "note", text, "--context", CTX]).ok();
     }
-    let curation = |record: &str, doc: bool| Curation {
+    let curation = |record: &str| Curation {
         record: record.parse().unwrap(),
         topic: "engine".into(),
         short: format!("short of {record}"),
-        doc_paths: doc.then(|| vec!["docs/a.md".to_owned()]),
     };
-    let curations = [
-        curation("hs-n1", false),
-        curation("hs-n2", false),
-        curation("hs-n3", true),
-    ];
+    let curations = [curation("hs-n1"), curation("hs-n2"), curation("hs-n3")];
     let proposals = [Proposal {
         record: "hs-n1".parse().unwrap(),
         reason: Reason::Duplicate,
@@ -75,7 +70,7 @@ fn notices(env: &TestEnv) -> Vec<Condition> {
     let all = rules::conditions(&mut env.store(), &home(env)).unwrap();
     let kinds: Vec<Kind> = all.iter().map(|c| c.kind).collect();
     assert!(
-        kinds.contains(&Kind::CurateDocs) && kinds.contains(&Kind::CurateRetire),
+        kinds.contains(&Kind::CurateRetire) && !kinds.contains(&Kind::CurateDocs),
         "{kinds:?}"
     );
     all
@@ -115,21 +110,23 @@ fn the_curation_notices_are_opened_with_urgency_cyan_and_no_inbox_output_prints_
     reconcile(&mut env.store(), &notices(&env), T0).unwrap();
 
     let items = listed(&env);
-    for kind in ["curate-docs", "curate-retire"] {
-        let item = items
-            .iter()
-            .find(|i| i["kind"] == kind)
-            .unwrap_or_else(|| panic!("{kind} in {items:?}"));
-        assert_eq!(item["urgency"], "cyan", "{item}");
-    }
+    let item = items
+        .iter()
+        .find(|i| i["kind"] == "curate-retire")
+        .unwrap_or_else(|| panic!("curate-retire in {items:?}"));
+    assert_eq!(item["urgency"], "cyan", "{item}");
     let stored: Vec<String> = env
         .store()
         .read(|c| {
-            let mut stmt = c.prepare("SELECT urgency FROM inbox_items WHERE kind IN ('curate-docs', 'curate-retire') ORDER BY id")?;
-            Ok(stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?)
+            let mut stmt = c.prepare(
+                "SELECT urgency FROM inbox_items WHERE kind = 'curate-retire' ORDER BY id",
+            )?;
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<String>, _>>()?)
         })
         .unwrap();
-    assert_eq!(stored, ["cyan", "cyan"], "the stored value");
+    assert_eq!(stored, ["cyan"], "the stored value");
 
     let list = env.cpd(&["inbox", "list"]).ok().to_string();
     assert!(list.contains("\"urgency\":\"cyan\""), "{list}");
@@ -155,13 +152,12 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
             .cloned()
             .collect::<Vec<_>>()
     };
-    let mut first = vec![
+    let first = vec![
         plain(Kind::Unread, Urgency::White, "w-old"),
         plain(Kind::Dialog, Urgency::Magenta, "m"),
         plain(Kind::PrReady, Urgency::Yellow, "y"),
         plain(Kind::Dialog, Urgency::Red, "r"),
     ];
-    first.extend(of(Kind::CurateDocs));
     reconcile(&mut env.store(), &first, T0).unwrap();
     let mut second = first.clone();
     second.extend(of(Kind::CurateRetire));
@@ -181,7 +177,6 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
         ("red", "r".into()),
         ("yellow", "y".into()),
         ("magenta", "m".into()),
-        ("cyan", format!("curate-docs:{CTX}")),
         ("cyan", format!("curate-retire:{CTX}")),
         ("white", "w-old".into()),
         ("white", "w-new".into()),

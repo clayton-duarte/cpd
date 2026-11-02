@@ -34,7 +34,7 @@ pub enum Kind {
     ReviewRequested,
     /// A Context has pending record retirements (hs-d551).
     CurateRetire,
-    /// A Context has pending documentation candidates (hs-d551).
+    /// No longer opened, pro-d327; only history rows an older engine wrote.
     CurateDocs,
     /// A Lead or Manager blocked by the loop guard (hs-d552, hs-d571); always red.
     LoopGuard,
@@ -433,7 +433,6 @@ fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Ite
             matches!(
                 i.kind,
                 Kind::CurateRetire
-                    | Kind::CurateDocs
                     | Kind::PrReady
                     | Kind::Dialog
                     | Kind::DraftsParked

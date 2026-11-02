@@ -394,11 +394,11 @@ const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],
 
 // ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
 
-/// The rows of `record_curations`: `(record, topic, short, doc_candidate)`, by record.
-fn curation_rows(fx: &Fx) -> Vec<(String, String, String, Option<String>)> {
+/// The rows of `record_curations`: `(record, topic, short)`, by record.
+fn curation_rows(fx: &Fx) -> Vec<(String, String, String)> {
     fx.env.read(|conn| {
-        let mut statement = conn.prepare("SELECT record, topic, short, doc_candidate FROM record_curations WHERE context = 'ctx' ORDER BY record")?;
-        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let mut statement = conn.prepare("SELECT record, topic, short FROM record_curations WHERE context = 'ctx' ORDER BY record")?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect()
     })
 }
@@ -531,10 +531,10 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
     );
     fx.insert(CONTEXT, "hs-n4", &ago(60), "Locks are flock.", Draft::Note);
     fx.pi.answers(
-        r#"{"id":"hs-d1","topic":"storage","short":"sqlite store","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
-{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null,"doc":false}
-{"id":"hs-d3","topic":"storage","short":"sqlite WAL again","retire":{"reason":"duplicate","target":"hs-d2"},"doc":false}
-{"id":"hs-n4","topic":"locking","short":"flock locks","retire":null,"doc":true}
+        r#"{"id":"hs-d1","topic":"storage","short":"sqlite store","retire":{"reason":"superseded","target":"hs-d2"}}
+{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null}
+{"id":"hs-d3","topic":"storage","short":"sqlite WAL again","retire":{"reason":"duplicate","target":"hs-d2"}}
+{"id":"hs-n4","topic":"locking","short":"flock locks","retire":null}
 "#,
     );
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
@@ -543,15 +543,10 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
     assert_eq!(
         curation_rows(&fx),
         [
-            (s("hs-d1"), s("storage"), s("sqlite store"), None),
-            (s("hs-d2"), s("storage"), s("sqlite WAL"), None),
-            (s("hs-d3"), s("storage"), s("sqlite WAL again"), None),
-            (
-                s("hs-n4"),
-                s("locking"),
-                s("flock locks"),
-                Some(s("pending"))
-            ),
+            (s("hs-d1"), s("storage"), s("sqlite store")),
+            (s("hs-d2"), s("storage"), s("sqlite WAL")),
+            (s("hs-d3"), s("storage"), s("sqlite WAL again")),
+            (s("hs-n4"), s("locking"), s("flock locks")),
         ]
     );
     assert_eq!(
@@ -562,10 +557,6 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
         ],
         "proposals only: nothing is retired without the User"
     );
-    let paths: String = fx
-        .env
-        .query("SELECT doc_paths FROM record_curations WHERE record = 'hs-n4'");
-    assert_eq!(paths, "[]", "a doc candidate with no grep hit");
     // One `context-curated` Event with the counts.
     let events = fx
         .cpd(&["events", "list", "--kind", "context-curated"])
@@ -576,7 +567,7 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(
         events[0]["data"],
-        json!({"context": CONTEXT, "curated": 4, "retire": 2, "docs": 1})
+        json!({"context": CONTEXT, "curated": 4, "retire": 2})
     );
     assert!(fx.errors().is_empty());
     // No digest file, no kept invalid output.
@@ -744,7 +735,7 @@ fn no_repair_turn_and_no_contradictions_section() {
 
 /// A line of the distiller's answer.
 fn line(id: &str, topic: &str, short: &str, retire: &str) -> String {
-    format!(r#"{{"id":"{id}","topic":"{topic}","short":"{short}","retire":{retire},"doc":false}}"#)
+    format!(r#"{{"id":"{id}","topic":"{topic}","short":"{short}","retire":{retire}}}"#)
 }
 
 /// The text of the answer of a pi that answers `lines`.
@@ -886,7 +877,7 @@ fn a_retirement_whose_target_left_force_meanwhile_is_dropped_and_the_curations_s
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(
         events[0]["data"],
-        json!({"context": CONTEXT, "curated": 2, "retire": 1, "docs": 0}),
+        json!({"context": CONTEXT, "curated": 2, "retire": 1}),
         "only the written ones count"
     );
 }

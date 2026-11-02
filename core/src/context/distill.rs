@@ -276,7 +276,6 @@ struct RawLine {
     topic: String,
     short: String,
     retire: Option<RawRetire>,
-    doc: bool,
 }
 
 /// A checked output (GXD1): what [`propose_rejecting`] takes, and the lines it rejects.
@@ -380,9 +379,6 @@ impl Batch<'_> {
                 record: id.clone(),
                 topic: raw.topic,
                 short: raw.short,
-                doc_paths: raw
-                    .doc
-                    .then(|| self.hits.get(&id).cloned().unwrap_or_default()),
             });
             checked.proposals.extend(proposal);
         }
@@ -484,14 +480,7 @@ impl Run<'_> {
             Err(Fault::Invalid(problems, kept)) => return Err(self.invalid(upto, &problems, &kept)),
             Err(Fault::Pi(failure, tail)) => return Err(self.pi_failed(upto, &failure, tail)),
         };
-        let (curated, docs) = (
-            checked.curations.len(),
-            checked
-                .curations
-                .iter()
-                .filter(|c| c.doc_paths.is_some())
-                .count(),
-        );
+        let curated = checked.curations.len();
         let retire = propose_rejecting(
             self.store,
             self.context,
@@ -512,7 +501,6 @@ impl Run<'_> {
             "curated": curated,
             "rejected": rejected_json(&checked.rejected),
             "retire": retire,
-            "docs": docs,
             "remaining": uncurated.len() - curated,
             "run": ran.figures(),
         }))

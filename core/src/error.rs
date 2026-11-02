@@ -165,7 +165,6 @@ error_codes! {
     IncidentHold = "incident_hold" => Refused,
     UserOnly = "user_only" => Refused,
     CurationNotPending = "curation_not_pending" => Refused,
-    ManagerMissing = "manager_missing" => Refused,
     ArgsInvalid = "args_invalid" => Usage,
     NotLoopGuarded = "not_loop_guarded" => Refused,
     DistillRunning = "distill_running" => Refused,

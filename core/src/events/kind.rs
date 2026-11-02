@@ -127,6 +127,7 @@ kinds! {
     PlanDeleted = "plan-deleted",
     ContextDeleted = "context-deleted",
     RecordsRetired = "records-retired",
+    // Retired (pro-d327): `cpd context docs` is gone; past Events keep the kind, nothing writes it.
     DocsDecided = "docs-decided",
     ContextCurated = "context-curated",
     ContextRenamed = "context-renamed",
@@ -328,7 +329,7 @@ impl Kind {
             DocsDecided => spec([Y, N, N, N, N], &["context", "sent", "dismissed"], &[]),
             ContextCurated => spec(
                 [Y, N, N, N, N],
-                &["context", "curated", "retire", "docs"],
+                &["context", "curated", "retire"],
                 &["rejected"],
             ),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),

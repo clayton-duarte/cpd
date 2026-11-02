@@ -235,7 +235,7 @@ fn a_hit_is_the_repo_as_given_a_colon_and_the_path_git_printed() {
 /// The model's line for `id`, retiring it as documented at `target`.
 fn documented(text_id: &str, topic: &str, short: &str, target: &str) -> String {
     format!(
-        r#"{{"id":"{text_id}","topic":"{topic}","short":"{short}","retire":{{"reason":"documented","target":"{target}"}},"doc":false}}"#
+        r#"{{"id":"{text_id}","topic":"{topic}","short":"{short}","retire":{{"reason":"documented","target":"{target}"}}}}"#
     )
 }
 
@@ -322,57 +322,6 @@ fn a_documented_target_that_is_a_grep_hit_of_the_record_in_a_second_repo_is_acce
         "{:?}",
         checked.rejected
     );
-}
-
-#[test]
-fn a_doc_candidate_has_its_grep_hits_as_its_doc_paths_and_none_when_it_is_not_one() {
-    let (d1, d2) = (decision(1, "hs-d1"), decision(2, "hs-d2"));
-    let r = answer(runner(), "/r/a", "hs-d1", Reply::ok("docs/design.md\n"));
-    let r = answer(r, "/r/a", "hs-d2", Reply::exit(1, "", ""));
-    let records = [&d1, &d2];
-    let hits = grep_hits_with(&r, &repos(&["/r/a"]), &records).unwrap();
-    let batch = Batch {
-        records: &records,
-        in_force: HashMap::new(),
-        hits,
-    };
-    let text = [
-        r#"{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":true}"#,
-        r#"{"id":"hs-d2","topic":"locking","short":"flock","retire":null,"doc":false}"#,
-    ]
-    .join("\n");
-    let checked = batch.check(&text);
-    let paths: Vec<(String, Option<Vec<String>>)> = checked
-        .curations
-        .iter()
-        .map(|c| (c.record.to_string(), c.doc_paths.clone()))
-        .collect();
-    assert_eq!(
-        paths,
-        [
-            (
-                "hs-d1".to_owned(),
-                Some(vec!["/r/a:docs/design.md".to_owned()])
-            ),
-            ("hs-d2".to_owned(), None)
-        ]
-    );
-}
-
-#[test]
-fn a_doc_candidate_with_no_grep_hit_has_an_empty_list_of_doc_paths() {
-    let d1 = decision(1, "hs-d1");
-    let r = runner().on("git", |_| true, Reply::exit(1, "", ""));
-    let records = [&d1];
-    let hits = grep_hits_with(&r, &repos(&["/r/a"]), &records).unwrap();
-    let batch = Batch {
-        records: &records,
-        in_force: HashMap::new(),
-        hits,
-    };
-    let checked = batch
-        .check(r#"{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":true}"#);
-    assert_eq!(checked.curations[0].doc_paths, Some(Vec::new()));
 }
 
 #[test]

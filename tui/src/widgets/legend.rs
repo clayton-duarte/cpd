@@ -348,13 +348,6 @@ pub(crate) fn sections() -> Vec<Section> {
             ),
             vec![
                 Line::from(Span::styled(
-                    palette::ITEM_DOCS,
-                    palette::fg_clickable(Meaning::Notice),
-                )),
-                plain("a documentation candidate"),
-            ],
-            vec![
-                Line::from(Span::styled(
                     palette::ITEM_RETIRE,
                     palette::fg_clickable(Meaning::Notice),
                 )),
@@ -1154,8 +1147,6 @@ mod tests {
                 "blue, external support: a review asked of you",
                 "\u{F06F1}",
                 "cyan, a cpd notice: curation, nothing blocks; also a change in the models a provider offers",
-                "\u{F0653}",
-                "a documentation candidate",
                 "\u{F116E}",
                 "a record to retire",
                 "\u{F0366}",
@@ -1179,13 +1170,12 @@ mod tests {
                 c(Meaning::External),
                 c(Meaning::Notice),
                 c(Meaning::Notice),
-                c(Meaning::Notice),
                 c(Meaning::NotStarted),
                 c(Meaning::Review),
                 c(Meaning::Review),
                 c(Meaning::External)
             ],
-            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white, then the deploy, pr-ready and review-requested lines"
+            "red, yellow, magenta, blue, cyan (two lines: the tier and the retire kind), white, then the deploy, pr-ready and review-requested lines"
         );
         let dots = all
             .iter()

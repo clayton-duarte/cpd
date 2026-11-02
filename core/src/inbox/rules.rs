@@ -462,24 +462,17 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
 
-/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one cyan item per Context and kind while the Context has
-/// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
+/// `curate-retire` (hs-d549, hs-d551): one cyan item per Context while the Context has pending retirements; the label
+/// carries the count. Dismissing one decides nothing.
 fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
     let mut out = Vec::new();
-    for (kind, name, noun, sql) in [
-        (
-            Kind::CurateRetire,
-            "curate-retire",
-            "to retire",
-            "SELECT context, count(*) FROM record_retirements WHERE status = 'pending' AND context IN (SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL AND (SELECT count(*) FROM context_records WHERE context = contexts.id) >= ?1) GROUP BY context ORDER BY context",
-        ),
-        (
-            Kind::CurateDocs,
-            "curate-docs",
-            "doc candidates",
-            "SELECT context, count(*) FROM record_curations WHERE doc_candidate = 'pending' AND context IN (SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL AND (SELECT count(*) FROM context_records WHERE context = contexts.id) >= ?1) GROUP BY context ORDER BY context",
-        ),
-    ] {
+    // No curate-docs kind (pro-d327): an item an older engine opened for one closes at the next reconcile, its condition no longer holding.
+    for (kind, name, noun, sql) in [(
+        Kind::CurateRetire,
+        "curate-retire",
+        "to retire",
+        "SELECT context, count(*) FROM record_retirements WHERE status = 'pending' AND context IN (SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL AND (SELECT count(*) FROM context_records WHERE context = contexts.id) >= ?1) GROUP BY context ORDER BY context",
+    )] {
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt
             .query_map([floor], |r| {

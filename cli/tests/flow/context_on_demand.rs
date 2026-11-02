@@ -46,7 +46,6 @@ pub(crate) fn curate(env: &TestEnv, rows: &[(&str, &str, &str)]) {
             record: id.parse().unwrap(),
             topic: (*topic).into(),
             short: (*short).into(),
-            doc_paths: None,
         })
         .collect();
     propose(

@@ -85,7 +85,6 @@ fn curate(fx: &Fx, id: &str, short: &str) {
         record: id.parse().unwrap(),
         topic: "engine".into(),
         short: short.into(),
-        doc_paths: None,
     }];
     propose(
         &mut fx.env.store(),

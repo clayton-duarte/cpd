@@ -7,6 +7,7 @@ mod common;
 mod doctor;
 mod watch;
 mod watch_auto_merge;
+mod watch_curate_docs_gone;
 mod watch_curate_inbox;
 mod watch_distill_inbox;
 mod watch_durable;
