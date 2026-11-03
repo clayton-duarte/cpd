@@ -332,6 +332,24 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
                 }
             }
         }
+        if *t == "sessions" {
+            // The later migration `agent-key-backfill` rewrites the name of a Manager, a Lead that is not a fork and a
+            // Worker to its key (every row here is one of them).
+            let at = |c: &str| cols.iter().position(|n| n == c).unwrap();
+            for row in &mut rows {
+                let text = |c: &str| row[at(c)].as_str().unwrap_or_default().to_owned();
+                let (context, plan) = (text("context"), text("plan"));
+                let key = match text("role").as_str() {
+                    "manager" => context,
+                    "lead" => format!("{context}:{plan}"),
+                    _ => {
+                        let attempt = text("attempt");
+                        format!("{context}:{plan}:{}", attempt.rsplit_once("-a").unwrap().0)
+                    }
+                };
+                row[at("name")] = Value::from(key);
+            }
+        }
         let sql = select_all(&mut store, t, by);
         let (new_cols, new_rows) = table(&mut store, &sql);
         assert_eq!(new_cols, cols, "{t}: the same columns, in the same order");

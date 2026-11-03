@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use serde_json::json;
 
-use super::row::{self, Row, State};
+use super::row::{self, Role, Row, State};
 use super::{Env, RenameArgs, StateArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -263,6 +263,21 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
     let read = env.store.read(|conn| row::load(conn, &id))?;
+    let fixed = match read.role {
+        Role::Manager | Role::Worker => true,
+        Role::Lead => read.forked_from.is_none(),
+    };
+    if fixed {
+        return Err(CpdError::new(
+            ErrorCode::KeyFixed,
+            format!(
+                "Session {id} is named by its key {:?}: it is not renamed.",
+                read.name
+            ),
+        )
+        .with("session", id.as_str())
+        .with("name", read.name.as_str()));
+    }
     if read.name == name {
         row::retitle(&id)?;
         return Ok(Output::success(

@@ -162,6 +162,18 @@ impl<'a> Contexts<'a> {
             if let Some(row) = existing(tx)? {
                 return Ok((row, true));
             }
+            let taken: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM plans WHERE id = ?1)",
+                [id.as_str()],
+                |r| r.get(0),
+            )?;
+            if taken {
+                return Err(CpdError::new(
+                    ErrorCode::IdTaken,
+                    format!("Context id {id} is taken by a Plan."),
+                )
+                .with("context", id.as_str()));
+            }
             tx.execute(
                 "INSERT INTO contexts (id, title, jira, created_at, created_on, owner) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![id.as_str(), title.as_str(), jira.map(Jira::as_str), now(), machine.as_str(), owner.as_str()],

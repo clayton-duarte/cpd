@@ -186,9 +186,12 @@ fn agent_key_schema_is_a_breaking_migration_after_100() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.last().map(|n| n.name),
-        Some(MIGRATION),
-        "it is the last migration"
+        NAMED
+            .iter()
+            .position(|n| n.name == MIGRATION)
+            .map(|at| crate::store::LEGACY.len() + at),
+        Some(100),
+        "exactly 100 migrations sort before it"
     );
     let (_dir, home) = before("");
     drop(migrated_in(&home));
@@ -202,7 +205,10 @@ fn agent_key_schema_is_a_breaking_migration_after_100() {
 fn agent_key_schema_keeps_every_session_row_and_column() {
     let (_dir, home) = before("");
     let mut old = old_store(&home);
-    let snapshot = sessions_snapshot(&mut old);
+    let mut snapshot = sessions_snapshot(&mut old);
+    // The later migration `agent-key-backfill` rewrites the name of a Lead that is not a fork to its key.
+    let name = snapshot.0.iter().position(|c| c == "name").unwrap();
+    snapshot.1[1][name] = Value::String("ctx:pay".to_owned());
     let ids = strings(&mut old, "SELECT id FROM sessions ORDER BY rowid");
     assert_eq!(ids, ["m1", "lead", "flead", "w1"]);
     drop(old);

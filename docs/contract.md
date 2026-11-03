@@ -575,6 +575,23 @@ A pi session cpd knows about: every Manager, Lead and Worker is one.
 | `runner` | text | `pi` or `durable` (default `pi`): how the Session runs. Set when the Session is created and never changed; existing rows read `pi`. A `durable` Lead or Manager runs on a host process and has no pane by design (§3.6 "A pane that is gone"; its host is §6.13, P1.3); nothing creates one yet and the column is set by tests and by hand only. A Worker's runner is its Attempt's (§3.4), not this column (unverified: no Worker Session is written with `durable` here) |
 | `working_pr` | text? | the key of the Workflow of the Session's own Plan that the Lead's current turn concerns; null otherwise. Only a `lead` Session in `working` may name a Workflow of its Plan, and leaving `working` clears it. The invariant, the writers and the display are §3.6 "The Lead's Workflow", the one definition (migration `20261102T2100-session-working-pr`, breaking; pro-d219, pro-d259) |
 
+#### Agent key
+
+cpd's agents form one hierarchy, Manager > Lead > Worker, mapped 1:1 to Context > Plan > Job (pro-d345, pro-d346; User, 2026-11-02 EST; Plan `agent-keys-core`). An agent's **agent key** is the name cpd gives it:
+
+| Agent | Key | Parts, each an id of §2.1 |
+|---|---|---|
+| Manager | `<context>` | the Context id (never `<context>-manager`) |
+| Lead (not a fork) | `<context>:<plan>` | the Context id and the Plan id |
+| Worker | `<context>:<plan>:<job>` | the Context id, the Plan id and the Job id; every Attempt of the Job is that Job's Worker, one live at a time |
+
+- **The separator is `:`.** `.` already separates `<plan>.<prefix>` (commands.md §1.3), and `:` is in no id pattern. The id patterns are Context `^[a-z][a-z0-9-]{1,39}$`, Plan `^[a-z][a-z0-9-]{1,23}$` and Job `^[a-z][a-z0-9-]{0,31}$`, so a key is at most 40 + 1 + 24 + 1 + 32 = 98 characters, the length `sessions.name` allows (§2.2 Session, §4.4).
+- **The key is the name.** `sessions.name` of a Manager, of a Lead that is not a fork and of a Worker IS its key. Exactly one function writes it: the `AgentKey` type, `cpd_core::agent_key`, whose `Display` is the key. Every registration path builds its name through it, and a test drives each path. The store puts no SQL CHECK on the value (pro-d345): the id patterns are checked in the binary at the boundary (§2.1).
+- **The key is fixed.** `session rename` refuses it with `key_fixed` (commands.md §10.7), whatever the new name.
+- **A fork is outside the hierarchy.** A fork (`forked_from` set) keeps `<source name> (fork)`, cut to 98 characters (commands.md §10.3), is free text, and may be renamed (`session rename`).
+- **The ids are disjoint.** A Plan id may not equal a Context id, nor the converse: `plan new` and `context new` refuse it with `id_taken` (commands.md §4.1, §3.1), so one name never denotes both a Manager and a Plan. The two archived pairs `bifrost` and `gatemac` predate the rule and are left as they are.
+- **Existing rows** are named by the data-only migration `20261103T1000-agent-key-backfill` (§4.5). The schema of §4.4 is unchanged.
+
 #### Asleep
 
 Context, Plan and Session carry `asleep_at` (hs-d515, hs-d520). A Session is put to sleep when it is finished and the User is not looking at it: it is complete but still holds its chat file and its place among live Sessions in the tree. Unlike archiving, sleeping is automatic and without User action.
@@ -879,7 +896,7 @@ Before migration 0008 the phase `deploy` was called `pr` (hs-d76); old Events an
 **`plan new` always starts a fresh Lead** (hs-d92): a Session registered `forked_from` null, whose first message is the Plan header, the full brief and the Context: the digest (the relevant short forms by topic, built by cpd) and at most 20 uncurated records raw (§4.6 "Consumers", `commands.md` §4.1). With `--brief-file` it also writes the brief as a Context record of kind `brief` (§2.2, B3-A4).
 
 **The Context's Manager** (hs-d83..d86, hs-d92, hs-d133; Plan manager B3). The higher-level Lead of a Context: it works at the Epic level, holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads and knows where each is. Its memory is the records (records first; the chat is disposable). It acts only when the User talks to it; at each turn start the adapter gives it a digest (§5.3, `commands.md` §15.7). Leads keep asking the User directly; the Manager never answers for the User.
-- **One live Manager per Context**: a Session with `role = manager`, `plan` null, `tier` = `manager_tier` (§8.2, default `O4`; moved later by `session retier`, §2.2), name `<context>-manager`, `cwd` = the User's home directory (pro-d343), never the caller's directory. A unique index allows one non-archived Manager per Context (§4.4).
+- **One live Manager per Context**: a Session with `role = manager`, `plan` null, `tier` = `manager_tier` (§8.2, default `O4`; moved later by `session retier`, §2.2), name `<context>`, `cwd` = the User's home directory (pro-d343), never the caller's directory. A unique index allows one non-archived Manager per Context (§4.4).
 - **`cpd context manager [--context <c>]`** registers it when the Context has none live (`session-registered`), then creates its parked window `ctx-<context>` running `cpd session run <id>` and appends `session-moved` in a second transaction after the commit, as `plan new` starts a Lead (§6.5). When the Manager is `stopped` with no pane, it starts it again on its session file (resume); otherwise it changes nothing. It never moves the chat slot (hs-d103) and is idempotent. An archived Context is refused with `archived`, an unknown one with `context_not_found`.
 - **First message**: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` followed by the Context as `plan new` gives it (§4.6 "Consumers"): the digest (the relevant short forms by topic) and at most 20 uncurated records raw.
 - It follows only Events addressed to it (§5.3), so it is never woken by Plan Events (hs-d86).
@@ -2700,6 +2717,21 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
   - The unique index `sessions_one_lead ON sessions(plan) WHERE role = 'lead' AND forked_from IS NULL` is created: at most one Lead that is not a fork per Plan, archived or not. A fork is outside it, and a NULL `plan` is never a duplicate in SQLite.
   - No row is renamed, and no SQL CHECK constrains the value of `name` (pro-d345: 303 test fixtures insert free names). The names are written by the `keys` Workflow, which also adds the data-only backfill. **This migration repairs no data:** a store with two Leads that are not forks on one Plan, or one such Lead with no Plan, is refused loudly (`migration_failed`), and nothing is applied.
   - **Tests** (`core/src/store/schema/agent_key_schema_tests.rs`): `agent_key_schema_is_a_breaking_migration_after_100`, `agent_key_schema_keeps_every_session_row_and_column`, `agent_key_schema_recreates_the_indexes_and_working_pr_triggers`, `agent_key_schema_accepts_a_name_of_98_characters_and_refuses_99_and_empty`, `agent_key_schema_refuses_a_second_non_fork_lead_on_a_plan`, `agent_key_schema_lets_a_fork_share_the_plan_of_a_lead`, `agent_key_schema_refuses_a_non_fork_lead_without_a_plan`, `agent_key_schema_lets_a_fork_have_no_plan_and_a_manager_never_has_one`, `agent_key_schema_refuses_a_store_with_two_non_fork_leads_on_a_plan`, `agent_key_schema_refuses_a_store_with_a_non_fork_lead_without_a_plan`.
+- **`20261103T1000-agent-key-backfill`** (pro-d345, pro-d346; User, 2026-11-02 EST; Plan `agent-keys-core`, Workflow `keys`; named by hand after `20261103T0900-agent-key-schema`, the newest on `main`, since `scripts/new-migration.sh` names by the UTC clock; `-- cpd-migration: breaking after 101`: the 101 `*.sql` migration files on `main` sort before it), declared **`breaking`**: it UPDATEs existing rows (A1). It is data only: no rebuild, no index, no CHECK, no DDL change, and SQL only, no Rust hook. Its file is `20261103T1000-agent-key-backfill.sql`, and it runs in one transaction with the pragmas of every migration. **What it does**, exactly:
+
+  ```sql
+  UPDATE sessions SET name = CASE
+      WHEN role = 'manager' THEN context
+      WHEN role = 'lead' THEN context || ':' || plan
+      WHEN role = 'worker' THEN context || ':' || plan || ':' || (SELECT job FROM attempts WHERE attempts.plan = sessions.plan AND attempts.id = sessions.attempt)
+    END
+  WHERE role IN ('manager', 'worker') OR (role = 'lead' AND forked_from IS NULL);
+  ```
+
+  - A fork keeps its name. A Manager, a Lead that is not a fork and a Worker get their key, archived ones too (the statement does not read `archived_at`).
+  - A row whose key cannot be built (a Worker without its Attempt) makes the NOT NULL of `name` fail, so the migration is refused (`migration_failed`) and nothing is applied.
+  - The statement changes only the column `name`: no other column, and no row is inserted or deleted.
+  - **Tests** (`core/src/store/schema/agent_key_backfill_tests.rs`): `agent_key_backfill_is_a_breaking_migration_after_101`, `agent_key_backfill_names_every_manager_by_its_context_archived_too`, `agent_key_backfill_names_every_non_fork_lead_context_colon_plan`, `agent_key_backfill_names_every_worker_context_plan_job_for_every_attempt`, `agent_key_backfill_leaves_a_fork_name_alone`, `agent_key_backfill_changes_only_the_name_column`.
 
 ## 5. Events
 
@@ -3546,7 +3578,7 @@ Both run types use the helper: the `[test-commands]` runs of a `test` or `impl` 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
 | Lead (fresh) | `--no-mcp --tools +codemode --model <model>:<level of the row's tier> [-e …] --session-id <id> -n <name> -- @<first message file>` where `<model>` is the resolved policy's `[model]` table key for the row's `tier` (§8.3, §9) | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PI_SKIP_VERSION_CHECK=1` |
-| Manager | as a fresh Lead, `--no-mcp --tools +codemode` included (or, resumed, `--no-mcp --tools +codemode --model <model>:<level>` where `<model>` is from the policy's `[model]` table (§8.3, §9), `--session <file>` and the `[-e …]` arguments, no first message). Model: the row's `tier`, which is `manager_tier` (§8.2) at registration and what `session retier` set later (§2.2). First message: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` then the Context as §4.6 "Consumers" renders it (its digest and the records after it, or every record) | `CPD_HOME`, `CPD_SESSION=<id>`, `PI_SKIP_VERSION_CHECK=1`. Name `<context>-manager` |
+| Manager | as a fresh Lead, `--no-mcp --tools +codemode` included (or, resumed, `--no-mcp --tools +codemode --model <model>:<level>` where `<model>` is from the policy's `[model]` table (§8.3, §9), `--session <file>` and the `[-e …]` arguments, no first message). Model: the row's `tier`, which is `manager_tier` (§8.2) at registration and what `session retier` set later (§2.2). First message: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` then the Context as §4.6 "Consumers" renders it (its digest and the records after it, or every record) | `CPD_HOME`, `CPD_SESSION=<id>`, `PI_SKIP_VERSION_CHECK=1`. Name `<context>` |
 | Lead (resume) | `--no-mcp --tools +codemode --model <model>:<level of the row's tier> --session <file>` where `<model>` is from the policy's `[model]` table (§8.3, §9) and the `[-e …]` arguments, no first message (hs-d506) | same |
 | A side fork with a Plan (`session fork --plan`) | `--fork <source file>` added to the Lead (fresh) row (§6.7) | a Lead's: the environment of a Lead |
 | Worker | `<prefix>` followed by `--approve --no-skills --no-mcp --tools +codemode --exclude-tools ask_user_question,cpd_plan_review [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` (the `<prefix>` of §6.5 hs-d528 goes before `--approve`) | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |

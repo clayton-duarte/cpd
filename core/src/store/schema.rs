@@ -1053,6 +1053,8 @@ pub(super) fn generated_mismatch(
 #[cfg(test)]
 mod actual_files_tests;
 #[cfg(test)]
+mod agent_key_backfill_tests;
+#[cfg(test)]
 mod agent_key_schema_tests;
 #[cfg(test)]
 mod blue_tests;

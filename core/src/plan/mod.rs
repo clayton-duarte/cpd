@@ -67,7 +67,7 @@ mod tier_advice_tests;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, Text, Title, WorkflowTitle};
+use crate::args::{PlanArg, Text, Title, WorkflowTitle};
 use crate::config::{Tier, WorkerRunner};
 use crate::context::Jira;
 use crate::env::Env;
@@ -131,9 +131,6 @@ pub struct NewArgs {
     /// The Jira task key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
-    /// The Lead's pi display name [default: <id>]
-    #[arg(long, value_name = "name")]
-    name: Option<Name>,
     /// The User's brief for the Lead
     #[arg(long = "brief-file", value_name = "file")]
     brief_file: Option<PathBuf>,

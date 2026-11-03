@@ -106,7 +106,7 @@ fn context_manager_creates_a_missing_permanent_context_and_its_manager() {
         .ok();
     let manager = &out["manager"];
     let id = manager["session"].as_str().unwrap();
-    assert_eq!(manager["name"], json!("codereview-manager"));
+    assert_eq!(manager["name"], json!("codereview"));
     assert_eq!(
         fx.env.query::<i64>(
             "SELECT count(*) FROM contexts WHERE id = 'codereview' AND archived_at IS NULL"

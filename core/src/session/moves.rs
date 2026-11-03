@@ -19,7 +19,7 @@ use super::state::scoped;
 use super::{
     CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone,
 };
-use crate::args::Name;
+use crate::agent_key::AgentKey;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
@@ -131,11 +131,11 @@ fn require_chat_session(row: &Row) -> Result<(), CpdError> {
     }
 }
 
-/// `<source name> (fork)`, cut to 80 characters.
+/// `<source name> (fork)`, cut to 98 characters.
 fn fork_name(source: &str) -> String {
     format!("{source} (fork)")
         .chars()
-        .take(Name::MAX_CHARS)
+        .take(AgentKey::MAX_LEN)
         .collect()
 }
 
@@ -840,10 +840,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fork_s_default_name_is_cut_to_80_characters() {
+    fn a_fork_s_default_name_is_cut_to_98_characters() {
         assert_eq!(fork_name("cpd rust lead"), "cpd rust lead (fork)");
-        let long = "é".repeat(78);
+        let long = "é".repeat(96);
         assert_eq!(fork_name(&long), format!("{long} ("));
-        assert_eq!(fork_name(&long).chars().count(), 80);
+        assert_eq!(fork_name(&long).chars().count(), 98);
     }
 }

@@ -128,6 +128,14 @@ fn a_database_before_job_addenda_migrates_to_an_empty_table_and_accepts_the_new_
         dump(&mut old, "events"),
         dump(&mut old, "sessions"),
     );
+    // The later migration `agent-key-backfill` rewrites the names of the Lead and the Worker to their keys.
+    let sessions: Vec<String> = sessions
+        .iter()
+        .map(|row| {
+            row.replace("\"L\"", "\"ctx:pay\"")
+                .replace("\"W\"", "\"ctx:pay:api\"")
+        })
+        .collect();
     let kinds_before = count(&mut old, "SELECT count(*) FROM event_kinds");
     drop(old);
 

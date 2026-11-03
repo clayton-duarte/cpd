@@ -540,23 +540,32 @@ fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
 }
 
+/// A fork of `source` (a Lead of `setup`) named `name`, stopped and without a pane: the only kind of Lead `session rename` accepts.
+fn add_fork(env: &TestEnv, id: &str, source: &str, plan: &str) {
+    env.sql(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, forked_from, cwd, tier, state, state_at, created_at) VALUES
+           ('{id}', 'lead', 'ctx', '{plan}', 'Fork', '{source}', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't8')"
+    ));
+}
+
 #[test]
 fn rename_appends_session_renamed_once() {
     let fx = Fx::with_ports();
     setup(&fx.env);
+    add_fork(&fx.env, "fork1", LEAD1, "pay");
     let out = fx
-        .cpd(&["session", "rename", "cpd rust lead", "--session", LEAD1])
+        .cpd(&["session", "rename", "cpd rust lead", "--session", "fork1"])
         .ok();
     assert_eq!(
         out,
-        json!({"ok": true, "session": "lead1", "name": "cpd rust lead"})
+        json!({"ok": true, "session": "fork1", "name": "cpd rust lead"})
     );
-    assert_eq!(show(&fx, LEAD1)["name"], "cpd rust lead");
+    assert_eq!(show(&fx, "fork1")["name"], "cpd rust lead");
     let again = fx
         .cpd_with(
             fx.env.root(),
             &["session", "rename", "cpd rust lead"],
-            &[("CPD_SESSION", LEAD1)],
+            &[("CPD_SESSION", "fork1")],
         )
         .ok();
     assert_eq!(again["already"], true);
@@ -564,16 +573,16 @@ fn rename_appends_session_renamed_once() {
     assert_eq!(renamed.len(), 1);
     assert_eq!(
         (&renamed[0]["session"], &renamed[0]["data"]),
-        (&json!("lead1"), &json!({"name": "cpd rust lead"}))
+        (&json!("fork1"), &json!({"name": "cpd rust lead"}))
     );
 
     refused(
-        &fx.cpd(&["session", "rename", "", "--session", LEAD1]),
+        &fx.cpd(&["session", "rename", "", "--session", "fork1"]),
         "invalid_name",
         2,
     );
     refused(
-        &fx.cpd(&["session", "rename", "a\tb", "--session", LEAD1]),
+        &fx.cpd(&["session", "rename", "a\tb", "--session", "fork1"]),
         "invalid_name",
         2,
     );
@@ -1577,22 +1586,23 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
 fn rename_works_on_an_archived_session() {
     let fx = Fx::with_ports();
     setup(&fx.env);
+    add_fork(&fx.env, "fork2", LEAD2, "other");
     fx.env
-        .sql("UPDATE sessions SET archived_at = 't9' WHERE id = 'lead2'");
+        .sql("UPDATE sessions SET archived_at = 't9' WHERE id = 'fork2'");
     let out = fx
         .cpd(&[
             "session",
             "rename",
             "Archived and renamed",
             "--session",
-            "lead2",
+            "fork2",
         ])
         .ok();
     assert_eq!(
         out,
-        json!({"ok": true, "session": "lead2", "name": "Archived and renamed"})
+        json!({"ok": true, "session": "fork2", "name": "Archived and renamed"})
     );
-    let row = show(&fx, "lead2");
+    let row = show(&fx, "fork2");
     assert_eq!(
         (&row["name"], &row["archived_at"]),
         (&json!("Archived and renamed"), &json!("t9"))
@@ -1624,12 +1634,13 @@ fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
     assert_eq!(pane_title(&fx, &fork), "Side Quest");
 
     // A Session with no pane has nothing to set.
+    add_fork(&fx.env, "fork2", LEAD2, "other");
     fx.cpd(&[
         "session",
         "rename",
         "Lead two renamed",
         "--session",
-        "lead2",
+        "fork2",
     ])
     .ok();
 }
@@ -1653,17 +1664,23 @@ fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
     let fx = Fx::with_ports();
     setup(&fx.env);
     fx.cockpit();
-    fx.env.sql(&format!(
-        "UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"
-    ));
-    // The Lead has no pane: opening resumes it in a new window, with the title.
-    fx.cpd(&["session", "open", LEAD1]).ok();
-    assert_eq!(pane_title(&fx, LEAD1), "Dynamic Subject");
+    add_fork(&fx.env, "fork1", LEAD1, "pay");
+    fx.env
+        .sql("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = 'fork1'");
+    // The fork has no pane: opening resumes it in a new window, with the title.
+    fx.cpd(&["session", "open", "fork1"]).ok();
+    assert_eq!(pane_title(&fx, "fork1"), "Dynamic Subject");
     // A rename writes the name and leaves the header.
-    fx.cpd(&["session", "rename", "Lead one renamed", "--session", LEAD1])
-        .ok();
-    assert_eq!(pane_title(&fx, LEAD1), "Dynamic Subject");
-    assert_eq!(show(&fx, LEAD1)["name"], "Lead one renamed");
+    fx.cpd(&[
+        "session",
+        "rename",
+        "Lead one renamed",
+        "--session",
+        "fork1",
+    ])
+    .ok();
+    assert_eq!(pane_title(&fx, "fork1"), "Dynamic Subject");
+    assert_eq!(show(&fx, "fork1")["name"], "Lead one renamed");
 }
 
 // ---------- archive ----------
@@ -2680,20 +2697,26 @@ fn every_session_command_accepts_the_short_forms() {
     fx.cockpit();
     // `--session` and `CPD_SESSION`.
     let out = fx
-        .cpd(&["session", "rename", "renamed", "--session", "pay"])
+        .cpd(&[
+            "session",
+            "rename",
+            "renamed",
+            "--session",
+            "pay.a1b2c3d4-0000-4000-8000-000000000001",
+        ])
         .ok();
     assert_eq!(
         out,
-        json!({"ok": true, "session": LEAD1, "name": "renamed"})
+        json!({"ok": true, "session": UUID_A, "name": "renamed"})
     );
     let out = fx
         .cpd_with(
             fx.env.root(),
             &["session", "rename", "again"],
-            &[("CPD_SESSION", "other")],
+            &[("CPD_SESSION", "pay.a1b2c3d4-0000-4000-8000-000000000002")],
         )
         .ok();
-    assert_eq!(out["session"], LEAD2);
+    assert_eq!(out["session"], UUID_B);
     let out = fx
         .cpd_with(
             fx.env.root(),

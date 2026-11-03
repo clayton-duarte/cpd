@@ -6,6 +6,7 @@
 //! module and never edits this file.
 
 // Shared foundations (Job rs-workspace).
+pub mod agent_key;
 pub mod args;
 pub mod atomic;
 pub mod clock;
@@ -59,6 +60,8 @@ pub mod workflow;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
 
+#[cfg(test)]
+mod agent_key_tests;
 #[cfg(test)]
 mod ambient_ports_tests;
 #[cfg(test)]

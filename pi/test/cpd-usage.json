@@ -880,7 +880,6 @@
       "--context": true,
       "--help": false,
       "--jira": true,
-      "--name": true,
       "--runner": true,
       "--tier": true,
       "--title": true

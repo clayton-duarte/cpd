@@ -273,6 +273,10 @@ _Avoid_: coordinator, orchestrator
 An agent that executes one Attempt of one Job in its own worktree.
 _Avoid_: subagent, executor, thread (as a word for a Worker)
 
+**Agent key** (term, pro-d345, pro-d346):
+The name of an agent in cpd's one hierarchy, Manager > Lead > Worker, mapped 1:1 to Context > Plan > Job: a Manager's key is its Context id (`cpd`), a Lead's is `<context>:<plan>` and a Worker's is `<context>:<plan>:<job>`, where every Attempt of a Job is that Job's Worker. The separator `:` is in no id pattern (`.` already separates `<plan>.<prefix>`). A fork is outside the hierarchy: it keeps its free name. The key is the Session's `name`, fixed for a Manager, a Lead that is not a fork and a Worker; only the `AgentKey` type writes it (contract §2.2 "Agent key").
+_Avoid_: `<context>-manager`, a free-text name for a Lead or a Worker
+
 **Worker runner** (term, pro-d165):
 What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by the config key `worker_runner` when an Attempt is created and stored on it; both are kept.
 _Avoid_: engine, backend

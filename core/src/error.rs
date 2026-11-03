@@ -314,6 +314,8 @@ error_codes! {
     PrNotReady = "pr_not_ready" => Refused,
     WorkflowNotOpen = "workflow_not_open" => Refused,
     AlreadyPosted = "already_posted" => Refused,
+    KeyFixed = "key_fixed" => Refused,
+    IdTaken = "id_taken" => Refused,
     DurableSession = "durable_session" => Refused,
     HostRunning = "host_running" => Refused,
     // Only an `error` Event's code (engine E18, pro-d117), never a command's failure.
@@ -573,6 +575,8 @@ mod tests {
             (ErrorCode::WorkflowNotOpen, 3),
             (ErrorCode::NoFailedRun, 3),
             (ErrorCode::AlreadyPosted, 3),
+            (ErrorCode::KeyFixed, 3),
+            (ErrorCode::IdTaken, 3),
             (ErrorCode::DurableSession, 3),
             (ErrorCode::HostRunning, 3),
             (ErrorCode::AutoMergeRefused, 3),

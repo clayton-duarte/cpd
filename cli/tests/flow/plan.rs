@@ -296,7 +296,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
             &out["lead"]["name"],
             &out["lead"]["forked_from"]
         ),
-        (&json!(session), &json!("pay"), &Value::Null)
+        (&json!(session), &json!("ctx:pay"), &Value::Null)
     );
     assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
@@ -372,7 +372,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_users_home() {
     );
     assert_eq!(
         registered[0]["data"],
-        json!({"role": "lead", "name": "pay", "forked_from": null, "tier": "O2"})
+        json!({"role": "lead", "name": "ctx:pay", "forked_from": null, "tier": "O2"})
     );
     assert_eq!(
         registered[0]["id"].as_i64().unwrap(),
@@ -815,21 +815,6 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
         3,
     );
     assert_eq!(error["details"]["plan"]["title"], "Plan pay");
-    refused(
-        &fx.cpd(&[
-            "plan",
-            "new",
-            "pay",
-            "--context",
-            "ctx",
-            "--title",
-            "Plan pay",
-            "--name",
-            "x",
-        ]),
-        "plan_exists",
-        3,
-    );
 }
 
 #[test]
@@ -928,7 +913,6 @@ fn new_refusals_write_nothing() {
         "usage",
         2,
     );
-    refused(&new(&["--context", "ctx", "--name", ""]), "invalid_name", 2);
     refused(&new(&["--context", "ctx", "--jira", "nope"]), "usage", 2);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 0);
@@ -2938,7 +2922,8 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
     );
 
     // Renaming the Plan's Lead Session never replaces the Plan's title.
-    fx.cpd(&["session", "rename", "lead name", "--session", &lead])
+    let fork_id = fork["id"].as_str().unwrap();
+    fx.cpd(&["session", "rename", "lead name", "--session", fork_id])
         .ok();
     assert_eq!(pane_title(&fx, &pane), "Third");
 
@@ -2999,8 +2984,15 @@ fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
     );
     assert_eq!(inproc::events(&fx, "plan-renamed").len(), 1);
 
-    fx.cpd(&["session", "rename", "lead name", "--session", &lead])
-        .ok();
+    let fork = fx.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
+    fx.cpd(&[
+        "session",
+        "rename",
+        "lead name",
+        "--session",
+        fork["id"].as_str().unwrap(),
+    ])
+    .ok();
     assert_eq!(pane_title(&fx, &pane), "Dynamic Subject");
 
     // A rerun with the same title repairs a cleared header to the dynamic title.
