@@ -378,9 +378,9 @@ pub fn bounded(
             .into_iter(),
     );
     if omitted.older_notes > 0 {
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "... {} older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all\n",
+            "... {} older notes omitted: cpd context show --topic <t> | cpd context search <query> | cpd context show --all",
             omitted.older_notes
         );
     }
