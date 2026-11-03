@@ -742,3 +742,63 @@ flowchart LR
 | Make it good (web-native, mobile, Dango) | good for web-native; Dango by CSS | poor: cells, phone, no web dialogs | best | mixed |
 | First delivery | chat in a pane | the real chat | today's `web/` | the real chat |
 | Still true after | | | | pro-d1 only half met |
+
+## 8. Recommendation
+
+**Recommended: Option D, the hybrid, started by a measured spike.** Take the terminal (B) for pi-runner Sessions only if the spike passes, build the web-native surface (A) only where a terminal cannot work or the spike fails, and do not start C. The recommendation is conditional on numbers that do not exist yet; it is a plan for getting them, not a verdict that D is the end state.
+
+### 8.1 Reasons, in the User's axiom order
+
+**1. Make it work (parity first).**
+
+- Only B reaches 59 of 59 parity rows with no chat code, because the real pi TUI runs (read, r6 verdict; the P-row statement is inferred, not run). Every web-native option leaves per-tool cards, compaction, slash, `@file` and two dialogs to be written (5.1-5.7), and no candidate renders `ask_user_question` previews out of the box (t3code carries the field and renders nothing; assistant-ui cannot represent it; pi-pocket and jmfederico have no preview).
+- B has two real holes, and they are why B alone is not the recommendation: Shift+Enter is broken without Kitty keyboard (5.8), and **a pi-durable session cannot be attached with a terminal** (r6 §7). cpd has both runners today (`runner: "pi" | "durable"`, s5 §5). Durable Sessions therefore need the web-native path whatever else is decided.
+- A is the best fit for durable Sessions: a `PiClient` over the host socket is the smallest adapter any candidate offered (150-300 lines, r5, inferred) and its `ui_request` mapping is one to one for `select`, `confirm`, `input` and `editor` (d2 §2.2).
+
+**2. Make it fast (the User's top priority, pro-n1).**
+
+- B's speed is pi's speed: the transcript lives in pi, so the web cost does not grow with N (inferred, r6 §2). Its baseline is the TUI's measured 54.2 ms median typing on a 24 MB copy (r7 §6, by others), which is the number the User wants to beat.
+- No existing web chat passes the speed list as shipped: assistant-ui's pi path fails C1, C2, C3 and C6; jmfederico, pimote and pi-pocket render all or a growing set of messages (5.4-5.7); OpenCode and t3code pass by design but cannot be embedded (5.2, 5.3). The web-native path must therefore pass the list with its own runtime, which is exactly what the spike measures.
+- The durable attach always sends the whole transcript (D2, D3); a windowed first paint needs a protocol change in durable-leads whichever web-native option is chosen.
+
+**3. Make it good (web-native, mobile, Dango).**
+
+- Web-native is better on every "good" axis: clickable tool blocks, native dialogs with previews and a plan-review view, find, accessibility, phone input, density as CSS. B is the worst on all of them (5.8). This is the last tiebreak and it does not outrank parity or speed.
+- The look cost is the same for A and C (the index map and the shapes, 6.1); B gets the look free because it is pi's.
+
+**Why not each alternative.** A alone: speed unproven and durable-only; it would delay the first usable chat. C: the same lines as A plus the primitives, the path already judged too costly. B alone: leaves durable Sessions and web-owned dialogs unsolved. D is the only option that gets the first chat soonest and keeps the door to web-native open without paying for it before a number says so.
+
+### 8.2 The open facts and the first spike
+
+Nothing here was measured except where section 2.3 or a finding says so. The findings leave four facts unmeasured, and the spike is the cheapest thing that settles them. Thresholds are the r7 yardsticks (section 2.2); thresholds that r7 does not give are marked guess. The spike runs against real sessions: the local 25.6 MB, 7,359-line file is the only one in the 20-30 MB band (s4, section 2.3), and it is estimated at about 3,750-4,350 messages, so the 5,000-message fixture of C1 needs a longer real session or two joined (a spike-time decision, guess).
+
+| # | Unmeasured fact | Where it came from | Probe | Pass | Fail |
+|---|---|---|---|---|---|
+| S1 | **xterm paint throughput with pi fullscreen on a 25 MB session** | r6: only the headless parser was measured, 103.7 MB/s; no paint, WebGL or latency number | xterm.js 6.0.0 + webgl + fit over `node-pty` + `tmux attach`, pi in fullscreen `tuiMode` on the 25.6 MB session, streaming at 200 tok/s for 60 s | **C7**: keydown to paint p95 ≤ 50 ms (the TUI's own 54.2 ms must at least be matched); **C1**: no main-thread long task > 100 ms in the 60 s; **C3**: per-frame scripting p95 ≤ 8 ms and within 20% between a 500-message and a 5,000-message session | any of the three missed; or frames stalled at about 1 s (xterm #6071) while the spinner and tokens run together |
+| S2 | **react-pi on a real 20-30 MB session** (and the cpd runtime that would replace its projection) | r5 and d2: every speed cell is read from code | react-pi `PiClient` over a recorded session, `createThreadRowsSelector` + `@tanstack/react-virtual`, then the same with a tail-first runtime on `useExternalStoreRuntime` | **C1**: first paint of the last messages ≤ 500 ms; **C2**: ≤ about 100 live message subtrees, and the DOM count at N=500 versus N=5,000 within 10%; **C3**: per-frame scripting p95 ≤ 8 ms and within 20% across N; **C6**: ≤ 1 px visible shift on prepend; **C8**: warm switch ≤ 100 ms, cold ≤ 500 ms | any miss for the own runtime; a miss for stock react-pi is expected (d2 §4.2) and is not a fail of A, it is the confirmation that the runtime must be replaced |
+| S3 | **Durable attach cost** | s2 §3.1: one 30-entry spike, 25 frames, 17,303 bytes, 0.9 ms (measured by a doc); no large snapshot ever measured | attach to a durable Session with a real 20-30 MB transcript through a minimal relay; record snapshot bytes, line parse time and the browser's long tasks | **C1**: first paint ≤ 500 ms and no long task > 100 ms from attach; the snapshot frame stays under the 8 MiB slow-client threshold (D5) so the viewer is not dropped | the viewer is dropped with `bye slow_client` (D5, unverified until tried), or the parse blocks the main thread > 100 ms; either means a windowed attach (D2, D3) is a hard dependency, not an option |
+| S4 | **Shift+Enter without Kitty keyboard** | r6 §3: the page map to `\x1b[13;2u` is untested; pi might need negotiation | the S1 page, a key handler mapping Shift+Enter, 20 trials each in Chrome and Safari (the browsers are a spike-time choice) | pi inserts a newline in 20 of 20 trials in each browser (threshold is this report's guess), and plain Enter still submits | any trial sends `\r`; then the fix is a proxy that answers the Kitty query (r6 §3c), which is a build, or waiting for xterm.js 7.0.0 |
+
+Fixture rules for S2 and S3 (r7 §8, read): at least 5,000 messages and at least 25 MB, a mix of long markdown, big code blocks, diffs, tool rows and thinking blocks, and the other C items (C4, C5, C9-C12) recorded from the same run. Sections of S2 that need a browser trace (long-task count, scripting time) use the Performance panel; no synthetic benchmark is written (r7's rule).
+
+**What each result decides.**
+
+- S1 and S4 pass: build B for pi-runner Sessions, then the web-native surface for durable Sessions and dialogs only.
+- S1 passes, S4 fails: B still ships if the Kitty proxy is accepted as a build (a decision for the User, D1).
+- S1 fails: drop B as the chat; keep it as the exact-TUI escape hatch (r6's own fallback role) and make A the one chat.
+- S2 own runtime passes and S3 passes: A is viable as built; if S3 fails, request the windowed attach first (see 8.3).
+- S2 own runtime fails twice: reopen C, and ask the User whether the cost is acceptable (pro-d1).
+
+### 8.3 Follow-up Plans (named, sizes are guesses)
+
+| Plan (proposed name) | What it does | Size (guess) | Depends on |
+|---|---|---|---|
+| `chat-spike` | S1-S4 above: a throwaway `node-pty` relay, an xterm page, a react-pi page, a minimal host relay; numbers recorded in a finding. No product code kept. | 3-5 Jobs, 300-600 throwaway lines | none; the User's answer to D4 |
+| `webui-panes` | The three panes on live data: refresh by Event cursor or commit signal instead of once on mount, the action POSTs, retry-Job, the kind and urgency of Inbox items, the `onState`, `onFocus`, `abort` and error events; fixes the s5 §4 discrepancies (inbox id type, unvalidated read-model cast, unmounted views) | 6-9 PRs, 1,500-2,500 lines | none (independent of the chat base; pro-d2) |
+| `webui-theme` | The hex map of the 16 slots and the index map from `compact-tools-indices.ts`, one source for the shell and any chat; density tokens | 2-3 PRs, 200-400 lines | reading `docs/contract.md` section 6.1.1 |
+| `webui-terminal-chat` | Option B: relay, page, Shift+Enter map (or Kitty proxy), resize debounce, environment for images and links, one terminal per open Session | 2-4 PRs, 500-900 lines | `chat-spike` S1, S4 pass |
+| `durable-windowed-attach` | The change on the durable-leads side: a window on `attach`, `history` usable before attach, a chunked or capped snapshot, a viewer role (D2, D3, D4, D15) | 2-3 PRs in durable-leads (guess); the User decides who owns it | S3 result |
+| `webui-host-relay` | The WS relay and fold for the host socket: connector with cursor reconnect, `req` correlation, fan-out, Host, Origin and token auth, and the fold of about 20 event types; reuses `web/src/api/host.ts` and `ws-bridge.ts` | 3-5 PRs, 700-1,300 lines (s2 §7 estimates, guess) | `durable-windowed-attach` for first paint |
+| `webui-native-chat` | Option A: `PiClient`, the cpd runtime, the virtual thread, cards, compaction, `QuestionnaireCard`, plan review, slash and `@file`; passes the C list in a repeatable trace | 8-12 PRs, 2,400-3,000 lines (d2 §8, guess) | `webui-host-relay`, S2 |
+
+The order that follows from the ranked reasons: `chat-spike` and `webui-panes` first (both are unconditional and independent), then `webui-theme`, then `webui-terminal-chat` or `webui-host-relay` and `webui-native-chat` as the spike decides.
