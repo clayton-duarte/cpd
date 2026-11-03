@@ -487,11 +487,11 @@ A cpd Worker is the same thing to the driver under both runners. Four things are
 | Shared contract | `pi` runner | `durable` runner | Label |
 |---|---|---|---|
 | Spec in: one first prompt naming a spec file and the attempt id | `Read {spec} and follow it exactly. Your attempt id is {attempt}.` as pi's last argument (`core/src/host/pi/launch.rs:230`) | the same sentence, submitted with `requestId: config.attempt` (`pi/durable-worker/run.ts:107`) | read |
-| Same launch environment | `worker_env(home, session, plan, attempt)` (`core/src/host/pi/launch.rs:639` shows the call in a test; `core/src/driver/runner.rs:83`) | the durable launch calls the same `pi::worker_env` (`core/src/driver/runner.rs:82-83`) and adds `CPD_JOB_KIND` only for explore Jobs (`runner.rs:99-103`) | read |
+| Same launch environment | `worker_env(home, session, plan, attempt)` defined at `core/src/host/pi/launch.rs:241` | the durable launch calls the same `pi::worker_env` (`core/src/driver/runner.rs:82-83`) and adds `CPD_JOB_KIND` only for explore Jobs (`runner.rs:84`, `105-110`) | read |
 | Report out | metrics read from pi's session file | metrics read from the end report `run/<plan>/attempts/<attempt>.report.json`, rewritten after every settled submission and at terminate (`pi/durable-worker/run.ts:96`, `149-155`; `core/src/driver/runner.rs:296-323`) | read |
 | One process owns everything | a tmux window per Attempt (`core/src/driver/runner.rs:3`) | one child process per Attempt, its own store `run/<plan>/durable/<attempt>.sqlite` (`pi/durable-worker/config.ts:33-35`; `runner.rs:4`) | read |
 
-Both runners are produced by one value: the driver's end report is one `Report` with two producers, `pi_report` and `durable_report` (read: `core/src/driver/runner.rs:7-9`). The driver follows the Attempt's stored `runner`, never today's `worker_runner` setting, so an Attempt keeps its runner across a config change (read: `core/src/driver/runner.rs:5-6`); the setting has exactly two values and `flipped()` swaps them (read: `core/src/config/runner.rs:10-16`, `36-40`).
+Both runners are produced by one value: the driver's end report is one `Report` with two producers, `pi_report` and `durable_report` (read: `core/src/driver/runner.rs:7-9`). The driver follows the Attempt's stored `runner`, never today's `worker_runner` setting, so an Attempt keeps its runner across a config change (read: `core/src/driver/runner.rs:6`); the setting has exactly two values and `flipped()` swaps them (read: `core/src/config/runner.rs:10-16`, `36-40`).
 
 Why this works for headless Workers (all `read` of cpd source unless noted):
 - **No UI.** The durable Worker opens no socket and installs no dialog: measured, `grep -n -i "dialog\|ui_\|socket\|listen" pi/durable-worker/*.ts` gives 3 hits, all `listener` parameter types in `harness.ts:28`, `36`, `53`. A refused action is a `beforeTool` block, never a question (`pi/durable-worker/extension.ts:15`; `guards.ts:17-35`).
@@ -538,19 +538,19 @@ An interactive session has three needs a headless Worker lacks: a human answers 
 Each bullet is labelled; "vs pi" means against the pi-coding-agent column of 3.1.
 
 - **Crash recovery is built in.** Work resumes from the last committed checkpoint and a partial answer survives to within 100 ms (read: `scheduler.js:1230-1247`, `agent.js:16-19`, 1.8). Vs pi: no automatic continue and no tool repair (measured: `.continue()` only in the run loop).
-- **Intent is committed before a tool runs.** The model learns that a tool was interrupted instead of seeing a dangling call (read: `tool.js:95`, `115`; 1.8). Vs pi: no such record (read: pi persists tool events never, `core/agent-session.js:756-768`).
+- **Intent is committed before a tool runs.** The model learns that a tool was interrupted instead of seeing a dangling call (read: `tool.js:95`, `115`; 1.8). Vs pi: no such record (read: pi persists only `message_end` records, so a running tool leaves none, `core/agent-session.js:756-768`).
 - **One atomic commit for transcript and state.** Entries, tasks, submissions and documents land together, so a reader never sees half a turn (`inferred` from the SQLite single-transaction path, 1.4; read for `session.js:534-536`).
 - **Durable queues.** Steer and follow-up inputs persist in `pi.inbox`; `requestId` makes a retried `submit` idempotent (read: `submissions.js:129-137`). Vs pi: queues are in memory (read: scout x-pi 3.8).
 - **Committed streaming gives every observer the same state.** `viewState`, `watch` and `watchEvents` all derive from commits, so a UI renders partials and tool output from state (read: `observation.js:207-222`, 2.2). Vs pi: stdout events and no replay.
 - **Task graph with ownership and abort marks.** Abort is a durable mark and runs bottom-up; subagents are child conversations (read: `scheduler.js:179-209`, 1.6). Vs pi: no subagents built in (read: scout x-pi section 7).
 - **Typed extension points over an owned registry.** Hooks can block, rewrite or continue a run; documents carry application state with versions and migrations (read: 2.3, `documents.js:78-98`).
-- **Several storage backends** (memory, SQLite, JSONL, Durable Object SQLite; read: `README.md:656-663`). Vs pi: JSONL files only.
+- **Several storage backends** (memory, SQLite, JSONL, Durable Object SQLite; read: `README.md:660-663`). Vs pi: JSONL files only.
 - **cpd already runs it** as both the headless runner and the interactive host, with a tested socket protocol (read: `core/src/driver/runner.rs:3-4`, `pi/durable-host/protocol.ts`).
 
 ### 3.5 Trade-offs
 
 - **One process owns a storage; nothing enforces it.** A second opener corrupts or collides (read: `README.md:682`; `inferred` consequences, 1.7). Every UI needs a host. pi has no such rule but also no lock on its session file (measured by scout x-pi: no lock in `core/session-manager.js`).
-- **Experimental API.** "The API changes without notice between releases" (read: `README.md:3`); the cpd notes cite 1.4.0 features absent in 1.3.0, such as read-only watch (measured by scout: grep in dist found none; 0, section 0).
+- **Experimental API.** "The API changes without notice between releases" (read: `README.md:3`); the cpd notes cite 1.4.0 features absent in 1.3.0, such as read-only watch (measured by scout x-store: `grep` in dist returned no match, see section 0).
 - **No exactly-once.** A `safe` tool must tolerate being run again; built-in tools declare no `replay`, so they are `unsafe` and a crash mid-call yields `interrupted` (read: `harness/types.d.ts:211-214`, `239-240`; measured by scout: no `replay:` in `tools/`).
 - **A crash costs a model request.** The `request` phase reruns (read: `generation.js:103-131`); the extra token cost was not measured (`guess:` tokens are spent again).
 - **No built-in interactivity.** No approval, question or pause API; cpd built them in the host with a memory-only held map (measured by scout x-ext; read `held.ts:44`), so a restart loses an open dialog unless the tool is `replay: "safe"` (read: `tools.ts:37`, `62`).
