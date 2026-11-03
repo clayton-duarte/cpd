@@ -299,7 +299,16 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
         .with("record", id.to_string())
         .with("kind", kind.as_str())
     };
-    if let Some(id) = draft.supersedes().first() {
+    let mut seen = Vec::new();
+    for id in draft.supersedes() {
+        if seen.contains(&id) {
+            return Err(CpdError::new(
+                ErrorCode::SupersedesInvalid,
+                format!("{id} is named twice in --supersedes."),
+            )
+            .with("record", id.to_string()));
+        }
+        seen.push(id);
         let found: Option<String> = conn
             .query_row(
                 "SELECT kind FROM context_records WHERE context = ?1 AND id = ?2",

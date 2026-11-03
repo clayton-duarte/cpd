@@ -198,7 +198,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
 const line = (r: ContextRecord): string =>
   r.kind === "brief"
     ? `- ${r.id} brief (${r.at.slice(0, 10)} UTC): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
-    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes[0]}.` : ""}`;
+    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes.join(", ")}.` : ""}`;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const sender = (p: BoardPost) => (p.from === null ? "Board post from the User" : `Board post from ${p.fromName ?? p.from} (${p.from})`);

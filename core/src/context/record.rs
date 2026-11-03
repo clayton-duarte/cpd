@@ -281,7 +281,15 @@ impl Record {
         };
         let draft = Draft::from_parts(
             kind,
-            record_id(8)?.into_iter().collect(),
+            optional(8)?
+                .map(|list| {
+                    list.split(',')
+                        .map(RecordId::parse)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(|e| bad(8, e))?
+                .unwrap_or_default(),
             record_id(9)?,
             plan,
         )
@@ -319,7 +327,13 @@ impl Record {
                 self.by.session.as_ref().map(SessionId::as_str),
                 self.by.plan.as_ref().map(PlanId::as_str),
                 self.text,
-                self.supersedes().first().map(RecordId::to_string),
+                (!self.supersedes().is_empty()).then(|| {
+                    self.supersedes()
+                        .iter()
+                        .map(RecordId::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }),
                 self.question().map(RecordId::to_string),
                 plan.map(|p| p.id.as_str()),
                 plan.map(|p| p.machine.as_str()),
@@ -336,12 +350,10 @@ impl Draft {
     /// (naming a question), `plan` for a plan or a brief only and required.
     fn from_parts(
         kind: RecordKind,
-        mut supersedes: Vec<RecordId>,
+        supersedes: Vec<RecordId>,
         question: Option<RecordId>,
         plan: Option<PlanRef>,
     ) -> Result<Draft, String> {
-        // Stub: only the first target is kept until multi-target is implemented.
-        supersedes.truncate(1);
         let extra =
             |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
         if !supersedes.is_empty() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
@@ -353,9 +365,10 @@ impl Draft {
         if plan.is_some() && !matches!(kind, RecordKind::Plan | RecordKind::Brief) {
             return Err(extra("plan", kind));
         }
-        if let Some(s) = supersedes.first()
-            && !may_supersede(kind, s.kind())
-        {
+        for s in &supersedes {
+            if may_supersede(kind, s.kind()) {
+                continue;
+            }
             return Err(format!(
                 "a {} record cannot supersede {s}, a {}",
                 kind.as_str(),

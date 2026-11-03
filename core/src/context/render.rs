@@ -26,6 +26,15 @@ pub type Retired = HashMap<String, String>;
 /// Only the records after `since` are listed, but which decision is active and
 /// which question is open is decided from all of `records`. An answer after
 /// `since` is listed with its question, whatever the question's position.
+/// ` (supersedes a, b)` for a record that supersedes any, else empty.
+fn supersedes_label(r: &Record) -> String {
+    if r.supersedes().is_empty() {
+        return String::new();
+    }
+    let ids: Vec<String> = r.supersedes().iter().map(ToString::to_string).collect();
+    format!(" (supersedes {})", ids.join(", "))
+}
+
 #[cfg(test)]
 pub fn markdown(
     title: &str,
@@ -59,7 +68,7 @@ pub fn markdown_retired(
     let mut answers: HashMap<String, Vec<&Indexed>> = HashMap::new();
     for entry in records {
         let (_, record) = entry;
-        if let Some(old) = record.supersedes().first() {
+        for old in record.supersedes() {
             successor.insert(old.to_string(), record);
         }
         if let Some(question) = record.question() {
@@ -145,11 +154,7 @@ pub fn markdown_retired(
         of_kind(RecordKind::Decision)
             .filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r))
             .map(|(_, r)| {
-                let replaces = r
-                    .supersedes()
-                    .first()
-                    .map(|s| format!(" (supersedes {s})"))
-                    .unwrap_or_default();
+                let replaces = supersedes_label(r);
                 item(r, &format!("{}{replaces}", r.text))
             }),
     );
@@ -213,11 +218,7 @@ pub fn markdown_retired(
     let active = of_kind(RecordKind::Note)
         .filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r))
         .map(|(_, r)| {
-            let replaces = r
-                .supersedes()
-                .first()
-                .map(|s| format!(" (supersedes {s})"))
-                .unwrap_or_default();
+            let replaces = supersedes_label(r);
             item(r, &format!("{}{replaces}", r.text))
         });
     let superseded = of_kind(RecordKind::Note).filter_map(|(_, r)| {
