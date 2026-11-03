@@ -103,7 +103,7 @@ fn a_lead_first_message_is_header_brief_and_pointer() {
         message,
         format!(
             "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\n\
-             Retry the failed payouts.\n\n{}\n",
+             Retry the failed payouts.\n\nTopics: ledger (1)\n\n{}\n",
             LEAD_POINTER
         )
     );
