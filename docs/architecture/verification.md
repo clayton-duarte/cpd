@@ -2,8 +2,7 @@
 
 This note documents how cpd verifies work today — the checks at `attempt submit`, the
 Gate at the merge, and the GitHub round-trip that carries a Lead Branch to a merged
-pull request — and the deprecation path the model states for it (`hs-d802`,
-`cpd context show --record hs-d802`, item 6). The verification behind every claim is
+pull request — and the deprecation path the model states for it (`hs-d802` (a record of machine `hs`), item 6). The verification behind every claim is
 [architecture-verification.md](../research/architecture-verification.md), section 6 and
 its disagreement 11 and 12; where the model and the docs differ this note reports both.
 Related notes: [[job-lifecycle]] (the states the checks move a Job through), [[sdk]] (the
@@ -73,8 +72,7 @@ flowchart TD
 ## The deprecation path
 
 The model says the Gates are marked for deprecation: the **PR gate is replaced by CI
-checks**, and the **merge gate by pre-commit/pre-merge hooks** (`hs-d802`,
-`cpd context show --record hs-d802`; [architecture-verification.md
+checks**, and the **merge gate by pre-commit/pre-merge hooks** (`hs-d802`; [architecture-verification.md
 §6](../research/architecture-verification.md)). Two parts of that are already the shipped
 default, and one part the docs do not say the way the model does — reported here, not
 silently resolved ([architecture-verification.md §6 disagreements
@@ -160,4 +158,4 @@ Every arrow above is a documented claim: push by rule P and the merge at [contra
   Mechanical checks](../CONTEXT.md), [CONTEXT — CI](../CONTEXT.md)
 - [docs/research/architecture-verification.md](../research/architecture-verification.md) —
   the verification of `hs-d802`, section 6
-- `hs-d802` (`cpd context show --record hs-d802`) — the model
+- `hs-d802` — the model
