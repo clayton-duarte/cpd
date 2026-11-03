@@ -234,7 +234,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract'
 
 ### 1.5 Text arguments
 
-Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
+Free text (Job `--title`, `--reason`, Context record text, Escalation questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A Workflow's title (`--title` of `workflow add` and `workflow edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`. A Workflow's Jira ticket (`--jira` of `workflow add` and `workflow edit`) is a Jira key matching `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`.
 
 ## 2. Command index
 
@@ -290,7 +290,7 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 **Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's records for this machine and letter (§2.1). The write transaction makes it race-free; only this machine writes its letter sequence.
 
-**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Any other write appends a new record; records are never edited.
+**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes` and `by.session`. Any other write appends a new record; records are never edited.
 
 ### 3.1 `context new`
 
@@ -334,7 +334,7 @@ No flags, no preconditions, no effects (one read transaction).
 ```json
 {"ok": true, "contexts": [
   {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "archived_at": null,
-   "records": 57, "open_questions": 2,
+   "records": 57,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
@@ -355,7 +355,7 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 
 **Callers** (Plan `explore-roles`, R10): the Lead and the Manager, as before and the **Worker**. An explore Worker (`scout` or `research`, §5.1) may run `context show` read-only, as its Spec's Deliverable section says; nothing enforces it (§2: anyone may run any command). Every other Worker's rule stays the Spec-only rule of the skill.
 
-Effects: none. Output: the Context, its records in index order and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: none. Output: the Context, its records in index order and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -403,17 +403,16 @@ Effects: none. Output: records with curated topics or short forms matching the q
 
 Idempotent: read-only.
 
-### 3.5 `context decide`, `context note`, `context ask`
+### 3.5 `context decide`, `context note`
 
 ```
 cpd context decide <text> [--supersedes <record>] [--context <id>]
 cpd context note <text> [--supersedes <record>] [--context <id>]
-cpd context ask <question> [--context <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
-| `<text>`, `<question>` | the record's `text` (§1.5) |
+| `<text>` | the record's `text` (§1.5) |
 | `--supersedes <record>` | `decide` and `note`: the id of the earlier record this one replaces (recency wins, contract §2.2). A decision may replace a decision or a note of the Context; a note may replace a note only |
 
 | Precondition | Code | Exit |
@@ -423,7 +422,7 @@ cpd context ask <question> [--context <id>]
 
 `supersedes_invalid` has `details: {record, kind, allowed}`: the id named, its kind and the kinds the writing record may supersede (`["decision", "note"]` for `decide`, `["note"]` for `note`). Nothing is written. A record superseded by a decision or note leaves force and every digest, stays readable and `context show` labels it superseded, naming its successor (§3.3).
 
-Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
+Effects: the record write above (one transaction), with kind `decision` (letter `d`) or `note` (`n`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
 
 ```json
 {"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": "hs-d2"}, "seq": 58}
@@ -431,26 +430,7 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-### 3.6 `context answer`
-
-```
-cpd context answer <question> <text> [--context <id>]
-```
-
-`<question>` is the record id of the question.
-
-| Precondition | Code | Exit |
-|---|---|---|
-| `<question>` is a record of this Context of kind `question` | `record_not_found` | 3 |
-| no answer in this Context's records names it yet | `question_answered` | 3 |
-
-Effects: the record write with kind `answer` (letter `a`) and `question` = `<question>`; **Event** `context-record`.
-
-```json
-{"ok": true, "record": {"id": "hs-a2", "kind": "answer", "at": "…", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "Yes, per machine.", "question": "hs-q3"}, "seq": 59}
-```
-
-Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
+`context ask` and `context answer` are removed (pro-d8): both are refused as usage errors (exit 2), as any unknown command is.
 
 ### 3.7 `context sync`
 
@@ -1916,7 +1896,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ## 8. `ask` and `answer`
 
-Escalations from a Worker to its Lead (§2.2, §3.5). The Context's `context ask` / `context answer` (§3.5, §3.6) are records, not Escalations.
+Escalations from a Worker to its Lead (§2.2, §3.5).
 
 ### 8.1 `ask`
 
