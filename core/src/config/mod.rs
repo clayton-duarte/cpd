@@ -77,6 +77,17 @@ pub enum ConfigCommand {
     /// Set the four Tier keys of config.toml (§14.2a)
     #[command(subcommand)]
     Tiers(TiersCommand),
+    /// Print or set the Experimental Features (§14.2b)
+    Experimental(ExperimentalArgs),
+}
+
+/// `cpd config experimental [<feature> <on|off>]` (§14.2b). STUB: not implemented yet.
+#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
+pub struct ExperimentalArgs {
+    /// One of the four Experimental Features
+    pub feature: Option<String>,
+    /// `on` or `off`
+    pub state: Option<String>,
 }
 
 /// The subcommands of `cpd config tiers` (§14.2a).
@@ -118,6 +129,9 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     if let Some(ConfigCommand::Tiers(TiersCommand::Set(set))) = args.command {
         return tiers_set(&home, set);
+    }
+    if let Some(ConfigCommand::Experimental(_)) = args.command {
+        unimplemented!("cpd config experimental (§14.2b)");
     }
     if args.migrate {
         return migrate(&home);
