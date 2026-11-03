@@ -12,6 +12,7 @@ import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText
 import { BOUND_SECONDS, blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
+import { installQuitMarker } from "./quit.ts";
 import { installChatPad, registerChatPad } from "./pad.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
 import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
@@ -46,6 +47,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
     // contract §6.1: the uniform 1-cell chat-slot pad replaces the cpd-pad status and header
     if (ctx.mode === "tui") installChatPad(ctx);
+    if (ctx.mode === "tui") installQuitMarker(ctx as never, host);
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {

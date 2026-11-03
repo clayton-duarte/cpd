@@ -13,6 +13,7 @@ use nix::errno::Errno;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
+use super::archive::archive_on_quit;
 use super::fork_wait::wait_for_source_with;
 use super::moves::first_message;
 use super::reload::{adapter_missing_with, may_exec, reload_due_with, reload_with, stop_pi_with};
@@ -75,6 +76,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         let row = patiently_with(&*clock, "reading the Session", || {
             env.store.read(|conn| row::load(conn, &args.id))
         })?;
+        let marker = env.home.quit_marker(&row.id);
         let (mut pi, pi_install, mut pi_stale) = match adopted.take() {
             // Steps 1–3 are not run and no pi is started. What the loop needs of the old process is restored here:
             // `recorded` is read from the row below, as at any start; `pi_install` is read now, which would hide a
@@ -90,12 +92,12 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         let mut recorded = row.file.is_some();
         let started = clock.now();
         let mut watched = started;
-        loop {
+        let status = loop {
             let exited = pi.try_wait_with(&*ports.spawn).map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}."))
                     .with("pid", pi.id())
             })?;
-            if exited.is_some() {
+            if let Some(status) = exited {
                 // A new install: restart before any store write (§6.7 "Reload on install").
                 if exe.replaced() && may_exec(&exe) {
                     return Err(reload_with(&ports, &exe, &row.id, None));
@@ -105,7 +107,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                         record_file(&mut env, &dirs, &row.id)
                     })?;
                 }
-                break;
+                break status;
             }
             pi_stale = pi_stale || pi_install.as_ref().is_some_and(Watched::changed);
             // A new cpd: re-exec at once, before any store access, and keep pi running (§6.7 "Reload on install").
@@ -161,7 +163,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 }
             }
             clock.sleep(file_poll);
-        }
+        };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = patiently_with(&*clock, "reporting the Session stopped", || {
             state::set(&mut env.store, "session run", &row.id, State::Stopped, None)
@@ -173,7 +175,16 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 e.message()
             );
         }
-        // Every exit, 0 included, leaves the Session `stopped`: the User resumes it here or closes the pane.
+        // The marker is consumed at every pi exit. Only the User's `/quit` leaves one (pro-d361), so a signal exit
+        // never archives; a Manager is archived only with its Context (§3.8), and a nonzero exit never is.
+        let quit = std::fs::remove_file(&marker).is_ok();
+        if quit && status.success() && row.role == Role::Lead {
+            match archive_on_quit(&mut env, &row.id) {
+                Ok(()) => return Ok(Output::Owned),
+                Err(e) => eprintln!("\n  {}: {}", e.code(), e.message()),
+            }
+        }
+        // Every other exit leaves the Session `stopped`: the User resumes it here or closes the pane.
         let name = patiently_with(&*clock, "reading the Session", || {
             env.store.read(|conn| row::load(conn, &args.id))
         })?
@@ -221,6 +232,17 @@ fn launch_pi(
         &mut std::io::stderr(),
     );
     git_guard::install(&env.home)?;
+    // A marker of an earlier pi is stale: only the User's `/quit` in this one may leave it (pro-d361).
+    match std::fs::remove_file(env.home.quit_marker(&row.id)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(CpdError::new(
+                ErrorCode::FileUnreadable,
+                format!("Cannot remove the stale quit marker: {e}."),
+            ));
+        }
+    }
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
         session: &row.id,
