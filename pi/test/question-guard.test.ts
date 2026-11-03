@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { boldPhi } from "../lib/phi.ts";
-import { classified, classifyError, classifyThrows, classifyTimedOut, classifyUntilAborted, Fixture, planShow, shown, stateCalls, waitFor, type ClassifyBehavior } from "./fake.ts";
+import { classified, classifyError, classifyThrows, classifyTimedOut, classifyUntilAborted, Fixture, planShow, shown, stateCalls, type ClassifyBehavior } from "./fake.ts";
 
 /** commands.md §15.26 (pro-d366): the turn-end question guard nudges a Lead or Manager that ended its turn on a plain-text question. */
 
@@ -27,7 +27,7 @@ async function started(role: Role = "lead"): Promise<Fixture> {
   f.respond("config", CONFIG_OK);
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   return f;
 }
 
@@ -52,7 +52,7 @@ async function turn(f: Fixture, o: Turn = {}): Promise<void> {
 }
 
 const typed = (f: Fixture) => f.pi.fire("input", { source: "interactive", text: "hello" });
-const nudged = (f: Fixture, n: number) => waitFor(`${n} user message(s)`, () => f.pi.userMessages.length >= n);
+const nudged = (f: Fixture, n: number) => f.userMessagesSent(n);
 
 /** The positive control: the same Session does nudge on a question turn; then the User types (the count resets) and the records are cleared. */
 async function control(f: Fixture): Promise<void> {
@@ -73,7 +73,7 @@ async function nothingSent(f: Fixture): Promise<void> {
 
 const warnings = (f: Fixture) => f.pi.noticeLevels.filter((n) => n.message.includes("classifier_unreachable"));
 const planReads = (f: Fixture) => f.argvs().filter((a) => a[0] === "plan" && a[1] === "show").length;
-const calls = (f: Fixture, n: number) => waitFor(`${n} classify call(s)`, () => f.pi.classifyCalls.length >= n);
+const calls = (f: Fixture, n: number) => f.classifyCalled(n);
 
 test("question guard: a Lead turn that ends on a question is classified and nudged once", async (t) => {
   const f = await started();
@@ -297,7 +297,7 @@ test("question guard: a tripped loop guard holds the nudge", async (t) => {
     await f.pi.fire("before_agent_start", { messageType: "custom", prompt: "x", message: { customType: "cpd", content: "x", details: {} } });
     await f.pi.fire("agent_start");
   }
-  await waitFor("the blocked state", () => stateCalls(f).includes(LOOP_LABEL));
+  await f.stateSet(LOOP_LABEL);
   await turn(f, { before: { messageType: "custom", prompt: "x", message: { customType: "cpd", content: "x", details: {} } } });
   await nothingSent(f);
 });
@@ -337,7 +337,7 @@ test("question guard: an unreachable classifier warns the User once and the next
     await f.quiet();
   };
   await run(classifyError, 1);
-  await waitFor("the first notice", () => warnings(f).length >= 1);
+  await f.noticesContaining("classifier_unreachable", 1);
   await run(classifyThrows, 2);
   await run(classifyTimedOut, 3);
   assert.equal(warnings(f).length, 1, "one notice for three failures");
@@ -346,7 +346,7 @@ test("question guard: an unreachable classifier warns the User once and the next
   await run(classified(0.1), 4); // reached: re-arms
   assert.equal(warnings(f).length, 1);
   await run(classifyError, 5);
-  await waitFor("the second notice", () => warnings(f).length >= 2);
+  await f.noticesContaining("classifier_unreachable", 2);
   await f.quiet();
   assert.equal(warnings(f).length, 2);
   assert.deepEqual(f.pi.userMessages, []);

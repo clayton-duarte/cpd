@@ -410,6 +410,26 @@ export class Fixture {
     await waitFor("the follower", () => this.follows().length > 0);
   }
 
+  /** Resolves when pi was sent `n` user messages. */
+  async userMessagesSent(n: number): Promise<void> {
+    await waitFor(`${n} user message(s)`, () => this.pi.userMessages.length >= n);
+  }
+
+  /** Resolves when the classifier was called `n` times. */
+  async classifyCalled(n: number): Promise<void> {
+    await waitFor(`${n} classify call(s)`, () => this.pi.classifyCalls.length >= n);
+  }
+
+  /** Resolves when the adapter set the blocked state `label`. */
+  async stateSet(label: string): Promise<void> {
+    await waitFor(`the state ${label}`, () => stateCalls(this).includes(label));
+  }
+
+  /** Resolves when `n` notices whose message contains `part` were shown. */
+  async noticesContaining(part: string, n: number): Promise<void> {
+    await waitFor(`${n} notice(s) containing ${part}`, () => this.pi.noticeLevels.filter((x) => x.message.includes(part)).length >= n);
+  }
+
   /** `--since` of every follower start. */
   sinces(): number[] {
     return this.follows().map((c) => Number(c.since));
