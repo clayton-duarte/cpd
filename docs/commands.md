@@ -117,7 +117,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `usage` | 2 | unknown flag, missing argument, flag value of the wrong shape, exclusive flags together |
 | `plan_required`, `context_required`, `session_required` | 2 | the command needs one and none was selected |
 | `workflow_required` | 2 | the command needs a Workflow, `--workflow` is omitted and the Plan does not have exactly one Workflow that is not `cancelled` (R34) |
-| `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
+| `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede, or a record twice (§3.5); `details: {record, kind, allowed}` |
+| `supersedes_unlinked` | 3 | `context decide` or `context note` whose text names, after `supersedes`, `overrules` or `replaces`, a record in force of the Context that `--supersedes` does not list (§3.5, the prose check); `details: {ids}`, the unlisted ids in text order; nothing is written |
 | `curation_not_pending` | 3 | `context retire` (§3.17) named a record that has no `pending` retirement: none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
 | `agent_forbidden` | 3 | `context archive`, `context unarchive`, `plan archive`, `plan unarchive`, `session archive` or `session unarchive` (§3.9, §3.10, §4.10, §4.11, §10.10, §10.11) ran with `CPD_SESSION` or `CPD_ATTEMPT` set and non-empty in its environment: archive is the User's and the engine's, not an agent's; refused before the Ledger is opened; message `cpd <command> is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule.`; `details` `{command, session, attempt}`, `session` and `attempt` the values of `CPD_SESSION` and `CPD_ATTEMPT`, or `null` when unset or empty |
 | `user_only` | 3 | `context curation` or `context retire` (§3.16 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
@@ -364,7 +365,7 @@ Effects: none. Output: the Context, its records in index order and `markdown`, t
 ```json
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
  "records": [{"seq": 42, "id": "hs-d7", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "machine": "hs",
-              "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "One engine per machine.", "supersedes": "hs-d2"}],
+              "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "One engine per machine.", "supersedes": ["hs-d2"]}],
  "markdown": "# Building cpd\n\n## Plans\n…"}
 ```
 
@@ -406,28 +407,42 @@ Idempotent: read-only.
 ### 3.5 `context decide`, `context note`, `context ask`
 
 ```
-cpd context decide <text> [--supersedes <record>] [--context <id>]
-cpd context note <text> [--supersedes <record>] [--context <id>]
+cpd context decide <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
+cpd context note <text> [--supersedes <record>]... [--no-supersedes] [--context <id>]
 cpd context ask <question> [--context <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `<text>`, `<question>` | the record's `text` (§1.5) |
-| `--supersedes <record>` | `decide` and `note`: the id of the earlier record this one replaces (recency wins, contract §2.2). A decision may replace a decision or a note of the Context; a note may replace a note only |
+| `--supersedes <record>` | `decide` and `note`: the id of an earlier record this one replaces (recency wins, contract §2.2). Repeatable: `--supersedes hs-d2 --supersedes hs-d5`, or the comma form `--supersedes hs-d2,hs-d5` (ids hold no comma), or both. A decision may replace a decision or a note of the Context; a note may replace a note only |
+| `--no-supersedes` | `decide` and `note`: a bool flag that confirms the text names no record this one replaces, so the prose check below is skipped. Conflicts with `--supersedes` (`usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--supersedes` names a record of this Context | `record_not_found` | 3 |
+| each `--supersedes` record is a record of this Context | `record_not_found` | 3 |
+| `--supersedes` names one record twice, by repeating it or in the comma form | `supersedes_invalid` | 3 |
 | `--supersedes` on a `note` names a record that is not a `note`, or on a `decide` names a record that is neither a `decision` nor a `note` | `supersedes_invalid` | 3 |
+| the text names, after `supersedes`, `overrules` or `replaces`, an unlinked record (below) and `--no-supersedes` is not given | `supersedes_unlinked` | 3 |
 
-`supersedes_invalid` has `details: {record, kind, allowed}`: the id named, its kind and the kinds the writing record may supersede (`["decision", "note"]` for `decide`, `["note"]` for `note`). Nothing is written. A record superseded by a decision or note leaves force and every digest, stays readable and `context show` labels it superseded, naming its successor (§3.3).
+`supersedes_invalid` has `details: {record, kind, allowed}`: the id named, its kind and the kinds the writing record may supersede (`["decision", "note"]` for `decide`, `["note"]` for `note`). Every target is validated on its own, in `--supersedes` order. Nothing is written. A record superseded by a decision or note leaves force and every digest, stays readable and `context show` labels it superseded, naming its successor (§3.3).
 
-Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
+**Prose supersession** (D4). A text that says it replaces a record without listing it is refused, so that every supersession is linked. The check runs after the retry check (below) and before the write:
+
+- A **phrase** is one of the verbs `supersedes`, `overrules` or `replaces` (case-insensitive), followed by one or more record ids (§2.1) joined by `,`, `and` or `&`, for example `supersedes pro-d344 and pro-d341`. The ids of a phrase are those directly after its verb, up to the first word that is neither an id nor a joiner.
+- A named id is **unlinked** when it is an in-force record of this Context whose kind the new record may supersede (for `decide`, a decision or a note; for `note`, a note) and `--supersedes` does not list it. An id of another Context, a record out of force (superseded or retired), or a record of a kind the new record may not supersede is not unlinked, and no refusal follows from it.
+- Any unlinked id makes the write fail `supersedes_unlinked` (exit 3), `details.ids` the unlinked ids in text order. Nothing is written.
+- A partial amendment is not a phrase: in `supersedes A1 of pro-d342` no record id follows the verb, so nothing is matched.
+- `--no-supersedes` skips the check, whatever the text says.
+- The retry is decided first: an identical latest record is returned as `already` even when its text would fail the check.
+
+Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`; `supersedes` = the ids named, in order, stored as one comma list (contract §4.4). **Event** `context-record`. No tmux.
 
 ```json
-{"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": "hs-d2"}, "seq": 58}
+{"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": ["hs-d2", "hs-d5"]}, "seq": 58}
 ```
+
+`supersedes` is an array of id strings, absent when the record replaces none. It was a single string before `context-supersedes-list` (contract §4.5): a reader that expects a string breaks on it.
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
