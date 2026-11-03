@@ -2,7 +2,12 @@
 
 ## Summary
 
-(written by the final part)
+**Verdict.** No existing open-source chat is an out-of-the-box base for cpd-webui. Eight candidates were read to source or docs (section 5): five are **parts** (pi-web-ui, OpenCode `session-ui`, t3code, assistant-ui with react-pi, xterm.js) and three are **reference** (`@jmfederico/pi-web`, pimote, pi-pocket); none is **base**. This changes pro-d1: "full chat out of the box, only cosmetic customisation" is met almost literally only by the terminal (xterm.js on the real pi TUI); any web-native chat means writing a pi runtime, a bridge, tool cards, two dialogs and the cockpit look, about 2,400-4,500 lines (guess, section 7). Nothing was run or benchmarked except where a finding says measured; every speed cell is read from code.
+**Recommendation (8).** **Option D, the hybrid, started by a measured spike:** the terminal (B) first for pi-runner Sessions if the spike passes, a web-native surface (A: assistant-ui primitives plus an own pi and durable adapter, TanStack Virtual, Streamdown) for durable Sessions and for the dialogs a terminal cannot own; evolving `web/` (C) is not started. Reasons in the User's order: make it work (only B reaches 59 of 59 parity rows with no chat code, and only A covers durable Sessions), make it fast (B is pi's own speed; no web chat passes the speed list as shipped), make it good (web-native wins last).
+**The 3 facts that decide it.** (1) The one candidate with the best adapter fit fails the speed list on the pi path: react-pi loads the whole transcript, mounts every row, re-projects the whole agent run per token and uses index ids, so C1, C2, C3 and C6 fail (read, d2); the other web chats render all or a growing set of messages, and the two that are virtualised (OpenCode, t3code) cannot be embedded. (2) The terminal is exact but has two holes: xterm.js 6.0.0 has no Kitty keyboard, so Shift+Enter sends `\r` (measured: no `kitty` in the 6.0.0 source), and a pi-durable session cannot be attached with a terminal (read, r6). (3) The durable host's `attach` always sends the whole transcript, with no window and `history` only after attach (read, s2), so first paint of a 20-30 MB session (C1, 500 ms) needs a protocol change in durable-leads for any web-native chat.
+**Open and unmeasured (8.2).** Nothing about candidate speed was measured. The spike settles four facts, with r7's numbers: xterm paint with pi fullscreen on the 25 MB session (keydown to paint p95 at most 50 ms, no long task over 100 ms, per-frame scripting p95 at most 8 ms and within 20% across N); react-pi and an own runtime on a real 20-30 MB session (first paint at most 500 ms, at most about 100 live subtrees, prepend shift at most 1 px, warm switch at most 100 ms); the durable attach cost on a real large transcript (first paint at most 500 ms, snapshot under the 8 MiB slow-client threshold); and Shift+Enter without Kitty keyboard (20 of 20 trials, a guess). Also unverified: `cpd_plan_review`'s runtime schema, the Inbox id type, the 16 Dango hex values, pi 1.3.0 against 1.5.0, and everything in the host's unread files (section 9).
+**Follow-up Plans (8.3, sizes guess).** `chat-spike` (3-5 Jobs), `webui-panes` (6-9 PRs), `webui-theme` (2-3), `webui-terminal-chat` (2-4), `durable-windowed-attach` (2-3, in durable-leads), `webui-host-relay` (3-5), `webui-native-chat` (8-12).
+**Decisions asked (10).** Eight, each with a recommended option first: D1 hybrid with the terminal first, over web-native only; D2 React; D3 take pinned npm dependencies, copy only small MIT leaf modules, never fork an app; D4 run the spike before committing; D5 keep the `web/` adapter pieces and throw away the chat view; D6 desktop first, phone after; D7 palette plus the structural parts of the look, not cell parity; D8 ask durable-leads for a windowed attach. This report recommends and decides nothing; the User answers and the Lead records each answer as a Context decision.
 
 ## 1. Scope, sources and labels
 
@@ -525,6 +530,21 @@ Labels are those of sections 5.1-5.8. Speed is the count of C1..C12 cells by lab
 | pi-pocket (d6) | reference | closest compact look; no preview, no plan review | 5 pass, 3 partial, 2 fail, 2 unk | 2,500-4,000 + fork | no (global store, own server) | strong layers; density built in | 92% one author; pins pi-durable 1.4.0 |
 | terminal-in-web (r6) | parts | exact by construction; Shift+Enter, images, durable sessions break | n/a to the web layer; C1, C7 to take from pi's TUI | 150-300 relay (this report's guess) | yes, trivially | 16-colour `ITheme` only; density is pi's | xterm 6.0.0 (2025-12-22); Kitty keyboard in unreleased 7.0.0 |
 
+The same speed cells, per item. **P** pass, **p** partial, **F** fail, **?** unknown or unverified, **n/a** not applicable; a star marks "pass by design" (read, from the paging or caching design, not from a trace). Cells for pi-web-ui and OpenCode are this report's mapping of r2 and r3 (inferred); the others are the findings' own tables. t3code's C9 is "fail (partial)" in d1 and counted as a partial there. pi-pocket's C10 is mixed (search jump and live row pass, expand state partial). The terminal row is by construction: pi, not the page, holds the transcript, so only C1, C7 and C8 are real questions for it.
+
+| | C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 | C10 | C11 | C12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pi-web-ui | F | F | F | F | ? | ? | ? | F | F | ? | ? | p |
+| OpenCode | P* | P | P* | P | P | ? | ? | P* | P | p | P | ? |
+| t3code | P* | P | p | P | P | P | ? | ? | p | P | P | F |
+| assistant-ui + react-pi | F | F | F | p | P | F | ? | p | P | F | p | p |
+| jmfederico pi-web | F | F | F | F | P | P | ? | F | p | n/a | p | p |
+| pimote | F | F | p | P | p | F | ? | F | p | F | p | F |
+| pi-pocket | ? | p | F | P | P | P | ? | F | p | P | P | p |
+| terminal (xterm) | ? | n/a | ? | n/a | n/a | n/a | ? | ? | n/a | n/a | n/a | n/a |
+
+Reading the grid (inferred): C7 (typing during streaming) is unknown for every web candidate, and it is the item the User feels most directly; C12 (hooks the base exposes) is a fail or partial for every candidate except none passing, which is why the assistant-ui path needs its own runtime; the only candidates with a virtualised, anchored list that were read (OpenCode, t3code) are the two that cannot be embedded (5.2, 5.3).
+
 ## 6. Theming and the three cpd panes
 
 ### 6.1 The Dango v3 mapping
@@ -954,10 +974,10 @@ All as the finding recorded them on 2026-11-03 EST. A "commit" is what the findi
 | 5.5 jmfederico (d3) | https://github.com/jmfederico/pi-web | commit `8646931f1e19` (2026-10-31); `@jmfederico/pi-web` 1.202610.9 (npm 2026-10-30) |
 | 5.6 pimote (d4) | https://github.com/alennartz/pimote | commit `1f876abc97144b76d88c8bec76786edcdb258797` (2026-10-30), `@pimote/pimote` 0.15.5 |
 | 5.7 pi-pocket (d6) | https://github.com/TannerMidd/pi-pocket; https://github.com/hachej/boring-ui; https://github.com/earendil-works/pi-durable-cloudflare | pi-pocket `db1e531` (main, 2026-10-30, 0.27.0); boring-ui `e383519` (2026-11-03, 0.4.51); pi-durable-cloudflare `fc596b2` (2026-10-31; d6 gives package `0.87.1` in its header and `1.4.0` in §6, R4) |
-| 5.8 terminal-in-web (r6) | npm `@xterm/xterm`, `ghostty-web`; https://github.com/tsl0922/ttyd; https://github.com/butlerx/wetty | `@xterm/xterm` 6.0.0 (2025-12-22), `addon-webgl` 0.19.0, `addon-fit` 0.11.0, `addon-serialize` 0.14.0, `addon-unicode11` 0.9.0, `addon-image` 0.9.0, `addon-search` 0.16.0; `ghostty-web` 0.4.0; ttyd 1.7.7; wetty 4.2.1; measured with `@xterm/headless` 6.0.0 on node v22.22.2 |
-| Speed techniques (r7) | https://github.com/TanStack/virtual, https://github.com/inokawa/virtua, https://github.com/LegendApp/legend-list, https://github.com/vercel/streamdown, https://github.com/pierrecomputer (`@pierre/diffs`), https://github.com/shikijs/shiki | `@tanstack/virtual-core` 3.19.11, virtua 0.54.1, `@legendapp/list` 3.7.1, Streamdown 2.7.1, markstream-react 2.0.23, `@pierre/diffs` 1.6.3, shiki 4.6.0, marked 18.1.3 |
+| 5.8 terminal-in-web (r6) | npm `@xterm/xterm`, `ghostty-web`, ttyd, wetty (repository URLs not given in r6's summary; r6 read them through `npm view` and the GitHub API) | `@xterm/xterm` 6.0.0 (2025-12-22), `addon-webgl` 0.19.0, `addon-fit` 0.11.0, `addon-serialize` 0.14.0, `addon-unicode11` 0.9.0, `addon-image` 0.9.0, `addon-search` 0.16.0; `ghostty-web` 0.4.0; ttyd 1.7.7; wetty 4.2.1; measured with `@xterm/headless` 6.0.0 on node v22.22.2 |
+| Speed techniques (r7) | https://github.com/TanStack/virtual and https://github.com/vercel/streamdown (as in section 4.1); npm `virtua`, `@legendapp/list`, `markstream-react`, `@pierre/diffs`, `shiki`, `marked` | `@tanstack/virtual-core` 3.19.11, virtua 0.54.1, `@legendapp/list` 3.7.1, Streamdown 2.7.1, markstream-react 2.0.23, `@pierre/diffs` 1.6.3, shiki 4.6.0, marked 18.1.3 |
 
-URLs not given in a finding (the ttyd, wetty, virtua, Legend, Pierre and shiki repository addresses above) are this report's best identification of the project the finding names by npm name; the finding's own `npm view` or tarball is the evidence. Unverified as URLs.
+Where a row names a package instead of a URL, the finding did not give a repository address in the text this report read; the finding's own `npm view` or tarball is the evidence.
 
 ### A.3 Report-internal ids
 
