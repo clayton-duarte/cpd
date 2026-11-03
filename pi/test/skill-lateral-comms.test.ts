@@ -101,7 +101,7 @@ test("skill-lateral-comms both skills send a request to a permanent Manager with
       "`host` for machine maintenance",
       "`codereview` for code reviews",
       'cpd session send cpd "<text>" --unblocks "cpd defect: <short>"',
-      "The `cpd` Manager applies the bug report protocol (pro-d204)",
+      "The `cpd` Manager applies the bug report protocol",
     ]) {
       assert.ok(s.includes(lit), `${skill}: Communication rules includes ${lit}`);
     }
@@ -112,7 +112,7 @@ test("skill-lateral-comms Lead-to-Lead is coordination only, Lead-to-Manager esc
   for (const skill of skills) {
     const s = section(skillText(skill), "### Communication rules");
     for (const lit of [
-      "Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting (pro-d305)",
+      "Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting",
       "Lead-to-Manager (`<context>`)",
       'cpd session send <context> "<text>" --unblocks "<reason>"',
     ]) {

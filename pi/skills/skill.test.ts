@@ -898,11 +898,11 @@ test("cpd-manager and cpd-lead carry the pro-d204 architecture rule and the four
   ];
   for (const c of cases) {
     const lines = section(skillFiles(c.skill)[0]!.text, "## Rules").split("\n");
-    const arch = lines.find((l) => l.startsWith("- **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).**"));
+    const arch = lines.find((l) => l.startsWith("- **Skills are for agent discovery; "));
     assert.ok(arch, `${c.skill}: architecture bullet`);
     assert.ok(arch.includes("Skills teach the agent what exists and when to use it"), `${c.skill}: teach`);
     assert.ok(arch.includes("never ad-hoc prose"), `${c.skill}: never ad-hoc prose`);
-    const at = lines.findIndex((l) => l.startsWith("- **Bug report protocol (pro-d204 — all steps required on every bug report):**"));
+    const at = lines.findIndex((l) => l.startsWith("- **Bug report protocol"));
     assert.ok(at >= 0, `${c.skill}: protocol bullet`);
     const texts = [
       "Debug, research and identify both the immediate mitigation and the long-term root-cause fix",

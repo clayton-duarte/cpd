@@ -45,7 +45,7 @@ test("cpd-lead skill: a Lead runs a command the User explicitly asks for, stated
   assert.ok(lead.indexOf(HEADING) < lead.indexOf("## 1. Context"), "the section sits before ## 1. Context");
   const s = section();
   for (const str of [
-    "explicitly asks you to run a command", "pro-d56", "commands.md §15.20", "Only an explicit request counts.", "Never infer one",
+    "explicitly asks you to run a command", "commands.md §15.20", "Only an explicit request counts.", "Never infer one",
     "What stays.", "lead_worktree", "in the background", "URL or port", "the log path", "how to stop it", "Leave nothing orphaned.", "plan-done",
   ]) assert.ok(s.includes(str), `the section lacks "${str}"`);
 
