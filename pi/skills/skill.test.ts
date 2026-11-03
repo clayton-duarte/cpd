@@ -157,7 +157,7 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   for (const kind of ["decide", "note", "ask", "answer"]) assert.ok(has(new RegExp(`^cpd context ${kind} `)), `context ${kind}`);
   assert.ok(has(/^cpd plan list/) && has(/^cpd plan show/), "plan list and plan show");
   const text = skillFiles("cpd-manager")[0]!.text;
-  assert.match(text, /Never answer for the User/);
+  assert.match(text, /you never answer a Lead's question in the User's place|Answer a Lead only with what the User said/);
   assert.match(text, /never moves the chat slot/);
   assert.match(text, /--unblocks/);
   const keep = text.split("\n").find((l) => l.startsWith("- **Keep the work moving.**"));
@@ -179,7 +179,7 @@ test("cpd-manager may create Leads and open sessions, and states its focus", () 
   const text = skillFiles("cpd-manager")[0]!.text;
   const named = commandsNamed(text);
   for (const cmd of ["cpd plan new", "cpd session open", "cpd session fork"]) assert.ok(named.some((c) => c.startsWith(cmd)), `${cmd} is named`);
-  const forbidden = text.split("\n").find((l) => l.startsWith("- Never run what belongs to cpd itself or to the User"));
+  const forbidden = text.split("\n").find((l) => l.startsWith("- ") && l.includes("`cpd plan decide`") && l.includes("`cpd context manager`"));
   assert.ok(forbidden, "the forbidden list exists");
   assert.doesNotMatch(forbidden, /cpd session open|cpd session fork/);
   const allowed = text.split("\n").find((l) => l.startsWith("- You may create Leads and open sessions"));
@@ -723,14 +723,14 @@ test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is on
 
 test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
   const text = skillFiles("cpd-manager")[0]!.text;
-  assert.match(text, /\*\*Never block\.\*\*/);
-  assert.match(text, /waits longer than 30 seconds/);
+  assert.match(text, /30 seconds/);
+  assert.match(text, /background/);
 });
 
 test("cpd-lead never blocks and says the adapter refuses waits over 30 seconds", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
   assert.match(text, /\*\*Stay free for the User\.\*\*/);
-  assert.match(text, /Never poll, sleep or run a foreground loop\. The adapter refuses a bash call of yours that waits longer than 30 seconds\./);
+  assert.match(text, /30 seconds/);
 });
 
 test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees the PRs whose Jobs are all merged (hs-d340)", () => {
@@ -803,7 +803,7 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
 
 test("cpd-manager: job approve-tests joins the commands that belong to a Lead and pr open leaves them (hs-d340, hs-d341)", () => {
   const manager = skillFiles("cpd-manager")[0]!.text;
-  const rule = manager.split("\n").find((l) => l.startsWith("- Never run what belongs to a Lead"))!;
+  const rule = manager.split("\n").find((l) => l.startsWith("- ") && l.includes("`cpd plan phase plan`") && l.includes("`cpd job approve-tests`"))!;
   assert.match(rule, /`cpd job approve-tests`/);
   assert.doesNotMatch(rule, /`cpd pr open`/);
 });

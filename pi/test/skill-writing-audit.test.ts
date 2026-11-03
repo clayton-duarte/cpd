@@ -222,3 +222,73 @@ test("adopted Workflow reminders outside Scoping and Addressing are one-line poi
   });
   assert.deepEqual(bad, [], bad.join("\n"));
 });
+
+const rulesBullets = (text: string): { n: number; line: string }[] => {
+  const rules = section(text, "## Rules");
+  const base = text.split("\n").indexOf("## Rules") + 1;
+  return rules.split("\n").flatMap((line, i) => (line.startsWith("- ") ? [{ n: base + i, line }] : []));
+};
+const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
+
+test("no Rules bullet of either skill starts with Never or Do not", () => {
+  const bad: string[] = [];
+  for (const [name, text] of [["cpd-lead", lead], ["cpd-manager", manager]] as const)
+    for (const b of rulesBullets(text))
+      if (/^- (\*\*)?(never|do not)\b/i.test(b.line)) bad.push(`${name}/SKILL.md:${b.n}: ${b.line.slice(0, 90)}`);
+  // R17 kept: the command lists and the git list stay word for word.
+  const bulletWith = (text: string, needles: string[]) => rulesBullets(text).some((b) => needles.every((n) => b.line.includes(n)));
+  const cpdOwn = ["`cpd plan decide`", "`cpd watch`", "`cpd attempt run`", "`cpd job dispatch`", "`cpd session run`", "`cpd tui`", "`cpd events follow`"];
+  const leadOwn = ["`cpd plan phase plan`", "`cpd workflow add`", "`cpd job add`", "`cpd plan review`", "`cpd plan lock`", "`cpd answer`", "`cpd job approve-tests`"];
+  const git = ["checkout, switch, reset, rebase, merge, pull, stash"];
+  assert.ok(bulletWith(lead, cpdOwn), "cpd-lead keeps the cpd-owned command list");
+  assert.ok(bulletWith(manager, [...cpdOwn, "`cpd context manager`"]), "cpd-manager keeps the cpd-owned command list");
+  assert.ok(bulletWith(manager, leadOwn), "cpd-manager keeps the Lead-owned command list");
+  assert.ok(bulletWith(lead, git), "cpd-lead keeps the git list");
+  assert.ok(bulletWith(manager, git), "cpd-manager keeps the git list");
+  assert.deepEqual(bad, [], `Rules bullets that start with a negation:\n${bad.join("\n")}`);
+});
+
+test("negation stays under the ratchet in both skills and spec-files", () => {
+  const spec = files("cpd-lead").find((f) => f.name.endsWith("references/spec-files.md"))!.text;
+  const re = /\b(never|do not|don't)\b/gi;
+  const got = { lead: count(lead, re), manager: count(manager, re), spec: count(spec, re) };
+  const over: string[] = [];
+  if (got.lead > 86) over.push(`cpd-lead/SKILL.md has ${got.lead} negations, at most 86`);
+  if (got.manager > 31) over.push(`cpd-manager/SKILL.md has ${got.manager} negations, at most 31`);
+  if (got.spec > 20) over.push(`cpd-lead/references/spec-files.md has ${got.spec} negations, at most 20`);
+  assert.deepEqual(over, [], over.join("; "));
+});
+
+test("ready_to_post is one chat line and cpd pr post waits for the User, stated once", () => {
+  const problems: string[] = [];
+  const review = section(lead, "#### Pull request review");
+  const lineOf = (text: string, s: string) => text.split("\n").findIndex((l) => l.toLowerCase().includes(s.toLowerCase())) + 1;
+  if (!/one chat line/i.test(review)) problems.push("#### Pull request review lacks `one chat line`");
+  if (!review.includes("cpd pr post --workflow <key>") || !/only when the User/.test(review)) problems.push("#### Pull request review lacks `cpd pr post --workflow <key>` ... `only when the User`");
+  const n = count(lead, /one chat line/gi);
+  if (n !== 1) problems.push(`\`one chat line\` occurs ${n} times in cpd-lead/SKILL.md (first at line ${lineOf(lead, "one chat line")}), want 1`);
+  const row = lead.split("\n").find((l) => l.startsWith("| `pr-feedback` |")) ?? "";
+  if (!row.includes("](#pull-request-review)")) problems.push(`the pr-feedback row (line ${lineOf(lead, "| `pr-feedback` |")}) lacks a link to #pull-request-review`);
+  if (!section(lead, "#### Posting for review").includes("](#pull-request-review)")) problems.push(`#### Posting for review (line ${lineOf(lead, "#### Posting for review")}) lacks a link to #pull-request-review`);
+  for (const s of ["never ask whether to post", "never post and never ask"]) if (lead.toLowerCase().includes(s)) problems.push(`\`${s}\` at line ${lineOf(lead, s)}`);
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+test("the session and read-only rules lead with their positive target", () => {
+  const problems: string[] = [];
+  const lb = rulesBullets(lead);
+  for (const b of lb) if (b.line.startsWith("- Never review inside")) problems.push(`cpd-lead/SKILL.md:${b.n}: starts with Never review inside`);
+  for (const b of lb) if (b.line.startsWith("- **Never review inside")) problems.push(`cpd-lead/SKILL.md:${b.n}: starts with **Never review inside`);
+  const keep = lb.find((b) => b.line.startsWith("- **Keep your session"));
+  if (!keep) problems.push("cpd-lead Rules has no bullet starting `- **Keep your session`");
+  else if (!keep.line.includes("explore Job")) problems.push(`cpd-lead/SKILL.md:${keep.n}: the Keep your session bullet lacks \`explore Job\``);
+  for (const [name, text] of [["cpd-lead", lead], ["cpd-manager", manager]] as const) {
+    const stay = rulesBullets(text).find((b) => b.line.startsWith("- **Stay free for the User.**"));
+    if (!stay) problems.push(`${name} Rules has no bullet starting \`- **Stay free for the User.**\``);
+    else for (const w of ["30 seconds", "background"]) if (!stay.line.includes(w)) problems.push(`${name}/SKILL.md:${stay.n}: Stay free bullet lacks \`${w}\``);
+  }
+  const nb = manager.split("\n").findIndex((l) => l.includes("**Never block.**")) + 1;
+  if (nb) problems.push(`cpd-manager/SKILL.md:${nb}: still has **Never block.**`);
+  if (!lead.includes("Events arrive as new turns")) problems.push("cpd-lead lacks `Events arrive as new turns`");
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
