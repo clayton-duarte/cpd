@@ -13,8 +13,19 @@ const MIN_BARE_PREFIX: usize = 4;
 
 /// The Session `reference` names for the caller in `CPD_SESSION` (see [`resolve_as`]).
 pub(super) fn resolve(conn: &Connection, reference: &SessionRef) -> Result<SessionId, CpdError> {
-    let caller = super::sender()?;
+    let raw = ["CPD_SESSION", "PI_SESSION_ID"]
+        .iter()
+        .find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
+        .map(|v| v.to_string_lossy().into_owned());
+    let caller = caller_of(conn, raw.as_deref());
     resolve_as(conn, reference, caller.as_ref())
+}
+
+/// The Session the raw caller value names, in any form of a [`SessionRef`]; `None` when unset, empty, malformed or
+/// unresolvable, so the relative forms are skipped and the command does not fail.
+pub(super) fn caller_of(conn: &Connection, raw: Option<&str>) -> Option<SessionId> {
+    let reference = raw.filter(|r| !r.is_empty())?.parse::<SessionRef>().ok()?;
+    resolve_as(conn, &reference, None).ok()
 }
 
 /// The Session `reference` names for `caller`, in order: exact id; exact name (live, non-fork, latest Attempt first);

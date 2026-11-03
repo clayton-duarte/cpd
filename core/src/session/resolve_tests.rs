@@ -1,7 +1,7 @@
 //! Red tests for the Session resolver's key order (commands.md §1.3) and the `SessionRef` key syntax. They call
 //! `resolve_as` with an explicit caller: none reads `CPD_SESSION`.
 
-use super::resolve::resolve_as;
+use super::resolve::{caller_of, resolve_as};
 use crate::args::SessionRef;
 use crate::error::ErrorCode;
 use crate::home::CpdHome;
@@ -254,4 +254,18 @@ fn resolve_as_refuses_an_unknown_key_as_session_not_found() {
         f.resolve("cpd:plan-x:nope", None),
         Err(ErrorCode::SessionNotFound)
     );
+}
+
+#[test]
+fn a_caller_given_as_a_short_form_is_resolved_and_a_bad_caller_skips_the_relative_forms() {
+    let mut f = fixture();
+    let lx = SessionId::parse("lx").unwrap();
+    let of = |f: &mut Fixture, raw: Option<&str>| f.store.read(|c| Ok(caller_of(c, raw))).unwrap();
+    assert_eq!(of(&mut f, Some("lx")), Some(lx.clone()));
+    assert_eq!(of(&mut f, Some("cpd:plan-x")), Some(lx.clone()));
+    assert_eq!(of(&mut f, Some("plan-x")), Some(lx));
+    assert_eq!(of(&mut f, None), None);
+    assert_eq!(of(&mut f, Some("")), None);
+    assert_eq!(of(&mut f, Some("no-such-session")), None);
+    assert_eq!(of(&mut f, Some("bad id with spaces")), None);
 }

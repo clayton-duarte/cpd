@@ -96,6 +96,7 @@ fn world() -> World {
     unsafe {
         std::env::set_var("CPD_HOME", home.root());
         std::env::remove_var("CPD_SESSION");
+        std::env::remove_var("CPD_ATTEMPT");
         std::env::remove_var("PI_SESSION_ID");
     }
     let base = runner.calls().len();
