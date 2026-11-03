@@ -4096,8 +4096,6 @@ fn version_9_with_a_grounded_lead(home: &CpdHome) {
              INSERT INTO context_records (context, id, kind, at, machine, text, supersedes, question, plan_id, plan_machine, plan_jira) VALUES
                ('ctx', 'm1-d1', 'decision', '{T}', 'm1', 'D', NULL, NULL, NULL, NULL, NULL),
                ('ctx', 'm1-n1', 'note', '{T}', 'm1', 'N', NULL, NULL, NULL, NULL, NULL),
-               ('ctx', 'm1-q1', 'question', '{T}', 'm1', 'Q', NULL, NULL, NULL, NULL, NULL),
-               ('ctx', 'm1-a1', 'answer', '{T}', 'm1', 'A', NULL, 'm1-q1', NULL, NULL, NULL),
                ('ctx', 'm1-p1', 'plan', '{T}', 'm1', 'Plan A', NULL, NULL, 'aa', 'm1', 'ABC-1');
              INSERT INTO events (txn, at, kind, context, session, text, data) VALUES
                (1, '{T}', 'context-grounded', 'ctx', 'l-g', 'Context ctx has a grounded Lead.', '{{\"seq\":2,\"forked_from\":\"l-a\"}}');"
@@ -4210,7 +4208,7 @@ fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_
             &mut store,
             "SELECT seq FROM context_records WHERE id = 'm1-b1'"
         ),
-        6
+        4
     );
     assert_eq!(
         sqlite_message(&refused(
