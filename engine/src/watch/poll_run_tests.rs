@@ -78,3 +78,14 @@ fn a_panicking_poll_is_a_failure_and_not_a_dead_engine() {
         failure.message
     );
 }
+
+#[test]
+fn the_poll_output_reaches_the_engine_unchanged_so_the_rebind_is_the_polls_own() {
+    // The rebind of a reopened pull request (pro-d362) runs inside `cpd pr poll`: the engine's `PollRun` only carries the
+    // poll's JSON, whatever it holds, and does no reopen work of its own.
+    let out = json!({"polled": 1, "changed": [], "reopened": [{"plan": "pay", "key": "api"}]});
+    let (release, mut run) = blocked(Ok(out.clone()));
+    drop(release);
+    let finished = run.wait().expect("the finished poll");
+    assert_eq!(finished.result.expect("the job's result"), out);
+}
