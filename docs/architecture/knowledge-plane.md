@@ -24,7 +24,7 @@ flowchart LR
 
 | | Knowledge plane | Event ledger |
 |---|---|---|
-| Holds | what the teams know: decisions, notes, questions, answers, Plans, briefs | what happened: every state change, in commit order |
+| Holds | what the teams know: decisions, notes, Plans, briefs | what happened: every state change, in commit order |
 | Shape | typed, append-only **Context records** ([contract §2.2](../contract.md) "Context record") | append-only **Events** ([contract §2.2](../contract.md) "Event") |
 | Written by | `cpd context …` commands and `plan new` | every state change, in the same transaction ([contract §5.1](../contract.md)) |
 | Address | a Context, machine-local | a Plan, Job, Attempt, Session or Context |
@@ -34,8 +34,8 @@ flowchart LR
 
 A Context is the shared knowledge of two or more Plans ([CONTEXT — Context](../CONTEXT.md)); its records are the plane's unit. A **Context record** is one typed, append-only row of `context_records`, the Context's only store ([contract §4.6](../contract.md), "Context record" in [contract §2.2](../contract.md); [CONTEXT — Context record](../CONTEXT.md)):
 
-- kinds `decision`, `note`, `question`, `answer`, `plan` and `brief`, each with a letter in its id ([contract §2.2](../contract.md) "Context record");
-- written only by `cpd context decide`, `context note`, `context ask` ([commands §3.5](../commands.md)) and `cpd context answer` ([commands §3.6](../commands.md)), plus `plan new` for the `plan` and `brief` kinds — each in one database transaction that validates, inserts the row and appends `context-record`;
+- kinds `decision`, `note`, `plan` and `brief`, each with a letter in its id ([contract §2.2](../contract.md) "Context record");
+- written only by `cpd context decide` and `context note` ([commands §3.5](../commands.md)), plus `plan new` for the `plan` and `brief` kinds — each in one database transaction that validates, inserts the row and appends `context-record`;
 - **recency wins**: a later record supersedes an earlier one, which leaves force but stays queryable; a `note` may supersede only a `note` ([contract §2.2](../contract.md) "Context record", [contract §4.6](../contract.md) "Records in force");
 - a record may also leave force by **retirement**, proposed by the distiller and decided only by the User ([contract §4.6](../contract.md) "Retirement");
 - Contexts are machine-local: nothing copies them to another machine, so there is no sync and no conflict ([contract §4.6](../contract.md); [CONTEXT — Context store](../CONTEXT.md)).
@@ -75,7 +75,7 @@ The plane is not the state: a Context record is knowledge that outlives the Jobs
 ## Sources
 
 - [contract.md](../contract.md) — §2.2 "Context record" and "Event", §3.7 (engine, E9), §4.1 (the database), §4.6 (the Context store, retirement, the holographic engine rail, the distiller), §5 (Events).
-- [commands.md](../commands.md) — §3.5 (`context decide`, `note`, `ask`), §3.6 (`context answer`), §3.13 (`context distill`).
+- [commands.md](../commands.md) — §3.5 (`context decide`, `note`), §3.13 (`context distill`).
 - [CONTEXT.md](../CONTEXT.md) — Context record, Context store, Distilled Context, Event.
 - [architecture-verification.md](../research/architecture-verification.md) — §8 (the knowledge plane), §11 (the boundaries).
 - Model: `hs-d802` (`cpd context show --record hs-d802`).
