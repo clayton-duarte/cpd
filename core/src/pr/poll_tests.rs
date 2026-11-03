@@ -425,3 +425,170 @@ fn an_update_job_already_live_is_not_duplicated() {
         "still exactly the one update Job"
     );
 }
+
+// --- a cancelled Workflow whose pull request GitHub reopened (pro-d362, E5) ---
+
+/// The in-process `gh` of the rebind: the search lists `acme/pay#801` as `state` (a closed pull request is not in the search),
+/// `gh pr list --head` answers as the reopen's [`crate::workflow::reopen_tests::Gh`]; any other call exits 9.
+struct ReopenGh {
+    state: &'static str,
+}
+
+impl Handler for ReopenGh {
+    fn handle(&self, call: &Call) -> Reply {
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            ["pr", "list", ..] => crate::workflow::reopen_tests::Gh {
+                heads: vec![("cpd/pay/api".to_owned(), 801, self.state)],
+            }
+            .handle(call),
+            ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => {
+                let nodes = if self.state == "OPEN" {
+                    r#"{"repository":{"nameWithOwner":"acme/pay"},"number":801,"url":"https://github.com/acme/pay/pull/801","title":"T",
+                    "isDraft":false,"state":"OPEN","createdAt":"opened","updatedAt":"U1","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
+                    "commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}"#
+                } else {
+                    ""
+                };
+                let count = usize::from(!nodes.is_empty());
+                Reply::ok(&format!(
+                    r#"{{"data":{{"search":{{"issueCount":{count},"nodes":[{nodes}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#
+                ))
+            }
+            ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => {
+                let empty = serde_json::json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+                let mut data = serde_json::json!({"viewer": {"login": "me"}});
+                for i in 0..query.matches(": repository(").count() {
+                    data[format!("p{i}")] = serde_json::json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
+                }
+                Reply::ok(&serde_json::json!({"data": data}).to_string())
+            }
+            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
+        }
+    }
+}
+
+/// A rig whose Plan `pay` is `done` with its one Workflow `api` cancelled, keeping its pull request `acme/pay#801` (stored
+/// `closed`), the Lead asleep; GitHub reports that pull request as `state`. With `published` its Lead Branch is on `origin`.
+fn reopened_rig(state: &'static str, published: bool) -> Rig {
+    use crate::workflow::reopen_tests::{cancelled, publish, rig};
+    let rig = rig("done");
+    cancelled(&rig, "pay", "api", Some(801));
+    if published {
+        publish(&rig, "cpd/pay/api");
+    }
+    let _ = (*rig.fakes.runner)
+        .clone()
+        .route("gh", Arc::new(ReopenGh { state }));
+    rig
+}
+
+fn poll_once(rig: &Rig) -> Result<crate::output::Output, crate::error::CpdError> {
+    unsafe { std::env::set_var("CPD_HOME", rig.home.root()) };
+    Ports::scope(&rig.fakes.ports, || {
+        poll(
+            &rig.fakes.ports,
+            PollArgs {
+                plan: PlanArg { plan: None },
+            },
+        )
+    })
+}
+
+/// `(workflow status, plan phase, done_at is null, lead asleep_at is null, pull request state)`.
+fn reopened_state(rig: &Rig) -> (String, String, bool, bool, String) {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT w.status, p.phase, p.done_at IS NULL, s.asleep_at IS NULL, q.state
+                   FROM workflows w JOIN plans p ON p.id = w.plan JOIN sessions s ON s.id = p.lead_session
+                   LEFT JOIN pull_requests q ON q.number = 801 WHERE w.key = 'api'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?)
+        })
+        .unwrap()
+}
+
+fn event_count(rig: &Rig, kind: &str) -> i64 {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| {
+            Ok(
+                c.query_row("SELECT count(*) FROM events WHERE kind = ?1", [kind], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
+}
+
+fn last_txn(rig: &Rig) -> i64 {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(|c| Ok(c.query_row("SELECT coalesce(max(id), 0) FROM txns", [], |r| r.get(0))?))
+        .unwrap()
+}
+
+#[test]
+fn poll_rebinds_a_cancelled_workflow_whose_pull_request_was_reopened() {
+    let rig = reopened_rig("OPEN", true);
+    let out = poll_once(&rig).unwrap();
+    assert_eq!(
+        reopened_state(&rig),
+        ("open".into(), "deploy".into(), true, true, "open".into()),
+        "the poll rebinds the Workflow and moves the Plan back to deploy: {out:?}"
+    );
+    assert_eq!(event_count(&rig, "workflow-reopened"), 1);
+    assert_eq!(event_count(&rig, "plan-phase"), 1);
+}
+
+#[test]
+fn poll_leaves_a_cancelled_workflow_with_a_closed_pull_request() {
+    let rig = reopened_rig("CLOSED", true);
+    poll_once(&rig).unwrap();
+    assert_eq!(
+        reopened_state(&rig),
+        (
+            "cancelled".into(),
+            "done".into(),
+            false,
+            false,
+            "closed".into()
+        )
+    );
+    assert_eq!(event_count(&rig, "workflow-reopened"), 0);
+    // The control: the same rig with GitHub reporting the pull request open does rebind it.
+    let open = reopened_rig("OPEN", true);
+    poll_once(&open).unwrap();
+    assert_eq!(reopened_state(&open).0, "open", "control");
+}
+
+#[test]
+fn poll_rebind_is_idempotent_and_writes_nothing_the_second_time() {
+    let rig = reopened_rig("OPEN", true);
+    poll_once(&rig).unwrap();
+    assert_eq!(reopened_state(&rig).0, "open", "the first poll rebinds");
+    let (txn, events) = (last_txn(&rig), event_count(&rig, "workflow-reopened"));
+    poll_once(&rig).unwrap();
+    assert_eq!(last_txn(&rig), txn, "the second poll writes no transaction");
+    assert_eq!(event_count(&rig, "workflow-reopened"), events);
+    assert_eq!(reopened_state(&rig).0, "open");
+}
+
+#[test]
+fn a_failed_rebind_leaves_the_workflow_cancelled_and_reports_one_error() {
+    // The Lead Branch is not on `origin`: the git fake refuses to recreate the Lead worktree from it.
+    let rig = reopened_rig("OPEN", false);
+    poll_once(&rig).unwrap();
+    poll_once(&rig).unwrap();
+    let (status, phase, ..) = reopened_state(&rig);
+    assert_eq!((status.as_str(), phase.as_str()), ("cancelled", "done"));
+    assert_eq!(
+        rig.errors().len(),
+        1,
+        "one error Event for the refused rebind, not one per tick: {:?}",
+        rig.errors()
+    );
+}
