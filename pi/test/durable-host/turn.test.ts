@@ -39,7 +39,7 @@ const FIRST = { ok: true, text: "Build the thing.", event: 120 };
 const reads = (f: Fake, a: string, b: string) => f.calls.filter((c) => c[0] === a && c[1] === b);
 const hasText = (w: Write, text: string) => JSON.stringify(w.entry.model).includes(text);
 const withModel = (w: Write) => w.entry.model.length > 0;
-const news = { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [{ at: "2026-10-14T21:00:00Z", from_session: null, text: "Mind the schema." }] } };
+const news = { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [{ at: "2026-10-14T21:00:00Z", from_session: null, from_name: null, text: "Mind the schema." }] } };
 
 test("a by-user Session's first message is stored once before any input", async () => {
   const f = fake(seat({ byUser: true }), { "session-first-message": FIRST });

@@ -13,7 +13,7 @@ const submit = (req: string, over: Record<string, unknown> = {}) => ({ type: "su
 const types = (c: { received(): Record<string, unknown>[] }) => c.received().map((m) => m.type);
 const hostStates = (c: { received(): Record<string, unknown>[] }) => c.received().filter((m) => m.type === "host_state");
 /** A context update is stored before an input that starts a turn when cpd has news. */
-const NEWS = { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [{ at: "2026-10-14T21:00:00Z", from_session: null, text: "Mind the schema." }] } };
+const NEWS = { "events-list": { ok: true, events: [] }, "board-take": { ok: true, taken: [{ at: "2026-10-14T21:00:00Z", from_session: null, from_name: null, text: "Mind the schema." }] } };
 
 test("runHost refuses a socket path over the limit with a usage error before it opens the store", { timeout: 20_000 }, async () => {
   const home = `/${"h".repeat(110)}`;
