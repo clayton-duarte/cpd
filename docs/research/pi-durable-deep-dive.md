@@ -562,4 +562,58 @@ Each bullet is labelled; "vs pi" means against the pi-coding-agent column of 3.1
 
 ## 4. Unverified claims and open questions
 
-TODO (later Job)
+Nothing here was run: no model, storage, kill test or socket client executed. Part A lists every `inferred` and `guess:` label of the document, by section. Part B lists what the sources could not settle. A `read` claim is not repeated here.
+
+### Part A. Every `inferred` and `guess:` label
+
+| # | Section | Claim | Label | What would settle it |
+|---|---|---|---|---|
+| 1 | 0 (draft carried to 1.7) | A web UI is a client of a host process and cannot open the SQLite file itself | inferred | a two-process run against one file (scout c-conv, cited by `durable-leads.md:71`, was not in the read set) |
+| 2 | 1.2 | `agent` and `init` passed to `Harness.root()` are ignored when the root exists | inferred | read the early return at `harness.js:219-241` in a test |
+| 3 | 1.3 | `write` submissions skip the `pi.` prefix check | inferred, untested | submit a `write` entry with a `pi.` kind |
+| 4 | 1.4 | All rows of a commit land together (SQLite transaction, memory apply) | inferred | fault-inject a failing `storage.commit` |
+| 5 | 1.6 | A phase's effects and its successor checkpoint are one storage commit | inferred | trace one phase with a recording `Storage` |
+| 6 | 1.6 | No cap on parallel tool calls | inferred from absence | read pi-durable's scheduler for a limit; run 50 parallel tools |
+| 7 | 1.6 | The pi-ai retry delay formula | unverified | read `pi-ai/utils/retry` |
+| 8 | 1.7 | A second process on one SQLite file: id collision, `running` rewritten to `pending`, blind upserts, stale caches | inferred from read code, not run | run two Harnesses on one file |
+| 9 | 1.7 | A Cloudflare Durable Object gives single ownership by the platform | guess | read Cloudflare docs |
+| 10 | 1.7 | A second UI or tool must go through the owning process | inferred | follows from 8 |
+| 11 | 1.8 | Phases whose successor checkpoint committed are skipped on resume | inferred | kill a run between two phases and trace |
+| 12 | 1.8 | `prepare` is skipped after a crash in `request` | inferred | the same kill test |
+| 13 | 1.8 | The cost of a re-request is the full token cost again | guess | measure `pi.usage` across a kill |
+| 14 | 1.8 | Changing a tool to `safe` later does not rerun an already recorded `unsafe` call | inferred | change the definition after a kill, resume |
+| 15 | 1.8 | A `safe` tool must tolerate a rerun at any point of its execution | inferred | a design rule, not testable by the framework |
+| 16 | 2.1 | Cancelling a caller's `Context` stops only that caller's wait, not the work | inferred | cancel a context during `submit().wait` and watch the task |
+| 17 | 2.1 | A tool must honour `context.abortSignal` for `abort` to finish | inferred | abort a tool that ignores the signal |
+| 18 | 2.1 | `conversation.abort()` cancels a manual compaction (mechanism) | inferred | abort during `compact` |
+| 19 | 2.1 | Whether `fork(at)` needs `at` visible from the parent | guess | read the storage validation |
+| 20 | 2.2 | Deltas in a `watchEvents` batch are per flush, not per provider token | inferred | observe a real stream |
+| 21 | 2.2 | The streaming-render recipe (five steps) | inferred; no shipped UI read | build it against a recorded `events` stream |
+| 22 | 2.3 | `afterTool` does not run for harness-written results or on the recovery path | inferred from control flow | a hook test around a blocked call |
+| 23 | 2.4 | Every pause pattern P1 to P4 is a design from primitives; a submission sent mid-round lands only after the round (so a waiting tool deadlocks); host commits are not task-gated; a rerun can create a second child task; no human can resolve a `waiting` task | inferred | prototype each |
+| 24 | 2.5 | A second process would be a second Harness and is unsafe | inferred | as 8 |
+| 25 | 2.5 | A narrow race lets two hosts open the store (guard before open, bind after) | inferred, not run | start two hosts with a stalled `open` |
+| 26 | 2.5 | A host restart always forces a snapshot (new epoch per process) | inferred | restart a host and attach with an old cursor |
+| 27 | 2.5 | The host stores no per-client cursor; the client sends it each attach | inferred | read `server.ts` attach state |
+| 28 | 3.2 | A restart re-submits the spec sentence and gets the existing submission without a second run | inferred from `run.ts:107` and `submissions.js:129-137` | restart a worker in a test with a mock `Storage` |
+| 29 | 3.2 | The driver reads only the pid or window and the report, so runtime differences are invisible to it | inferred | read the whole driver for other reads |
+| 30 | 3.2 | The pi runner restarts a crashed Worker differently from the durable runner | guess | read `core/src/driver/run.rs` for the pi path |
+| 31 | 3.3 | A browser cannot open a unix socket, so a web client needs a bridge | inferred | a platform fact, checkable in a browser |
+| 32 | 3.3 | The host keeps no per-client cursor | inferred | as 27 |
+| 33 | 3.3 | A second host can open the store before the first binds | inferred, not run | as 25 |
+| 34 | 3.4 | One atomic commit means a reader never sees half a turn | inferred | as 4 |
+
+### Part B. Open questions the sources could not settle
+
+1. **pi-ai behaviour.** Does `normalizeContext` synthesise results for unmatched tool calls, and which errors are retryable (`isRetryableAssistantError`)? pi-ai was outside the read set (scout x-pi, section 8). It decides whether pi's reopen is safe for a transcript that ends in a tool call.
+2. **No kill test exists.** All crash behaviour in 1.8 and 3.1 is read from code. A scripted kill (mid-stream, mid-tool, between phases) would turn 11, 12, 13 and 14 into measurements. The Spec forbids synthetic benchmarks, so none was run.
+3. **Two-process behaviour.** What exactly happens when two processes open one SQLite file (8, 24)? The evidence cited by cpd (`durable-leads.md:71`, an `ID 11 already belongs to entry` error) was not in the read set.
+4. **Cloudflare Durable Object ownership** (9), the **JSONL lock** (no file lock found by grep in `jsonl/`, scout x-store) and the **IndexedDB storage** and `restartLimit` named by the older cpd notes (absent from 1.3.0, scout x-store): are they in 1.4.0, and what changes?
+5. **Version drift.** The cpd host reports `pi_durable: "1.3.0"` as a constant (`pi/durable-host/run.ts:112`, read by scout), and older notes cite 1.4.0. Which version runs in production, and does the protocol or the abort path differ?
+6. **Reconnect logic of a client** is not part of the host (2.5, unverified: not in the read set beyond `web/src/api/host.ts`). What is the right behaviour after `bye restart`, which nothing sends (scout grep)?
+7. **Held dialogs never expire** (no caller passes the expiry option, scout x-host grep). Is that intended for a web UI that can close its tab for days?
+8. **`fork` through the host** creates a cpd Session, not a pi-durable fork (2.5). Is there a need for an in-conversation fork in a web chat?
+9. **Throttle floor.** The tool output also pauses by size at 100 KiB/s (`chord/dist/output.js:273-340`, per scout); the README omits this. Is 100 ms the right UI step for a web chat, or should `settings.progress` change?
+10. **Exactly-once for host tools.** `ask_user_question` is `replay: "safe"` and approvals are `unsafe` (read: `tools.ts:37`, `62`, `100`). Is re-asking a question after a restart acceptable to the User for every case?
+11. **pi-coding-agent details not read:** the `grep`, `find`, `ls` and `powershell` tools, `mcp-servers.js` internals, codemode code and the TUI (scout x-pi, section 8; the TUI is out of scope).
+12. **Comparison basis.** The pi-durable column of 3.1 for batteries rests on the README and a grep (measured by scout x-pi); a missing mention is not proof of absence in the code.
