@@ -544,9 +544,8 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/, "the stub form stays for genuinely unscoped work");
-  assert.match(lead, /--needs <k1,k2>`, no `--draft`/, "a scoped Job that waits is queued with its needs link (hs-d822)");
-  assert.match(lead, /never as a waiting draft/);
-  assert.match(lead, /A draft is legal only while it is a stub or under review/, "the two legal draft forms are stated (hs-n677)");
+  assert.match(lead, /--needs <k1,k2>/, "a scoped Job that waits is queued with its needs link (hs-d822)");
+  for (const token of ["stub", "under review", "queued", "draft_parked", "draft_incomplete"]) assert.ok(lead.includes(token), `the two legal draft forms: ${token}`);
   assert.match(lead, /cpd workflow add <key> --repo <path> --title "<title>" --needs/);
   assert.match(lead, /workflow_title_required/);
   assert.match(lead, /cpd workflow edit <key> --title/);
@@ -592,7 +591,7 @@ test("cpd-lead: a same-repo PR on an earlier PR of the Plan is stacked with --ba
   const text = skillFiles("cpd-lead")[0]!.text;
   const bullet = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
   // 1. Rules: Register planned work at once
-  const register = bullet("- **Register planned work at once.**");
+  const register = section(text, "## Rules");
   assert.match(register, /same-repo follow-up is stacked \(`--base <workflow-key>`, the default\)/);
   assert.match(register, /`--needs <workflow-key>` \(the cross-repo or fresh-main exception: `cpd workflow add <key> --repo <path> --title "<title>" --needs <workflow-key>`\)/);
   // 2. 2. Plan, Scoping: the settling of repos and Workflows

@@ -127,3 +127,98 @@ test("Grilling Interview Grounding and Clarifying end on checkable completion cr
   ];
   assert.deepEqual(problems, [], problems.join("\n"));
 });
+
+const words = (t: string) => t.split(/\s+/).filter(Boolean).length;
+const lineOf = (text: string, needle: string) => text.split("\n").findIndex((l) => l.includes(needle)) + 1;
+const bulletOf = (text: string, start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line starting ${start}`);
+const specFiles = files("cpd-lead").find((f) => f.name.endsWith("references/spec-files.md"))!.text;
+
+test("the Register planned work bullet states the draft rule once in at most 180 words", () => {
+  const b = bulletOf(lead, "- **Register planned work at once.**");
+  const line = lineOf(lead, "- **Register planned work at once.**");
+  assert.ok(words(b) <= 180, `cpd-lead/SKILL.md:${line}: the Register bullet has ${words(b)} words, at most 180`);
+  for (const token of ["cpd job add <k> --draft --title", "--needs <k1,k2>", "draft_parked", "draft_incomplete", "stub", "under review"]) {
+    assert.ok(b.includes(token), `cpd-lead/SKILL.md:${line}: the Register bullet lacks ${token}`);
+  }
+  assert.match(b, /decided work is (added )?queued/i, `cpd-lead/SKILL.md:${line}: the bullet must say decided work is added queued`);
+  const d = bulletOf(lead, "- **Decided work is queued, undecided design is a draft.**");
+  assert.ok(d.includes("Spec that cites the decision") && d.includes("When unsure, a draft"), "the Decided work bullet keeps its two phrases");
+});
+
+test("Splitting Orchestrating and Starting a later batch point to Rules instead of restating draft legality", () => {
+  const lines = lead.split("\n");
+  const s7 = lines.findIndex((l) => l.startsWith("7. **Add the later batches**"));
+  const d3 = lines.findIndex((l) => l === "## 3. Dispatch");
+  assert.ok(s7 >= 0 && d3 > s7, "step 7 and ## 3. Dispatch exist");
+  const blocks = [
+    { name: "Plan every batch now", line: lineOf(lead, "- **Plan every batch now.**"), text: bulletOf(lead, "- **Plan every batch now.**"), max: 90 },
+    { name: "Orchestrating step 7", line: s7 + 1, text: lines.slice(s7, d3).join("\n"), max: 200 },
+    { name: "Starting a later batch", line: lineOf(lead, "#### Starting a later batch"), text: section(lead, "#### Starting a later batch"), max: 180 },
+  ];
+  const bad = blocks.flatMap((b) => [
+    ...(words(b.text) > b.max ? [`cpd-lead/SKILL.md:${b.line}: ${b.name} has ${words(b.text)} words, at most ${b.max}`] : []),
+    ...(b.text.includes("](#rules)") ? [] : [`cpd-lead/SKILL.md:${b.line}: ${b.name} has no link ](#rules)`]),
+  ]);
+  assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+test("Exploring keeps the step and command and points to spec-files for the refusals", () => {
+  const e = section(lead, "#### Exploring");
+  const line = lineOf(lead, "#### Exploring");
+  const bad: string[] = [];
+  if (words(e) > 220) bad.push(`cpd-lead/SKILL.md:${line}: Exploring has ${words(e)} words, at most 220`);
+  if (!e.includes('cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --kind scout|research')) bad.push(`cpd-lead/SKILL.md:${line}: Exploring lacks the job add --kind command`);
+  if (!e.includes("references/spec-files.md#explore-jobs")) bad.push(`cpd-lead/SKILL.md:${line}: Exploring lacks the link to references/spec-files.md#explore-jobs`);
+  const codes = ["explore_workflow_forbidden", "explore_no_draft", "explore_needs_mixed", "tier_not_allowed", "illegal_phase"];
+  for (const c of codes) if (e.includes(c)) bad.push(`cpd-lead/SKILL.md:${lineOf(lead, c)}: Exploring names ${c}`);
+  const x = section(specFiles, "## Explore Jobs");
+  for (const c of codes) if (!x.includes(c)) bad.push(`spec-files.md ## Explore Jobs lacks ${c}`);
+  assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+test("spec-files tells a Research Job from an explore Job", () => {
+  const r = section(specFiles, "## Research Jobs");
+  const x = section(specFiles, "## Explore Jobs");
+  const bad: string[] = [];
+  const rl = lineOf(specFiles, "## Research Jobs");
+  if (!r.includes("ordinary Workflow Job")) bad.push(`spec-files.md:${rl}: Research Jobs does not say ordinary Workflow Job`);
+  if (!r.includes("docs/research/<topic>.md")) bad.push(`spec-files.md:${rl}: Research Jobs lacks docs/research/<topic>.md`);
+  if (!r.includes("](#explore-jobs)")) bad.push(`spec-files.md:${rl}: Research Jobs lacks a link to #explore-jobs`);
+  const xl = lineOf(specFiles, "## Explore Jobs");
+  if (!x.includes("--kind scout|research")) bad.push(`spec-files.md:${xl}: Explore Jobs lacks --kind scout|research`);
+  if (!x.includes("$CPD_HOME/run/<plan>/explore/<job-key>.md")) bad.push(`spec-files.md:${xl}: Explore Jobs lacks the artefact $CPD_HOME/run/<plan>/explore/<job-key>.md`);
+  assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+test("adopted Workflow reminders outside Scoping and Addressing are one-line pointers", () => {
+  const bad: string[] = [];
+  const scoping = section(lead, "### Scoping");
+  for (const t of ["--adopt", "adopt_foreign", "adopt_not_open", "adopt_fork", "adopt_cpd_branch", "adopt_taken", "--confirm-author"]) {
+    if (!scoping.includes(t)) bad.push(`### Scoping lacks ${t}`);
+  }
+  const addr = section(lead, "#### Addressing");
+  if (!addr.includes("cpd pr rebase --workflow <key>")) bad.push("#### Addressing lacks cpd pr rebase --workflow <key>");
+  if (!addr.includes("never a plain `git push`")) bad.push("#### Addressing lacks never a plain `git push`");
+  const lines = lead.split("\n");
+  const inRange = (i: number) => {
+    const sIdx = lines.indexOf("### Scoping"), aIdx = lines.indexOf("#### Addressing");
+    return (i >= sIdx && i < sIdx + scoping.split("\n").length) || (i >= aIdx && i < aIdx + addr.split("\n").length);
+  };
+  lines.forEach((l, i) => {
+    if (inRange(i)) return;
+    for (const s of l.split(/(?<=[.!?])\s+/).filter((x) => /adopted/i.test(x))) {
+      const why = [
+        ...(words(s) > 30 ? [`${words(s)} words`] : []),
+        ...(/\]\(#(scoping|addressing)\)/.test(s) ? [] : ["no link to #scoping or #addressing"]),
+        ...(s.includes("cpd pr rebase") ? ["names cpd pr rebase"] : []),
+      ];
+      if (why.length) bad.push(`cpd-lead/SKILL.md:${i + 1}: ${why.join(", ")}: ${s.slice(0, 70)}`);
+    }
+  });
+  for (const f of all.filter((f) => f.name !== "cpd-lead/SKILL.md")) f.text.split("\n").forEach((l, i) => {
+    for (const s of l.split(/(?<=[.!?])\s+/).filter((x) => /adopted/i.test(x))) {
+      if (words(s) > 30 || !/\]\(#(scoping|addressing)\)/.test(s)) bad.push(`${f.name}:${i + 1}: adopted sentence is not a pointer`);
+    }
+  });
+  assert.deepEqual(bad, [], bad.join("\n"));
+});
