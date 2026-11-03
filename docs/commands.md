@@ -92,16 +92,20 @@ Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`c
 - **Plan:** `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2) (§1.3).
 - **Context:** `--context <id>`, else the Context of the selected Plan when a Plan is selected (by `--plan` or `CPD_PLAN`), else `context_required` (exit 2). New: a Lead's pane has `CPD_PLAN` set (§6.5), so it never needs to name its Context.
 - **Session:** `--session <id>`, else `CPD_SESSION`, else `session_required` (exit 2). `CPD_SESSION` is set in every pane cpd starts (§6.5).
-- **Short Session ids** (hs-a3, hs-q3): wherever a command takes a Session (`--session`, `CPD_SESSION` and the argument of `session open`, `close`, `fork`, `park`, `rename`, `archive`, `unarchive` and `show`) the value is resolved **once, at the boundary, into a `SessionId`** (`core/src/session/resolve.rs`, `docs/implementing.md`), trying these forms in this order, the first that matches deciding:
+- **Session references** (hs-a3, hs-q3; agent keys, pro-d345, pro-d346): wherever a command takes a Session (`--session`, `CPD_SESSION`, or a Session argument), the value is parsed once, at the boundary, into a `SessionRef`, and resolved once into a `SessionId` (`core/src/session/resolve.rs`, `docs/implementing.md`). Every command section that takes a Session says it accepts **any form of §1.3**, which is this list. The forms are tried in this order; the first step that matches decides, and a step that matches nothing falls through to the next:
 
-  | # | Form | Resolves to |
-  |---|---|---|
-  | 1 | the full id (a Session whose id equals it, a UUID in practice) | that Session |
-  | 2 | a **Plan id** | that Plan's Lead Session, `plans.lead_session` |
-  | 3 | **`<plan>·<prefix>`** or **`<plan>.<prefix>`** (split at the first `·` or `.`; `.` because `·` is hard to type and Plan ids never contain either) | the Session of that Plan whose id starts with `<prefix>` (at least 1 character) |
-  | 4 | a **bare id prefix of at least 4 characters** | the Session, of any Plan or none, whose id starts with it |
+  1. **Exact Session id.** `sessions.id` equals the value (a UUID in practice). That Session.
+  2. **Exact name.** `sessions.name` equals the value: an agent key (contract §2.2 "Agent key") or any other name. Several rows can share a name (every Attempt of a Job is named by the Worker key; a fork is named `<source name> (fork)`), so the candidates are ordered: live (`archived_at IS NULL`) first; then non-fork (`forked_from IS NULL`); then the highest Attempt number (`attempts.number` of the row's Attempt; a Worker row's `attempt` is `<job>-a<n>`); then the newest `created_at`; then `id`. The first candidate is the Session.
+  3. **Legacy alias `<context>-manager`.** When form 2 matched nothing and a Context `<context>` exists: that Context's Manager Session, live first, then the newest `created_at`, then `id`.
+  4. **Relative Plan.** The value has no `:`, the caller Session has a Context, and the value is a Plan id of that Context (`plans.context` = the caller's Context). The key `<caller context>:<value>`, resolved as form 2.
+  5. **Relative Job.** The value has no `:`, the caller Session has a Plan, and the value is a Job key of that Plan. The key `<caller context>:<caller plan>:<value>`, resolved as form 2; a Job with no Worker Session yet falls through.
+  6. **Legacy forms, unchanged.** A **Plan id** (any Plan) is that Plan's Lead Session, `plans.lead_session`. **`<plan>·<prefix>`** or **`<plan>.<prefix>`** (split at the first `·` or `.`; `.` because `·` is hard to type and Plan ids never contain either) is the Session of that Plan whose id starts with `<prefix>` (at least 1 character). A **bare id prefix of at least 4 characters** is the Session, of any Plan or none, whose id starts with it.
 
-  Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
+  **The caller** is the Session in `CPD_SESSION` (`session::sender()`). With none (the User at a terminal) or an unknown one, forms 4 and 5 are skipped.
+
+  **Key syntax.** A value containing `:` is a key of 2 or 3 `:`-separated segments, valid as a Context id, then a Plan id, then a Job key (§2.1): two segments name a Lead (`<context>:<plan>`), three a Worker (`<context>:<plan>:<job>`). Any other value containing `:` is `invalid_session_id` (exit 2). No other form matches a value with `:`. A value without `:` must match the Session id pattern of §2.1, which accepts `cpd` and `cpd-manager`; else `invalid_session_id`.
+
+  Matching is exact and case-sensitive. **Archived Sessions count** at every form; where a form has both, a live one beats an archived one. **Nothing matches:** `session_not_found` (exit 4). **Several Sessions match** a prefix form (6): `session_ambiguous` (exit 3) with `details.candidates`, never resolved by guessing. Output always carries the full id.
 - **Workflow** (R34, §1.3): `--workflow <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push`, `pr view`, `pr reply`, `pr rerun` and `pr post`. It may be omitted when the Plan has exactly one Workflow that is not `cancelled`, which is then selected; with two or more, `workflow_required` (exit 2); with none, `workflow_required` too, its message naming `cpd workflow add`. A key that is not one of the Plan's Workflows is `workflow_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--workflow`, it polls every open pull request of the User (§9.2, hs-d96) and `job edit --workflow` changes the Job's Workflow, so omitting it changes nothing (§5.2). `workflow add`, `workflow edit`, `workflow cancel` and `workflow start` take the key as their positional argument.
 - **The Lead's Workflow** (contract §3.6, pro-d219, pro-d259): the Workflow of the Plan that the working Lead's current turn concerns, stored as `sessions.working_pr` and drawn as the Lead's dot (§13.2). Its definition is contract §3.6's. Only these commands name it, and only when the Plan's working Lead runs them: `job add`, `job edit`, `job cancel`, `job retry`, `job urgent`, `job approve-tests`, `answer`, `workflow add`, `workflow edit`, `workflow describe` and `workflow cancel`.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
@@ -135,7 +139,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `stacked_rebase` | 3 | `pr rebase` (§9.3) found the Workflow stacked on a base Workflow; `details` is `{workflow, base, base_workflow, next}` (contract §3.8 "Stacked Workflows" step 4, hs-d325) |
 | `attempt_running` | 3 | `pr rebase` (§9.3) or `pr rebase --continue` found an Attempt of the Workflow of any kind (work, open, update) running (pro-d103, pro-d105); `details` is `{workflow, jobs: [keys], attempts: [ids]}`; nothing is changed, checked before the fetch; the message tells the Lead to steer the Worker to do the rebase instead |
 | `needs_unavailable` | 3 | `job add` (A4, pro-d89): a named Job is `cancelled`, `failed`, a draft in a phase after plan, or an `open` or `update` Job; or in phase `dispatch` a failed Job has no fix appended yet (A4): that failed leaf refuses to queue a new Job that needs it; `details.jobs` lists them; may include `fix_job` with the Job key for the failed leaf |
-| `invalid_context_id`, `invalid_plan_id`, `invalid_workflow_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
+| `invalid_context_id`, `invalid_plan_id`, `invalid_workflow_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
+| `invalid_session_id` | 2 | a Session reference (§1.3) matches neither the Session id pattern of §2.1 nor a key: a value with `:` that is not a key of 2 or 3 `:`-separated segments, valid as a Context id, then a Plan id, then a Job key (§2.1), or a value without `:` outside the Session id pattern |
 | `config_missing`, `config_invalid` | 1 | §8.1; the Tier checks of contract §8.2 and §9 (pro-d328 to pro-d332): a `lead_tier`, `manager_tier`, `context_distill_tier` or `worker_tier` that is not a Tier in the syntax of §5 (effort 5 never valid) is `config_invalid`; the four role defaults must strictly ascend (`context_distill_tier` < `worker_tier` < `lead_tier` < `manager_tier`), else `config_invalid` with `details.key` the key that breaks the order. A default that is not a valid rung is refused where it is checked (`doctor`'s `tiers` check, §14.1), never here. `review_lead_tier` is removed: a file that still sets it is `config_invalid`, as any unknown key. `open_tier` is renamed `worker_tier` (§8.1). Each with `details.key` |
 | `tier_not_allowed` | 2 | a Tier outside the range of its role (contract §9 "Roles and ranges", "Where the ranges are enforced"; pro-d328 to pro-d332, which supersede the fixed ranges of pro-d82, hs-d554 and hs-d506, the fixed Worker list of pro-d84, and the review-tier clauses of pro-d139 and pro-d140). `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5) check the worker range, from `worker_tier` up to just below `lead_tier`; `scout` and `research` check their explore range (§5.1). `plan new --tier` (§4.1) and `session retier <lead> --tier` (§10.16) check the lead range, from `lead_tier` up to just below `manager_tier`; `session retier <manager> --tier` the manager range, from `manager_tier` up to the top valid rung. `details` `{tier, role, floor, ceiling, allowed, key}`: `role` the role whose range was checked, `allowed` the text `<floor>-<ceiling>`, `key` the config key that sets the floor (`worker_tier`, `lead_tier` or `manager_tier`); the message names the range and the keys. An explore Job's `details` name the kind and its range. Also an `error` Event of engine E3 (contract §3.7) for a stored Job outside its range, one per Job |
 | `tier_invalid` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4), `plan new --tier` (§4.1) and `session retier --tier` (§10.16): a Tier that is not valid at all: bad syntax, effort 5 (never valid, for any letter), `X` for a model that has effort levels, or a digit its letter's model lacks (§5, the Tier flag); `details.tier` and `details.efforts` for an effort. A Lead's `--tier` is checked before anything is written. `tier_invalid` is checked before `tier_not_allowed` everywhere: the range of a Tier that is not valid is never looked at |
@@ -2695,7 +2700,7 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` (`runner` included) plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts any form of §1.3. Output: the fields of `session list` (`runner` included) plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session), `switch` (null or a failed switch record, below) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 `model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`) and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
@@ -2718,7 +2723,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 
 | Flag | Meaning |
 |---|---|
-| `<source>` | the Session to fork (the short forms of §1.3 are accepted); a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; no Worker is a fork (pro-d163) |
+| `<source>` | the Session to fork (any form of §1.3); a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; no Worker is a fork (pro-d163) |
 | `--plan <id>` | the new Session's Plan; default the source's Plan. The fork is a **side session** of the Plan: the Plan's `lead_session` does not change, so Plan Events still go to the Plan's Lead only (§15.2). It is drawn in the tree **directly under its Context**, after the Context's Plans, never under the Plan or under `<source>` (B1, §13.2) |
 | `--name <name>` | default `<source name> (fork)`, cut to 98 characters (contract §2.2 "Agent key") |
 | `--message-file <file>` | its first message, copied to `run/<plan>/messages/<session>.md`; without it the fork starts with no message |
@@ -2748,7 +2753,7 @@ Idempotent: no; each call registers a new Session.
 cpd session open <id>
 ```
 
-Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accepts the short forms of §1.3, so `cpd session open <plan id>` opens that Plan's Lead.
+Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accepts any form of §1.3, so `cpd session open <plan id>` opens that Plan's Lead.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2775,7 +2780,7 @@ Idempotent: yes.
 cpd session park [<id>]
 ```
 
-Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaults to the Session in the chat slot; it accepts the short forms of §1.3.
+Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaults to the Session in the chat slot; it accepts any form of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2800,7 +2805,7 @@ Idempotent: yes.
 cpd session state <working|waiting|blocked|idle|stopped> [--label <text>] [--reply] [--session <id>]
 ```
 
-How the pi adapter reports its agent state (§3.6, D4). `waiting` (an agent waits for another agent) and `blocked` (the User has to act) say why: `--label` is required with them and refused with any other state (`usage`); 1–80 characters. `waiting` is entered from `working`, `idle` and `blocked` and left for `working`, `idle`, `blocked` or `stopped` (§3.6). `--reply` (hs-d278) is allowed only with `idle`, else `usage`: it says the run that ended answered a message the User wrote to this Session (§15.4). Internal (§1.1): hidden in clap, run only by the pi adapter.
+How the pi adapter reports its agent state (§3.6, D4). `--session <id>` takes any form of §1.3. `waiting` (an agent waits for another agent) and `blocked` (the User has to act) say why: `--label` is required with them and refused with any other state (`usage`); 1–80 characters. `waiting` is entered from `working`, `idle` and `blocked` and left for `working`, `idle`, `blocked` or `stopped` (§3.6). `--reply` (hs-d278) is allowed only with `idle`, else `usage`: it says the run that ended answered a message the User wrote to this Session (§15.4). Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2820,7 +2825,7 @@ Idempotent: yes.
 cpd session rename <name> [--session <id>]
 ```
 
-cpd 1 §11 `session rename`, kept; the queue file becomes an Event. `--session` accepts the short forms of §1.3.
+cpd 1 §11 `session rename`, kept; the queue file becomes an Event. `--session` accepts any form of §1.3.
 
 **Refused `key_fixed`** (exit 3, `details` `{session, key}`) for a Session that is a Manager, a Lead that is not a fork (`forked_from` null) or a Worker: its name is its agent key (contract §2.2 "Agent key"). This is checked first, whatever the new name, so the unchanged name is refused too; nothing is written and no `session-renamed` Event is appended. A fork (`forked_from` set) is renamed as below.
 
@@ -2838,7 +2843,7 @@ Idempotent: yes.
 cpd session run <id> [--adopt <pid>]
 ```
 
-The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.7:
+`<id>` accepts any form of §1.3. The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.7:
 1. If the Session's file exists, resume: `pi --model <model>:<thinking> --session <file>` with the Lead's `[-e …]` (§6.5). **The model is the row's current `tier`'s** (hs-d506): pi, given `--model`, uses it instead of the model its session file recorded (pi 1.3.0 `core/sdk.js`: the file's model is restored only when none is given) and applies the `:<thinking>` level (`main.js` `buildSessionOptions`); so a Session `session retier` moved (§10.15) and then restarted (a reload for a new pi, the watchdog, Enter after pi exited, `session open`) runs on its new Tier, with its whole conversation.
 2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- @<first message file>]`.
 3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>` for a non-by-user Session, or `pi --model … --session-id <id> -n <name>` for a by-user Session (hs-d542 A2: no `@<file>` when `sessions.by_user = 1`; the User's first prompt carries the first message with the queued turns, §15). Steps 2 and 3 take `--model` from the row's `tier` **when pi starts**, not from the `tier` the row had at registration (hs-d506).
@@ -2871,7 +2876,7 @@ Idempotent: yes; a restart resumes (§6.7 step 3).
 cpd session close <id>
 ```
 
-Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19).
+Ends a Lead's pane (`<id>` accepts any form of §1.3): pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2895,7 +2900,7 @@ Idempotent: yes.
 cpd session archive <id>
 ```
 
-Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms of §1.3.
+Archives one Session (contract §2.2 "Archived"); `<id>` accepts any form of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2925,7 +2930,7 @@ Idempotent: yes; already archived: `"already": true`, nothing written, nothing c
 cpd session unarchive <id>
 ```
 
-`<id>` accepts the short forms of §1.3.
+`<id>` accepts any form of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2950,7 +2955,7 @@ Idempotent: yes; not archived: `"already": true`, nothing written.
 cpd session history <id>
 ```
 
-Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d122). It is the tree's click on an archived Session row (§13.2).
+`<id>` accepts any form of §1.3. Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d122). It is the tree's click on an archived Session row (§13.2).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2981,7 +2986,7 @@ Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It 
 
 | Argument | Meaning |
 |---|---|
-| `<id>` | the target Session (the short forms of §1.3 are accepted) |
+| `<id>` | the target Session (any form of §1.3) |
 | `<text>` | the message, a `Text` (1–20 000 characters) |
 | `--file <f>` | the message read from a file, same limits |
 | `--unblocks <reason>` | what the message unblocks, 1–200 characters, one line (hs-d514); shown in the message as `Message from <sender> (unblocks: <reason>): <text>` |
@@ -3016,7 +3021,7 @@ Effects:
 cpd session retitle <session> --width <cols>
 ```
 
-Writes the Session's **dynamic title** (contract §2.2, hs-d257): a glance reminder of what was **last happening** in its conversation (hs-d543: the input is the last 2 turns only and the length is the chat slot's width minus 8; no word count), written by an auxiliary agent (hs-n95: cpd never calls an LLM API itself, only pi, here as a one-shot run, `pi --print`, docs: pi `cli.md`). **Internal:** engine E10 starts it (contract §3.7) for each Lead or Manager Session after its turns end, at most once every 10 minutes; anyone may run it. `<session>` accepts the short forms of §1.3.
+Writes the Session's **dynamic title** (contract §2.2, hs-d257): a glance reminder of what was **last happening** in its conversation (hs-d543: the input is the last 2 turns only and the length is the chat slot's width minus 8; no word count), written by an auxiliary agent (hs-n95: cpd never calls an LLM API itself, only pi, here as a one-shot run, `pi --print`, docs: pi `cli.md`). **Internal:** engine E10 starts it (contract §3.7) for each Lead or Manager Session after its turns end, at most once every 10 minutes; anyone may run it. `<session>` accepts any form of §1.3.
 
 `--width <cols>` (required, hs-d543) is the width in columns of the chat slot pane (contract §6.2); the title's limit is **N = cols − 8, capped at 200** (a Title's maximum). `--width` missing, not an integer, or **below 9** is `usage` (§1.5). Engine E10 reads the width from tmux and passes it (contract §3.7); a later resize truncates the shown title as the header does today.
 
@@ -3054,7 +3059,7 @@ pi failing to start or exiting non-zero, or an answer that is empty or does not 
 cpd session first-message [--session <id>]
 ```
 
-**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3); the durable host runs it too, at startup, for a fresh non-by-user Lead or Manager whose conversation is empty, and submits the returned text as the first turn's input (hs-d812, contract §6.13 "Delivery (P1.4)" 3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
+`--session <id>` takes any form of §1.3. **Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3); the durable host runs it too, at startup, for a fresh non-by-user Lead or Manager whose conversation is empty, and submits the returned text as the first turn's input (hs-d812, contract §6.13 "Delivery (P1.4)" 3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`) and prints JSON for the adapter to add the message to the run (§15).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3087,7 +3092,7 @@ Moves live Leads and Managers to the Tier the config names for them now (hs-d506
 
 | Argument | Meaning |
 |---|---|
-| `<id>` | one Session (the short forms of §1.3) |
+| `<id>` | one Session (any form of §1.3) |
 | `--all` | every Lead and Manager that is not archived |
 | `--tier <T>` | with `<id>` only: the Tier the Session moves to instead of its target (below). With `--all`, or without `<id>`, it is `usage` |
 
@@ -3140,7 +3145,7 @@ Reports an adapter error to the Manager (hs-d573, M4). Its callers are: **the ad
 | `--code <code>` | error code (the adapter's code, not a command's exit code): `^[a-z][a-z0-9_]{0,63}$`, else `usage` |
 | `--message <text>` | error message (1–2000 characters), else `usage` |
 | `--details <json>` | additional details as a JSON object, else `usage`; the report adds `what`, `session` and `plan` (null if the Lead's Plan is none) |
-| `--session <id>` | the Session reporting the error; default `CPD_SESSION` (§1.3) |
+| `--session <id>` | the Session reporting the error, in any form of §1.3; default `CPD_SESSION` (§1.3) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3168,7 +3173,7 @@ Records a failed model switch (DEFECT 2): the adapter of a Lead runs this when `
 |---|---|
 | `--code <code>` | error code (the adapter's code): `^[a-z][a-z0-9_]{0,63}$`, else `usage` |
 | `--message <text>` | error message (1–2000 characters), else `usage` |
-| `--session <id>` | the Session whose switch failed; default `CPD_SESSION` (§1.3) |
+| `--session <id>` | the Session whose switch failed, in any form of §1.3; default `CPD_SESSION` (§1.3) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3193,7 +3198,7 @@ Records a successful model switch (DEFECT 2): the adapter of a Lead runs this af
 
 | Flag | Meaning |
 |---|---|
-| `--session <id>` | the Session whose switch succeeded; default `CPD_SESSION` (§1.3) |
+| `--session <id>` | the Session whose switch succeeded, in any form of §1.3; default `CPD_SESSION` (§1.3) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3215,7 +3220,7 @@ Output:
 cpd session resume <id>
 ```
 
-Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts the short forms of §1.3.
+Resumes a Lead or a Manager Session that is blocked by the loop guard, appending an Event and delivering one message with a turn (L6 of hs-d552, hs-d571). `<id>` accepts any form of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3245,7 +3250,7 @@ The read path of a live durable Lead's or Manager's transcript (contract §6.20;
 
 | Argument | Meaning |
 |---|---|
-| `<id>` | the target Session (the short forms of §1.3 are accepted) |
+| `<id>` | the target Session (any form of §1.3) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3288,13 +3293,13 @@ Post a message to the board. It appends no Event and never starts a turn (hs-d51
 | Argument | Meaning |
 |---|---|
 | `<text>` | the message, a `Text` (1–2000 characters) |
-| `--to <ref>` | the target: `manager` (the live Manager of the sender's Context, else `no_manager`), a Plan id (its live Lead Session; a Plan in phase `done` or `archived` is refused `plan_inactive`), or a Session id |
+| `--to <ref>` | the target: `manager`, the alias for the live Manager of the sender's Context (else `no_manager`), or any form of §1.3 (a Plan id names that Plan's Lead Session). A Lead of a Plan in phase `done` or `archived` is refused `plan_inactive` whatever the form |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `<text>` is 1–2000 characters | `usage` | 2 |
 | the target Session exists (resolved from `<ref>`); when `<ref>` is `manager` and there is no live Manager, refusal `no_manager` | `session_not_found` | 4 |
-| when `<ref>` is a Plan id, the Plan is not in phase `done` or `archived` (hs-d514); `details: {plan, phase}` | `plan_inactive` | 3 |
+| `<ref>` resolves to a Lead of a Plan in phase `done` or `archived`, whatever the form of §1.3 (hs-d514); `details: {plan, phase}` | `plan_inactive` | 3 |
 
 Effects:
 - **Rows**, one transaction: **Row** `board_posts`: `at`, `context` (target's), `from_session` (sender's Session or null), `to_session` (target), `text`, `read_at` (null); `id` is auto-incremented.
@@ -3317,7 +3322,7 @@ List posts to a Session. By default, unread posts only (`read_at` null), oldest 
 
 | Argument | Meaning |
 |---|---|
-| `--session <id>` | the target Session (default: `$CPD_SESSION`); accepts short forms of §1.3 |
+| `--session <id>` | the target Session (default: `$CPD_SESSION`); accepts any form of §1.3 |
 | `--all` | show all posts, including read ones (`read_at` is not null) |
 
 | Precondition | Code | Exit |
@@ -3345,7 +3350,7 @@ Return and mark as read the unread posts to a Session (internal, the adapter's m
 
 | Argument | Meaning |
 |---|---|
-| `--session <id>` | the target Session; accepts short forms of §1.3 |
+| `--session <id>` | the target Session; accepts any form of §1.3 |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3366,7 +3371,7 @@ Idempotent: yes; the second call returns an empty list and updates nothing.
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
 
-`--session <id>` applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
+`--session <id>` takes any form of §1.3 and applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
 - for the Session that is its Plan's `lead_session`: Events with `plan` = its Plan; Events with `plan IS NULL AND context` = its Context; Events with `session` = itself;
 - for any other Session (Workers, side forks): Events with `session` = itself;
 - for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.7).
@@ -3379,7 +3384,7 @@ The kinds `attempt-ended` and `job-blocked` and the `error` code `worker_stalled
 cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--limit <n>]
 ```
 
-`--since` is exclusive and defaults to 0; `--limit` defaults to 500 (1–5000). Effects: none.
+`--session <id>` takes any form of §1.3. `--since` is exclusive and defaults to 0; `--limit` defaults to 500 (1–5000). Effects: none.
 
 ```json
 {"ok": true, "events": [{"id": 48214, "at": "…", "kind": "job-merged", "context": "building-cpd", "plan": "cpd2", "job": "contract-core", "attempt": "contract-core-a1", "session": null,
@@ -3394,7 +3399,7 @@ cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]�
 cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--until-idle]
 ```
 
-§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+`--session <id>` takes any form of §1.3. §5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
 
 **Stale Events** (pro-d214): a `--session` follower drops a `plan-done`, `pr-feedback`, `job-failed`, `escalation`, `error` or `attempt-nudge` Event whose condition a later Event or the Workflow's stored state proves over; the table, the fail-open rule and the cursor are in contract §5.4 and `--plan`, `--context`, unscoped follows and `events list` are unchanged.
 
