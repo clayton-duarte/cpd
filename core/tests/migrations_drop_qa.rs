@@ -272,3 +272,37 @@ fn drop_qa_is_idempotent_on_a_clean_store() {
         0
     );
 }
+
+#[test]
+fn drop_qa_deletes_inbox_items_naming_a_deleted_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home_in(&dir);
+    store_before(&home, true);
+    let conn = raw(&home);
+    for (subject, record, closed) in [
+        ("on a question", "cx-q1", None),
+        ("on an answer, closed", "cx-a1", Some("2026-11-03T13:00:00Z")),
+        ("on a decision", "cx-d1", None),
+    ] {
+        conn.execute(
+            "INSERT INTO inbox_items (kind, urgency, subject, context, record, label, opened_at, closed_at) \
+             VALUES ('unread', 'white', ?1, ?2, ?3, 'l', '2026-11-03T12:00:00Z', ?4)",
+            params![subject, CONTEXT, record, closed],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let conn = migrate(&home);
+    assert_eq!(
+        strings(&conn, "SELECT record FROM inbox_items ORDER BY id"),
+        ["cx-d1"]
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'inbox_items_no_delete'"
+        ),
+        1,
+        "the delete guard is back"
+    );
+}

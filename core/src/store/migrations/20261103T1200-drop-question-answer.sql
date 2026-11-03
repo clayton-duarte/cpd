@@ -5,6 +5,10 @@
 DROP TRIGGER IF EXISTS context_records_no_delete;
 DROP TRIGGER IF EXISTS record_curations_no_delete;
 DROP TRIGGER IF EXISTS record_retirements_no_delete;
+DROP TRIGGER IF EXISTS inbox_items_no_delete;
+-- An Inbox row of any status may name a deleted record; a left row would fail every Inbox read.
+DELETE FROM inbox_items
+ WHERE record IN (SELECT id FROM context_records WHERE kind IN ('question', 'answer'));
 DELETE FROM record_curations
  WHERE (context, record) IN (SELECT context, id FROM context_records WHERE kind IN ('question', 'answer'));
 DELETE FROM record_retirements
