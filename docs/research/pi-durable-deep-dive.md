@@ -244,7 +244,222 @@ Consequence for applications (inferred): a second UI or tool must go through the
 
 ## 2. How applications communicate with pi-durable
 
-TODO (later Job)
+Short answer. In-process, an application calls methods on a `Conversation` handle and observes it through one of three per-commit channels (2.1, 2.2). It extends behaviour with registered `Extension`s (2.3). pi-durable 1.3.0 has no pause, approval or question API; a tool pause is built from primitives (2.4). Out of process, pi-durable offers nothing: cpd's `pi/durable-host` is the process that owns the store and speaks an NDJSON socket protocol (2.5).
+
+### 2.1 In-process commands
+
+Every command takes a chord `Context` as its last argument: `{ abortSignal: AbortSignal | undefined; value(key); toString() }` (read: `chord/dist/context/index.d.ts:8-12`). Cancelling the signal cancels the wait or the commit admission of that call; a commit already admitted still settles (read: `pi-durable/dist/session/session.js:534-536`, quoted in 1.4). `BACKGROUND_CONTEXT` is a context with no signal (read: `chord/dist/context/index.d.ts:13`; cpd passes it for every call, `pi/durable-worker/harness.ts:3`).
+
+| Context helper | Effect | Evidence |
+|---|---|---|
+| `withAbortSignal(signal, ctx)` | derived context cancelled by the parent or the new signal | read: `chord/dist/context/index.d.ts:22` |
+| `withoutAbortSignal(ctx)` | keeps values, drops caller cancellation; "mandatory cleanup only" | read: `chord/dist/context/index.d.ts:24` |
+| `withCancel(ctx)` | independently cancellable child: `{ context, cancel(reason?) }` | read: `chord/dist/context/index.d.ts:26-29` |
+| `awaitWithContext(promise, ctx)` | rejects only the waiter on cancel, never the underlying promise | read: `chord/dist/context/index.d.ts:34` |
+
+Cancelling a `Context` is not the same as aborting work. `abort()` (below) writes a durable abort mark; a signal on a caller's context only stops that caller waiting (inferred from the two code paths: `scheduler.js:242-265` marks tasks in a commit, `awaitWithContext` rejects a waiter).
+
+**Handle.** `Harness.open(storage, options, context)` returns the `Harness`; `harness.root(context, {agent?, init?})` returns the root `Conversation` (read: `pi-durable/dist/harness/harness.js:309-331`; `harness.js:219-241` per 1.2). The handle holds no state; compare by `id` (read: `pi-durable/dist/harness/types.d.ts:587`, per scout). Methods (read: `pi-durable/dist/harness/types.d.ts:600-638`):
+
+```ts
+submit(submission: SubmissionDraft, context): Promise<Submission>
+reset(handoff: string | undefined, context): Promise<void>
+compact(instructions: string | undefined, context): Promise<TaskId<CompactionResult>>
+fork(at: EntryId, options: ConversationCreateOptions, context): Promise<Conversation>
+abort(context, options?: { background?: boolean }): Promise<void>
+waitForIdle(context): Promise<void>
+```
+
+**`submit` draft** (read: `pi-durable/dist/harness/types.d.ts:23-36`):
+
+```ts
+type SubmissionDraft = { requestId?: string } & (
+  | { type: "input"; content: UserInput; whenBusy?: "steer"|"followUp"|"reject"; entry?: InputEntry }
+  | { type: "write"; entry: EntryDraft; content?: never; whenBusy?: never });
+```
+
+| Option | Values and behaviour | Evidence |
+|---|---|---|
+| `type: "input"` | a user message; idle: places the entry and starts a run; busy: queued in `pi.inbox` | read: `submissions.js:147`, `167`, `188-191` (`pi-durable/dist/harness/`) |
+| `type: "write"` | appends an `EntryDraft` without starting a run; a display-only write (only `kind` and `data`) is appended and settled `done` at once, even while busy | read: `pi-durable/dist/harness/submissions.js:138-145`, doc `113-125` |
+| `whenBusy` | `"followUp"` (default: any value other than `"steer"` queues as follow-up), `"steer"`, `"reject"` (throws `ConversationBusy`, writes nothing) | read: `submissions.js:148`, `167` |
+| `entry` on input | places the input as `{kind, data?}` instead of `pi.user`; kind must not start with `pi.` | read: `pi-durable/dist/harness/types.d.ts:25-26` (comment), check at `submissions.js:110-116` per scout |
+| `requestId` | idempotency key scoped to the conversation; a known id returns the existing submission and writes nothing; reusing it with the other `type` throws | read: `pi-durable/dist/harness/submissions.js:129-137` |
+| delivery when busy | steers are placed after the current tool round, follow-ups when the run answers; modes default `one-at-a-time` | read: `pi-durable/README.md:419-420` (scout), `agent.js:48-49` (scout) |
+
+**`Submission`** handle: `id`, `status(ctx)`, `wait(ctx)`, `abort(ctx)` (read: `pi-durable/dist/harness/types.d.ts:44-49`). `wait` resolves to a record with status `done` or `unanswered` (read: `types.d.ts:40-42` per scout). `abort` returns `"aborted"` (was queued), `"already_placed"` or `"settled"`; a queued submission settles `unanswered` with reason `aborted` (read: `types.d.ts:48`; behaviour `submissions.js:64-76`, scout). `submit` also enables scheduling, so it resumes a harness that was never `resume()`d (read: `submissions.js:31-33`, per 1.8).
+
+**`abort`** (read: `pi-durable/dist/harness/scheduler.js:242-265`): one commit marks every live non-background task below the conversation and withdraws queued inputs of conversations in scope; with `background: true` it also crosses background boundaries and waits for those tasks; it then waits for idle. Queued `write` submissions survive (read: `inbox.js:110-119` skips `mode === "write"`, scout; doc `types.d.ts:623-626`). A tool must honour `context.abortSignal` for the abort to finish (inferred: `abort` joins the running invocation, `scheduler.js:204-209` per scout).
+
+**`compact(instructions)`** admits a manual `pi.compaction` task owned by the conversation and returns its `TaskId`; the summary is placed by a write submission, at once when idle, else at the next boundary (read: `pi-durable/dist/harness/harness.js:37-41`; doc `types.d.ts:607-609`). Result is `{ entryId?, submissionId? }`; wait with `harness.waitForTask(id, ctx)` (read: `types.d.ts:471-474`, `667` per scout). `conversation.abort()` cancels a manual compaction (read: README claim `README.md:467`, per scout; mechanism inferred).
+
+**`reset(handoff)`** submits a `write` of a `pi.reset` entry with `head: "self"`, carrying `handoff` as a user message when given; while busy it is placed at the next boundary (read: `pi-durable/dist/harness/harness.js:42-48`). Older entries stay stored; the model sees entries from the newest reset (read: 1.3 and `context.js:195-213`).
+
+**`fork(at, {ownership, agent?, init?})`** creates a child conversation whose history is the parent's up to and including entry `at`; `ownership` is required (`{kind:"ownerless"}` is the README example) (read: `pi-durable/dist/harness/types.d.ts:622`, `417-421` per scout; copy rules in 1.2). Whether `at` must be visible from the parent was not verified (guess:, scout did not read storage validation).
+
+### 2.2 Observing state: viewState, watch, watchEvents
+
+All three attach to one per-conversation mount fed by the publication of every commit, so each starts from an atomic snapshot and sees only durable (committed) state (read: `pi-durable/dist/harness/view.js:87-102`, atomic on the Session line via `readOnLine`; publication after `storage.commit`, `session.js:535`, 1.4).
+
+**Streaming is committed, not ephemeral.** The in-flight answer is `pi.live` document data: `assignJson(live.generation, "message", message)` inside `runtime.commit` (read: `pi-durable/dist/harness/generation.js:296-299`); tool output is `pi.live.tools[i].output` (read: `pi-durable/dist/harness/tool.js:355-370`, scout). Only three things are in memory: text produced since the last flush (`pending`, `generation.js:321`, scout), the tool's output buffer until its next progress commit, and per-observer frame buffers (read: `pi-durable/dist/session/observation.js:207-222`). No ephemeral document class exists (measured by scout x-api: the only `ephemeral` hit in dist is a comment, `session.js:45`).
+
+| | `viewState(ctx)` | `watch(ctx)` | `watchEvents(harness, id, ctx)` |
+|---|---|---|---|
+| Returns | `AttachedReplicatedState<ConversationView>`: `value`, `subscribe`, `dispose` (read: `chord/dist/state.d.ts:81-85`, scout) | `WatchHandle<ConversationView>`: `value`, `start(listener(value, ops, ctx))`, `stop()`, `closed` (read: `pi-durable/dist/types.d.ts:784-793`) | `AgentEventStream`: `snapshot`, `start(listener(events[], ctx))`, `stop()`, `closed`; experimental (read: `pi-durable/dist/harness/events.d.ts:173-184`, scout) |
+| Payload | whole new value each time | Chord ops plus the new value; `["r", value]` means whole replacement | typed `AgentEvent` batches: `message_update` with `text_delta`, `tool_execution_*`, `run_start/end`, `entry_appended`, `inbox_update`, and so on (read: `events.d.ts:66-157`, scout) |
+| Granularity | one value per delivery; intermediate values can be skipped | one frame per commit; exact ops | one batch per commit (read: `pi-durable/dist/harness/events.js:52-57`); deltas inside a batch are per flush, not per provider token (inferred from the 100 ms throttle below) |
+| Committed vs ephemeral | all committed | all committed | all committed (events are derived from commit publications, `events.js:52-57`) |
+| Backpressure | at most 100 deliveries wait; overflow keeps the newest (read: `chord/dist/state.d.ts:19-22`, scout) | at most 100 pending frames; overflow replaces them with one `["r", newest view]` frame (read: `observation.js:4`, `212-217`) | same 100 limit; overflow delivers one fresh `snapshot` event (read: `events.js:50`; `README.md:502`) |
+| Reconnect | no replay: re-attach, first value is current state (read: `README.md:404`) | same | same; the `snapshot` is the first value (read: `events.js:48`) |
+| Ends with | `dispose()` | `WatchEnd.reason`: `stopped`, `cancelled`, `session_closed`, `retired`, `listener_error`, `session_failed` (read: `pi-durable/dist/types.d.ts:772-782`, scout) | same `WatchEnd` |
+| Best fit | simple render-on-change UI; framework state | UI that forwards exact ops to a remote client | transport to a remote client or a log: typed deltas, no diffing (cpd host uses it, `pi/durable-host/run.ts:248`, via `pi/durable-worker/harness.ts:49-57` per scout) |
+
+`ConversationView` is `{ conversation, entries, docs }`; `entries` is the active transcript (head marker first), `docs` holds only the five built-in documents `pi.agent`, `pi.live`, `pi.inbox`, `pi.provider`, `pi.usage` (read: `pi-durable/dist/harness/view.js:13-19`, scout; `view.d.ts:6-13`, scout). Task-scoped documents, such as nested-call documents, are not in it (read: same). Other single documents can be watched with `Session.watchDoc` (read: `pi-durable/dist/types.d.ts:798-804`).
+
+**Throttle.** `DEFAULT_PROGRESS_POLICY = { partialIntervalMs: 100, outputIntervalMs: 100 }` (read: `pi-durable/dist/harness/agent.js:16-19`). The first partial after idle waits one interval before its commit (read: `generation.js:322-323`), so a UI sees text in steps of at least 100 ms; set `settings.progress` to commit less often (read: `types.d.ts:456-458`, scout). Tool output also pauses by size at 100 KiB/s (read: `chord/dist/output.js:273-340`, scout); the README's "at most every 100 ms" omits this (scout x-api §8).
+
+**Render a streaming turn** (inferred from the state shape; no shipped UI was read):
+1. Attach once and render the first value. Draw `entries` as the transcript.
+2. If `docs["pi.live"].run` is set, the conversation is busy. Draw `docs["pi.live"].generation.message` as the in-flight answer, `generation.retry` and `deferred` as status, and `tools[]` (name, status, `output`, `details`, `droppedBytes`) as the tool round.
+3. Draw `docs["pi.inbox"].items` as queued inputs.
+4. Apply each update: under `watch` apply ops and treat `["r", v]` as replace (read: `observation.js:216`); under `viewState` re-render the value; under `watchEvents` apply `message_update.changes` to a local model and replace the model on any `snapshot` event.
+5. When the committed entry arrives (`message_end`, or the entry in `entries`), drop the live partial.
+
+**Resume after a disconnect** (read: `README.md:404`, `502`): nothing is replayed and there is no cursor in pi-durable. After any `WatchEnd`, call the attach method again and replace local state with the first value. After a process crash, a new `Harness.open` plus `resume()` is needed first; the committed partial becomes an `aborted` assistant entry (read: `pi-durable/dist/harness/live.js:133-156`, scout; 1.8). A cursor and replay across clients exist only in cpd's host (2.5).
+
+### 2.3 Extensibility
+
+An `Extension` is `{ name, tools?, sections?, hooks?, wraps?, tasks? }` (read: `pi-durable/dist/harness/types.d.ts:305-314`). The helpers are identity or shape builders with no runtime checks (read: `pi-durable/dist/harness/define.js:1-25`).
+
+| API | What it does | Evidence |
+|---|---|---|
+| `createRegistry()` | registry holding only the built-in tasks `pi.generation`, `pi.tool`, `pi.compaction`; `Harness.open` throws if one is missing | read: `pi-durable/dist/harness/registry.js:98-100` (scout), `harness.js:316-318` (scout) |
+| `registry.install(ext)` / `uninstall(ext)` | replaces the same-named extension in place, else appends; publishes at once | read: `pi-durable/dist/harness/registry.js:58-64` |
+| `defineExtension(ext)` | identity, types the object | read: `define.js:2-4` |
+| `defineTool(tool)` | identity; a tool is a pi-ai `Tool` plus `replay?`, `executionMode?`, `prepareArguments?`, `callers?`, `deferred?`, `outputLimits?`, `execute(args, api, ctx)` | read: `define.js:6-8`; `types.d.ts:238-271` (scout) |
+| `section(key, render, {tag?})` | system-prompt section; key matches `/^[a-z][a-z0-9_-]*$/`, `instructions` is reserved; `undefined` omits it; rendered at each generation `prepare` | read: `registry.js:5` ; `define.js:10-13`; `prompt.js:18-43`, `generation.js:67-68` (scout) |
+| `hook(Task, handlers)` | handlers for tasks by name, run only in conversations that select the extension | read: `define.js:14-17`; `agent.js:147-155` (scout) |
+| `wrapTool(tool, fn)`, `wrapSection(key, fn)` | decorate whichever tool or section won; a wrapper that throws or renames removes the target; wrappers must be pure | read: `define.js:18-25`; `agent.js:250-264` (scout) |
+| `Extension.tasks` | custom `defineTask` tasks, registry-wide, names unique | read: `pi-durable/dist/harness/registry.js:17-25` |
+| `defineDoc` / `defineDocFamily`, `HarnessOptions.conversationCreated` | custom documents, initialised per new conversation | read: see 1.5 |
+
+Selection is per conversation: `AgentState.extensions` is an array (exact list) or `{add, remove}` over the default (all installed, in install order) (read: `pi-durable/dist/harness/agent.js:232-249`, scout). Later extensions win a tool-name clash (read: `agent.js:163-165`).
+
+**Hooks.** All hook handlers run in selected-extension order; an ordinary throw is reported and the next handler runs, but once the invocation is aborted the error propagates (read: `pi-durable/dist/harness/scheduler.js:1511-1514`). `HookApi` extends `DocumentReader` only: it reads documents, has no `watchDoc` and no `sleep` (read: `pi-durable/dist/harness/types.d.ts:678-685`).
+
+| Task | Hook | Runs when | Can do | Evidence |
+|---|---|---|---|---|
+| `pi.generation` | `beforeRequest` | before every request attempt, recovery included | return `{messages}` to replace this request's messages | read: `generation.js:117`; `types.d.ts:689-694` (scout) |
+| | `afterResponse` | each terminal provider message, not a `deferred` stop | observe | read: `generation.js:357` |
+| | `onYield` | a final answer, before its commit | return `{continue: UserInput}`; first wins; dropped if the boundary chose a user item or reset | read: `generation.js:420`; semantics `types.d.ts:697-700` (scout) |
+| | `afterTools` | all tools of a round terminal, before the boundary | observe | read: `generation.js:502` |
+| `pi.tool` | `beforeTool` | `call` phase, before intent is recorded | `{block}` (first wins) or `{arguments}`; a throw blocks; a block settles an error result `Tool call blocked: <reason>` | read: `pi-durable/dist/harness/tool.js:61-83`; `types.d.ts:712-720` |
+| | `afterTool` | after `execute`, before commit | return a replacement result | read: `tool.js:403`; `types.d.ts:712-720` |
+| `pi.compaction` | `beforeCompact` | before summarizing | return `{decline: true}` or `{summary}`; first decision wins | read: `pi-durable/dist/harness/compaction.js:82-89` |
+
+`afterTool` does not run for harness-written results (unavailable tool, invalid arguments, blocked) or on the recovery path (inferred from control flow `tool.js:51-83`, `101-119`, scout). `beforeTool` reruns after a crash before intent was committed (read: 1.8; `tool.js:95`).
+
+### 2.4 Interactive tool pauses (approval, question)
+
+**Absent from source.** pi-durable 1.3.0 has no approval, question, confirm or pause API: `grep -rn -i "approv\|question\|pause" dist` matches only codemode classifier text, sampling comments and one README example string (measured by scout x-ext: grep over dist and README). Every pattern below is a design built from primitives and is `inferred` unless it cites cpd code.
+
+**How a human answer can reach a running tool** (read unless noted; scout x-ext §8.5):
+
+| Route | Reaches a running tool? | Evidence |
+|---|---|---|
+| `submit({type:"input"})` while busy | No: queued in `pi.inbox`, placed after the round | read: `submissions.js:147-178`; placement only in `finishToolRound` after all tools are terminal (inferred, `generation.js:491-544`, scout) |
+| `submit({type:"write"})` with `model`, `head` or `edits` | No: waits for a boundary | read: `README.md` Busy Conversations (scout) |
+| `submit({type:"write"})` display-only | Appended at once, but a tool sees it only if it also watches a document | read: `submissions.js:138-145` |
+| `conversation.commit(tx => tx.doc(...))` into a document the tool watches | Yes: `watchDoc` delivers the new value | read: `pi-durable/dist/types.d.ts:798-804`, `784-793`; host commits are not task-gated (inferred, `scheduler.js:1650-1670`) |
+
+A submission that is not display-only, sent while the round runs, lands only after that round, so a tool that waits for it deadlocks (inferred from the first row).
+
+**Patterns.** A waiting tool keeps its task `running` with a live invocation; a task parks as `waiting` only on other task ids and wakes only when they end (read: `pi-durable/dist/harness/scheduler.js:1313-1319` and `waiting` state `types.d.ts:455-461`, scout). Nothing in the scheduler times a task out (measured by scout x-ext: `grep -n "timeout" dist/harness/*.js | wc -l` gives 0).
+
+| Pattern | Shape | Restart behaviour | Label |
+|---|---|---|---|
+| P1 in-execute await | tool `execute` awaits an answer; shows the question with `api.details({awaiting})`; durable form: per-call document created by `api.commit`, watched by `api.watchDoc`, answered by host `conversation.commit` | `execute` is the checkpoint after intent; reruns only if the tool declares `replay: "safe"` (read: `tool.js:95`, `105`), else the model gets an `interrupted` error (read: `tool.js:115-118`) | inferred; `api.details` read: `tool.js:228-236` |
+| P2 `beforeTool` gate | `{block: reason}` denies, `undefined` allows | gate reruns if the crash was before intent (read: `tool.js:61-97`); a throw blocks (read: `tool.js:71-75`) | read for mechanics; durable wait inside the hook is not possible because `HookApi` has no `watchDoc` (read: `types.d.ts:678-685`); free-text answers do not fit (inferred) |
+| P3 child task | tool creates a custom task that watches a document; waits with `api.waitForTask` | child of a non-replay-safe tool gets `abandonOnRestart` (read: `tool.js:246-250`), so the tool must be `replay: "safe"`; `createTask` has no key, so a rerun can create a second child (inferred) | inferred |
+| P4 human resolves a `waiting` task | not available: only a task's own invocation commits its terminal state | | inferred (scout x-ext P4) |
+
+**How cpd's host does it** (read, all in `pi/durable-host/`): the host uses P1 with an in-memory held map, not a document. `ask_user_question` is an `execute` that awaits `dialogs.questionnaire(...)` (`tools.ts:52`) and is `replay: "safe"` (`tools.ts:37`); `cpd_secret_approve` and `cpd_host_approve` await a `select` and are `replay: "unsafe"` (`tools.ts:62`, `100`), so after a restart the model gets `interrupted` and the User is never re-asked silently; `cpd_plan_review` returns at once and the dialog is reopened from a cpd Event (`tools.ts:118`, `plan-review.ts`). The held map is process memory only: "memory only (4.4 rule 6), dies with the process" (`held.ts:44`, per scout). The answer arrives as a socket `ui_response` (2.5), resolves the held promise (`held.ts:100-113`) and the tool returns, so the answer never touches `Conversation.submit`.
+
+### 2.5 Out of process and multi-client
+
+**Why an external client cannot open the SQLite file.** pi-durable states "One process owns a storage at a time; there is no cross-process locking" (read: `pi-durable/README.md:682`). Nothing stops a second open: no lock, lease or fence in dist (measured by scout x-store: grep, see 1.7); the only exclusion is SQLite's own per-transaction `BEGIN IMMEDIATE` (read: `pi-durable/dist/storage/sqlite/node.js:114`). A second process would be a second Harness over the same rows, and it is unsafe (inferred from 1.7: the id counter is loaded once at open, so writers collide; `resume()` rewrites `running` tasks to `pending` and re-runs them; caches never refresh). A client that opens the file for reading only is not offered either: `readOnly` is absent from 1.3.0 (measured by scout x-ext: grep of `.d.ts` gives 0). cpd's host does not lock the file; its only owner check is a socket probe, `guardSocket` (read: `pi/durable-host/net.ts:19-30`), run before the store opens (`run.ts:131` before `run.ts:247`) and the socket is bound after (`run.ts:573`), so a narrow race exists (inferred, not run). Hence cpd puts one host process per Session in front of the store and clients talk to it (read: `pi/durable-host/config.ts:25-27` for the per-Session store path).
+
+**Protocol v1** (read: `pi/durable-host/protocol.ts`, `server.ts`, `ring.ts`, `net.ts`, `held.ts`). Socket `<CPD_HOME>/run/host/<session>.sock`, umask `0o177` then `chmod 0600`, directory `0700` (read: `pi/durable-host/net.ts:19-25`, `45-51`, per scout; path from `config.ts:29-34`).
+
+*Framing.* One JSON object per line, UTF-8, `encode(msg) = JSON.stringify(msg) + "\n"` (read: `protocol.ts:251-253` per scout). Client line limit 1 048 576 bytes (`LIMITS.clientLine`, `protocol.ts:3`), host line limit 67 108 864 (`protocol.ts:4`, used to cap history pages). A line over the limit gets `error frame_too_large` and a drop (read: `server.ts:207-211`, per scout). A write buffer above 8 388 608 bytes sends `bye slow_client` (`reconnect: true`) and drops the client (read: `server.ts:79-86`; `protocol.ts:5`).
+
+*Handshake.* The host waits 5000 ms for `hello` (`LIMITS.helloMs`, `protocol.ts:6`; `server.ts:199-203`). Before `hello` only `ping` and `hello` are accepted, else `error hello_required` (read: `server.ts:218-223`). `negotiate` picks the highest host version within `[min_protocol, protocol]`; no match gives `error protocol_mismatch` with `details {host, client}` and a drop (read: `server.ts:224-229`; `PROTOCOL_VERSIONS = [1]`, `protocol.ts:1`). After `hello` a client must `attach` before any command except `hello`, `ping`, `detach` (read: `server.ts:138-141`, per scout).
+
+*Client to host (`ToHost`, 14 types; read: `protocol.ts:39-53`).*
+
+| `type` | Fields | Effect |
+|---|---|---|
+| `hello` | `protocol`, `min_protocol`, `client`, `name?` | reply `welcome` (read: `server.ts:224-244`, scout) |
+| `attach` | `req`, `cursor?: {epoch, seq}`, `conversation?` | only `"root"` is accepted, else `error unsupported`; replies `attached`, then replay frames, then held `ui_request`s, then `host_state` (read: `server.ts:117-131`) |
+| `submit` | `req`, `text`, `when_busy`, `request_id?`, `images?` | becomes `conversation.submit` with `requestId = chat:<request_id>` and entry `{kind: "cpd-chat", data: {client_id, request_id}}`; busy-reject gives `error busy` (read: `run.ts:452-465`); result `{submission_id, status}` (read: `server.ts:142-147`) |
+| `compact` | `req`, `instructions?` | result `{task_id}` (read: `server.ts:148-149`) |
+| `configure` | `req`, one of `model?`, `thinking_level?` | result `{agent}`; refused while a run is pending (read: `server.ts:150-156`; `run.ts:468-491` per scout) |
+| `list_models` | `req` | result `{models}` (read: `server.ts:157-158`) |
+| `fork` | `req`, `at`, `ownership?` | creates a new cpd Session, not a pi-durable fork; result `{conversation_id}`; any `ownership` gives `bad_args` (read: `server.ts:159-160`; `run.ts:493-507` per scout) |
+| `history` | `req`, `before?`, `limit?` (1..500, default 50) | newest-first page, `{entries, next?}` (read: `server.ts:161-165`; `protocol.ts:17-18`) |
+| `abort` | `req`, `background` | resolves every held request as `aborted` (broadcast `ui_resolved by:"host"`), then `conversation.abort` (read: `run.ts:530-538`; `server.ts:166-170`) |
+| `abort_submission` | `req`, `submission_id` | outcome `aborted`, `already_placed`, `settled` or `not_found` (read: `protocol.ts:49`; `run.ts:539` per scout) |
+| `ping` | `req?` | `pong`; allowed before hello and attach (read: `server.ts:218-219`) |
+| `detach` | `req` | `result`, then `bye {detached, reconnect:false}`, close (read: `server.ts:132-136`, per scout) |
+| `reload` | `req` | reloads host config; `refused` if not allowed (read: `protocol.ts:52`; `reload.ts:26-38` per scout) |
+| `ui_response` | `req`, `id`, one of `value`, `confirmed`, `answer`, `cancelled` | `result {}`, then broadcast `ui_resolved` with `by` = this client (read: `server.ts:175-186`) |
+
+*Host to client (`ToClient`, 13 types, five of them `ui_request` methods; read: `protocol.ts:82-99`).*
+
+| `type` | Fields | Sent when |
+|---|---|---|
+| `welcome` | `protocol`, `host_version`, `pi_durable`, `session`, `role`, `epoch`, `client_id`, `cwd`, `limits` | after a valid `hello` (read: `protocol.ts:83`) |
+| `attached` | `req`, `mode: snapshot` or `resume`, `epoch`, `from_seq`, `head_seq`, `client_id` | reply to `attach` (read: `server.ts:124`) |
+| `snapshot` | `epoch`, `seq`, `snapshot` | base frame on a snapshot attach; after a rebase (read: `ring.ts:33`; `run.ts:561`) |
+| `events` | `epoch`, `seq`, `events[]` | each `watchEvents` batch, unchanged (read: `run.ts:552-554`) |
+| `result` | `req`, `data` | reply to a command (read: `protocol.ts:87`) |
+| `error` | `req?`, `code`, `message`, `details?` | failure; codes `protocol_mismatch`, `hello_timeout`, `bad_frame`, `frame_too_large`, `unknown_type`, `bad_args`, `not_attached`, `busy`, `unsupported`, `storage_failed`, `shutting_down`, `internal`, `refused`, `hello_required`, `ui_unknown` (read: `protocol.ts:23-27`, `88`) |
+| `host_state` | `state`: `idle`, `working`, `waiting` or `blocked`, `name?`, `clients`, `held_ui`, `agent?` | attach and every state change; host code sets only `idle`, `working`, `blocked` (read: `protocol.ts:89`; `run.ts:543-546`) |
+| `ui_request` | `id`, `purpose`, `created_at`, `expires_at?`, `tool_call_id?`, `replayed?` plus `method`: `select`, `confirm`, `input`, `editor`, `questionnaire` | a dialog opens, or replayed on attach with `replayed: true` (read: `protocol.ts:72-94`; `server.ts:126-128`) |
+| `ui_resolved` | `id`, `outcome`: `answered`, `cancelled`, `timeout`, `superseded` or `aborted`, `by?` | answer, timeout, supersede or abort (read: `protocol.ts:95`) |
+| `notice` | `level`, `message` | plain broadcast (read: `protocol.ts:96`; `dialogs.ts:93`) |
+| `status` | `key`, `text` (string or null) | plain broadcast (read: `protocol.ts:97`; `dialogs.ts:94`) |
+| `pong` | `req?` | reply to `ping` (read: `protocol.ts:98`) |
+| `bye` | `reason`: `shutdown`, `restart`, `storage_failed`, `slow_client` or `detached`, `reconnect` | shutdown (`reconnect: true`), slow client, detach (read: `protocol.ts:99`; `server.ts:261-267`). Nothing sends `restart` (grep by scout) |
+
+*Cursor, epoch, replay, ring.* The ring is in memory: a base `snapshot` at `seq` 1 plus an array of `events` frames; `head = base.seq + frames.length`; each frame's `seq` is the previous head plus one, and a frame is one pi-durable batch, not one event (read: `pi/durable-host/ring.ts:12-25`). `attach(cursor)` resumes only when `cursor.epoch` equals the ring's epoch and `base.seq <= cursor.seq <= head`, replying frames from `cursor.seq + 1`; any other cursor gets `snapshot` mode: the base then every frame (read: `ring.ts:27-34`). The epoch is a fresh `randomUUID()` per host process (read: `run.ts:440`; `main.ts:47` per scout), so a host restart always forces a snapshot (inferred from `ring.ts:30`). The ring is rebased when frames exceed 4096, or exceed 256 at a batch that contains `run_end` (read: `ring.ts:36-39`; `protocol.ts:7-8`; `run.ts:555`): the host retires the stream, calls `watch()` again, and sends the new snapshot as a live frame (read: `run.ts:557-562`). The host stores no per-client cursor; the client sends `{epoch, seq}` on each attach (inferred: `attach` carries the cursor, `protocol.ts:41`).
+
+*Multiple clients.* Any number of connections may attach; there is no leader (read: `server.ts:98-100`, `254-259`, per scout). Every attached client gets every `events`, `snapshot`, `host_state`, `ui_request`, `ui_resolved`, `notice` and `status` frame (read: `server.ts:254-259`). Submissions carry the sending `client_id` in the entry data (read: `run.ts:459`). Any client may answer any held request and the first answer wins (read: `held.ts:100-110`).
+
+*Reconnect.* A dropped socket changes nothing in the Session (read: `net.ts:42`, per scout). The client reconnects, sends `hello`, then `attach` with its last `{epoch, seq}`: it gets `resume` frames if the host is the same process and the ring still covers `seq`, else a snapshot (read: `ring.ts:27-34`). After the attach the held `ui_request`s are replayed, oldest first, flagged `replayed: true` (read: `server.ts:126-128`; order `held.ts:46`, per scout). Reconnect logic of a client is not part of the host (unverified: not in the read set).
+
+*Dialogs, held, plan review.* A dialog is a held request: `create` stores an id, a promise and an optional unref-ed timer, broadcasts `ui_request`, and `stateChanged` makes `host_state` `blocked` while any is held (read: `held.ts:74-97`; `run.ts:543-546`). Method results: `select`, `input`, `editor` give a string or `undefined`; `confirm` a boolean; `questionnaire` a result or `{answers: [], cancelled: true}` (read: `dialogs.ts:73-92`). A client `cancelled` answer is broadcast as `ui_resolved cancelled` but leaves the request held until the host settles it (read: `held.ts:111-113`); no caller passes the expiry option, so nothing expires (grep by scout x-host). Plan review: `cpd_plan_review` returns at once; a `plan-review` Event opens a `select` (Approve / Change) and, for Change, an `editor`; the decision runs `cpd plan decide` (read: `pi/durable-host/plan-review.ts:118-147`, `67-96`, per scout). After a host restart the held map is empty; a pending plan review is reopened with a new id and an `ask_user_question` is asked again (read: `run.ts:587-595` and `tools.ts:33-34`, per scout).
+
+```mermaid
+sequenceDiagram
+  participant UI as UI client
+  participant H as Host (pi/durable-host)
+  participant HA as Harness + Conversation
+  UI->>H: hello, then attach {cursor}
+  H-->>UI: welcome, attached, snapshot or resume frames, host_state
+  UI->>H: submit {text, request_id}
+  H->>HA: conversation.submit(input, requestId chat:id)
+  H-->>UI: result {submission_id, status}
+  HA-->>H: watchEvents batch: run_start, message_update (text_delta)
+  H-->>UI: events {epoch, seq, events}
+  HA-->>H: tool_execution_start (beforeTool or tool awaits dialog)
+  H-->>UI: ui_request {id, method: select} + host_state blocked
+  UI->>H: ui_response {id, value: Allow once}
+  H->>HA: held promise resolves, tool runs
+  H-->>UI: result, ui_resolved {answered, by}
+  HA-->>H: tool_execution_end, message_end, run_end
+  H-->>UI: events frames, host_state idle
+```
 
 ## 3. pi-durable vs pi-agent
 
