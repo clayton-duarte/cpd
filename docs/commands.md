@@ -5222,6 +5222,57 @@ A test, `pi/test/skill-writing-audit.test.ts`, pins each rule; the rules apply t
 
 The rows of the verified tables that are left out (LW-32, LW-36, LW-37, LA-11, LA-14, MG-10, LA-17, LA-19, LA-20, MG-12, XS-10) are recorded in BACKLOG.md.
 
+### 15.26 The turn-end question guard (Plan `exp-turn-question-guard`, pro-d366)
+
+A Lead or a Manager that ends its turn by asking the User a question in plain prose, instead of calling `ask_user_question`, leaves its Session `idle` and not `blocked`, so the User gets no structured questionnaire (§15.13). The guard nudges such a Session once to call the tool. It lives in its own module, `pi/lib/question-guard.ts`, registered once from `pi/lib/adapter.ts` next to `registerLoopGuard`. pi has no unsubscribe, so every handler reads `host.run` and the Session's role at call time, as `pi/lib/loop-guard.ts` does. **A turn** here is one run of the adapter, from pi's `before_agent_start` to `agent_end` (as §15.15 L3), not pi's `turn_start` and `turn_end`. The guard is an Experimental Feature, gated by the config key `experimental.turn_question_guard` (Q5).
+
+**Q1 Scope and trigger.** The guard acts for a Session of role `lead` or `manager` only, never for a Worker. At `agent_end` it marks a candidate when all three hold: the LAST assistant message of `event.messages` has `stopReason === "stop"`; its text (`lastAssistantText` of `pi/lib/reminder.ts`, which ignores `stopReason`, so the guard checks it itself) contains `?`; and the run called none of the tools `ask_user_question`, `cpd_plan_review`, `cpd_secret_approve`, `cpd_host_approve`. Every `tool_call` event counts, a nested one too: a call that a `codemode` script makes carries `parentToolCallId` (§15.21) and counts as called. The run keeps its own set of the tool names it called on the Run state. The set is cleared at `before_agent_start` and at `agent_end` after it was read.
+
+**Q2 One nudge per User turn.** The Run counter `questionNudges` counts the nudges sent. No nudge is sent while it is 1 or more. It is reset to 0 by (a) an `input` event with source `interactive` (the User's typed prompt, `isTyped` of `pi/lib/reply.ts`) and (b) a `before_agent_start` whose `startsReply(event)` is true and whose `messageType` is not `user` (the User's from-null session-message, `pi/lib/reply.ts`). A `before_agent_start` with `messageType: "user"` does not reset it: pi starts the run of `sendUserMessage` with that type, the nudge's own run included, so a reset there would loop.
+
+**Q3 Deferred send.** `agent_end` only stores the candidate on the Run state: its text, and an identity of the run that produced it. The send happens in the `agent_settled` handler (next to the one in `pi/lib/agent-state.ts`). That handler starts the rest as a non-awaited async function (`void`), so it never holds the settle or the state report. pi 1.3.0 reports `ctx.isIdle()` as false inside `agent_end` and defers a prompt sent in `agent_settled` until after the settle, so the nudge is sent from there. A `before_agent_start` or `agent_start` of a newer run clears the candidate. After every `await` the function checks that `host.run` is still the same run and that the candidate is still the same; if either differs, it does nothing.
+
+**Q4 Order of checks.** The checks of Q1 to Q3 run first and cost nothing. Then, in this order, each failure ends the candidate silently (no message, no notice, no state change):
+
+1. the flag (Q5);
+2. for a Lead with a Plan (`r.info.plan`), `cpd plan show --plan <plan>` through `host.call` (the pattern of `pi/lib/turns.ts`): `counts.running + counts.queued` must be 0. A Manager has no Plan read and skips this step. A failed call or unreadable output ends the candidate;
+3. the classifier (Q6);
+4. the send (Q7).
+
+**Q5 The flag.** The guard reads `cpd config` as JSON through `host.call(["config"])` at the moment of the check, with no cache, so a change of the User's toggle applies at once. It is ON unless `config.experimental?.turn_question_guard === false`. An absent `experimental` table and an absent key both mean ON; the key is defined by Plan `experimental-config`, and until that Plan lands the guard is on. A failed `cpd config` call, or output that does not parse, makes the guard do nothing for this candidate and writes one line with `r.log`: no message, no notice, no state change.
+
+**Q6 The classifier.** The model is `ctx.modelRegistry.findOfType("classifier", "llama.cpp", "kev-4b")`. When it is `undefined` the guard does nothing (neither a notice nor a state change). Otherwise it calls `ctx.modelRegistry.classify(model, { state: { message }, questions: { asking_user } }, { signal, maxRetries: 0 })`, where:
+
+- `message` is the candidate's text, truncated to its LAST 2000 characters;
+- `asking_user` is a `bool` question with the instructions "Does this assistant message ask the human user a question or ask for a decision/confirmation before proceeding?", criteria `true`: "The assistant is asking the user a question, offering choices, or waiting for user confirmation/input.", and `false`: "The assistant is only reporting status, summarizing completed work, or rhetorical/quoted question marks.";
+- `signal` is `AbortSignal.any([r.abort.signal, AbortSignal.timeout(1500)])`, the hard bound of 1500 ms. pi's `timeoutMs` is per HTTP request and retried, so it does not bound the call.
+
+A result counts only when its `stopReason` is `"stop"` and `answers.asking_user` is `{type: "bool", probability}` with `probability >= 0.85` (the threshold is inclusive). Anything else sends nothing. A throw is caught and treated as UNREACHABLE (Q8). The outcome is classified for Q8.
+
+**Q7 The nudge.** A candidate that passes Q6 is sent as this text, a steer:
+
+```
+You ended your turn with a question in plain text. If you need a decision or input from the User, call `ask_user_question` now so the session enters `blocked` state; otherwise state your assumption in one line and proceed.
+```
+
+The call is `host.pi.sendUserMessage(<text>, { deliverAs: "steer" })`. It is not sent while `r.tripped` (§15.15) or `r.firstPending` is true: those hold every send that would start a turn. After a send, `questionNudges += 1`.
+
+**Q8 Unreachable classifier notice.** The classifier endpoint is `http://ollama.lab/v1`. The Q6 outcome is one of three:
+
+- **REACHED**: `stopReason` is `"stop"`, whatever the probability. The Run flag `classifierDown` is set to false.
+- **UNREACHABLE**: `stopReason` is `"error"`, the call throws, or it aborts because the 1500 ms timeout fired while `r.abort.signal` is not aborted.
+- **Neither**: an abort while `r.abort.signal` is aborted (session shutdown), or a missing model (Q6). Nothing is shown and no state changes.
+
+On UNREACHABLE the guard still sends nothing: a turn is never interrupted. When `classifierDown` is false, the guard sets it to true and shows the User one warning with `ctx.ui.notify`, the text passed through `boldPhi` of `pi/lib/phi.ts`, level `warning`:
+
+```
+φ: classifier_unreachable: http://ollama.lab/v1 is unreachable, so the turn-end question guard is skipped (connect Tailscale or turn it off: cpd config experimental turn_question_guard off).
+```
+
+While `classifierDown` is true no further notice is shown, whatever the number of turns; the next REACHED outcome clears the flag, so a later outage notifies again. The notice goes to the User's screen only: not to the agent, not through `host.deliver`, with no `cpd` call and no Session state change. `classifierDown` is kept on the Run state, per Session process, so a restart may notify once more.
+
+**Fail open.** Everywhere in the guard, a failure is handled without an error: the only visible output is the Q8 notice, nothing changes the Session's state, and nothing throws out of a handler.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
