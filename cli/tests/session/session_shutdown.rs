@@ -7,14 +7,12 @@ use crate::common;
 use std::fs;
 
 use common::fx::Fx;
-use common::session::{setup, show};
+use common::session::{events, setup, show};
 use common::wrapper::{Ended, Pane, Wrapper, installed_cpd};
 
 /// `session run <id>` in a new window of the cockpit, its first pi started, which then exits 0 (the User's `/quit`).
 /// Returns the wrapper and its pane, with the prompt on the screen.
 fn quit(fx: &Fx, id: &str, name: &str) -> (Wrapper, Pane) {
-    setup(&fx.env);
-    fx.cockpit();
     let dir = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -42,6 +40,25 @@ fn assert_left_stopped(fx: &Fx, id: &str, mut w: Wrapper) {
     let row = show(fx, id);
     assert_eq!(row["state"], "stopped", "{row}");
     assert!(row["archived_at"].is_null(), "archived: {row}");
+    assert_nothing_archived(fx);
+    // No Enter typed: the end of input ends the wrapper.
+    assert!(
+        matches!(w.finish(), Ended::Returned { .. }),
+        "{:?}",
+        w.ended()
+    );
+}
+
+fn assert_nothing_archived(fx: &Fx) {
+    assert_eq!(
+        fx.env
+            .query::<i64>("SELECT count(*) FROM sessions WHERE archived_at IS NOT NULL"),
+        0,
+        "a Session archived"
+    );
+    for kind in ["context-archived", "plan-archived", "session-archived"] {
+        assert!(events(fx, kind).is_empty(), "{kind} was written");
+    }
     for table in ["plans", "contexts"] {
         assert_eq!(
             fx.env.query::<i64>(&format!(
@@ -51,25 +68,26 @@ fn assert_left_stopped(fx: &Fx, id: &str, mut w: Wrapper) {
             "{table} archived"
         );
     }
-    // No Enter typed: the end of input ends the wrapper.
-    assert!(
-        matches!(w.finish(), Ended::Returned { .. }),
-        "{:?}",
-        w.ended()
-    );
 }
 
 #[test]
 fn a_lead_whose_pi_exits_zero_is_left_stopped_and_not_archived() {
     let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
     // `lead2`: the own Lead of Plan `other`, which has nothing running.
     let (w, _pane) = quit(&fx, "lead2", "Lead two");
     assert_left_stopped(&fx, "lead2", w);
 }
 
+/// One Context with a Manager and a Plan with its own Lead: quitting either archives nothing.
 #[test]
 fn a_manager_whose_pi_exits_zero_is_left_stopped_and_not_archived() {
     let fx = Fx::with_ports();
-    let (w, _pane) = quit(&fx, "manager1", "Manager");
+    setup(&fx.env);
+    fx.cockpit();
+    let (w, _manager_pane) = quit(&fx, "manager1", "Manager");
     assert_left_stopped(&fx, "manager1", w);
+    let (w, _lead_pane) = quit(&fx, "lead2", "Lead two");
+    assert_left_stopped(&fx, "lead2", w);
 }
