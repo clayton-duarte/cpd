@@ -160,7 +160,6 @@ describe("durable backend", () => {
     expect(ids(first.window)).toEqual(range(80, 90));
     expect(first.window.cursor).toBe("dur:u:80");
     await handle.loadEarlier("dur:u:70");
-    await handle.loadEarlier("dur:u:60");
     expect(host.history).not.toHaveBeenCalled();
     host.history.mockResolvedValueOnce({ entries: Array.from({ length: 30 }, (_, i) => userEntry(59 - i)), next: "n1" });
     await handle.loadEarlier("dur:u:60");

@@ -20,6 +20,7 @@ import {
 } from "../../protocol/domain.ts";
 import { sessionRetierArgs } from "../cockpit/actions.ts";
 import { createDialect, dialogFromRequest } from "./frames.ts";
+import type { TranscriptItem } from "../../protocol/domain.ts";
 import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { HostClient, HostFrame } from "./client.ts";
@@ -154,10 +155,36 @@ export function createDurableBackend(deps: {
           send({ type: "session.status", sessionId, busy, queued: [...queued] });
         }
       };
+      // Entries older than the cache come from the host's history command, newest first: `historyNext` continues the chain.
+      let historyExhausted = false;
+      let historyNext: string | undefined;
+      const pageOf = (items: readonly TranscriptItem[], start: number, end: number): Window => {
+        const hasEarlier = items.length > 0 && (start > 0 || !historyExhausted);
+        const first = items[start];
+        return { items: items.slice(start, end), hasEarlier, cursor: hasEarlier && first !== undefined ? `dur:${first.id}` : null };
+      };
       const tailWindow = (): Window => {
         const items = dialect.transcript.items;
-        const start = Math.max(0, items.length - windowSize);
-        return { items: items.slice(start), hasEarlier: start > 0, cursor: start > 0 ? `dur:${start}` : null };
+        return pageOf(items, Math.max(0, items.length - windowSize), items.length);
+      };
+      const fetchHistory = async (): Promise<void> => {
+        const page = await client.history(historyNext);
+        dialect.applyHistory(page);
+        historyNext = page.next;
+        if (page.next === undefined) historyExhausted = true;
+      };
+      /** Fill the entries between the cache and the host window, from the newest entry down. */
+      const fillGap = async (): Promise<void> => {
+        const gap = dialect.gap;
+        if (gap === undefined) return;
+        let next: string | undefined;
+        for (;;) {
+          const page = await client.history(next);
+          dialect.applyHistory(page);
+          const reached = page.entries.some((e) => typeof e === "object" && e !== null && typeof (e as { id?: unknown }).id === "number" && (e as { id: number }).id <= gap.after);
+          if (reached || page.next === undefined || dialect.gap === undefined) return;
+          next = page.next;
+        }
       };
 
       const onDialogRequest = (frame: Extract<HostFrame, { type: "ui_request" }>): void => {
@@ -191,11 +218,45 @@ export function createDurableBackend(deps: {
         send({ type: "session.dialog", sessionId, dialog: result });
       };
 
+      // view and ops frames are applied one at a time, in order: a gap fill awaits the host between two of them.
+      let frames: Promise<void> = Promise.resolve();
+      const onStream = async (frame: Extract<HostFrame, { type: "view" | "ops" }>): Promise<void> => {
+        if (disposed) return;
+        let out: ReturnType<typeof dialect.applyOps> = { append: [], update: [], deltas: [] };
+        if (frame.type === "view") {
+          dialect.applyView(frame);
+          out = { ...out, replaced: true };
+        } else {
+          out = dialect.applyOps(frame);
+        }
+        if (dialect.transcript.before === undefined) historyExhausted = true;
+        await fillGap();
+        if (disposed) return;
+        const facts = dialect.transcript.facts;
+        if (out.replaced === true) {
+          busy = facts.busy;
+          send({ type: "session.window", sessionId, mode: "tail", window: tailWindow() });
+        } else {
+          if (out.append.length > 0) send({ type: "session.append", sessionId, items: out.append });
+          if (out.update.length > 0) send({ type: "session.update", sessionId, items: out.update });
+          for (const d of out.deltas) send({ type: "session.delta", sessionId, ...d });
+          if (out.busy !== undefined) busy = out.busy;
+        }
+        if (out.agent?.model !== undefined) agentModel = out.agent.model;
+        if (out.agent?.thinking !== undefined) agentThinking = out.agent.thinking;
+        if (out.queued !== undefined) {
+          const ids = new Set(out.queued.map((q) => q.id));
+          queued = queued.filter((q) => q.submissionId !== undefined && ids.has(q.submissionId));
+        }
+        emitFooter(false);
+        emitStatus(false);
+      };
+
       const onLive = (frame: HostFrame): void => {
         switch (frame.type) {
           case "view":
           case "ops":
-            fail(new Error("not implemented"));
+            frames = frames.then(() => onStream(frame)).catch(fail);
             return;
           case "host_state": {
             busy = frame.state !== "idle";
@@ -260,6 +321,7 @@ export function createDurableBackend(deps: {
         await firstSnapshot;
         timer.dispose();
         if (snapshotError !== null) throw snapshotError;
+        historyExhausted = dialect.transcript.before === undefined;
       } catch (e) {
         return abortAttach(e);
       }
@@ -295,17 +357,17 @@ export function createDurableBackend(deps: {
         capabilities,
         async loadEarlier(before) {
           guard();
-          const m = /^dur:(\d+)$/.exec(before);
-          const end = m === null ? NaN : Number(m[1]);
+          const m = /^dur:(.+)$/.exec(before);
+          const cursor = m?.[1];
+          const at = (): number => (cursor === undefined ? -1 : dialect.transcript.items.findIndex((i) => i.id === cursor));
+          if (at() < 0) throw invalid(`bad cursor ${before}`);
+          while (at() < windowSize && !historyExhausted) {
+            await fetchHistory();
+            if (at() < 0) throw invalid(`bad cursor ${before}`);
+          }
+          const end = at();
           const items = dialect.transcript.items;
-          if (!Number.isSafeInteger(end) || end > items.length) throw invalid(`bad cursor ${before}`);
-          const start = Math.max(0, end - windowSize);
-          send({
-            type: "session.window",
-            sessionId,
-            mode: "earlier",
-            window: { items: items.slice(start, end), hasEarlier: start > 0, cursor: start > 0 ? `dur:${start}` : null },
-          });
+          send({ type: "session.window", sessionId, mode: "earlier", window: pageOf(items, Math.max(0, end - windowSize), end) });
         },
         async submit(input) {
           guard();

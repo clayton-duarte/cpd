@@ -58,7 +58,7 @@ export interface Gap {
 export interface Dialect {
   applyView(frame: { view: unknown }): { transcript: DurableTranscript };
   applyOps(frame: { ops: unknown[] }): DialectOutput;
-  applyHistory(frame: { entries: unknown[]; next?: string }): void;
+  applyHistory(frame: { entries: readonly unknown[]; next?: string }): void;
   readonly gap: Gap | undefined;
   readonly transcript: DurableTranscript;
 }
@@ -527,8 +527,7 @@ export function createDialect(): Dialect {
     },
     applyHistory(frame) {
       try {
-        const fresh = ingest(arr(frame.entries, "history entries"));
-        if (fresh.length === 0 && view === null) return;
+        ingest(arr(frame.entries, "history entries"));
         if (view !== null) {
           items = derive(view);
           facts = factsOf(view);

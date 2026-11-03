@@ -246,8 +246,12 @@ export async function connectHost(socketPath: string, deps: { factory: SocketFac
       if (!Array.isArray(models)) return bad("list_models", "models");
       return models as Awaited<ReturnType<HostClient["listModels"]>>;
     },
-    history() {
-      return Promise.reject(new Error("not implemented"));
+    async history(before, limit) {
+      const result = await data("history", { ...(before === undefined ? {} : { before }), ...(limit === undefined ? {} : { limit }) });
+      const { entries, next } = result;
+      if (!Array.isArray(entries)) return bad("history", "entries");
+      if (next !== undefined && typeof next !== "string") return bad("history", "next");
+      return { entries, ...(next === undefined ? {} : { next }) };
     },
     async abort() {
       await data("abort", { background: false });
