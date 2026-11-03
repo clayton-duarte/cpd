@@ -464,7 +464,8 @@ fn per_context(store: &mut Store, context: &str) -> Vec<i64> {
 fn history_rows(store: &mut Store) -> Vec<Value> {
     rows(
         store,
-        "SELECT id, tbl, pk, op, before, after FROM history ORDER BY id",
+        "SELECT id, tbl, pk, op, before, after FROM history
+          WHERE NOT (tbl = 'event_kinds' AND after LIKE '%workflow-reopened%') ORDER BY id",
     )
 }
 

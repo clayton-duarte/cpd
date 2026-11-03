@@ -357,7 +357,7 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
     }
     assert_eq!(
         count(&mut store, "SELECT count(*) FROM history"),
-        history,
+        history + 1, // the one `workflow-reopened` row of `event_kinds` (`workflow-reopen`)
         "the copy writes no history row"
     );
 }

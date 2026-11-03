@@ -2736,7 +2736,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
         assert_eq!(
             rows_after.remove("event_kinds").map(|r| r.len()),
-            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS + REOPEN_KIND_NOT_YET_IN_KIND)
+            Some(
+                crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS + REOPEN_KIND_NOT_YET_IN_KIND
+            )
         );
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(
