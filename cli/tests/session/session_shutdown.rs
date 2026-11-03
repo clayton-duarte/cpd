@@ -130,10 +130,20 @@ fn a_manager_whose_pi_exits_zero_is_left_stopped_and_not_archived() {
 
 /// Plan `other` finished: nothing live, so its Lead may be archived.
 fn finish_plan_other(fx: &Fx) {
+    done_plan_other(fx);
     fx.env
-        .sql("UPDATE plans SET phase = 'done' WHERE id = 'other'");
-    fx.env
-        .sql("UPDATE workflows SET status = 'merged' WHERE plan = 'other'");
+        .sql("UPDATE workflows SET status = 'cancelled' WHERE plan = 'other'");
+}
+
+/// Plan `other` in phase `done`, by the legal phases.
+fn done_plan_other(fx: &Fx) {
+    for phase in ["plan", "dispatch", "deploy", "done"] {
+        fx.env.sql(&format!(
+            "UPDATE plans SET phase = '{phase}', locked_at = {}, done_at = {} WHERE id = 'other'",
+            if phase == "plan" { "NULL" } else { "'t'" },
+            if phase == "done" { "'t'" } else { "NULL" }
+        ));
+    }
 }
 
 fn archived_count(fx: &Fx, table: &str) -> i64 {
@@ -166,8 +176,7 @@ fn a_blocked_lead_whose_pi_exits_zero_after_the_quit_marker_is_not_archived() {
     setup(&fx.env);
     fx.cockpit();
     // The Plan is done but its Workflow still waits: a blocker.
-    fx.env
-        .sql("UPDATE plans SET phase = 'done' WHERE id = 'other'");
+    done_plan_other(&fx);
     let (w, pane) = quit_with(&fx, "lead2", "Lead two", true, 0);
     let shown = pane.screen();
     assert!(shown.contains("archive_blocked"), "{shown}");
