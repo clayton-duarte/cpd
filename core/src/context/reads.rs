@@ -1,11 +1,11 @@
-//! Read log of Context records (decision pro-d10 item 5): stubs, the implementation is another Job's.
+//! Read log of Context records (decision pro-d10 item 5) and `context reads` (commands.md §3.18).
 
-use crate::error::CpdError;
-use crate::ids::{ContextId, RecordId, SessionId};
-use crate::store::Store;
 use super::{ContextRow, Select};
 use crate::env::Env;
+use crate::error::CpdError;
+use crate::ids::{ContextId, RecordId, SessionId};
 use crate::output::Output;
+use crate::store::Store;
 use clap::Args;
 use serde_json::{Value, json};
 
@@ -23,7 +23,6 @@ pub struct ReadsArgs {
     #[arg(long, value_name = "n")]
     min_sessions: Option<u32>,
 }
-
 
 use rusqlite::params;
 use time::OffsetDateTime;
@@ -136,13 +135,11 @@ pub(crate) fn env_session(store: &mut Store) -> Option<SessionId> {
     let id = SessionId::parse(&raw).ok()?;
     let known = store
         .read(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT count(*) FROM sessions WHERE id = ?1",
-                    [id.to_string()],
-                    |r| r.get::<_, i64>(0),
-                )?
-                > 0)
+            Ok(conn.query_row(
+                "SELECT count(*) FROM sessions WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get::<_, i64>(0),
+            )? > 0)
         })
         .ok()?;
     known.then_some(id)
@@ -150,12 +147,7 @@ pub(crate) fn env_session(store: &mut Store) -> Option<SessionId> {
 
 /// Best-effort: log the reads of the environment's Session; every error is swallowed.
 #[allow(dead_code)]
-pub(crate) fn log_reads(
-    store: &mut Store,
-    context: &ContextId,
-    channel: Channel,
-    reads: &[Read],
-) {
+pub(crate) fn log_reads(store: &mut Store, context: &ContextId, channel: Channel, reads: &[Read]) {
     if let Some(session) = env_session(store) {
         let _ = log_reads_for(store, context, &session, channel, reads, &clock::now());
     }
@@ -163,12 +155,7 @@ pub(crate) fn log_reads(
 
 /// Best-effort: mark used what `text` cites; every error is swallowed.
 #[allow(dead_code)]
-pub(crate) fn mark_used(
-    store: &mut Store,
-    context: &ContextId,
-    text: &str,
-    exclude: &[RecordId],
-) {
+pub(crate) fn mark_used(store: &mut Store, context: &ContextId, text: &str, exclude: &[RecordId]) {
     if let Some(session) = env_session(store) {
         let _ = mark_used_for(store, context, &session, text, exclude);
     }
@@ -213,8 +200,10 @@ pub(super) fn reads(args: ReadsArgs) -> Result<Output, CpdError> {
     };
     let min_sessions = args.min_sessions.unwrap_or(1);
     if min_sessions < 1 {
-        return Err(CpdError::new(ErrorCode::Usage, "--min-sessions must be at least 1.")
-            .with("value", min_sessions));
+        return Err(
+            CpdError::new(ErrorCode::Usage, "--min-sessions must be at least 1.")
+                .with("value", min_sessions),
+        );
     }
     let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
