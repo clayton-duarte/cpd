@@ -168,6 +168,7 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
         // A Context's Manager (contract §6.5, "Manager").
         return BTreeMap::from([
+            quit_marker_env(launch),
             session_path(launch.home),
             (
                 "CPD_HOME".to_owned(),
@@ -180,7 +181,22 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
             ),
         ]);
     };
-    base_env(launch.home, launch.session, plan)
+    let mut env = base_env(launch.home, launch.session, plan);
+    let (key, value) = quit_marker_env(launch);
+    env.insert(key, value);
+    env
+}
+
+/// `CPD_QUIT_MARKER`: where the adapter writes the User's `/quit` for `session run` (pro-d361).
+fn quit_marker_env(launch: &LeadLaunch) -> (String, String) {
+    (
+        "CPD_QUIT_MARKER".to_owned(),
+        launch
+            .home
+            .quit_marker(launch.session)
+            .display()
+            .to_string(),
+    )
 }
 
 /// A Worker: contract §6.5's last two rows.
@@ -286,6 +302,7 @@ mod tests {
     use crate::ids::JobKey;
 
     const ID: &str = "596d007f-1111-4222-8333-444455556666";
+    const MARKER: &str = "/cpd-home/run/quit/596d007f-1111-4222-8333-444455556666";
 
     fn home() -> CpdHome {
         CpdHome::resolve(Some("/cpd-home".into()), None).unwrap()
@@ -450,6 +467,7 @@ mod tests {
             env(&[
                 ("CPD_HOME", "/cpd-home"),
                 ("CPD_SESSION", ID),
+                ("CPD_QUIT_MARKER", MARKER),
                 ("PI_SKIP_VERSION_CHECK", "1"),
             ])
         );
@@ -460,6 +478,7 @@ mod tests {
             ("CPD_HOME", "/cpd-home"),
             ("CPD_SESSION", ID),
             ("CPD_PLAN", "cpd2"),
+            ("CPD_QUIT_MARKER", MARKER),
             ("PI_SKIP_VERSION_CHECK", "1"),
         ]);
         e.extend(env(extra));

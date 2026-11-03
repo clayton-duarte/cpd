@@ -218,6 +218,18 @@ pub fn archive(
     command: &str,
     objects: &Objects,
 ) -> Result<Output, CpdError> {
+    archive_keeping(store, config, command, objects, None)
+}
+
+/// [`archive`] that leaves the pane of Lead `keep` alone: its caller runs in that pane
+/// and closes it itself, last (`session run` on the User's quit, commands.md §10.8).
+pub fn archive_keeping(
+    store: &mut Store,
+    config: &Config,
+    command: &str,
+    objects: &Objects,
+    keep: Option<&SessionId>,
+) -> Result<Output, CpdError> {
     let all = objects.all();
     let (pending, live) = store.read(|conn| {
         let mut pending = false;
@@ -240,7 +252,7 @@ pub fn archive(
     refuse_chat_slot(store, &tmux, cockpit, &objects.sessions)?;
 
     let mut closed = Vec::new();
-    for id in objects.sessions.iter() {
+    for id in objects.sessions.iter().filter(|id| Some(*id) != keep) {
         let lead = close_lead(store, &tmux, cockpit, id, command)?;
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
