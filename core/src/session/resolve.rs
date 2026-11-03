@@ -18,6 +18,7 @@ const MIN_BARE_PREFIX: usize = 4;
 /// a prefix form: `session_ambiguous`.
 pub(super) fn resolve(conn: &Connection, reference: &SessionRef) -> Result<SessionId, CpdError> {
     match reference {
+        SessionRef::Key(_) => unimplemented!("resolving an agent key"),
         SessionRef::Plain(value) => {
             let raw = value.as_str();
             if let Some(id) = conn
@@ -46,6 +47,16 @@ pub(super) fn resolve(conn: &Connection, reference: &SessionRef) -> Result<Sessi
             reference,
         ),
     }
+}
+
+/// [`resolve`] for `caller` (the Session in `CPD_SESSION`, if any): the order of §1.3 with the key and relative forms.
+#[allow(dead_code)]
+pub(super) fn resolve_as(
+    _conn: &Connection,
+    _reference: &SessionRef,
+    _caller: Option<&SessionId>,
+) -> Result<SessionId, CpdError> {
+    unimplemented!("the key resolution order")
 }
 
 /// The ids of the Sessions (of `plan`, if given) whose id starts with `prefix` (exact, case-sensitive).

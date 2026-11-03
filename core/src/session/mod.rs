@@ -31,6 +31,8 @@ mod ports_tests;
 mod reload;
 mod report;
 mod resolve;
+#[cfg(test)]
+mod resolve_tests;
 mod resume;
 mod retier;
 pub(crate) mod retitle;

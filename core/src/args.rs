@@ -124,6 +124,8 @@ pub enum SessionRef {
     Plain(SessionId),
     /// `<plan>·<prefix>` or `<plan>.<prefix>`, split at the first separator.
     Scoped { plan: PlanId, prefix: SessionId },
+    /// An agent key `<context>:<plan>[:<job>]`: the validated text.
+    Key(String),
 }
 
 impl FromStr for SessionRef {
@@ -145,6 +147,7 @@ impl fmt::Display for SessionRef {
         match self {
             SessionRef::Plain(id) => write!(f, "{id}"),
             SessionRef::Scoped { plan, prefix } => write!(f, "{plan}.{prefix}"),
+            SessionRef::Key(key) => write!(f, "{key}"),
         }
     }
 }
