@@ -7,7 +7,7 @@ use common::fx::Fx;
 use common::refused;
 use serde_json::{Value, json};
 
-/// Plan `pay` (phase `plan`, with its Lead) in Context `ctx`, one PR `api` and one full draft Job `d`.
+/// Plan `pay` (walked to phase `done` with its Workflow `cancelled`, as the archive rule wants, with its Lead) in Context `ctx`, one PR `api` and one full draft Job `d`.
 fn world(fx: &Fx) {
     fx.env.write_tmux_config("");
     fx.cpd(&[
@@ -53,7 +53,12 @@ fn world(fx: &Fx) {
     }
     fx.env.sql(
         "INSERT INTO jobs (plan, workflow, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');",
+         VALUES ('pay', 'api', 'd', 'Job d', 'S2', 'Goal.', 'Context.', '[\"src/d.rs\"]', '[\"cargo test\"]', '[]', 'draft', 0, cpd_txn(), 't');
+         UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay';
+         UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'",
     );
 }
 

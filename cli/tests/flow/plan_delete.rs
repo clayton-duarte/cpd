@@ -199,7 +199,15 @@ pub fn world_with_open_pr(fx: &Fx, plan: &str) -> World {
     world_ending(fx, plan, false)
 }
 
+/// `plan archive`, after the fixture walked to what the archive rule wants: the Plan `done` (the Plans of
+/// [`world`] have merged Workflows already).
 pub fn archive(fx: &Fx, plan: &str) {
+    fx.env.sql(&format!(
+        "UPDATE plans SET phase = 'plan' WHERE id = '{plan}' AND phase = 'grounding';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan}' AND phase = 'plan';
+         UPDATE plans SET phase = 'deploy' WHERE id = '{plan}' AND phase = 'dispatch';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = '{plan}' AND phase = 'deploy'"
+    ));
     fx.cpd(&["plan", "archive", "--plan", plan]).ok();
 }
 
@@ -335,7 +343,11 @@ fn refuses_with_live_work_or_an_unmerged_pr() {
     );
 
     let open = world_with_open_pr(&fx, "openpr");
-    archive(&fx, "openpr");
+    // A Plan whose Workflow is still open is never archived by `plan archive`: the row is set, as an older cpd wrote it.
+    fixture(
+        &fx,
+        "UPDATE plans SET archived_at = 't' WHERE id = 'openpr'",
+    );
     let error = refused(
         &fx.cpd(&["plan", "delete", "openpr", "--yes"]),
         "archive_blocked",
