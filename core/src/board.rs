@@ -129,11 +129,12 @@ fn existing(conn: &Connection, reference: &SessionRef) -> Result<String, CpdErro
 
 fn rows(conn: &Connection, session: &str, all: bool) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT id, at, from_session, text, read_at FROM board_posts WHERE to_session = ?1 AND (?2 OR read_at IS NULL) ORDER BY id",
+        "SELECT p.id, p.at, p.from_session, p.text, p.read_at, s.name FROM board_posts p LEFT JOIN sessions s ON s.id = p.from_session WHERE p.to_session = ?1 AND (?2 OR p.read_at IS NULL) ORDER BY p.id",
     )?;
     let posts = stmt
         .query_map(rusqlite::params![session, all], |r| {
             Ok(json!({"id": r.get::<_, i64>(0)?, "at": r.get::<_, String>(1)?, "from_session": r.get::<_, Option<String>>(2)?,
+                      "from_name": r.get::<_, Option<String>>(5)?,
                       "text": r.get::<_, String>(3)?, "read_at": r.get::<_, Option<String>>(4)?}))
         })?
         .collect::<rusqlite::Result<Vec<Value>>>()?;
