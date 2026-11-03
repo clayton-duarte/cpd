@@ -18,6 +18,7 @@ pub struct Reopened {
     pub changed: bool,
 }
 
+#[allow(dead_code)] // the engine (next Job) reuses it
 /// A cancelled Workflow that may have its pull request back (A7).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -34,6 +35,7 @@ pub struct Candidate {
 /// The cancelled Workflows to try [`reopen`] on: those that kept a `pull_request` whose stored state is `open`, and the legacy
 /// ones (`pull_request` NULL) that are the only cancelled Workflow of their (repo, lead branch): the store holds no head ref
 /// of a pull request, so [`reopen`] confirms those with `gh`.
+#[allow(dead_code)] // the engine (next Job) reuses it
 pub fn reopenable(conn: &rusqlite::Connection) -> Result<Vec<Candidate>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT w.plan, w.key, w.repo, w.lead_branch, w.pull_request FROM workflows w
