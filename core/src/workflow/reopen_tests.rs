@@ -351,3 +351,60 @@ fn reopen_matches_a_legacy_cancelled_workflow_by_lead_branch_only_when_unique() 
     assert_eq!(refused.code(), ErrorCode::IllegalTransition);
     assert_eq!(snapshot(&rig_two), before, "nothing was rebound");
 }
+
+/// `(key, pull_request)` of every row `reopenable` returns, in its order.
+fn listed(rig: &Rig) -> Vec<(String, Option<i64>)> {
+    let mut store = Store::open(&rig.home, 5000).unwrap();
+    store
+        .read(super::reopen::reopenable)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.key.as_str().to_owned(), c.pull_request))
+        .collect()
+}
+
+#[test]
+fn reopenable_lists_a_legacy_row_only_when_an_unowned_open_pull_request_exists() {
+    let rig = rig("done");
+    cancelled(&rig, "pay", "api", None);
+    assert_eq!(listed(&rig), vec![], "no pull_requests row: nothing");
+
+    stored_pull(&rig, 900, "open");
+    assert_eq!(
+        listed(&rig),
+        vec![("api".to_owned(), None)],
+        "an unowned open authored pull request: the legacy row"
+    );
+
+    // Link the open row to an `open` Workflow through `workflows.pull_request`: it is owned.
+    rig.sql(
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pull_request)
+           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', NULL, cpd_txn(), 't', NULL,
+                   (SELECT id FROM pull_requests WHERE number = 900));",
+    );
+    assert_eq!(listed(&rig), vec![], "an owned open pull request: nothing");
+
+    // Unlink it and make it not authored by us.
+    rig.sql(
+        "UPDATE workflows SET pull_request = NULL WHERE key = 'web';
+         UPDATE pull_requests SET authored = 0 WHERE number = 900;",
+    );
+    assert_eq!(listed(&rig), vec![], "a not authored open row: nothing");
+
+    // A kept pull_request stored open is listed whatever the others hold.
+    rig.sql("DELETE FROM workflows WHERE key = 'web';");
+    cancelled(&rig, "pay", "kept", Some(801));
+    rig.sql("UPDATE pull_requests SET state = 'open' WHERE number = 801;");
+    assert!(
+        listed(&rig).contains(&("kept".to_owned(), listed_kept(&rig))),
+        "the kept row is listed: {:?}",
+        listed(&rig)
+    );
+}
+
+/// The `pull_requests.id` of `acme/pay#801`.
+fn listed_kept(rig: &Rig) -> Option<i64> {
+    rows(rig, "SELECT id FROM pull_requests WHERE number = 801")
+        .first()
+        .map(|s| s.parse().unwrap())
+}
