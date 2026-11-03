@@ -181,7 +181,7 @@ fn list_filters_and_derives_place_and_leads() {
     let lead1 = sessions.iter().find(|s| s["id"] == LEAD1).unwrap();
     assert_eq!(
         *lead1,
-        json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
+        json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one", "key": "Lead one",
                "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "asleep_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
                "cwd": fx.env.root().display().to_string(), "title": null, "titled_at": null, "by_user": false, "runner": "pi"})
@@ -1646,12 +1646,12 @@ fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
 }
 
 #[test]
-fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_fork() {
+fn open_gives_a_new_pane_the_key_for_the_plans_lead_and_the_name_for_a_fork() {
     let fx = Fx::with_ports();
     setup(&fx.env);
     fx.cockpit();
     fx.cpd(&["session", "open", LEAD1]).ok();
-    assert_eq!(pane_title(&fx, LEAD1), "Pay");
+    assert_eq!(pane_title(&fx, LEAD1), "Lead one");
     let fork = fx.cpd(&["session", "fork", LEAD1, "--name", "side"]).ok()["session"]["id"]
         .as_str()
         .unwrap()

@@ -210,6 +210,7 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 impl Row {
     /// The header of its pane (contract §6.1): its dynamic title when it has one, else its
     /// name (its key for an agent).
+    #[cfg(test)]
     pub fn title(&self, _conn: &Connection) -> Result<String, CpdError> {
         Ok(self
             .dynamic_title

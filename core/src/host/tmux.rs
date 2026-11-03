@@ -1159,15 +1159,7 @@ impl Tmux {
 
     /// `set -p -t <pane> @cpd_title <key>`, the text verbatim: an agent key is not Title Cased.
     pub fn set_pane_key(&self, pane: &PaneId, key: &str) -> Result<(), CpdError> {
-        self.run(&strings(&[
-            "set",
-            "-p",
-            "-t",
-            pane.as_str(),
-            OPT_TITLE,
-            key,
-        ]))
-        .map(drop)
+        self.run(&pane_key_args(pane, key)).map(drop)
     }
 
     /// `set -p -t <pane> @cpd_view <view>`.
