@@ -2620,7 +2620,7 @@ fn fresh_canonical_hash() -> String {
 /// its migrations, converts twice to the same store, and ends with the schema
 /// of a fresh store. One test per version (below): each takes a fraction of
 /// what all of them take, and they run side by side.
-fn converts_keeping_every_row_and_id(n: usize) {
+fn converts_keeping_every_row_and_id_at(n: usize) {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     write_store(&home, &legacy_stores(n).pop().unwrap());
@@ -2874,12 +2874,18 @@ fn converts_keeping_every_row_and_id(n: usize) {
     );
 }
 
+/// Pins the last-version branch, where the `history_tables` count and the `context_reads` rows are asserted.
+#[test]
+fn converts_keeping_every_row_and_id() {
+    converts_keeping_every_row_and_id_at(LEGACY.len());
+}
+
 macro_rules! conversion_tests {
     ($($name:ident: $n:literal,)*) => {
         $(
             #[test]
             fn $name() {
-                converts_keeping_every_row_and_id($n);
+                converts_keeping_every_row_and_id_at($n);
             }
         )*
         // A version added to `LEGACY` without its test does not compile.
