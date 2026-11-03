@@ -288,7 +288,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// starts the engine; `pr-ready` has none (the label is a link; Merge is in its menu); `plan-review` opens the Lead of its Plan; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
-        Kind::Dialog | Kind::Unread => item
+        Kind::Dialog | Kind::Unread | Kind::LoopGuard => item
             .session
             .as_ref()
             .map(|s| Jump::Run(open_or_history(tree, s))),
@@ -309,11 +309,6 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             open_lead(tree, item.plan.as_ref()?).map(Jump::Run)
         }
         Kind::CurateRetire => item.context.as_ref().map(|c| Jump::Curate(c.clone())),
-        // one background `session resume`: the pane does not open; a refusal is the failure dialog
-        Kind::LoopGuard => item
-            .session
-            .as_ref()
-            .map(|s| Jump::Run(Action::SessionResume(s.clone()))),
         Kind::ModelsChanged => cpd_core::inbox::models::parse_subject(&item.subject)
             .map(|(p, at)| Jump::Models(p.to_owned(), at.to_owned())),
         // a deploy item has no jump; its label is a Link to the run's page (pro-d100)
@@ -893,33 +888,6 @@ mod tests {
             ["context", "curation", "--context=alpha", "--limit=10"]
                 .map(String::from)
                 .to_vec()
-        );
-    }
-
-    #[test]
-    fn a_loop_guard_item_click_runs_session_resume_in_the_background() {
-        let tree = sample();
-        let mut guard = item(
-            1,
-            Kind::LoopGuard,
-            Urgency::Red,
-            "m-alpha: loop guard tripped",
-            OPENED,
-        );
-        assert_eq!(jump(&tree, &guard), None, "no Session: nowhere to go");
-        guard.session = Some(sid("m-alpha"));
-        // one command, no dialog and no `session open`: the Session's pane does not open
-        let resume = Action::SessionResume(sid("m-alpha"));
-        assert_eq!(jump(&tree, &guard), Some(Jump::Run(resume.clone())));
-        assert_eq!(
-            resume.argv(),
-            ["session", "resume", "m-alpha"].map(String::from).to_vec()
-        );
-        // an archived Session is resumed too: it is never opened
-        guard.session = Some(sid("f-blocked"));
-        assert_eq!(
-            jump(&archived(), &guard),
-            Some(Jump::Run(Action::SessionResume(sid("f-blocked"))))
         );
     }
 
