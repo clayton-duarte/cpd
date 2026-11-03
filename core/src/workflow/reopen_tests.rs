@@ -153,12 +153,12 @@ pub(crate) fn rows(rig: &Rig, sql: &str) -> Vec<String> {
                 .query_map([], |r| {
                     (0..width)
                         .map(|i| {
-                            Ok(r.get::<_, rusqlite::types::Value>(i).map(|v| match v {
+                            r.get::<_, rusqlite::types::Value>(i).map(|v| match v {
                                 rusqlite::types::Value::Null => "NULL".to_owned(),
                                 rusqlite::types::Value::Integer(i) => i.to_string(),
                                 rusqlite::types::Value::Text(t) => t,
                                 other => format!("{other:?}"),
-                            })?)
+                            })
                         })
                         .collect::<rusqlite::Result<Vec<_>>>()
                         .map(|c| c.join("|"))
