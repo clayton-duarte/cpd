@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::TailArgs;
+use super::delta::DeltaError;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::SessionId;
@@ -42,15 +43,15 @@ pub struct Cursor {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Frame {
-    Snapshot {
+    View {
         epoch: String,
         seq: u64,
-        snapshot: Value,
+        view: Value,
     },
-    Events {
+    Ops {
         epoch: String,
         seq: u64,
-        events: Vec<Value>,
+        ops: Vec<Value>,
     },
     #[serde(other)]
     Unknown,
@@ -89,15 +90,15 @@ pub enum ToClient {
         #[serde(default)]
         head_seq: u64,
     },
-    Snapshot {
+    View {
         epoch: String,
         seq: u64,
-        snapshot: Value,
+        view: Value,
     },
-    Events {
+    Ops {
         epoch: String,
         seq: u64,
-        events: Vec<Value>,
+        ops: Vec<Value>,
     },
     Error {
         code: String,
@@ -114,83 +115,33 @@ pub enum ToClient {
     Unknown,
 }
 
-/// The shared fold (contract §6.20, Q35 A): applies each frame to the `SnapshotEvent` state and returns
-/// the transcript lines the frame completes (the plain-line grammar of contract §6.20).
+/// The shared fold (contract §6.20, Q35 A): keeps the replica of the conversation view, applies each
+/// frame to it and returns the transcript lines the frame completes.
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 pub struct Fold {
     cursor: Cursor,
     /// Whether a frame has ever been applied: the first attach has no cursor, a reconnect does.
     started: bool,
-    /// The in-flight assistant message of a `message_start`, completed by `message_end` or `run_end`.
-    in_flight: Option<Value>,
+    /// The replica of the `ConversationView`.
+    view: Option<Value>,
+    /// The id of the last entry printed.
+    last_printed: Option<u64>,
+    /// The stderr lines naming a gap, in order.
+    gaps: Vec<String>,
 }
 
 impl Fold {
-    /// A fold with no state yet: the base `snapshot` frame of the next attach fills it.
+    /// A fold with no state yet: the base `view` frame of the next attach fills it.
     pub fn new() -> Fold {
         Fold::default()
     }
 
     /// Applies one wire frame and returns the transcript lines it completes.
-    pub fn apply(&mut self, frame: &Frame) -> Vec<String> {
+    pub fn apply(&mut self, frame: &Frame) -> Result<Vec<String>, DeltaError> {
         match frame {
-            Frame::Snapshot {
-                epoch,
-                seq,
-                snapshot,
-            } => {
-                self.cursor = Cursor {
-                    epoch: epoch.clone(),
-                    seq: *seq,
-                };
-                self.started = true;
-                self.in_flight = None;
-                render_entries(snapshot)
-            }
-            Frame::Events { epoch, seq, events } => {
-                self.cursor = Cursor {
-                    epoch: epoch.clone(),
-                    seq: *seq,
-                };
-                self.started = true;
-                let mut lines = Vec::new();
-                for event in events {
-                    match event.get("type").and_then(Value::as_str) {
-                        Some("message_start") => self.in_flight = event.get("message").cloned(),
-                        Some("message_end") => {
-                            let completed =
-                                event.get("entry").map(render_entries).unwrap_or_default();
-                            if completed.is_empty() {
-                                lines.extend(
-                                    self.in_flight
-                                        .take()
-                                        .map(|m| render_message(&m))
-                                        .unwrap_or_default(),
-                                );
-                            } else {
-                                self.in_flight = None;
-                                lines.extend(completed);
-                            }
-                        }
-                        Some("run_end") => {
-                            lines.extend(
-                                self.in_flight
-                                    .take()
-                                    .map(|m| render_message(&m))
-                                    .unwrap_or_default(),
-                            );
-                        }
-                        // A pi-durable overflow: the `events` batch carries a whole snapshot (research §4.3).
-                        Some("snapshot") => {
-                            self.in_flight = None;
-                            lines.extend(render_entries(event));
-                        }
-                        _ => {}
-                    }
-                }
-                lines
-            }
-            Frame::Unknown => Vec::new(),
+            Frame::View { .. } | Frame::Ops { .. } => unimplemented!("Fold::apply"),
+            Frame::Unknown => Ok(Vec::new()),
         }
     }
 
@@ -198,10 +149,16 @@ impl Fold {
     pub fn cursor(&self) -> Cursor {
         self.cursor.clone()
     }
+
+    /// The gap lines the fold has noted so far (the tail writes each to stderr).
+    pub fn gap_notices(&self) -> Vec<String> {
+        self.gaps.clone()
+    }
 }
 
 /// The transcript lines of one `snapshot` frame (or an `AgentEvent` of type `snapshot`): each entry's
 /// model messages, in order. An entry whose `kind` carries no `model` messages is bookkeeping and silent.
+#[allow(dead_code)]
 fn render_entries(snapshot: &Value) -> Vec<String> {
     match snapshot.get("entries").and_then(Value::as_array) {
         Some(entries) => entries.iter().flat_map(render_entry).collect(),
@@ -210,6 +167,7 @@ fn render_entries(snapshot: &Value) -> Vec<String> {
 }
 
 /// The transcript lines of one entry: its `model` messages, or nothing when it has none.
+#[allow(dead_code)]
 fn render_entry(entry: &Value) -> Vec<String> {
     match entry.get("model").and_then(Value::as_array) {
         Some(messages) => messages.iter().flat_map(render_message).collect(),
@@ -494,8 +452,8 @@ fn one(
     send(
         &mut *conn,
         &ToHost::Hello {
-            protocol: 1,
-            min_protocol: 1,
+            protocol: 2,
+            min_protocol: 2,
             client: "cpd session tail".to_owned(),
         },
     )?;
@@ -534,26 +492,18 @@ fn one(
                     },
                 )?;
             }
-            ToClient::Snapshot {
-                epoch,
-                seq,
-                snapshot,
-            } => {
+            ToClient::View { epoch, seq, view } => {
                 if fold.started {
-                    eprintln!("snapshot {epoch} seq {seq}: view replaced");
+                    eprintln!("view {epoch} seq {seq}: view replaced");
                 }
-                let lines = fold.apply(&Frame::Snapshot {
-                    epoch,
-                    seq,
-                    snapshot,
-                });
-                if !write_lines(out, &lines)? {
+                let applied = fold.apply(&Frame::View { epoch, seq, view });
+                if !print_applied(applied, out)? {
                     return Ok(Flow::Done);
                 }
             }
-            ToClient::Events { epoch, seq, events } => {
-                let lines = fold.apply(&Frame::Events { epoch, seq, events });
-                if !write_lines(out, &lines)? {
+            ToClient::Ops { epoch, seq, ops } => {
+                let applied = fold.apply(&Frame::Ops { epoch, seq, ops });
+                if !print_applied(applied, out)? {
                     return Ok(Flow::Done);
                 }
             }
@@ -562,7 +512,7 @@ fn one(
                     return Err(CpdError::new(
                         ErrorCode::Internal,
                         format!(
-                            "this host speaks protocol 1, the client speaks 1 (the installed cpd): {message}"
+                            "this host speaks protocol 1, the client speaks 2 (the installed cpd): {message}"
                         ),
                     ));
                 }
@@ -577,6 +527,20 @@ fn one(
                 });
             }
             ToClient::Attached { .. } | ToClient::Unknown => {}
+        }
+    }
+}
+
+/// Prints what a fold applied; a refused op is written to stderr.
+fn print_applied(
+    applied: Result<Vec<String>, DeltaError>,
+    out: &mut dyn Write,
+) -> Result<bool, CpdError> {
+    match applied {
+        Ok(lines) => write_lines(out, &lines),
+        Err(e) => {
+            eprintln!("cpd session tail: {e}");
+            Ok(true)
         }
     }
 }
