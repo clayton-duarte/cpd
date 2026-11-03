@@ -898,21 +898,23 @@ fn a_retry_returns_the_existing_record() {
     assert_eq!(record_ids(&fx), ["hs-n1"]);
     assert_eq!(events(&fx, "context-record").len(), 1);
 
-    // Only the latest record counts: after another write, the same text is new.
+    // An in-force record of the same text dedupes, whatever the latest record is.
     fx.cpd(&["context", "note", "Other.", "--context", CTX])
         .ok();
     let third = fx.cpd(&["context", "note", "Same.", "--context", CTX]).ok();
-    assert!(third.get("already").is_none());
-    assert_eq!(third["record"]["id"], "hs-n3");
+    assert_eq!(third["already"], true);
+    assert_eq!(third["record"]["id"], "hs-n1");
 
-    // A different session is a different write.
+    // A different session dedupes too.
     let out = fx.cpd_with(
         fx.env.root(),
         &["context", "note", "Same.", "--context", CTX],
         &[("CPD_SESSION", "other-session")],
     );
     let out: Value = serde_json::from_str(&out.stdout).unwrap();
-    assert_eq!(out["record"]["id"], "hs-n4");
+    assert_eq!(out["already"], true);
+    assert_eq!(out["record"]["id"], "hs-n1");
+    assert_eq!(record_ids(&fx), ["hs-n1", "hs-n2"]);
 }
 
 #[test]
