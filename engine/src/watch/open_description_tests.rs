@@ -85,7 +85,7 @@ fn e3_does_not_start_an_open_job_whose_pr_has_no_description_raises_one_error_an
         "{data}"
     );
     assert!(
-        texts(&mut fx, "error")[0].contains("cpd workflow describe --workflow repo"),
+        texts(&mut fx, "error")[0].contains("cpd workflow describe repo"),
         "{:?}",
         texts(&mut fx, "error")
     );
