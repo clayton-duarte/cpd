@@ -156,6 +156,12 @@ fn transcript(path: &Path, text: &str) -> Result<Vec<String>, CpdError> {
     Ok(out)
 }
 
+/// The transcript lines of a `durable` Attempt's store: `records` are the `entries.record` texts in `id` order.
+#[allow(dead_code)]
+fn durable_transcript(_path: &Path, _records: &[String]) -> Result<Vec<String>, CpdError> {
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +219,57 @@ mod tests {
                 ErrorCode::SessionMalformed,
                 "{bad}"
             );
+        }
+    }
+
+    fn record(kind: &str, role: &str, content: &str) -> String {
+        format!(
+            r#"{{"kind":"{kind}","id":1,"conversationId":1,"model":[{{"role":"{role}","content":{content}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn durable_assistant_text_and_tool_calls_in_order() {
+        let records = [
+            record("pi.system", "system", r#""s""#),
+            record("pi.user", "user", r#"[{"type":"text","text":"hi"}]"#),
+            record(
+                "pi.assistant",
+                "assistant",
+                r#"[{"type":"thinking","thinking":"hm"},{"type":"text","text":"a\nb"},{"type":"toolCall","id":"t","name":"bash","arguments":{}}]"#,
+            ),
+            record(
+                "pi.tool-result",
+                "toolResult",
+                r#"[{"type":"text","text":"ok"}]"#,
+            ),
+            record(
+                "pi.assistant",
+                "assistant",
+                r#"[{"type":"text","text":"done"},{"type":"toolCall","id":"u","name":"read","arguments":{}}]"#,
+            ),
+        ];
+        assert_eq!(
+            durable_transcript(Path::new("/s.sqlite"), &records).unwrap(),
+            [
+                "assistant: a",
+                "assistant: b",
+                "tool: bash",
+                "assistant: done",
+                "tool: read"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_durable_record_that_is_not_an_assistant_entry_is_malformed() {
+        for bad in [
+            r#"{"kind":"pi.assistant","id":1,"conversationId":1}"#.to_owned(),
+            "not json".to_owned(),
+        ] {
+            let err = durable_transcript(Path::new("/s.sqlite"), std::slice::from_ref(&bad))
+                .expect_err(&bad);
+            assert_eq!(err.code(), ErrorCode::SessionMalformed, "{bad}");
         }
     }
 }
