@@ -255,6 +255,8 @@ pub fn main_with(argv: impl IntoIterator<Item = OsString>, out: &mut dyn Write) 
 ```
 `Ports` holds the three seams a test fakes: time (`Clock`), short processes with an output (`Runner`: tmux, git, gh, pi, node, the secret tool) and long-lived or replacing processes (`Spawn`). It carries no environment (below). `Fakes::new()` builds a `ManualClock`, a `FakeRunner` on that clock and a `FakeSpawn`, and `fakes.ports` is the `Ports` over them; the test keeps the typed handles to script and to read the record.
 
+**Domain ports** sit beside `Ports`, not in it: a domain port is a trait with a real adapter and a fake (`core/src/fakes/`), as `ContextEngine` and the classifier and embedding ports of contract §3.7a are. A real adapter that runs a process takes its `Runner` as a parameter, built over `Ports.runner`, so a test hands it a `FakeRunner` and no process starts.
+
 **`Spawn`** (`core/src/host/spawn.rs`) is what `Runner` is not: a child that outlives the call, is waited for later, is signalled, or replaces the process.
 ```rust
 pub trait Spawn: Send + Sync {
