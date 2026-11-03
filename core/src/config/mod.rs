@@ -81,7 +81,7 @@ pub enum ConfigCommand {
     Experimental(ExperimentalArgs),
 }
 
-/// `cpd config experimental [<feature> <on|off>]` (§14.2b). STUB: not implemented yet.
+/// `cpd config experimental [<feature> <on|off>]` (§14.2b): print the four flags, or set one.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct ExperimentalArgs {
     /// One of the four Experimental Features
@@ -130,8 +130,8 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
     if let Some(ConfigCommand::Tiers(TiersCommand::Set(set))) = args.command {
         return tiers_set(&home, set);
     }
-    if let Some(ConfigCommand::Experimental(_)) = args.command {
-        unimplemented!("cpd config experimental (§14.2b)");
+    if let Some(ConfigCommand::Experimental(experimental)) = args.command {
+        return experimental_command(&home, experimental);
     }
     if args.migrate {
         return migrate(&home);
@@ -142,6 +142,57 @@ pub fn config(args: ConfigArgs) -> Result<Output, CpdError> {
         "config": config,
         "sources": sources,
     })))
+}
+
+/// `cpd config experimental` (§14.2b): validates the arguments before any write, sets one flag when given, prints all four.
+fn experimental_command(home: &CpdHome, args: ExperimentalArgs) -> Result<Output, CpdError> {
+    let usage = |m: String| CpdError::new(ErrorCode::Usage, m);
+    let change = match (args.feature, args.state) {
+        (None, None) => None,
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(usage(
+                "usage: cpd config experimental [<feature> <on|off>].".into(),
+            ));
+        }
+        (Some(feature), Some(state)) => {
+            let feature = [
+                Feature::DurableWorkers,
+                Feature::WriteCuration,
+                Feature::FailureTriage,
+                Feature::TurnQuestionGuard,
+            ]
+            .into_iter()
+            .find(|f| f.key() == feature)
+            .ok_or_else(|| usage(format!("unknown Experimental Feature `{feature}`.")))?;
+            let on = match state.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    return Err(usage(format!(
+                        "state must be `on` or `off`, not `{state}`."
+                    )));
+                }
+            };
+            Some((feature, on))
+        }
+    };
+    if let Some((feature, on)) = change {
+        experimental::set(home, feature, on)?;
+    }
+    let path = home.config();
+    let text = std::fs::read_to_string(&path).map_err(|e| {
+        let code = if e.kind() == std::io::ErrorKind::NotFound {
+            ErrorCode::ConfigMissing
+        } else {
+            ErrorCode::ConfigInvalid
+        };
+        CpdError::new(code, format!("cannot read config.toml: {e}."))
+            .with("path", path.display().to_string())
+    })?;
+    let (config, _) = Config::parse(&text, &path)?;
+    Ok(Output::success(
+        json!({"experimental": config.experimental}),
+    ))
 }
 
 /// `cpd config --migrate` (commands.md §14.2): applies the migrations to `$CPD_HOME/config.toml`,
