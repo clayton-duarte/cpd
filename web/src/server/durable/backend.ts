@@ -11,8 +11,7 @@ import type { Scheduler } from "../../protocol/runtime.ts";
 import type { SessionServerMessage } from "../../protocol/wire.ts";
 import type { HostClient } from "./client.ts";
 
-// TODO(contract 6.1/6.3): replace these local mirrors with the shared imports
-// (runtime.ts backend interfaces, cockpit/cli.ts Cpd) once those modules exist.
+// local copy of CONTRACT 6.1/6.3; replaced by imports in the integration cleanup
 export interface Cpd {
   json(args: readonly string[]): Promise<Readonly<Record<string, unknown>>>;
 }
