@@ -39,9 +39,7 @@ pub fn in_force_without<'a>(
     retired: &HashSet<RecordId>,
 ) -> Vec<&'a Indexed> {
     let considered = || records.iter().filter(|(seq, _)| *seq <= as_of);
-    let superseded: HashSet<_> = considered()
-        .flat_map(|(_, r)| r.supersedes())
-        .collect();
+    let superseded: HashSet<_> = considered().flat_map(|(_, r)| r.supersedes()).collect();
     considered()
         .filter(|(_, r)| {
             matches!(

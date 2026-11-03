@@ -230,7 +230,18 @@ fn show_leaves_every_superseded_target_out_of_force() {
     .ok();
     let shown = show(&fx);
     let md = shown["markdown"].as_str().unwrap();
-    assert!(lists(md, "hs-d3"), "{md}");
-    assert!(!lists(md, "hs-d1"), "hs-d1 is superseded: {md}");
-    assert!(!lists(md, "hs-d2"), "hs-d2 is superseded: {md}");
+    let (in_force, superseded) = md
+        .split_once("## Superseded")
+        .expect("a Superseded section");
+    assert!(lists(in_force, "hs-d3"), "{md}");
+    assert!(!lists(in_force, "hs-d1"), "hs-d1 is superseded: {md}");
+    assert!(!lists(in_force, "hs-d2"), "hs-d2 is superseded: {md}");
+    for old in ["hs-d1", "hs-d2"] {
+        assert!(
+            superseded.lines().any(
+                |l| l.starts_with(&format!("- {old} (")) && l.contains("(superseded by hs-d3)")
+            ),
+            "{old} is listed as superseded: {md}"
+        );
+    }
 }
