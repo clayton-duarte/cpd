@@ -379,7 +379,7 @@ fn reopenable_lists_a_legacy_row_only_when_an_unowned_open_pull_request_exists()
     // Link the open row to an `open` Workflow through `workflows.pull_request`: it is owned.
     rig.sql(
         "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pull_request)
-           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', NULL, cpd_txn(), 't', NULL,
+           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', '/wt/web', cpd_txn(), 't', NULL,
                    (SELECT id FROM pull_requests WHERE number = 900));",
     );
     assert_eq!(listed(&rig), vec![], "an owned open pull request: nothing");
