@@ -32,7 +32,7 @@ mod pending;
 pub mod permanent;
 #[cfg(test)]
 mod permanent_tests;
-mod prose_supersedes;
+pub mod prose_supersedes;
 #[cfg(test)]
 mod prose_supersedes_tests;
 mod query;
@@ -229,8 +229,7 @@ pub struct DecideArgs {
     #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
     supersedes: Vec<RecordId>,
     /// Confirm the text is not a supersession: skip the prose check
-    #[arg(long, conflicts_with = "supersedes")]
-    #[allow(dead_code)]
+    #[arg(long)]
     no_supersedes: bool,
     #[command(flatten)]
     select: Select,
@@ -244,8 +243,7 @@ pub struct NoteArgs {
     #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
     supersedes: Vec<RecordId>,
     /// Confirm the text is not a supersession: skip the prose check
-    #[arg(long, conflicts_with = "supersedes")]
-    #[allow(dead_code)]
+    #[arg(long)]
     no_supersedes: bool,
     #[command(flatten)]
     select: Select,
@@ -299,6 +297,17 @@ pub struct DeleteArgs {
     yes: bool,
 }
 
+/// `--no-supersedes` with `--supersedes` is `args_invalid`.
+fn no_supersedes_alone(supersedes: &[RecordId], no_supersedes: bool) -> Result<(), CpdError> {
+    if no_supersedes && !supersedes.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::ArgsInvalid,
+            "--no-supersedes conflicts with --supersedes.",
+        ));
+    }
+    Ok(())
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
@@ -307,12 +316,20 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Search(args) => search::search(args),
         Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = Draft::Decision {
                 supersedes: args.supersedes,
             };
-            write::write("context decide", &args.select, &args.text, draft)
+            write::write(
+                "context decide",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
         Command::Note(args) => {
+            no_supersedes_alone(&args.supersedes, args.no_supersedes)?;
             let draft = if args.supersedes.is_empty() {
                 Draft::Note
             } else {
@@ -320,11 +337,21 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
                     supersedes: args.supersedes,
                 }
             };
-            write::write("context note", &args.select, &args.text, draft)
+            write::write(
+                "context note",
+                &args.select,
+                &args.text,
+                draft,
+                args.no_supersedes,
+            )
         }
-        Command::Ask(args) => {
-            write::write("context ask", &args.select, &args.question, Draft::Question)
-        }
+        Command::Ask(args) => write::write(
+            "context ask",
+            &args.select,
+            &args.question,
+            Draft::Question,
+            false,
+        ),
         Command::Answer(args) => write::write(
             "context answer",
             &args.select,
@@ -332,6 +359,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             Draft::Answer {
                 question: args.question,
             },
+            false,
         ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),

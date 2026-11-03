@@ -93,15 +93,24 @@ fn an_overrules_and_a_replaces_phrase_are_refused_the_same_way() {
         "supersedes_unlinked",
     );
     assert_eq!(error["details"]["ids"], serde_json::json!(["hs-d1"]));
+    write(&fx, "note", "A fact.");
     let run = fx.cpd(&[
         "context",
         "note",
-        "A note that REPLACES hs-d2.",
+        "A note that REPLACES hs-n1.",
         "--context",
         CTX,
     ]);
     let error = refused(run, 3, "supersedes_unlinked");
-    assert_eq!(error["details"]["ids"], serde_json::json!(["hs-d2"]));
+    assert_eq!(error["details"]["ids"], serde_json::json!(["hs-n1"]));
+    fx.cpd(&[
+        "context",
+        "note",
+        "A note that replaces hs-d2.",
+        "--context",
+        CTX,
+    ])
+    .ok();
 }
 
 #[test]
