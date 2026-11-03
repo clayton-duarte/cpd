@@ -27,13 +27,14 @@ pub struct Candidate {
     pub repo: String,
     pub lead_branch: String,
     /// The kept `pull_requests.id` whose state is `open`; `None` for a legacy row, which only `gh` can confirm (by its Lead
-    /// Branch, [`reopen`] does it).
+    /// Branch, [`reopen`] does it); it is listed only while an unowned open authored pull request exists.
     pub pull_request: Option<i64>,
 }
 
 /// The cancelled Workflows to try [`reopen`] on: those that kept a `pull_request` whose stored state is `open`, and the legacy
 /// ones (`pull_request` NULL) that are the only cancelled Workflow of their (repo, lead branch): the store holds no head ref
-/// of a pull request, so [`reopen`] confirms those with `gh`.
+/// of a pull request, so [`reopen`] confirms those with `gh`. A legacy row is listed only while the store holds an unowned open
+/// authored pull request (`state = 'open'`, `authored = 1`, linked by no Workflow); the check is global, not per repo.
 pub fn reopenable(conn: &rusqlite::Connection) -> Result<Vec<Candidate>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT w.plan, w.key, w.repo, w.lead_branch, w.pull_request FROM workflows w
@@ -42,7 +43,10 @@ pub fn reopenable(conn: &rusqlite::Connection) -> Result<Vec<Candidate>, CpdErro
             AND (q.state = 'open'
                  OR w.pull_request IS NULL
                     AND (SELECT count(*) FROM workflows t
-                          WHERE t.status = 'cancelled' AND t.repo = w.repo AND t.lead_branch = w.lead_branch) = 1)
+                          WHERE t.status = 'cancelled' AND t.repo = w.repo AND t.lead_branch = w.lead_branch) = 1
+                    AND EXISTS (SELECT 1 FROM pull_requests q2
+                                 WHERE q2.state = 'open' AND q2.authored = 1
+                                   AND NOT EXISTS (SELECT 1 FROM workflows w2 WHERE w2.pull_request = q2.id)))
           ORDER BY w.plan, w.key",
     )?;
     let rows = stmt
@@ -68,6 +72,9 @@ pub fn reopenable(conn: &rusqlite::Connection) -> Result<Vec<Candidate>, CpdErro
         })
         .collect()
 }
+
+/// `details.reason` of the refusal "its pull request is not open on GitHub".
+pub(crate) const PR_NOT_OPEN: &str = "pr_not_open";
 
 fn refused(plan: &PlanId, key: &WorkflowKey, why: &str) -> CpdError {
     CpdError::new(
@@ -97,8 +104,8 @@ struct Row {
 /// `lead_worktree` set, the Event `workflow-reopened`, the Lead Session's `asleep_at` NULL (A4) and, only when the Plan is
 /// `done`, the Plan `done -> deploy` with `done_at` NULL and a `plan-phase` Event (A3). The Lead worktree is recreated from
 /// `origin/<lead_branch>` when its path and local branch are gone; a registered worktree of that branch is kept as it is.
-/// The `pull_requests` row of the pull request is already stored (the poll writes it), matched by its url. A Workflow already `open` changes nothing (A5). A pull request that is `CLOSED` or absent is `illegal_transition`,
-/// with nothing written.
+/// The `pull_requests` row of the pull request is already stored (the poll writes it), matched by its url. A Workflow already `open` changes nothing (A5). A pull request that is `CLOSED` or absent is `illegal_transition`
+/// (details `reason` = `pr_not_open`, which the poll skips silently for a legacy row), with nothing written.
 pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopened, CpdError> {
     let row = env.store.read(|conn| {
         conn.query_row(
@@ -132,8 +139,10 @@ pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopene
         ));
     }
     let repo = Path::new(&row.repo);
-    let (number, url) = crate::pr::open::open_head_pr(repo, &row.lead_branch)?
-        .ok_or_else(|| refused(plan, key, "its pull request is not open on GitHub"))?;
+    let (number, url) =
+        crate::pr::open::open_head_pr(repo, &row.lead_branch)?.ok_or_else(|| {
+            refused(plan, key, "its pull request is not open on GitHub").with("reason", PR_NOT_OPEN)
+        })?;
     let pull_request: i64 = env
         .store
         .read(|conn| {

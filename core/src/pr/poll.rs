@@ -756,7 +756,8 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 }
 
 /// Pro-d362: each cancelled Workflow whose pull request the poll stored `open` is reopened (`git fetch` and `gh` run here, in the
-/// poll subprocess, outside any write transaction). A refusal appends one `error` Event, not one per tick, and never aborts the poll.
+/// poll subprocess, outside any write transaction). A legacy candidate (no kept `pull_request`) whose pull request is not open on
+/// GitHub is skipped with no `error` Event and no write. Any other refusal appends one `error` Event, not one per tick, and never aborts the poll.
 fn rebind_reopened(env: &mut Env) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
     let mut reopened = Vec::new();
     const SOURCE: &str = "workflow reopen";
@@ -770,6 +771,12 @@ fn rebind_reopened(env: &mut Env) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError
             }
             Err(error) => error,
         };
+        if c.pull_request.is_none()
+            && error.details().get("reason").and_then(Value::as_str)
+                == Some(crate::workflow::reopen::PR_NOT_OPEN)
+        {
+            continue;
+        }
         let latest: Option<String> = env.store.read(|conn| {
             Ok(conn
                 .query_row(
