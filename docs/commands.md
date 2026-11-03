@@ -280,6 +280,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd resource list` (§30) | Manager, Lead, Worker | no | no |
 | `cpd resource run` (§30) | Manager, Lead, Worker | no | no |
 | `cpd context show` (§3.3) | Manager, Lead, Worker | no | no |
+| `cpd context topics` (§3.3a) | Manager, Lead, Worker | no | no |
 | `cpd context search` (§3.4) | Manager, Lead, Worker | no | no |
 
 `context show` and `context search` gain `Worker` (§3.3, §3.4; Plan `explore-roles`): an explore Worker reads the Context with them, read-only. `context new` gains `--owner` (§3.1) and `workflow add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `workflow add` gains `--shape` (§9.4), hs-d340 and hs-d341.
@@ -379,6 +380,31 @@ Idempotent: read-only.
  "records": [{"id": "hs-d7", "short": "one engine per machine"}],
  "markdown": "- [hs-d7] one engine per machine"}
 ```
+
+### 3.3a `context topics`
+
+```
+cpd context topics [--context <c>] [--plan <id>]
+```
+
+Lists the **curated topics in force** of the Context (contract §4.6): each topic that a curated record in force carries, with the count of those records. The Context is `--context`, else the Context of the selected Plan (`--plan`, or `CPD_PLAN`, §1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+No new error code. **Callers** (as `context show`, §3.3): the Lead, the Manager and the **Worker**.
+
+Effects: none. Output: `topics` sorted by topic (the topic string, ascending), each `{topic, count}`, `count` the number of curated records in force with that topic. `markdown` is one line, the topics comma-separated, each as `<topic> (<count>)` with no `- ` prefix, for example `engine (3), store (1)`; the same line is the `Topics:` line of the first messages (§3.11, §4.1). A Context with no curated record in force gives `topics: []` and `markdown: ""`; that is not an error.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
+ "topics": [{"topic": "engine", "count": 3}, {"topic": "store", "count": 1}],
+ "markdown": "engine (3), store (1)"}
+```
+
+Idempotent: read-only.
 
 ### 3.4 `context search`
 
