@@ -45,6 +45,8 @@ mod ensure;
 mod escalations;
 #[cfg(test)]
 mod explore_tests;
+#[cfg(test)]
+mod finished_rule_tests;
 pub mod host_alert;
 mod hosts;
 #[cfg(test)]
@@ -102,6 +104,8 @@ mod runner_tests;
 mod schedule;
 #[cfg(test)]
 mod schedule_tests;
+#[cfg(test)]
+mod shutdown_recovery_tests;
 mod sleep;
 #[cfg(test)]
 mod stacked_ready_tests;

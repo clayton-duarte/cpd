@@ -1592,7 +1592,13 @@ fn archivable(fx: &Fx) {
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
-           VALUES ('worker1', 'worker', 'building-cpd', 'pay', 'api-a1', 'Worker', '/', 'S2', 'idle', 't', 't2');",
+           VALUES ('worker1', 'worker', 'building-cpd', 'pay', 'api-a1', 'Worker', '/', 'S2', 'idle', 't', 't2');
+         -- The archive rule wants `pay` and `ship` done and their Workflows cancelled.
+         UPDATE workflows SET status = 'cancelled' WHERE plan IN ('pay', 'ship');
+         UPDATE plans SET phase = 'plan' WHERE id IN ('pay', 'ship');
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id IN ('pay', 'ship');
+         UPDATE plans SET phase = 'deploy' WHERE id IN ('pay', 'ship');
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id IN ('pay', 'ship');",
     );
     cockpit(fx);
     for id in ["lead-pay", "fork-pay", "manager"] {

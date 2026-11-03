@@ -3418,6 +3418,11 @@ fn after_a_workflow_cancel_the_plan_can_be_archived() {
     let archive = || fx.cpd(&["plan", "archive", "--plan", "pay-1"]);
     common::refused(&archive(), "archive_blocked", 3);
     fx.pr(&["cancel", "gone"]).ok();
+    // The archive rule wants the Plan done.
+    fx.env.sql(
+        "UPDATE plans SET phase = 'deploy' WHERE id = 'pay-1';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay-1'",
+    );
     archive().ok();
     assert!(
         !fx.env

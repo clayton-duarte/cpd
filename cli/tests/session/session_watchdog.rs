@@ -207,7 +207,7 @@ fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
 
 #[test]
 fn a_pi_that_exits_is_handled_as_before_with_no_error_event() {
-    // Status 1: a crash, not the User's quit (which archives and ends the wrapper), after a few polls of the watchdog
+    // Status 1: a crash, not the User's quit, after a few polls of the watchdog
     // (the real limit: no restart comes first).
     let mut f = start("stopped");
     let pi: Pid = f.pane.spawn.pids()[0];

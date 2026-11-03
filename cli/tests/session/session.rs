@@ -2051,26 +2051,20 @@ fn e2_restarts_a_dead_manager_in_its_context_window() {
 }
 
 #[test]
-fn e2_does_not_restart_a_lead_that_stopped_itself_or_was_closed() {
+fn e2_restarts_a_stopped_lead_whose_pane_vanished_but_not_one_that_was_closed() {
     let fx = Fx::with_ports();
     let (one, two) = two_parked_leads(&fx);
-    // lead2 died working: restarted (the control). lead1 wrote `stopped` first, as `/quit` does.
+    // Both reported `stopped` with the pane still recorded (the OS shutdown case): both are restarted.
     fx.cpd(&["session", "state", "stopped", "--session", LEAD1])
         .ok();
+    fx.env
+        .sql("UPDATE sessions SET state = 'stopped' WHERE id = 'lead2'");
     fx.pane_exit(&one, 0);
     fx.pane_exit(&two, 1);
     fx.engine_tick();
     assert_restarted_parked(&fx, LEAD2, &two, "park-other");
-    assert_eq!(window_names(&fx), ["main", "park-other"]);
-    assert!(show(&fx, LEAD1)["tmux_pane"].is_null());
-    assert_eq!(
-        (
-            show(&fx, LEAD1)["state"].clone(),
-            show(&fx, LEAD1)["place"].clone()
-        ),
-        (json!("stopped"), json!("none"))
-    );
-    assert_eq!(moves_of(&fx, LEAD1).last().unwrap().0, "none");
+    assert_restarted_parked(&fx, LEAD1, &one, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-other", "park-pay"]);
 
     // `session close` writes `stopped` and kills the pane: the engine restarts nothing.
     fx.env
@@ -2328,7 +2322,7 @@ fn run_refusals() {
     assert!(fx.fakes.spawn.launches().is_empty(), "pi was started");
 }
 
-// ---------- run: the User's quit archives (commands.md §10.8) ----------
+// ---------- run: the User's quit (commands.md §10.8) ----------
 
 /// pi's session file for `id`, so `session run` resumes it; `finished` ends it on a finished turn.
 fn pi_file(env: &TestEnv, id: &str, finished: bool) {
@@ -2370,96 +2364,6 @@ fn pane_exists(fx: &Fx, pane: &str) -> bool {
 }
 
 #[test]
-fn quitting_pi_archives_a_side_fork_and_closes_its_pane() {
-    let fx = Fx::with_ports();
-    quit_fixture(&fx);
-    let mut side = Running::start(&fx, "side");
-    let pane = side.pane.pane.clone();
-    side.pi_exits(&fx, 0);
-    side.w.finish();
-    assert!(session_archived(&fx, "side"));
-    assert!(!pane_exists(&fx, &pane));
-    let row = show(&fx, "side");
-    assert_eq!(
-        (&row["state"], &row["tmux_pane"], &row["place"]),
-        (&json!("stopped"), &Value::Null, &json!("none"))
-    );
-    assert_eq!(events(&fx, "session-archived").len(), 1);
-    // Nothing else was archived.
-    for other in [LEAD1, LEAD2, "side2"] {
-        assert!(!session_archived(&fx, other), "{other}");
-    }
-    assert_eq!(
-        fx.env
-            .query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"),
-        None
-    );
-}
-
-#[test]
-fn quitting_a_plan_s_own_lead_archives_the_plan_with_its_fork() {
-    let fx = Fx::with_ports();
-    quit_fixture(&fx);
-    let mut lead = Running::start(&fx, LEAD2);
-    let fork = Running::start(&fx, "side2");
-    let (lead_pane, fork_pane) = (lead.pane.pane.clone(), fork.pane.pane.clone());
-    lead.pi_exits(&fx, 0);
-    lead.w.finish();
-    assert!(session_archived(&fx, LEAD2));
-    assert!(!pane_exists(&fx, &lead_pane) && !pane_exists(&fx, &fork_pane));
-    assert!(session_archived(&fx, "side2"));
-    assert!(
-        fx.env
-            .query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'other'")
-            .is_some()
-    );
-    assert_eq!(events(&fx, "plan-archived").len(), 1);
-    assert_eq!(events(&fx, "session-archived").len(), 2);
-    // Another Plan is untouched.
-    assert!(!session_archived(&fx, LEAD1));
-    assert_eq!(
-        fx.env
-            .query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"),
-        None
-    );
-}
-
-#[test]
-fn quitting_the_lead_in_the_chat_slot_parks_it_first_and_the_placeholder_holds_the_slot() {
-    let fx = Fx::with_ports();
-    quit_fixture(&fx);
-    fx.cpd(&["session", "open", "side"]).ok();
-    let pane = slot(&fx).pane;
-    assert_eq!(slot(&fx).session, "side");
-    let mut side = Running::attach(&fx, &pane, "side");
-    side.until_pis(1);
-    side.pi_exits(&fx, 0);
-    side.w.finish();
-    assert!(session_archived(&fx, "side"));
-    assert!(!pane_exists(&fx, &pane));
-    let held = slot(&fx);
-    assert_eq!(
-        (held.session.as_str(), held.view.as_str()),
-        ("", "chat"),
-        "{held:?}"
-    );
-    assert_placeholders(&fx, 1);
-    assert!(panes(&fx).iter().all(|p| p.session != "side"));
-    assert_eq!(
-        window_names(&fx),
-        ["main"],
-        "the Lead's park window went with its pane"
-    );
-    // Parked first: `session-moved` to `parked`, then to none.
-    let places: Vec<Value> = events(&fx, "session-moved")
-        .iter()
-        .filter(|e| e["session"] == "side")
-        .map(|e| e["data"]["place"].clone())
-        .collect();
-    assert_eq!(places, [json!("chat"), json!("parked"), json!("none")]);
-}
-
-#[test]
 fn a_pi_that_exits_with_status_1_is_not_archived() {
     let fx = Fx::with_ports();
     quit_fixture(&fx);
@@ -2470,37 +2374,6 @@ fn a_pi_that_exits_with_status_1_is_not_archived() {
     assert_eq!(show(&fx, "side")["state"], "stopped");
     assert!(pane_exists(&fx, &side.pane.pane));
     assert_eq!(events(&fx, "session-archived").len(), 0);
-}
-
-#[test]
-fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
-    let fx = Fx::with_ports();
-    quit_fixture(&fx);
-    // `pay` has a running Job; its Lead holds the chat slot.
-    fx.cpd(&["session", "open", LEAD1]).ok();
-    let pane = slot(&fx).pane;
-    let mut lead = Running::attach(&fx, &pane, LEAD1);
-    lead.until_pis(1);
-    lead.pi_exits(&fx, 0);
-    lead.until_screen("pi exited. Press Enter to resume Lead one here.");
-    let shown = lead.pane.screen();
-    assert!(shown.contains("archive_blocked"), "{shown}");
-    assert!(shown.contains("Job api of Plan pay is running."), "{shown}");
-    // Nothing was archived, and the Lead was not parked.
-    assert!(!session_archived(&fx, LEAD1));
-    assert_eq!(
-        fx.env
-            .query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"),
-        None
-    );
-    assert_eq!(
-        events(&fx, "session-archived").len() + events(&fx, "plan-archived").len(),
-        0
-    );
-    assert_eq!(
-        (slot(&fx).pane, slot(&fx).session),
-        (pane, LEAD1.to_owned())
-    );
 }
 
 #[test]
