@@ -543,7 +543,7 @@ The same speed cells, per item. **P** pass, **p** partial, **F** fail, **?** unk
 | pi-pocket | ? | p | F | P | P | P | ? | F | p | P | P | p |
 | terminal (xterm) | ? | n/a | ? | n/a | n/a | n/a | ? | ? | n/a | n/a | n/a | n/a |
 
-Reading the grid (inferred): C7 (typing during streaming) is unknown for every web candidate, and it is the item the User feels most directly; C12 (hooks the base exposes) is a fail or partial for every candidate except none passing, which is why the assistant-ui path needs its own runtime; the only candidates with a virtualised, anchored list that were read (OpenCode, t3code) are the two that cannot be embedded (5.2, 5.3).
+Reading the grid (inferred): C7 (typing during streaming) is unknown for every web candidate, and it is the item the User feels most directly; C12 (hooks the base exposes) is a fail, partial or unknown for every candidate (none passes), which is why the assistant-ui path needs its own runtime; the only candidates with a virtualised, anchored list that were read (OpenCode, t3code) are the two that cannot be embedded (5.2, 5.3).
 
 ## 6. Theming and the three cpd panes
 
