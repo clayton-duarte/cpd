@@ -133,7 +133,7 @@ fn bad_flag_values_are_usage_errors() {
         args.extend_from_slice(extra);
         let run = fx.cpd(&args);
         let err = run.error();
-        assert_eq!(err["error"]["code"], "usage", "{extra:?}: {run:?}");
+        assert_eq!(err["code"], "usage", "{extra:?}: {run:?}");
         assert_eq!(run.exit, 2, "{extra:?}");
     }
 }
