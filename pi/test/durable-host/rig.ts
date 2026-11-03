@@ -332,7 +332,7 @@ export function rig(over: RigOptions = {}) {
   /** A connected client that said hello and attached (without a cursor, unless given). */
   const attach = async (cursor?: { epoch: string; seq: number }): Promise<FakeClient> => {
     const client = connect();
-    client.send({ type: "hello", protocol: 1, min_protocol: 1, client: "test" });
+    client.send({ type: "hello", protocol: 2, min_protocol: 2, client: "test" });
     client.send({ type: "attach", req: "attach-1", ...(cursor === undefined ? {} : { cursor }) });
     await drain();
     return client;
