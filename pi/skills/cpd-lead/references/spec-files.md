@@ -67,7 +67,7 @@ Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (g
 
 ## A feedback fix Job
 
-On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe --workflow <key> --file <body.md>` (pro-d94), and opens only when you do.
+On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>` (pro-d94), and opens only when you do.
 
 ## Test Jobs
 
