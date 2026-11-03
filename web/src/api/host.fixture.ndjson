@@ -1,5 +1,0 @@
-{"type":"welcome","protocol":2,"host_version":"1","pi_durable":"1.5.0","session":"d738aa4d-ec41-4284-92db-93a88d46ac13","role":"lead","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","client_id":"c1","cwd":"/home/clayton","limits":{"client_line":1048576}}
-{"type":"attached","req":"r1","mode":"view","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","from_seq":1,"head_seq":2,"client_id":"c1"}
-{"type":"view","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","seq":1,"view":{"conversation":{"id":1},"entries":[{"id":1,"conversationId":1,"kind":"pi.user","model":[{"role":"user","content":"run the checks"}]},{"id":2,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"on it"}]}]}],"docs":{"pi.agent":{},"pi.live":{},"pi.inbox":{},"pi.provider":{},"pi.usage":{}}}}
-{"type":"ops","epoch":"157af596-ac7c-41f0-905a-faeb87c5055f","seq":2,"ops":[["p",["entries"],2,0,[{"id":3,"conversationId":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"done"}]}]}]]]}
-{"type":"host_state","state":"idle"}
