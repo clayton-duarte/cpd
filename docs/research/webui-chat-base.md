@@ -542,7 +542,7 @@ Labels are those of sections 5.1-5.8. Speed is the count of C1..C12 cells by lab
 
 | Candidate | Mechanism | Dango effort | Density |
 |---|---|---|---|
-| pi-web-ui | about 15 oklch variables on `:root` | variable override of a few dozen lines (inferred) | not a token; overrides or fork |
+| pi-web-ui | CSS variables on `:root` in oklch (102 lines) | variable override of a few dozen lines (inferred) | not a token; overrides or fork |
 | OpenCode | `DesktopTheme` JSON, `palette` plus `overrides` | one JSON file; syntax via `overrides` | CSS-file edits in `session-ui` |
 | t3code | about 50 palette roles, custom themes first-class | 100-200 lines of mapping (guess); plus a Shiki or `@pierre` theme | none; class edits across `Timeline*Row.tsx` |
 | assistant-ui | shadcn variables; 430 palette-named colours in 74 files | variables plus edits to copied files; plus a Shiki theme | not a token; edit copied components |
@@ -615,3 +615,130 @@ Labels are those of sections 5.1-5.8. Speed is the count of C1..C12 cells by lab
 | jmfederico pi-web | no: plugin panels are tabs (d3 §1) |
 | pimote | only with its singleton stores and protocol (d4 §1) |
 | pi-pocket | no: panes would be pocket browser modules on its server (d6 §1.3) |
+
+## 7. Options
+
+**Stated plainly: no candidate is an out-of-the-box base.** Five are parts and three are reference (section 5). The only candidate that gives the whole pi chat with no chat code is the terminal (5.8), and it gives up everything web-native. **What this changes against pro-d1:** the User asked for an OSS chat base with full chat capability out of the box and only cosmetic customisation, mirroring `cpd tui`. For a web-native chat that cannot be met by any existing project: someone writes a pi runtime, a bridge, per-tool cards, the two dialogs and the cockpit look (A and C below, 2,400-4,500 lines, guess). For the terminal it can be met almost literally, but only for sessions that run inside tmux, and with a keyboard defect, a weak phone story and no web-owned dialogs. The choice is therefore between **reuse the TUI** and **build a thin web-native layer on pinned parts**; pro-d1's wording ("only cosmetic") holds for the first and not for the second. Sizes in this section are guesses built from the findings' own estimates (cited); PR counts are this report's guesses. The panes (6.2) are common to all four options and are not counted in them.
+
+### 7.1 Option A: assistant-ui core plus an own pi and durable adapter
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    P[Three cpd panes<br/>custom]
+    T[assistant-ui primitives<br/>pinned npm dependency]
+    R[cpd runtime on useExternalStoreRuntime<br/>BUILT: tail-first load, entry-id keys, per-turn projection]
+    V[TanStack Virtual thread<br/>from the with-virtualized-thread example]
+    M[Streamdown incremental markdown<br/>pinned]
+    C[Cards: read, edit with diff, write, bash,<br/>compaction, questionnaire, plan review<br/>BUILT]
+  end
+  subgraph Bridge[Node bridge BUILT]
+    W[WS relay + fold of about 20 event types]
+  end
+  H[(pi-durable host socket)]
+  T --- R --- V
+  R --- M
+  R --- C
+  P -.->|same provider| T
+  R <-->|WS| W
+  W <-->|NDJSON, protocol v1| H
+```
+
+- **Built versus taken.** Taken, pinned: `@assistant-ui/react`, `core`, `store`, `react-markdown` or `react-streamdown`, `@tanstack/react-virtual`, Streamdown, `@pierre/diffs`, `shiki/core`. Copied (the designed shadcn path, about 3.3k lines, d2 §5.1): `thread.tsx` and the card sources, which then become cpd's. Built: the relay and fold (400-700 and 300-600 lines, s2 §7, guess), `PiClient` (150-300, r5, inferred), the runtime replacement (400-600), `VirtualThread` (about 350), cards (about 400), `QuestionnaireCard` (150-250), slash and `@file` adapters (about 120, plus server routes the host lacks, D9), theme (about 150 lines of CSS plus edits) (d2 §8, guess).
+- **Cost (guess).** About **2,400-3,000 new lines** (d2 §8) in about **8-12 PRs** (this report's guess); in the repo's web/ the chat view being replaced is 526 lines (read, s4).
+- **Speed risk: medium, unmeasured.** The shipped react-pi path fails C1, C2, C3 and C6 (5.4); the own runtime and virtual thread must pass them, and that is untested. Whole-message markdown parse (C4) is solved by swapping in Streamdown (inferred, r5). The attach still sends the whole transcript (D2, D3), so C1 needs a windowed attach asked of durable-leads.
+- **Parity risk: medium.** Per-tool cards, compaction, slash, `@file` and both dialogs are cpd-written; the slash and mention adapters are `unstable_`; the cockpit's balloons, pills and `╰` rows are re-drawn in CSS (6.1).
+- **What the User gets first.** A streaming chat with thinking, grouped tool calls, steer, follow-up and abort, model and thinking pickers, context usage, images and the four basic host dialogs (read, d2 §3: the YES rows), sitting beside the panes in one React tree. Not first: windowed load, previews, plan review.
+
+### 7.2 Option B: terminal chat, xterm.js on the real pi TUI over tmux
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    P[Three cpd panes<br/>custom, plain components]
+    X[xterm.js 6.0.0 + webgl, fit, unicode11, clipboard<br/>pinned, one terminal per open Session]
+    K[Shift+Enter key map<br/>BUILT, untested]
+  end
+  subgraph Server[Node relay BUILT]
+    PT[node-pty: tmux attach -t session<br/>resize debounce, env for images and links]
+  end
+  TM[(tmux pane running the real pi TUI<br/>fullscreen tuiMode)]
+  P -.->|cpd JSON, not the terminal| CPD[(cpd store / CLI)]
+  X --- K
+  X <-->|binary WS frames| PT
+  PT <-->|pty| TM
+```
+
+- **Built versus taken.** Taken, pinned: `@xterm/xterm` and its addons, `node-pty`, tmux and the real pi. Built: the relay (150-300 lines, this report's guess), the page (a few hundred lines, guess), the Shift+Enter map to `\x1b[13;2u` (untested, r6), the resize debounce, the `PI_IMAGE_PROTOCOL` and `PI_HYPERLINKS` environment (r6 §3).
+- **Cost (guess).** About **500-900 lines in 2-4 PRs**; the least of the four.
+- **Speed risk: low in the web layer, unmeasured end to end.** pi holds the transcript, so cost is the tmux TUI's own (54.2 ms median typing on the 24 MB copy, measured by others, r7 §6); the web adds one WS hop and the paint (no number exists, r6). The unknown is xterm's paint of a pi fullscreen frame, including the DEC 2026 behaviour (#6071).
+- **Parity risk: low for pi-runner Sessions, a hole for durable ones.** Exact by construction, except Shift+Enter (without Kitty keyboard only `ctrl+j` inserts a newline), images, OSC 52 without an addon, and the fact that **a pi-durable session cannot be attached with a terminal** (5.8). Mobile is poor (no Esc or Ctrl, IME bugs). The web owns no dialog.
+- **What the User gets first.** The real chat of any pi-runner Session, at 59 of 59 parity rows (inferred), in a browser, the first day.
+
+### 7.3 Option C: evolve `web/`, lifting named parts
+
+```mermaid
+flowchart LR
+  subgraph Browser[web/ React shell, kept]
+    P[Three panes<br/>rewired to live data]
+    L[Own chat: composer + thread + scroll<br/>BUILT, replaces live-chat.tsx]
+    F[Own fold: pi-durable-cloudflare reducer pattern<br/>BUILT]
+    A1[Lifted: t3code markdown-incremental<br/>+ highlight LRU]
+    A2[Lifted: pimote edit-diff + token CSS<br/>+ guard test]
+    A3[Techniques: r7 windowing, rAF flush,<br/>keyed rows, worker highlight]
+  end
+  subgraph Bridge[web/ adapter kept: host.ts, ws-bridge, live-server paging]
+    W[WS bridge + windowed history]
+  end
+  H[(pi-durable host socket)]
+  L --- F
+  L --- A1
+  L --- A2
+  L --- A3
+  L <-->|WS| W
+  W <-->|NDJSON| H
+```
+
+- **Built versus taken.** Kept from `web/` (read, s4 §1): `host.ts` (238 lines), `transcript.ts` (465), `ws-bridge.ts` (180), the paging in `live-server.ts`, `use-thread-scroll.ts` (90), wire types. Lifted as small MIT modules: t3code `markdown-incremental.ts` and the highlight LRU (`MarkdownCodeBlock.tsx:35,286-360`), pimote `edit-diff.ts`, `write-content.ts` and the `layout.css` token structure with its guard test, the pi-durable-cloudflare `reduceAgentEvent` pattern (with its O(N) `appendEntry` fixed), plus pinned dependencies `@tanstack/react-virtual`, `@pierre/diffs`, `shiki/core`. Built: everything in A's list except the assistant-ui primitives, so also the composer, the thread and scroll primitives and the message grouping.
+- **Cost (guess).** A's 2,400-3,000 lines plus the primitives A takes from a library, about **3,000-4,500 lines** in about **12-18 PRs**. The extra 600-1,500 is this report's guess; no finding sizes it.
+- **Speed risk: lowest ceiling, highest effort.** Every C1..C12 item is cpd's to pass by construction (windowing, keyed rows, tail-only markdown, worker highlight), with no foreign runtime to fight. It is also the path the User judged too costly (pro-d1).
+- **Parity risk: medium.** Same dialogs and cards as A, plus own grouping. Lifted code carries each upstream's version skew (t3code `>= 0.80.5`, pimote on pi 1.4.0).
+- **What the User gets first.** What `web/` can already do (read-only live transcript, 40-turn tail, reconnect), then each parity row as a PR; the slowest to full parity.
+
+### 7.4 Option D: hybrid, B first, A or C where the web must own the interaction
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    P[Three cpd panes]
+    X[Terminal surface, Option B<br/>pi-runner Sessions: full parity day one]
+    N[Web-native surface, Option A or C<br/>durable Sessions; dialogs and plan review]
+  end
+  S{{Measured spike decides the split}}
+  TM[(tmux + real pi TUI)]
+  H[(pi-durable host socket)]
+  CPD[(cpd store / CLI)]
+  P -.-> CPD
+  X <-->|pty relay| TM
+  N <-->|WS relay| H
+  S -.->|C1, C3, C7, C8 numbers| N
+  S -.->|C1, C7 + Shift+Enter| X
+```
+
+- **Built versus taken.** B whole, then the part of A or C that the spike justifies. The natural first web-native pieces are the ones where a terminal cannot work: `ask_user_question` with previews and `cpd_plan_review` as web components (about 150-250 lines for the card, guess, d2 §3.6), fed by the host's `ui_request` (a side channel that exists for durable Sessions, `questionnaire` and `purpose: plan_review`, s2). For a pi-runner Session in tmux no such side channel is known (r6 §8: a hybrid is possible only if the extension also exposes the dialog's data separately), so those dialogs stay terminal-native there (inferred).
+- **Cost (guess).** B's 500-900 lines plus 600-1,200 for the dialog surfaces; the full A or C is added only if the spike says so. About **2-4 PRs first, then 4-8**.
+- **Speed risk: low first, then as A or C for the web-native surface.** Parity risk: B's keyboard and durable gaps remain until the web-native surface covers durable Sessions.
+- **What the User gets first.** The B result, the first day, with the rest decided by numbers instead of by this report's reading of code. Two surfaces to maintain is the price.
+- **A caveat on D (inferred).** A split by session runner doubles the chat code paths; the alternative split (terminal as an opt-in "debug view" of the exact TUI, r6's own fallback role) keeps A or C as the one chat and B as a small escape hatch. The spike's numbers choose between the two shapes.
+
+### 7.5 Comparison
+
+| | A assistant-ui + own adapter | B terminal | C evolve `web/` | D hybrid |
+|---|---|---|---|---|
+| New lines (guess) | 2,400-3,000 | 500-900 | 3,000-4,500 | B + 600-1,200, then A or C |
+| PRs (guess) | 8-12 | 2-4 | 12-18 | 2-4, then 4-8 |
+| Make it work (parity) | partial until cards and dialogs land | exact for pi-runner Sessions; durable Sessions not covered | partial until each row lands | exact for pi-runner at once; web dialogs next |
+| Make it fast | unmeasured; shipped path fails C1, C2, C3, C6 | pi's own speed; paint unmeasured | by construction, effort | as B, then as A or C |
+| Make it good (web-native, mobile, Dango) | good for web-native; Dango by CSS | poor: cells, phone, no web dialogs | best | mixed |
+| First delivery | chat in a pane | the real chat | today's `web/` | the real chat |
+| Still true after | | | | pro-d1 only half met |
