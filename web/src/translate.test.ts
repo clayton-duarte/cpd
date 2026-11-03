@@ -1,136 +1,140 @@
-// Host-frame translation tests of the dev live adapter (web/README.md "`web/src/translate.ts` — the
-// frame translation", hs-d819/chat-host). RED: `applyHostFrame` / `translateFrames` still throw
-// `not implemented`, so these fail now and pass once the impl lands.
-//
-// The frames are the real captured fixture web/src/api/host.fixture.ndjson (read from disk) plus
-// inline events of the pi-durable shapes the CLI's Rust tail folds (core/src/session/tail.rs): no
-// socket, no cpd, no network.
-import { readFileSync } from "node:fs";
+// Host-frame translation tests of protocol 2 (web/README.md "`web/src/translate.ts` — the frame
+// translation", docs/contract.md §6.14). RED: `applyHostFrame` throws `not implemented` for view and
+// ops frames. The frames are built from the pi-durable 1.5.0 types, not recorded; ops are literals
+// (the tests do not import `@earendil-works/chord`). No socket, no cpd, no network.
 import { expect, test } from "vitest";
 import { applyHostFrame, translateFrames, type HostState } from "./translate";
 import type { HostFrame } from "./api/host";
 
-const EPOCH = "157af596-ac7c-41f0-905a-faeb87c5055f";
+const EPOCH = "e1";
 
-/** The real captured host frames, read from disk. */
-function fixtureFrames(): HostFrame[] {
-  return readFileSync(new URL("./api/host.fixture.ndjson", import.meta.url), "utf8")
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as HostFrame);
-}
-
-/** A fresh empty fold state. */
 function empty(): HostState {
-  return { messages: [], cursor: undefined };
+  return { view: undefined, messages: [], cursor: undefined, lastEntryId: undefined };
 }
 
-/** An assistant message of the pi-durable shape, with one text block and one thinking block. */
-function assistantMessage(text: string) {
+function userEntry(id: number, text: string) {
+  return { id, conversationId: 1, kind: "pi.user", model: [{ role: "user", content: text }] };
+}
+
+function assistantEntry(id: number, text: string) {
   return {
-    role: "assistant",
-    content: [
-      { type: "text", text },
-      { type: "thinking", thinking: "hidden" },
+    id,
+    conversationId: 1,
+    kind: "pi.assistant",
+    model: [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text },
+          { type: "thinking", thinking: "hidden" },
+        ],
+      },
     ],
   };
 }
 
-test("translateFrames turns a real host snapshot and events into messages", () => {
-  // The captured frames: welcome, attached, an empty snapshot and one bookkeeping event. They fold
-  // to no messages but advance the cursor to the last stream frame (doc contract 6.20, rule 4).
-  const real = translateFrames(empty(), fixtureFrames());
-  expect(real.messages).toEqual([]);
-  expect(real.cursor).toEqual({ epoch: EPOCH, seq: 2 });
-
-  // A snapshot replaces the whole state (rule 1): its model messages render like the tail's lines
-  // (`host-N` ids in output order), thinking blocks skipped and bookkeeping entries silent.
-  const snapshot: HostFrame = {
-    type: "snapshot",
-    epoch: "e1",
-    seq: 1,
-    snapshot: {
-      type: "snapshot",
-      entries: [
-        {
-          id: 1,
-          conversationId: 1,
-          kind: "pi.user",
-          model: [{ role: "user", content: "run the checks" }],
-        },
-        {
-          id: 2,
-          conversationId: 1,
-          kind: "pi.assistant",
-          model: [assistantMessage("ok, done")],
-        },
-        {
-          id: 3,
-          conversationId: 1,
-          kind: "cpd-skills",
-          model: [],
-        },
-        {
-          id: 4,
-          conversationId: 1,
-          kind: "pi.tool",
-          model: [
-            {
-              role: "toolResult",
-              toolName: "bash",
-              isError: true,
-              content: [{ type: "text", text: "ENOENT" }],
-            },
-          ],
-        },
-      ],
-    },
+function viewOf(entries: unknown[], before?: number) {
+  const view: Record<string, unknown> = {
+    conversation: { id: 1 },
+    entries,
+    docs: { "pi.agent": {}, "pi.live": {}, "pi.inbox": {}, "pi.provider": {}, "pi.usage": {} },
   };
-  const folded = translateFrames(empty(), [snapshot]);
-  expect(folded.messages).toEqual([
+  if (before !== undefined) view["before"] = before;
+  return view;
+}
+
+function viewFrame(seq: number, view: unknown): HostFrame {
+  return { type: "view", epoch: EPOCH, seq, view };
+}
+
+function opsFrame(seq: number, ops: unknown[]): HostFrame {
+  return { type: "ops", epoch: EPOCH, seq, ops };
+}
+
+const texts = (state: HostState): string[] => state.messages.map((message) => message.text);
+
+test("translateFrames turns a view frame into one message per entry", () => {
+  const state = translateFrames(empty(), [
+    viewFrame(1, viewOf([userEntry(1, "run the checks"), assistantEntry(2, "ok, done")])),
+  ]);
+  expect(state.messages).toEqual([
     { id: "host-1", role: "user", text: "run the checks" },
     { id: "host-2", role: "assistant", text: "ok, done" },
-    { id: "host-3", role: "tool", name: "bash", text: "ENOENT", error: true },
   ]);
-  expect(folded.cursor).toEqual({ epoch: "e1", seq: 1 });
+  expect(state.cursor).toEqual({ epoch: EPOCH, seq: 1 });
+  expect(state.lastEntryId).toBe(2);
+});
 
-  // An events frame applies its AgentEvents in order (rule 2): `message_end` appends the completed
-  // message; a `run_end` completes an in-flight message; other events change nothing shown.
-  const events: HostFrame = {
-    type: "events",
-    epoch: "e1",
-    seq: 2,
-    events: [
-      { type: "message_start", message: assistantMessage("") },
-      {
-        type: "message_end",
-        entry: {
-          id: 5,
-          conversationId: 1,
-          kind: "pi.assistant",
-          model: [assistantMessage("second")],
-        },
-      },
-      { type: "submission", record: { id: 6 } },
-    ],
-  };
-  const applied = translateFrames(folded, [events]);
-  expect(applied.messages.map((message) => message.text)).toEqual([
-    "run the checks",
-    "ok, done",
-    "ENOENT",
-    "second",
+test("translateFrames adds the entry an ops frame appends", () => {
+  const base = translateFrames(empty(), [viewFrame(1, viewOf([userEntry(1, "hi")]))]);
+  const next = applyHostFrame(base, opsFrame(2, [["p", ["entries"], 1, 0, [assistantEntry(2, "hello")]]]));
+  expect(texts(next)).toEqual(["hi", "hello"]);
+  expect(next.lastEntryId).toBe(2);
+  // Pure: the input state is untouched.
+  expect(texts(base)).toEqual(["hi"]);
+});
+
+test("translateFrames adds no message for an ops frame that changes only docs", () => {
+  const base = translateFrames(empty(), [viewFrame(1, viewOf([userEntry(1, "hi")]))]);
+  const live = { run: { id: "r1" }, generation: { message: { role: "assistant", content: "par" } } };
+  const one = applyHostFrame(base, opsFrame(2, [["s", ["docs", "pi.live"], live]]));
+  expect(texts(one)).toEqual(["hi"]);
+  expect(one.cursor).toEqual({ epoch: EPOCH, seq: 2 });
+  const two = applyHostFrame(one, opsFrame(3, [["d", ["docs", "pi.live"]]]));
+  expect(texts(two)).toEqual(["hi"]);
+  expect(two.cursor).toEqual({ epoch: EPOCH, seq: 3 });
+});
+
+test("translateFrames adds only the entries after the last id on a root replacement", () => {
+  const base = translateFrames(empty(), [
+    viewFrame(1, viewOf([userEntry(1, "one"), assistantEntry(2, "two")])),
   ]);
-  expect(applied.cursor).toEqual({ epoch: "e1", seq: 2 });
+  const replaced = viewOf([userEntry(1, "one"), assistantEntry(2, "two"), userEntry(3, "three")]);
+  const next = applyHostFrame(base, opsFrame(2, [["r", replaced]]));
+  expect(texts(next)).toEqual(["one", "two", "three"]);
+  expect(next.lastEntryId).toBe(3);
+});
 
-  // The single-frame primitive is the same fold: `welcome` and `attached` touch nothing.
-  const afterAttached = applyHostFrame(folded, {
-    type: "attached",
-    req: "r1",
-    mode: "snapshot",
-    epoch: "e1",
-    from_seq: 1,
-    head_seq: 2,
-  });
-  expect(afterAttached).toEqual(folded);
+test("translateFrames keeps the messages of entries a window drops", () => {
+  const base = translateFrames(empty(), [
+    viewFrame(1, viewOf([userEntry(1, "one"), assistantEntry(2, "two")])),
+  ]);
+  const next = applyHostFrame(
+    base,
+    opsFrame(2, [
+      ["p", ["entries"], 2, 0, [userEntry(3, "three")]],
+      ["p", ["entries"], 0, 1, []],
+      ["s", ["before"], 1],
+    ]),
+  );
+  expect(texts(next)).toEqual(["one", "two", "three"]);
+  expect((next.view as { entries: unknown[] }).entries).toHaveLength(2);
+});
+
+test("translateFrames refuses an ops frame before any view", () => {
+  expect(() => applyHostFrame(empty(), opsFrame(1, [["s", ["docs", "pi.live"], {}]]))).toThrow();
+  // The same ops frame after a view does not throw.
+  const base = applyHostFrame(empty(), viewFrame(1, viewOf([])));
+  expect(() => applyHostFrame(base, opsFrame(2, [["s", ["docs", "pi.live"], {}]]))).not.toThrow();
+});
+
+test("translateFrames advances the cursor with each frame", () => {
+  const frames: HostFrame[] = [
+    viewFrame(1, viewOf([])),
+    opsFrame(2, [["p", ["entries"], 0, 0, [userEntry(1, "a")]]]),
+    opsFrame(3, [["s", ["docs", "pi.agent"], { cwd: "/x" }]]),
+  ];
+  let state = empty();
+  const cursors = [];
+  for (const frame of frames) {
+    state = applyHostFrame(state, frame);
+    cursors.push(state.cursor);
+  }
+  expect(cursors).toEqual([
+    { epoch: EPOCH, seq: 1 },
+    { epoch: EPOCH, seq: 2 },
+    { epoch: EPOCH, seq: 3 },
+  ]);
+  // Non-stream frames leave the state unchanged.
+  expect(applyHostFrame(state, { type: "host_state", state: "idle" })).toEqual(state);
 });

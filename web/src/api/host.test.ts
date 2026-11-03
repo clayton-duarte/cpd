@@ -1,9 +1,8 @@
 // Host-socket client tests of the dev live adapter (web/README.md "`web/src/api/host.ts` — the socket
-// client", hs-d819/chat-host). RED: `createHostClient` still throws `not implemented`, so these fail
-// now and pass once the impl lands.
+// client", hs-d819/chat-host). RED until the protocol 2 hello and frame list land.
 //
 // Every socket is a fake `HostConnect`: no test opens a real socket, spawns cpd or touches the
-// network. The replay lines are the real captured fixture web/src/api/host.fixture.ndjson.
+// network. The replay lines are web/src/api/host.fixture.ndjson: built from the 1.5.0 types, not recorded.
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import type { Socket } from "node:net";
@@ -24,7 +23,7 @@ afterEach(() => {
   else process.env.CPD_HOME = originalHome;
 });
 
-/** The real captured host lines, read from disk. */
+/** The host lines (built from the 1.5.0 types, not recorded), read from disk. */
 function fixtureLines(): string[] {
   return readFileSync(new URL("./host.fixture.ndjson", import.meta.url), "utf8")
     .split("\n")
@@ -94,18 +93,18 @@ function fakeConnect(): { connect: HostConnect; sockets: FakeSocket[]; paths: st
   return { connect, sockets, paths };
 }
 
-test("the client sends hello then attach and resolves the snapshot", async () => {
+test("the client sends hello then attach and resolves the view", async () => {
   const { connect, sockets, paths } = fakeConnect();
   const client = createHostClient(connect);
   const frames: HostFrame[] = [];
-  let resolveSnapshot!: (frame: HostFrame) => void;
-  const snapshot = new Promise<HostFrame>((resolve) => {
-    resolveSnapshot = resolve;
+  let resolveView!: (frame: HostFrame) => void;
+  const viewFrame = new Promise<HostFrame>((resolve) => {
+    resolveView = resolve;
   });
 
   const close = client.attach(SESSION, (frame) => {
     frames.push(frame);
-    if (frame.type === "snapshot") resolveSnapshot(frame);
+    if (frame.type === "view") resolveView(frame);
   });
   await flush();
 
@@ -113,8 +112,8 @@ test("the client sends hello then attach and resolves the snapshot", async () =>
   expect(paths).toEqual([`${HOME}/run/host/${SESSION}.sock`]);
   const socket = sockets[0]!;
 
-  // The host sends nothing first: the client's first line is `hello` (protocol 1).
-  expect(socket.sent()[0]).toMatchObject({ type: "hello", protocol: 1, min_protocol: 1 });
+  // The host sends nothing first: the client's first line is `hello` (protocol 2).
+  expect(socket.sent()[0]).toMatchObject({ type: "hello", protocol: 2, min_protocol: 2, client: "cpd web chat" });
 
   // After `welcome`, the client sends one `attach`, with no cursor on the first attach.
   socket.deliver(fixtureLines()[0]!);
@@ -123,15 +122,15 @@ test("the client sends hello then attach and resolves the snapshot", async () =>
   expect(attach).toMatchObject({ type: "attach" });
   expect(attach?.["cursor"]).toBeUndefined();
 
-  // The host then streams `attached`, the base `snapshot` (seq 1) and the `events` frame (seq 2).
+  // The host then streams `attached`, the base `view` (seq 1) and the `ops` frame (seq 2).
   for (const line of fixtureLines().slice(1)) socket.deliver(line);
-  const replayed = await snapshot;
-  expect(replayed).toMatchObject({ type: "snapshot", epoch: EPOCH, seq: 1 });
+  const replayed = await viewFrame;
+  expect(replayed).toMatchObject({ type: "view", epoch: EPOCH, seq: 1 });
   expect(frames.map((frame) => frame.type)).toEqual([
     "welcome",
     "attached",
-    "snapshot",
-    "events",
+    "view",
+    "ops",
   ]);
 
   close();
@@ -146,12 +145,12 @@ test("the client re-attaches with the last cursor after a drop", async () => {
     await flush();
 
     // Connection 0: the full handshake plus two stream frames, then the socket drops.
-    const [welcome, attached, snapshot, events] = fixtureLines() as [string, string, string, string];
+    const [welcome, attached, view, ops] = fixtureLines() as [string, string, string, string];
     sockets[0]!.deliver(welcome);
     await flush();
     sockets[0]!.deliver(attached);
-    sockets[0]!.deliver(snapshot);
-    sockets[0]!.deliver(events);
+    sockets[0]!.deliver(view);
+    sockets[0]!.deliver(ops);
     await flush();
     sockets[0]!.emit("close");
     await vi.advanceTimersByTimeAsync(250);
@@ -192,9 +191,30 @@ test("the client refuses a frame the protocol does not allow", async () => {
   socket.deliver({ type: "notice", level: "info", message: "hello" });
   socket.deliver("not json at all");
   socket.deliver(fixtureLines()[2]!);
+  // The protocol 1 frames are no longer allowed.
+  socket.deliver({ type: "snapshot", epoch: EPOCH, seq: 3, snapshot: {} });
+  socket.deliver({ type: "events", epoch: EPOCH, seq: 4, events: [] });
   await flush();
 
-  expect(frames.map((frame) => frame.type)).toEqual(["welcome", "snapshot"]);
+  expect(frames.map((frame) => frame.type)).toEqual(["welcome", "view"]);
+
+  close();
+});
+
+test("the client accepts the view and ops frames", async () => {
+  const { connect, sockets } = fakeConnect();
+  const client = createHostClient(connect);
+  const frames: HostFrame[] = [];
+  const close = client.attach(SESSION, (frame) => frames.push(frame));
+  await flush();
+
+  const socket = sockets[0]!;
+  for (const line of fixtureLines()) socket.deliver(line);
+  await flush();
+
+  expect(frames.map((frame) => frame.type)).toEqual(["welcome", "attached", "view", "ops", "host_state"]);
+  expect(frames[2]).toMatchObject({ type: "view", epoch: EPOCH, seq: 1 });
+  expect(frames[3]).toMatchObject({ type: "ops", epoch: EPOCH, seq: 2 });
 
   close();
 });

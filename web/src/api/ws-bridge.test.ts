@@ -100,19 +100,23 @@ test("ws_bridge_streams_a_durable_session_from_the_host_socket", async () => {
 
   // `welcome` and `attached` are handshake frames, not snapshots: nothing is sent yet.
   fake.emit({ type: "welcome", session: durableSession.id, role: "manager", epoch: "e1" });
-  fake.emit({ type: "attached", req: "r1", mode: "snapshot", epoch: "e1", from_seq: 1, head_seq: 1 });
+  fake.emit({ type: "attached", req: "r1", mode: "view", epoch: "e1", from_seq: 1, head_seq: 2 });
   await flush();
   expect(sent).toEqual([]);
 
-  // The host's `snapshot` maps onto the same SnapshotFrame the SSE route sends: epoch "live", seq 1.
+  const entry = (id: number, role: string, text: string) => ({
+    id,
+    conversationId: 1,
+    kind: `pi.${role}`,
+    model: [{ role, content: [{ type: "text", text }] }],
+  });
+
+  // The host's `view` maps onto the same SnapshotFrame the SSE route sends: epoch "live", seq 1.
   fake.emit({
-    type: "snapshot",
+    type: "view",
     epoch: "e1",
     seq: 1,
-    snapshot: {
-      type: "snapshot",
-      entries: [{ model: [{ role: "user", content: [{ type: "text", text: "hello" }] }] }],
-    },
+    view: { conversation: { id: 1 }, entries: [entry(1, "user", "hello")], docs: {} },
   });
   await flush();
 
@@ -121,6 +125,22 @@ test("ws_bridge_streams_a_durable_session_from_the_host_socket", async () => {
   expect(sent[0]!.epoch).toBe("live");
   expect(sent[0]!.seq).toBe(1);
   expect(frameMessages(sent[0]!)).toEqual([{ id: "host-1", role: "user", text: "hello" }]);
+
+  // An `ops` frame appending an entry sends the next frame with both messages.
+  fake.emit({
+    type: "ops",
+    epoch: "e1",
+    seq: 2,
+    ops: [["p", ["entries"], 1, 0, [entry(2, "assistant", "hi there")]]],
+  });
+  await flush();
+
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.seq).toBe(2);
+  expect(frameMessages(sent[1]!)).toEqual([
+    { id: "host-1", role: "user", text: "hello" },
+    { id: "host-2", role: "assistant", text: "hi there" },
+  ]);
 
   // The returned closure stops the host attach.
   close();

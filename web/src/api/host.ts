@@ -13,11 +13,13 @@ export type HostFrame =
   | {
       type: "attached";
       req: string;
-      mode: "snapshot" | "resume";
+      mode: "view" | "resume" | "snapshot";
       epoch: string;
       from_seq: number;
       head_seq: number;
     }
+  | { type: "view"; epoch: string; seq: number; view: unknown }
+  | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
   | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
   | { type: "events"; epoch: string; seq: number; events: unknown[] }
   | { type: "host_state"; state: "idle" | "working" | "waiting" | "blocked" }
