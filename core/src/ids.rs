@@ -445,14 +445,12 @@ impl RecordId {
                         }
                         let after_ok =
                             k == b.len() || !(b[k].is_ascii_alphanumeric() || b[k] == b'_');
-                        if after_ok {
-                            if let Ok(id) = RecordId::parse(&text[i..k]) {
-                                if !found.contains(&id) {
-                                    found.push(id);
-                                }
-                                i = k;
-                                continue;
+                        if after_ok && let Ok(id) = RecordId::parse(&text[i..k]) {
+                            if !found.contains(&id) {
+                                found.push(id);
                             }
+                            i = k;
+                            continue;
                         }
                     }
                 }

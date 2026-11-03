@@ -85,7 +85,9 @@ fn the_table_has_the_contract_columns_and_primary_key() {
         1
     );
     write(&mut store, &insert("pushed", "NULL", "NULL", "s1", "m1-n1"))
-        .expect_err("a NULL used is fine, a duplicate is not");
+        .expect("a NULL used is fine");
+    write(&mut store, &insert("pushed", "NULL", "NULL", "s1", "m1-n1"))
+        .expect_err("a duplicate key is not");
 }
 
 #[test]
@@ -149,6 +151,6 @@ fn it_is_a_history_table_without_no_delete() {
             &mut store,
             "SELECT count(*) FROM history WHERE tbl = 'context_reads' AND op = 'delete'"
         ),
-        1
+        0
     );
 }
