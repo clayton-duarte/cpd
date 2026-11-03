@@ -94,7 +94,14 @@ for (const { skill, minCommands } of skills) test(`every cpd command ${skill} na
   const named = skillFiles(skill).flatMap((f) => commandsNamed(f.text).map((c) => ({ file: f.name, command: c })));
   assert.ok(named.length > minCommands, `expected many commands, found ${named.length}`);
   for (const { file, command } of named) {
-    const key = words(command.slice("cpd ".length)).join(" ");
+    // The command is the longest prefix of its words that is a synopsis key: a literal positional after the
+    // command words (`cpd` in `cpd session send cpd "<text>"`) is an argument, not a word of the command.
+    const cmdWords = words(command.slice("cpd ".length));
+    let key = cmdWords.join(" ");
+    for (let n = cmdWords.length; n > 0; n--) {
+      const prefix = cmdWords.slice(0, n).join(" ");
+      if (known.has(prefix)) { key = prefix; break; }
+    }
     const flags = known.get(key);
     assert.ok(flags, `${file}: "${command}": "cpd ${key}" is not a command of commands.md`);
     for (const f of command.matchAll(/--[a-z][a-z-]*/g)) {
@@ -136,8 +143,7 @@ test("cpd-lead rules allow git and gh for diagnosis, still forbid tmux, wt, forc
 
 test("cpd-lead talks to its Manager with session send and still asks the User directly", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
-  assert.match(text, /cpd session send <manager-id>/);
-  assert.match(text, /cpd session list --role manager/);
+  assert.match(text, /cpd session send <context> "<text>" --unblocks/);
   assert.match(text, /session-message/);
   assert.match(text, /cpd context show --since/);
   assert.doesNotMatch(text, /cpd-context/, "Leads get no turn-start cpd-context message (hs-d209)");
@@ -556,7 +562,7 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
-  assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
+  assert.match(manager, /cpd session send <context>:<plan>[^\n]*register/);
 });
 
 test("cpd-manager splits work by area, maps files and sets the landing order", () => {

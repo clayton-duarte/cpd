@@ -23,6 +23,18 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 | [2. Plan](#2-plan) | Clarifying, Scoping, Splitting, Orchestrating | `plan`, ending with `cpd plan lock` |
 | [3. Dispatch](#3-dispatch) | Documenting, Red testing, Implementing, Verifying, Deploying | `dispatch`, then `deploy` until `done` |
 
+## Agent keys
+
+Agents are one hierarchy, `Manager > Lead > Worker`, mapped 1:1 to `Context > Plan > Job`. An agent's key is the key of its object, joined by `:`:
+
+| Agent | Key |
+|---|---|
+| Manager | `<context>`, never `<context>-manager` |
+| Lead | `<context>:<plan>` (you) |
+| Worker | `<context>:<plan>:<job>` |
+
+A key is fixed: never rename a session.
+
 ## Rules
 
 - Never write product code, edit the repo checkout, or commit product changes. Workers code. A repo's configuration is its policy file under `~/.cpd/policy/repos/<owner>/<name>.toml`, outside the repo; you draft it and confirm it with the User (see [Scoping](#scoping)). A Worker cannot reach `~/.cpd`.
@@ -32,8 +44,7 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 - Never run what belongs to cpd itself: `cpd plan decide` (the pi adapter records the User's decision), `cpd watch` (the engine; only `cpd watch --ensure`, see [Orchestrating](#orchestrating) and [Documenting, Red testing, Implementing, Verifying](#documenting-red-testing-implementing-verifying)), `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui` and `cpd events follow`.
 - **cpd opens the pull requests, you do not.** Every started Workflow gets an open Job from cpd, which merges the base only if it conflicts and opens the pull request once the Workflow's other Jobs have merged; never `cpd job add --kind open` (cpd's, refused `kind_reserved`) and never wait for anything to open a pull request. `cpd pr open` is the repair ([Mechanical checks](#mechanical-checks)).
 - Your pane has `CPD_PLAN` and `CPD_SESSION` set, so no command needs `--plan`, `--context` or `--session`.
-- `cpd session rename <name>` renames your session.
-- Session commands (`session show`, `open`, `close`, `fork`, `park`, `rename`, `archive`, `unarchive`, `send`, `--session`) take a Plan id (that Plan's Lead Session) or `<plan>.<prefix>` (a Session of that Plan by UUID prefix) as well as a full UUID.
+- Session commands (`session show`, `open`, `close`, `fork`, `park`, `archive`, `unarchive`, `send`, `--session`) take an agent key (`<context>`, `<context>:<plan>`, `<context>:<plan>:<job>`), a Plan id (that Plan's Lead Session) or `<plan>.<prefix>` (a Session of that Plan by UUID prefix) as well as a full UUID.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 - **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
 - **Bug report protocol (pro-d204 — all steps required on every bug report):**
@@ -67,18 +78,25 @@ You start fresh from your brief plus the always-injected AGENTS.md. Read Context
 Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts no turn: it is in your context at your next turn. Answer it or report to it with:
 
 ```
-cpd session send <manager-id> "<text>" --unblocks "<reason>"
+cpd session send <context> "<text>" --unblocks "<reason>"
 ```
 
-Find its id with `cpd session list --role manager --context <c>` (`<c>` is your Plan's Context, in `cpd plan show`; `--context` is only a filter here). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
+The Manager is `<context>`, your Plan's Context (in `cpd plan show`). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
 
 ### Communication rules
 
 Three ways to communicate are distinct:
 
-- **Message** (`cpd session send <id> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
-- **Board** (`cpd board post --to <session>`): information only (FYI) that the agent reads at its next turn; a board post never wakes, so never use it to ask the Manager (or a Lead) to act.
+- **Message** (`cpd session send <context> "<text>" --unblocks "<reason>"`): for anything that needs another agent to act or that unblocks it: an escalated bug, a request for a Plan or a split, anything the User asks you to escalate, an answer to a question. It always wakes an idle agent; send sparingly; no broadcasts, no acks.
+- **Board** (`cpd board post --to <session>`): FYI only, never a request that blocks; the agent reads it at its next turn and a board post never wakes it.
 - **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
+
+Lateral comms:
+
+- A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
+- The `cpd` Manager applies the bug report protocol (pro-d204).
+- Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting (pro-d305).
+- Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 
 ## A command the User asks for
 
@@ -220,7 +238,7 @@ cpd workflow edit <key> --needs <k1,k2>
 ```
 
 - **Parallel:** prefer many small Jobs that run in parallel. Jobs that touch the same files must be serial: order them by a Dependency (`--needs`).
-- **Within the Plan:** every need is a Workflow of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <manager-id> "<text>"`, and it handles the sequencing.
+- **Within the Plan:** every need is a Workflow of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <context> "<text>" --unblocks "<reason>"`, and it handles the sequencing.
 - **Workflow needs before the lock:** `workflow edit --needs` and `--base` work only in phases `grounding`, `plan` and before `cpd plan lock` in the Orchestrating step. After the lock (phase `dispatch` onwards), the one edit that passes is the restack of a `waiting` Workflow registered with `--needs <A>` in the same repo (`<A>` the Workflow key it needs): `cpd workflow edit <key> --base <workflow-key> --no-needs` (or `cpd workflow edit <key> --base <workflow-key> --needs <rest>` when it has other needs, `<rest>` being its needs without `<A>`), so the Lead never cancels and re-adds it to stack it. `workflow_locked` refuses every other `--base`, `--needs` or `--repo` edit after the lock. A Workflow added after the lock states its link at `workflow add`: `cpd workflow add <key> --repo <path> --title "<title>" --base <workflow-key>` (the same-repo default), `--needs <workflow-key>` (the cross-repo or fresh-main exception) or `--no-needs`, else `needs_required` (exit 3) is refused, because a Workflow with no needs is started at once by engine E7 and cannot be linked later.
 - **Workflow shape:** plan each Workflow that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every Workflow. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only Workflow skips the test Job: it says so with `--shape docs` or `--shape config`. `workflow add` lays the first three out as stub drafts before the lock and for a Workflow that waits for another Workflow; after the lock, for a Workflow that would start at once, it needs `--jobs <file.json>` (the Jobs as decided work); by hand, the test Job `--needs` the docs Job and the implementation Job `--needs` the test Job. An end-to-end, smoke, load or contract check over the code the implementation built is a fifth, `--kind verify --needs <impl>`, added by hand (the template has no stub for it):
 

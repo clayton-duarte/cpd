@@ -489,6 +489,9 @@ fn the_rebuilt_tables_keep_their_indexes_and_triggers() {
     names.push("index sessions_one_lead ON sessions".to_owned());
     names.sort();
     let mut store = migrated_in(&home);
+    // the migration `20261103T0900-agent-key-schema` adds this index (one Lead per Plan)
+    names.push("index sessions_one_lead ON sessions".to_owned());
+    names.sort();
     assert_eq!(strings(&mut store, sql), names);
     for t in TABLES {
         let strict: i64 = count(

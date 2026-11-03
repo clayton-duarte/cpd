@@ -7,7 +7,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import compactTools from "../../compact-tools/extensions/compact-tools.ts";
 
-const UI_EVENTS = new Set(["session_start", "session_shutdown", "session_tree", "agent_start", "agent_end", "agent_settled", "message_update", "message_end", "tool_execution_start", "tool_execution_end", "turn_start", "thinking_level_select"]);
+const UI_EVENTS = new Set(["session_start", "session_shutdown", "session_tree", "agent_start", "agent_end", "agent_settled", "message_update", "message_end", "tool_execution_start", "tool_execution_end", "turn_start", "thinking_level_select", "session_before_compact", "session_compact", "session_compact_failed"]);
 for (const style of ["compact", "claude", "codex", "off"] as const) {
 	test(`UI calls only allowed rendering/observation APIs (${style})`, () => {
 		const previous = process.env.PI_CODING_AGENT_DIR;
@@ -30,6 +30,7 @@ for (const style of ["compact", "claude", "codex", "off"] as const) {
 			writeFileSync(join(directory, "compact-tools.json"), JSON.stringify({ style }));
 			compactTools(pi);
 			handlers.get("session_start")!({ reason: "startup" }, ctx);
+			for (const name of ["session_before_compact", "session_compact", "session_compact_failed"]) assert.equal(handlers.get(name)!({ type: name }, ctx), undefined, `${name} observer returns nothing`);
 			assert.equal(handlers.get("tool_execution_start")!({ toolCallId: "parent", toolName: "codemode" }), undefined);
 			assert.equal(handlers.get("tool_execution_start")!({ toolCallId: "parent/1", parentToolCallId: "parent", toolName: "read" }), undefined);
 			assert.equal(handlers.get("tool_execution_end")!({ toolCallId: "parent/1", parentToolCallId: "parent", toolName: "read", isError: true }), undefined);

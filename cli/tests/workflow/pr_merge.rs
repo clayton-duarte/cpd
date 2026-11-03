@@ -29,6 +29,10 @@ struct Gh {
     /// What `repo view ... squashMergeAllowed,...` answers; squash allowed only unless a test sets it.
     methods: Mutex<Reply>,
     merged: Mutex<bool>,
+    /// What a failing `pr merge` says on stderr; `merge said no\n` unless a test sets it.
+    merge_stderr: Mutex<String>,
+    /// What `api --method PUT ...` (the REST merge) answers; exit 9 unless a test sets it.
+    rest: Mutex<Reply>,
 }
 
 impl Gh {
@@ -42,6 +46,14 @@ impl Gh {
 
     fn set_methods(&self, reply: Reply) {
         *self.methods.lock().unwrap() = reply;
+    }
+
+    fn set_merge_stderr(&self, stderr: &str) {
+        *self.merge_stderr.lock().unwrap() = stderr.to_owned();
+    }
+
+    fn set_rest(&self, reply: Reply) {
+        *self.rest.lock().unwrap() = reply;
     }
 }
 
@@ -62,7 +74,7 @@ impl Handler for Gh {
                 if self.merge_exit == 0 {
                     Reply::ok("")
                 } else {
-                    Reply::exit(self.merge_exit, "", "merge said no\n")
+                    Reply::exit(self.merge_exit, "", &self.merge_stderr.lock().unwrap())
                 }
             }
             ["repo", "view"]
@@ -72,6 +84,7 @@ impl Handler for Gh {
             }
             ["repo", "view"] => self.repo.lock().unwrap().clone(),
             ["api", "graphql"] => self.graphql.lock().unwrap().clone(),
+            ["api", "--method"] => self.rest.lock().unwrap().clone(),
             _ => Reply::exit(9, "", ""),
         }
     }
@@ -87,6 +100,8 @@ fn install(fx: &Fx, before: &str, after: &str, merge_exit: i32, graphql: Reply) 
         repo: Mutex::new(Reply::ok("{\"deleteBranchOnMerge\": true}\n")),
         methods: Mutex::new(methods(true, false, false)),
         merged: Mutex::new(false),
+        merge_stderr: Mutex::new("merge said no\n".to_owned()),
+        rest: Mutex::new(Reply::exit(9, "", "")),
     });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     gh
@@ -752,4 +767,110 @@ fn merge_with_an_empty_required_list_ignores_the_head_checks() {
         assert_eq!(fx.cpd(&["pr", "merge", REF]).ok()["ok"], true, "{policy:?}");
         assert!(merged(&fx), "{policy:?}");
     }
+}
+
+const STACK_REFUSAL: &str = "GraphQL: This pull request is part of a stack and must be merged using the asynchronous merge REST API\n";
+
+fn rest_call() -> Vec<String> {
+    argv(&[
+        "api",
+        "--method",
+        "PUT",
+        "repos/acme/api/pulls/7/merge-async",
+        "-f",
+        "merge_method=squash",
+        "-f",
+        &format!("sha={SHA}"),
+    ])
+}
+
+/// A merge whose `gh pr merge` fails with `stderr` and whose REST fallback answers `rest`.
+fn refused_merge(stderr: &str, rest: Reply) -> Fx {
+    let fx = Fx::with_ports();
+    row_with_ready_item(&fx.env);
+    let gh = install(
+        &fx,
+        &view_merged_at("OPEN", "CLEAN", None),
+        &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)),
+        1,
+        Reply::exit(1, "", ""),
+    );
+    gh.set_merge_stderr(stderr);
+    gh.set_rest(rest);
+    fx
+}
+
+fn assert_rest_fallback_made_once_after_merge(fx: &Fx) {
+    let all = calls(fx);
+    let rest: Vec<usize> = (0..all.len()).filter(|i| all[*i] == rest_call()).collect();
+    assert_eq!(rest.len(), 1, "{all:?}");
+    let merge: Vec<usize> = (0..all.len())
+        .filter(|i| all[*i][..2] == ["pr", "merge"])
+        .collect();
+    assert_eq!(merge.len(), 1, "{all:?}");
+    assert!(merge[0] < rest[0], "{all:?}");
+}
+
+#[test]
+fn a_stack_base_refusal_falls_back_to_the_rest_merge_api_and_stores_the_merge() {
+    let fx = refused_merge(STACK_REFUSAL, Reply::ok(""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    assert_rest_fallback_made_once_after_merge(&fx);
+    assert_stored_merged(&fx.env, Some(MERGED_AT));
+}
+
+#[test]
+fn a_part_of_a_stack_refusal_alone_also_falls_back_to_the_rest_merge_api() {
+    let fx = refused_merge("part of a stack\n", Reply::ok(""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    assert_rest_fallback_made_once_after_merge(&fx);
+}
+
+#[test]
+fn any_other_pr_merge_failure_does_not_call_the_rest_merge_api() {
+    let fx = refused_merge("merge said no\n", Reply::ok(""));
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+    assert_eq!(
+        error["details"]["argv"],
+        json!([
+            "gh",
+            "pr",
+            "merge",
+            "7",
+            "--repo",
+            "acme/api",
+            "--squash",
+            "--match-head-commit",
+            SHA
+        ])
+    );
+    assert_eq!(error["details"]["exit"], 1);
+    assert_eq!(error["details"]["stderr"], "merge said no");
+    assert!(
+        calls(&fx)
+            .iter()
+            .all(|c| !(c[0] == "api" && c.iter().any(|a| a == "PUT"))),
+        "{:?}",
+        calls(&fx)
+    );
+}
+
+#[test]
+fn a_failing_rest_merge_fallback_is_gh_failed_with_the_gh_api_call() {
+    let fx = refused_merge(
+        "GraphQL: part of a stack\n",
+        Reply::exit(1, "", "rest said no\n"),
+    );
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+    let mut want = vec!["gh".to_owned()];
+    want.extend(rest_call());
+    assert_eq!(error["details"]["argv"], json!(want));
+    assert_eq!(error["details"]["exit"], 1);
+    assert_eq!(error["details"]["stderr"], "rest said no");
+    assert_eq!(
+        fx.env
+            .query::<String>("SELECT state FROM pull_requests WHERE number = 7"),
+        "open",
+        "nothing is stored merged"
+    );
 }
