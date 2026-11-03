@@ -149,15 +149,11 @@ pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopene
             refused(
                 plan,
                 key,
-                &format!(
-                    "pull request {} is not stored yet: the poll writes it",
-                    head.url
-                ),
+                &format!("pull request {} is not stored yet: the poll writes it", url),
             )
         })?;
     let path: PathBuf = crate::git::workflow_lead_worktree_path(repo, plan, key, &row.lead_branch)?;
     crate::git::worktree::ensure_reopened_lead_worktree(repo, &path, &row.lead_branch)?;
-    let (number, url) = (head.number, url);
     let worktree = path.to_string_lossy().into_owned();
 
     env.store.write(COMMAND, |tx| {
