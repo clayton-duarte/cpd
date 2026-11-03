@@ -861,3 +861,56 @@ A fork of any of these diverges within days to weeks (d1, d3, d6). Pinning an ex
 4. **Shift+Enter** may need a proxy that answers the Kitty query: a build, not a configuration (r6 §3).
 5. **Dialogs in a tmux Session have no side channel** (r6 §8): for pi-runner Sessions the previews and the plan review stay terminal-native until the extension exposes the dialog's data separately (inferred).
 6. **The cost estimates are guesses of guesses.** Each size in sections 7 and 8 is a finding's guess or this report's; none was built.
+
+## 10. Decisions for the User
+
+Each decision lists its options with the recommended one first. They are asks, not conclusions; the recommendation of section 8 stands or falls with D1 and D4.
+
+**D1. Terminal-first or web-native chat?**
+
+1. **Hybrid, terminal first for pi-runner Sessions, decided by the spike (Option D).** The real chat on day one; web-native only where a terminal cannot work. Accepts that pro-d1's "only cosmetic" is met for the terminal surface and not beyond it.
+2. Web-native only (Option A). Slower to a usable chat, best for dialogs, phone and look; durable-first.
+3. Terminal only (Option B). Cheapest; leaves durable Sessions, previews and plan review unsolved.
+4. Evolve `web/` (Option C). The most control and the most lines; the path already judged too costly.
+
+**D2. React or another stack?**
+
+1. **React.** `web/` is a React shell today (s4); assistant-ui, TanStack Virtual, Streamdown and the best parts are React (section 4.3); the findings' "parts" almost all carry to React and carry badly across frameworks (pimote is Svelte, OpenCode is Solid, jmfederico is Lit).
+2. SolidJS, only if OpenCode `session-ui` is adopted as vendored parts (r3's one credible path); gives up the React parts and the `web/` code.
+3. Lit or Svelte: no finding supports it for the chat; only the ideas transfer.
+
+**D3. Vendoring and pinning policy.**
+
+1. **Take npm dependencies at exact versions; copy only small MIT leaf modules with a header naming the source and commit; never fork an app.** Matches the "take the dependency" axiom; assistant-ui's shadcn copies (about 3.3k lines) are the one designed exception, and they are cpd's source afterwards (d2 §5.1).
+2. Vendor whole candidates (pi-pocket's `projection.ts`, jmfederico's `chat-view`): d6 and d3 say this violates "never vendor" and ties cpd to a one-person protocol.
+3. Take nothing pre-1.0 unpinned: a stricter rule that excludes `react-pi` 0.0.x as a dependency (keep it as a reading source only).
+
+**D4. Run the spike before committing to any option?**
+
+1. **Yes: one Plan, `chat-spike`, S1-S4 of section 8.2, before any chat code is kept.** About 3-5 Jobs; it replaces this report's reading of code with numbers for the User's top priority.
+2. No: commit to Option A now and treat the measurements as the first PRs of that Plan. Faster, and it risks building on react-pi's failing path.
+3. No: commit to Option B now. Cheapest, and it leaves the durable hole open.
+
+**D5. What to do with the existing `web/` adapter and chat?**
+
+1. **Keep the adapter pieces (`host.ts`, `transcript.ts`, `ws-bridge.ts`, the paging in `live-server.ts`, `use-thread-scroll.ts`, the wire types) and throw away the chat view `live-chat.tsx`, `translate.ts`, `fold.ts`, `mock.ts` and the CLI-spawn read layer** (s4 §1). The three panes keep their shell and are rewired (6.2).
+2. Keep everything until the base is chosen. Leaves stale views mounted or unmounted as today (s5 §4).
+3. Delete `web/` and start clean. Loses 14,583 lines (`wc -l`, s4) of which a part is reusable regardless of the base.
+
+**D6. How much does a phone matter, and when?**
+
+1. **Desktop browser first; phone after the desktop chat works.** The terminal option is weak on a phone (no Esc, Ctrl, Tab or arrow keys, IME bugs, r6 §4); the web-native options can be made mobile-first later.
+2. Phone first. Rules out Option B as the main chat and favours A, with a custom on-screen key bar not needed.
+3. No phone requirement. Keeps B fully viable.
+
+**D7. How faithful must the Dango look be?**
+
+1. **Palette (the 16-slot hex map) plus the structural parts that carry meaning: pills, status dots and colours, user and assistant balloons, tool rows with their closing row, the input's state border. Not glyph-level or cell-level fidelity.** Needs the index map ported (6.1) and `docs/contract.md` section 6.1.1 read.
+2. Palette only (colours, fonts, density tokens). Cheapest; the chat looks like a generic shadcn chat.
+3. Pixel and cell parity with the TUI. Only the terminal option gives it for free; a web-native chat can approximate and no finding sizes the cost.
+
+**D8. Who owns the windowed attach on the durable host?**
+
+1. **Ask durable-leads for a window on `attach`, `history` usable before attach, a capped or chunked snapshot and a viewer role (D2, D3, D4, D15), as a Plan that precedes the web-native relay.** Without it, first paint of a 20-30 MB session cannot meet C1 (section 3.3).
+2. Work around it in the relay (a server-side window over the host's snapshot): the relay would parse the whole line anyway, and the cost lands in the bridge (inferred).
+3. Do not support large durable Sessions in the web at first, and accept the loss.
