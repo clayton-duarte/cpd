@@ -4952,7 +4952,7 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 **L5 The User's prompt** (`before_agent_start` with `messageType: "user"`) always runs. It empties the window; and when the breaker is tripped it also clears the trip: the reason closes, the entry `{tripped: false}` is appended and deliveries trigger turns again. Nothing else resumes it: no timeout.
 
-**L6 Resume from the Inbox**. `cpd session resume <id>` (§10.17) appends the Event `session-resumed`. On it, for its own Session while tripped, the adapter empties the window, clears the trip as L5 and delivers ONE message with a turn (the Event's text), so one turn starts and sees every delivery queued meanwhile. While not tripped it does nothing: no message, no turn. The turn it starts is a self-started turn (the window holds 1).
+**L6 Resume**. `cpd session resume <id>` (§10.17) appends the Event `session-resumed`. On it, for its own Session while tripped, the adapter empties the window, clears the trip as L5 and delivers ONE message with a turn (the Event's text), so one turn starts and sees every delivery queued meanwhile. While not tripped it does nothing: no message, no turn. The turn it starts is a self-started turn (the window holds 1).
 
 **L7 Reload** (L7 of hs-d552). The trip survives a pi reload. At `session_start`, before the follower starts, the adapter reads its pi session's last `cpd-loop-guard` entry; `tripped: true` re-opens the reason and the gate at once. The window is not persisted: a reload empties it.
 
