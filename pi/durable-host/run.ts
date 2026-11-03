@@ -109,7 +109,7 @@ function endText(end: unknown): string {
 
 /** The host's own version (the wire's `host_version`) and the pi-durable it is built on (package.json pins 1.3.0). */
 const HOST_VERSION = "1";
-const PI_DURABLE = "1.3.0";
+export const PI_DURABLE = "1.3.0";
 /** Timers of the server: the global ones, unref-ed so a pending hello timeout never holds the process. */
 const timers = {
   after(ms: number, fn: () => void): () => void {
