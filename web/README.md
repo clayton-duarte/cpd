@@ -859,7 +859,7 @@ export interface HostClient {
 export function createHostClient(connect: HostConnect): HostClient;
 ```
 
-`ConversationView` is pi-durable 1.5.0's type (`dist/harness/view.d.ts`, read, not run): `conversation`, `entries` (the window), `before?` and `docs`.
+`ConversationView` is pi-durable 1.5.0's type (`dist/harness/view.d.ts`, verified by reading, not run): `conversation`, `entries` (the window), `before?` and `docs`.
 
 `attach(id)` resolves the socket path from `$CPD_HOME` (`env.CPD_HOME` or `~/.cpd`), connects, sends `hello`, reads `welcome`, sends `attach` — with the saved cursor of the last applied frame when it has one — and hands every parsed line to `onFrame`, `error` and `bye` frames included. It never opens the store and never sends a write.
 
