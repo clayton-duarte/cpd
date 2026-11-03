@@ -2885,7 +2885,7 @@ fn pane_title(fx: &Fx, pane: &str) -> String {
 }
 
 #[test]
-fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
+fn the_leads_pane_carries_its_key_and_plan_rename_leaves_it() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
     let out = fx
@@ -2903,7 +2903,7 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
         out["lead"]["session"].as_str().unwrap().to_owned(),
         out["lead"]["pane"].as_str().unwrap().to_owned(),
     );
-    assert_eq!(pane_title(&fx, &pane), "Retry Payouts");
+    assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 
     fx.cpd(&[
         "plan",
@@ -2914,7 +2914,7 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
         "Retry the payouts",
     ])
     .ok();
-    assert_eq!(pane_title(&fx, &pane), "Retry The Payouts");
+    assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 
     // A side fork shows its own name; renaming the Plan leaves it alone.
     let fork = fx.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
@@ -2924,14 +2924,14 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
         .ok();
     assert_eq!(
         (pane_title(&fx, &pane), pane_title(&fx, fork_pane)),
-        ("Third".to_owned(), "Side".to_owned())
+        ("ctx:pay".to_owned(), "Side".to_owned())
     );
 
     // Renaming the Plan's Lead Session never replaces the Plan's title.
     let fork_id = fork["id"].as_str().unwrap();
     fx.cpd(&["session", "rename", "lead name", "--session", fork_id])
         .ok();
-    assert_eq!(pane_title(&fx, &pane), "Third");
+    assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 
     // A rerun with the same title repairs a header that was cleared.
     fx.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
@@ -2940,7 +2940,7 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
         .cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"])
         .ok();
     assert_eq!(again["already"], true);
-    assert_eq!(pane_title(&fx, &pane), "Third");
+    assert_eq!(pane_title(&fx, &pane), "ctx:pay");
 
     // No pane, nothing to do.
     fx.tmux(&["kill-pane", "-t", &pane]);

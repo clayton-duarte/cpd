@@ -6,7 +6,7 @@ import { CpdError, errorOfEnvelope, isObject } from "./cpd.ts";
  * or the output of a command the adapter runs changes in a way the adapter depends on.
  * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`, 16 is the `session switch-failed` and `session switched` commands, 17 is `workflow-described`, 18 is `session-model-changed`, 19 is `context pending`'s plan-level `jobs`, 20 is the Workflow rename: the six object kinds are `workflow-*` and the object data key is `workflow`.
  */
-export const PROTOCOL = 20;
+export const PROTOCOL = 21;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [

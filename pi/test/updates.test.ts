@@ -379,7 +379,7 @@ test("a Lead gets one cpd-context message with new decisions, board posts and op
       "- hs-n4: Cut the wake.",
       "",
       "Board:",
-      "- User (2026-10-21 21:00 +05:30): PR #207 opened",
+      "- Board post from the User (2026-10-21 21:00 +05:30): PR #207 opened",
       "",
       "Workflows:",
       "- Workflow api: pull request opened https://github.com/o/r/pull/211",
@@ -422,7 +422,7 @@ test("a Lead cpd-context message lists the pull request of a legacy pr-opened Ev
       "- hs-n4: Cut the wake.",
       "",
       "Board:",
-      "- User (2026-10-21 21:00 +05:30): PR #207 opened",
+      "- Board post from the User (2026-10-21 21:00 +05:30): PR #207 opened",
       "",
       "Workflows:",
       "- Workflow api: pull request opened https://github.com/o/r/pull/211",
@@ -461,7 +461,7 @@ test("board posts are taken at turn start and shown in full", async (t) => {
   f.respond("board-take", take({ id: 1, from_session: null, text: long }, { id: 2, from_session: null, text: "Second post" }));
   const m = await beforeTurn(f);
   assert.equal(m.content.split("\n")[0], "Context ctx: 2 board posts");
-  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21 21:00 +05:30): ${long}`, "- User (2026-10-21 21:00 +05:30): Second post"]);
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- Board post from the User (2026-10-21 21:00 +05:30): ${long}`, "- Board post from the User (2026-10-21 21:00 +05:30): Second post"]);
   assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
   assert.deepEqual(f.pi.sent, [], "a post never starts a turn");
 });
@@ -566,7 +566,7 @@ test("board posts show the local date, time and zone", async (t) => {
   nothingNew(f);
   f.respond("board-take", take({ id: 1, from_session: null, text: "hello", at: "2026-10-25T22:29:00.000Z" }));
   const m = await beforeTurn(f);
-  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", "- User (2026-10-26 03:59 +05:30): hello"]);
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", "- Board post from the User (2026-10-26 03:59 +05:30): hello"]);
 });
 
 // ---- the Lead's standing line for a PR whose pull request closed without a merge ----

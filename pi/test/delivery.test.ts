@@ -326,7 +326,7 @@ async function errorHost(t: { after(fn: () => unknown): void }) {
   const host = createHost(pi, {});
   host.run = new Run({
     id: ID,
-    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, byUser: false, loopGuardTurns: 20 },
+    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, key: null, byUser: false, loopGuardTurns: 20 },
     facts: {} as never,
     reporter: {} as never,
     abort: new AbortController(),

@@ -122,6 +122,7 @@ test("session_shutdown waits at most shutdownWaitMs for `stopped`", async (t) =>
 test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
+  f.respond("session-show", shown({ key: null })); // a name is fixed only for a Session with a key
   await started(f);
   assert.equal(f.pi.sessionName, "the lead");
 

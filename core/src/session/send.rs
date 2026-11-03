@@ -134,18 +134,12 @@ fn write(
     let preview: String = text.chars().take(PREVIEW_CHARS).collect();
     let message = match unblocks {
         Some(reason) => {
-            let summary = format!(
-                "Message for {} from {who} (unblocks: {reason}): {preview}",
-                target.name
-            );
+            let summary = format!("Message from {who} (unblocks: {reason}): {preview}");
             NewEvent::session_message_unblocking(summary, from, text, reason)
         }
-        None => NewEvent::session_message(
-            format!("Message for {} from {who}: {preview}", target.name),
-            from,
-            text,
-            wake,
-        ),
+        None => {
+            NewEvent::session_message(format!("Message from {who}: {preview}"), from, text, wake)
+        }
     };
     append(tx, scoped(message, target))
 }
