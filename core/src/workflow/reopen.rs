@@ -158,7 +158,7 @@ pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopene
 
     env.store.write(COMMAND, |tx| {
         let reopened = tx.execute(
-            "UPDATE workflows SET status = 'open', lead_worktree = ?1, pr_number = ?2, pr_url = ?3,
+            "UPDATE workflows SET status = 'open', lead_worktree = ?1, started_at = (SELECT at FROM txns WHERE id = cpd_txn()), pr_number = ?2, pr_url = ?3,
                     pr_opened_at = coalesce(pr_opened_at, (SELECT at FROM txns WHERE id = cpd_txn())), pull_request = ?4
               WHERE plan = ?5 AND key = ?6 AND status = 'cancelled'",
             rusqlite::params![worktree, number, url, pull_request, plan.as_str(), key.as_str()],
