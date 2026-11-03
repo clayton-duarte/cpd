@@ -71,7 +71,7 @@ fn session_show_takes_a_relative_plan_id_from_a_lead() {
     // The key `ctx:other` is looked up by name, not through the Plan's `lead_session` link the legacy form follows.
     let fx = world();
     fx.env
-        .sql("UPDATE plans SET lead_session = NULL WHERE id = 'other'");
+        .sql("UPDATE plans SET lead_session = 'lead1' WHERE id = 'other'");
     assert_eq!(shown(&fx, "other", FROM_LEAD1)["id"], "lead2");
 }
 
@@ -134,6 +134,9 @@ fn board_post_to_a_lead_of_a_done_plan_is_plan_inactive() {
 #[test]
 fn session_archive_and_unarchive_take_a_lead_key() {
     let fx = world();
+    // The Lead of a Plan is archived with its Plan; once the Plan links another Lead, this one is archived on its own.
+    fx.env
+        .sql("UPDATE plans SET lead_session = 'lead1' WHERE id = 'other'");
     fx.cpd(&["session", "archive", "ctx:other"]).ok();
     assert!(shown(&fx, "lead2", &[])["archived_at"].is_string());
     fx.cpd(&["session", "unarchive", "ctx:other"]).ok();
