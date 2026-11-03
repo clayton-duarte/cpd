@@ -174,7 +174,7 @@ Phase `plan`. Steps: [Clarifying](#clarifying), [Scoping](#scoping), [Splitting]
    cpd context answer <question-record-id> "<answer>"
    ```
 
-   Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
+   Use `decide` for a settled choice (`--supersedes` when it replaces earlier ones; it may repeat, `--supersedes a --supersedes b`, and a text that says it supersedes a record without linking it is refused, `supersedes_unlinked`), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
 3. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). Confirm them with the User in one `ask_user_question` round (Accept or Change), also while drafts exist: the assumptions are stated in the question (its text, or an option's description or preview), then confirmed. If they are too long for 1500 characters, write them to a file outside the repo and point to it in chat. Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec, and into the Plan's outline (`assumptions`, see [Orchestrating](#orchestrating)). Move on only after the User accepts.
 
 ### Scoping

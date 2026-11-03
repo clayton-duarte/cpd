@@ -28,7 +28,7 @@ One of exactly three Contexts that every machine keeps: `cpd`, `host` (local mai
 _Avoid_: default Context, system Context
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede others: `--supersedes` may repeat, and prose that says a record is superseded without linking it is refused, contract §4.6), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
 
 **Context store**:
