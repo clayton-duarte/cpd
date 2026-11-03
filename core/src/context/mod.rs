@@ -214,6 +214,9 @@ pub struct ShowArgs {
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
+    /// A record id, as --record
+    #[arg(value_name = "record", conflicts_with_all = ["record", "since", "topic"])]
+    record_positional: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
