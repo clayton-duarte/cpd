@@ -2051,26 +2051,20 @@ fn e2_restarts_a_dead_manager_in_its_context_window() {
 }
 
 #[test]
-fn e2_does_not_restart_a_lead_that_stopped_itself_or_was_closed() {
+fn e2_restarts_a_stopped_lead_whose_pane_vanished_but_not_one_that_was_closed() {
     let fx = Fx::with_ports();
     let (one, two) = two_parked_leads(&fx);
-    // lead2 died working: restarted (the control). lead1 wrote `stopped` first, as `/quit` does.
+    // Both reported `stopped` with the pane still recorded (the OS shutdown case): both are restarted.
     fx.cpd(&["session", "state", "stopped", "--session", LEAD1])
         .ok();
+    fx.env
+        .sql("UPDATE sessions SET state = 'stopped' WHERE id = 'lead2'");
     fx.pane_exit(&one, 0);
     fx.pane_exit(&two, 1);
     fx.engine_tick();
     assert_restarted_parked(&fx, LEAD2, &two, "park-other");
-    assert_eq!(window_names(&fx), ["main", "park-other"]);
-    assert!(show(&fx, LEAD1)["tmux_pane"].is_null());
-    assert_eq!(
-        (
-            show(&fx, LEAD1)["state"].clone(),
-            show(&fx, LEAD1)["place"].clone()
-        ),
-        (json!("stopped"), json!("none"))
-    );
-    assert_eq!(moves_of(&fx, LEAD1).last().unwrap().0, "none");
+    assert_restarted_parked(&fx, LEAD1, &one, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-other", "park-pay"]);
 
     // `session close` writes `stopped` and kills the pane: the engine restarts nothing.
     fx.env
