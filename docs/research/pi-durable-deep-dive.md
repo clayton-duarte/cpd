@@ -1,19 +1,19 @@
 # pi-durable deep dive
 
-Commissioned by Context record pro-d7 (User, 2026-11-03 EST). Built in three docs Jobs; this file is Job 1 (sections 0 and 1). Sections 2 to 4 are filled by later Jobs.
+Commissioned by Context record pro-d7 (User, 2026-11-03 EST). Built in three docs Jobs: Job 1 wrote sections 0 (draft) and 1, Job 2 section 2, Job 3 sections 3 and 4 and the final section 0.
 
 ## 0. TL;DR and evidence labels
 
-**Draft TL;DR (Job 3 finalizes).**
+**TL;DR.** Answers to the three questions of pro-d7: how it works (sections 1), how applications and UIs communicate with it (section 2), how it compares with pi-agent (section 3). Every bullet points to the section that proves it.
 
-- pi-durable is a crash-recoverable agent runtime: a `Harness` that keeps every conversation, entry, task and document in a `Storage`, and re-runs unfinished work from the last committed checkpoint (`pi-durable/dist/harness/scheduler.js:1230-1234`, read).
-- Stack: pi-ai (models) under chord (JSON delta/state primitives) under pi-durable. pi-durable uses only chord's values, contexts and output helpers, not chord's objects, hosts or links (measured: 0 dist files reference `createHost`, `webSocketLink`, `ipcLink`; see section 1.1).
-- All state changes are one serial commit per callback: entries, tasks, submissions and document deltas reach `Storage.commit()` as one atomic batch (`pi-durable/dist/session/session.js:534-536`, `653-657`, read).
-- Durable progress is a task checkpoint committed in the same batch as the phase's effects; a phase that commits no new checkpoint faults (`pi-durable/dist/harness/scheduler.js:1266-1270`, read).
-- Streaming text is committed to the `pi.live` document at most every 100 ms, so a crash loses at most that window (`pi-durable/dist/harness/agent.js:16-19`, read).
-- After a crash a model request is re-sent; a tool reruns only if both its stored intent and its definition say `replay: "safe"`, else the model gets an `interrupted` error (`pi-durable/dist/harness/tool.js:105`, `115`, read).
-- One process owns a storage. No lock, lease or fence exists in 1.3.0 (measured by the scout: grep over all dist files, see 1.7), so applications must front it with one host process.
-- Consequence for cpd-webui (inferred): a web UI is a client of a host process that owns the Harness; it cannot open the SQLite file itself.
+1. **What it is.** pi-durable is an in-process library: `Harness.open(storage, options, context)` returns a `Harness` that stores every conversation, entry, task and document, and re-runs unfinished work from its last committed checkpoint after `resume()` (read: `pi-durable/dist/harness/scheduler.js:1230-1234`, `1266-1270`). Proof: 1.1, 1.6, 1.8.
+2. **Stack.** pi-ai (models) under chord (JSON delta and context primitives) under pi-durable; pi-durable uses chord's values, contexts and output helpers, not chord's hosts or links (measured by scout: 0 dist files reference `createHost`, `webSocketLink` or `ipcLink`). Proof: 1.1.
+3. **Atomic state.** One serial commit per callback writes entries, tasks, submissions and document deltas to `Storage.commit()` as one batch (read: `pi-durable/dist/session/session.js:534-536`, `653-657`); streaming text is committed to `pi.live` at most every 100 ms (read: `pi-durable/dist/harness/agent.js:16-19`). Proof: 1.4, 1.5, 2.2.
+4. **Crash recovery.** After a crash a model request is re-sent, the committed partial becomes an `aborted` entry, and a tool reruns only if both its stored intent and its definition say `replay: "safe"`, else the model gets an `interrupted` error (read: `pi-durable/dist/harness/tool.js:95`, `105`, `115`). There is no exactly-once guarantee. Proof: 1.8.
+5. **Talking to it in process.** An application calls `submit`, `abort`, `compact`, `reset`, `fork` on a `Conversation` and watches it with `viewState`, `watch` or `watchEvents`; all three channels carry committed state only, with no replay and no cursor (read: `pi-durable/README.md:404`). Extensions, hooks and tools plug in through a `Registry`. pi-durable has no approval or question API; a pause is built from primitives. Proof: 2.1 to 2.4.
+6. **Talking to it from outside.** One process owns a storage and nothing enforces it: "no cross-process locking" (read: `pi-durable/README.md:682`; measured by scout: no lock, lease or fence in dist). A UI must therefore go through a host process. cpd's `pi/durable-host` is that host: an NDJSON unix socket, protocol v1, snapshot or resume attach from `{epoch, seq}`, many clients, dialogs replayed on attach. Proof: 1.7, 2.5.
+7. **Versus pi-agent.** pi-coding-agent persists completed messages as JSONL lines and does nothing on reopen; pi-durable persists intent, partials and queues and resumes. The price is a single owning process, an experimental API (read: `pi-durable/README.md:3`) and no skills, MCP, templates or export (3.1, 3.5). Headless cpd Workers switch between `pi` and `durable` because they share only a contract: spec in, report out, no UI, one process (3.2).
+8. **For cpd-webui.** A web chat for Leads and Managers is a client of the host, not of the store; the host already gives snapshot, resume, history, submit, abort and dialogs, and a web client adds a browser transport, auth, reconnect, a fold of events and dialog rendering (3.3). Claims I could not settle are listed in section 4.
 
 **Evidence labels.** Every claim carries one of these in its sentence or table cell.
 
@@ -24,7 +24,7 @@ Commissioned by Context record pro-d7 (User, 2026-11-03 EST). Built in three doc
 | `inferred` | My reasoning from read code; nothing was run. |
 | `guess:` | Unverified. |
 
-Nothing in sections 0 and 1 was executed: no model, storage or test ran. The only `measured` values are `grep` counts from the scouts (artefacts under `$CPD_HOME/run/pi-durable-how/explore/`) and `ls`/`sed` checks in this Job.
+Nothing in this document was executed against pi-durable: no model, storage or test ran. The only `measured` values are `grep` counts from the scouts (artefacts under `$CPD_HOME/run/pi-durable-how/explore/`) and `grep`/`sed` checks by the document's authors. Section 4 lists every `inferred` and `guess:` label.
 
 **Versions covered.** pi-durable 1.3.0 (`pi-durable/package.json:3`, read), chord 1.3.0 (`chord/package.json:3`, read by scout x-chord), pi-coding-agent 1.3.0 (`pi-coding-agent/package.json:3`, read). pi-durable depends on `@earendil-works/pi-ai` 1.3.0 (`pi-durable/package.json:147`, read). Older cpd notes (`docs/research/pi-durable.md`, `pi-durable-resume.md`, `chord.md`, `durable-leads.md`) cite 1.4.0 (read: `chord.md:3-6` per scout x-chord); features they name that are absent here: read-only watch, `restartLimit`, IndexedDB storage (measured by scout x-store: `grep` in dist returned no match).
 
@@ -69,7 +69,7 @@ flowchart TB
 | chord | `track`, `apply`, `applyImmutable`, `applyImmutableBatches`, `replicatedState`, `copyJson`, `Context` and its combinators, `OutputBuffer`, `Progress`, `boundOutput` | 22 dist `.js` files import chord (measured by scout x-chord: `grep -rl "@earendil-works/chord" dist --include=*.js`) |
 | pi-durable | Harness, Session, Storage, Tasks, built-in documents and entries | sections 1.2 to 1.8 |
 
-Chord ships no `Document` type: the word appears only as `## Documentation` in chord's README (measured by scout x-chord: grep over `README.md`, `docs/`, `src/`, `dist/`). pi-durable's document model is its own, built on chord's tracker (`pi-durable/dist/session/transaction.js:349`, `453`, read by scout; the tracker's compare-and-swap is at `chord/dist/delta/tracker.js:152-154`, read).
+Chord ships no `Document` type: the word appears only as `## Documentation` in chord's README (measured by scout x-chord: grep over `README.md`, `docs/`, `src/`, `dist/`). pi-durable's document model is its own, built on chord's tracker (`pi-durable/dist/session/transaction.js:349`, `453`, read by scout; adoption checks the revision and base at `chord/dist/delta/tracker.js:141-149` and then swaps one pointer at `152-154`, read).
 
 Chord objects, hosts, links, contracts and reload are **not** used by pi-durable 1.3.0 (measured by scout x-chord: 0 dist files reference `createHost`, `defineFacet`, `webSocketLink`, `ipcLink`, `memoryLinkPair`, `hostNamed`, `remote(`, `withCancel` or `chord/node`). Chord's guide sample that hosts pi-durable as `DurableHarness` / `durableRegistry` does not match 1.3.0 (measured: both names appear in 0 dist files).
 
@@ -463,7 +463,102 @@ sequenceDiagram
 
 ## 3. pi-durable vs pi-agent
 
-TODO (later Job)
+Short answer. pi-agent (`pi-agent-core` plus `pi-coding-agent`) is a finished agent with a TUI, RPC mode and many batteries; it writes completed messages to a JSONL file and repairs nothing after a crash. pi-durable is an engine with none of those batteries, which commits intent, partials, queues and task checkpoints to storage and resumes them. Paths for pi-coding-agent are `pi-coding-agent/dist/<file>` (1.3.0). The TUI feature inventory is out of scope (sibling Plan pi-chat-features, pro-d8).
+
+### 3.1 Side-by-side
+
+| Dimension | pi-agent (pi-coding-agent / pi-agent-core) | pi-durable | Label |
+|---|---|---|---|
+| Durability | Session JSONL: a completed message is appended at `message_end` with `appendFileSync` (`core/agent-session.js:756-768`, `core/session-manager.js:812`); no `fsync` in core or modes (measured: `grep -rl fsync core modes` gives 0 files). Streaming partials, tool events and queued steer/follow-up inputs are not persisted | One atomic `Storage.commit` per callback for entries, tasks, submissions and document deltas (`session/session.js:534-536`); SQLite WAL `synchronous = NORMAL`, "commits survive process crashes" (`README.md:661`); partials committed at most every 100 ms (`harness/agent.js:16-19`) | read |
+| Crash recovery | Reopen loads the transcript; no code calls `agent.continue()` on open (measured: `grep -n "\.continue()"` finds only `core/agent-session.js:1423`, `1430`, inside the run loop); no repair of a tool call without a result was found (measured by scout x-pi: grep for `orphan\|interrupted\|dangling\|unanswered`). The user must prompt again. Whether pi-ai repairs unmatched calls was not read | `harness.resume()` re-enters unfinished tasks from their stored checkpoint (`harness/scheduler.js:145-147`, `1230-1234`); a model request is re-sent; a tool reruns only if `replay: "safe"` on both sides (`harness/tool.js:95`, `105`); else an `interrupted` error result (`tool.js:115`) | read; pi-ai part unverified |
+| Process model | One Node process per `AgentSession`; extensions run inside it (`docs/extensions.md:5` per scout); RPC mode is a child process over stdin and stdout JSONL (`modes/rpc/rpc-mode.js`, 33 `case` labels, measured: `grep -c 'case "'`) | A library inside the application's process; "One process owns a storage at a time; there is no cross-process locking" (`README.md:682`); a second process is not refused (measured by scout, see 1.7) | read |
+| State management | Transcript is a tree of entries in a file; extension state via `appendEntry` custom entries (`core/extensions/types.d.ts:1272`); queues in memory | Immutable entries plus typed JSON documents (`pi.agent`, `pi.live`, `pi.inbox`, `pi.usage`, custom) committed together (1.5); durable inbox with `whenBusy` (2.1) | read |
+| Streaming | In-process `subscribe(listener)`; in RPC mode stdout records; no sequence numbers or replay; a client refetches with `get_messages` or `get_entries` (`modes/rpc/rpc-mode.js:265-270`, `503-536`) | `viewState`, `watch`, `watchEvents`; all committed, at most 100 undelivered frames then one whole-view frame; "nothing is replayed" (`README.md:404`); 2.2 | read |
+| Extensibility | `ExtensionAPI.on` has 41 overloads, plus tools, commands, flags, providers and MCP servers (`core/extensions/types.d.ts:1186-1406`; measured: `grep -c "on(event"` = 41); `ctx.ui` dialogs answered over RPC by `extension_ui_response` (`modes/rpc/rpc-mode.js:47-79`, `602-624`) | `Extension { tools, sections, hooks, wraps, tasks }` in a registry the process owns (2.3); six hooks; no dialog or approval API (measured by scout x-ext, 2.4) | read |
+| Built-in batteries | Tools `read bash edit write` default, plus `grep find ls powershell`; skills, prompt templates, MCP, codemode, tool search, export and share, cache warming, project trust (`core/settings-manager.js:35`, `core/tools/index.js:19-28`; scout x-pi 6.1 to 6.8) | `read write edit bash` and `CodingTools` (`README.md:151`), codemode with journal, `tool_search`, compaction; no skills, MCP, templates or export in the README (measured by scout x-pi: `grep -c -i "skill"` and MCP only in tool-name examples) | read |
+| Stability | Released CLI 1.3.0 | "Experimental. The API changes without notice between releases." (`README.md:3`) | read |
+
+The pi-durable column describes the package, not cpd's use of it: cpd re-adds its own context files, policy, zone and guards as an extension (read: `pi/durable-worker/extension.ts:6-17`).
+
+### 3.2 Why headless cpd Workers switch between `pi` and `durable`
+
+A cpd Worker is the same thing to the driver under both runners. Four things are shared and nothing else.
+
+| Shared contract | `pi` runner | `durable` runner | Label |
+|---|---|---|---|
+| Spec in: one first prompt naming a spec file and the attempt id | `Read {spec} and follow it exactly. Your attempt id is {attempt}.` as pi's last argument (`core/src/host/pi/launch.rs:230`) | the same sentence, submitted with `requestId: config.attempt` (`pi/durable-worker/run.ts:107`) | read |
+| Same launch environment | `worker_env(home, session, plan, attempt)` (`core/src/host/pi/launch.rs:639` shows the call in a test; `core/src/driver/runner.rs:83`) | the durable launch calls the same `pi::worker_env` (`core/src/driver/runner.rs:82-83`) and adds `CPD_JOB_KIND` only for explore Jobs (`runner.rs:99-103`) | read |
+| Report out | metrics read from pi's session file | metrics read from the end report `run/<plan>/attempts/<attempt>.report.json`, rewritten after every settled submission and at terminate (`pi/durable-worker/run.ts:96`, `149-155`; `core/src/driver/runner.rs:296-323`) | read |
+| One process owns everything | a tmux window per Attempt (`core/src/driver/runner.rs:3`) | one child process per Attempt, its own store `run/<plan>/durable/<attempt>.sqlite` (`pi/durable-worker/config.ts:33-35`; `runner.rs:4`) | read |
+
+Both runners are produced by one value: the driver's end report is one `Report` with two producers, `pi_report` and `durable_report` (read: `core/src/driver/runner.rs:7-9`). The driver follows the Attempt's stored `runner`, never today's `worker_runner` setting, so an Attempt keeps its runner across a config change (read: `core/src/driver/runner.rs:5-6`); the setting has exactly two values and `flipped()` swaps them (read: `core/src/config/runner.rs:10-16`, `36-40`).
+
+Why this works for headless Workers (all `read` of cpd source unless noted):
+- **No UI.** The durable Worker opens no socket and installs no dialog: measured, `grep -n -i "dialog\|ui_\|socket\|listen" pi/durable-worker/*.ts` gives 3 hits, all `listener` parameter types in `harness.ts:28`, `36`, `53`. A refused action is a `beforeTool` block, never a question (`pi/durable-worker/extension.ts:15`; `guards.ts:17-35`).
+- **Input is events, not a person.** The follower turns cpd Events into submissions (`pi/durable-worker/run.ts:114-137`); the only first input is the spec sentence.
+- **One process, one owner.** The single-owner rule of 1.7 is satisfied by construction: the driver starts one process per Attempt and holds it by pid (`core/src/driver/runner.rs:3-4`). The adapter never closes the Harness, so exit is by `process.exit` (`pi/durable-worker/harness.ts:89`, `pi/durable-worker/main.ts:50`).
+- **Restart is the same launch.** "The same launch starts the runner again (A4), so the store and the conversation resume" (`core/src/driver/runner.rs:63-64`), up to `MAX_RESTARTS = 3` (`runner.rs:34`); the adapter calls `harness.resume()` at open (`pi/durable-worker/harness.ts:104`). On the restart the worker submits the spec sentence again with the same `requestId`, and pi-durable returns the existing submission without a second run (`pi-durable/dist/harness/submissions.js:129-137`, read; that this is what happens on a driver restart is `inferred` from the two lines, not run).
+- **A kill is cheap.** A dead driver's durable Worker gets SIGKILL at once, because "the runner's commits survive a kill and the last report is on disk" (`core/src/driver/runner.rs:237-239`).
+
+The seam is the contract, not equal behaviour. Under a crash the runtimes differ (3.1: pi leaves an unmatched tool call, pi-durable skips or re-runs it), and the driver does not care (`inferred`: the driver code reads only the pid or window and the report). The pi runner's own restart handling was not read (`guess:` it differs).
+
+### 3.3 Why interactive Leads and Managers need a host plus a client
+
+An interactive session has three needs a headless Worker lacks: a human answers questions while the agent runs, more than one observer watches, and the observer can vanish and come back. pi-durable alone offers none of these across processes (1.7, 2.5), so cpd runs one host process per Session and puts clients on its socket.
+
+- **A host exists only for Leads and Managers.** `runHost` refuses any other role: "the host runs a lead or a manager only" (`pi/durable-host/run.ts:145`). It is a separate entry point with its own store `run/host/<session>.sqlite` (`pi/durable-host/config.ts:25-27`) and a socket guard (`pi/durable-host/net.ts:19-30`).
+- **The Worker is the host minus the socket.** Both call the same `openConversation` (`pi/durable-host/main.ts:43`, `pi/durable-worker/main.ts:37`; read), so the Harness behaves identically; the host adds the protocol, ring, held dialogs and four host tools (`pi/durable-host/tools.ts:30-134`).
+
+**What the host already gives a web client** (all in 2.5; read from `pi/durable-host/`):
+- one NDJSON stream of a snapshot then `events` batches, resumable from `{epoch, seq}` (`ring.ts:27-34`);
+- paged history, newest first, 1 to 500 entries (`server.ts:161-165`);
+- `submit` with an idempotency key, `abort`, `abort_submission`, `compact`, `configure`, `list_models` (`protocol.ts:39-53`);
+- dialogs as `ui_request` frames, replayed on attach, first answer wins (`server.ts:126-128`, `held.ts:100-110`);
+- `host_state` (`idle`, `working`, `blocked`) and any number of attached clients (`run.ts:543-546`, `server.ts:98-100`);
+- a slow-client drop and size limits (`server.ts:79-86`, `protocol.ts:3-8`).
+
+**What a web client must add** (a browser cannot open a unix socket: `inferred`):
+- a bridge process that connects to `<CPD_HOME>/run/host/<session>.sock`; the dev bridge does this in `web/src/api/host.ts` with one connect, `hello`, `attach` per attach (read: `web/README.md:88-91`, `web/src/api/host.ts:1-5`);
+- authentication: the socket is protected by file mode `0600` only (read: `pi/durable-host/net.ts:45-51`); the dev bridge checks a token before a WebSocket upgrade (read: `web/README.md:63-66`);
+- reconnect and cursor: the host keeps no per-client cursor (`inferred`, 2.5); the client sends its last `{epoch, seq}` and the bridge backs off 100 ms doubling to 1 s over 30 s (read: `web/src/api/host.ts:42`);
+- a fold of `events` into a chat view, and replacement on any `snapshot` (read: `web/README.md:22`; protocol in 2.2);
+- rendering and answering `ui_request`: the socket client of the dev bridge handles neither `ui_request` nor `ui_response` (measured: `grep -c "ui_request\|ui_response" web/src/api/host.ts` gives 0; `web/src/api/actions.ts:15-17` names `ui_response` as a planned POST action, read).
+
+**What raw pi-durable and `pi/durable-host` lack** (pointers only; the full inventory belongs to pro-d8):
+- raw pi-durable: no transport, no cursor or replay, no read-only open, no approval API, no multi-client (2.2, 2.4, 2.5);
+- host: ring in memory and a new epoch per process, so a host restart forces a snapshot (`ring.ts:30`, `run.ts:440`; 2.5);
+- host: held dialogs live in memory and never expire (`held.ts:44`; 2.5);
+- host: `attach` accepts only the root conversation (`server.ts:117-121`);
+- host: `fork` makes a new cpd Session, not a pi-durable fork (`server.ts:159-160`, per scout);
+- host: a narrow window lets a second host open the store before the first binds its socket (`run.ts:131`, `247`, `573`; `inferred`, not run);
+- web side: no client-side reconnect logic is part of the host (2.5).
+
+### 3.4 Advantages
+
+Each bullet is labelled; "vs pi" means against the pi-coding-agent column of 3.1.
+
+- **Crash recovery is built in.** Work resumes from the last committed checkpoint and a partial answer survives to within 100 ms (read: `scheduler.js:1230-1247`, `agent.js:16-19`, 1.8). Vs pi: no automatic continue and no tool repair (measured: `.continue()` only in the run loop).
+- **Intent is committed before a tool runs.** The model learns that a tool was interrupted instead of seeing a dangling call (read: `tool.js:95`, `115`; 1.8). Vs pi: no such record (read: pi persists tool events never, `core/agent-session.js:756-768`).
+- **One atomic commit for transcript and state.** Entries, tasks, submissions and documents land together, so a reader never sees half a turn (`inferred` from the SQLite single-transaction path, 1.4; read for `session.js:534-536`).
+- **Durable queues.** Steer and follow-up inputs persist in `pi.inbox`; `requestId` makes a retried `submit` idempotent (read: `submissions.js:129-137`). Vs pi: queues are in memory (read: scout x-pi 3.8).
+- **Committed streaming gives every observer the same state.** `viewState`, `watch` and `watchEvents` all derive from commits, so a UI renders partials and tool output from state (read: `observation.js:207-222`, 2.2). Vs pi: stdout events and no replay.
+- **Task graph with ownership and abort marks.** Abort is a durable mark and runs bottom-up; subagents are child conversations (read: `scheduler.js:179-209`, 1.6). Vs pi: no subagents built in (read: scout x-pi section 7).
+- **Typed extension points over an owned registry.** Hooks can block, rewrite or continue a run; documents carry application state with versions and migrations (read: 2.3, `documents.js:78-98`).
+- **Several storage backends** (memory, SQLite, JSONL, Durable Object SQLite; read: `README.md:656-663`). Vs pi: JSONL files only.
+- **cpd already runs it** as both the headless runner and the interactive host, with a tested socket protocol (read: `core/src/driver/runner.rs:3-4`, `pi/durable-host/protocol.ts`).
+
+### 3.5 Trade-offs
+
+- **One process owns a storage; nothing enforces it.** A second opener corrupts or collides (read: `README.md:682`; `inferred` consequences, 1.7). Every UI needs a host. pi has no such rule but also no lock on its session file (measured by scout x-pi: no lock in `core/session-manager.js`).
+- **Experimental API.** "The API changes without notice between releases" (read: `README.md:3`); the cpd notes cite 1.4.0 features absent in 1.3.0, such as read-only watch (measured by scout: grep in dist found none; 0, section 0).
+- **No exactly-once.** A `safe` tool must tolerate being run again; built-in tools declare no `replay`, so they are `unsafe` and a crash mid-call yields `interrupted` (read: `harness/types.d.ts:211-214`, `239-240`; measured by scout: no `replay:` in `tools/`).
+- **A crash costs a model request.** The `request` phase reruns (read: `generation.js:103-131`); the extra token cost was not measured (`guess:` tokens are spent again).
+- **No built-in interactivity.** No approval, question or pause API; cpd built them in the host with a memory-only held map (measured by scout x-ext; read `held.ts:44`), so a restart loses an open dialog unless the tool is `replay: "safe"` (read: `tools.ts:37`, `62`).
+- **No batteries.** No skills, MCP, prompt templates, export or cache warming in the package; cpd re-implements what it needs (read: `pi/durable-host/skills.ts`, `codemode.ts`, `pi/durable-worker/mcp.ts`). pi has them (3.1).
+- **Observation is committed, so it is bounded by commit rate.** A UI sees text in steps of at least 100 ms and nothing between (read: `agent.js:16-19`, `generation.js:322-323`), unless `settings.progress` is lowered (2.2).
+- **No replay or cursor in the engine.** Resume of an observer is a re-attach; only the host adds a cursor, and only in memory (read: `README.md:404`, `ring.ts:27-34`).
+- **Failure is final for a Session.** The first storage error fails the Session and nothing retries (read: `session.js:42-46` per scout, 1.4); the host exits with `storage_failed` (read: `run.ts:249-258`, per scout).
+- **More moving parts.** SQLite file, ring, held map, epoch and a socket protocol (read: 1.7, 2.5), against pi's single JSONL file.
 
 ## 4. Unverified claims and open questions
 
