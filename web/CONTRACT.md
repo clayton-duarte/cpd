@@ -22,6 +22,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | pro-d15 | Proof is manual in a browser, recorded in `web/VERIFY.md` (a later Job writes it; not this file). |
 | pro-d16 | Minimal functional visuals only: unstyled semantic HTML plus one small plain CSS file; the Figma design comes in Phase 3. |
 | pro-d17 | `web/package.json` is byte-identical, `pnpm-lock.yaml` is not edited: no dependency is added or removed. The transport is Vite `server.ws` custom events, dev bench only. |
+| pro-d18 | (User, 2026-11-03 EST, chose in this Plan: add header and status bar slots, minimal.) The cockpit is a 5-zone frame: full-width Top Header, left full-height Context tree, centre-top Plan view, centre-bottom Chat (Chat Title on its top border, composer and chat footer at its bottom), right full-height Attention Inbox, full-width Bottom Status Bar. Phase 1 adds ONLY a Top Header with the plain text `C-P-D` (no emblem art) and a Bottom Status Bar showing the selected session's runner and state and `cpd` version (or an explicit `unknown`); the Chat Title is the `ChatHeader` already built, placed at the top of the chat zone. Pill styling, emblem art, host stats, workers summary and balloons are not Phase 1 (pro-d16: Figma in Phase 3, visuals in Phase 4). No new data source and no `wire.ts` field. |
 
 ### 1.3 Accepted assumptions
 
@@ -43,6 +44,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 - Phase 1 does not render `cpd` session messages (`customType` `cpd`, `cpd-error`) or other custom message types: they are dropped. Only the four fold kinds of 3.2 render.
 - One attached session per browser connection. No auth. Dev bench only (`vite serve`), never `vite build` output.
 - No visual design (pro-d16).
+- **Status bar, Phase 1 (pro-d18).** No cpd version reaches the web: `CockpitSnapshot` (6.3, 5) has no version field, so the StatusBar shows `cpd: unknown`. This is a stated limitation, not a wire change (unverified source, O19). The runner and state come from the selected session's `SessionNode.ref` in `cockpit.tree` (6.11), so a selected session absent from the tree (archived, or removed by a patch) shows `none`. The header and status bar show no other data: no host stats, workers summary or balloons (pro-d16, pro-d18).
 
 ## 2. Module map (the fixed file layout; no other source path is written)
 
@@ -54,7 +56,7 @@ Citations: `scout-cockpit.md`, `scout-durable.md`, `scout-pi.md` are the explore
 | durable-srv | `web/src/server/durable/client.ts`, `frames.ts`, `backend.ts` | `client.test.ts`, `frames.test.ts`, `backend.test.ts` |
 | pi-srv | `web/src/server/pi/jsonl.ts`, `window.ts`, `watch.ts`, `backend.ts` | `jsonl.test.ts`, `window.test.ts`, `watch.test.ts`, `backend.test.ts` |
 | hub-srv | `web/src/server/hub/connection.ts`, `registry.ts`, `web/src/server/plugin.ts` | `hub/connection.test.ts`, `hub/registry.test.ts`, `plugin.test.ts` |
-| ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `Inbox.tsx`, `Shell.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx` |
+| ui-cockpit | `web/src/ui/cockpit/ContextTree.tsx`, `PlanView.tsx`, `Inbox.tsx`, `Shell.tsx`, `Header.tsx`, `StatusBar.tsx` | `ContextTree.test.tsx`, `PlanView.test.tsx`, `Inbox.test.tsx`, `Shell.test.tsx`, `Header.test.tsx`, `StatusBar.test.tsx` |
 | ui-chat | `web/src/ui/chat/Transcript.tsx`, `ToolRow.tsx`, `Folds.tsx`, `ChatHeader.tsx`, `Footer.tsx` | `Transcript.test.tsx`, `ToolRow.test.tsx`, `Folds.test.tsx`, `ChatHeader.test.tsx`, `Footer.test.tsx` |
 | ui-composer | `web/src/ui/composer/attachments.ts`, `Composer.tsx`, `TierSelector.tsx` | `attachments.test.ts`, `Composer.test.tsx`, `TierSelector.test.tsx` |
 | ui-dialogs | `web/src/ui/dialogs/AskCard.tsx`, `PlanReviewCard.tsx` | `AskCard.test.tsx`, `PlanReviewCard.test.tsx` |
@@ -1255,7 +1257,9 @@ Presentational: props in, callbacks out; no store, connection or network import 
 export function ContextTree(props: { tree: ContextTreeModel | null; selectedSessionId: string | null; selectedPlanId: string | null; onSelectSession(sessionId: string): void; onSelectPlan(planId: string): void }): JSX.Element;
 export function PlanView(props: { plan: PlanViewModel | null; onAction(action: CockpitAction): void }): JSX.Element;
 export function Inbox(props: { inbox: InboxModel | null; onAction(action: CockpitAction): void; onSelectSession(sessionId: string): void }): JSX.Element;
-export function Shell(props: { tree: ReactNode; plan: ReactNode; chat: ReactNode; inbox: ReactNode }): JSX.Element;
+export function Shell(props: { tree: ReactNode; plan: ReactNode; chat: ReactNode; inbox: ReactNode; header?: ReactNode; status?: ReactNode }): JSX.Element; // header, status: pro-d18; a slot is present when its prop is not `undefined`
+export function Header(): JSX.Element; // pro-d18; no props (Phase 1 is the plain text `C-P-D`)
+export function StatusBar(props: { runner: Runner | null; state: string | null; version: Stat<string> | null }): JSX.Element; // pro-d18; Runner, Stat from `protocol/domain.ts`
 ```
 
 **ContextTree DOM.** `<nav aria-label="Context tree">`; `tree === null` -> text `Loading contexts…`. A `<ul role="tree">` of Contexts: `<li role="treeitem" data-context="<id>">` with the Context title; its Plans as nested `<li role="treeitem" data-plan="<id>">` containing `<button data-select="plan">` (label `plan.title`, plus counts text `merged 13 · running 1`: only non-zero counts, order draft, queued, running, merged, failed, cancelled); its sessions (Context sessions, then each Plan's sessions) as `<button data-session="<sessionId>">` with text `ref.key` and, when set, ` — <title>`, preceded by the state dot `<span role="img" data-dot="<state>" data-attention="<urgency|none>" aria-label="<state>[, needs you (<urgency>)]">`. The selected session button and the selected plan button carry `aria-current="true"`. Archived Contexts and archived Plans are placed inside a closed `<details data-archived><summary>Archived (n)</summary>…</details>`. Clicking a session button calls `onSelectSession(id)`; clicking a plan button calls `onSelectPlan(id)`.
@@ -1264,7 +1268,13 @@ export function Shell(props: { tree: ReactNode; plan: ReactNode; chat: ReactNode
 
 **Inbox DOM.** `<aside aria-label="Inbox">`: `<h2>Inbox (<openCount>)</h2>` (the open item count); `inbox === null` -> `Loading inbox…`; `engineRunning === false` -> `<p role="status">Engine is not running</p>`; zero rows -> `<p data-empty>Nothing needs you</p>`. Each row `<li data-kind="<kind>" data-urgency="<urgency>">`: `<span data-part="kind">kind</span>`, the label's first line in `<strong>` and further lines in `<span>`; a `<button data-action="open-session">` calling `onSelectSession(sessionId)` when `sessionId !== null`; an `<a href=url>` when `url !== null`; one `<button>` per `row.actions` entry (text = its `label`) calling `onAction(entry.action)`: row actions call `onAction` with the typed action.
 
-**Shell DOM.** `<div data-shell>`: left `<aside aria-label="Context tree column">{tree}</aside>`, centre `<div data-column="center"><section aria-label="Plan pane">{plan}</section><main aria-label="Chat">{chat}</main></div>`, right `<aside aria-label="Inbox column">{inbox}</aside>`. The 3-pane layout of pro-d2 around the chat slot; this arrangement is a Phase 1 choice.
+**Shell DOM.** `<div data-shell>`: when `header` is given, its first child is `<header aria-label="Cockpit header">{header}</header>`; then left `<aside aria-label="Context tree column">{tree}</aside>`, centre `<div data-column="center"><section aria-label="Plan pane">{plan}</section><main aria-label="Chat">{chat}</main></div>`, right `<aside aria-label="Inbox column">{inbox}</aside>`; when `status` is given, its last child is `<footer aria-label="Status bar">{status}</footer>`. With neither slot given the DOM is exactly the 3-pane DOM above. The 3-pane layout of pro-d2 around the chat slot is unchanged by pro-d18; this arrangement is a Phase 1 choice. The app stylesheet (6.11) places the header and footer across all columns; that is CSS, not DOM.
+
+**Header DOM (pro-d18).** `<span data-emblem>C-P-D</span>`. `Shell` supplies the `<header>` wrapper.
+
+**StatusBar DOM (pro-d18).** Three `<span>` children, in this order, with no wrapper (`Shell` supplies the `<footer>`): `<span data-part="runner">Runner: <runner|none></span>`, `<span data-part="state">State: <state|none></span>`, `<span data-part="version">cpd: <version|unknown></span>`. `version` shows its value only when it is `{state:"known"}`; `null` or `{state:"unknown"}` shows `unknown`. Phase 1 has no styling and no left/right split of pills (pro-d16, pro-d18).
+
+**Behaviours to test (pro-d18).** Shell: with `header` and `status` given, `[data-shell]`'s first element child is the `header` and its last is `footer[aria-label="Status bar"]`, with the three panes between in order; with neither given the child list is the 3-pane list. Header: `[data-emblem]` text is `C-P-D`. StatusBar: runner `pi` shows `Runner: pi`, `null` shows `Runner: none` (likewise State); a known version `0.21.102` shows `cpd: 0.21.102`; `null` or unknown shows `cpd: unknown`.
 
 ### 6.8 ui-chat `web/src/ui/chat/`
 
@@ -1404,6 +1414,7 @@ Wiring:
 - `ContextTree`: `onSelectSession` -> `connection.selectSession(id)`, `onSelectPlan` -> `connection.selectPlan(id)`; `PlanView.onAction`, `Inbox.onAction` -> `connection.action(action)`; `Inbox.onSelectSession` -> `connection.selectSession`.
 - Chat slot (`selectedSessionId !== null`): `ChatPane` composes `ChatHeader` (`ref.key`, `title`), `Transcript` (`onLoadEarlier` -> `connection.loadEarlier()`), the active dialog card (`AskCard`/`PlanReviewCard` with `readOnly = !dialog.interactive`, `onRespond` -> `connection.respond(dialog.id, response)`), `TierSelector` (`onConfigure` -> `connection.configure`, `onRequestModels` -> `connection.listModels`), `Footer`, `Composer` (`onSubmit({text, attachments, whenBusy})` -> `const {text: prompt, images} = buildPrompt(text, attachments); connection.submit({text: prompt, images, whenBusy})`; `onAbort` -> `connection.abort`; `onCancelQueued` -> `connection.abortSubmission`). No session selected: `<p data-empty>Select a session</p>`.
 - **Drop zone**: the chat slot wrapper `<div data-chat-dropzone>` handles `dragover`/`drop` with files (same `Files` rule as the Composer) and forwards `filesFromDrop(dataTransfer)` to the Composer's `ComposerHandle.addFiles` (the drop works onto the composer and onto the chat slot).
+- **Header and status bar (pro-d18).** `Shell` gets `header={<Header />}` and `status={<StatusBar runner={r} state={s} version={CPD_VERSION} />}`. `r` and `s` are `ref.runner` and `ref.state` of the `SessionNode` whose `ref.id === selectedSessionId`, found by walking `cockpit.tree` (each Context's `sessions`, then each of its `plans[].sessions`); both are `null` when the tree is `null`, no session is selected, or the session is not in the tree. The tree is the one source: `session.ref` is set at attach only and is not refreshed by cockpit patches. `CPD_VERSION` is a module constant of type `Stat<string>`, `{state:"unknown", reason:"cockpit snapshot carries no cpd version (Phase 1, O19)"}`: the snapshot has no version field (1.4, unverified source O19). The ChatPane keeps `ChatHeader` at the top of the chat zone (no change).
 
 Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a fake `FileReaderBoundary`):
 
@@ -1412,6 +1423,7 @@ Behaviours the App test covers (all through `FakeTransport`, `FakeScheduler`, a 
 3. Typing a message and pressing Enter sends `{type:"session.submit", sessionId, clientSubmissionId, text, images:[], whenBusy:"followUp"}`.
 4. A `session.dialog` message renders the dialog card; answering it sends `{type:"dialog.respond", sessionId, dialogId, response}`.
 5. Dropping an image file on the chat slot adds the attachment (reader returns base64) and the next submit carries it as `images:[{mimeType, dataBase64}]`.
+6. (pro-d18) Before any selection the header `[data-emblem]` reads `C-P-D` and the status bar reads `Runner: none` and `State: none`. After the snapshot holds a session with `runner "durable"` and `state "idle"` and that session is selected, the status bar reads `Runner: durable`, `State: idle` and `cpd: unknown`.
 
 ## 7. Error codes (typed, exhaustive)
 
@@ -1485,5 +1497,6 @@ Every unverified item of this file, listed once. A Job that needs one of them se
 | O16 | Event kind names not written in `docs/commands.md` (the core `Kind` strings were not read) | 6.3 `panesFor` | scout-cockpit §2 |
 | O17 | Whether Vite calls the plugin `closeBundle` hook on dev-server close (the plugin also listens on `httpServer` `close`) | 6.6 `plugin.ts` | vite 8.3.5 not read |
 | O18 | Live output of `cpd events follow` (not run) and its `cursor_ahead` refusal on restart | 6.3 `events.ts` | scout-cockpit §2 |
+| O19 | Source of a cpd version for the StatusBar. No cockpit read model carries one (`CockpitSnapshot`, 5). `cpd --version` is observed (scout-cockpit header, cpd 0.21.102), but no Phase 1 source reads it; whether a read command or snapshot field exists is unverified. Phase 1 shows `cpd: unknown` | 6.7 `StatusBar`, 6.11 | scout-cockpit header; the wider question is unverified |
 
 Counting rule: `grep -c 'unverified' web/CONTRACT.md` counts lines mentioning the word; each line either states one of O1-O18 inline or is this section.
