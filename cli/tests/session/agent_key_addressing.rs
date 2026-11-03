@@ -13,7 +13,7 @@ const FROM_LEAD2: &[(&str, &str)] = &[("CPD_SESSION", "lead2")];
 /// `setup_with_fork`, with every agent named by its key: Manager `mgr1` (`ctx`), Leads `lead1` (`ctx:pay`) and `lead2`
 /// (`ctx:other`), and Job `api` of `pay` with Attempt 1 (`worker1`, ended) and Attempt 2 (`worker2`), both `ctx:pay:api`.
 fn world() -> Fx {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
     fx.env.sql(
         "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE id = 'api-a1';
@@ -134,6 +134,7 @@ fn board_post_to_a_lead_of_a_done_plan_is_plan_inactive() {
 #[test]
 fn session_archive_and_unarchive_take_a_lead_key() {
     let fx = world();
+    fx.cockpit();
     // The Lead of a Plan is archived with its Plan; once the Plan links another Lead, this one is archived on its own.
     fx.env
         .sql("UPDATE plans SET lead_session = 'lead1' WHERE id = 'other'");

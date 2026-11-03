@@ -128,7 +128,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `workflow` | `pr*`, `merge*`, `git*`, `repo_hooks`, `workflow`, `workflow_adopt*`, `workflow_crud`, `workflow_describe`, `workflow_jira*`, `workflow_lead_branch`, `workflow_live_spec`, `workflow_local_needs`, `workflow_merge_drafts`, `workflow_needs_required`, `workflow_start`, `workflow_template_jobs` |
   | `flow` | `plan*`, `agent_key_names`, `agent_key_worker`, `worker_runner*`, `job*`, `attempt`, `attempt_abort*`, `feedback*`, `driver*`, `review*`, `retire_review`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `resource*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate`, `working_workflow`, `workflow_commands`, `workflow_policy`, `workflow_wire`, `preset` |
-  | `session` | `session*`, `agent_key_guards`, `host`, `board`, `host_pill`, `mcp_attach` |
+  | `session` | `session*`, `agent_key_guards`, `agent_key_addressing`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
   | `tooling` | `*_script`, `cargo_script`, `pnpm_fresh`, `install_script`, `harness`, `fx`, `guards`, `real_process_scan`, `fake_tmux`, `fx_exec`, `dead_code`, `interface`, `no_repo_lock`, `no_gh_pr_edit`, `slot`, `layout`, `version`, `gate_run*`, `pill_parity`, `pill_sites`, `retired_terms`, `run_with`, `smoke`, `testkit*`, `usage_grammar` |
