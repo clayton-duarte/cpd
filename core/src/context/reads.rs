@@ -55,3 +55,28 @@ pub(crate) fn mark_used_for(
 ) -> Result<usize, CpdError> {
     todo!()
 }
+
+#[allow(dead_code)]
+pub(crate) fn env_session(_store: &mut Store) -> Option<SessionId> {
+    todo!()
+}
+
+#[allow(dead_code)]
+pub(crate) fn log_reads(
+    _store: &mut Store,
+    _context: &ContextId,
+    _channel: Channel,
+    _reads: &[Read],
+) {
+    todo!()
+}
+
+#[allow(dead_code)]
+pub(crate) fn mark_used(
+    _store: &mut Store,
+    _context: &ContextId,
+    _text: &str,
+    _exclude: &[RecordId],
+) {
+    todo!()
+}

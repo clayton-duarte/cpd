@@ -37,6 +37,8 @@ mod query;
 mod query_tests;
 mod reads;
 #[cfg(test)]
+mod reads_best_effort_tests;
+#[cfg(test)]
 mod reads_tests;
 mod record;
 mod reindex;
