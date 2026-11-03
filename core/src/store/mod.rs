@@ -849,11 +849,13 @@ pub(crate) fn configure(
 }
 
 /// Holds `locks/store.lock` (§1.4) until dropped: the one-time setup of a derived cache runs under it.
-pub(crate) struct CacheSetupLock(#[allow(dead_code)] SetupLock);
+pub(crate) struct CacheSetupLock {
+    _lock: SetupLock,
+}
 
 /// Takes `locks/store.lock` for a derived cache's first open, waiting `busy_ms` for a holder.
 pub(crate) fn cache_setup_lock(home: &CpdHome, busy_ms: u64) -> Result<CacheSetupLock, CpdError> {
-    setup_lock(&SystemClock, home, busy_ms).map(CacheSetupLock)
+    setup_lock(&SystemClock, home, busy_ms).map(|_lock| CacheSetupLock { _lock })
 }
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not

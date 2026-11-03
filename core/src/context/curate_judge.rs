@@ -86,7 +86,6 @@ fn bad_reply(why: impl std::fmt::Display) -> CpdError {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {
-    #[allow(dead_code)]
     ok: bool,
     verdict: Verdict,
     quote: String,
@@ -101,6 +100,9 @@ fn parse(line: &str) -> Result<Judged, CpdError> {
     match value["ok"] {
         Value::Bool(true) => {
             let w: Wire = serde_json::from_value(value).map_err(bad_reply)?;
+            if !w.ok {
+                return Err(bad_reply("a success answer with `ok` false"));
+            }
             Ok(Judged {
                 verdict: w.verdict,
                 quote: w.quote,
