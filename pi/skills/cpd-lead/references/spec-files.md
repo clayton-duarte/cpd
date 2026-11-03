@@ -96,12 +96,11 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
 
 ## Research Jobs
 
-A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md` and goes through review; it is not an explore Job (`--kind scout|research`, no Workflow, queued at once, artefact in `$CPD_HOME/run/<plan>/explore/<job-key>.md`: [Explore Jobs](#explore-jobs)). Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as one.
+A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md` and goes through review; it is not an explore Job (`--kind scout|research`, no Workflow, queued at once, artefact in `$CPD_HOME/run/<plan>/explore/<job-key>.md`: [Explore Jobs](#explore-jobs)). Grounding that reads a codebase, compares libraries or checks an API against its source goes to an explore Job as one.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling.
 - Put it in the Plan first and add the follow-up drafts right after the lock with `--needs <research-job>` (same Workflow; `job add --draft`), listing them in its `context`: they wait on it. When it is Merged (`job-merged`), resolve them at once with what it found: edit each to a full Tier and Spec and start them with `cpd_plan_review` (with a `title`), or cancel it. Tell the User what the batch holds. A follow-up that is its own Workflow is added right after the lock with `cpd workflow add <key> --repo <path> --title "<title>" --needs <research-workflow>` so it waits on the research Workflow's merge, and its drafts wait on that Workflow; the research findings are read from main when it starts, and when the research Workflow merges you resolve its drafts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research Workflow.
 - A research Job obeys the [bounded commands](#bounded-commands): it commits its findings file early and measures only under `timeout`, with real data, never a synthetic benchmark.
-- If the question is cheap to answer by reading, read instead.
 - Promoting an explore finding into the repo (a `docs/research/*.md` file) is an ordinary docs Job the Lead adds ([Explore Jobs](#explore-jobs)).
 
 ## Explore Jobs
@@ -153,9 +152,9 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
 }
 ```
 
-Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: cite that path in the Spec of each Job that needs the finding.
+Add the Job and read its summary when it merges (`job-merged`). Its file stays where the Worker wrote it, `$CPD_HOME/run/<plan>/explore/<job-key>.md`: the Lead never reads it (the adapter refuses it). Cite that path in the Spec of each Job that needs the finding, so its Worker reads it.
 
 - **Dependencies.** An explore Job may need only other explore Jobs, and no other Job may need one (`explore_needs_mixed`, exit 3).
 - **Tier.** A scout is letter `H` and a research Job letter `S`, each at effort 1 or above or `X`, and at most the worker range's ceiling (read it from `cpd tiers` and the config); any other Tier is `tier_not_allowed` (exit 2, with the kind's range in `details`). A `no_submit` Attempt retries at the next valid effort inside its letter (contract §9 'Next rung'); a `crashed` or `merge_conflict` Attempt retries at the same Tier; after the top rung a `no_submit` fails the Job.
 - **Worker.** An explore Worker may `cpd ask`: answer it as any Escalation. It may read the Context's records, read-only.
-- **Refusals.** `explore_workflow_forbidden` (`--workflow`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3.
+- **Refusals.** `explore_workflow_forbidden` (`--workflow`), `explore_no_draft` (`--draft`) and `illegal_phase` (in `done`): all exit 3. `cpd plan phase plan` is refused `explore_pending` (exit 3) while an explore Job of the Plan is queued, running or failed; `details.jobs` lists them.
