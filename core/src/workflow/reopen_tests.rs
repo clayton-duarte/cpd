@@ -365,46 +365,56 @@ fn listed(rig: &Rig) -> Vec<(String, Option<i64>)> {
 
 #[test]
 fn reopenable_lists_a_legacy_row_only_when_an_unowned_open_pull_request_exists() {
-    let rig = rig("done");
-    cancelled(&rig, "pay", "api", None);
-    assert_eq!(listed(&rig), vec![], "no pull_requests row: nothing");
+    // (a) no pull_requests row: nothing.
+    let rig_a = rig("deploy");
+    cancelled(&rig_a, "pay", "api", None);
+    assert_eq!(listed(&rig_a), vec![], "no pull_requests row: nothing");
 
-    stored_pull(&rig, 900, "open");
+    // (b) an unowned open authored pull request: the legacy row.
+    let rig_b = rig("deploy");
+    cancelled(&rig_b, "pay", "api", None);
+    stored_pull(&rig_b, 801, "open");
     assert_eq!(
-        listed(&rig),
+        listed(&rig_b),
         vec![("api".to_owned(), None)],
         "an unowned open authored pull request: the legacy row"
     );
 
-    // Link the open row to an `open` Workflow through `workflows.pull_request`: it is owned.
-    rig.sql(
-        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, pull_request)
-           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', '/wt/web', cpd_txn(), 't', NULL,
-                   (SELECT id FROM pull_requests WHERE number = 900));",
+    // (c) the open pull request is linked to an `open` Workflow through `workflows.pull_request`: it is owned.
+    let rig_c = rig("deploy");
+    cancelled(&rig_c, "pay", "api", None);
+    stored_pull(&rig_c, 801, "open");
+    rig_c.sql(
+        "INSERT INTO workflows (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                pr_number, pr_url, pr_opened_at, pull_request)
+           VALUES ('pay', 'web', '/web', 'pay', 'main', 'open', 'cpd/pay/web', '/wt/web', cpd_txn(), 't', 't',
+                   801, 'https://github.com/acme/pay/pull/801', 't',
+                   (SELECT id FROM pull_requests WHERE number = 801));",
     );
-    assert_eq!(listed(&rig), vec![], "an owned open pull request: nothing");
-
-    // Unlink it and make it not authored by us.
-    rig.sql(
-        "UPDATE workflows SET pull_request = NULL WHERE key = 'web';
-         UPDATE pull_requests SET authored = 0 WHERE number = 900;",
+    assert_eq!(
+        listed(&rig_c),
+        vec![],
+        "an owned open pull request: nothing"
     );
-    assert_eq!(listed(&rig), vec![], "a not authored open row: nothing");
 
-    // A kept pull_request stored open is listed whatever the others hold.
-    rig.sql("DELETE FROM workflows WHERE key = 'web';");
-    cancelled(&rig, "pay", "kept", Some(801));
-    rig.sql("UPDATE pull_requests SET state = 'open' WHERE number = 801;");
+    // (d) an open pull request that is not authored by us: nothing.
+    let rig_d = rig("deploy");
+    cancelled(&rig_d, "pay", "api", None);
+    stored_pull(&rig_d, 801, "open");
+    rig_d.sql("UPDATE pull_requests SET authored = 0 WHERE number = 801;");
+    assert_eq!(listed(&rig_d), vec![], "a not authored open row: nothing");
+
+    // (e) a kept pull_request stored open is listed whatever else exists.
+    let rig_e = rig("deploy");
+    cancelled(&rig_e, "pay", "api", None);
+    cancelled(&rig_e, "pay", "web", Some(802));
+    rig_e.sql("UPDATE pull_requests SET state = 'open' WHERE number = 802;");
+    let kept: i64 = rows(&rig_e, "SELECT id FROM pull_requests WHERE number = 802")[0]
+        .parse()
+        .unwrap();
     assert!(
-        listed(&rig).contains(&("kept".to_owned(), listed_kept(&rig))),
+        listed(&rig_e).contains(&("web".to_owned(), Some(kept))),
         "the kept row is listed: {:?}",
-        listed(&rig)
+        listed(&rig_e)
     );
-}
-
-/// The `pull_requests.id` of `acme/pay#801`.
-fn listed_kept(rig: &Rig) -> Option<i64> {
-    rows(rig, "SELECT id FROM pull_requests WHERE number = 801")
-        .first()
-        .map(|s| s.parse().unwrap())
 }
