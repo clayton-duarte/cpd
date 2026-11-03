@@ -19,7 +19,7 @@ The Vite dev server serves the client **against the mock** on **port 5173** (pla
 |---|---|
 | `api/` | the typed wire surface, the one `CpdApi` interface, the token attachment, typed POST actions, the WebSocket live channel |
 | `api/mock/` | the typed mock implementing the interface (served by the Vite dev server) |
-| `fold/` | the TS chat fold: apply each `AgentEvent` of an `events` frame in order; whole message at `message_start`, replaced at `message_end`; a `snapshot` replaces the whole view; cursor epoch/seq resume (durable-leads §4.3, hs-d772) |
+| `fold/` | the TS chat fold of the browser's `SnapshotFrame` (rule 3: a `snapshot` replaces the whole view); cursor epoch/seq resume (durable-leads §4.3, hs-d772). The host socket's `view` and `ops` frames are folded in `translate.ts` (below), not here |
 | `parity/` | the read-model mirror types (plan list/show, session list, inbox list JSON → TS) and the **parity skeleton**: a test that, when W1 lands, imports the core `Serialize` read-model and asserts CLI output equals the mirror (hs-d771, hs-d779) |
 | `views/` | the cockpit views — Tree, Plan, Inbox, Logs, Chat, all read-only (A7) |
 | `app/` | the app shell: routing, the live connection, the token bootstrap |
@@ -824,14 +824,14 @@ A durable Session's transcript is read from its **host socket** — the real fra
 
 #### The handshake and the frames a reader meets
 
-The host sends nothing first. A read-only reader sends two frames and consumes everything else:
+The host sends nothing first. A read-only reader sends two frames and consumes everything else. The wire is **protocol 2** (`docs/contract.md` §6.14, pi-durable 1.5.0): the stream carries the conversation's state, a `view` base and `ops` deltas, and no pi-durable event. Protocol 1 (`snapshot`, `events`) is dropped.
 
-1. → `{"type":"hello","protocol":1,"min_protocol":1,"client":"<name>"}` — `protocol` is the highest version the client speaks, `min_protocol` the lowest; the host picks the highest common (today `1`), or refuses `protocol_mismatch` (details `{"host":[1],"client":[min,protocol]}`) and closes.
-2. ← `welcome` — `{"type":"welcome","protocol":1,"host_version":"1","pi_durable":"<v>","session":"<id>","role":"lead"|"manager","epoch":"<uuid>","client_id":"c1","cwd":"<path>","limits":{"client_line":1048576}}`. The `epoch` names the host process.
+1. → `{"type":"hello","protocol":2,"min_protocol":2,"client":"<name>"}` — `protocol` is the highest version the client speaks, `min_protocol` the lowest; the host picks the highest common (today `2`), or refuses `protocol_mismatch` (details `{"host":[2],"client":[min,protocol]}`) and closes. A protocol-1 client is refused the same way.
+2. ← `welcome` — `{"type":"welcome","protocol":2,"host_version":"1","pi_durable":"1.5.0","session":"<id>","role":"lead"|"manager","epoch":"<uuid>","client_id":"c1","cwd":"<path>","limits":{"client_line":1048576}}`. The `epoch` names the host process.
 3. → `{"type":"attach","req":"r1","cursor?":{"epoch":"<uuid>","seq":N}}` — `conversation` absent or `"root"`, anything else refused `unsupported`. The cursor is absent on a first attach (the reconnect rule below sends it).
-4. ← `attached` — `{"type":"attached","req":"r1","mode":"snapshot"|"resume","epoch":"<uuid>","from_seq":N,"head_seq":M,"client_id":"c1"}` — then, in `seq` order with none skipped, the **stream frames**: in `snapshot` mode a base `{"type":"snapshot","epoch":"<uuid>","seq":1,"snapshot":<pi-durable SnapshotEvent, passed through unchanged>}` followed by `events` frames `{"type":"events","epoch","seq":2,3,…,"events":[<AgentEvent…>]}` (one commit batch, unchanged); in `resume` mode exactly the `events` frames with `seq > cursor.seq`. Then one `host_state`. **The reader is caught up when it has applied the frame whose `seq` equals `attached.head_seq`.**
+4. ← `attached` — `{"type":"attached","req":"r1","mode":"view"|"resume","epoch":"<uuid>","from_seq":N,"head_seq":M,"client_id":"c1"}` — then, in `seq` order with none skipped, the **stream frames**: in `view` mode a base `{"type":"view","epoch":"<uuid>","seq":1,"view":<pi-durable ConversationView, as JSON>}` followed by `ops` frames `{"type":"ops","epoch","seq":2,3,…,"ops":[<Chord ops…>]}` (the ops of one watch call, decoded form, plain JSON); in `resume` mode exactly the `ops` frames with `seq > cursor.seq`. Then one `host_state`. **The reader is caught up when it has applied the frame whose `seq` equals `attached.head_seq`.**
 
-- `seq` counts stream frames only (`snapshot` and `events`), starts at 1 per host process, and grows by 1 — a gap is a defect. Frames outside the seq space (`host_state`, `notice`, `status`, `ui_request`, `ui_resolved`) are never replayed.
+- `seq` counts stream frames only (`view` and `ops`), starts at 1 per host process, and grows by 1 — a gap is a defect. Frames outside the seq space (`host_state`, `notice`, `status`, `ui_request`, `ui_resolved`) are never replayed.
 - Nothing else is sent — no `submit`, `abort`, `detach`, `ping` — so the write-side refusals below never reach this reader.
 
 #### `web/src/api/host.ts` — the socket client
@@ -840,9 +840,9 @@ The host sends nothing first. A read-only reader sends two frames and consumes e
 /** A frame the host sent: protocol.ts's ToClient, the subset a hello/attach-only reader receives. */
 export type HostFrame =
   | { type: "welcome"; session: string; role: "lead" | "manager"; epoch: string }
-  | { type: "attached"; req: string; mode: "snapshot" | "resume"; epoch: string; from_seq: number; head_seq: number }
-  | { type: "snapshot"; epoch: string; seq: number; snapshot: unknown }
-  | { type: "events"; epoch: string; seq: number; events: unknown[] }
+  | { type: "attached"; req: string; mode: "view" | "resume"; epoch: string; from_seq: number; head_seq: number }
+  | { type: "view"; epoch: string; seq: number; view: ConversationView }
+  | { type: "ops"; epoch: string; seq: number; ops: unknown[] }
   | { type: "host_state"; state: "idle" | "working" | "waiting" | "blocked" }
   | { type: "error"; code: string; message: string }
   | { type: "bye"; reason: string; reconnect: boolean };
@@ -859,6 +859,8 @@ export interface HostClient {
 export function createHostClient(connect: HostConnect): HostClient;
 ```
 
+`ConversationView` is pi-durable 1.5.0's type (`dist/harness/view.d.ts`, read, not run): `conversation`, `entries` (the window), `before?` and `docs`.
+
 `attach(id)` resolves the socket path from `$CPD_HOME` (`env.CPD_HOME` or `~/.cpd`), connects, sends `hello`, reads `welcome`, sends `attach` — with the saved cursor of the last applied frame when it has one — and hands every parsed line to `onFrame`, `error` and `bye` frames included. It never opens the store and never sends a write.
 
 #### `web/src/translate.ts` — the frame translation
@@ -866,34 +868,36 @@ export function createHostClient(connect: HostConnect): HostClient;
 The translation folds host frames onto the **same `TranscriptMessage[]` the CLI path produces** and maps them onto the same snapshot frame through `toSnapshotFrame` (above), so a durable Session read over the socket renders exactly like one read through `cpd session tail`:
 
 ```ts
-/** The fold state: the transcript so far and the cursor of the last applied frame. */
+/** The fold state: the view so far, the messages shown, the cursor of the last applied frame, and the id of the newest entry shown. */
 export interface HostState {
+  view: ConversationView | undefined;
   messages: TranscriptMessage[];
   cursor: { epoch: string; seq: number } | undefined;
+  lastEntryId: number | undefined;
 }
 
-/** Applies one frame; pure: returns the next state. */
+/** Applies one frame; pure: returns the next state. Throws when the frame cannot be applied (rule 4). */
 export function applyHostFrame(state: HostState, frame: HostFrame): HostState;
 ```
 
-The rules are `docs/contract.md` §6.20's fold, in TS, over the wire's unchanged pi-durable shapes:
+The rules are `docs/contract.md` §6.20's fold, in TS. `ops` are applied with `applyImmutable` from `@earendil-works/chord/delta` (a TS client uses it; the Rust tail has its own applier pinned by test vectors, contract §6.20).
 
-1. A `snapshot` frame **replaces the whole state**, never merges — the base snapshot, a rebase, and a new epoch's snapshot are the same operation. Its `SnapshotEvent` entries render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message` — the role from the message type, the blocks becoming the message's ordered `parts` exactly as the pi parse rules 3–4 (above) — and an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message pairs with the `toolCall` it answers, by `toolCallId`: its text becomes the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and it carries `name` = `toolName`, `durationMs` and `error: true` when `isError`. (The `cpd session tail` fallback keeps its plain grammar: a `tool` message with a name, text and no structured input.)
-2. An `events` frame applies its `AgentEvent`s in order: a completed message (`message_end`, or a `run_end` ending an in-flight message) appends its `TranscriptMessage`s; every other event updates nothing the transcript shows. The short-answer rule holds: a message arrives whole, the fold never waits for deltas.
-3. The cursor advances only with stream frames: a `snapshot` sets it to `(epoch, seq)`, an `events` frame likewise once its events are applied. `attached` fixes the mode and touches nothing else.
-4. `host_state`, `notice`, `status`, `ui_request`, `ui_resolved` and `error` leave the state unchanged.
+1. A `view` frame **replaces the view** (`view = frame.view`), never merges: the base, a rebase, and a new epoch's base are the same operation. It appends the messages of its entries whose `id` is greater than `lastEntryId` (every entry of the window when none is set), and `lastEntryId` becomes the newest id shown. Entries the window later drops stay in `messages`. An entry's messages render like the tail's: an entry whose `kind` carries model messages yields one `TranscriptMessage` per `Message`, the role from the message type, the blocks becoming the message's ordered `parts` exactly as the pi parse rules 3–4 (above); an entry with no model messages is bookkeeping and yields nothing. A `toolResult` message pairs with the `toolCall` it answers, by `toolCallId`: its text becomes the `tool` part's `result`, its `image` blocks become `image` parts of the same turn, and it carries `name` = `toolName`, `durationMs` and `error: true` when `isError`. (The `cpd session tail` fallback keeps its plain grammar: a `tool` message with a name, text and no structured input.)
+2. An `ops` frame does `view = applyImmutable(view, ops)` and appends the messages of the entries the ops add to the window (id greater than `lastEntryId`), by rule 1's rendering. A message still streaming is not shown: there is no pending in-flight message in the state (A1); it appears when its entry is appended. An op that changes only `docs` appends nothing.
+3. The cursor advances with the frame: a `view` or `ops` frame sets it to `(epoch, seq)` once applied. `attached` fixes the mode and touches nothing else. `host_state`, `notice`, `status`, `ui_request`, `ui_resolved` and `error` leave the state unchanged.
+4. An `ops` frame before any `view`, or an op the delta rules refuse (`applyImmutable` throws), makes `applyHostFrame` throw. The caller then drops its whole state (`view`, `messages`, `cursor` and `lastEntryId`), so the next attach has no cursor and is a view-mode attach.
 
 The frames stream calls `toSnapshotFrame(state.messages, epoch, seq)` — the CLI path's exact frame — and re-sends whenever the fold's messages change.
 
 #### The reconnect rule and the refusals
 
-**Reconnect**: keep the cursor `(epoch, seq)` of the last applied frame. On `bye {"reconnect":true}` (reasons `shutdown`, `restart`, `storage_failed`, `slow_client`) or any socket loss (error or EOF): close, reconnect with back-off (100 ms doubling to a 1 s cap over a 30 s deadline; past it, give up), `hello`, and `attach` with the saved cursor. Same epoch → `resume`: the host sends exactly the frames with `seq > cursor.seq` — **no message lost, none duplicated**. New epoch → `snapshot` mode: the fold replaces its state whole (rule 1 above), so the stream never repeats a line it already sent. `bye {"reconnect":false}` (`detached`, unreachable for a reader that never detaches) ends the stream.
+**Reconnect**: keep the cursor `(epoch, seq)` of the last applied frame. On `bye {"reconnect":true}` (reasons `shutdown`, `restart`, `storage_failed`, `slow_client`) or any socket loss (error or EOF): close, reconnect with back-off (100 ms doubling to a 1 s cap over a 30 s deadline; past it, give up), `hello`, and `attach` with the saved cursor. Same epoch → `resume`: the host sends exactly the frames with `seq > cursor.seq` — **no message lost, none duplicated**. New epoch → `view` mode: the fold replaces its view (rule 1 above) and appends only the messages of entries it has not shown, so the stream never repeats a message it already sent. `bye {"reconnect":false}` (`detached`, unreachable for a reader that never detaches) ends the stream.
 
 The **refusals** a read-only reader can meet, each an `error` frame with a `code` of `protocol.ts`:
 
 | Code | When | Connection |
 |---|---|---|
-| `protocol_mismatch` | no common version; details `{"host":[1],"client":[min,protocol]}` | closed |
+| `protocol_mismatch` | no common version; details `{"host":[2],"client":[min,protocol]}` | closed |
 | `hello_timeout` | no `hello` within 5 000 ms | closed |
 | `hello_required` | a frame other than `hello` (or `ping`) first | kept |
 | `bad_frame` | a line that is not JSON, not an object, or has no string `type` | kept, line skipped |
@@ -906,7 +910,7 @@ Every other code (`not_attached`, `busy`, `frame_too_large`, `refused`, `ui_unkn
 
 #### The fixture
 
-- `web/src/api/host.fixture.ndjson` — the **real captured** frames of a live durable host (four NDJSON lines: `welcome`, `attached`, `snapshot`, `events`; captured 2026-11-01 EDT from the live host of an archived durable Lead), verbatim from the scout's capture `~/.cpd/run/web-chat-live/explore/host-proto-fixture.ndjson`; nothing was redacted because nothing needed it. The host-client and translation tests replay it through a fake `HostConnect` — no test touches a real socket.
+- `web/src/api/host.fixture.ndjson` — the **real captured** frames of a live durable host. It is a protocol-1 capture (four NDJSON lines: `welcome`, `attached`, `snapshot`, `events`) until the code Job replaces it with a protocol-2 capture (`welcome`, `attached`, `view`, `ops`); the replacement is then the fixture of the host-client and translation tests. The protocol-1 capture was taken 2026-11-01 EDT from the live host of an archived durable Lead), verbatim from the scout's capture `~/.cpd/run/web-chat-live/explore/host-proto-fixture.ndjson`; nothing was redacted because nothing needed it. The host-client and translation tests replay it through a fake `HostConnect` — no test touches a real socket.
 
 ### Fixtures
 
