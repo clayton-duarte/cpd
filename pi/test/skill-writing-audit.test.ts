@@ -292,3 +292,122 @@ test("the session and read-only rules lead with their positive target", () => {
   if (!lead.includes("Events arrive as new turns")) problems.push("cpd-lead lacks `Events arrive as new turns`");
   assert.deepEqual(problems, [], problems.join("\n"));
 });
+
+const prDescription = files("cpd-lead").find((f) => f.name.endsWith("pr-description.md"))!.text;
+
+/** The lines of a text that match, as `line N: text`. */
+function lineHits(text: string, re: RegExp): string[] {
+  return text.split("\n").flatMap((l, i) => (re.test(l) ? [`line ${i + 1}: ${l.slice(0, 100)}`] : []));
+}
+
+test("Addressing keeps six steps and drops the plan-done and register repeats", () => {
+  const sec = section(lead, "#### Addressing");
+  const items = numbered(sec);
+  assert.deepEqual(items.map((i) => i.n), [1, 2, 3, 4, 5, 6], `Addressing items: ${items.map((i) => i.line).join(" | ")}`);
+  const bad = lineHits(sec, /The Plan is done when every Workflow is merged|Register every further fix/);
+  assert.deepEqual(bad, [], `repeats in Addressing:\n${bad.join("\n")}`);
+  const row = lead.split("\n").find((l) => l.startsWith("| `plan-done`"))!;
+  assert.ok(row, "plan-done row");
+  assert.ok(row.includes('cpd workflow add <key> --repo <path> --title "<title>"'), `plan-done row lacks the workflow add command: ${row.slice(0, 100)}`);
+  assert.ok(/--workflow <key>/.test(row), `plan-done row lacks --workflow <key>: ${row.slice(0, 100)}`);
+});
+
+test("no sleep command and no opens only when you do clause in the skills", () => {
+  const sleep = all.filter((f) => f.name.startsWith("cpd-lead/")).flatMap((f) => lineHits(f.text, /sleep 10/).map((h) => `${f.name} ${h}`));
+  assert.deepEqual(sleep, [], `sleep 10:\n${sleep.join("\n")}`);
+  const opens = all.flatMap((f) => lineHits(f.text, /opens only when you do/).map((h) => `${f.name} ${h}`));
+  assert.deepEqual(opens, [], `opens only when you do:\n${opens.join("\n")}`);
+});
+
+test("Failed Jobs states the Gate retry once in its table row", () => {
+  const sec = section(lead, "#### Failed Jobs");
+  const bullets = lineHits(sec, /^- A `gate_failed` Attempt was already retried once/);
+  assert.deepEqual(bullets, [], `repeated bullet:\n${bullets.join("\n")}`);
+  const row = sec.split("\n").find((l) => l.startsWith("| `gate_failed`"))!;
+  assert.ok(row && /retry/.test(row), `gate_failed row states the retry: ${row}`);
+});
+
+test("Rules merges the adjacent bullets and drops the ask only sentence and parenthesis misplacement", () => {
+  const sec = section(lead, "## Rules");
+  const split = lineHits(sec, /^- \*\*Ask the User directly\.\*\*/);
+  assert.deepEqual(split, [], `bullet not merged into Resolve first:\n${split.join("\n")}`);
+  assert.ok(/^- \*\*Resolve first, ask second\.\*\*/m.test(sec), "Resolve first bullet stays");
+  const sentence = lineHits(sec, /Ask the User only for decisions you cannot derive/);
+  assert.deepEqual(sentence, [], `sentence stays:\n${sentence.join("\n")}`);
+  const forbidden = sec.split("\n").filter((l) => l.includes("agent_forbidden"));
+  assert.ok(forbidden.length > 0, "agent_forbidden stays in Rules");
+  for (const l of forbidden) {
+    assert.ok(!l.includes("cpd plan decide"), `agent_forbidden stands beside cpd plan decide: ${l.slice(0, 100)}`);
+    for (const c of ["cpd context archive", "cpd context unarchive", "cpd plan archive", "cpd plan unarchive", "cpd session archive", "cpd session unarchive"])
+      assert.ok(l.includes(c), `agent_forbidden line lacks ${c}: ${l.slice(0, 100)}`);
+  }
+});
+
+test("Agent keys names the three keys only", () => {
+  for (const [name, text] of [["cpd-lead", lead], ["cpd-manager", manager]] as const) {
+    const sec = section(text, "## Agent keys");
+    for (const k of ["`<context>`", "`<context>:<plan>`", "`<context>:<plan>:<job>`", "A key is fixed"])
+      assert.ok(sec.includes(k), `${name} Agent keys lacks ${k}`);
+    const bad = lineHits(text, /<plan>\.<prefix>|UUID/);
+    assert.deepEqual(bad, [], `${name} names another address:\n${bad.join("\n")}`);
+  }
+});
+
+test("Exploring and Test Jobs drop the repeats of their reference", () => {
+  const promo = lineHits(section(lead, "#### Exploring"), /docs\/research/);
+  assert.deepEqual(promo, [], `Exploring restates the promotion:\n${promo.join("\n")}`);
+  assert.ok(/Promoting an explore finding[^\n]*docs\/research/.test(specFiles), "spec-files keeps the promotion");
+  const tdd = lineHits(section(specFiles, "## Test Jobs"), /tests_unconfigured/);
+  assert.deepEqual(tdd, [], `Test Jobs restates the tdd template:\n${tdd.join("\n")}`);
+  assert.ok(section(lead, "### Scoping").includes("tests_unconfigured"), "Scoping keeps tests_unconfigured");
+});
+
+test("every body.md placeholder is closed", () => {
+  const open = all.flatMap((f) => lineHits(f.text, /<body\.md(?!>)/).map((h) => `${f.name} ${h}`));
+  assert.deepEqual(open, [], `unclosed placeholder:\n${open.join("\n")}`);
+});
+
+test("pr-description names a Workflow key and reads clearly", () => {
+  const good = prDescription.slice(prDescription.indexOf("## Good example"));
+  const start = good.indexOf("## Out of scope and follow-ups\n");
+  assert.ok(start >= 0, "good example has the Out of scope section");
+  const out = good.slice(start, good.indexOf("## Links", start));
+  assert.ok(/\bWorkflow [a-z][a-z0-9]*(-[a-z0-9]+)*\b/.test(out), `good example names no Workflow key: ${out.replace(/\n/g, " ").slice(0, 200)}`);
+  const rule = prDescription.split("\n").find((l) => l.startsWith("**What and why:**"))!;
+  assert.ok(rule, "What and why rule");
+  assert.ok(!/questions answered/.test(rule), `garbled sentence: ${rule.slice(0, 260)}`);
+});
+
+test("Splitting and Grilling drop the unsourced figure and the repeats", () => {
+  const split = lineHits(section(lead, "### Splitting"), /150 turns|finish without asking/);
+  assert.deepEqual(split, [], `Splitting:\n${split.join("\n")}`);
+  const size = lineHits(section(specFiles, "## Size"), /150 turns/);
+  assert.deepEqual(size, [], `spec-files Size:\n${size.join("\n")}`);
+  const item = section(lead, "### Grilling").split("\n").find((l) => l.startsWith("1. "))!;
+  assert.ok(item, "Grilling item 1");
+  assert.ok(/group[^\n]*\(?references\/questions\.md|references\/questions\.md[^\n]*group/i.test(item), `Grilling item 1 does not link questions.md for grouping: ${item.slice(0, 120)}`);
+  assert.ok(!/Group independent questions/.test(item), `Grilling item 1 restates the grouping rule: ${item.slice(0, 120)}`);
+  assert.ok(/whole frontier at once/.test(files("cpd-lead").find((f) => f.name.endsWith("questions.md"))!.text), "questions.md keeps the grouping rule");
+});
+
+test("Within the Plan and the registered work list match the Manager", () => {
+  const within = lead.split("\n").find((l) => l.startsWith("- **Within the Plan:**"))!;
+  assert.ok(within, "Within the Plan bullet");
+  assert.ok(within.includes("moves the work or re-routes it"), `Within the Plan lacks the Manager's wording: ${within.slice(0, 260)}`);
+  assert.ok(!/handles the sequencing/.test(within), `Within the Plan says the Manager sequences: ${within.slice(0, 260)}`);
+  const reg = manager.split("\n").find((l) => l.includes("Check each Plan's registered work"))!;
+  assert.ok(reg, "registered work bullet");
+  assert.ok(reg.includes("`queued`, `running` or `failed`"), `registered work list omits failed: ${reg.slice(0, 300)}`);
+});
+
+test("Manager Plans keeps six steps with the pending check in Intake", () => {
+  const sec = section(manager, "## 2. Plans");
+  const steps = sec.split("\n").filter((l) => /^\d+\. /.test(l));
+  assert.deepEqual(steps.map((l) => Number(/^(\d+)/.exec(l)![1])), [1, 2, 3, 4, 5, 6], `steps: ${steps.map((l) => l.slice(0, 50)).join(" | ")}`);
+  const intake = steps[0]!;
+  assert.ok(/^1\. \*\*Intake/.test(intake), `step 1: ${intake.slice(0, 50)}`);
+  for (const k of ["every deliverable", "affected repo", "out-of-scope"]) assert.ok(intake.includes(k), `Intake lacks ${k}`);
+  assert.ok(intake.includes("cpd context pending --context <c>"), "Intake lacks the pending check");
+  const late = steps.slice(1).filter((l) => l.includes("cpd context pending --context <c>"));
+  assert.deepEqual(late, [], `pending check outside Intake: ${late.map((l) => l.slice(0, 60)).join(" | ")}`);
+});

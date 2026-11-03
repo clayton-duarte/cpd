@@ -5203,6 +5203,19 @@ A test, `pi/test/skill-writing-audit.test.ts`, pins each rule; the rules apply t
 - **R15, session bullet**: in cpd-lead `## Rules` no bullet starts with `Never review inside`; one bullet starts with `- **Keep your session` and contains `explore Job`.
 - **R16, Stay free for the User**: cpd-lead and cpd-manager `## Rules` each have a bullet that starts `- **Stay free for the User.**` and contains `30 seconds` and `background`; cpd-manager has no `**Never block.**`; cpd-lead keeps `Events arrive as new turns`.
 - **R17, kept word for word**: the command lists of the bullets that name what belongs to cpd, to the User or to a Lead (`cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`; for the Manager also `cpd plan phase plan`, `cpd workflow add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd job approve-tests`, `cpd context manager`), and the git list `checkout, switch, reset, rebase, merge, pull, stash` in both skills.
+- **R18, Addressing ends at step 6**: `#### Addressing` of cpd-lead has six numbered steps (1 to 6) and contains neither `The Plan is done when every Workflow is merged` nor `Register every further fix`. The `plan-done` row of the Events table says that follow-up work is a new Workflow added with `cpd workflow add <key> --repo <path> --title "<title>"` and that its Jobs take `--workflow <key>`.
+- **R19, no polling sleep, no stale phrase**: `sleep 10` occurs nowhere in `pi/skills/cpd-lead/`, and `opens only when you do` occurs in no file of `pi/skills/cpd-lead/` or `pi/skills/cpd-manager/`.
+- **R20, Gate retry once**: `#### Failed Jobs` of cpd-lead states the Gate retry once, in its `gate_failed` table row; no bullet of the section starts with `A `gate_failed` Attempt was already retried once`.
+- **R21, Rules bullets**: in `## Rules` of cpd-lead the two adjacent bullets that said the same are one bullet, the repeated sentence is gone, and the `agent_forbidden` parenthesis stands beside the six archive commands it explains, not beside `cpd plan decide`.
+- **R22, Agent keys**: `## Agent keys` of cpd-lead and cpd-manager name the three keys and say that a key is fixed; neither names `<plan>.<prefix>` or a UUID prefix as an address.
+- **R23, no repeat of spec-files**: `#### Exploring` of cpd-lead does not restate the `docs/research` promotion of `references/spec-files.md`, and `## Test Jobs` of `spec-files.md` does not restate the `tdd` template of cpd-lead `### Scoping`.
+- **R24, closed placeholder**: every `<body.md` of cpd-lead is closed: the text `<body.md` is always followed by `>`.
+- **R25, pr-description.md**: the good-example text for `Out of scope and follow-ups` names a Workflow key, and the `What and why` rule of the section rules is one readable sentence pair.
+- **R26, Splitting and Grilling**: `### Splitting` of cpd-lead has no `150 turns` and no clause that tells a Worker to `finish without asking`; `spec-files.md` `## Size` has no `150 turns`; `### Grilling` item 1 of cpd-lead links to `references/questions.md` for how to group questions and does not restate the grouping rule.
+- **R27, Manager and Lead wording**: `Within the Plan` of cpd-lead says the Manager `moves the work or re-routes it` and never sequences across Leads, as cpd-manager does; cpd-manager `Check each Plan's registered work` lists `queued`, `running` or `failed`.
+- **R28, Manager Plans steps**: cpd-manager `### 2. Plans` keeps six numbered steps; the check of pending work (`cpd context pending --context <c>`) is stated in step 1 Intake, not as step 4.
+
+The rows of the verified tables that are left out (LW-32, LW-36, LW-37, LA-11, LA-14, MG-10, LA-17, LA-19, LA-20, MG-12, XS-10) are recorded in BACKLOG.md.
 
 ## 16. The Worker contract
 

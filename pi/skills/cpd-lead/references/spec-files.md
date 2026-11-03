@@ -35,7 +35,7 @@ The Worker's submit runs only the tamper check and, for a test or implementation
 
 ## Size
 
-- An Attempt gets `attempt_minutes` of active time (the configured `attempt_minutes`); the timeout is that value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
+- An Attempt gets `attempt_minutes` of active time (the configured `attempt_minutes`); the timeout is that value. Size a Job to fit **well inside it**, including worktree setup and dependency install. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
 - Prefer many small Jobs that run in parallel. Split down to a unit that has its own acceptance check, no further.
 - A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
@@ -67,7 +67,7 @@ Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (g
 
 ## A feedback fix Job
 
-On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`, and opens only when you do.
+On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`.
 
 ## Test Jobs
 
@@ -92,7 +92,7 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
   run   = "<run the named tests, {{ tests }}: exit non-zero when one fails>"
   ```
 
-  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is fine (it inherits the owner's policy); a `tdd` Workflow that needs `[test-commands]` is refused `tests_unconfigured`: a docs-only or config-only Workflow is made with `--shape docs` or `--shape config`.
+  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is fine (it inherits the owner's policy); a docs-only or config-only Workflow is made with `--shape docs` or `--shape config`.
 
 ## Research Jobs
 
