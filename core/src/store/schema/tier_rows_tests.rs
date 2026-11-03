@@ -485,9 +485,6 @@ fn the_rebuilt_tables_keep_their_indexes_and_triggers() {
         "the live schema has indexes and triggers on the three tables: {names:?}"
     );
     drop(old);
-    // The later migration `agent-key-schema` adds the unique index of one Lead that is not a fork per Plan.
-    names.push("index sessions_one_lead ON sessions".to_owned());
-    names.sort();
     let mut store = migrated_in(&home);
     // the migration `20261103T0900-agent-key-schema` adds this index (one Lead per Plan)
     names.push("index sessions_one_lead ON sessions".to_owned());
