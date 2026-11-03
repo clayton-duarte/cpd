@@ -32,7 +32,7 @@ Use this template exactly, one line per section header, and omit any section wit
 
 ## Section rules
 
-**What and why:** The problem and the change, in 2–4 sentences. Start with an imperative sentence (for example, "Validate user input in the /register endpoint. …"). A reviewer should understand the problem and the change in these two questions answered: what is broken or missing, and what does this PR do about it.
+**What and why:** The problem and the change, in 2–4 sentences. Start with an imperative sentence (for example, "Validate user input in the /register endpoint. …"). A reviewer should be able to answer two questions from it: what is broken or missing, and what does this PR do about it.
 
 **How:** The approach, key decisions, trade-offs and shortcomings. Why this approach, not another. What was sacrificed. What is known to be rough. Enough that a reviewer can judge whether the change is sound and whether it fits the system.
 
@@ -94,7 +94,7 @@ Use Redis with a 1-minute TTL for article list queries. Cache key is articles:<p
 
 ## Out of scope and follow-ups
 
-Cache invalidation for batch updates is not implemented; registered in backlog. Metrics and cache hit rate dashboard are future work; tracked separately.
+Cache invalidation for batch updates is not implemented; registered as Workflow cache-invalidation. Metrics and cache hit rate dashboard are future work; tracked separately.
 
 ## Links
 
