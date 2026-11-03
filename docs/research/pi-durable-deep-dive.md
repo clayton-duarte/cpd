@@ -575,12 +575,12 @@ Nothing here was run: no model, storage, kill test or socket client executed. Pa
 | 5 | 1.6 | A phase's effects and its successor checkpoint are one storage commit | inferred | trace one phase with a recording `Storage` |
 | 6 | 1.6 | No cap on parallel tool calls | inferred from absence | read pi-durable's scheduler for a limit; run 50 parallel tools |
 | 7 | 1.6 | The pi-ai retry delay formula | unverified | read `pi-ai/utils/retry` |
-| 8 | 1.7 | A second process on one SQLite file: id collision, `running` rewritten to `pending`, blind upserts, stale caches | inferred from read code, not run | run two Harnesses on one file |
+| 8 | 1.7, 3.5 | A second process on one SQLite file: id collision, `running` rewritten to `pending`, blind upserts, stale caches | inferred from read code, not run | run two Harnesses on one file |
 | 9 | 1.7 | A Cloudflare Durable Object gives single ownership by the platform | guess | read Cloudflare docs |
 | 10 | 1.7 | A second UI or tool must go through the owning process | inferred | follows from 8 |
 | 11 | 1.8 | Phases whose successor checkpoint committed are skipped on resume | inferred | kill a run between two phases and trace |
 | 12 | 1.8 | `prepare` is skipped after a crash in `request` | inferred | the same kill test |
-| 13 | 1.8 | The cost of a re-request is the full token cost again | guess | measure `pi.usage` across a kill |
+| 13 | 1.8, 3.5 | The cost of a re-request is the full token cost again | guess | measure `pi.usage` across a kill |
 | 14 | 1.8 | Changing a tool to `safe` later does not rerun an already recorded `unsafe` call | inferred | change the definition after a kill, resume |
 | 15 | 1.8 | A `safe` tool must tolerate a rerun at any point of its execution | inferred | a design rule, not testable by the framework |
 | 16 | 2.1 | Cancelling a caller's `Context` stops only that caller's wait, not the work | inferred | cancel a context during `submit().wait` and watch the task |
