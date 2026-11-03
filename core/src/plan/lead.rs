@@ -106,21 +106,13 @@ pub(super) fn start(
     Ok(Started { window, pane })
 }
 
-/// The header of `lead`'s pane (contract §6.1): its dynamic title when it has one, else its
-/// Plan's title, else (a Context's Manager) its name.
+/// The header of `lead`'s pane (contract §6.1): its dynamic title when it has one, else its key.
 fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
     env.store.read(|conn| {
         if let Some(dynamic) = dynamic_title(conn, lead.session)? {
             return Ok(dynamic);
         }
-        match lead.plan {
-            None => Ok(lead.name.to_owned()),
-            Some(plan) => Ok(conn.query_row(
-                "SELECT title FROM plans WHERE id = ?1",
-                [plan.as_str()],
-                |r| r.get(0),
-            )?),
-        }
+        Ok(lead.name.to_owned())
     })
 }
 
@@ -137,10 +129,23 @@ fn dynamic_title(
 }
 
 /// Sets `@cpd_title` on `session`'s live pane, if it has one: to its dynamic title when it has
-/// one (contract §6.1), else to `title`.
-pub(super) fn retitle(env: &mut Env, session: &SessionId, title: &str) -> Result<(), CpdError> {
-    let dynamic = env.store.read(|conn| dynamic_title(conn, session))?;
-    let title = dynamic.as_deref().unwrap_or(title);
+/// one (contract §6.1), else its key (`sessions.name`). The Plan title is not the pill.
+pub(super) fn retitle(
+    env: &mut Env,
+    session: &SessionId,
+    _plan_title: &str,
+) -> Result<(), CpdError> {
+    let title = env.store.read(|conn| {
+        Ok::<_, CpdError>(match dynamic_title(conn, session)? {
+            Some(t) => t,
+            None => conn.query_row(
+                "SELECT name FROM sessions WHERE id = ?1",
+                [session.as_str()],
+                |r| r.get(0),
+            )?,
+        })
+    })?;
+    let title = title.as_str();
     let tmux = Tmux::new(env.config.tmux.socket.clone());
     for pane in tmux
         .list_panes()?

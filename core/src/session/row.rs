@@ -209,18 +209,19 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 
 impl Row {
     /// The header of its pane (contract §6.1): its dynamic title when it has one, else its
-    /// Plan's title when it is the Plan's Lead, else its name.
-    pub fn title(&self, conn: &Connection) -> Result<String, CpdError> {
-        if let Some(dynamic) = &self.dynamic_title {
-            return Ok(dynamic.clone());
-        }
-        match (&self.plan, self.plan_lead) {
-            (Some(plan), true) => Ok(conn.query_row(
-                "SELECT title FROM plans WHERE id = ?1",
-                [plan.as_str()],
-                |r| r.get(0),
-            )?),
-            _ => Ok(self.name.clone()),
+    /// name (its key for an agent).
+    pub fn title(&self, _conn: &Connection) -> Result<String, CpdError> {
+        Ok(self
+            .dynamic_title
+            .clone()
+            .unwrap_or_else(|| self.name.clone()))
+    }
+
+    /// Its agent key: its name, unless it is a fork (not an agent).
+    pub fn key(&self) -> Option<&str> {
+        match &self.forked_from {
+            Some(_) => None,
+            None => Some(&self.name),
         }
     }
 
@@ -281,6 +282,7 @@ impl Row {
             "plan": self.plan,
             "attempt": self.attempt,
             "name": self.name,
+            "key": self.key(),
             "state": self.state.as_str(),
             "state_label": self.state_label,
             "state_at": self.state_at,
