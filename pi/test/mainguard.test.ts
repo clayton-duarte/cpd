@@ -253,6 +253,8 @@ const named = (skill: string) => {
   const text = skillFiles(skill)[0].text;
   for (const s of ["git fetch origin", "git show origin/main:<path>", "git log origin/main", "git diff origin/main", "git worktree add $(mktemp -d) origin/main"])
     assert.ok(text.includes(s), `${skill} SKILL.md lacks ${s}`);
+  const git = "checkout, switch, reset, rebase, merge, pull, stash";
+  assert.ok(text.split("\n").some((l) => l.startsWith("- ") && l.includes(git)), `${skill} SKILL.md has no bullet with the git list ${git}`);
 };
 
 test("the cpd-lead skill names the allowed ways to read the latest main", () => named("cpd-lead"));
