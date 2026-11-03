@@ -118,7 +118,6 @@ pub enum ToClient {
 /// The shared fold (contract §6.20, Q35 A): keeps the replica of the conversation view, applies each
 /// frame to it and returns the transcript lines the frame completes.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub struct Fold {
     cursor: Cursor,
     /// Whether a frame has ever been applied: the first attach has no cursor, a reconnect does.
@@ -140,9 +139,71 @@ impl Fold {
     /// Applies one wire frame and returns the transcript lines it completes.
     pub fn apply(&mut self, frame: &Frame) -> Result<Vec<String>, DeltaError> {
         match frame {
-            Frame::View { .. } | Frame::Ops { .. } => unimplemented!("Fold::apply"),
             Frame::Unknown => Ok(Vec::new()),
+            Frame::View { epoch, seq, view } => {
+                let lines = self.fold_view(view.clone());
+                self.advance(epoch, *seq);
+                Ok(lines)
+            }
+            Frame::Ops { epoch, seq, ops } => {
+                let Some(replica) = self.view.take() else {
+                    self.forget();
+                    return Err(DeltaError("an ops frame before any view".to_owned()));
+                };
+                match super::delta::apply(replica, ops) {
+                    Ok(view) => {
+                        let lines = self.fold_view(view);
+                        self.advance(epoch, *seq);
+                        Ok(lines)
+                    }
+                    Err(e) => {
+                        self.forget();
+                        Err(e)
+                    }
+                }
+            }
         }
+    }
+
+    fn advance(&mut self, epoch: &str, seq: u64) {
+        self.started = true;
+        self.cursor = Cursor {
+            epoch: epoch.to_owned(),
+            seq,
+        };
+    }
+
+    fn forget(&mut self) {
+        self.view = None;
+        self.started = false;
+        self.cursor = Cursor::default();
+    }
+
+    /// Makes `view` the replica and returns the lines of its entries newer than the last printed.
+    fn fold_view(&mut self, view: Value) -> Vec<String> {
+        if let (Some(last), Some(before)) = (
+            self.last_printed,
+            view.get("before").and_then(Value::as_u64),
+        ) && before > last
+        {
+            self.gaps.push(format!(
+                "cpd session tail: entries missed: the last printed entry is {last}, the window starts after {before}"
+            ));
+        }
+        let mut lines = Vec::new();
+        if let Some(entries) = view.get("entries").and_then(Value::as_array) {
+            for entry in entries {
+                let Some(id) = entry.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if self.last_printed.is_none_or(|last| id > last) {
+                    lines.extend(render_entry(entry));
+                    self.last_printed = Some(id);
+                }
+            }
+        }
+        self.view = Some(view);
+        lines
     }
 
     /// The cursor of the last frame applied (`epoch`, `seq`): what a reconnect sends.
@@ -156,18 +217,7 @@ impl Fold {
     }
 }
 
-/// The transcript lines of one `snapshot` frame (or an `AgentEvent` of type `snapshot`): each entry's
-/// model messages, in order. An entry whose `kind` carries no `model` messages is bookkeeping and silent.
-#[allow(dead_code)]
-fn render_entries(snapshot: &Value) -> Vec<String> {
-    match snapshot.get("entries").and_then(Value::as_array) {
-        Some(entries) => entries.iter().flat_map(render_entry).collect(),
-        None => Vec::new(),
-    }
-}
-
 /// The transcript lines of one entry: its `model` messages, or nothing when it has none.
-#[allow(dead_code)]
 fn render_entry(entry: &Value) -> Vec<String> {
     match entry.get("model").and_then(Value::as_array) {
         Some(messages) => messages.iter().flat_map(render_message).collect(),
@@ -497,14 +547,18 @@ fn one(
                     eprintln!("view {epoch} seq {seq}: view replaced");
                 }
                 let applied = fold.apply(&Frame::View { epoch, seq, view });
-                if !print_applied(applied, out)? {
-                    return Ok(Flow::Done);
+                match print_applied(fold, applied, out)? {
+                    Applied::Printed => {}
+                    Applied::Closed => return Ok(Flow::Done),
+                    Applied::Refused => return Ok(Flow::Reconnect),
                 }
             }
             ToClient::Ops { epoch, seq, ops } => {
                 let applied = fold.apply(&Frame::Ops { epoch, seq, ops });
-                if !print_applied(applied, out)? {
-                    return Ok(Flow::Done);
+                match print_applied(fold, applied, out)? {
+                    Applied::Printed => {}
+                    Applied::Closed => return Ok(Flow::Done),
+                    Applied::Refused => return Ok(Flow::Reconnect),
                 }
             }
             ToClient::Error { code, message } => {
@@ -512,7 +566,7 @@ fn one(
                     return Err(CpdError::new(
                         ErrorCode::Internal,
                         format!(
-                            "this host speaks protocol 1, the client speaks 2 (the installed cpd): {message}"
+                            "this host speaks protocol 2, the client speaks 2 (the installed cpd): {message}"
                         ),
                     ));
                 }
@@ -531,16 +585,35 @@ fn one(
     }
 }
 
-/// Prints what a fold applied; a refused op is written to stderr.
+/// What printing an applied frame ended with.
+enum Applied {
+    Printed,
+    /// Stdout closed: the stream ends cleanly.
+    Closed,
+    /// An op was refused: the fold forgot its state, the client reconnects with no cursor.
+    Refused,
+}
+
+/// Prints what a fold applied; a refused op and a gap are written to stderr.
 fn print_applied(
+    fold: &mut Fold,
     applied: Result<Vec<String>, DeltaError>,
     out: &mut dyn Write,
-) -> Result<bool, CpdError> {
+) -> Result<Applied, CpdError> {
     match applied {
-        Ok(lines) => write_lines(out, &lines),
+        Ok(lines) => {
+            for gap in fold.gaps.drain(..) {
+                eprintln!("{gap}");
+            }
+            Ok(if write_lines(out, &lines)? {
+                Applied::Printed
+            } else {
+                Applied::Closed
+            })
+        }
         Err(e) => {
-            eprintln!("cpd session tail: {e}");
-            Ok(true)
+            eprintln!("cpd session tail: {e}; reconnecting without a cursor");
+            Ok(Applied::Refused)
         }
     }
 }
