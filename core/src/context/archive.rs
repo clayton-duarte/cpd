@@ -8,6 +8,7 @@ use crate::output::Output;
 use crate::plan::archive::{self, Objects};
 
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
+    archive::refuse_agent_caller("context archive")?;
     if args.id.permanent().is_some() {
         return Err(CpdError::new(
             ErrorCode::ContextPermanent,
@@ -29,6 +30,7 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 }
 
 pub(super) fn unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
+    archive::refuse_agent_caller("context unarchive")?;
     let Env { mut store, .. } = Env::open()?;
     let objects = store.read(|conn| {
         ContextRow::require(conn, &args.id)?;
