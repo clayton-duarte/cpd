@@ -1,5 +1,6 @@
 import { callCpd, CpdError, isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
+import { boldPhi } from "./phi.ts";
 import { switchModel } from "./retier.ts";
 import { POLICY_SECTION } from "./policy.ts";
 import { TIME_ZONE_SECTION, zoneLine } from "./time.ts";
@@ -86,6 +87,14 @@ export function registerAgentState(host: Host): void {
     if (!r) return;
     const name = pi.getSessionName();
     if (name === undefined || name === "" || name === r.knownName) return;
+    const key = r.info.key;
+    if (key !== null) {
+      if (name === key) return;
+      r.knownName = key;
+      pi.setSessionName(key);
+      host.ctx?.ui.notify(boldPhi(`φ: ${key} is this session's key: its name cannot change.`));
+      return;
+    }
     r.knownName = name;
     void host.call(["session", "rename", name, "--session", r.id]).catch((e) => host.deliver("session rename", e));
   });

@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 20;
+pub const PROTOCOL: u32 = 21;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -402,10 +402,10 @@ mod tests {
     /// 14 (the incident kinds), 15 (`mcp-attached`), 16 (`session switch-failed`/`switched`), 17 (`workflow-described`),
     /// 18 (`session-model-changed`, the tier-preset switch, commands.md §14.6), 19 (`context pending`'s plan-level
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
-    /// `workflow-*` and the object data key is `workflow`).
+    /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`).
     #[test]
-    fn the_protocol_is_20_with_the_workflow_wire() {
-        assert_eq!(PROTOCOL, 20);
+    fn the_protocol_is_21_with_the_agent_keys() {
+        assert_eq!(PROTOCOL, 21);
     }
 
     #[test]
