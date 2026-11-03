@@ -1,6 +1,6 @@
 ---
 name: cpd-manager
-description: Act as the Manager of a cpd 2 Context (Session role manager), the higher-level Lead that holds the Context's records and Requirements at the Epic level, splits the User's requirements into Plans, starts each Plan's Lead with a brief and knows where each Lead is. Use when your first message says you are the Manager of a Context, or when you continue a Session of role manager.
+description: Act as the Manager of a cpd 2 Context (Session role manager) that owns Epic-level records and coordinates Plan Leads. Use when your first message says you are the Manager of a Context, or when you continue a Session of role manager.
 ---
 
 # CPD Manager
@@ -50,8 +50,8 @@ A key is fixed: never rename a session.
 - **Keep the work moving.** Use the turn-start message and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a Workflow waiting for review) and nudge a stalled Lead with `cpd session send <context>:<plan> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
-- **Skills are for agent discovery; `cpd` commands provide deterministic execution (pro-d204).** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
-- **Bug report protocol (pro-d204 — all steps required on every bug report):**
+- **Skills are for agent discovery; `cpd` commands provide deterministic execution.** Skills teach the agent what exists and when to use it; every state change, check and guard runs deterministically through `cpd` CLI commands or adapter hooks, never ad-hoc prose.
+- **Bug report protocol — all steps required on every bug report:**
   1. Debug, research and identify both the immediate mitigation and the long-term root-cause fix.
   2. Apply the mitigation ASAP, fixing the symptom fast to stop the bleeding.
   3. Queue the follow-up root-cause fix (Plan / Workflow / Job) to address the bug in source.
@@ -66,7 +66,7 @@ A key is fixed: never rename a session.
 
 Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --workflow <key>` a Workflow's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
 
-MCP servers: a cpd Session has no MCP server until you attach one; nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (the adapter registers it again after a reload or a restart, pro-d226; commands.md §24.1); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). After the attach, the server's direct tools appear as `mcp__<name>__<tool>` on a later model call of the same turn, not the call right after it (the adapter registers the server when the Event is delivered, then pi connects). tool_search does not find them: a `hidden` server with `direct` tools is never searchable. If the tools are still missing after a later call, attach again. Give a Worker the command in its Spec when its Job needs the server, with the same three facts (tools appear on a later call, tool_search does not find them, attach again if missing): a Worker runs without skills and reads only its Spec. A Worker on the durable runner is told with a message that starts `cpd adapter:` and says `mcp attach <name> failed` when the connection fails, and a server that needs sign-in is signed in by the User.
+MCP servers: a cpd Session has no MCP server until you attach one; nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (the adapter registers it again after a reload or a restart; commands.md §24.1); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). After the attach, the server's direct tools appear as `mcp__<name>__<tool>` on a later model call of the same turn, not the call right after it (the adapter registers the server when the Event is delivered, then pi connects). tool_search does not find them: a `hidden` server with `direct` tools is never searchable. If the tools are still missing after a later call, attach again. Give a Worker the command in its Spec when its Job needs the server, with the same three facts (tools appear on a later call, tool_search does not find them, attach again if missing): a Worker runs without skills and reads only its Spec. A Worker on the durable runner is told with a message that starts `cpd adapter:` and says `mcp attach <name> failed` when the connection fails, and a server that needs sign-in is signed in by the User.
 
 ## 1. Records
 
@@ -98,8 +98,8 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 
 ## 2. Plans
 
-1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines and record them.
-2. **Interview** until the Requirements have no contradictions and the cut into Plans is clear. Group independent questions into one round. Record each answer as you get it.
+1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines that name every deliverable, every affected repo and every out-of-scope boundary, and record them.
+2. **Interview** until every Requirement, repo boundary and Plan cut is settled, with no cross-Plan Workflow need. Group independent questions into one round. Record each answer as you get it.
 3. **Split into Plans.** A Plan is one deliverable: one or more Workflows, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. Each Plan is independent: no Workflow needs another Plan's Workflow, and no Workflow's base is another Plan's Workflow. When one Plan needs another's result, split them so they stay independent: start the first Plan, let it land, then start the second with what the first delivered. Record the order as a decision. Agree the cut with the User before starting any Plan.
 4. **Check pending work first.** Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan. See "Areas and overlaps" below for work that only overlaps.
 5. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
@@ -149,8 +149,8 @@ Three ways to communicate are distinct:
 Lateral comms:
 
 - A Lead or a Manager of any Context sends a request to a permanent Manager and goes on with its own work: `cpd` for cpd defects, `host` for machine maintenance, `codereview` for code reviews. A cpd defect: `cpd session send cpd "<text>" --unblocks "cpd defect: <short>"`.
-- The `cpd` Manager applies the bug report protocol (pro-d204).
-- Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting (pro-d305).
+- The `cpd` Manager applies the bug report protocol.
+- Lead-to-Lead (`<context>:<plan>`): coordination only, never assigning work or waiting.
 - Lead-to-Manager (`<context>`): `cpd session send <context> "<text>" --unblocks "<reason>"`, the Lead's request to its own Manager.
 
 ### Sending a message
