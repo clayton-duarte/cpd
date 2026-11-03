@@ -900,7 +900,7 @@ Each decision lists its options with the recommended one first. They are asks, n
 **D6. How much does a phone matter, and when?**
 
 1. **Desktop browser first; phone after the desktop chat works.** The terminal option is weak on a phone (no Esc, Ctrl, Tab or arrow keys, IME bugs, r6 §4); the web-native options can be made mobile-first later.
-2. Phone first. Rules out Option B as the main chat and favours A, with a custom on-screen key bar not needed.
+2. Phone first. Rules out Option B as the main chat unless an on-screen key bar is built (r6 §4), and favours A.
 3. No phone requirement. Keeps B fully viable.
 
 **D7. How faithful must the Dango look be?**
@@ -914,3 +914,51 @@ Each decision lists its options with the recommended one first. They are asks, n
 1. **Ask durable-leads for a window on `attach`, `history` usable before attach, a capped or chunked snapshot and a viewer role (D2, D3, D4, D15), as a Plan that precedes the web-native relay.** Without it, first paint of a 20-30 MB session cannot meet C1 (section 3.3).
 2. Work around it in the relay (a server-side window over the host's snapshot): the relay would parse the whole line anyway, and the cost lands in the bridge (inferred).
 3. Do not support large durable Sessions in the web at first, and accept the loss.
+
+## Appendix A. Sources
+
+### A.1 The findings
+
+The keys below are **machine-local findings of Plan chat-research**, written 2026-11-03 EST on one machine under `/Users/Clayton.Duarte/.cpd/run/chat-research/explore/`. They are read-only source material, **not committed to the repo and not copied here**; this report cites them by their short key. A reader without that machine cannot open them; the upstream URLs in A.2 are the public evidence.
+
+| Key | What it is |
+|---|---|
+| `s1-pi-rpc` | pi 1.3.0 RPC, SDK and session JSONL, from the docs only (no `.d.ts` read, nothing run) |
+| `s2-durable-host` | pi-durable host socket protocol v1: `protocol.ts`, `server.ts`, `dialogs.ts`, `tools.ts`; 23 gaps for a browser (D1-D23) |
+| `s3-parity-checklist` | 59 rows P01-P59 of pi's terminal chat as customised by cpd, with dialog data shapes and the colour finding |
+| `s4-web-current` | what `web/` already has, what is throwaway, the local transcript size distribution |
+| `s5-three-panes` | data, commands, refresh and actions of the Context tree, Plan view and Attention Inbox; 14 discrepancies; the chat-to-shell contract |
+| `r1-pi-webuis` | survey of web UIs for pi (218 npm rows) |
+| `r2-pi-web-ui-src` | source read of `@earendil-works/pi-web-ui` 0.75.3 |
+| `r3-opencode` | OpenCode web and desktop UI as a chat base |
+| `r4-agent-webuis` | OSS web UIs for terminal coding agents beyond pi; the ACP route |
+| `r5-chat-libs` | embeddable chat libraries for a custom backend; assistant-ui and AI Elements |
+| `r6-term-in-web` | xterm.js, ghostty-web, ttyd and wetty as the chat for the real pi TUI |
+| `r7-chat-perf` | keeping a 5,000+ message streaming chat fast; the 12-item checklist C1-C12 |
+| `d1-t3code` | deep dive of pingdotgg/t3code |
+| `d2-assistant-ui-pi` | deep dive of assistant-ui and `@assistant-ui/react-pi` |
+| `d3-jmfederico-pi-web` | deep dive of `@jmfederico/pi-web` |
+| `d4-pimote` | deep dive of `@pimote/pimote` |
+| `d6-pi-pocket` | deep dive of pi-pocket, with boring-ui and pi-durable-cloudflare read for their contracts |
+
+### A.2 Upstream URLs, versions and commits pinned by each deep dive
+
+All as the finding recorded them on 2026-11-03 EST. A "commit" is what the finding read; none was rebuilt for this report.
+
+| Deep dive | Source | Pinned version or commit |
+|---|---|---|
+| 5.1 pi-web-ui (r2) | `npm pack @earendil-works/pi-web-ui@0.75.3`; `@mariozechner/mini-lit@0.2.1`; https://github.com/earendil-works/pi | npm 0.75.3, `gitHead` `a7d8dd3d5db7d66aa5cc6886e32768b1196ce91f` ("Release v0.75.3"); removal commit `b141e1fa` (2026-05-20) |
+| 5.2 OpenCode (r3) | https://github.com/sst/opencode (redirects to `anomalyco/opencode`, repo id 975734319), branch `dev` | commit `1e322a3a0132b01200c824b609785ebe616fc35e`, v2.2.5 (tag 2026-10-30); `@opencode/ui` and `@opencode/client` 2.2.5 on npm |
+| 5.3 t3code (d1) | https://github.com/pingdotgg/t3code, `main` tarball from `codeload.github.com` | API `commits/main` `12ec17ce4c6481a8ea1049dedd78d0e56bc48aec` (2026-11-03 12:24 EST); tarball fetched about four minutes later, equality unverified (R7); `apps/web` 0.1.6; `react 19.3.0`, `effect 4.1.2`, `@legendapp/list 3.3.5`, `@pierre/diffs 1.6.1` (workspace catalog) |
+| 5.4 assistant-ui (d2, r5) | https://github.com/assistant-ui/assistant-ui | commit `a96e62f89da310602b716821dd91b9525f94cbb5` (2026-11-03); `@assistant-ui/react` 0.15.32, `core` 0.3.32, `react-pi` 0.0.32; r5 also read `vercel/ai-elements` `ca8be60` (`ai-elements@1.9.1`), `ibelick/prompt-kit` `5a94966`, `streamdown@2.7.1` |
+| 5.5 jmfederico (d3) | https://github.com/jmfederico/pi-web | commit `8646931f1e19` (2026-10-31); `@jmfederico/pi-web` 1.202610.9 (npm 2026-10-30) |
+| 5.6 pimote (d4) | https://github.com/alennartz/pimote | commit `1f876abc97144b76d88c8bec76786edcdb258797` (2026-10-30), `@pimote/pimote` 0.15.5 |
+| 5.7 pi-pocket (d6) | https://github.com/TannerMidd/pi-pocket; https://github.com/hachej/boring-ui; https://github.com/earendil-works/pi-durable-cloudflare | pi-pocket `db1e531` (main, 2026-10-30, 0.27.0); boring-ui `e383519` (2026-11-03, 0.4.51); pi-durable-cloudflare `fc596b2` (2026-10-31; d6 gives package `0.87.1` in its header and `1.4.0` in §6, R4) |
+| 5.8 terminal-in-web (r6) | npm `@xterm/xterm`, `ghostty-web`; https://github.com/tsl0922/ttyd; https://github.com/butlerx/wetty | `@xterm/xterm` 6.0.0 (2025-12-22), `addon-webgl` 0.19.0, `addon-fit` 0.11.0, `addon-serialize` 0.14.0, `addon-unicode11` 0.9.0, `addon-image` 0.9.0, `addon-search` 0.16.0; `ghostty-web` 0.4.0; ttyd 1.7.7; wetty 4.2.1; measured with `@xterm/headless` 6.0.0 on node v22.22.2 |
+| Speed techniques (r7) | https://github.com/TanStack/virtual, https://github.com/inokawa/virtua, https://github.com/LegendApp/legend-list, https://github.com/vercel/streamdown, https://github.com/pierrecomputer (`@pierre/diffs`), https://github.com/shikijs/shiki | `@tanstack/virtual-core` 3.19.11, virtua 0.54.1, `@legendapp/list` 3.7.1, Streamdown 2.7.1, markstream-react 2.0.23, `@pierre/diffs` 1.6.3, shiki 4.6.0, marked 18.1.3 |
+
+URLs not given in a finding (the ttyd, wetty, virtua, Legend, Pierre and shiki repository addresses above) are this report's best identification of the project the finding names by npm name; the finding's own `npm view` or tarball is the evidence. Unverified as URLs.
+
+### A.3 Report-internal ids
+
+C1-C12 are the speed checklist (section 2.2); P01-P59 the parity rows (2.1); D1-D23 the durable host gaps (3.3) and, in section 10, **D1-D8 are the decisions**; the two uses of "D" are told apart by context (host gaps are quoted as "D2, D3" with a section reference; decisions are headed "D1." to "D8." in section 10). S1-S4 are the spike probes (8.2); R1-R9 the contradictions (9.2).
