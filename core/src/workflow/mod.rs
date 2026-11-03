@@ -16,8 +16,12 @@ pub(crate) mod add;
 pub(crate) mod cancel;
 pub(crate) mod describe;
 pub(crate) mod edit;
+pub(crate) mod reopen;
 pub(crate) mod row;
 pub mod start;
+
+#[cfg(test)]
+pub(crate) mod reopen_tests;
 
 /// The `workflow` group (commands.md §9): the Plan's Workflows, before and after they start.
 #[derive(clap::Subcommand, Debug)]
