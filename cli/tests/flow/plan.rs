@@ -822,6 +822,7 @@ fn new_again_in_an_archived_context_is_already_not_archived() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
     let first = inproc::new_plan_only(&fx, "pay");
+    finish_plan(&fx, "pay");
     fx.cpd(&["context", "archive", "ctx"]).ok();
     let again = fx
         .cpd(&[
@@ -835,7 +836,10 @@ fn new_again_in_an_archived_context_is_already_not_archived() {
         ])
         .ok();
     assert_eq!(again["already"], true);
-    assert_eq!(again["plan"], first["plan"]);
+    // The same Plan, as it now is: finished for the archive rule.
+    let mut expected = first["plan"].clone();
+    expected["phase"] = json!("done");
+    assert_eq!(again["plan"], expected);
     // A new Plan, and a rerun with other flags, are still refused in this order.
     refused(
         &fx.cpd(&["plan", "new", "other", "--context", "ctx", "--title", "T"]),
@@ -1207,15 +1211,6 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     };
     assert_eq!(ids(&fx), ["pay"]);
 
-    let archived = fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
-    assert_eq!(
-        archived["archived"][0],
-        json!({"kind": "plan", "id": "pay"})
-    );
-    assert_ne!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
-    fx.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
-
     let out = fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     assert_eq!(
         (&out["plan"], &out["phase"]),
@@ -1228,6 +1223,16 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
         "no_draft_jobs",
         3,
     );
+
+    finish_plan(&fx, "pay");
+    let archived = fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(
+        archived["archived"][0],
+        json!({"kind": "plan", "id": "pay"})
+    );
+    assert_ne!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
+    fx.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
 }
 
 /// Plans moving to phase `plan` at once all move, and none registers a Session. Six threads call `run_with` on the
@@ -1301,6 +1306,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let repo = inproc::setup(&fx);
     inproc::planned(&fx, &repo, "pay");
     inproc::new_plan(&fx, "refund", &repo);
+    finish_plan(&fx, "refund");
     // An archived Plan is still listed, `created_at` included (§4.2).
     fx.cpd(&["plan", "archive", "--plan", "refund"]).ok();
     fx.cpd(&[
@@ -1360,7 +1366,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
             .map(|p| p["id"].as_str().unwrap().to_owned())
             .collect()
     };
-    assert_eq!(ids(&["plan", "list", "--phase", "grounding"]), ["refund"]);
+    assert_eq!(ids(&["plan", "list", "--phase", "done"]), ["refund"]);
     assert_eq!(
         ids(&["plan", "list", "--context", "ctx", "--phase", "plan"]),
         ["pay"]
@@ -3039,6 +3045,7 @@ fn rename_works_on_an_archived_plan() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
     inproc::new_plan_only(&fx, "pay");
+    finish_plan(&fx, "pay");
     fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     let out = fx
         .cpd(&[
@@ -3058,6 +3065,17 @@ fn rename_works_on_an_archived_plan() {
 }
 
 // ---- plan archive and unarchive -------------------------------------------
+
+/// The archive rule wants a Plan `done` and its Workflows `merged` or `cancelled`: walk the fixture there.
+fn finish_plan(fx: &Fx, plan: &str) {
+    fx.env.sql(&format!(
+        "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = '{plan}' AND status NOT IN ('merged', 'cancelled');
+         UPDATE plans SET phase = 'plan' WHERE id = '{plan}' AND phase = 'grounding';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan}' AND phase = 'plan';
+         UPDATE plans SET phase = 'deploy' WHERE id = '{plan}' AND phase = 'dispatch';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = '{plan}' AND phase = 'deploy'"
+    ));
+}
 
 /// Plan `pay` with its Lead and one side fork, each with a live parked pane.
 fn plan_with_fork(fx: &Fx) -> (String, String) {
@@ -3092,6 +3110,7 @@ fn event_count(env: &TestEnv) -> i64 {
 fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_event_each() {
     let fx = Fx::with_ports();
     let (lead, fork) = plan_with_fork(&fx);
+    finish_plan(&fx, "pay");
     let (lead_pane, fork_pane) = (
         inproc::panes(&fx)
             .into_iter()
@@ -3176,6 +3195,7 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
 fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
     let fx = Fx::with_ports();
     let (lead, fork) = plan_with_fork(&fx);
+    finish_plan(&fx, "pay");
     fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     let events_before = event_count(&fx.env);
 
@@ -3205,6 +3225,7 @@ fn unarchive_inside_an_archived_context_is_refused() {
     let fx = Fx::with_ports();
     let repo = inproc::setup(&fx);
     inproc::new_plan(&fx, "pay", &repo);
+    finish_plan(&fx, "pay");
     fx.cpd(&["context", "archive", "ctx"]).ok();
     let events_before = event_count(&fx.env);
     let archived = archived_ats(&fx.env);
@@ -3287,6 +3308,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     ] {
         let fx = Fx::with_ports();
         let (_, fork) = plan_with_fork(&fx);
+        finish_plan(&fx, "pay");
         let apply = if kind == "session" {
             format!("UPDATE sessions SET state = 'working' WHERE id = '{fork}'")
         } else {
@@ -3314,6 +3336,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
 fn archive_lists_every_blocker() {
     let fx = Fx::with_ports();
     plan_with_fork(&fx);
+    finish_plan(&fx, "pay");
     store(&fx.env)
         .write("fixture", |tx| exec(tx, &job("queued")))
         .unwrap();
@@ -3355,13 +3378,15 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
                 "UPDATE workflows SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
                         pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
             )?;
-            exec(tx, "UPDATE plans SET phase = 'deploy' WHERE id = 'pay'")
+            exec(tx, "UPDATE plans SET phase = 'deploy' WHERE id = 'pay'")?;
+            exec(tx, "UPDATE workflows SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+            exec(tx, "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'")
         })
         .unwrap();
     let out = fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
     assert!(!has_pane(&fx, &lead));
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "deploy");
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "done");
     assert!(inproc::show(&fx, "pay")["plan"]["archived_at"].is_string());
 }
 
@@ -3369,6 +3394,7 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
 fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     let fx = Fx::with_ports();
     let (lead, fork) = plan_with_fork(&fx);
+    finish_plan(&fx, "pay");
     // The chat slot: the pane of window `main` running a Lead (the fork).
     let fork_pane = inproc::panes(&fx)
         .into_iter()
