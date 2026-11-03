@@ -948,7 +948,6 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
         "UPDATE plans SET phase = 'plan', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
         "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'pr'",
         "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
-        "UPDATE plans SET phase = 'deploy', done_at = NULL WHERE id = 'dn'",
         "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
     ] {
         let err = refused(&mut store, sql);
@@ -2222,7 +2221,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
         .unwrap();
     let err = refused(
         &mut store,
-        "UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'",
+        "UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'di'",
     );
     assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
@@ -4569,7 +4568,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
         ),
         vec![serde_json::json!(["pr-base-changed"])]
     );
-    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-ended-kind`, the one of `attempt-aborted-kind`, the one of `job-blocked-kind`, the one of `job-addenda`, and the six of `workflow-event-kinds`: the later migrations that add Event kinds
+    // this migration's one kind, the two of an earlier migration, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`, the one of `inbox-claim`, the one of `pr-description`, the one of `event-session-model-changed`, the one of `attempt-ended-kind`, the one of `attempt-aborted-kind`, the one of `job-blocked-kind`, the one of `job-addenda`, the one of `workflow-reopen`, and the six of `workflow-event-kinds`: the later migrations that add Event kinds
     assert_eq!(
         rows(&mut store, "SELECT count(*) FROM event_kinds"),
         vec![serde_json::json!([before
@@ -4582,6 +4581,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 3
             + 1
             + 2
+            + 1
             + 1
             + 1
             + 1

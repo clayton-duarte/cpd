@@ -656,3 +656,35 @@ fn janitor_pass_skips_a_swept_attempt_whose_driver_lock_is_held() {
     );
     assert_eq!(rig.errors(), Vec::new(), "no Event");
 }
+
+/// A cancelled Workflow whose pull request is `open` again on GitHub (pro-d362 A8) keeps its Lead worktree and branch: it is coming
+/// back. A cancelled one whose pull request is `closed` is still cleaned.
+#[test]
+fn janitor_keeps_the_lead_worktree_of_a_cancelled_workflow_with_an_open_pull_request() {
+    let mut rig = Rig::new();
+    rig.workflow("api", "cancelled");
+    rig.workflow("web", "cancelled");
+    for (key, number, state) in [("api", 901, "open"), ("web", 902, "closed")] {
+        rig.sql(&format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+               VALUES ('acme/pay', {number}, 'https://github.com/acme/pay/pull/{number}', 'T', 0, '{state}', 'none', 'none', 'opened', 'opened');
+             UPDATE workflows SET pr_number = {number}, pr_url = 'https://github.com/acme/pay/pull/{number}', pr_opened_at = 'opened',
+                                  pull_request = (SELECT id FROM pull_requests WHERE number = {number})
+              WHERE key = '{key}';"
+        ));
+    }
+
+    rig.pass();
+
+    let [api, web] = [&rig.workflows[0], &rig.workflows[1]];
+    assert_eq!(
+        rig.left(api)[..3],
+        [true, true, true],
+        "the open one keeps its worktree, registration and branch"
+    );
+    assert_eq!(
+        rig.left(web)[..3],
+        [false, false, false],
+        "the closed one is cleaned"
+    );
+}

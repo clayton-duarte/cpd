@@ -17,7 +17,8 @@ use cpd_core::session::close_lead;
 /// Both queries alias the Session `s` and its Plan `p`, and bind no parameter.
 pub(super) const LEAD_FINISHED: &str = "
        p.phase = 'done'
-       AND NOT EXISTS (SELECT 1 FROM workflows r WHERE r.plan = p.id AND r.status NOT IN ('merged', 'cancelled'))
+       AND NOT EXISTS (SELECT 1 FROM workflows r WHERE r.plan = p.id AND r.status NOT IN ('merged', 'cancelled')
+                                                  OR r.status = 'cancelled' AND EXISTS (SELECT 1 FROM pull_requests q WHERE q.id = r.pull_request AND q.state = 'open'))
        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running', 'failed'))
        AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
        AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')

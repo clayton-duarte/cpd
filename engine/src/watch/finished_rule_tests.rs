@@ -97,3 +97,45 @@ fn a_sleeping_lead_with_a_snoozed_open_inbox_item_is_not_archived_by_e14() {
         "a snoozed open item keeps the Plan unarchived"
     );
 }
+
+/// The Workflow of the Plan keeps its pull request `acme/pay#801`, stored in `state` (pro-d362: a cancelled Workflow keeps it).
+fn keep_pull_request(fx: &mut Fx, state: &str) {
+    fx.fixture(&format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored)
+           VALUES ('acme/pay', 801, 'https://github.com/acme/pay/pull/801', 'T', 0, '{state}', 'none', 'none', 'opened', 'opened', 1);
+         UPDATE workflows SET pr_number = 801, pr_url = 'https://github.com/acme/pay/pull/801', pr_opened_at = 'opened',
+                pull_request = (SELECT id FROM pull_requests WHERE number = 801)
+          WHERE plan = 'pay' AND key = 'repo';"
+    ));
+}
+
+#[test]
+fn a_lead_with_a_cancelled_workflow_whose_pull_request_is_open_is_not_put_to_sleep() {
+    let mut fx = finished();
+    keep_pull_request(&mut fx, "open");
+    sleep::run(&mut fx.engine);
+    assert!(
+        !asleep(&mut fx),
+        "an open pull request of a cancelled Workflow keeps the Lead awake"
+    );
+}
+
+#[test]
+fn a_lead_with_a_cancelled_workflow_whose_pull_request_is_closed_is_still_put_to_sleep() {
+    // The control: the same Lead with the pull request open stays awake, so that only the pull request's state differs.
+    let mut open = finished();
+    keep_pull_request(&mut open, "open");
+    sleep::run(&mut open.engine);
+    assert!(
+        !asleep(&mut open),
+        "control: an open pull request keeps the Lead awake"
+    );
+
+    let mut fx = finished();
+    keep_pull_request(&mut fx, "closed");
+    sleep::run(&mut fx.engine);
+    assert!(
+        asleep(&mut fx),
+        "a closed pull request does not keep the Lead awake"
+    );
+}

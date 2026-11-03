@@ -26,6 +26,8 @@ mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
+mod open_reopen_tests;
+#[cfg(test)]
 mod poll_tests;
 
 pub mod auto_merge;

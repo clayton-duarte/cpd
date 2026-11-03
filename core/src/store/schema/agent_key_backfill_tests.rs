@@ -206,9 +206,9 @@ fn agent_key_backfill_is_a_breaking_migration_after_101() {
         "the migration is breaking"
     );
     assert_eq!(
-        NAMED.last().map(|n| n.name),
+        NAMED.iter().rev().nth(1).map(|n| n.name),
         Some(MIGRATION),
-        "it is the last migration"
+        "only `workflow-reopen` comes after it"
     );
 }
 

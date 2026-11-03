@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 21;
+pub const PROTOCOL: u32 = 22;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -107,6 +107,7 @@ kinds! {
     WorkflowEdited = "workflow-edited",
     WorkflowDescribed = "workflow-described",
     WorkflowCancelled = "workflow-cancelled",
+    WorkflowReopened = "workflow-reopened",
     WorkflowStarted = "workflow-started",
     WorkflowBaseChanged = "workflow-base-changed",
     PrOpened = "pr-opened",
@@ -258,6 +259,7 @@ impl Kind {
             WorkflowEdited => spec([Y, Y, N, N, N], &["workflow", "fields"], &[]),
             WorkflowDescribed => spec([Y, Y, N, N, N], &["workflow"], &[]),
             WorkflowCancelled => spec([Y, Y, N, N, N], &["workflow"], &["superseded_by"]),
+            WorkflowReopened => spec([Y, Y, N, N, N], &["workflow"], &[]),
             WorkflowStarted => spec(
                 [Y, Y, N, N, N],
                 &[
@@ -404,8 +406,8 @@ mod tests {
     /// `jobs`, commands.md §3.12, Plan explore-view) and 20 (the Workflow rename: the six object kinds are
     /// `workflow-*` and the object data key is `workflow`) and 21 (agent keys: `key` in `session show`, `from_name` in `board take`).
     #[test]
-    fn the_protocol_is_21_with_the_agent_keys() {
-        assert_eq!(PROTOCOL, 21);
+    fn the_protocol_is_22_with_workflow_reopened() {
+        assert_eq!(PROTOCOL, 22);
     }
 
     #[test]

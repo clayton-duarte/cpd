@@ -27,6 +27,8 @@ mod follow_tests;
 #[cfg(test)]
 mod pr_tests;
 #[cfg(test)]
+mod reopen_tests;
+#[cfg(test)]
 mod rows_review_tests;
 #[cfg(test)]
 mod rows_tests;

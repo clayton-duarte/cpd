@@ -2230,11 +2230,11 @@ fn an_open_workflow_whose_pull_request_is_closed_is_cancelled_and_the_plan_reach
         (fx.workflow_status("web"), fx.phase()),
         ("cancelled".to_string(), "done".to_string())
     );
-    // The table's checks: no Lead worktree, start time or pull request on a cancelled PR; the old values stay in `history`.
+    // The table's checks: no Lead worktree or start time on a cancelled PR; the PR's number, url, opened time and `pull_request` are kept (A1, pro-d362).
     assert_eq!(
         fx.env.query::<i64>(
-            "SELECT count(*) FROM workflows WHERE key = 'web' AND lead_worktree IS NULL AND started_at IS NULL AND pr_number IS NULL
-               AND pr_url IS NULL AND pr_opened_at IS NULL AND pull_request IS NULL"
+            "SELECT count(*) FROM workflows WHERE key = 'web' AND lead_worktree IS NULL AND started_at IS NULL AND pr_number IS NOT NULL
+               AND pr_url IS NOT NULL AND pr_opened_at IS NOT NULL AND pull_request IS NOT NULL"
         ),
         1
     );

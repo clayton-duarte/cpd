@@ -45,6 +45,11 @@ enum Decision {
 }
 
 pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
+    cancel_in(&mut Env::open()?, args)
+}
+
+/// [`cancel`] on an opened `env`: what a test hands in.
+fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
     // The superseding Workflow as a reference of the Plan (§2.2): the bare key in the Plan itself, else `<plan>/<key>`.
@@ -53,7 +58,6 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
         .map(|r| Ok::<_, CpdError>(needs_refs(&plan, &[r])?.remove(0)))
         .transpose()?;
     let superseded = superseded.as_deref();
-    let mut env = Env::open()?;
     let mut moved_to = None;
     let mut released = None;
     let already = match env.store.read(|conn| decide(conn, &plan, &key, superseded))? {
@@ -61,11 +65,10 @@ pub(crate) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
         Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded)? {
             Decision::Already => Ok(true),
             Decision::Cancel { from, released: gave, superseded_by } => {
-                // `workflows` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` Workflow has
-                // none (the worktree on disk stays, §3.8). They are null already but for the status's own.
+                // `workflows` ties the Lead worktree and the start time to the status: a `cancelled` Workflow has none (the worktree
+                // on disk stays, §3.8). The pull request identity is kept so a reopened PR finds its Workflow (pro-d362 A1).
                 let moved = tx.execute(
-                    "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL,
-                                    pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL
+                    "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL
                       WHERE plan = ?1 AND key = ?2 AND status = ?3",
                     [plan.as_str(), key.as_str(), from],
                 )?;
@@ -483,6 +486,10 @@ fn decide_open(
         superseded_by: None,
     })
 }
+
+#[cfg(test)]
+#[path = "cancel_tests.rs"]
+mod cancel_tests;
 
 #[cfg(test)]
 mod tests {
