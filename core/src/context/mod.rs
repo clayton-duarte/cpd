@@ -69,7 +69,7 @@ pub enum Command {
     List(ListArgs),
     /// Show a Context and its records (§3.3)
     Show(ShowArgs),
-    /// Search the Context's records with full-text search (§3.3)
+    /// Search the Context's records, ranked by in-process full-text search (§3.4)
     Search(search::SearchArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
