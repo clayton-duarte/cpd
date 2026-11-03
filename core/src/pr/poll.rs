@@ -773,7 +773,7 @@ fn rebind_reopened(env: &mut Env) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError
         };
         if c.pull_request.is_none()
             && error.details().get("reason").and_then(Value::as_str)
-                == Some(crate::workflow::reopen::PR_NOT_OPEN)
+                == Some(crate::workflow::reopen::NOT_OPEN_ON_GITHUB)
         {
             continue;
         }

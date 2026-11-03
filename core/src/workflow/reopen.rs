@@ -74,7 +74,7 @@ pub fn reopenable(conn: &rusqlite::Connection) -> Result<Vec<Candidate>, CpdErro
 }
 
 /// `details.reason` of the refusal "its pull request is not open on GitHub".
-pub(crate) const PR_NOT_OPEN: &str = "pr_not_open";
+pub(crate) const NOT_OPEN_ON_GITHUB: &str = "not_open_on_github";
 
 fn refused(plan: &PlanId, key: &WorkflowKey, why: &str) -> CpdError {
     CpdError::new(
@@ -105,7 +105,7 @@ struct Row {
 /// `done`, the Plan `done -> deploy` with `done_at` NULL and a `plan-phase` Event (A3). The Lead worktree is recreated from
 /// `origin/<lead_branch>` when its path and local branch are gone; a registered worktree of that branch is kept as it is.
 /// The `pull_requests` row of the pull request is already stored (the poll writes it), matched by its url. A Workflow already `open` changes nothing (A5). A pull request that is `CLOSED` or absent is `illegal_transition`
-/// (details `reason` = `pr_not_open`, which the poll skips silently for a legacy row), with nothing written.
+/// (details `reason` = `not_open_on_github`, which the poll skips silently for a legacy row), with nothing written.
 pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopened, CpdError> {
     let row = env.store.read(|conn| {
         conn.query_row(
@@ -141,7 +141,7 @@ pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopene
     let repo = Path::new(&row.repo);
     let (number, url) =
         crate::pr::open::open_head_pr(repo, &row.lead_branch)?.ok_or_else(|| {
-            refused(plan, key, "its pull request is not open on GitHub").with("reason", PR_NOT_OPEN)
+            refused(plan, key, "its pull request is not open on GitHub").with("reason", NOT_OPEN_ON_GITHUB)
         })?;
     let pull_request: i64 = env
         .store
