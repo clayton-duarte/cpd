@@ -769,7 +769,7 @@ test("the Job kinds: the template and its shape, [tests], the kind of each Job a
   assert.match(escalations, /only an implementation Job/);
   const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
   const tests = section(spec, "## Test Jobs");
-  for (const word of ["`tests`", "`test_files`", "`[tests]`", "`build`", "`run`", "`list`", "`tests_not_found`", "guarded", "cpd job approve-tests", "derived"]) assert.ok(tests.includes(word), `spec-files.md Test Jobs must state ${word}`);
+  for (const word of ["`tests`", "`test_files`", "`[test-commands]`", "`build`", "`run`", "`list`", "`tests_not_found`", "guarded", "cpd job approve-tests", "derived"]) assert.ok(tests.includes(word), `spec-files.md Test Jobs must state ${word}`);
   const fields = /with exactly these fields.*$/m.exec(spec)![0];
   assert.match(fields, /a test Job's also has `tests` and `test_files`/);
 });

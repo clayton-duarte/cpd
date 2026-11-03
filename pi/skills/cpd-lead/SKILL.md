@@ -289,7 +289,7 @@ cpd workflow edit <key> --needs <k1,k2>
 
    **Decided work is not a draft.** A Job that only carries out a decision the User already recorded, with no open design choice, is added queued: the same command without `--draft`, with a Spec that cites the decision (`workflow add --jobs <file.json>` for a whole Workflow template). It shows in the Plan view and runs without a second approval. Undecided design (research outcomes, options, scope you propose) is a draft and goes through a Plan review. When unsure, a draft under review.
 
-   A draft may need other drafts (definition: the PR template's impl Job needs the test Job); a complete draft whose needs name a `queued`, `running` or `failed` Job is refused `draft_parked` — add it queued instead ([Rules](#rules), "Register planned work at once"). A Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of [Splitting](#splitting) apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 4). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
+   A draft may need other drafts (definition: the PR template's impl Job needs the test Job); a complete draft whose needs name a `queued`, `running` or `failed` Job is refused `draft_parked` — add it queued instead ([Rules](#rules), "Register planned work at once"). A Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of [Splitting](#splitting) apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 5). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
 
 ## 3. Dispatch
 
