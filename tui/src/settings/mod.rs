@@ -3,6 +3,8 @@
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
+#[cfg(test)]
+mod experimental_tests;
 mod model;
 #[cfg(test)]
 mod model_tests;
