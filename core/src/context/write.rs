@@ -1,4 +1,4 @@
-//! `context decide` and `note` (commands.md §3.4): one
+//! `context decide`, `note`, `ask` and `answer` (commands.md §3.4, §3.5): one
 //! record appended through [`Contexts::write`].
 
 use serde_json::json;
@@ -19,7 +19,7 @@ fn session_from_env() -> Result<Option<SessionId>, CpdError> {
         .transpose()
 }
 
-/// `context decide` and `note` (§3.4).
+/// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
 pub(super) fn write(
     command: &str,
     select: &Select,
