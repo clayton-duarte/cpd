@@ -141,7 +141,8 @@ pub fn reopen(env: &mut Env, plan: &PlanId, key: &WorkflowKey) -> Result<Reopene
     let repo = Path::new(&row.repo);
     let (number, url) =
         crate::pr::open::open_head_pr(repo, &row.lead_branch)?.ok_or_else(|| {
-            refused(plan, key, "its pull request is not open on GitHub").with("reason", NOT_OPEN_ON_GITHUB)
+            refused(plan, key, "its pull request is not open on GitHub")
+                .with("reason", NOT_OPEN_ON_GITHUB)
         })?;
     let pull_request: i64 = env
         .store
