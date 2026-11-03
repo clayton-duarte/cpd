@@ -5,7 +5,7 @@ import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard, toolCallGuard } from "./loop-guard.ts";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { exploreGuard } from "./explore.ts";
+import { exploreGuard, leadExploreGuard } from "./explore.ts";
 import { fileURLToPath } from "node:url";
 import { pinAdapter } from "./adapter-pin.ts";
 import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
@@ -72,6 +72,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const role = host.run?.info.role;
     const explored = exploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> }, ctx.cwd);
     if (explored !== undefined) return { block: true, reason: explored.block };
+    const led = leadExploreGuard(role, host.env, { name: event.toolName, arguments: event.input as Record<string, unknown> });
+    if (led !== undefined) return { block: true, reason: led.block };
     if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
       const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
       if (written !== undefined) return { block: true, reason: mainReasonText(written) };
