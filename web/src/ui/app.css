@@ -8,3 +8,4 @@
 [data-diff="remove"] { background: #ffeef0; }
 [data-side-by-side] { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 button:disabled, textarea:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+[data-shell] > header, [data-shell] > footer { grid-column: 1 / -1; }

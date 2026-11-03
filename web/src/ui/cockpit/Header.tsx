@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
 
 export function Header(): ReactElement {
-  throw new Error("not implemented");
+  return <strong data-emblem>C-P-D</strong>;
 }

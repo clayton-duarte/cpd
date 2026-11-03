@@ -5,9 +5,11 @@ import { createConnection } from "../state/connection.ts";
 import { createStore, useStore } from "../state/store.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { ContextTree } from "./cockpit/ContextTree.tsx";
+import { Header } from "./cockpit/Header.tsx";
 import { Inbox } from "./cockpit/Inbox.tsx";
 import { PlanView } from "./cockpit/PlanView.tsx";
 import { Shell } from "./cockpit/Shell.tsx";
+import { StatusBar } from "./cockpit/StatusBar.tsx";
 import type { FileReaderBoundary } from "./composer/attachments.ts";
 
 export type { FileReaderBoundary };
@@ -28,6 +30,8 @@ export function App(props: AppProps): ReactElement {
   const { cockpit, session } = state;
   return (
     <Shell
+      header={<Header />}
+      status={<StatusBar runner={session?.ref?.runner ?? null} state={session?.ref?.state ?? null} version={null} />}
       tree={
         <ContextTree
           tree={cockpit.tree}
