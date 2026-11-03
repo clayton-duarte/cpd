@@ -278,7 +278,7 @@ The name of an agent in cpd's one hierarchy, Manager > Lead > Worker, mapped 1:1
 _Avoid_: `<context>-manager`, a free-text name for a Lead or a Worker
 
 **Worker runner** (term, pro-d165):
-What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by the config key `worker_runner` when an Attempt is created and stored on it; both are kept.
+What runs a Worker: `pi` (a pi session in a tmux window) or `durable` (a headless child process of the Attempt's driver that resumes in place). Chosen by `durable_workers` in the `[experimental]` table of config.toml (contract §8.2), read through `Config::worker_runner()` when an Attempt is created and stored on it; both are kept.
 _Avoid_: engine, backend
 
 **Brief** (entity, B3):
@@ -351,6 +351,10 @@ _Avoid_: tool server, plugin
 **Attach** (mechanism, pro-d2, pro-d8):
 Giving an MCP server to one Session, explicitly with `cpd mcp attach <name>` (commands.md §24.1): not saved and never by default. Not tmux's attach (`cpd tui --attach`).
 _Avoid_: enable, load; install (as a word for it)
+
+**Experimental Feature** (term, pro-d366, pro-d367):
+A feature that is not permanent and can be turned on or off depending on how the User evaluates it. Its config lives only in the `[experimental]` table of config.toml, one bool key per feature (contract §8.2): `durable_workers` (the Worker runner), `write_curation`, `failure_triage` and `turn_question_guard`. The commands that show and set them are in commands.md §14.2b.
+_Avoid_: flag, beta; toggle (for a setting that is permanent)
 
 ## Checks and gates
 
