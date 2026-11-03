@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
-import { createRegistry, Harness, watchEvents, type Extension } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, type Extension } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
@@ -15,7 +15,8 @@ type Root = {
   abort(ctx: typeof BACKGROUND_CONTEXT, opts: { background: boolean }): Promise<void>;
   configure(change: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<void>;
   submit(input: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ readonly id: number; status(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: string }>; wait(ctx: typeof BACKGROUND_CONTEXT): Promise<{ status: "done" | "unanswered" | "failed" }>; }>;
-  viewState(ctx: typeof BACKGROUND_CONTEXT): Promise<{ value: { entries: unknown } }>;
+  context(ctx: typeof BACKGROUND_CONTEXT): Promise<{ entries: unknown }>;
+  watch(ctx: typeof BACKGROUND_CONTEXT, window?: unknown): Promise<{ readonly value: unknown; start(listener: (call: ViewCall, ctx: unknown) => Promise<void>): void; stop(): Promise<unknown>; readonly closed: Promise<unknown> }>;
   compact(instructions: string | undefined, ctx: typeof BACKGROUND_CONTEXT): Promise<number>;
   configure(change: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<void>;
   agent(ctx: typeof BACKGROUND_CONTEXT): Promise<{ model?: { provider: string; modelId: string }; thinkingLevel: string }>;
@@ -23,22 +24,24 @@ type Root = {
 };
 
 /** The Conversation of a root and its registry (contract §6.13): the pure part of `openConversation`, testable with no pi-durable. */
-export type EventStream = {
-  readonly snapshot: unknown;
-  start(listener: (events: readonly unknown[]) => Promise<void>): void;
+export type ViewCall =
+  | { kind: "value"; value: unknown; ops: readonly unknown[]; retired: boolean }
+  | { kind: "failed"; error: unknown };
+export type ViewStream = {
+  readonly value: unknown;
+  start(listener: (call: ViewCall) => Promise<void>): void;
   stop(): Promise<unknown>;
   readonly closed: Promise<unknown>;
 };
 export type AbortOutcome = "aborted" | "already_placed" | "settled" | "not_found";
-/** What `conversationOf` calls on pi-durable beyond the root: the Harness and `watchEvents`, injected so a test passes fakes (contract §6.14 "The event stream"). */
+/** What `conversationOf` calls on pi-durable beyond the root: the Harness, injected so a test passes fakes (contract §6.14 "The event stream"). */
 export type Durable = {
   harness: { abortSubmission(id: number, ctx: typeof BACKGROUND_CONTEXT, conversationId?: unknown): Promise<AbortOutcome> };
-  watchEvents(harness: unknown, conversationId: unknown, ctx: typeof BACKGROUND_CONTEXT): Promise<{ snapshot: unknown; start(listener: (events: readonly unknown[], context: unknown) => Promise<void>): void; stop(): Promise<unknown>; closed: Promise<unknown> }>;
 };
 export type SubmissionOf = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 export type Extras = {
   submit(input: Input): Promise<SubmissionOf>;
-  watch(): Promise<EventStream>;
+  watch(): Promise<ViewStream>;
   abort(opts: { background: boolean }): Promise<void>;
   abortSubmission(id: number): Promise<AbortOutcome>;
 };
@@ -47,13 +50,7 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
   const r = root as Root;
   return {
     watch: async () => {
-      const stream = await durable.watchEvents(durable.harness, r.id, BACKGROUND_CONTEXT);
-      return {
-        snapshot: stream.snapshot,
-        start: (listener: (events: readonly unknown[]) => Promise<void>) => stream.start((events) => listener(events)),
-        stop: () => stream.stop(),
-        closed: stream.closed,
-      };
+      throw new Error("not implemented");
     },
     abort: (opts: { background: boolean }) => r.abort(BACKGROUND_CONTEXT, opts),
     abortSubmission: (id: number) => durable.harness.abortSubmission(id, BACKGROUND_CONTEXT, r.id),
@@ -74,7 +71,9 @@ export function conversationOf(root: unknown, registry: { install(extension: Ext
       if (status !== "done") throw new Error(`the write ended ${status}`);
     },
     install: (extension) => registry.install(extension),
-    entries: async () => (await r.viewState(BACKGROUND_CONTEXT)).value.entries as never,
+    entries: async () => {
+      throw new Error("not implemented");
+    },
     compact: (instructions) => r.compact(instructions, BACKGROUND_CONTEXT),
     configure: (change) => r.configure(change, BACKGROUND_CONTEXT),
     agent: () => r.agent(BACKGROUND_CONTEXT),
@@ -105,5 +104,5 @@ export async function openConversation(
   const root = await harness.root(BACKGROUND_CONTEXT, {
     agent: { model: { provider: o.model.provider, modelId: o.model.modelId }, thinkingLevel: o.model.thinkingLevel as never, cwd: o.cwd } as never,
   });
-  return conversationOf(root, registry, harness.closed, { harness, watchEvents } as never) as never;
+  return conversationOf(root, registry, harness.closed, { harness } as never) as never;
 }

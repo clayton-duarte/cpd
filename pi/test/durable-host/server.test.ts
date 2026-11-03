@@ -4,8 +4,8 @@ import { LIMITS, ProtocolError } from "../../durable-host/protocol.ts";
 import { Ring } from "../../durable-host/ring.ts";
 import { type Connection, createServer, type ServerDeps } from "../../durable-host/server.ts";
 
-const HELLO = JSON.stringify({ type: "hello", protocol: 1, min_protocol: 1, client: "t" });
-const snap = { type: "snapshot", n: 0 };
+const HELLO = JSON.stringify({ type: "hello", protocol: 2, min_protocol: 2, client: "t" });
+const snap = { conversation: "c", entries: [], docs: {} };
 
 type FakeConn = Connection & { lines: string[]; closes: number; buf: number; msgs(): any[] };
 const conn = (): FakeConn => {
@@ -118,7 +118,7 @@ test("hello is answered by welcome with the picked protocol, the epoch and a cli
   assert.deepEqual(c.msgs(), [
     {
       type: "welcome",
-      protocol: 1,
+      protocol: 2,
       host_version: "9.9",
       pi_durable: "1.3.0",
       session: "s1",
@@ -135,11 +135,11 @@ test("hello is answered by welcome with the picked protocol, the epoch and a cli
 test("a hello with no common protocol gets protocol_mismatch with the versions and the connection is closed", () => {
   const { open } = setup();
   const { c, h } = open(false);
-  h.receive(JSON.stringify({ type: "hello", protocol: 3, min_protocol: 2, client: "t" }));
+  h.receive(JSON.stringify({ type: "hello", protocol: 4, min_protocol: 3, client: "t" }));
   const [m] = c.msgs();
   assert.equal(m.type, "error");
   assert.equal(m.code, "protocol_mismatch");
-  assert.deepEqual(m.details, { host: [1], client: [2, 3] });
+  assert.deepEqual(m.details, { host: [2], client: [3, 4] });
   assert.equal(c.msgs().length, 1);
   assert.equal(c.closes, 1);
 });
@@ -208,14 +208,14 @@ test("ping works before attach and carries its req", () => {
   assert.deepEqual(d.c.msgs(), [{ type: "pong", req: "p2" }]);
 });
 
-test("attach without a cursor answers attached in snapshot mode then the snapshot frame, the ring frames and host_state", () => {
+test("attach without a cursor answers attached in view mode then the view frame, the ring frames and host_state", () => {
   const { open, ring, server } = setup();
   const f2 = ring.append([{ type: "message", n: 1 }]);
   const { c, h } = open();
   h.receive(JSON.stringify({ type: "attach", req: "a1" }));
   assert.deepEqual(c.msgs().slice(1), [
-    { type: "attached", req: "a1", mode: "snapshot", epoch: "e1", from_seq: 1, head_seq: 2, client_id: "c1" },
-    { type: "snapshot", epoch: "e1", seq: 1, snapshot: snap },
+    { type: "attached", req: "a1", mode: "view", epoch: "e1", from_seq: 1, head_seq: 2, client_id: "c1" },
+    { type: "view", epoch: "e1", seq: 1, view: snap },
     f2,
     hostState(1),
   ]);
@@ -274,7 +274,7 @@ test("a client attaching while frames arrive gets every frame once and in seq or
   server.frame(f4);
   const seqs = late.c
     .msgs()
-    .filter((m) => m.type === "snapshot" || m.type === "events")
+    .filter((m) => m.type === "view" || m.type === "ops")
     .map((m) => m.seq);
   assert.deepEqual(seqs, [1, 2, 3, 4]);
 });
@@ -394,7 +394,7 @@ test("a client whose output exceeds the slow client limit gets bye slow_client a
   const n = c.lines.length;
   server.frame(ring.append([{ n: 1 }]));
   const msgs = c.msgs().slice(n);
-  assert.equal(msgs[0].type, "events");
+  assert.equal(msgs[0].type, "ops");
   assert.deepEqual(msgs[msgs.length - 1], { type: "bye", reason: "slow_client", reconnect: true });
   assert.equal(c.closes, 1);
 });
@@ -530,8 +530,8 @@ test("attach replays each held request with replayed true after the frames and b
   const { c, h } = open();
   h.receive(JSON.stringify({ type: "attach", req: "a1" }));
   assert.deepEqual(c.msgs().slice(1), [
-    { type: "attached", req: "a1", mode: "snapshot", epoch: "e1", from_seq: 1, head_seq: 1, client_id: "c1" },
-    { type: "snapshot", epoch: "e1", seq: 1, snapshot: snap },
+    { type: "attached", req: "a1", mode: "view", epoch: "e1", from_seq: 1, head_seq: 1, client_id: "c1" },
+    { type: "view", epoch: "e1", seq: 1, view: snap },
     { type: "ui_request", id: "u1", method: "select", title: "approve", options: ["Allow once", "Deny"], purpose: "secret_approve", created_at: 100, replayed: true },
     { type: "ui_request", id: "u2", method: "input", title: "name", placeholder: "your name", purpose: "ask_user_question", created_at: 200, expires_at: 500, replayed: true },
     hostState(1),
@@ -559,7 +559,7 @@ test("attach with no held request sends no ui_request", () => {
   h.receive(JSON.stringify({ type: "attach", req: "a1" }));
   assert.deepEqual(
     c.msgs().slice(1).map((m) => m.type),
-    ["attached", "snapshot", "host_state"],
+    ["attached", "view", "host_state"],
   );
 });
 

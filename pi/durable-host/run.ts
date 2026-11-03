@@ -32,16 +32,16 @@ import { Ring } from "./ring.ts";
 import { createServer, type Server } from "./server.ts";
 import { hostExtension } from "./extension.ts";
 import { registerHostTools } from "./tools.ts";
-import type { EventStream } from "../durable-worker/harness.ts";
+import type { ViewCall, ViewStream } from "../durable-worker/harness.ts";
 import type { Connection } from "./server.ts";
 import { newTurnState, prepareTurn, reminderFor, type StoredEntry, type TurnPort, type Write } from "./turn.ts";
 
-export type { EventStream };
+export type { ViewCall, ViewStream };
 export type Submission = { id: number; status(): Promise<string>; wait(): Promise<"done" | "unanswered"> };
 /** `write` appends an entry (`submit({ type: "write", ... })`): the first message and the context updates. */
 /** The change a retier applies (contract §6.18): pi-durable's `AgentChange`, narrowed to the two fields the host sets. */
 export type AgentChange = { model?: { provider: string; modelId: string } | null; thinkingLevel?: string | null };
-export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<EventStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
+export type Conversation = { submit(input: Input): Promise<Submission>; write(write: Write): Promise<unknown>; install(extension: Extension): void; entries(): Promise<readonly unknown[]>; closed: Promise<unknown>; watch(): Promise<ViewStream>; abort(opts: { background: boolean }): Promise<void>; abortSubmission(id: number): Promise<"aborted" | "already_placed" | "settled" | "not_found"> } & ConversationCommands;
 
 /** The four conversation commands of contract 6.17 a `Conversation` must carry (built by `conversationOf`). */
 export type ConversationCommands = {
@@ -147,7 +147,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
   let follower: { start(): void; stop(): void } | undefined;
   let server: Server | undefined;
   let listener: { close(): Promise<void> } | undefined;
-  let current: EventStream | undefined;
+  let current: ViewStream | undefined;
   let over = false;
   let byeReason: "shutdown" | "storage_failed" = "shutdown";
   let end!: (code: number, reason?: "shutdown" | "storage_failed") => void;
@@ -438,7 +438,7 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
     // The event stream: the ring of what clients are caught up on (contract §6.14).
     const first = current!;
     const epoch = deps.newEpoch();
-    const ring = new Ring(epoch, first.snapshot);
+    const ring = new Ring(epoch, first.value);
     let from = "";
     let nextClient = 0;
     const srv = createServer({
@@ -548,25 +548,10 @@ export async function runHost(config: Config, deps: Deps): Promise<number> {
       clientId: () => (from = `c${++nextClient}`),
     });
     server = srv;
-    const attachStream = (s: EventStream): void => {
-      s.start(async (events) => {
-        if (s !== current) return;
-        srv.frame(ring.append([...events]));
-        if (!ring.shouldRebase(events.some((e) => (e as { type?: unknown }).type === "run_end"))) return;
-        // Retire this stream first (events it delivers after this point are in the next snapshot); its stop is not awaited, since it may wait for this very listener (unverified in pi-durable 1.3.0).
-        current = undefined;
-        s.stop().catch((e) => failed("stopping the stream", e));
-        const next = await conversation.watch();
-        current = next;
-        srv.frame(ring.rebase(next.snapshot));
-        attachStream(next);
-      });
-      s.closed.then((reason) => {
-        if (s !== current) return;
-        const why = (reason as { reason?: unknown } | null)?.reason;
-        if (why === "stopped") return;
-        failed("the event stream ended", endText(reason));
-        end(1, "storage_failed");
+    // STUB (state-tests): the listener and the end of the watch are not implemented.
+    const attachStream = (s: ViewStream): void => {
+      s.start(async (_call: ViewCall) => {
+        throw new Error("not implemented");
       });
     };
     attachStream(first);

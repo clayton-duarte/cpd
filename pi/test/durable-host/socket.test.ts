@@ -7,8 +7,9 @@ import { CONFIG, EPOCH, withHost } from "./rig.ts";
 const SOCK = "/cpd-home/run/host/s-lead.sock";
 const IDLE = ["session", "state", "idle", "--session", CONFIG.session];
 const IDLE_REPLY = ["session", "state", "idle", "--reply", "--session", CONFIG.session];
-const snapshotFrame = (seq: number, n: number) => ({ type: "snapshot", epoch: EPOCH, seq, snapshot: { type: "snapshot", n } });
-const eventsFrame = (seq: number, events: unknown[]) => ({ type: "events", epoch: EPOCH, seq, events });
+const viewFrame = (seq: number, n: number) => ({ type: "view", epoch: EPOCH, seq, view: { type: "view", n } });
+const opsFrame = (seq: number, ops: unknown[]) => ({ type: "ops", epoch: EPOCH, seq, ops });
+const live = (run: boolean) => ({ docs: { "pi.live": run ? { run: { id: 1 } } : {} } });
 const submit = (req: string, over: Record<string, unknown> = {}) => ({ type: "submit", req, text: "hi", when_busy: "followUp", ...over });
 const types = (c: { received(): Record<string, unknown>[] }) => c.received().map((m) => m.type);
 const hostStates = (c: { received(): Record<string, unknown>[] }) => c.received().filter((m) => m.type === "host_state");
@@ -36,56 +37,59 @@ test("runHost listens on the socket path of the Session after it opens the store
   });
 });
 
-test("runHost gives an attaching client the snapshot of the stream as the first frame", { timeout: 20_000 }, async () => {
+test("runHost gives an attaching client the view of the watch as the first frame", { timeout: 20_000 }, async () => {
   await withHost({}, async (r) => {
     await r.ready();
     const c = await r.attach();
     const got = c.received();
     assert.equal(got[0]?.type, "welcome");
-    assert.deepEqual(got[1], { type: "attached", req: "attach-1", mode: "snapshot", epoch: EPOCH, from_seq: 1, head_seq: 1, client_id: "c1" });
-    assert.deepEqual(got[2], snapshotFrame(1, 1));
+    assert.deepEqual(got[1], { type: "attached", req: "attach-1", mode: "view", epoch: EPOCH, from_seq: 1, head_seq: 1, client_id: "c1" });
+    assert.deepEqual(got[2], viewFrame(1, 1));
     assert.equal(got[3]?.type, "host_state");
   });
 });
 
-test("runHost appends each batch of the stream to the ring and writes it to attached clients", { timeout: 20_000 }, async () => {
+test("runHost appends the ops of each watch call to the ring and writes them to attached clients", { timeout: 20_000 }, async () => {
   await withHost({}, async (r) => {
     await r.ready();
     const first = await r.attach();
-    const e1 = { type: "turn_start" };
-    const e2 = { type: "turn_end" };
-    await r.streams[0]!.push([e1, e2]);
-    await r.streams[0]!.push([{ type: "turn_start" }]);
-    assert.deepEqual(first.received().filter((m) => m.type === "events"), [eventsFrame(2, [e1, e2]), eventsFrame(3, [{ type: "turn_start" }])]);
+    const o1 = ["p", ["entries"], 0, 0, [{ id: "a" }]];
+    const o2 = ["s", ["docs", "pi.live"], { run: null }];
+    const o3 = ["a", ["docs", "pi.live", "text"], "x"];
+    await r.streams[0]!.push([o1, o2], { n: "v2" });
+    await r.streams[0]!.push([o3], { n: "v3" });
+    assert.deepEqual(first.received().filter((m) => m.type === "ops"), [opsFrame(2, [o1, o2]), opsFrame(3, [o3])]);
 
     const late = await r.attach();
-    assert.deepEqual(late.received().slice(1, 5).map((m) => m.type), ["attached", "snapshot", "events", "events"]);
+    assert.deepEqual(late.received().slice(1, 5).map((m) => m.type), ["attached", "view", "ops", "ops"]);
     assert.equal(late.received()[1]?.head_seq, 3);
 
     const resumed = await r.attach({ epoch: EPOCH, seq: 2 });
     assert.deepEqual(resumed.received()[1], { type: "attached", req: "attach-1", mode: "resume", epoch: EPOCH, from_seq: 3, head_seq: 3, client_id: "c3" });
-    assert.deepEqual(resumed.received()[2], eventsFrame(3, [{ type: "turn_start" }]));
+    assert.deepEqual(resumed.received()[2], opsFrame(3, [o3]));
   });
 });
 
-test("runHost rebases the stream and broadcasts a snapshot frame when the ring exceeds the bound at a run end", { timeout: 20_000 }, async () => {
+test("runHost rebases the ring with the current view at a run end without opening the watch again", { timeout: 20_000 }, async () => {
   await withHost({}, async (r) => {
     await r.ready();
     const c = await r.attach();
-    for (let i = 0; i < LIMITS.rebaseAtRunEnd; i++) await r.streams[0]!.push([{ type: "turn_start" }]);
-    assert.equal(r.streams.length, 1, "no rebase below the bound, run end or not");
-    await r.streams[0]!.push([{ type: "run_end", inputs: [] }]);
-    assert.equal(r.streams.length, 2, "a second stream was opened");
-    assert.equal(r.streams[0]!.stopped, 1);
-    assert.equal(r.streams[1]!.started, 1);
+    const op = ["a", ["docs", "pi.live", "text"], "x"];
+    await r.streams[0]!.push([], live(true));
+    for (let i = 1; i < LIMITS.rebaseAtRunEnd; i++) await r.streams[0]!.push([op], live(true));
+    assert.equal(r.streams[0]!.stopped, 0, "no rebase below the bound, run end or not");
+    const ended = live(false);
+    await r.streams[0]!.push([["d", ["docs", "pi.live"]]], ended);
+    assert.equal(r.streams.length, 1, "the watch is not opened again");
+    assert.equal(r.streams[0]!.stopped, 0, "the watch is not stopped");
     const got = c.received();
-    assert.deepEqual(got.at(-2), eventsFrame(LIMITS.rebaseAtRunEnd + 2, [{ type: "run_end", inputs: [] }]));
-    assert.deepEqual(got.at(-1), snapshotFrame(LIMITS.rebaseAtRunEnd + 3, 2));
-    assert.equal(r.ending.code, undefined, "the stop of a rebase is not a failure");
+    assert.deepEqual(got.at(-2), opsFrame(LIMITS.rebaseAtRunEnd + 2, [["d", ["docs", "pi.live"]]]));
+    assert.deepEqual(got.at(-1), { type: "view", epoch: EPOCH, seq: LIMITS.rebaseAtRunEnd + 3, view: ended });
+    assert.equal(r.ending.code, undefined, "a rebase is not a failure");
     assert.ok(!got.some((m) => m.type === "bye"));
 
     const late = await r.attach();
-    assert.deepEqual(late.received()[1], { type: "attached", req: "attach-1", mode: "snapshot", epoch: EPOCH, from_seq: LIMITS.rebaseAtRunEnd + 3, head_seq: LIMITS.rebaseAtRunEnd + 3, client_id: "c2" });
+    assert.deepEqual(late.received()[1], { type: "attached", req: "attach-1", mode: "view", epoch: EPOCH, from_seq: LIMITS.rebaseAtRunEnd + 3, head_seq: LIMITS.rebaseAtRunEnd + 3, client_id: "c2" });
   });
 });
 
@@ -219,11 +223,11 @@ test("runHost sends bye shutdown to clients before it reports stopped and return
   });
 });
 
-test("runHost sends bye storage_failed and returns 1 when the stream ends with a failure", { timeout: 20_000 }, async () => {
+test("runHost sends bye storage_failed and returns 1 when the watch ends with a failure", { timeout: 20_000 }, async () => {
   await withHost({}, async (r) => {
     await r.ready();
     const c = await r.attach();
-    r.streams[0]!.settle({ reason: "listener_error", error: new Error("boom") });
+    r.streams[0]!.settle({ kind: "listener_error", error: new Error("boom") });
     await r.drain();
     assert.equal(r.ending.code, 1);
     assert.deepEqual(c.received().at(-1), { type: "bye", reason: "storage_failed", reconnect: true });
@@ -233,10 +237,23 @@ test("runHost sends bye storage_failed and returns 1 when the stream ends with a
   await withHost({}, async (r) => {
     await r.ready();
     const c = await r.attach();
-    r.closeConversation({ reason: "failed", error: new Error("disk I/O error") });
+    r.closeConversation({ kind: "failed", error: new Error("disk I/O error") });
     await r.drain();
     assert.equal(r.ending.code, 1);
     assert.deepEqual(c.received().at(-1), { type: "bye", reason: "storage_failed", reconnect: true });
+  });
+});
+
+test("runHost sends bye storage_failed and returns 1 when the watch delivers a failed call", { timeout: 20_000 }, async () => {
+  await withHost({}, async (r) => {
+    await r.ready();
+    const c = await r.attach();
+    await r.streams[0]!.fail(new Error("boom"));
+    await r.drain();
+    assert.equal(r.ending.code, 1);
+    assert.deepEqual(c.received().at(-1), { type: "bye", reason: "storage_failed", reconnect: true });
+    assert.ok(r.order.indexOf("bye") < r.order.indexOf("state:stopped"), `bye after stopped: ${r.order.join(", ")}`);
+    assert.equal(r.listener.closes, 1);
   });
 });
 
