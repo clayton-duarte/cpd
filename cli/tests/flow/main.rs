@@ -7,6 +7,7 @@ mod common;
 mod agent_forbidden;
 mod agent_key_names;
 mod agent_key_worker;
+mod archive_blockers;
 mod ask;
 mod attempt;
 mod attempt_abort;
