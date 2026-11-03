@@ -1,14 +1,14 @@
 # Knowledge plane
 
-The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **holographic search index** built over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (`cpd context show --record hs-d802`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
+The knowledge plane is cpd's memory of what the teams have learned: the **Context records**, the **in-process full-text search** over them, and the **curation and distillation** that classify, compress and propose them. It is deliberately separate from the **Event ledger**, which records what happened. State (the ledger) answers "what is true now"; knowledge (the plane) answers "what do we know". The split is the decision of `hs-d802` (`cpd context show --record hs-d802`), verified in [architecture-verification.md §8](../research/architecture-verification.md).
 
 ```mermaid
 flowchart LR
   subgraph KNOWLEDGE["knowledge plane"]
     REC["Context records — typed, append-only"]
-    IDX["holographic index (derived)"]
+    IDX["FTS5 search (in memory, per call)"]
     CUR["curation / distillation"]
-    IDX -.->|"projected lazily at search"| REC
+    IDX -.->|"built from the records at each search"| REC
     CUR -->|"topic, short, proposals"| REC
   end
   subgraph STATE["Event ledger"]
@@ -20,7 +20,7 @@ flowchart LR
 
 ## Two planes, one database
 
-"Separate plane" means separate tables and a derived index, **not a second store**: both the Context records and the Events live in the one `cpd.db` file ([contract §4.1](../contract.md), the database; [contract §4.6](../contract.md), "cpd.db stays the source of truth"). The ledger is the `events` table and the append-only Event log ([CONTEXT — Event](../CONTEXT.md)); the plane is the `contexts` and `context_records` tables ([CONTEXT — Context store](../CONTEXT.md)) plus the per-Context index that is projected from them.
+"Separate plane" means separate tables and a derived index, **not a second store**: both the Context records and the Events live in the one `cpd.db` file ([contract §4.1](../contract.md), the database; [contract §4.6](../contract.md), "cpd.db stays the source of truth"). The ledger is the `events` table and the append-only Event log ([CONTEXT — Event](../CONTEXT.md)); the plane is the `contexts` and `context_records` tables ([CONTEXT — Context store](../CONTEXT.md)) plus the in-memory search index that each search builds from them.
 
 | | Knowledge plane | Event ledger |
 |---|---|---|
@@ -42,16 +42,16 @@ A Context is the shared knowledge of two or more Plans ([CONTEXT — Context](..
 
 The old digest-writing run and the git store are gone; records are rendered on demand, not stored ([contract §4.6](../contract.md)).
 
-## The holographic search index
+## The search index
 
-`cpd context search` does not scan records directly: it reaches the **holographic memory engine** through a small bridge spawned per operation ([contract §4.6](../contract.md), "The holographic engine rail"; [commands §3.4](../commands.md)). The index is:
+`cpd context search` ranks the Context's records with an **in-process SQLite FTS5** table, built in memory on each call and dropped when the call returns ([contract §4.6](../contract.md), "The search rail"; [commands §3.4](../commands.md)). The index is:
 
-- **derived**, one per Context, at `<context_engine_dir>/<context>.db`, projected lazily at search time and **never on writes** — `cpd.db` stays the source of truth ([contract §4.6](../contract.md));
-- fed by the bridge `contrib/holographic/bridge.py`, which speaks JSON lines and indexes `topic`, `short` and `text` against cpd's record id ([contract §4.6](../contract.md));
-- rebuilt incrementally when it is stale, before each search ([contract §4.6](../contract.md) "Watermark in Index and staleness");
-- optional: missing software is `engine_missing`, and `context_engine_enabled = false` disables it (`engine_disabled`), never a silent no-hit ([contract §4.6](../contract.md)).
+- **never stored**: nothing persists and nothing is rebuilt, so a record written or deleted is seen on the next call and no index can go stale; `cpd.db` stays the source of truth ([contract §4.6](../contract.md));
+- built from the records (`context_records`) and their curations (`record_curations`: `topic` and `short`); the store is only read;
+- ranked by `bm25`, the record's id weighted most, and then filtered by the candidate selection of [contract §4.6](../contract.md): the pending duplicate and superseded retirements are hidden unless `--all`, and a weak tail of hits is dropped;
+- no engine and no process: there is nothing to install, nothing that can be missing or disabled, and a malformed query is a `usage` error, never a silent no-hit.
 
-Because the index is derived from the records, deleting it loses nothing: the records are the truth.
+Because the index is built from the records on every call, nothing is lost by its absence: the records are the truth.
 
 ## Curation and distillation
 
@@ -74,7 +74,7 @@ The plane is not the state: a Context record is knowledge that outlives the Jobs
 
 ## Sources
 
-- [contract.md](../contract.md) — §2.2 "Context record" and "Event", §3.7 (engine, E9), §4.1 (the database), §4.6 (the Context store, retirement, the holographic engine rail, the distiller), §5 (Events).
+- [contract.md](../contract.md) — §2.2 "Context record" and "Event", §3.7 (engine, E9), §4.1 (the database), §4.6 (the Context store, retirement, the search rail, the distiller), §5 (Events).
 - [commands.md](../commands.md) — §3.5 (`context decide`, `note`, `ask`), §3.6 (`context answer`), §3.13 (`context distill`).
 - [CONTEXT.md](../CONTEXT.md) — Context record, Context store, Distilled Context, Event.
 - [architecture-verification.md](../research/architecture-verification.md) — §8 (the knowledge plane), §11 (the boundaries).
