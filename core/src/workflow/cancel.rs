@@ -65,11 +65,10 @@ fn cancel_in(env: &mut Env, args: CancelArgs) -> Result<Output, CpdError> {
         Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded)? {
             Decision::Already => Ok(true),
             Decision::Cancel { from, released: gave, superseded_by } => {
-                // `workflows` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` Workflow has
-                // none (the worktree on disk stays, §3.8). They are null already but for the status's own.
+                // `workflows` ties the Lead worktree and the start time to the status: a `cancelled` Workflow has none (the worktree
+                // on disk stays, §3.8). The pull request identity is kept so a reopened PR finds its Workflow (pro-d362 A1).
                 let moved = tx.execute(
-                    "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL,
-                                    pr_number = NULL, pr_url = NULL, pr_opened_at = NULL, pull_request = NULL
+                    "UPDATE workflows SET status = 'cancelled', lead_worktree = NULL, started_at = NULL
                       WHERE plan = ?1 AND key = ?2 AND status = ?3",
                     [plan.as_str(), key.as_str(), from],
                 )?;
