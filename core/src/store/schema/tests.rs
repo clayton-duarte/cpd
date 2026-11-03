@@ -42,6 +42,8 @@ fn at_version(conn: &Connection, n: usize) {
 /// `workflow-event-kinds` adds their new names and leaves these in `event_kinds` as history, since past Events
 /// hold them (contract §4.5 K1, §5.2).
 const RETIRED_OBJECT_KINDS: usize = 6;
+/// `workflow-reopen` adds `workflow-reopened` to `event_kinds` before `events::Kind` names it (the next Job); drop this when it does.
+const REOPEN_KIND_NOT_YET_IN_KIND: usize = 1;
 
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
@@ -948,7 +950,6 @@ fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_bac
         "UPDATE plans SET phase = 'plan', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
         "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'pr'",
         "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
-        "UPDATE plans SET phase = 'deploy', done_at = NULL WHERE id = 'dn'",
         "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
     ] {
         let err = refused(&mut store, sql);
@@ -2222,7 +2223,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
         .unwrap();
     let err = refused(
         &mut store,
-        "UPDATE workflows SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'",
+        "UPDATE workflows SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'di'",
     );
     assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
@@ -2735,7 +2736,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
         assert_eq!(
             rows_after.remove("event_kinds").map(|r| r.len()),
-            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS)
+            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS + REOPEN_KIND_NOT_YET_IN_KIND)
         );
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(
@@ -4591,7 +4592,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 1
             + 1
             + 1
-            + RETIRED_OBJECT_KINDS as i64])]
+            + RETIRED_OBJECT_KINDS as i64
+            + REOPEN_KIND_NOT_YET_IN_KIND as i64])]
     );
 }
 
