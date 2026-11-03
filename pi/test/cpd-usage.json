@@ -323,6 +323,21 @@
     },
     "required": []
   },
+  "context reads": {
+    "flags": {
+      "--channel": true,
+      "--context": true,
+      "--help": false,
+      "--min-sessions": true,
+      "--plan": true,
+      "--since": true
+    },
+    "positionals": {
+      "max": 0,
+      "min": 0
+    },
+    "required": []
+  },
   "context reindex": {
     "flags": {
       "--context": true,

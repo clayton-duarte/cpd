@@ -107,6 +107,8 @@ pub enum Command {
     /// Decide the pending retirements (§3.16)
     #[command(hide = true)]
     Retire(curation::RetireArgs),
+    /// List the Context records Sessions have read or cited (§3.18)
+    Reads(reads::ReadsArgs),
 }
 
 /// A Jira key (a Context's Epic, a Workflow's ticket): `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -332,6 +334,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Delete(args) => delete::delete(args),
         Command::Curation(args) => curation::curation(args),
         Command::Retire(args) => curation::retire(args),
+        Command::Reads(args) => reads::reads(args),
     }
 }
 
