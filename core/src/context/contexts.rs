@@ -238,6 +238,9 @@ impl<'a> Contexts<'a> {
             }) {
                 return Ok(Next::Retry(seq, record));
             }
+            if let Some((seq, record)) = in_force_duplicate(conn, context, &draft, text.as_str())? {
+                return Ok(Next::Retry(seq, record));
+            }
             check_links(conn, context, &draft)?;
             if !no_supersedes {
                 check_prose(conn, context, &draft, text.as_str())?;
@@ -295,6 +298,38 @@ impl<'a> Contexts<'a> {
             })
         })
     }
+}
+
+/// An in-force record of the same kind as `draft` with the same trimmed text and the same supersedes list (§4.6 "A write").
+fn in_force_duplicate(
+    conn: &Connection,
+    context: &ContextId,
+    draft: &Draft,
+    text: &str,
+) -> Result<Option<(i64, Record)>, CpdError> {
+    if !matches!(draft.kind(), RecordKind::Decision | RecordKind::Note) {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq",
+        Record::COLUMNS
+    ))?;
+    let records = stmt
+        .query_map([context.as_str()], Record::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let Some(highest) = records.last().map(|(seq, _)| *seq) else {
+        return Ok(None);
+    };
+    let retired = super::inforce::retired(conn, context)?;
+    let found = super::inforce::in_force_without(&records, highest, &retired)
+        .into_iter()
+        .find(|(_, r)| {
+            r.kind() == draft.kind()
+                && r.text.trim() == text.trim()
+                && r.supersedes() == draft.supersedes()
+        })
+        .cloned();
+    Ok(found)
 }
 
 /// §4.6 "A write": `supersedes` names an existing record of a kind the writing

@@ -291,7 +291,7 @@ A Context and its records (§2.2, §4.6). The records live only in the database 
 
 **Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's records for this machine and letter (§2.1). The write transaction makes it race-free; only this machine writes its letter sequence.
 
-**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Any other write appends a new record; records are never edited.
+**Retries.** A record write is recognised as a retry and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Also, a `decide` or `note` whose trimmed text and `supersedes` list equal an in-force record of the same kind (any machine or session) returns that record with `"already": true`; a different kind, list or text, or a record out of force does not dedupe. Any other write appends a new record; records are never edited.
 
 ### 3.1 `context new`
 
