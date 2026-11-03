@@ -43,8 +43,9 @@ fn write_executable_over_a_running_script_does_not_fail() {
     // (vault `cpd`) and reaches `read_value`, which blocks on stdin to EOF.
     env.sql(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'ctx', 't', 't');\
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 's1', 't');\
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)\
-         VALUES ('s1', 'lead', 'ctx', NULL, 'Lead', '/', 'S3', 'idle', 't', 't');",
+         VALUES ('s1', 'lead', 'ctx', 'pay', 'Lead', '/', 'S3', 'idle', 't', 't');",
     );
     let path = env.bin().join("running");
     copy_executable(CPD, &path);

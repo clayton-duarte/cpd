@@ -146,8 +146,8 @@ fn e2_still_stops_a_paneless_session_whose_attempt_is_pi_or_ended() {
     add_worker_session(&fx, "w-ended", "web", "idle");
     // A Session with no Attempt (an archived Lead, so E2 does not restart it) and no pane.
     fx.env.sql(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at)
-           VALUES ('lead2', 'lead', 'ctx', 'pay', 'Lead two', '/', 'O3', 'working', 't', 't', 't');",
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at, forked_from)
+           VALUES ('lead2', 'lead', 'ctx', 'pay', 'Lead two', '/', 'O3', 'working', 't', 't', 't', 'lead1');",
     );
 
     fx.watch_ticks(2).unwrap();

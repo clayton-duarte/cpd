@@ -45,9 +45,9 @@ fn populate(env: &TestEnv, file: Option<&Path>, archived: bool) {
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
              INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at,
-                                   created_at, archived_at)
+                                   created_at, archived_at, forked_from)
              VALUES ('l1', 'lead', 'alpha', NULL, NULL, 'old lead', {file}, '/repo', 'O3', NULL, 'stopped', NULL,
-                     '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z', {archived});",
+                     '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z', {archived}, 'l1');",
         ),
     );
 }

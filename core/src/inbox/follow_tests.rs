@@ -18,10 +18,10 @@ fn store() -> (tempfile::TempDir, Store) {
         .write("fixture", |tx| {
             tx.execute_batch(
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                 INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('s1', 'lead', 'ctx', 'One', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('l-pay', 'lead', 'ctx', NULL, 'Lead', '/', 'O3', 'working', 't', 't');
+                   VALUES ('l-pay', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
+                 INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, forked_from)
+                   VALUES ('s1', 'lead', 'ctx', 'One', '/', 'O3', 'idle', 't', 't', 'l-pay');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
                    VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l-pay', 't', NULL, NULL);",
             )?;

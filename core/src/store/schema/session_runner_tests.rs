@@ -16,9 +16,15 @@ const BASE: &str = "INSERT INTO contexts (id, title, created_at, created_on) VAL
 
 /// A Lead row of Plan `pay`; `columns` and `values` add to the columns every Session has.
 fn session(id: &str, columns: &str, values: &str) -> String {
+    // `lead` is the Plan's Lead; every other row is a fork of it.
+    let (fork_column, fork) = if id == "lead" {
+        ("", "")
+    } else {
+        (", forked_from", ", 'lead'")
+    };
     format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at{columns})
-         VALUES ('{id}', 'lead', 'ctx', 'pay', 'Lead {id}', '/', 'O3', 'idle', 't', 't'{values});"
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at{columns}{fork_column})
+         VALUES ('{id}', 'lead', 'ctx', 'pay', 'Lead {id}', '/', 'O3', 'idle', 't', 't'{values}{fork});"
     )
 }
 

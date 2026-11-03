@@ -52,8 +52,8 @@ impl Fixture {
         let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
         let title = title.map_or("NULL".to_owned(), |t| format!("'{t}'"));
         self.sql(&format!(
-            "INSERT INTO sessions (id, role, context, plan, name, title, cwd, tier, state, state_at, created_at)
-             VALUES ('{id}', 'lead', 'ctx', {plan}, 'n', {title}, '/', 'O3', 'working', '{T}', '{T}');"
+            "INSERT INTO sessions (id, role, context, plan, name, title, cwd, tier, state, state_at, created_at, forked_from)
+             VALUES ('{id}', 'lead', 'ctx', {plan}, 'n', {title}, '/', 'O3', 'working', '{T}', '{T}', 'l-pay');"
         ));
     }
 

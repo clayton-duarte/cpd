@@ -77,9 +77,10 @@ fn session(
 ) -> String {
     let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
     format!(
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, forked_from)
          VALUES ('{id}', '{role}', '{context}', {}, {}, 'name {id}', '/s/{id}.jsonl', '/repo', 'O3', NULL, '{state}', {},
-                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');",
+                 '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z',
+                 CASE WHEN '{id}' LIKE 'f-%' THEN 'l-' || substr('{id}', 3) END);",
         q(plan),
         q(attempt),
         q(label)

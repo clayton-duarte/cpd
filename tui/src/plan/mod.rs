@@ -1555,7 +1555,7 @@ mod tests {
                  UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
                  {}",
                 session_row("mgr", "manager", None),
-                session_row("lead", "lead", None),
+                session_row("lead", "lead", Some("p1")),
                 moved("mgr")
             ),
         );

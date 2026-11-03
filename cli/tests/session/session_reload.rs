@@ -191,8 +191,9 @@ fn prepare(state: &str, store_busy_ms: u32) -> Fixture {
     let cwd = fx.env.root().display().to_string();
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', '{LEAD}', 't');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
-           VALUES ('{LEAD}', 'lead', 'ctx', NULL, NULL, 'Grounded', '{cwd}', 'O3', '{state}', '{at}', '{at}');"
+           VALUES ('{LEAD}', 'lead', 'ctx', 'pay', NULL, 'Grounded', '{cwd}', 'O3', '{state}', '{at}', '{at}');"
     ));
     let sessions = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();

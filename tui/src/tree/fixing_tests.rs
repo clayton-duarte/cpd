@@ -156,7 +156,7 @@ fn escalated(status: &str) -> Tree {
     let sql = format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('l-x', 'lead', 'ctx', NULL, 'l-x', '/repo', 'O3', 'working', {t}, '2026-01-02T00:00:00.000Z');
+           VALUES ('l-x', 'lead', 'ctx', 'px', 'l-x', '/repo', 'O3', 'working', {t}, '2026-01-02T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('px', 'ctx', 'X', 'dispatch', 'l-x', {t}, {t}, NULL);
          UPDATE sessions SET plan = 'px' WHERE id = 'l-x';

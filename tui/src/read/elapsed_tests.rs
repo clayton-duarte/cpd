@@ -21,9 +21,9 @@ pub(super) fn store_with(workflows: &[&str]) -> (tempfile::TempDir, Store) {
     let mut sql = format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', NULL, 'lead1', '/repo', 'O3', 'idle', {at}, '2026-01-01T00:00:00.000Z');
-         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('other', 'lead', 'ctx', NULL, 'other', '/repo', 'O3', 'idle', {at}, '2026-01-01T00:00:00.000Z');
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'lead1', '/repo', 'O3', 'idle', {at}, '2026-01-01T00:00:00.000Z');
+         INSERT INTO sessions (id, role, context, plan, forked_from, name, cwd, tier, state, state_at, created_at)
+           VALUES ('other', 'lead', 'ctx', NULL, 'lead1', 'other', '/repo', 'O3', 'idle', {at}, '2026-01-01T00:00:00.000Z');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay', 'deploy', 'lead1', '2026-01-01T00:00:00.000Z', {at}, NULL);
          UPDATE sessions SET plan = 'pay' WHERE id = 'lead1';"

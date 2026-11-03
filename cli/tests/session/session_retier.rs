@@ -39,8 +39,8 @@ fn fixture(env: &TestEnv) {
     env.sql(&format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, forked_from, cwd, tier, state, state_at, created_at, archived_at) VALUES
            ('fork1', 'lead', 'ctx', 'pay', NULL, 'Side', 'lead1', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5', NULL),
-           ('lead4', 'lead', 'ctx', 'pay', NULL, 'On target', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't6', NULL),
-           ('lead5', 'lead', 'ctx', 'pay', NULL, 'Archived lead', NULL, '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7', 't9'),
+           ('lead4', 'lead', 'ctx', 'pay', NULL, 'On target', 'lead1', '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't6', NULL),
+           ('lead5', 'lead', 'ctx', 'pay', NULL, 'Archived lead', 'lead1', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7', 't9'),
            ('manager0', 'manager', 'ctx', NULL, NULL, 'Old manager', NULL, '{cwd}', 'O2', 'stopped', '2020-01-01T00:00:00Z', 't8', 't9');"
     ));
 }

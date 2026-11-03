@@ -2539,11 +2539,11 @@ fn setup_short(env: &TestEnv) {
     setup(env);
     env.sql(&format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
-             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
-               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
-               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5'),
-               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't6'),
-               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7')"
+             INSERT INTO sessions (id, role, context, plan, name, forked_from, cwd, tier, state, state_at, created_at) VALUES
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '{LEAD1}', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '{LEAD1}', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', NULL, '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '{CAFE_LEAD}', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7')"
         ),
     );
 }

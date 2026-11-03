@@ -27,15 +27,20 @@ fn populate(env: &mut Env) {
     s += &fork("l-ship", "", "", "2026-01-02T00:00:00.000Z");
     s += &fork(
         "f-slp",
-        ", asleep_at",
-        &format!(", '{WHEN}'"),
+        ", asleep_at, forked_from",
+        &format!(", '{WHEN}', 'l-ship'"),
         "2026-01-02T00:00:01.000Z",
     );
-    s += &fork("f-live", "", "", "2026-01-02T00:00:02.000Z");
+    s += &fork(
+        "f-live",
+        ", forked_from",
+        ", 'l-ship'",
+        "2026-01-02T00:00:02.000Z",
+    );
     s += &fork(
         "f-arc",
-        ", archived_at",
-        &format!(", '{WHEN}'"),
+        ", archived_at, forked_from",
+        &format!(", '{WHEN}', 'l-ship'"),
         "2026-01-02T00:00:03.000Z",
     );
     env.sql(&s);

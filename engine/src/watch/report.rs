@@ -577,8 +577,9 @@ mod tests {
                 tx.execute_batch(&format!(
                     "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
                        VALUES ('mgr-a', 'manager', 'ctx-a', 'Ma', '/', 'O3', 'idle', '{t}', '{t}', NULL),
-                              ('mgr-b', 'manager', 'ctx-b', 'Mb', '/', 'O3', 'idle', '{t}', '{t}', {archived}),
-                              ('lead-a', 'lead', 'ctx-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
+                              ('mgr-b', 'manager', 'ctx-b', 'Mb', '/', 'O3', 'idle', '{t}', '{t}', {archived});
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at)
+                   VALUES ('lead-a', 'lead', 'ctx-a', 'plan-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('plan-a', 'ctx-a', 'Pa', 'grounding', 'lead-a', '{t}'),
                               ('plan-b', 'ctx-b', 'Pb', 'grounding', 'lead-a', '{t}'),

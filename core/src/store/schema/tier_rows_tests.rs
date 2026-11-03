@@ -213,8 +213,8 @@ fn migrated() -> (tempfile::TempDir, Store) {
 
 fn session(id: &str, tier: &str) -> String {
     format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', '/', '{tier}', 'idle', 't', 't');"
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', '/', '{tier}', 'idle', 't', 't', 'lead');"
     )
 }
 
@@ -461,13 +461,16 @@ fn the_rebuilt_tables_keep_their_indexes_and_triggers() {
                  AND tbl_name IN ('sessions', 'attempts', 'jobs') ORDER BY 1";
     let (_dir, home) = before("");
     let mut old = old_store(&home);
-    let names = strings(&mut old, sql);
+    let mut names = strings(&mut old, sql);
     assert!(
         names.len() > 20,
         "the live schema has indexes and triggers on the three tables: {names:?}"
     );
     drop(old);
     let mut store = migrated_in(&home);
+    // the migration `20261103T0900-agent-key-schema` adds this index (one Lead per Plan)
+    names.push("index sessions_one_lead ON sessions".to_owned());
+    names.sort();
     assert_eq!(strings(&mut store, sql), names);
     for t in TABLES {
         let strict: i64 = count(
