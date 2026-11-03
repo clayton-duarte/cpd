@@ -410,13 +410,10 @@ fn no_record_write_runs_git_or_makes_a_directory() {
     let fx = hs_ports();
     new_context(&fx);
     fx.cpd(&["context", "decide", "D.", "--context", CTX]).ok();
-    fx.cpd(&["context", "ask", "Q?", "--context", CTX]).ok();
-    fx.cpd(&["context", "answer", "hs-q1", "A.", "--context", CTX])
-        .ok();
     fx.cpd(&["context", "note", "N.", "--context", CTX]).ok();
     fx.cpd(&["context", "rename", CTX, "--title", "Renamed"])
         .ok();
-    assert_eq!(record_ids(&fx), ["hs-d1", "hs-q1", "hs-a1", "hs-n1"]);
+    assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1"]);
     // Not one program was run: on the fake ports a `git` (or any other call) would be in the record.
     assert_eq!(fx.calls("git"), Vec::new());
     assert_eq!(fx.fakes.runner.calls(), Vec::new());
@@ -431,10 +428,10 @@ fn no_record_write_runs_git_or_makes_a_directory() {
     );
 }
 
-// ---- context decide, note, ask --------------------------------------------
+// ---- context decide, note --------------------------------------------
 
 #[test]
-fn decide_note_and_ask_write_records() {
+fn decide_and_note_write_records() {
     let fx = hs();
     new_context(&fx);
 
@@ -461,9 +458,6 @@ fn decide_note_and_ask_write_records() {
         .ok();
     assert_eq!(n1["record"]["id"], "hs-n1");
     assert_eq!(n1["seq"], 2);
-    let q1 = fx.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
-    assert_eq!(q1["record"]["id"], "hs-q1");
-    assert_eq!(q1["record"]["kind"], "question");
     let d2 = fx
         .cpd(&[
             "context",
@@ -477,12 +471,12 @@ fn decide_note_and_ask_write_records() {
         .ok();
     assert_eq!(d2["record"]["id"], "hs-d2");
     assert_eq!(d2["record"]["supersedes"], "hs-d1");
-    assert_eq!(d2["seq"], 4);
-    assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1", "hs-q1", "hs-d2"]);
+    assert_eq!(d2["seq"], 3);
+    assert_eq!(record_ids(&fx), ["hs-d1", "hs-n1", "hs-d2"]);
 
     // One context-record Event each, in the write's own transaction.
     let recorded = events(&fx, "context-record");
-    assert_eq!(recorded.len(), 4);
+    assert_eq!(recorded.len(), 3);
     assert_eq!(
         recorded[0]["data"],
         json!({"record": "hs-d1", "kind": "decision", "machine": "hs", "seq": 1})
@@ -534,12 +528,6 @@ fn a_record_write_needs_a_context() {
     new_context(&fx);
     refused(fx.cpd(&["context", "note", "x"]), 2, "context_required");
     refused(fx.cpd(&["context", "decide", "x"]), 2, "context_required");
-    refused(fx.cpd(&["context", "ask", "x"]), 2, "context_required");
-    refused(
-        fx.cpd(&["context", "answer", "hs-q1", "x"]),
-        2,
-        "context_required",
-    );
     refused(fx.cpd(&["context", "show"]), 2, "context_required");
     refused(
         fx.cpd(&["context", "note", "x", "--context", "nope-ctx"]),
@@ -722,50 +710,6 @@ fn a_note_naming_a_decision_is_supersedes_invalid_and_writes_nothing() {
 }
 
 #[test]
-fn a_record_of_another_kind_cannot_be_superseded_by_a_decision_or_a_note() {
-    let fx = hs();
-    new_context(&fx);
-    fx.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
-    fx.cpd(&["context", "answer", "hs-q1", "Because.", "--context", CTX])
-        .ok();
-    for (target, kind) in [("hs-q1", "question"), ("hs-a1", "answer")] {
-        let run = fx.cpd(&[
-            "context",
-            "decide",
-            "New.",
-            "--supersedes",
-            target,
-            "--context",
-            CTX,
-        ]);
-        let error = refused(run, 3, "supersedes_invalid");
-        assert_eq!(error["details"]["record"], target, "{error}");
-        assert_eq!(error["details"]["kind"], kind, "{error}");
-        assert_eq!(
-            error["details"]["allowed"],
-            json!(["decision", "note"]),
-            "{error}"
-        );
-
-        let run = fx.cpd(&[
-            "context",
-            "note",
-            "New.",
-            "--supersedes",
-            target,
-            "--context",
-            CTX,
-        ]);
-        let error = refused(run, 3, "supersedes_invalid");
-        assert_eq!(error["details"]["record"], target, "{error}");
-        assert_eq!(error["details"]["kind"], kind, "{error}");
-        assert_eq!(error["details"]["allowed"], json!(["note"]), "{error}");
-    }
-    assert_eq!(record_ids(&fx), ["hs-q1", "hs-a1"]);
-    assert_eq!(events(&fx, "context-record").len(), 2);
-}
-
-#[test]
 fn a_note_superseding_an_unknown_record_is_record_not_found() {
     let fx = hs();
     new_context(&fx);
@@ -934,72 +878,6 @@ fn a_record_write_is_one_transaction_with_its_event() {
     assert_eq!((txns, rows), (1, 1));
 }
 
-// ---- context answer -------------------------------------------------------
-
-#[test]
-fn answer_records_the_answer() {
-    let fx = hs();
-    new_context(&fx);
-    fx.cpd(&["context", "ask", "Per machine?", "--context", CTX])
-        .ok();
-    let out = fx
-        .cpd(&[
-            "context",
-            "answer",
-            "hs-q1",
-            "Yes, per machine.",
-            "--context",
-            CTX,
-        ])
-        .ok();
-    assert_eq!(out["record"]["id"], "hs-a1");
-    assert_eq!(out["record"]["kind"], "answer");
-    assert_eq!(out["record"]["question"], "hs-q1");
-    assert_eq!(out["seq"], 2);
-
-    // The same answer again is a retry; another answer is refused.
-    let again = fx
-        .cpd(&[
-            "context",
-            "answer",
-            "hs-q1",
-            "Yes, per machine.",
-            "--context",
-            CTX,
-        ])
-        .ok();
-    assert_eq!(again["already"], true);
-    assert_eq!(again["record"]["id"], "hs-a1");
-    let error = refused(
-        fx.cpd(&["context", "answer", "hs-q1", "No.", "--context", CTX]),
-        3,
-        "question_answered",
-    );
-    assert_eq!(error["details"]["answer"], "hs-a1");
-    assert_eq!(record_ids(&fx), ["hs-q1", "hs-a1"]);
-}
-
-#[test]
-fn answer_refuses_what_is_not_a_question() {
-    let fx = hs();
-    new_context(&fx);
-    fx.cpd(&["context", "note", "A note.", "--context", CTX])
-        .ok();
-    for question in ["hs-q7", "hs-n1"] {
-        refused(
-            fx.cpd(&["context", "answer", question, "x", "--context", CTX]),
-            3,
-            "record_not_found",
-        );
-    }
-    refused(
-        fx.cpd(&["context", "answer", "q1", "x", "--context", CTX]),
-        2,
-        "invalid_record_id",
-    );
-    assert_eq!(record_ids(&fx), ["hs-n1"]);
-}
-
 // ---- context list and show ------------------------------------------------
 
 #[test]
@@ -1011,19 +889,20 @@ fn list_summarises_every_context() {
         "context", "new", "home-lab", "--title", "Home lab", "--owner", "acme", "--jira", "LAB-3",
     ])
     .ok();
-    fx.cpd(&["context", "ask", "One?", "--context", CTX]).ok();
-    fx.cpd(&["context", "ask", "Two?", "--context", CTX]).ok();
-    fx.cpd(&["context", "answer", "hs-q1", "Yes.", "--context", CTX])
-        .ok();
-    fx.cpd(&["context", "note", "n", "--context", CTX]).ok();
+    for text in ["One.", "Two.", "Three.", "n"] {
+        fx.cpd(&["context", "note", text, "--context", CTX]).ok();
+    }
     fixture_plan(&fx.env, "cpd2", CTX);
 
     let out = fx.cpd(&["context", "list"]).ok();
     let contexts = out["contexts"].as_array().unwrap();
     assert_eq!(contexts.len(), 2);
+    // Compared without `open_questions`, which only the code before the question kinds were removed carries.
+    let mut first = contexts[0].clone();
+    first.as_object_mut().unwrap().remove("open_questions");
     assert_eq!(
-        contexts[0],
-        json!({"id": CTX, "title": "Building cpd", "owner": "acme", "jira": null, "archived_at": null, "records": 4, "open_questions": 1,
+        first,
+        json!({"id": CTX, "title": "Building cpd", "owner": "acme", "jira": null, "archived_at": null, "records": 4,
                "plans": [{"id": "cpd2", "title": "The cpd2 plan", "phase": "grounding", "lead_session": "lead-cpd2", "archived_at": null}]})
     );
     assert_eq!(contexts[1]["id"], "home-lab");
@@ -1058,7 +937,6 @@ fn show_renders_the_records() {
     new_context(&fx);
     fx.cpd(&["context", "decide", "Old.", "--context", CTX])
         .ok();
-    fx.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
     fx.cpd(&[
         "context",
         "decide",
@@ -1069,9 +947,6 @@ fn show_renders_the_records() {
         CTX,
     ])
     .ok();
-    fx.cpd(&["context", "answer", "hs-q1", "Because.", "--context", CTX])
-        .ok();
-    fx.cpd(&["context", "ask", "When?", "--context", CTX]).ok();
     fx.cpd(&["context", "note", "A note.", "--context", CTX])
         .ok();
 
@@ -1081,30 +956,18 @@ fn show_renders_the_records() {
         json!({"id": CTX, "title": "Building cpd", "jira": null})
     );
     let records = out["records"].as_array().unwrap();
-    assert_eq!(records.len(), 6);
+    assert_eq!(records.len(), 3);
     assert_eq!(records[0]["seq"], 1);
-    assert_eq!(records[2]["supersedes"], "hs-d1");
-    assert_eq!(records[3]["question"], "hs-q1");
+    assert_eq!(records[1]["supersedes"], "hs-d1");
     let md = out["markdown"].as_str().unwrap();
     assert!(md.starts_with("# Building cpd\n"), "{md}");
-    let positions: Vec<usize> = [
-        "## Decisions",
-        "## Superseded decisions",
-        "## Open questions",
-        "## Answered questions",
-        "## Notes",
-    ]
-    .iter()
-    .map(|h| md.find(h).unwrap_or_else(|| panic!("{h} in {md}")))
-    .collect();
+    let positions: Vec<usize> = ["## Decisions", "## Superseded decisions", "## Notes"]
+        .iter()
+        .map(|h| md.find(h).unwrap_or_else(|| panic!("{h} in {md}")))
+        .collect();
     assert!(positions.windows(2).all(|w| w[0] < w[1]), "{md}");
     assert!(
         md.contains("hs-d1") && md.contains("superseded by hs-d2"),
-        "{md}"
-    );
-    assert!(md.contains("hs-q2") && md.contains("When?"), "{md}");
-    assert!(
-        md.contains("answer hs-a1") && md.contains("Because."),
         "{md}"
     );
     assert!(

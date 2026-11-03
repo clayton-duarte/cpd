@@ -484,12 +484,12 @@ fn populate(store: &mut Store) {
     s += &escalation_row("rel", "r1-a1", 1, "open", "2026-01-03T00:05:00.000Z");
     s += &job_row("rel", "r0", "merged", "S3", &[]);
 
-    // Context records: a note, an answered and an unanswered question.
+    // Context records: notes and a decision.
     for (id, kind, extra) in [
         ("m1-n1", "note", "NULL"),
-        ("m1-q1", "question", "NULL"),
-        ("m1-q2", "question", "NULL"),
-        ("m1-a1", "answer", "'m1-q1'"),
+        ("m1-n2", "note", "NULL"),
+        ("m1-d1", "decision", "NULL"),
+        ("m1-n3", "note", "NULL"),
     ] {
         s += &format!(
             "INSERT INTO context_records (context, id, kind, at, machine, text, question)
@@ -561,10 +561,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
         panic!()
     };
 
-    assert_eq!(
-        (alpha.title.as_str(), alpha.records, alpha.open_questions),
-        ("Title of alpha", 4, 1)
-    );
+    assert_eq!((alpha.title.as_str(), alpha.records), ("Title of alpha", 4));
     assert!(gamma.plans.is_empty());
 
     let plans: Vec<&str> = alpha.plans.iter().map(|p| p.head.id.as_str()).collect();
