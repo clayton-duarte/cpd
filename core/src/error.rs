@@ -174,7 +174,6 @@ error_codes! {
     RecordNotFound = "record_not_found" => Refused,
     SupersedesInvalid = "supersedes_invalid" => Refused,
     ContextExists = "context_exists" => Refused,
-    QuestionAnswered = "question_answered" => Refused,
     NotAGitRepo = "not_a_git_repo" => Refused,
     PlanExists = "plan_exists" => Refused,
     BranchExists = "branch_exists" => Refused,

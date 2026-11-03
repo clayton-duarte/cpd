@@ -39,8 +39,6 @@ pub struct ContextNode {
     pub title: String,
     pub jira: Option<String>,
     pub records: usize,
-    /// Questions no answer refers to.
-    pub open_questions: usize,
     /// When it was archived (contract §4.5); archived Contexts are in the model.
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
@@ -297,21 +295,13 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
     let engine_running = model::engine_running(&home)?;
     store.read(|conn| {
         let mut records: BTreeMap<String, usize> = BTreeMap::new();
-        let mut stmt = conn.prepare("SELECT context, count(*) FROM context_records GROUP BY context")?;
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))? {
+        let mut stmt =
+            conn.prepare("SELECT context, count(*) FROM context_records GROUP BY context")?;
+        for row in stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })? {
             let (context, n) = row?;
             records.insert(context, n);
-        }
-        let mut questions: BTreeMap<String, usize> = BTreeMap::new();
-        let mut stmt = conn.prepare(
-            "SELECT q.context, count(*) FROM context_records q WHERE q.kind = 'question'
-               AND NOT EXISTS (SELECT 1 FROM context_records a
-                               WHERE a.context = q.context AND a.kind = 'answer' AND a.question = q.id)
-              GROUP BY q.context",
-        )?;
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))? {
-            let (context, n) = row?;
-            questions.insert(context, n);
         }
 
         // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
@@ -332,7 +322,12 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                FROM attempts a LEFT JOIN sessions s ON s.id = a.worker_session",
         )?;
         for row in stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<rusqlite::types::Value>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<rusqlite::types::Value>>(1)?,
+                r.get::<_, bool>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
         })? {
             let (plan, stored, no_metrics, file) = row?;
             let cost = cost::attempt_cost(stored, no_metrics, file.as_deref());
@@ -347,7 +342,10 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         }
         let mut manager_costs: BTreeMap<ContextId, Vec<Option<f64>>> = BTreeMap::new();
         for s in &all_managers {
-            manager_costs.entry(s.context.clone()).or_default().push(s.cost_usd);
+            manager_costs
+                .entry(s.context.clone())
+                .or_default()
+                .push(s.cost_usd);
         }
         let managers: BTreeMap<ContextId, (Dot, Place, bool)> = all_managers
             .iter()
@@ -359,7 +357,10 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
             .collect();
         let mut archived_managers: BTreeMap<ContextId, Vec<SessionNode>> = BTreeMap::new();
         for manager in all_managers.into_iter().filter(SessionNode::is_archived) {
-            archived_managers.entry(manager.context.clone()).or_default().push(manager);
+            archived_managers
+                .entry(manager.context.clone())
+                .or_default()
+                .push(manager);
         }
 
         let mut stmt = conn.prepare(
@@ -371,19 +372,35 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         while let Some(r) = rows.next()? {
             let cid: String = r.get(0)?;
             let context = id("Context id", &cid, ContextId::parse)?;
-            let (mine, rest): (Vec<PlanHead>, Vec<PlanHead>) = heads.drain(..).partition(|h| h.context == context);
+            let (mine, rest): (Vec<PlanHead>, Vec<PlanHead>) =
+                heads.drain(..).partition(|h| h.context == context);
             heads = rest;
             let plans = mine
                 .into_iter()
                 .map(|head| {
-                    let mut own: Vec<SessionNode> = leads.iter().filter(|s| s.plan.as_ref() == Some(&head.id)).cloned().collect();
+                    let mut own: Vec<SessionNode> = leads
+                        .iter()
+                        .filter(|s| s.plan.as_ref() == Some(&head.id))
+                        .cloned()
+                        .collect();
                     own.sort_by_key(|s| !s.plan_lead); // stable: the Lead first, the rest oldest first
-                    let attempts = attempt_costs.remove(&head.id.to_string()).unwrap_or_default();
+                    let attempts = attempt_costs
+                        .remove(&head.id.to_string())
+                        .unwrap_or_default();
                     let cost_usd = cost::total(own.iter().map(|s| s.cost_usd).chain(attempts));
-                    PlanNode { head, sessions: own, cost_usd }
+                    PlanNode {
+                        head,
+                        sessions: own,
+                        cost_usd,
+                    }
                 })
                 .collect::<Vec<PlanNode>>();
-            let cost_usd = cost::total(plans.iter().map(|p| p.cost_usd).chain(manager_costs.remove(&context).unwrap_or_default()));
+            let cost_usd = cost::total(
+                plans
+                    .iter()
+                    .map(|p| p.cost_usd)
+                    .chain(manager_costs.remove(&context).unwrap_or_default()),
+            );
             let archived_at: Option<String> = r.get(3)?;
             contexts.push(ContextNode {
                 dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
@@ -393,7 +410,6 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
-                open_questions: questions.remove(&cid).unwrap_or(0),
                 archived_at,
                 plans,
                 archived_managers: archived_managers.remove(&context).unwrap_or_default(),
@@ -402,6 +418,11 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
             });
         }
         engine_down_first(&mut inbox, engine_running, !managers.is_empty(), now);
-        Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })
+        Ok(Tree {
+            contexts,
+            events_cursor: highest_id(conn)?,
+            inbox,
+            engine_running,
+        })
     })
 }

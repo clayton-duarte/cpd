@@ -353,29 +353,24 @@ id_traits!(ReviewId);
 pub enum RecordKind {
     Decision,
     Note,
-    Question,
-    Answer,
+    // The `record_kinds` table still holds `question` and `answer`: its rows cannot be deleted and nothing reads them.
     Plan,
     Brief,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 6] = [
+    pub const ALL: [RecordKind; 4] = [
         RecordKind::Decision,
         RecordKind::Note,
-        RecordKind::Question,
-        RecordKind::Answer,
         RecordKind::Plan,
         RecordKind::Brief,
     ];
 
-    /// The letter in record ids: `d`, `n`, `q`, `a`, `p`, `b`.
+    /// The letter in record ids: `d`, `n`, `p`, `b`.
     pub fn letter(self) -> char {
         match self {
             RecordKind::Decision => 'd',
             RecordKind::Note => 'n',
-            RecordKind::Question => 'q',
-            RecordKind::Answer => 'a',
             RecordKind::Plan => 'p',
             RecordKind::Brief => 'b',
         }
@@ -387,13 +382,11 @@ impl RecordKind {
             .find(|kind| kind.letter() == letter)
     }
 
-    /// The `kind` field of the record: `decision`, `note`, `question`, `answer`, `plan`, `brief`.
+    /// The `kind` field of the record: `decision`, `note`, `plan`, `brief`.
     pub fn as_str(self) -> &'static str {
         match self {
             RecordKind::Decision => "decision",
             RecordKind::Note => "note",
-            RecordKind::Question => "question",
-            RecordKind::Answer => "answer",
             RecordKind::Plan => "plan",
             RecordKind::Brief => "brief",
         }
@@ -424,7 +417,7 @@ impl RecordId {
                 ErrorCode::InvalidRecordId,
                 "Context record id",
                 s,
-                "<machine>-<letter><n>, letter one of d n q a p, n from 1",
+                "<machine>-<letter><n>, letter one of d n p b, n from 1",
             )
         };
         // A machine name has no '-', so the separator is the first one.
@@ -789,10 +782,7 @@ mod tests {
     #[test]
     fn record_kind_names() {
         let names: Vec<_> = RecordKind::ALL.iter().map(|k| k.as_str()).collect();
-        assert_eq!(
-            names,
-            ["decision", "note", "question", "answer", "plan", "brief"]
-        );
+        assert_eq!(names, ["decision", "note", "plan", "brief"]);
     }
 
     #[test]

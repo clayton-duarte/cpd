@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
@@ -193,7 +193,7 @@ impl<'a> Contexts<'a> {
     }
 
     /// Writes one record (§4.6 "A write"): in one transaction, validates it
-    /// (`record_not_found`, `question_answered`), inserts the row and appends
+    /// (`record_not_found`), inserts the row and appends
     /// `context-record`. `command` is the transaction's `txns.command`. A retry
     /// of this machine's latest record writes nothing.
     pub fn write(
@@ -279,26 +279,8 @@ impl<'a> Contexts<'a> {
 }
 
 /// §4.6 "A write": `supersedes` names an existing record of a kind the writing
-/// record may supersede (`supersedes_invalid` otherwise), `question` an existing question; and an answer's question has no answer yet (§3.5).
+/// record may supersede (`supersedes_invalid` otherwise).
 fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<(), CpdError> {
-    let exists = |id: &RecordId, kind: RecordKind| -> rusqlite::Result<bool> {
-        conn.query_row(
-            "SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2 AND kind = ?3",
-            params![context.as_str(), id.to_string(), kind.as_str()],
-            |_| Ok(()),
-        )
-        .optional()
-        .map(|found| found.is_some())
-    };
-    let not_found = |id: &RecordId, kind: RecordKind| {
-        CpdError::new(
-            ErrorCode::RecordNotFound,
-            format!("Context {context} has no {} {id}.", kind.as_str()),
-        )
-        .with("context", context.as_str())
-        .with("record", id.to_string())
-        .with("kind", kind.as_str())
-    };
     if let Some(id) = draft.supersedes() {
         let found: Option<String> = conn
             .query_row(
@@ -331,30 +313,7 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
             .with("allowed", allowed));
         }
     }
-    match draft {
-        Draft::Answer { question } => {
-            if !exists(question, RecordKind::Question)? {
-                return Err(not_found(question, RecordKind::Question));
-            }
-            let answer: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM context_records WHERE context = ?1 AND kind = 'answer' AND question = ?2 ORDER BY seq LIMIT 1",
-                    params![context.as_str(), question.to_string()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match answer {
-                Some(answer) => Err(CpdError::new(
-                    ErrorCode::QuestionAnswered,
-                    format!("Question {question} is already answered by {answer}."),
-                )
-                .with("question", question.to_string())
-                .with("answer", answer)),
-                None => Ok(()),
-            }
-        }
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 /// The `context-record` Event of a record (§5.2).

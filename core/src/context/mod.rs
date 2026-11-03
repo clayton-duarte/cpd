@@ -76,10 +76,6 @@ pub enum Command {
     Decide(DecideArgs),
     /// Record a note (§3.4)
     Note(NoteArgs),
-    /// Record a question (§3.4)
-    Ask(AskArgs),
-    /// Record the answer to a question (§3.5)
-    Answer(AnswerArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
     /// Archive the Context with its Plans and their Sessions (§3.8)
@@ -239,24 +235,6 @@ pub struct NoteArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct AskArgs {
-    /// The question
-    question: Text,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
-pub struct AnswerArgs {
-    /// The record id of the question
-    question: RecordId,
-    /// The answer
-    text: Text,
-    #[command(flatten)]
-    select: Select,
-}
-
-#[derive(Args, Debug)]
 pub struct RenameArgs {
     /// The Context
     id: ContextId,
@@ -306,17 +284,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             };
             write::write("context note", &args.select, &args.text, draft)
         }
-        Command::Ask(args) => {
-            write::write("context ask", &args.select, &args.question, Draft::Question)
-        }
-        Command::Answer(args) => write::write(
-            "context answer",
-            &args.select,
-            &args.text,
-            Draft::Answer {
-                question: args.question,
-            },
-        ),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
