@@ -2628,7 +2628,7 @@ You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.
 
 Context on demand: cpd context search <query> --context <c> · cpd context show --context <c> --since <seq> · cpd context show --context <c> --record <id>
 ```
-Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `context show --topic <t>` prints every curated record in force of a topic as `- [<id>] <short>` (an unknown topic is refused `topic_not_found`, exit 4, `details` `{context, topic, topics}`, `commands.md` §3.3).
+Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `context show --topic <t>` prints every curated record in force of a topic as `- [<id>] <short>` (an unknown topic is refused `topic_not_found`, exit 4, `details` `{context, topic, topics}`, `commands.md` §3.3). `context topics` lists the curated topics in force of the Context, sorted by topic, each as `{topic, count}` (`commands.md` §3.3a). When at least one curated topic is in force, the first message of a Lead or a Manager also has one line `Topics: <topic> (<count>), …` between the brief (or the header) and the pointer line, a snapshot taken when the message is written, with no cap (`commands.md` §4.1, §3.11).
 
 
 
