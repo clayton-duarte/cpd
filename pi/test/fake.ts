@@ -144,7 +144,7 @@ export class FakeCpd {
 
   /** `cpd <argv>` as pi's `exec` runs it: `signal` and `timeout` end it as `killed`, like pi's. */
   call(argv: string[], options: ExecOptions): Promise<ExecResult> {
-    const killed: ExecResult = { stdout: "", stderr: "", code: 0, killed: true };
+    const killed: ExecResult = { stdout: "", stderr: "", code: 0, killed: true, truncated: false };
     const { signal, timeout } = options;
     if (signal?.aborted) return Promise.resolve(killed);
     this.log({ phase: "start", argv, since: flagOf(argv, "--since") });
@@ -155,7 +155,7 @@ export class FakeCpd {
     try {
       if (file !== undefined) feedback = readFileSync(file, "utf8");
     } catch (e) {
-      return new Promise((resolve) => setImmediate(resolve, { stdout: "", stderr: String(e), code: 1, killed: false }));
+      return new Promise((resolve) => setImmediate(resolve, { stdout: "", stderr: String(e), code: 1, killed: false, truncated: false }));
     }
     return new Promise((resolve) => {
       let delayTimer: unknown;
@@ -170,7 +170,7 @@ export class FakeCpd {
       const abort = () => conclude(killed);
       const end = () => {
         this.log({ phase: "end", argv, feedback });
-        conclude({ stdout: typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout), stderr: "", code: r.exit ?? 0, killed: false });
+        conclude({ stdout: typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout), stderr: "", code: r.exit ?? 0, killed: false, truncated: false });
       };
       signal?.addEventListener("abort", abort, { once: true });
       if (r.delay) {

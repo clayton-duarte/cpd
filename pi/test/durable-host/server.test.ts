@@ -42,7 +42,7 @@ function setup(over: Partial<ServerDeps> = {}) {
     role: "lead",
     cwd: "/w",
     hostVersion: "9.9",
-    piDurable: "1.3.0",
+    piDurable: "1.5.0",
     epoch: "e1",
     ring,
     submit: async (i) => {
@@ -120,7 +120,7 @@ test("hello is answered by welcome with the picked protocol, the epoch and a cli
       type: "welcome",
       protocol: 2,
       host_version: "9.9",
-      pi_durable: "1.3.0",
+      pi_durable: "1.5.0",
       session: "s1",
       role: "lead",
       epoch: "e1",
