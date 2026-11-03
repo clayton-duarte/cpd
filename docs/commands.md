@@ -3258,7 +3258,7 @@ Effects:
 cpd session tail <id>
 ```
 
-The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14), folds the frames onto the `SnapshotEvent` and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
+The read path of a live durable Lead's or Manager's transcript (contract §6.20; the research's Q33 Decided A): it connects to the Session host's socket (§6.14, protocol 2), folds the frames onto the pi-durable `ConversationView` (its base `view` frame and its `ops` frames) and prints the transcript as plain lines, then follows the host live. It writes nothing — no row, no Event, no tmux, never the store (the host is the one owner of the store; the socket is the tail's only path). It never sends `submit`, `abort`, `detach` or `ping` to the host: read-only.
 
 | Argument | Meaning |
 |---|---|
@@ -3273,9 +3273,9 @@ The read path of a live durable Lead's or Manager's transcript (contract §6.20;
 | the socket path `$CPD_HOME/run/host/<id>.sock` is at most `SOCKET_PATH_MAX` (107) bytes (contract §6.14 step 1, applied symmetrically) | `usage` (`socket_path_too_long`) | 2 |
 
 Effects:
-- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`client: "cpd session tail"`), attaches without a cursor, and prints the whole transcript from the base `snapshot` frame — one line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
-- **Follow:** every live `events` frame prints the messages it completes, as they complete.
-- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in snapshot mode: the fold replaces its state, one line on stderr (`snapshot <epoch> seq <seq>: view replaced`) and nothing on stdout, so the stream never repeats lines it printed.
+- **Startup:** the client (contract §6.20) connects through the `HostConn` port, sends `hello` (`protocol: 2`, `min_protocol: 2`, `client: "cpd session tail"`), attaches without a cursor, and prints the transcript of the base `view` frame: the window the host's watch starts with, the newest 50 entries (up to 100), so a long transcript shows its recent part; earlier entries are read with `cpd session history` (§10.12). One line per completed message, the grammar of contract §6.20 (`user: `, `assistant: `, `system: `, `tool <toolName>: <text>` with ` (error)` on a failed tool result; a text with newlines prints one line per source line, the prefix on the first line only; thinking stays unprinted; bookkeeping entries are silent).
+- **Follow:** every live `ops` frame prints the entries it appends, as they complete. The message still streaming is not printed until its entry is appended. When the window moved past entries the tail had not printed (a gap), one line on stderr names the gap and the tail goes on.
+- **Reconnect:** on `bye {reconnect: true}` (`shutdown`, `restart`, `storage_failed`, `slow_client`) or a lost socket it reconnects and attaches with the cursor, napping on the back-off of §10.4's wait (100 ms doubling to a 1 s cap, a 30 s deadline — design defaults, not measured); past the deadline the command ends `host_timeout`, exit 5, `details: {session, socket}`. A new epoch re-attaches in view mode: the fold replaces its replica, prints the entries it has not printed and writes one line on stderr (`view <epoch> seq <seq>: view replaced`), so the stream never repeats a line it printed.
 - **End:** exit 0 when its stdout closes (EPIPE, as §11.2's follower ends), when it reads a `bye` with `reconnect: false` (none of the host's reasons can reach a tail that never detaches; the branch ends the stream cleanly), or on SIGINT/SIGTERM.
 - **Rows / Events / tmux:** none.
 
@@ -3288,7 +3288,7 @@ tool bash: all checks pass
 assistant: All green. Ready for review.
 ```
 
-Idempotent: reading only; the same transcript renders the same lines (the first snapshot's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
+Idempotent: reading only; the same transcript renders the same lines (the base view's rendering is deterministic); the lines a live stream prints depend on when the frames arrive.
 
 ## 10a. `board` (hs-d514)
 
