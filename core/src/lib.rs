@@ -67,6 +67,8 @@ mod ambient_ports_tests;
 #[cfg(test)]
 mod clock_tests;
 #[cfg(test)]
+mod ids_scan_tests;
+#[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
 mod janitor_tests;

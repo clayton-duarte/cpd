@@ -418,6 +418,13 @@ impl RecordId {
         }
     }
 
+    /// Every distinct valid record id token in `text`, in order of first appearance. A token is `<machine>-<letter><n>`
+    /// as [`RecordId::parse`] accepts it; the character before it is not an ASCII letter, digit, `-` or `_`, the
+    /// character after it is not an ASCII letter, digit or `_`.
+    pub fn scan(_text: &str) -> Vec<RecordId> {
+        todo!()
+    }
+
     pub fn parse(s: &str) -> Result<RecordId, CpdError> {
         let err = || {
             invalid(
