@@ -197,7 +197,10 @@ fn review_plan_done_migration_keeps_every_other_transition_as_before() {
 fn the_migration_changes_no_row() {
     let (_dir, home) = before();
     let mut old = crate::store::tests::open_named(&home, &earlier()).unwrap();
-    let want = dump(&mut old);
+    // The later migration `agent-key-backfill` rewrites the names of the two Leads to their keys.
+    let want = dump(&mut old)
+        .replace("\"name\":\"L1\"", "\"name\":\"codereview:r-pay-812\"")
+        .replace("\"name\":\"L2\"", "\"name\":\"cpd:c-pay\"");
     drop(old);
     let mut store = migrated_in(&home);
     assert_eq!(dump(&mut store), want);

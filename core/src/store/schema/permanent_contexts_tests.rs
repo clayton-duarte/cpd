@@ -293,6 +293,7 @@ fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
         "/work",
         false,
     );
+    // Only one Lead of a Plan is not a fork (the unique index of `agent-key-schema`): the others are forks of `h2l`.
     sql += &session(
         "h2f",
         "lead",
@@ -329,7 +330,7 @@ fn fixture(store: &mut Store, root: &str, codereview: bool, host_owner: &str) {
         "/work",
         false,
     );
-    sql += "UPDATE sessions SET forked_from = 'h2l' WHERE id = 'h2f';\n";
+    sql += "UPDATE sessions SET forked_from = 'h2l' WHERE id IN ('h2f', 'h2x', 'h2y', 'h2z');\n";
     sql += &plan("h2p", "host-2", "dispatch", "h2l", false);
     for n in [1, 2, 3, 4, 5, 7, 6] {
         let supersedes = (n == 2).then_some("box-n1");
@@ -493,7 +494,8 @@ fn eec_codereview_moves_to_codereview_in_every_table() {
             null
         ])]
     );
-    // no collision: the record ids and links stay, the Manager stays live and keeps its name
+    // no collision: the record ids and links stay, the Manager stays live and keeps its name (the later migration
+    // `agent-key-backfill` rewrites it to its key, the Context)
     assert_eq!(
         strings(
             &mut store,
@@ -506,7 +508,7 @@ fn eec_codereview_moves_to_codereview_in_every_table() {
             &mut store,
             "SELECT id, name, archived_at FROM sessions WHERE role = 'manager' AND context = 'codereview'"
         ),
-        vec![json!(["ecm", "eec-codereview-manager", null])]
+        vec![json!(["ecm", "codereview", null])]
     );
     // a Job's prose that mentions the id is not a Context id
     assert_eq!(
@@ -734,14 +736,16 @@ fn the_merged_host_keeps_host_2s_manager_live_and_archives_the_old_one() {
             &mut store,
             "SELECT id, name FROM sessions WHERE role = 'manager' AND context = 'host' AND archived_at IS NULL"
         ),
-        vec![json!(["h2m", "host-manager"])]
+        // the later migration `agent-key-backfill` rewrites the name to its key, the Context
+        vec![json!(["h2m", "host"])]
     );
     assert_eq!(
         rows(
             &mut store,
             "SELECT id, name, archived_at FROM sessions WHERE id = 'hm'"
         ),
-        vec![json!(["hm", "host-manager", "t1"])]
+        // archived, a Manager: the later migration `agent-key-backfill` rewrites its name to its key, the Context
+        vec![json!(["hm", "host", "t1"])]
     );
     assert_eq!(
         strings(
@@ -944,17 +948,19 @@ fn a_moved_sessions_name_follows_the_new_context_id() {
                ('ecm', 'ecl', 'ecl2', 'ecw', 'h2m', 'h2l', 'h2f', 'h2x', 'h2y', 'h2z', 'om') ORDER BY id"
         ),
         vec![
-            json!(["ecl", "codereview", "codereview"]),
-            json!(["ecl2", "codereview", "Lead eec-codereview"]),
-            json!(["ecm", "codereview", "codereview-manager"]),
-            json!(["ecw", "codereview", "codereview:ecp:w"]),
+            // The later migration `agent-key-backfill` rewrites the name of a Manager, a Lead that is not a fork and a
+            // Worker to its key; the forks keep theirs.
+            json!(["ecl", "codereview", "codereview:ecp"]),
+            json!(["ecl2", "codereview", "codereview:ecq"]),
+            json!(["ecm", "codereview", "codereview"]),
+            json!(["ecw", "codereview", "codereview:ecp:j1"]),
             json!(["h2f", "host", "Manager host"]),
-            json!(["h2l", "host", "host"]),
-            json!(["h2m", "host", "host-manager"]),
+            json!(["h2l", "host", "host:h2p"]),
+            json!(["h2m", "host", "host"]),
             json!(["h2x", "host", "host:h2p"]),
             json!(["h2y", "host", "Reviewer"]),
             json!(["h2z", "host", "host-2x"]),
-            json!(["om", "other", "other-manager"]),
+            json!(["om", "other", "other"]),
         ]
     );
 }

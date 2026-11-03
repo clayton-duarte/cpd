@@ -55,7 +55,7 @@ fn agent_key_guards_rename_of_a_worker_is_refused_key_fixed() {
 
 #[test]
 fn agent_key_guards_rename_of_a_fork_is_allowed() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     add_fork(&fx);
     let out = fx

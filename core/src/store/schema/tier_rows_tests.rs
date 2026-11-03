@@ -213,8 +213,8 @@ fn migrated() -> (tempfile::TempDir, Store) {
 
 fn session(id: &str, tier: &str) -> String {
     format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', '/', '{tier}', 'idle', 't', 't');"
+        "INSERT INTO sessions (id, role, context, plan, name, forked_from, cwd, tier, state, state_at, created_at)
+           VALUES ('{id}', 'lead', 'ctx', 'pay', 'L', 'lead', '/', '{tier}', 'idle', 't', 't');"
     )
 }
 
@@ -330,6 +330,24 @@ fn every_other_row_and_column_is_kept_byte_for_byte() {
                 if tier_columns.contains(&name.as_str()) {
                     effort_4(value);
                 }
+            }
+        }
+        if *t == "sessions" {
+            // The later migration `agent-key-backfill` rewrites the name of a Manager, a Lead that is not a fork and a
+            // Worker to its key (every row here is one of them).
+            let at = |c: &str| cols.iter().position(|n| n == c).unwrap();
+            for row in &mut rows {
+                let text = |c: &str| row[at(c)].as_str().unwrap_or_default().to_owned();
+                let (context, plan) = (text("context"), text("plan"));
+                let key = match text("role").as_str() {
+                    "manager" => context,
+                    "lead" => format!("{context}:{plan}"),
+                    _ => {
+                        let attempt = text("attempt");
+                        format!("{context}:{plan}:{}", attempt.rsplit_once("-a").unwrap().0)
+                    }
+                };
+                row[at("name")] = Value::from(key);
             }
         }
         let sql = select_all(&mut store, t, by);
@@ -461,12 +479,15 @@ fn the_rebuilt_tables_keep_their_indexes_and_triggers() {
                  AND tbl_name IN ('sessions', 'attempts', 'jobs') ORDER BY 1";
     let (_dir, home) = before("");
     let mut old = old_store(&home);
-    let names = strings(&mut old, sql);
+    let mut names = strings(&mut old, sql);
     assert!(
         names.len() > 20,
         "the live schema has indexes and triggers on the three tables: {names:?}"
     );
     drop(old);
+    // The later migration `agent-key-schema` adds the unique index of one Lead that is not a fork per Plan.
+    names.push("index sessions_one_lead ON sessions".to_owned());
+    names.sort();
     let mut store = migrated_in(&home);
     assert_eq!(strings(&mut store, sql), names);
     for t in TABLES {

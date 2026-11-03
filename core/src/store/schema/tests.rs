@@ -2850,6 +2850,16 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 *row = Value::from(values).to_string();
             }
         }
+        // `agent-key-backfill` rewrites the name of every Lead that is not a fork (all of them here) to `<context>:<plan>`.
+        for row in rows_before.get_mut("sessions").unwrap() {
+            let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+            values[5] = Value::from(format!(
+                "{}:{}",
+                values[2].as_str().unwrap(),
+                values[3].as_str().unwrap()
+            ));
+            *row = Value::from(values).to_string();
+        }
         assert_eq!(rows_after, rows_before);
     }
 
@@ -3214,6 +3224,30 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
 // ---------- named migration `waiting-state` (§3.6, hs-d303) ----------
 
 /// Every column of every Session, as JSON, by id.
+/// The rows as the later migration `agent-key-backfill` leaves them: the name of a Manager, a Lead that is not a fork
+/// and a Worker is its key (`<context>`, `<context>:<plan>`, `<context>:<plan>:<job>`); a fork keeps its name.
+fn with_agent_keys(rows: Vec<Value>) -> Vec<Value> {
+    rows.into_iter()
+        .map(|mut row| {
+            let text = |row: &Value, k: &str| row[k].as_str().map(str::to_owned);
+            if row["forked_from"].is_null() {
+                let context = text(&row, "context").unwrap();
+                let key = match text(&row, "role").unwrap().as_str() {
+                    "manager" => context,
+                    "lead" => format!("{context}:{}", text(&row, "plan").unwrap()),
+                    _ => {
+                        let attempt = text(&row, "attempt").unwrap();
+                        let job = attempt.rsplit_once("-a").unwrap().0;
+                        format!("{context}:{}:{job}", text(&row, "plan").unwrap())
+                    }
+                };
+                row["name"] = Value::from(key);
+            }
+            row
+        })
+        .collect()
+}
+
 fn session_rows(conn: &Connection) -> Vec<Value> {
     let columns = table_columns(conn, "sessions").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
@@ -3265,7 +3299,8 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
          COMMIT;",
     )
     .unwrap();
-    let before = session_rows(&conn);
+    // `agent-key-backfill`, a later migration, rewrites the names of the rows that are not forks to their keys.
+    let before = with_agent_keys(session_rows(&conn));
     let history: i64 = conn
         .query_row(
             "SELECT count(*) FROM history WHERE tbl = 'sessions'",
@@ -3399,7 +3434,8 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
          COMMIT;"
     ))
     .unwrap();
-    let before = session_rows(&conn);
+    // `agent-key-backfill`, a later migration, rewrites the names of the rows that are not forks to their keys.
+    let before = with_agent_keys(session_rows(&conn));
     let history: i64 = conn
         .query_row(
             "SELECT count(*) FROM history WHERE tbl = 'sessions'",
@@ -4588,7 +4624,8 @@ fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_an
             .replace("{fp}", &"a".repeat(64)),
     )
     .unwrap();
-    let columns = "rowid, id, role, context, plan, attempt, name, cwd, tier, state";
+    // `name` is left out: the later migration `agent-key-backfill` rewrites it (every row is a Manager, a Lead or a Worker).
+    let columns = "rowid, id, role, context, plan, attempt, cwd, tier, state";
     let sessions = rows(
         &mut before,
         &format!("SELECT {columns} FROM sessions ORDER BY id"),
