@@ -72,7 +72,7 @@ MCP servers: a cpd Session has no MCP server until you attach one; nothing is at
 
 ## Context updates
 
-You start fresh from your brief plus the always-injected AGENTS.md. Read Context records on demand: `cpd context search <query>` to search, `cpd context show --since <seq>` for new records (with `<seq>` the highest record `seq` you have read), `cpd context show --topic <t>` for a topic's rest, or `cpd context show --record <id>` for one record. Read them at four points: grounding; before drafting each batch; before answering a Worker's Escalation from the records; before `pr open`. When a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you. Messages from your Manager (`session-message`) arrive without starting a turn and are in your context at your next turn.
+You start fresh from your brief plus the always-injected AGENTS.md. Read Context records on demand: `cpd context search <query>` to search, `cpd context show --since <seq>` for new records (with `<seq>` the highest record `seq` you have read), `cpd context topics` for the topics in use, `cpd context show --topic <t>` for a topic's rest, or `cpd context show --record <id>` for one record. Read them at four points: grounding; before drafting each batch; before answering a Worker's Escalation from the records; before `pr open`. When a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you. Messages from your Manager (`session-message`) arrive without starting a turn and are in your context at your next turn.
 
 ## Your Manager
 

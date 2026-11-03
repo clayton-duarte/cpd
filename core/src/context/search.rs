@@ -355,6 +355,7 @@ struct Hit {
     seq: i64,
     score: f64,
     in_force: bool,
+    topic: Option<String>,
 }
 
 impl Hit {
@@ -367,12 +368,16 @@ impl Hit {
             "seq": self.seq,
             "score": self.score,
             "in_force": self.in_force,
+            "topic": self.topic,
         })
     }
 
     /// The `- [<id>] <short>` line, with the out-of-force labels of `context show`.
     fn line(&self, snap: &Snapshot) -> String {
-        let mut line = format!("- [{}] {}", self.id, self.short);
+        let mut line = match &self.topic {
+            Some(topic) => format!("- [{}] [{topic}] {}", self.id, self.short),
+            None => format!("- [{}] {}", self.id, self.short),
+        };
         if let Some(successor) = snap.successor.get(&self.id) {
             line.push_str(&format!(" (superseded by {successor})"));
         }
@@ -419,6 +424,7 @@ fn hits_of(
                 seq: *seq,
                 score: hit["score"].as_f64().unwrap_or(0.0),
                 in_force,
+                topic: snap.curations.get(id).map(|(topic, _, _)| topic.clone()),
             })
         })
         .collect();

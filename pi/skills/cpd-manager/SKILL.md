@@ -74,7 +74,7 @@ Your first message is the header and the pointer line:
    ```
    Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
    ```
-   Then `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
+   Then `cpd context topics` lists the topics in use and `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
 
 A record is one line of text and append-only:
 
