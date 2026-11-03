@@ -2299,7 +2299,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_cache_keeps_the_items_and_says_so() {
+    fn an_unreadable_cache_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2323,17 +2323,9 @@ mod tests {
                 .count(),
             1
         );
-        let error = all
-            .iter()
-            .find(|c| c.kind == Kind::EngineError)
-            .expect("an engine-error condition");
-        assert_eq!(
-            (error.urgency, error.subject.as_str(), error.label.as_str()),
-            (
-                Urgency::Red,
-                "error:E8/team-review/store_failed",
-                "team review: store_failed"
-            )
+        assert!(
+            all.iter().all(|c| c.kind != Kind::EngineError),
+            "no engine-error for an unreadable cache"
         );
         std::fs::write(
             f.home.run_dir().join("team-review.json"),
@@ -2349,14 +2341,18 @@ mod tests {
             Some(team(&mut |_| panic!("unreadable"))),
         )
         .unwrap();
-        assert!(
-            all.iter().any(|c| c.kind == Kind::EngineError),
-            "another version is unreadable too"
+        assert_eq!(
+            all.iter()
+                .filter(|c| c.kind == Kind::ReviewRequested)
+                .count(),
+            1,
+            "another version is unreadable too: kept"
         );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
-    fn a_github_that_fails_keeps_the_items_and_says_so() {
+    fn a_github_that_fails_keeps_the_items_and_opens_no_engine_error() {
         let mut f = fixture("dispatch");
         let opened = reviews(
             &mut f,
@@ -2382,12 +2378,7 @@ mod tests {
             1,
             "kept"
         );
-        assert_eq!(
-            all.iter()
-                .find(|c| c.kind == Kind::EngineError)
-                .map(|c| c.subject.as_str()),
-            Some("error:E8/team-review/gh_failed")
-        );
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     #[test]
@@ -2437,7 +2428,7 @@ mod tests {
             1,
             "every Workflow unreadable: the queue stays"
         );
-        assert!(all.iter().any(|c| c.kind == Kind::EngineError));
+        assert!(all.iter().all(|c| c.kind != Kind::EngineError));
     }
 
     // ---- all together ----
