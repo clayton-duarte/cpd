@@ -60,6 +60,14 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let key = match require_dispatch(&plan, &args)? {
         Step::Already(done) => return Ok(done),
+        Step::Reopen(key) => {
+            let done = crate::workflow::reopen::reopen(&mut env, &id, &key)?;
+            let plan = env.plan(&id)?;
+            return Ok(Output::success(json!({
+                "plan": id, "phase": plan.plan.phase.as_str(),
+                "pr": plan.select(&args.workflow)?.to_json(), "reopened": done.changed,
+            })));
+        }
         Step::Go(key) => key,
     };
     env.store
@@ -317,6 +325,14 @@ pub fn pull_request(
             merged: false,
         }),
     }
+}
+
+/// The `(number, url)` of the newest pull request of `branch`, when it is `OPEN` (a reopened pull request, pro-d362); `closed`,
+/// `merged` or none is `None`. `gh` runs in `repo`.
+pub(crate) fn open_head_pr(repo: &Path, branch: &str) -> Result<Option<(i64, String)>, CpdError> {
+    Ok(gh::head_pr(repo, branch, None)?
+        .filter(|h| h.state == HeadState::Open)
+        .map(|h| (h.number, h.url)))
 }
 
 /// Whether the newest pull request of the Lead Branch is already `merged` on GitHub and never recorded (§7.6 `pr open` step 0): the merge of an
@@ -731,6 +747,8 @@ enum Step {
     Go(WorkflowKey),
     /// The Workflow is `open` or `merged`: the success to print.
     Already(Output),
+    /// The Workflow is `cancelled`: it comes back when its pull request is open on GitHub (pro-d362).
+    Reopen(WorkflowKey),
 }
 
 /// The Workflow must be `dispatch`. `open` and `merged` are `already`; `waiting` and
@@ -746,6 +764,7 @@ fn require_dispatch(plan: &PlanWorkflows, args: &Args) -> Result<Step, CpdError>
         "open" | "merged" => Ok(Step::Already(Output::success(
             json!({"plan": plan.plan.id, "phase": plan.plan.phase.as_str(), "pr": workflow.to_json(), "already": true}),
         ))),
+        "cancelled" => Ok(Step::Reopen(workflow.key.clone())),
         _ => Err(workflow.refuse(&plan.plan.id, COMMAND, "dispatch")),
     }
 }

@@ -722,6 +722,50 @@ pub fn prepare_stacked_lead_worktree(
     )
 }
 
+/// The Lead worktree of a reopened Workflow (pro-d362): `path` on `branch`, never discarding anything. A worktree already registered
+/// on `branch` at `path` is kept as it is. Else `origin/<branch>` is fetched and the worktree and local branch are cut from it, when
+/// neither the path nor the local branch exists; one of them without the other is `worktree_exists` / `branch_exists`.
+pub fn ensure_reopened_lead_worktree(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+) -> Result<(), CpdError> {
+    let registered = list(repo)?
+        .iter()
+        .any(|w| real(&w.path) == real(path) && w.branch.as_deref() == Some(branch));
+    if registered {
+        return Ok(());
+    }
+    if path.exists() {
+        return Err(CpdError::new(
+            ErrorCode::WorktreeExists,
+            format!("{} already exists.", path.display()),
+        )
+        .with("path", path.to_string_lossy().into_owned()));
+    }
+    if branch_exists(repo, branch)? {
+        return Err(CpdError::new(
+            ErrorCode::BranchExists,
+            format!("Branch {branch} already exists."),
+        )
+        .with("branch", branch.to_owned()));
+    }
+    fetch(repo, &["origin", branch])?;
+    ok(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--no-track",
+            "-b",
+            branch,
+            path_str(path)?,
+            &format!("origin/{branch}"),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked Workflow's base Workflow's
 /// Lead Branch, or, for an **adopted** Workflow (contract §7.2), `origin/<head_ref>`: `origin <head_ref>` is fetched (a failure
 /// is step `remote`), no conflict check against `base` runs, nothing is pushed, and the User's own local branch of the

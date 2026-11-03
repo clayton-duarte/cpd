@@ -42,8 +42,6 @@ fn at_version(conn: &Connection, n: usize) {
 /// `workflow-event-kinds` adds their new names and leaves these in `event_kinds` as history, since past Events
 /// hold them (contract §4.5 K1, §5.2).
 const RETIRED_OBJECT_KINDS: usize = 6;
-/// `workflow-reopen` adds `workflow-reopened` to `event_kinds` before `events::Kind` names it (the next Job); drop this when it does.
-const REOPEN_KIND_NOT_YET_IN_KIND: usize = 1;
 
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
@@ -2736,9 +2734,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `workflow-event-kinds` adds the six kinds of the object beside the six it retired, which stay as history.
         assert_eq!(
             rows_after.remove("event_kinds").map(|r| r.len()),
-            Some(
-                crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS + REOPEN_KIND_NOT_YET_IN_KIND
-            )
+            Some(crate::events::Kind::ALL.len() + RETIRED_OBJECT_KINDS)
         );
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
         assert_eq!(
@@ -4594,8 +4590,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
             + 1
             + 1
             + 1
-            + RETIRED_OBJECT_KINDS as i64
-            + REOPEN_KIND_NOT_YET_IN_KIND as i64])]
+            + RETIRED_OBJECT_KINDS as i64])]
     );
 }
 

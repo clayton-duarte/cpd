@@ -107,6 +107,7 @@ kinds! {
     WorkflowEdited = "workflow-edited",
     WorkflowDescribed = "workflow-described",
     WorkflowCancelled = "workflow-cancelled",
+    WorkflowReopened = "workflow-reopened",
     WorkflowStarted = "workflow-started",
     WorkflowBaseChanged = "workflow-base-changed",
     PrOpened = "pr-opened",
@@ -258,6 +259,7 @@ impl Kind {
             WorkflowEdited => spec([Y, Y, N, N, N], &["workflow", "fields"], &[]),
             WorkflowDescribed => spec([Y, Y, N, N, N], &["workflow"], &[]),
             WorkflowCancelled => spec([Y, Y, N, N, N], &["workflow"], &["superseded_by"]),
+            WorkflowReopened => spec([Y, Y, N, N, N], &["workflow"], &[]),
             WorkflowStarted => spec(
                 [Y, Y, N, N, N],
                 &[

@@ -465,6 +465,10 @@ impl NewEvent {
         make(Kind::WorkflowDescribed, text, json!({"workflow": workflow}))
     }
 
+    pub fn workflow_reopened(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
+        make(Kind::WorkflowReopened, text, json!({"workflow": workflow}))
+    }
+
     pub fn workflow_cancelled(text: impl Into<String>, workflow: impl Serialize) -> NewEvent {
         make(Kind::WorkflowCancelled, text, json!({"workflow": workflow}))
     }
@@ -948,6 +952,7 @@ mod tests {
                 NewEvent::workflow_cancelled(T, s),
                 NewEvent::workflow_cancelled_superseded(T, s, s),
             ],
+            Kind::WorkflowReopened => vec![NewEvent::workflow_reopened(T, s)],
             Kind::WorkflowStarted => vec![NewEvent::workflow_started(T, s, s, s, s, s, s, b, b, s)],
             Kind::WorkflowBaseChanged => vec![
                 NewEvent::workflow_base_changed(T, s, (s, s), (None, Some(s)), s, BasePull::Absent),
