@@ -38,9 +38,9 @@ CREATE TABLE workflows_new (
   UNIQUE (plan, lead_branch),
   CHECK ((status IN ('waiting', 'cancelled')) = (lead_worktree IS NULL)),
   CHECK ((status IN ('waiting', 'cancelled')) = (started_at IS NULL)),
-  CHECK (status NOT IN ('open', 'merged') OR pr_number IS NOT NULL),
+  CHECK (status = 'cancelled' OR (status IN ('open', 'merged')) = (pr_number IS NOT NULL)),   -- pro-d362: a cancelled row may keep its PR (A1); open and merged need one, waiting and dispatch have none
   CHECK ((pr_number IS NULL) = (pr_url IS NULL) AND (pr_number IS NULL) = (pr_opened_at IS NULL)),
-  CHECK (status NOT IN ('open', 'merged') OR pull_request IS NOT NULL),
+  CHECK (status = 'cancelled' OR (status IN ('open', 'merged')) = (pull_request IS NOT NULL)),   -- pro-d362, as pr_number
   CHECK ((status = 'merged') = (merged_at IS NOT NULL)),
   CHECK (start_failed_at IS NULL OR status = 'waiting')
 ) STRICT;

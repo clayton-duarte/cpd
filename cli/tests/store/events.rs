@@ -379,6 +379,7 @@ const SPEC: &[SpecRow] = &[
         &["workflow"],
         &["superseded_by"],
     ),
+    ("workflow-reopened", "cp", "", &["workflow"], &[]),
     (
         "workflow-started",
         "cp",
