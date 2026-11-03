@@ -1157,6 +1157,19 @@ impl Tmux {
         .map(drop)
     }
 
+    /// `set -p -t <pane> @cpd_title <key>`, the text verbatim: an agent key is not Title Cased.
+    pub fn set_pane_key(&self, pane: &PaneId, key: &str) -> Result<(), CpdError> {
+        self.run(&strings(&[
+            "set",
+            "-p",
+            "-t",
+            pane.as_str(),
+            OPT_TITLE,
+            key,
+        ]))
+        .map(drop)
+    }
+
     /// `set -p -t <pane> @cpd_view <view>`.
     pub fn set_pane_view(&self, pane: &PaneId, view: View) -> Result<(), CpdError> {
         self.run(&strings(&[
@@ -1635,6 +1648,11 @@ pub fn title_case(text: &str) -> String {
     out
 }
 
+/// The `set` call of [`Tmux::set_pane_key`]: the key verbatim, never Title Cased.
+fn pane_key_args(pane: &PaneId, key: &str) -> Vec<String> {
+    strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, key])
+}
+
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -1756,6 +1774,15 @@ mod tests {
             assert!(!older_version(same, same));
         }
         assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
+    }
+
+    #[test]
+    fn a_pane_key_is_written_verbatim() {
+        let pane = PaneId::parse("%3").unwrap();
+        assert_eq!(
+            pane_key_args(&pane, "ctx:pay:job"),
+            ["set", "-p", "-t", "%3", "@cpd_title", "ctx:pay:job"]
+        );
     }
 
     #[test]

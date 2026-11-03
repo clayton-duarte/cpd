@@ -77,7 +77,7 @@ pub(super) fn start(
     // A failing step now leaves a pane no row names: kill the window, keep the error (G11).
     let marked = (|| {
         tmux.set_pane_session(&pane, lead.session)?;
-        tmux.set_pane_title(&pane, &title(env, lead)?)?;
+        pill(env, &tmux, &pane, lead.session)?;
         env.store.write(command, |tx| {
             tx.execute(
                 "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2",
@@ -106,53 +106,38 @@ pub(super) fn start(
     Ok(Started { window, pane })
 }
 
-/// The header of `lead`'s pane (contract §6.1): its dynamic title when it has one, else its key.
-fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
-    env.store.read(|conn| {
-        if let Some(dynamic) = dynamic_title(conn, lead.session)? {
-            return Ok(dynamic);
-        }
-        Ok(lead.name.to_owned())
-    })
+/// Sets the pill of `lead`'s pane (contract §6.1): its dynamic title, else its key.
+fn pill(env: &mut Env, tmux: &Tmux, pane: &PaneId, session: &SessionId) -> Result<(), CpdError> {
+    let (dynamic, name, fork) = env.store.read(|conn| {
+        Ok::<_, CpdError>(conn.query_row(
+            "SELECT title, name, forked_from IS NOT NULL FROM sessions WHERE id = ?1",
+            [session.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
+            },
+        )?)
+    })?;
+    crate::session::row::set_pill(tmux, pane, dynamic.as_deref(), &name, fork)
 }
 
-/// The Session's dynamic title, if it has one.
-fn dynamic_title(
-    conn: &rusqlite::Connection,
-    session: &SessionId,
-) -> Result<Option<String>, CpdError> {
-    Ok(conn.query_row(
-        "SELECT title FROM sessions WHERE id = ?1",
-        [session.as_str()],
-        |r| r.get(0),
-    )?)
-}
-
-/// Sets `@cpd_title` on `session`'s live pane, if it has one: to its dynamic title when it has
-/// one (contract §6.1), else its key (`sessions.name`). The Plan title is not the pill.
+/// Sets `@cpd_title` on `session`'s live pane, if it has one (contract §6.1): see [`pill`]. The
+/// Plan title is not the pill.
 pub(super) fn retitle(
     env: &mut Env,
     session: &SessionId,
     _plan_title: &str,
 ) -> Result<(), CpdError> {
-    let title = env.store.read(|conn| {
-        Ok::<_, CpdError>(match dynamic_title(conn, session)? {
-            Some(t) => t,
-            None => conn.query_row(
-                "SELECT name FROM sessions WHERE id = ?1",
-                [session.as_str()],
-                |r| r.get(0),
-            )?,
-        })
-    })?;
-    let title = title.as_str();
     let tmux = Tmux::new(env.config.tmux.socket.clone());
     for pane in tmux
         .list_panes()?
         .iter()
         .filter(|p| !p.dead && p.cpd_session.as_ref() == Some(session))
     {
-        tmux.set_pane_title(&pane.pane, title)?;
+        pill(env, &tmux, &pane.pane, session)?;
     }
     Ok(())
 }

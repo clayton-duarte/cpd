@@ -217,6 +217,21 @@ impl Row {
             .unwrap_or_else(|| self.name.clone()))
     }
 
+    /// Sets the pill of `pane`: see [`set_pill`].
+    pub fn set_pill(
+        &self,
+        tmux: &crate::host::Tmux,
+        pane: &crate::host::PaneId,
+    ) -> Result<(), CpdError> {
+        set_pill(
+            tmux,
+            pane,
+            self.dynamic_title.as_deref(),
+            &self.name,
+            self.forked_from.is_some(),
+        )
+    }
+
     /// Its agent key: its name, unless it is a fork (not an agent).
     pub fn key(&self) -> Option<&str> {
         match &self.forked_from {
@@ -380,6 +395,22 @@ pub(super) fn models_of(env: &mut Env, row: &Row) -> Result<Models, CpdError> {
         .read(|conn| crate::policy::model::models_of_context(conn, &home, row.context.as_str()))
 }
 
+/// Sets `@cpd_title` of `pane`, the one place the pill is chosen: the dynamic title (Title Case)
+/// when there is one, else the agent key verbatim, else (a fork) the name in Title Case.
+pub(crate) fn set_pill(
+    tmux: &crate::host::Tmux,
+    pane: &crate::host::PaneId,
+    dynamic: Option<&str>,
+    name: &str,
+    fork: bool,
+) -> Result<(), CpdError> {
+    match (dynamic, fork) {
+        (Some(title), _) => tmux.set_pane_title(pane, title),
+        (None, false) => tmux.set_pane_key(pane, name),
+        (None, true) => tmux.set_pane_title(pane, name),
+    }
+}
+
 /// The Session `id`, if it exists.
 pub(super) fn find(conn: &Connection, id: &SessionId) -> Result<Option<Row>, CpdError> {
     Ok(query(conn, "s.id = ?", vec![Sql::Text(id.to_string())])?.pop())
@@ -395,14 +426,14 @@ pub(super) fn load(conn: &Connection, id: &SessionId) -> Result<Row, CpdError> {
 /// repairs the header.
 pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
     let mut env = Env::open()?;
-    let title = env.store.read(|conn| load(conn, id)?.title(conn))?;
+    let row = env.store.read(|conn| load(conn, id))?;
     let tmux = env.tmux();
     for pane in tmux
         .list_panes()?
         .iter()
         .filter(|p| !p.dead && p.cpd_session.as_ref() == Some(id))
     {
-        tmux.set_pane_title(&pane.pane, &title)?;
+        row.set_pill(&tmux, &pane.pane)?;
     }
     Ok(())
 }

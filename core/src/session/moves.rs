@@ -220,7 +220,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
-        tmux.set_pane_title(&pane, &name)?;
+        crate::session::row::set_pill(&tmux, &pane, None, &name, true)?;
         env.store.write("session fork", |tx| {
             moved(tx, &row, &pane, &window, "parked")
         })?;
@@ -323,7 +323,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             );
             let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
             kill_window_on_error(&tmux, &window, || {
-                tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
+                lead.set_pill(&tmux, &pane)?;
                 // The store records the pane (no event: the one `session-moved` follows the swap, below) before the
                 // go signal (contract §6.4). When the signal fails the window is killed here and the row's pane is
                 // gone: engine E2 stops it (§3.6).
@@ -663,7 +663,7 @@ pub(crate) fn start_parked(
     let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
     let started = kill_window_on_error(&tmux, &window, || {
-        tmux.set_pane_title(&pane, &env.store.read(|conn| row.title(conn))?)?;
+        row.set_pill(&tmux, &pane)?;
         let won = env.store.write(command, |tx| {
             let changed = tx.execute(
                 "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2 AND tmux_pane IS ?3",
