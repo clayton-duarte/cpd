@@ -53,4 +53,4 @@ Read by: every pin file and every rule was grepped for the quoted words. Where a
 - LA-11: RT:34-37 needs "never cancel" in all three lines.
 - LA-14: ST:286-287 needs "targeted tests" and "full suite is the Gate's" in L.
 
-The 27 other CONFIRMED rows break no pin. Of the five, none is a one-line defect: each moves or links prose that a pin reads, so the fix keeps the words the pin reads or the pin moves with it.
+The 27 other CONFIRMED rows break no pin.
