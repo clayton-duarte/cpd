@@ -1,5 +1,6 @@
-import type { DialogOutcome, ImageMime } from "../../protocol/domain.ts";
+import { WebError, type DialogOutcome, type ImageMime } from "../../protocol/domain.ts";
 import type { Disposable, Scheduler } from "../../protocol/runtime.ts";
+import { assertSupportedHost } from "./frames.ts";
 
 export interface SocketLike {
   write(line: string): void;
@@ -28,8 +29,36 @@ export type HostFrame =
   | { type: "pong"; req?: string }
   | { type: "bye"; reason: "shutdown" | "restart" | "storage_failed" | "slow_client" | "detached"; reconnect: boolean };
 
-export function parseHostFrame(_line: string): HostFrame {
-  throw new Error("not implemented");
+const FRAME_TYPES: ReadonlySet<string> = new Set([
+  "welcome",
+  "attached",
+  "snapshot",
+  "events",
+  "result",
+  "error",
+  "host_state",
+  "ui_request",
+  "ui_resolved",
+  "notice",
+  "status",
+  "pong",
+  "bye",
+]);
+
+export function parseHostFrame(line: string): HostFrame {
+  const fail = (why: string): never => {
+    throw new WebError("protocol_error", `host frame: ${why}`, { line: line.slice(0, 200) });
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return fail("not valid JSON");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return fail("not an object");
+  const type = (value as { type?: unknown }).type;
+  if (typeof type !== "string" || !FRAME_TYPES.has(type)) return fail(`unknown type ${String(type)}`);
+  return value as HostFrame;
 }
 
 export interface HostCursor {
@@ -51,6 +80,196 @@ export interface HostClient {
   onClose(handler: (error: Error | null) => void): Disposable;
   close(): void;
 }
-export function connectHost(_socketPath: string, _deps: { factory: SocketFactory; scheduler: Scheduler }): Promise<HostClient> {
-  return Promise.reject(new Error("not implemented"));
+const HELLO_MS = 5000; // LIMITS.helloMs, protocol.ts:6
+
+type Pending = { resolve: (frame: HostFrame) => void; reject: (error: Error) => void };
+type Answer = Parameters<HostClient["respond"]>[1];
+
+export async function connectHost(socketPath: string, deps: { factory: SocketFactory; scheduler: Scheduler }): Promise<HostClient> {
+  let socket: SocketLike;
+  try {
+    socket = await deps.factory.connect(socketPath);
+  } catch (e) {
+    throw new WebError("host_unreachable", `cannot open ${socketPath}: ${e instanceof Error ? e.message : String(e)}`, { path: socketPath });
+  }
+
+  const frameHandlers = new Set<(frame: HostFrame) => void>();
+  const closeHandlers = new Set<(error: Error | null) => void>();
+  const pending = new Map<string, Pending>();
+  let closed = false;
+  let buffer = "";
+  let nextReq = 0;
+  let welcome: Extract<HostFrame, { type: "welcome" }> | null = null;
+  let onHandshake: ((outcome: Error | Extract<HostFrame, { type: "welcome" }>) => void) | null = null;
+
+  const subscriptions: Disposable[] = [];
+  const teardown = (error: Error): void => {
+    closed = true;
+    for (const s of subscriptions) s.dispose();
+    for (const p of pending.values()) p.reject(error);
+    pending.clear();
+  };
+  const fail = (error: Error): void => {
+    if (closed) return;
+    teardown(error);
+    if (onHandshake !== null) {
+      onHandshake(error);
+      return;
+    }
+    for (const h of [...closeHandlers]) h(error);
+  };
+  const disconnected = (details?: Record<string, unknown>): WebError =>
+    new WebError("host_disconnected", "durable host connection closed", details);
+
+  const dispatch = (frame: HostFrame): void => {
+    if (welcome === null) {
+      if (frame.type === "welcome") {
+        onHandshake?.(frame);
+      } else if (frame.type === "error") {
+        fail(new WebError("host_error", frame.message, { hostCode: frame.code, details: frame.details }));
+      }
+      return;
+    }
+    if ((frame.type === "result" || frame.type === "error" || frame.type === "attached") && frame.req !== undefined) {
+      const p = pending.get(frame.req);
+      if (p !== undefined) {
+        pending.delete(frame.req);
+        if (frame.type === "error") p.reject(new WebError("host_error", frame.message, { hostCode: frame.code, details: frame.details }));
+        else p.resolve(frame);
+        return;
+      }
+    }
+    for (const h of [...frameHandlers]) h(frame);
+    if (frame.type === "bye") fail(disconnected({ bye: frame.reason }));
+  };
+
+  subscriptions.push(
+    socket.onData((chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const nl = buffer.indexOf("\n");
+        if (nl < 0) return;
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line === "") continue;
+        let frame: HostFrame;
+        try {
+          frame = parseHostFrame(line);
+        } catch (e) {
+          fail(e as Error);
+          socket.end();
+          return;
+        }
+        if (closed) return;
+        dispatch(frame);
+      }
+    }),
+    socket.onClose(() => fail(onHandshake !== null ? new WebError("host_unreachable", "socket closed before welcome", { path: socketPath }) : disconnected())),
+  );
+
+  const first = await new Promise<Error | Extract<HostFrame, { type: "welcome" }>>((resolve) => {
+    const timer = deps.scheduler.after(HELLO_MS, () =>
+      resolve(new WebError("host_unreachable", `no welcome within ${HELLO_MS} ms`, { path: socketPath })),
+    );
+    onHandshake = (outcome) => {
+      timer.dispose();
+      resolve(outcome);
+    };
+    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, min_protocol: PROTOCOL, client: CLIENT_NAME })}\n`);
+  });
+  onHandshake = null;
+  if (first instanceof Error) {
+    if (!closed) {
+      teardown(first);
+      socket.end();
+    }
+    throw first;
+  }
+  try {
+    assertSupportedHost(first);
+  } catch (e) {
+    teardown(e as Error);
+    socket.end();
+    throw e;
+  }
+  welcome = first;
+
+  const request = (type: string, fields: Record<string, unknown>): Promise<HostFrame> => {
+    if (closed) return Promise.reject(disconnected());
+    const req = `r${++nextReq}`;
+    return new Promise<HostFrame>((resolve, reject) => {
+      pending.set(req, { resolve, reject });
+      socket.write(`${JSON.stringify({ type, req, ...fields })}\n`);
+    });
+  };
+  const data = async (type: string, fields: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const frame = await request(type, fields);
+    if (frame.type !== "result") throw new WebError("protocol_error", `${type}: expected result, got ${frame.type}`);
+    return frame.data;
+  };
+  const bad = (type: string, field: string): never => {
+    throw new WebError("protocol_error", `${type} result: bad ${field}`);
+  };
+
+  return {
+    welcome,
+    async attach(cursor) {
+      const frame = await request("attach", { conversation: "root", ...(cursor === undefined ? {} : { cursor }) });
+      if (frame.type !== "attached") throw new WebError("protocol_error", `attach: expected attached, got ${frame.type}`);
+      return frame;
+    },
+    async submit(input) {
+      const result = await data("submit", {
+        text: input.text,
+        when_busy: input.whenBusy,
+        ...(input.requestId === undefined ? {} : { request_id: input.requestId }),
+        ...(input.images === undefined || input.images.length === 0
+          ? {}
+          : { images: input.images.map((i) => ({ mime_type: i.mimeType, data: i.dataBase64 })) }),
+      });
+      const { submission_id: id, status } = result;
+      if (typeof id !== "number") return bad("submit", "submission_id");
+      if (typeof status !== "string") return bad("submit", "status");
+      return { submissionId: id, status };
+    },
+    async compact(instructions) {
+      const result = await data("compact", instructions === undefined ? {} : { instructions });
+      if (typeof result.task_id !== "number") return bad("compact", "task_id");
+      return { taskId: result.task_id };
+    },
+    configure(change) {
+      return data("configure", "model" in change ? { model: change.model } : { thinking_level: change.thinkingLevel });
+    },
+    async listModels() {
+      const { models } = await data("list_models", {});
+      if (!Array.isArray(models)) return bad("list_models", "models");
+      return models as Awaited<ReturnType<HostClient["listModels"]>>;
+    },
+    async abort() {
+      await data("abort", { background: false });
+    },
+    async abortSubmission(submissionId) {
+      const result = await data("abort_submission", { submission_id: submissionId });
+      return { outcome: result.outcome };
+    },
+    async respond(id: string, answer: Answer) {
+      await data("ui_response", { id, ...answer });
+    },
+    async detach() {
+      await data("detach", {});
+    },
+    onFrame(handler) {
+      frameHandlers.add(handler);
+      return { dispose: () => void frameHandlers.delete(handler) };
+    },
+    onClose(handler) {
+      closeHandlers.add(handler);
+      return { dispose: () => void closeHandlers.delete(handler) };
+    },
+    close() {
+      if (closed) return;
+      teardown(disconnected());
+      socket.end();
+    },
+  };
 }
