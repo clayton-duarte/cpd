@@ -48,8 +48,8 @@ pub struct Team<'a> {
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
 static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
-/// Every condition of the kinds, in the order of the kinds. The only `engine-error` is a stalled `durable` Attempt
-/// (hs-d798, [`stalls`]); the engine's own errors go to the Manager (hs-d314). There is no `job-stuck` (hs-d318: a
+/// Every condition of the kinds, in the order of the kinds. The engine's own errors go to the Manager (hs-d314); a stalled
+/// `durable` Attempt is an `error` Event, not an item. There is no `job-stuck` (hs-d318: a
 /// stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
@@ -107,7 +107,6 @@ pub fn conditions_with(
     all.extend(review_requested(store, home, now, team)?);
     all.extend(models_changed(store, home, now)?);
     all.extend(deploys(store, home)?);
-    all.extend(store.read(stalls)?);
     all.extend(store.read(drafts_parked)?);
     Ok(all)
 }
@@ -115,47 +114,6 @@ pub fn conditions_with(
 /// `deploy` (contract §2.2 "The deploy rule"): one condition per run of `run/deploy-runs.json`, written by the pull request poll.
 /// A missing file is no run; a file that is not that JSON is no run either, as E8 reads an unreadable `team-review.json`
 /// as "unknown": the open items stay as they are, and one `engine-error` condition says why.
-fn stalls(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT a.plan, p.context, a.id, a.job FROM attempts a
-           JOIN plans p ON p.id = a.plan
-           JOIN events e ON e.plan = a.plan AND e.attempt = a.id AND e.kind = 'error'
-                AND json_extract(e.data, '$.code') = 'worker_stalled'
-          WHERE a.status <> 'ended'
-          ORDER BY a.plan, a.id",
-    )?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut out = Vec::new();
-    for (plan, context, attempt, job) in rows {
-        let plan = id("Plan id", &plan, PlanId::parse)?;
-        let job = id("Job key", &job, JobKey::parse)?;
-        out.push(Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:driver/worker_stalled/{attempt}"),
-            label: format!("worker stalled: cpd job cancel {job} now, or cpd attempt abort {attempt} once that command lands"),
-            url: None,
-            context: Some(id("Context id", &context, ContextId::parse)?),
-            plan: Some(plan),
-            job: Some(job),
-            session: None,
-            record: None,
-            event: None,
-            opened_at: None,
-        });
-    }
-    Ok(out)
-}
-
 fn deploys(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     #[derive(serde::Deserialize)]
     struct Cache {
