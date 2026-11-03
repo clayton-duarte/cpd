@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod agent_key_addressing;
 mod agent_key_guards;
 mod board;
 mod host;

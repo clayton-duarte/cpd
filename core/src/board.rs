@@ -78,16 +78,19 @@ fn target(conn: &Connection, to: &str, from: Option<&SessionId>) -> Result<Strin
             )
         });
     }
-    let lead: Option<String> = conn
-        .query_row("SELECT lead_session FROM plans WHERE id = ?1", [to], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    if let Some(lead) = lead {
-        session::plan_inactive(conn, to)?;
-        return Ok(lead);
+    let id = session::resolve(conn, &to.parse::<SessionRef>()?)?;
+    let lead_plan: Option<String> = conn
+        .query_row(
+            "SELECT plan FROM sessions WHERE id = ?1 AND role = 'lead'",
+            [id.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(plan) = lead_plan {
+        session::plan_inactive(conn, &plan)?;
     }
-    Ok(session::resolve(conn, &to.parse::<SessionRef>()?)?.to_string())
+    Ok(id.to_string())
 }
 
 fn post(args: PostArgs) -> Result<Output, CpdError> {
