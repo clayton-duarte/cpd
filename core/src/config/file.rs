@@ -55,6 +55,8 @@ pub struct Config {
     pub pi_adapter: String,
     /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
     pub worker_runner: WorkerRunner,
+    /// STUB: the `[experimental]` table.
+    pub experimental: super::Experimental,
     /// The runner of each new Lead Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `manager_runner` (Q11).
     pub lead_runner: WorkerRunner,
     /// The runner of each new Manager Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `lead_runner` (Q11).
@@ -236,6 +238,11 @@ impl Watch {
 }
 
 impl Config {
+    /// STUB: derived from `experimental.durable_workers`.
+    pub fn worker_runner(&self) -> WorkerRunner {
+        unimplemented!("Config::worker_runner")
+    }
+
     /// The four role defaults, ascending (checked at parse).
     pub fn role_tiers(&self) -> RoleTiers {
         RoleTiers {
@@ -487,6 +494,7 @@ impl Config {
             lead_pi_packages,
             pi_adapter,
             worker_runner,
+            experimental: super::Experimental::default(),
             lead_runner,
             manager_runner,
             context_engine_enabled,

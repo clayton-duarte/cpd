@@ -40,6 +40,10 @@ pub const MIGRATIONS: &[ConfigMigration] = &[
         name: "drop-inbox-review-context",
         run: drop_inbox_review_context,
     },
+    ConfigMigration {
+        name: "worker-runner-to-experimental",
+        run: worker_runner_to_experimental,
+    },
 ];
 
 /// Folds the migrations in order over `text`, returning the final text and the names of
@@ -183,5 +187,10 @@ fn drop_inbox_review_context(text: &str) -> Option<String> {
         }
         start += line.len();
     }
+    None
+}
+
+/// `worker-runner-to-experimental` (A8). STUB: a no-op.
+fn worker_runner_to_experimental(_text: &str) -> Option<String> {
     None
 }
