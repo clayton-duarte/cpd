@@ -592,6 +592,8 @@ cpd's agents form one hierarchy, Manager > Lead > Worker, mapped 1:1 to Context 
 - **The ids are disjoint.** A Plan id may not equal a Context id, nor the converse: `plan new` and `context new` refuse it with `id_taken` (commands.md §4.1, §3.1), so one name never denotes both a Manager and a Plan. The two archived pairs `bifrost` and `gatemac` predate the rule and are left as they are.
 - **Existing rows** are named by the data-only migration `20261103T1000-agent-key-backfill` (§4.5). The schema of §4.4 is unchanged.
 
+**Resolution.** A Session reference (commands.md §1.3), wherever a command takes a Session, may be an agent key, or a relative Plan or Job key of the caller's Context or Plan. How a reference resolves, in what order and which candidate wins is defined once, in commands.md §1.3; this section does not restate it.
+
 #### Asleep
 
 Context, Plan and Session carry `asleep_at` (hs-d515, hs-d520). A Session is put to sleep when it is finished and the User is not looking at it: it is complete but still holds its chat file and its place among live Sessions in the tree. Unlike archiving, sleeping is automatic and without User action.
@@ -4957,7 +4959,7 @@ Read-only. Refuses before any connect, in this order:
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session exists (the short forms of §1.3) | `session_not_found` | 4 |
+| the Session exists (any form of §1.3) | `session_not_found` | 4 |
 | it is a `lead` or a `manager` (a Worker's runner is its Attempt, and its transcripts live nowhere to tail) | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` (an archived Session has no host: §6.19's stop hooks stopped it) | `archived` | 3 |
 | its `runner` is `durable`; a `pi` Session has no host socket, and its pane is read in tmux, not over a socket. Message: `Session <id> runs on pi: it has no host socket to tail. Open it with cpd session open.` | `no_host_socket` | 3 |
