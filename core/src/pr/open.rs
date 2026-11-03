@@ -881,7 +881,7 @@ pub fn stored_description_of(
 pub fn description_required(plan: &PlanId, key: &WorkflowKey) -> CpdError {
     CpdError::new(
         ErrorCode::DescriptionRequired,
-        format!("Workflow {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd workflow describe --workflow {key} --file <body.md>, then open it again."),
+        format!("Workflow {key} of Plan {plan} has no description: write it (the repo's pull request template, else ## What and why / ## How / ## Acceptance criteria / ## Out of scope and follow-ups / ## Links), run cpd workflow describe {key} --file <body.md>, then open it again."),
     )
     .with("plan", plan.as_str())
     .with("workflow", key.as_str())

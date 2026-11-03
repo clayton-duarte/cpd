@@ -23,7 +23,7 @@ fn job_dispatch_refuses_an_open_job_whose_pr_has_no_description() {
         error["message"]
             .as_str()
             .unwrap()
-            .contains("cpd workflow describe --workflow repo"),
+            .contains("cpd workflow describe repo"),
         "{error}"
     );
     assert_eq!(attempts(&live), 0, "no Attempt row");
