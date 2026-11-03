@@ -14,7 +14,7 @@ use crate::events::{NewEvent, append};
 use crate::host::chat_slot;
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
-use crate::plan::archive::{Objects, archive_keeping};
+use crate::plan::archive::{Objects, archive_keeping, refuse_agent_caller};
 
 /// One live object that stops an archive (contract §2.2 "Archived").
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +179,7 @@ fn archived_event(row: &Row, archived: bool) -> NewEvent {
 
 /// `session archive` (commands.md §10.10).
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
+    refuse_agent_caller("session archive")?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;
@@ -342,6 +343,7 @@ pub(super) fn archive_on_quit(env: &mut Env, id: &SessionId) -> Result<(), CpdEr
 
 /// `session unarchive` (commands.md §10.11).
 pub(super) fn unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
+    refuse_agent_caller("session unarchive")?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;

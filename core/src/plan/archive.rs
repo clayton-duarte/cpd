@@ -330,7 +330,28 @@ pub fn unarchive(
 }
 
 /// `plan archive` (§4.10).
+/// Refuses a caller whose environment carries `CPD_SESSION` or `CPD_ATTEMPT`.
+pub(crate) fn refuse_agent_caller(command: &str) -> Result<(), CpdError> {
+    let read = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    let (session, attempt) = (read("CPD_SESSION"), read("CPD_ATTEMPT"));
+    if session.is_none() && attempt.is_none() {
+        return Ok(());
+    }
+    let text = |v: Option<std::ffi::OsString>| match v {
+        Some(v) => Value::from(v.to_string_lossy().into_owned()),
+        None => Value::Null,
+    };
+    Err(CpdError::new(
+        ErrorCode::AgentForbidden,
+        format!("cpd {command} is for the User and the engine, not an agent: Plans and Sessions archive on the engine's asleep -> archive schedule."),
+    )
+    .with("command", command)
+    .with("session", text(session))
+    .with("attempt", text(attempt)))
+}
+
 pub(super) fn plan_archive(args: ArchiveArgs) -> Result<Output, CpdError> {
+    refuse_agent_caller("plan archive")?;
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let objects = env.store.read(|conn| Objects::of_plan(conn, &id))?;
@@ -339,6 +360,7 @@ pub(super) fn plan_archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 
 /// `plan unarchive` (§4.11).
 pub(super) fn plan_unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
+    refuse_agent_caller("plan unarchive")?;
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let (objects, context) = env
