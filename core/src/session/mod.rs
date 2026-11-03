@@ -44,6 +44,8 @@ mod switch;
 pub mod tail;
 #[cfg(test)]
 mod tail_tests;
+#[cfg(test)]
+mod title_tests;
 pub(crate) mod working_pr;
 
 use std::path::PathBuf;

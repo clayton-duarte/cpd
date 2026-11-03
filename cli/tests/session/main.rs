@@ -6,6 +6,7 @@ mod common;
 
 mod agent_key_addressing;
 mod agent_key_guards;
+mod agent_key_row;
 mod board;
 mod host;
 mod host_pill;
