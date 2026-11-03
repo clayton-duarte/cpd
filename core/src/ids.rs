@@ -426,10 +426,14 @@ impl RecordId {
         let mut found: Vec<RecordId> = Vec::new();
         let mut i = 0;
         while i < b.len() {
-            let before_ok = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'-' || b[i - 1] == b'_');
+            let before_ok = i == 0
+                || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'-' || b[i - 1] == b'_');
             if before_ok && b[i].is_ascii_lowercase() {
                 let mut j = i;
-                while j < b.len() && j - i < 8 && (b[j].is_ascii_lowercase() || b[j].is_ascii_digit()) {
+                while j < b.len()
+                    && j - i < 8
+                    && (b[j].is_ascii_lowercase() || b[j].is_ascii_digit())
+                {
                     j += 1;
                 }
                 if j < b.len() && b[j] == b'-' {
@@ -439,7 +443,8 @@ impl RecordId {
                         while k < b.len() && b[k].is_ascii_digit() {
                             k += 1;
                         }
-                        let after_ok = k == b.len() || !(b[k].is_ascii_alphanumeric() || b[k] == b'_');
+                        let after_ok =
+                            k == b.len() || !(b[k].is_ascii_alphanumeric() || b[k] == b'_');
                         if after_ok {
                             if let Ok(id) = RecordId::parse(&text[i..k]) {
                                 if !found.contains(&id) {
