@@ -1,6 +1,6 @@
 # Questions to the User
 
-Rules for every `ask_user_question` call (trial t5). The tool opens a dialog in the editor area; the User answers there.
+Rules for every `ask_user_question` call. The tool opens a dialog in the editor area; the User answers there.
 
 - **A dialog holds one short question.** Tables, lists and long text go in the chat first; then the dialog asks. A `preview` is a few lines at most.
 - **One call per interview round.** At most 4 questions, 2–4 options each. Header at most 16 characters. Each question ends with `?`.

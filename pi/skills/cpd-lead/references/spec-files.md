@@ -16,7 +16,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
     "`timeout 300 node --test test/routes/health.test.ts` passes",
     "The repo's quick check passes"
   ],
-  "out_of_scope": ["Do not change the existing routes", "Do not add a dependency"]
+  "out_of_scope": ["The existing routes stay unchanged", "No new dependency"]
 }
 ```
 
@@ -37,7 +37,7 @@ The Worker's submit runs only the tamper check and, for a test or implementation
 
 - An Attempt gets `attempt_minutes` of active time (the configured `attempt_minutes`); the timeout is that value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
-- Prefer many small Jobs that run in parallel. Do not split below a unit that has its own acceptance check.
+- Prefer many small Jobs that run in parallel. Split down to a unit that has its own acceptance check, no further.
 - A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
 
 ## Bounded commands
@@ -57,7 +57,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini), ranked G < H < S < O; effort `0`–`4` (a digit only where the model offers that effort; digits may skip), or `X` for a model with no effort levels; effort 5 is never valid. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is inside the worker range**, from `worker_tier` up to just below `lead_tier` (contract §9 "Roles and ranges"; pro-d328 to pro-d332, which supersede the fixed `H0`–`H3` and `S0`–`S3` of pro-d82 and the fixed Worker list of pro-d84). Read that range from `cpd tiers` and the config, never from a fixed list; the explore kinds have their own ranges ([Explore Jobs](#explore-jobs)). A Worker's ladder climbs to the next valid effort inside the letter (contract §9 'Next rung') and stops at the range's ceiling. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. A Lead's Tier is in the lead range (`lead_tier` up to just below `manager_tier`), a Manager's in the manager range (`manager_tier` up to the top valid rung); both are set by the config, not by you. `GX` is the auxiliar's Tier (the distiller, `context_distill_tier`, default `GX`); G is a letter like the others, and a Job's Tier of letter G is refused unless the worker range holds it.
+Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini), ranked G < H < S < O; effort `0`–`4` (a digit only where the model offers that effort; digits may skip), or `X` for a model with no effort levels; effort 5 is never valid. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is inside the worker range**, from `worker_tier` up to just below `lead_tier` (contract §9 "Roles and ranges"). Read that range from `cpd tiers` and the config, never from a fixed list; the explore kinds have their own ranges ([Explore Jobs](#explore-jobs)). A Worker's ladder climbs to the next valid effort inside the letter (contract §9 'Next rung') and stops at the range's ceiling. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. A Lead's Tier is in the lead range (`lead_tier` up to just below `manager_tier`), a Manager's in the manager range (`manager_tier` up to the top valid rung); both are set by the config, not by you. `GX` is the auxiliar's Tier (the distiller, `context_distill_tier`, default `GX`); G is a letter like the others, and a Job's Tier of letter G is refused unless the worker range holds it.
 
 | Work | Tier | Why |
 |---|---|---|
@@ -67,7 +67,7 @@ Format `<letter><effort>`: letters `O` (opus), `S` (sonnet), `H` (haiku), `G` (g
 
 ## A feedback fix Job
 
-On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>` (pro-d94), and opens only when you do.
+On an open Workflow a fix is one `work` Job (`--tier S1`, no `--kind`, no `--draft`): a feedback round puts every fix of the round in it; cpd chains it after the Workflow's open Job and previous fixes, so you give no `--needs` for the chain. The Job's Spec carries the comment text, file and line, the failing log lines and the exact fix, and, when behaviour changes, an acceptance item naming the test the Worker writes first in the same Job. A failed fix must be retried or cancelled before the next is added (`needs_unavailable`). Its merge pushes the pull request ([Addressing](../SKILL.md#addressing)). The pull request body or title is never a Job: the Lead's, written with `cpd workflow describe <key> --file <body.md>`, and opens only when you do.
 
 ## Test Jobs
 
@@ -83,7 +83,7 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
   Its submit builds the branch and runs the named tests, and is refused unless they fail for a reason other than a build error (`tests_build_failed`, `tests_not_red`; `test_files_missing` when a `test_files` entry matches nothing the Job changed).
 - **An implementation Job names no tests.** Its tests are the union of the `tests` of the test Jobs it needs directly (derived, so the tests it must pass are the ones that were red). Its submit is refused unless they pass (`tests_failed`). Its Spec's `context` says which test Jobs it builds on.
 - **The red tests are guarded.** The implementation Job may not change a path matched by the `test_files` of the test Jobs it needs (`tests_tampered`), unless you approve the path with `cpd job approve-tests <job> --path <p> --reason "<why>"`. A Worker that needs a test changed asks you with `cpd ask`; the decision is yours ([Escalations](../SKILL.md#escalations)).
-- **The repo's test commands** are the `[test-commands]` table (formerly `[tests]` before the policy file migration) of the repo's policy file at `$CPD_HOME/policy/repos/<owner>/<name>.toml`, which the Lead drafts and the User approves:
+- **The repo's test commands** are the `[test-commands]` table of the repo's policy file at `$CPD_HOME/policy/repos/<owner>/<name>.toml`, which the Lead drafts and the User approves:
 
   ```toml
   [test-commands]
@@ -96,7 +96,7 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
 
 ## Research Jobs
 
-Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as an ordinary Job.
+A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md` and goes through review; it is not an explore Job (`--kind scout|research`, no Workflow, queued at once, artefact in `$CPD_HOME/run/<plan>/explore/<job-key>.md`: [Explore Jobs](#explore-jobs)). Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as one.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling.
 - Put it in the Plan first and add the follow-up drafts right after the lock with `--needs <research-job>` (same Workflow; `job add --draft`), listing them in its `context`: they wait on it. When it is Merged (`job-merged`), resolve them at once with what it found: edit each to a full Tier and Spec and start them with `cpd_plan_review` (with a `title`), or cancel it. Tell the User what the batch holds. A follow-up that is its own Workflow is added right after the lock with `cpd workflow add <key> --repo <path> --title "<title>" --needs <research-workflow>` so it waits on the research Workflow's merge, and its drafts wait on that Workflow; the research findings are read from main when it starts, and when the research Workflow merges you resolve its drafts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research Workflow.
@@ -106,7 +106,7 @@ Grounding that needs more than reading (a large codebase survey, comparing libra
 
 ## Explore Jobs
 
-The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X`, up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout` or `--kind research` and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
+The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X`, up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
 
 The file passed as `--spec` has exactly these four fields, all required, and no others (`spec_invalid`, exit 2, with the JSON path, for `touches`, `tests`, `test_files` or `resources`):
 
@@ -117,7 +117,7 @@ The file passed as `--spec` has exactly these four fields, all required, and no 
 | `acceptance` | What the file must answer and cite, one checkable item each. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty. |
 
-cpd stores the artefact as the Job's `touches`: `run/<plan>/explore/<job-key>.md`, relative to `$CPD_HOME`. You name no file.
+cpd stores the artefact as the Job's `touches`: `$CPD_HOME/run/<plan>/explore/<job-key>.md`. You name no file.
 
 Rules to put in the `context` of every explore Spec (they are the Worker's only rules):
 
@@ -137,7 +137,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
     "The file names the developer command, the script behind it and the CI job that runs it",
     "Each fact cites its file and line, for example scripts/cargo.sh:12"
   ],
-  "out_of_scope": ["Do not change the repo", "Do not run the test suite"]
+  "out_of_scope": ["The repo stays unchanged", "The test suite is not run"]
 }
 ```
 
@@ -149,7 +149,7 @@ Rules to put in the `context` of every explore Spec (they are the Worker's only 
     "The file states whether the call exists in the current major version, with the URL that says so",
     "The file names the version that changed it, or says that no source names one"
   ],
-  "out_of_scope": ["Do not change the repo", "Do not install packages"]
+  "out_of_scope": ["The repo stays unchanged", "No package is installed"]
 }
 ```
 

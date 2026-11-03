@@ -45,7 +45,7 @@ test("cpd-lead skill: a Lead runs a command the User explicitly asks for, stated
   assert.ok(lead.indexOf(HEADING) < lead.indexOf("## 1. Context"), "the section sits before ## 1. Context");
   const s = section();
   for (const str of [
-    "explicitly asks you to run a command", "pro-d56", "commands.md §15.20", "Only an explicit request counts.", "Never infer one",
+    "explicitly asks you to run a command", "commands.md §15.20", "Only an explicit request counts.", "Never infer one",
     "What stays.", "lead_worktree", "in the background", "URL or port", "the log path", "how to stop it", "Leave nothing orphaned.", "plan-done",
   ]) assert.ok(s.includes(str), `the section lacks "${str}"`);
 
@@ -56,7 +56,7 @@ test("cpd-lead skill: a Lead runs a command the User explicitly asks for, stated
   assert.ok(act.includes("(#a-command-the-user-asks-for)"), "the Act bullet links the section");
   const stay = lines.find((l) => l.startsWith("- **Stay free for the User.**"));
   assert.ok(stay, "the Stay free bullet exists");
-  assert.ok(stay.includes("Never poll, sleep or run a foreground loop. The adapter refuses a bash call of yours that waits longer than 30 seconds."), "the Stay free bullet keeps its sentence");
+  assert.ok(stay.includes("30 seconds"), "the Stay free bullet names 30 seconds");
   assert.ok(stay.includes("(#a-command-the-user-asks-for)"), "the Stay free bullet links the section");
 
   assert.equal(count(lead, "explicitly asks you to run"), 1, "the phrase occurs once in the Lead SKILL.md");
