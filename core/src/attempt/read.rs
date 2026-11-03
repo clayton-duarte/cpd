@@ -28,6 +28,7 @@ pub(super) fn read(args: ReadArgs) -> Result<Output, CpdError> {
         };
         Ok((attempt, session, file.flatten()))
     })?;
+    let durable = attempt.runner == "durable";
     let missing = |why: &str| {
         CpdError::new(
             ErrorCode::SessionNotFound,
@@ -37,6 +38,19 @@ pub(super) fn read(args: ReadArgs) -> Result<Output, CpdError> {
         .with("session", session.clone())
         .with("file", file.clone())
     };
+    if durable {
+        let path = env.home.durable_store(&plan, &id);
+        let shown = path.display().to_string();
+        if !path.exists() {
+            return Err(missing("its durable store does not exist (yet)").with("file", shown));
+        }
+        let records = read_records(&path)?;
+        let all = durable_transcript(&path, &records)?;
+        let keep = all.len().saturating_sub(args.lines as usize);
+        return Ok(Output::success(json!({
+            "attempt": attempt.id, "session": session, "file": shown, "total": all.len(), "lines": &all[keep..],
+        })));
+    }
     let (Some(session), Some(file)) = (&session, &file) else {
         return Err(missing(
             "no Session is registered for it, or its file is not known yet",
@@ -52,6 +66,20 @@ pub(super) fn read(args: ReadArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "attempt": attempt.id, "session": session, "file": file, "total": all.len(), "lines": &all[keep..],
     })))
+}
+
+fn read_records(path: &Path) -> Result<Vec<String>, CpdError> {
+    let fail = |e: rusqlite::Error| malformed(path, None, format!("cannot be read: {e}"));
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(fail)?;
+    let mut stmt = conn
+        .prepare("SELECT record FROM entries ORDER BY id")
+        .map_err(fail)?;
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .map_err(fail)?
+        .collect::<Result<_, _>>()
+        .map_err(fail)
 }
 
 fn malformed(path: &Path, line: Option<usize>, why: String) -> CpdError {
@@ -135,31 +163,69 @@ fn transcript(path: &Path, text: &str) -> Result<Vec<String>, CpdError> {
         if message.role != "assistant" {
             continue;
         }
-        match message.content {
-            None => {}
-            Some(Content::Text(text)) => {
-                out.extend(text.split('\n').map(|l| format!("assistant: {l}")))
-            }
-            Some(Content::Blocks(blocks)) => {
-                for block in blocks {
-                    match (block.kind.as_str(), block.text, block.name) {
-                        ("text", Some(text), _) => {
-                            out.extend(text.split('\n').map(|l| format!("assistant: {l}")))
-                        }
-                        ("toolCall", _, Some(name)) => out.push(format!("tool: {name}")),
-                        _ => {}
-                    }
-                }
-            }
-        }
+        push_content(&mut out, message.content);
     }
     Ok(out)
 }
 
+/// The lines of one assistant message's content: `assistant: …` per text line, `tool: <name>` per tool call.
+fn push_content(out: &mut Vec<String>, content: Option<Content>) {
+    match content {
+        None => {}
+        Some(Content::Text(text)) => {
+            out.extend(text.split('\n').map(|l| format!("assistant: {l}")))
+        }
+        Some(Content::Blocks(blocks)) => {
+            for block in blocks {
+                match (block.kind.as_str(), block.text, block.name) {
+                    ("text", Some(text), _) => {
+                        out.extend(text.split('\n').map(|l| format!("assistant: {l}")))
+                    }
+                    ("toolCall", _, Some(name)) => out.push(format!("tool: {name}")),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// A `durable` store record: `kind` and the first model message.
+#[derive(Deserialize)]
+struct DurableRecord {
+    kind: String,
+    model: Option<Vec<DurableMessage>>,
+}
+
+#[derive(Deserialize)]
+struct DurableMessage {
+    content: Option<Content>,
+}
+
 /// The transcript lines of a `durable` Attempt's store: `records` are the `entries.record` texts in `id` order.
-#[allow(dead_code)]
-fn durable_transcript(_path: &Path, _records: &[String]) -> Result<Vec<String>, CpdError> {
-    Ok(Vec::new())
+fn durable_transcript(path: &Path, records: &[String]) -> Result<Vec<String>, CpdError> {
+    let mut out = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        let n = i + 1;
+        let value: Value = serde_json::from_str(record)
+            .map_err(|e| malformed(path, Some(n), format!("invalid JSON: {e}")))?;
+        let entry = DurableRecord::deserialize(&value)
+            .map_err(|_| malformed(path, Some(n), "not a store record".to_owned()))?;
+        if entry.kind != "pi.assistant" {
+            continue;
+        }
+        let first = entry
+            .model
+            .and_then(|m| m.into_iter().next())
+            .ok_or_else(|| {
+                malformed(
+                    path,
+                    Some(n),
+                    "assistant record without a model message".to_owned(),
+                )
+            })?;
+        push_content(&mut out, first.content);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
