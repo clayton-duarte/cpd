@@ -96,7 +96,7 @@ A Workflow that changes behaviour has a test Job and an implementation Job after
 
 ## Research Jobs
 
-Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as an ordinary Job.
+A Research Job is an ordinary Workflow Job that writes `docs/research/<topic>.md` and goes through review; it is not an explore Job (`--kind scout|research`, no Workflow, queued at once, artefact in `$CPD_HOME/run/<plan>/explore/<job-key>.md`: [Explore Jobs](#explore-jobs)). Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as one.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling.
 - Put it in the Plan first and add the follow-up drafts right after the lock with `--needs <research-job>` (same Workflow; `job add --draft`), listing them in its `context`: they wait on it. When it is Merged (`job-merged`), resolve them at once with what it found: edit each to a full Tier and Spec and start them with `cpd_plan_review` (with a `title`), or cancel it. Tell the User what the batch holds. A follow-up that is its own Workflow is added right after the lock with `cpd workflow add <key> --repo <path> --title "<title>" --needs <research-workflow>` so it waits on the research Workflow's merge, and its drafts wait on that Workflow; the research findings are read from main when it starts, and when the research Workflow merges you resolve its drafts. This is the exception to stacking ([Scoping](../SKILL.md#scoping)): the follow-up reads what is on `main`, so it does not stack (`--base`) on the research Workflow.
@@ -106,7 +106,7 @@ Grounding that needs more than reading (a large codebase survey, comparing libra
 
 ## Explore Jobs
 
-The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X`, up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout` or `--kind research` and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
+The explore kinds are `scout` and `research`; a Job of one is an explore Job. A **scout** answers one question from this machine only (Tier letter `H`, effort 1 or above or `X`, up to the worker range's ceiling); a **research** Job may also reach outside it (web, curl, attached MCP servers, registries, upstream docs; Tier letter `S`, effort 1 or above or `X`, up to the worker range's ceiling). They answer for you from a Worker's session, so the material stays out of yours ([Exploring](../SKILL.md#exploring)). An explore Job belongs to the Plan, not to a Workflow: add it with `--kind scout|research` (`--kind scout` or `--kind research`) and no `--workflow`, and with no `--draft`. It is `queued` at once, with no review and no lock.
 
 The file passed as `--spec` has exactly these four fields, all required, and no others (`spec_invalid`, exit 2, with the JSON path, for `touches`, `tests`, `test_files` or `resources`):
 
@@ -117,7 +117,7 @@ The file passed as `--spec` has exactly these four fields, all required, and no 
 | `acceptance` | What the file must answer and cite, one checkable item each. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty. |
 
-cpd stores the artefact as the Job's `touches`: `run/<plan>/explore/<job-key>.md`, relative to `$CPD_HOME`. You name no file.
+cpd stores the artefact as the Job's `touches`: `$CPD_HOME/run/<plan>/explore/<job-key>.md`. You name no file.
 
 Rules to put in the `context` of every explore Spec (they are the Worker's only rules):
 
