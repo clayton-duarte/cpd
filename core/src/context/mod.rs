@@ -35,6 +35,9 @@ mod permanent_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
+mod reads;
+#[cfg(test)]
+mod reads_tests;
 mod record;
 mod reindex;
 mod rename;
