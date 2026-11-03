@@ -1829,16 +1829,29 @@ Effects, for an explore Attempt that passes:
 cpd attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
-A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order, from the Worker's session file. `--lines` (default 40) keeps the last n. A partial last line of a file being written is skipped.
+A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order. The source is the Worker Session's `runner`:
+- `pi`: the Worker's session file (`sessions.file`). A partial last line of a file being written is skipped.
+- `durable`: the Attempt's store `run/<plan>/durable/<attempt>.sqlite`, the `entries` table. Only the rows whose `record` `kind` is `pi.assistant` are read, in `id` order: each `model[0].content` text block gives an `assistant: …` line and each `toolCall` block a `tool: <name>` line, as for `pi`. The `file` field is the `.sqlite` path. There is no partial-line rule.
+
+`--lines` (default 40) keeps the last n.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session is registered and its `file` is known and exists | `session_not_found` | 4 |
-| every complete line is a JSON session entry | `session_malformed` | 1 |
+| the Session is registered and its `file` is known and exists (`pi`); the store `run/<plan>/durable/<attempt>.sqlite` exists (`durable`) | `session_not_found` | 4 |
+| every complete line is a JSON session entry (`pi`); every `pi.assistant` row's `record` is an assistant entry, its `model[0]` an assistant message with a `content` array (`durable`) | `session_malformed` | 1 |
+
+Example for `pi`:
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "session": "c1a2…", "file": "/home/clayton/.pi/agent/sessions/…/…_c1a2….jsonl", "total": 412,
  "lines": ["tool: bash", "assistant: The schema compiles; committing."]}
+```
+
+Example for `durable`:
+
+```json
+{"ok": true, "attempt": "api-schema-a1", "session": "d4e5…", "file": "/home/clayton/.cpd/run/api-schema/durable/api-schema-a1.sqlite", "total": 57,
+ "lines": ["assistant: The schema compiles; committing.", "tool: bash"]}
 ```
 
 Read-only.
@@ -3452,7 +3465,7 @@ The engine, one per machine (§3.7, §6.6, D5).
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
-**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode, for which E8 opens one `engine-error` Inbox item (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
+**Two new signals** (hs-d798): E3 appends one `job-blocked` Event per waiting episode when the queue walk skips a Ready Job for want of a pool slot (contract §3.7 E3, §5.2); and a `durable` Attempt whose transcript has not grown for `timeouts.stall_minutes` (default 15) is reported by its driver with one `error` Event, code `worker_stalled`, per stall episode; it opens no Inbox item and wakes the Plan's Lead only (contract §3.4, §2.2). The engine does not act on the stall: the Lead decides.
 
 | Precondition | Code | Exit |
 |---|---|---|
