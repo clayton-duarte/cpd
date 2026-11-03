@@ -2440,6 +2440,30 @@ mod tests {
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }
 
+    /// A `worker_stalled` Event is an `error` Event that wakes the Lead, and opens no Inbox item: no `engine-error`
+    /// condition for a running `durable` Attempt that stalled.
+    #[test]
+    fn a_worker_stalled_event_opens_no_engine_error_item() {
+        let mut f = fixture("dispatch");
+        f.job("w", "running");
+        f.sql(&format!(
+            "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, runner)
+             VALUES ('pay', 'w-a1', 'w', 1, 'S2', 'ladder', 'running', 'cpd/pay--w-a1', '/w', '{T}', 'durable');
+             INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+             VALUES (cpd_txn(), '{T}', 'error', 'ctx', 'pay', 'w', 'w-a1', 'x',
+                     '{{\"source\":\"driver\",\"code\":\"worker_stalled\",\"details\":{{\"attempt\":\"w-a1\",\"minutes\":1}}}}');"
+        ));
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&Kind::EngineError),
+            "a worker_stalled Event opens no engine-error item: {kinds:?}"
+        );
+    }
+
     // ---- all together ----
 
     #[test]
