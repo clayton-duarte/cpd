@@ -26,6 +26,7 @@ mod context_on_demand;
 mod context_pending;
 mod context_pending_waiting;
 mod context_permanent;
+mod context_prose_supersedes;
 mod context_reindex;
 mod context_search;
 mod context_supersedes;

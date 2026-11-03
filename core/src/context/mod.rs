@@ -32,6 +32,9 @@ mod pending;
 pub mod permanent;
 #[cfg(test)]
 mod permanent_tests;
+mod prose_supersedes;
+#[cfg(test)]
+mod prose_supersedes_tests;
 mod query;
 #[cfg(test)]
 mod query_tests;
@@ -225,6 +228,10 @@ pub struct DecideArgs {
     /// The decision or note this one replaces
     #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
     supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long, conflicts_with = "supersedes")]
+    #[allow(dead_code)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
@@ -236,6 +243,10 @@ pub struct NoteArgs {
     /// The note this one replaces
     #[arg(long, value_name = "record", action = clap::ArgAction::Append, value_delimiter = ',')]
     supersedes: Vec<RecordId>,
+    /// Confirm the text is not a supersession: skip the prose check
+    #[arg(long, conflicts_with = "supersedes")]
+    #[allow(dead_code)]
+    no_supersedes: bool,
     #[command(flatten)]
     select: Select,
 }
