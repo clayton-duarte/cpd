@@ -64,6 +64,8 @@ fn plan_phase_is_refused_for_a_queued_explore_job() {
     explore(&fx.env, "scout-a", "scout", "queued");
     assert_blocked(&fx, &["scout-a"]);
     // Control: once merged, the same command succeeds.
+    fx.env
+        .sql("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'scout-a'");
     fx.env.sql(
         "UPDATE jobs SET status = 'merged', merged_sha = 'abc123', summary = 'Found.' WHERE plan = 'pay' AND key = 'scout-a'",
     );
