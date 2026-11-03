@@ -99,6 +99,17 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         env.plan(id)?;
     }
     let _lock = take_lock_with(&env.ports, &env.home.pr_poll_lock())?;
+    // A pass that reopened a Workflow is run again: the Workflow is owned now, so its policy, comments and checks are read as
+    // any owned Workflow's are (each pass reopens fewer: a reopened Workflow is no longer a candidate).
+    loop {
+        let (out, again) = poll_pass(&mut env, &selected)?;
+        if !again {
+            return Ok(out);
+        }
+    }
+}
+
+fn poll_pass(env: &mut Env, selected: &Option<PlanId>) -> Result<(Output, bool), CpdError> {
     let root = env.home.root().to_owned();
 
     let search = gh::search_open(&*env.ports.runner, &root, &env.config.inbox.bot_reviewers)?;
@@ -108,7 +119,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     let mut checks: Vec<Resolved> = Vec::new();
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
-        match super::workflow_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
+        match super::workflow_policy_resolved(env, plan, key, crate::policy::resolve)? {
             Ok(policy) => checks.push(Resolved {
                 plan: plan.clone(),
                 key: key.clone(),
@@ -297,7 +308,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
             .collect();
         wanting.extend(follows.iter().map(|f| (f.plan.clone(), f.workflow.clone())));
         for (plan, key) in wanting {
-            let tier = open::tier_of_workflow(&mut env, &plan, &key)?;
+            let tier = open::tier_of_workflow(env, &plan, &key)?;
             tiers.push((plan, key, tier));
         }
     }
@@ -310,14 +321,15 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         Outcome::default()
     };
 
-    report_unresolved(&mut env, &unresolved)?;
+    report_unresolved(env, &unresolved)?;
+    let reopened = rebind_reopened(env)?;
     // After the poll's own rows are written (§7.6 step 8): a failure of the deploy read loses none of them.
     deploys::read(&*env.ports.runner, &env.home, &crate::clock::now())?;
 
     let printed_prs = match &selected {
         Some(id) => {
             let plan = env.plan(id)?;
-            Some(plan_workflows(&mut env, &plan)?)
+            Some(plan_workflows(env, &plan)?)
         }
         None => None,
     };
@@ -336,7 +348,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     if let Some(workflows) = printed_prs {
         out["workflows"] = Value::Array(workflows);
     }
-    Ok(Output::success(out))
+    Ok((Output::success(out), !reopened.is_empty()))
 }
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`] on `ports.clock`: `lock_timeout` (exit 5). The
@@ -741,6 +753,62 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
         }
         Ok(())
     })
+}
+
+/// Pro-d362: each cancelled Workflow whose pull request the poll stored `open` is reopened (`git fetch` and `gh` run here, in the
+/// poll subprocess, outside any write transaction). A refusal appends one `error` Event, not one per tick, and never aborts the poll.
+fn rebind_reopened(env: &mut Env) -> Result<Vec<(PlanId, WorkflowKey)>, CpdError> {
+    let mut reopened = Vec::new();
+    const SOURCE: &str = "workflow reopen";
+    for c in env.store.read(crate::workflow::reopen::reopenable)? {
+        let error = match crate::workflow::reopen::reopen(env, &c.plan, &c.key) {
+            Ok(done) => {
+                if done.changed {
+                    reopened.push((c.plan.clone(), c.key.clone()));
+                }
+                continue;
+            }
+            Err(error) => error,
+        };
+        let latest: Option<String> = env.store.read(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT json_extract(data, '$.code') FROM events
+                      WHERE kind = 'error' AND plan = ?1 AND json_extract(data, '$.source') = ?2
+                        AND json_extract(data, '$.details.pr') = ?3
+                      ORDER BY id DESC LIMIT 1",
+                    [c.plan.as_str(), SOURCE, c.key.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })?;
+        if latest.as_deref() == Some(error.code().as_str()) {
+            continue;
+        }
+        let message = format!(
+            "Workflow {} of Plan {} could not be reopened: {}",
+            c.key,
+            c.plan,
+            error.message()
+        );
+        env.store.write(COMMAND, |tx| {
+            let mut details = error.details().clone();
+            details.insert("plan".into(), json!(c.plan));
+            details.insert("pr".into(), json!(c.key));
+            append(
+                tx,
+                NewEvent::error(
+                    message.clone(),
+                    SOURCE,
+                    error.code().as_str(),
+                    &message,
+                    details,
+                )
+                .plan(c.plan.clone()),
+            )
+        })?;
+    }
+    Ok(reopened)
 }
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
