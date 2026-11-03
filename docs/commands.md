@@ -4185,6 +4185,29 @@ The file is written atomically (a temporary file in the same directory, then a r
 
 `changed` lists the keys whose effective value changed, in the order `context_distill_tier`, `worker_tier`, `lead_tier`, `manager_tier`. When no value changes, `changed` is `[]` and `already` is `true`, and nothing is written (the file is not touched and its comment dates stay). `config` is the effective configuration after the write, as plain `cpd config` prints it (§14.2). Idempotence: yes, a rerun with the same four values writes nothing (`already`).
 
+### 14.2b `config experimental`
+
+```
+cpd config experimental
+cpd config experimental <feature> <on|off>
+```
+
+The Experimental Features (CONTEXT.md) are the four switches of the `[experimental]` table of `$CPD_HOME/config.toml` (contract §8.2): `durable_workers` (the Worker runner: `off` is `pi`, `on` is `durable`), `write_curation`, `failure_triage` and `turn_question_guard`. Each feature's config lives only in that table (contract §8.1).
+
+`cpd config experimental` prints the four switches, read from the file as it is now (the defaults of contract §8.2 for an absent key: `durable_workers` `off`, the other three `on`). `cpd config experimental <feature> <on|off>` sets one of them: it writes the key in `[experimental]` atomically (a temporary file in the same directory, then a rename: contract §8.1 "Every write is atomic"), keeps the comments and every other key, and prints the same object. The file is parsed before and after the change, and it is written only when the result parses. Setting a feature to the value it has rewrites the same bytes. A change to `durable_workers` affects the Attempts started afterwards: a started Attempt keeps its runner (contract §3.4 "The Worker runner and its seam"). The Settings popup's Experimental section (§13.2) runs this command once per changed row.
+
+| Refusal | Code | Exit |
+|---|---|---|
+| a feature that is not one of the four keys, a state that is not `on` or `off`, or a wrong number of arguments | `usage` | 2 |
+| `config.toml` does not parse, before or after the change; `details.key` names the key that breaks it | `config_invalid` | 1 |
+| `config.toml` is missing | `config_missing` | 1 |
+
+```json
+{"ok":true,"experimental":{"durable_workers":false,"write_curation":true,"failure_triage":true,"turn_question_guard":true}}
+```
+
+Idempotence: yes, a rerun with the same feature and state leaves the file as it is. Callers: none, the User at a shell (§2); cockpit: yes (§2, the Settings popup, §13.2).
+
 ### 14.3 `tiers`
 
 ```
