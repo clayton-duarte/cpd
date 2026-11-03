@@ -53,9 +53,7 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
-    /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
-    pub worker_runner: WorkerRunner,
-    /// STUB: the `[experimental]` table.
+    /// The `[experimental]` table (contract §8.2); `durable_workers` picks the Worker runner, see [`Config::worker_runner`].
     pub experimental: super::Experimental,
     /// The runner of each new Lead Session (contract §6.19, §8.2; hs-d754 Q10); default `Pi`, independent of `manager_runner` (Q11).
     pub lead_runner: WorkerRunner,
@@ -238,9 +236,14 @@ impl Watch {
 }
 
 impl Config {
-    /// STUB: derived from `experimental.durable_workers`.
+    /// Which runner starts a Worker; read once per Attempt, when it is created (contract §3.4, §8.2).
+    /// Derived from `experimental.durable_workers`.
     pub fn worker_runner(&self) -> WorkerRunner {
-        unimplemented!("Config::worker_runner")
+        if self.experimental.durable_workers {
+            WorkerRunner::Durable
+        } else {
+            WorkerRunner::Pi
+        }
     }
 
     /// The four role defaults, ascending (checked at parse).
@@ -301,7 +304,15 @@ impl Config {
             path,
             sources: Sources::new(),
         };
-        r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux", "presets"])?;
+        r.sections_are_tables(&[
+            "timeouts",
+            "watch",
+            "inbox",
+            "events",
+            "tmux",
+            "presets",
+            "experimental",
+        ])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| {
@@ -355,9 +366,21 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let worker_runner = r.get("worker_runner", WorkerRunner::Pi, |v| {
-            WorkerRunner::parse(text_of(&v)?)
-        })?;
+        let experimental = {
+            let defaults = super::Experimental::default();
+            let mut flag = |name: &str, default: bool| {
+                r.get(&format!("experimental.{name}"), default, |v| match v {
+                    Value::Boolean(b) => Ok(b),
+                    other => Err(format!("must be a boolean, not {}", other.type_str())),
+                })
+            };
+            super::Experimental {
+                durable_workers: flag("durable_workers", defaults.durable_workers)?,
+                write_curation: flag("write_curation", defaults.write_curation)?,
+                failure_triage: flag("failure_triage", defaults.failure_triage)?,
+                turn_question_guard: flag("turn_question_guard", defaults.turn_question_guard)?,
+            }
+        };
         // The runner of each new Lead and Manager Session (contract §6.19, hs-d754 Q10); independent keys (Q11).
         let lead_runner = r.get("lead_runner", WorkerRunner::Pi, |v| {
             WorkerRunner::parse(text_of(&v)?)
@@ -493,8 +516,7 @@ impl Config {
             worker_tier,
             lead_pi_packages,
             pi_adapter,
-            worker_runner,
-            experimental: super::Experimental::default(),
+            experimental,
             lead_runner,
             manager_runner,
             context_engine_enabled,
@@ -744,7 +766,15 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 6] = ["timeouts", "watch", "inbox", "events", "tmux", "presets"];
+const KNOWN_SECTIONS: [&str; 7] = [
+    "timeouts",
+    "watch",
+    "inbox",
+    "events",
+    "tmux",
+    "presets",
+    "experimental",
+];
 
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
 fn text_of(value: &Value) -> Result<&str, String> {

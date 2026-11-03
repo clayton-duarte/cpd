@@ -60,7 +60,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "worker_tier": "H3",
             "lead_pi_packages": [],
             "pi_adapter": "",
-            "worker_runner": "pi",
             "lead_runner": "pi",
             "manager_runner": "pi",
             "context_engine_enabled": true,
@@ -92,7 +91,8 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
             },
             "events": {"poll_ms": 200},
-            "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
+            "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"},
+            "experimental": {"durable_workers": false, "write_curation": true, "failure_triage": true, "turn_question_guard": true}
         })
     );
 }
@@ -278,9 +278,13 @@ context_engine_python = "/b/venv/bin/python"
 context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
-worker_runner = "durable"
 lead_runner = "durable"
 manager_runner = "durable"
+[experimental]
+durable_workers = true
+write_curation = false
+failure_triage = false
+turn_question_guard = false
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1

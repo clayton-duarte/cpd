@@ -57,7 +57,7 @@ pub use file::{
     Config, Events, Inbox, Preset, Source, Sources, TickSeconds, Timeouts, Tmux, Watch,
 };
 pub use repo::RepoTests;
-pub use runner::{TOGGLE_COMMENT, WorkerRunner, set_in_text, toggle};
+pub use runner::{WorkerRunner, toggle};
 pub use tier::{Catalog, Letter, Range, Role, RoleTiers, Tier, TierModel};
 
 /// `cpd config` takes no arguments, or the subcommand `tiers set` (§14.2a).

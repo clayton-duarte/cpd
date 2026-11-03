@@ -250,7 +250,7 @@ pub fn start_with_allocation(
                 .with("urgent", urgent));
             }
         }
-        insert(tx, plan, key, &next, &identities, ctx.config.worker_runner)
+        insert(tx, plan, key, &next, &identities, ctx.config.worker_runner())
     })?;
     drop(guarded);
 
