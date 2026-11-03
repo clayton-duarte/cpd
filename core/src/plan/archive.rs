@@ -1,7 +1,7 @@
 //! `plan archive` and `plan unarchive` (commands.md §4.10, §4.11), and the
 //! cascade that `context archive` and `unarchive` share (§3.8, §3.9; contract
 //! §2.2 "Archived"). The archive rule and the pane closing are the session
-//! area's: [`blockers`] and [`close_lead`].
+//! area's: [`archive_blockers`] and [`close_lead`].
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use crate::events::{NewEvent, append};
 use crate::host::{Tmux, chat_slot};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
-use crate::session::{archive_blocked, blockers, close_lead};
+use crate::session::{archive_blocked, archive_blockers, close_lead};
 use crate::store::Store;
 
 /// What one archive or unarchive covers: a Context, Plans and their Lead Sessions.
@@ -218,25 +218,16 @@ pub fn archive(
     command: &str,
     objects: &Objects,
 ) -> Result<Output, CpdError> {
-    archive_keeping(store, config, command, objects, None)
-}
-
-/// [`archive`] that leaves the pane of Lead `keep` alone: its caller runs in that pane
-/// and closes it itself, last (`session run` on the User's quit, commands.md §10.8).
-pub fn archive_keeping(
-    store: &mut Store,
-    config: &Config,
-    command: &str,
-    objects: &Objects,
-    keep: Option<&SessionId>,
-) -> Result<Output, CpdError> {
     let all = objects.all();
     let (pending, live) = store.read(|conn| {
         let mut pending = false;
         for object in &all {
             pending |= !object.archived(conn)?;
         }
-        Ok((pending, blockers(conn, &objects.sessions, &objects.plans)?))
+        Ok((
+            pending,
+            archive_blockers(conn, &objects.sessions, &objects.plans)?,
+        ))
     })?;
     if !pending {
         return Ok(result(&[], Vec::new()));
@@ -249,13 +240,13 @@ pub fn archive_keeping(
     refuse_chat_slot(store, &tmux, cockpit, &objects.sessions)?;
 
     let mut closed = Vec::new();
-    for id in objects.sessions.iter().filter(|id| Some(*id) != keep) {
+    for id in objects.sessions.iter() {
         let lead = close_lead(store, &tmux, cockpit, id, command)?;
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
 
     let changed = store.write(command, |tx| {
-        let live = blockers(tx, &objects.sessions, &objects.plans)?;
+        let live = archive_blockers(tx, &objects.sessions, &objects.plans)?;
         if !live.is_empty() {
             return Err(archive_blocked(&live, None));
         }

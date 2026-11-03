@@ -776,23 +776,6 @@ pub fn close_lead(
     })
 }
 
-/// Writes, as `command`, the rows engine E2 writes for the pane of Lead `id` and then kills that
-/// pane: for the caller that runs in it, which must not die before its rows are written.
-/// Returns when the pane is not there to kill.
-pub(super) fn close_own(env: &mut Env, id: &SessionId, command: &str) -> Result<(), CpdError> {
-    let lead = env.store.read(|conn| row::load(conn, id))?;
-    let Some(pane) = lead.tmux_pane.clone() else {
-        return Ok(());
-    };
-    let pane_id =
-        PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
-    let why = format!("its pane {pane} was closed");
-    env.store.write(command, |tx| {
-        pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why)
-    })?;
-    env.tmux().kill_pane(&pane_id)
-}
-
 /// `session close` (commands.md §10.9).
 pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
